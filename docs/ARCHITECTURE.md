@@ -275,12 +275,58 @@
 
 | 追问者 | 典型动机 | 追问结果写回哪里 | session 归属 |
 |---|---|---|---|
-| **作者** | "这数字从哪来 / 这结论太绝对，重写" | 写回 `researches.content_md`（草稿更新） | 作者私 session |
-| **其他阅读者** | "50 并发会不会爆内存 / 这 benchmark 怎么用" | 写回 `comments` 表（追问链） | 任何阅读者开 |
+| **作者** | "这数字从哪来 / 这结论太绝对，重写" | 草稿：`researches.content_md`（仅作者可见） | 作者私 session |
+| **其他阅读者** | "50 并发会不会爆内存 / 这 benchmark 怎么用" | `comments` 表（追问链） | 任何阅读者开 |
 | **admin** | "这结论有偏差，要补风险段" | 同作者，写回草稿 | 私 session |
 
 > 关键设计：**作者追问 = 修改工具**；**读者追问 = 协作对话**。两者都走 AI 但写回不同表。
 > 配额 20 次/日 是**全团成员**统一池，不是作者的独立池（防止某些热门调研被作者个人占满）。
+
+**6.1.2 草稿可见性硬规则**（v3.3.1 新增，必读）：
+
+> **草稿（status=draft）只能作者自己看到。** 这是产品的基础安全/隐私约束。
+
+| 对象 | draft | published |
+|---|---|---|
+| 作者 | ✅ CRUD + 追问 | ✅ |
+| 其他成员 | ❌ 完全不可见 | ✅ 读 + 追问（写回 comments） |
+| admin | ❌ 不可见（**也是作者才能看**） | ✅ |
+| 团队搜索引擎 | ❌ 不索引 | ✅ 索引 |
+| 顶栏"我的草稿"下拉 | ✅ 仅自己 | n/a |
+
+**约束理由**：
+- 草稿含未审核内容，可能错、可能涉密、可能只有作者能看懂的半成品
+- admin 也看不到别人的草稿 → **保持中立**：admin 是"内容把关者"不是"内容窥视者"
+- 实现：API 层做行级权限过滤，DB 不靠 RLS（v3.3.1 P0 选 BFF 强制过滤，v2 可上 RLS）
+
+**6.1.3 作者对已发布调研的追问**（v3.3.1 明确，边界）：
+
+> 作者对自己**已发布**的调研也可以追问，但结果**不直接改 published 内容**（会污染历史快照）。
+
+```
+作者在 published 调研页追问 AI
+  → AI 建议"第 3 段有错误"
+  → 系统创建"修订草稿"（researches_drafts 表，v3.3.1 加）
+  → 草稿引用 published_id + 修订 diff
+  → 作者改完点"发布修订" → 创建新 published + 旧版本入 research_audit
+  → 团队所有成员收到"已更新"通知
+```
+
+> **不直接覆盖** published 是为了：① 团队里如果有人引用了第 3 段，链接不会突然变样；② 出问题能 rollback 到旧版本；③ research_audit（v3.2 加）有完整变更历史。
+
+```sql
+-- v3.3.1 加：修订草稿（作者对自己已发布调研的追问产物）
+CREATE TABLE research_drafts (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  research_id     uuid NOT NULL REFERENCES researches(id),  -- 指向原 published
+  author_id       uuid NOT NULL REFERENCES users(id),
+  diff            jsonb,                                    -- 字段级 diff
+  content_md      text,                                     -- 草稿全文
+  status          text NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open','published','discarded')),
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+```
 
 **6.2 多轮对话策略**（v3.3.1 明确）：
 
