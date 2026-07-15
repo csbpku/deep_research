@@ -299,34 +299,40 @@
 - admin 也看不到别人的草稿 → **保持中立**：admin 是"内容把关者"不是"内容窥视者"
 - 实现：API 层做行级权限过滤，DB 不靠 RLS（v3.3.1 P0 选 BFF 强制过滤，v2 可上 RLS）
 
-**6.1.3 作者对已发布调研的追问**（v3.3.1 明确，边界）：
+**6.1.3 作者对已发布调研的修改**（v3.3.1 简化，明确状态切换）：
 
-> 作者对自己**已发布**的调研也可以追问，但结果**不直接改 published 内容**（会污染历史快照）。
+> **published 调研默认是只读**——任何作者、读者、admin 看到的都是同一份内容。
+> 作者想改自己已发布的调研，**必须显式点"进入修改"按钮**进入修改模式，AI 共创才解锁。
 
 ```
-作者在 published 调研页追问 AI
-  → AI 建议"第 3 段有错误"
-  → 系统创建"修订草稿"（researches_drafts 表，v3.3.1 加）
-  → 草稿引用 published_id + 修订 diff
-  → 作者改完点"发布修订" → 创建新 published + 旧版本入 research_audit
-  → 团队所有成员收到"已更新"通知
+published 调研详情页（默认状态）
+  ├─ 读者：💬 评论 + ✨ AI 提问（→ 写回 comments）
+  └─ 作者：💬 评论 + ✨ AI 提问（→ 写回 comments）  ← 默认和读者一样
+                + ✏️ [进入修改] 按钮（仅作者可见）
+                            ↓ 点击切换
+                            ↓
+修改模式（仅作者自己看到，团队看到的还是 published）
+  ├─ 顶部橙色提示条："✏️ 修改模式 · 其他成员看到的是原版本"
+  ├─ 调研内容变可编辑（编辑器组件激活）
+  ├─ AI 提问 → [✍️ 应用回此版本] 按钮（写回 research_audit）
+  └─ [完成修改] 按钮 → 创建新 version + research_audit 记录
+       → 其他成员收到"已更新"通知
+       → 默认回到只读模式
 ```
 
-> **不直接覆盖** published 是为了：① 团队里如果有人引用了第 3 段，链接不会突然变样；② 出问题能 rollback 到旧版本；③ research_audit（v3.2 加）有完整变更历史。
+**与 v3.2 设计的差异**：
+- v3.2：作者对已发布追问**直接覆盖** → 风险（污染历史、不可回滚）
+- v3.3.1（采纳你的方案）：published 只读 + 显式"进入修改" → **更安全、UI 状态更清晰**
+- **不引入 research_drafts 表**（v3.3.1 之前的设计）：用 research_audit（v3.2 已加）记录修改历史足够
+- 作者修改的是同一行 `researches` 的最新版（不创建新行），避免关系图变复杂
 
-```sql
--- v3.3.1 加：修订草稿（作者对自己已发布调研的追问产物）
-CREATE TABLE research_drafts (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  research_id     uuid NOT NULL REFERENCES researches(id),  -- 指向原 published
-  author_id       uuid NOT NULL REFERENCES users(id),
-  diff            jsonb,                                    -- 字段级 diff
-  content_md      text,                                     -- 草稿全文
-  status          text NOT NULL DEFAULT 'open'
-    CHECK (status IN ('open','published','discarded')),
-  created_at      timestamptz NOT NULL DEFAULT now()
-);
-```
+**核心规则（v3.3.1 一句话总结）**：
+
+| 状态 | 作者 | 其他成员 | AI 行为 |
+|---|---|---|---|
+| 草稿 (status=draft) | ✅ 可见 + 可改 + 可追问 AI（应用回草稿） | ❌ 完全不可见 | 应用回草稿 |
+| published 默认 | ✅ 可见 + 可评论 + 可问 AI（写回 comments） | ✅ 可见 + 可评论 + 可问 AI | 写回 comments |
+| published + 进入修改 | ✅ 看到修改模式 | ❌ 看到的还是 published | 应用回此版本（写 audit） |
 
 **6.2 多轮对话策略**（v3.3.1 明确）：
 
