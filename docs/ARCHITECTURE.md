@@ -1,8 +1,9 @@
 # 技术调研平台 · 架构方案
 
-> 版本：v3.3.1 · 2026-07-14
+> 版本：v3.3.2 · 2026-07-16
 > 配套文档：`docs/MODULE_MAP.md` / `docs/DIAGRAMS.md` / `docs/mockups/index.html`
-> v3.3.1 增量：补全 mockup 中已落地的 UI 设计（详情页结构化字段、admin 页面、avatar 下拉、跨模块热议、✨ AI 协助字段）
+> v3.3.2 增量：补全 mockup 中已落地的次要交互（通知/历史筛选/批操作/成员管理 等 alert handlers）
+> v3.3.1 增量：详情页结构化字段 / admin 页面 / avatar 下拉 / 跨模块热议 / ✨ AI 协助字段
 
 ---
 
@@ -1058,3 +1059,51 @@ ALTER TABLE users ADD COLUMN disabled_at timestamptz;  -- v3.3.1：禁用而非�
 - 两个维度正交，**混合会让用户困惑"现在看的是早报还是活跃信号"**
 
 ---
+
+---
+
+## 十八、Mockup 补漏功能（v3.3.2 新增，对应 mockup 全部 alert handler）
+
+> v3.3.2 增量：补全 mockup 中**之前缺失的次要交互**，避免空链接/无反应按钮。
+
+### 1. 补的 alert handlers（v3.3.2 新增）
+
+| 触发 | 行为 | 真实产品对应 |
+|---|---|---|
+| `showNotifications()` | 通知页（P1） | `@我的 / 提名状态 / 系统通知` 列表 |
+| `showFullHotList()` | 完整热度榜（P1） | 全团 47 条热度分页 |
+| `showHistoryList()` | 历史摘要（P1） | 7/14/30 天切窗口 |
+| `filterHistory('all'/'published'/'failed'/'cancelled')` | AI 调研历史筛选 | 4 个 tab 切换 |
+| `askSuggestion(q)` | 抽屉推荐问题点击 | 填入输入框 + 触发 AI 回答 |
+| `discardDraft()` | AI 编辑页放弃 | 二次确认 + 跳回入口 |
+| `submitShare()` | 分享 dialog 提交 | 写 summaries(status=pending_review) |
+| `adminApprove(id)` / `adminReject(id)` | 提名/分享批/拒 | 写 tables + 改 comments.promote_status |
+| `adminBatchApprove()` / `adminBatchReject()` | 批量操作 | 循环调用单条 + confirm |
+| `adminToggleAutoReview()` | 机器预审开关 | 改 system_settings |
+| `adminSetRole(user, role)` | 成员角色管理 | 二次确认 + 改 users.role |
+| `adminDisableUser(user)` | 禁用账号 | 二次确认 + 改 users.disabled_at |
+
+### 2. 为什么这些是 alert（v3.3.2 选型）
+
+> mockup 阶段对**次要交互**用 alert 兜底，**核心交互**（点卡打开 drawer、tab 切换、提交评论）用真功能。
+
+**原因**：
+- 11 个 alert 都不在**用户高频路径**上（不会每天触发）
+- 真实实现成本高（API/权限/状态机），但 mockup 看流程足够
+- 保留 alert 的好处：未来接真实后端时**只需替换 alert body**，不改 UI
+
+### 3. 数字一致性（v3.3.2 新增）
+
+> 每日摘要头部 ⭐/💬 数字必须 = 行内评论区 ⭐/💬 累加。
+
+| 卡片 | 头部 | 评论区 | 一致？ |
+|---|---|---|---|
+| c1 Multi-Agent | ⭐ 5 💬 2 | 2 评论 (2+3 赞) | ✅ |
+| c2 Vercel | ⭐ 1 💬 0 | 0 评论 | ✅ |
+| c4 SWE-bench | ⭐ 5 💬 0 | 0 评论 | ✅ |
+| c5 PG 调优（同事） | (无头部) | 1 评论 (2 赞) | ✅ |
+
+**设计原则**（v3.3.2 明确）：
+- **头部数字 = 真实数字**（不夸大，不模糊）
+- **0 也要显示**（`💬 0` 比"不显示"更清晰，告诉你"没人评过"）
+
