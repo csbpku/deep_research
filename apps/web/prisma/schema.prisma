@@ -1,7 +1,7 @@
 // Prisma schema — Week 0 freeze
 //
 // 锁定基线：docs/ARCHITECTURE.md §五 + docs/IMPLEMENTATION_PLAN.md §三-十一。
-// 共 10 张表（7 业务 + 3 支撑）。schema freeze 后工程师 A/B 不直接改；
+// 共 12 张表。schema freeze 后工程师 A/B 不直接改；
 // 修改走 [db] PR 由主会话 review，并同步 ARCHITECTURE §五 增量。
 //
 // 跨语言合约：packages/shared/src/states.ts 的枚举必须与下面 enum 一字不差。
@@ -129,8 +129,11 @@ model User {
   commentStars      CommentStar[]
   aiJobs            AiResearchJob[]
   importJobs        ContentImportJob[]
+  productEvents     ProductEvent[]
+  adminActions      AdminAction[]
 
   @@index([role, disabledAt])
+  @@map("users")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -154,6 +157,7 @@ model Summary {
   status              SummaryStatus  @default(candidate)
   // 索引与分析时使用的轻量 AI 调用计数
   ingestionTokenCount Int            @default(0)
+  tags                String[]       @default([])
   createdAt           DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
 
@@ -168,6 +172,7 @@ model Summary {
   @@index([status, createdAt(sort: Desc)])
   @@index([summaryDate])
   @@index([sharedByUserId])
+  @@map("summaries")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -207,11 +212,14 @@ model Research {
   researchSources        ResearchSource[]
   audit                  ResearchAudit[]
   comments               Comment[]      @relation("comments_research")
+  sourceAiJob            AiResearchJob? @relation("ai_job_draft")
+  sourceImportJob        ContentImportJob? @relation("import_job_output")
 
   @@index([type, publishedAt(sort: Desc)])
   @@index([authorId, status])
   @@index([aiAssisted])
   @@index([sourceCommentId])
+  @@map("researches")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -232,6 +240,7 @@ model ResearchSource {
   // 同一调研同一 canonical 资料不重复入库
   @@unique([researchId, canonicalKey])
   @@index([researchId])
+  @@map("research_sources")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -250,6 +259,8 @@ model AiResearchJob {
   attempts          Int           @default(0)
   // 5 步流水线中已抓取的来源快照；partial 时保留（架构 §九 风险 10）
   partialSources    Json          @default("[]")
+  sourceRefs        Json          @default("[]")
+  failedSources     Json          @default("[]")
   // Worker 租约与心跳（架构 §十三 §3）
   lockedBy          String?
   leaseExpiresAt    DateTime?     @db.Timestamptz(3)
@@ -267,11 +278,12 @@ model AiResearchJob {
   errorCode         String?       @db.VarChar(64)
   errorMessage      String?       @db.VarChar(500)
   // 生成的研究草稿 id
-  draftResearchId   String?       @db.Uuid
+  draftResearchId   String?       @unique @db.Uuid
   createdAt         DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime      @updatedAt @db.Timestamptz(3)
 
   requester         User          @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+  draftResearch     Research?     @relation("ai_job_draft", fields: [draftResearchId], references: [id], onDelete: SetNull)
 
   aiResearchSources AiResearchSource[]
 
@@ -282,6 +294,7 @@ model AiResearchJob {
   // @@unique([requesterId, idempotencyKey]) 改为 partial unique（idempotencyKey 非空）
   // 由 migrations/init_constraints 加，避免 PG 段 非 partial + partial unique 冲突
   @@index([requesterId, createdAt(sort: Desc)])
+  @@map("ai_research_jobs")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -303,6 +316,7 @@ model AiResearchSource {
 
   @@unique([jobId, canonicalKey])
   @@index([jobId])
+  @@map("ai_research_sources")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -336,6 +350,7 @@ model Comment {
   @@index([authorId])
   @@index([parentId])
   @@index([promoteStatus])
+  @@map("comments")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -353,6 +368,7 @@ model CommentStar {
 
   @@unique([commentId, userId])
   @@index([userId, createdAt(sort: Desc)])
+  @@map("comment_stars")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -373,6 +389,7 @@ model ResearchAudit {
   editor        User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
 
   @@index([researchId, createdAt(sort: Desc)])
+  @@map("research_audit")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -398,26 +415,66 @@ model ContentImportJob {
   warnings            Json           @default("[]")
   errorCode           String?        @db.VarChar(64)
   errorMessage        String?        @db.VarChar(500)
-  outputResearchId    String?        @db.Uuid
+  outputResearchId    String?        @unique @db.Uuid
   // worker 租约（与 ai_research_jobs 同模式）
+  attempts            Int            @default(0)
   lockedBy            String?
   leaseExpiresAt      DateTime?      @db.Timestamptz(3)
   heartbeatAt         DateTime?      @db.Timestamptz(3)
+  nextRetryAt         DateTime?      @db.Timestamptz(3)
   createdAt           DateTime       @default(now()) @db.Timestamptz(3)
   completedAt         DateTime?      @db.Timestamptz(3)
 
   requester           User           @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+  outputResearch      Research?      @relation("import_job_output", fields: [outputResearchId], references: [id], onDelete: SetNull)
 
-  // 同 (user, sha256) partial unique（sourceKind=file AND contentSha256 IS NOT NULL）
-  // 在 SQL migration init_constraints 加（Prisma 5.x 多条件 where 不支持）；
+  // 同 (user, sha256) 在 queued/running/succeeded 中 partial unique；failed 后可重试。
+  // 在 SQL migration preflight_contract_completion 加（Prisma 5.x 多条件 where 不支持）；
   // schema 层不加 non-partial unique，避免 PG 段冲突
   // @@unique([requesterId, contentSha256])
   @@index([status, createdAt(sort: Asc)])
   @@index([requesterId, createdAt(sort: Desc)])
+  @@map("content_import_jobs")
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 11. admin_actions（审计表）— 见 ADR 0003
-//   在 IMPLEMENTATION_PLAN §十·周度人力预算作为 Week 8 设计 admin API 时启用。
-//   schema freeze 不含此表；任何 P0 评审需要先建 ADR。
+// 11. product_events — Week 13 决策指标事件
 // ─────────────────────────────────────────────────────────────────────
+
+model ProductEvent {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @db.Uuid
+  eventName    String   @db.VarChar(64)
+  entityType   String?  @db.VarChar(32)
+  entityId     String?  @db.Uuid
+  metadata     Json     @default("{}")
+  dedupeKey    String   @unique @db.VarChar(255)
+  occurredAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([eventName, occurredAt])
+  @@index([userId, occurredAt])
+  @@map("product_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 12. admin_actions — Admin 审核与成员操作审计
+// ─────────────────────────────────────────────────────────────────────
+
+model AdminAction {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId      String   @db.Uuid
+  action       String   @db.VarChar(64)
+  targetType   String   @db.VarChar(32)
+  targetId     String   @db.Uuid
+  requestId    String   @unique @db.Uuid
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  actor        User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@map("admin_actions")
+}

@@ -118,12 +118,17 @@ P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data
 | `research_audit` | 已发布沉淀的修改留痕 |
 | `comment_stars` | 评论一人一票 |
 | `content_import_jobs` | 文件转换任务；P1 扩展 Confluence |
+| `product_events` | Week 13 产品事件、metadata 和去重键 |
+| `admin_actions` | 管理员审核、角色与禁用动作审计 |
 
 ### 核心关系
 
 - `research_sources.research_id → researches.id`。
 - `ai_research_sources.job_id → ai_research_jobs.id`。
 - `content_import_jobs.requester_id → users.id`，成功后 `output_research_id → researches.id`。
+- `ai_research_jobs.draft_research_id` 与 `content_import_jobs.output_research_id` 均为唯一外键，一个草稿只对应一个来源任务。
+- 两类 job 都持有 `attempts`、`next_retry_at`、lease 与 heartbeat 字段，才能复用同一 runner。
+- `product_events.user_id → users.id`；`dedupe_key` 唯一。`admin_actions.actor_id → users.id`；`request_id` 唯一。
 - `comments.research_id` 与 `comments.summary_id` 必须恰好一个非空。
 - `comment_stars(comment_id, user_id)` 为复合主键，保证一人一票。
 - 私有草稿不依赖前端隐藏；所有读取均由 BFF 按 owner 和状态过滤。
@@ -163,9 +168,9 @@ queued -> running -> succeeded
                   -> cancelled
 ```
 
-两个队列分表，但复用租约、心跳、重试和幂等 helper。worker 使用事务和 `FOR UPDATE SKIP LOCKED` 抢占；运行中每 15 秒心跳；只有租约过期任务可被接管。
+两个队列分表，但复用租约、心跳、重试和幂等 helper。worker 使用事务和 `FOR UPDATE SKIP LOCKED` 抢占；lease 60 秒、heartbeat 15 秒、reaper 30 秒；只有租约过期任务可被接管。初次执行后最多重试 3 次，退避 30/120/300 秒，且只有网络超时、429 和 5xx 可重试。
 
-AI job 使用请求者 + `Idempotency-Key` 唯一约束。单 job 最长 5 分钟；已获得至少 3 条可引用资料但未完成报告时标记 `partial`，否则标记 `failed`。
+AI job 使用请求者 + `Idempotency-Key` 唯一约束。单 job 最长 5 分钟；已获得至少 3 条可引用资料但未完成报告时进入终态 `partial`，不创建可发布草稿；用户重试创建新 job。不足 3 条来源则标记 `failed`。
 
 ---
 
@@ -192,7 +197,7 @@ cron/admin trigger -> 抓取候选 -> 规范化/去重 -> 轻量摘要 -> 最多
 - 扩展名和实际 MIME 必须同时通过；文本必须为 UTF-8。
 - HTML 删除 `script/style/iframe/object`、事件属性和危险 URL，不加载外部资源。
 - 文件名只作展示，磁盘路径由服务端生成；成功或失败后 24 小时内清理原文件。
-- 相同用户 + SHA-256 的成功导入不重复创建草稿。
+- 相同用户 + SHA-256 在 `queued/running/succeeded` 中只保留一个 job；并发冲突返回已有 job，失败后允许重新上传。
 - 转换不调用 LLM，不占 AI 配额；不支持结构进入 `warnings`，不得静默丢失。
 
 P1 Confluence 只解析站点和 page id，正文必须通过用户委托授权的 API 读取。首版是单页一次性快照，不使用超级账号，不读取整个空间，也不做双向同步。
@@ -275,7 +280,7 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | `POST /api/comments/{id}/stars` | 一人一票；事务内更新计数和 nomination |
 | `POST /api/admin/reviews/{id}` | Admin-only；明确批准或拒绝并写审计 |
 
-错误响应使用稳定业务码和 `request_id`，不把供应商错误、prompt、token 或密钥直接返回前端。
+错误响应使用稳定业务码和 `request_id`，不把供应商错误、prompt、access token、API key 或 secret 直接返回前端。
 
 ---
 
@@ -284,7 +289,7 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 ### 运行底线
 
 - BFF 日志：`request_id`、脱敏用户、角色、route、latency 和 status code。
-- Job 日志：状态、step、elapsed、attempts、来源数、失败分类、token 和估算成本。
+- Job 日志：状态、step、elapsed、attempts、来源数、失败分类、`tokenInputTotal` / `tokenOutputTotal` 数值和估算成本；不记录正文或 prompt。
 - 每日 pg_dump；恢复点目标 24 小时内，恢复时间目标 2 小时内。
 - Week 8 和 Week 9 各执行一次空环境恢复演练。
 - 导入原文件不进入数据库备份或应用日志。
@@ -307,7 +312,7 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | 成功 AI 调研 / 团队人数 | ≥ 1 次/人/月 |
 | 节省工时价值 | > `$200/月` |
 
-硬门槛通过后，至少 2 个价值指标达标，并且必须包含“正式调研产出”或“ROI”之一。具体 Go / Adjust / Stop 动作见实施计划。
+硬门槛通过后，至少 2 个价值指标达标，并且必须包含“正式调研产出”或“ROI”之一。指标计算、固定试用名单、事件去重和 ROI 公式以 `docs/contracts/metrics.md` 为唯一契约；具体 Go / Adjust / Stop 动作见实施计划。
 
 ---
 
@@ -328,7 +333,7 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 
 ## 十、参考与归档
 
-- 开源方案调研：`docs/references/research-oss-references.md`。
+- 开源方案调研：`docs/inputs/research-oss-references.md`。
 - 完整 v3.5 架构旧稿：`docs/archive/ARCHITECTURE.v3.5-full.md`。
 - 原系统模块图：`docs/archive/MODULE_MAP.v3.5.md`。
 - 早期 brainstorm：`docs/archive/2026-07-14-tech-research-platform-brainstorm.md`。

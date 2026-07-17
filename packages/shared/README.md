@@ -9,6 +9,7 @@
 - `errors.ts` —— 错误码与 HTTP 状态常量、ApiError 类型
 - `states.ts` —— 业务状态枚举（job / import / summary / research / promote / role）
 - `schemas.ts` —— Zod 输入校验（API 入口）
+- `metrics.ts` —— Week 13 产品事件名与管理动作类型
 
 ## 使用
 

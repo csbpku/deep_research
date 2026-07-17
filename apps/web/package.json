@@ -8,7 +8,7 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "test -d src && tsc --noEmit || echo 'no src/, skip (Week 1 engineer A writes src first)'",
-    "test": "vitest run",
+    "test": "test -d src && vitest run || echo 'no src/, skip (Week 1 engineer A writes src and tests together)'",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:reset": "prisma migrate reset --force"

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states.js';
 
-// Zod schema：API 输入约束。详细定义见 docs/contracts/api-schemas.md（待补）。
+// Zod schema：API 输入约束。详细定义见 docs/contracts/api-schemas.md。
 
 const SourceRefUrl = z.object({
   type: z.literal('url'),
@@ -88,3 +88,21 @@ export const AdminApprovalInput = z.object({
   }
 });
 export type AdminApprovalInput = z.infer<typeof AdminApprovalInput>;
+
+/** 详情有效阅读事件；eventName/userId/occurredAt 由服务端填写。 */
+export const DetailReadCompletedInput = z.object({
+  entityType: z.enum(['summary', 'research']),
+  entityId: z.string().uuid(),
+  foregroundSeconds: z.number().int().min(30).max(86_400),
+  scrollPercent: z.number().min(50).max(100),
+  idempotencyKey: z.string().uuid(),
+});
+export type DetailReadCompletedInput = z.infer<typeof DetailReadCompletedInput>;
+
+/** succeeded research job 的节省时间反馈。 */
+export const RecordTimeSavedInput = z.object({
+  jobId: z.string().uuid(),
+  minutes: z.number().int().min(0).max(240),
+  idempotencyKey: z.string().uuid(),
+});
+export type RecordTimeSavedInput = z.infer<typeof RecordTimeSavedInput>;
