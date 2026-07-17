@@ -1,0 +1,420 @@
+// Prisma schema — Week 0 freeze
+//
+// 锁定基线：docs/ARCHITECTURE.md §五 + docs/IMPLEMENTATION_PLAN.md §三-十一。
+// 共 10 张表（7 业务 + 3 支撑）。schema freeze 后工程师 A/B 不直接改；
+// 修改走 [db] PR 由主会话 review，并同步 ARCHITECTURE §五 增量。
+//
+// 跨语言合约：packages/shared/src/states.ts 的枚举必须与下面 enum 一字不差。
+// ai-engine（Python Pydantic）镜像见 docs/decisions/0002 §8（Week 1 spike 后）。
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_trgm, citext]
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 枚举（与 packages/shared/src/states.ts 一字不差）
+// ─────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  member
+  admin
+}
+
+enum SummaryStatus {
+  candidate
+  pending_review
+  published
+  rejected
+  archived
+}
+
+enum SummarySource {
+  daily
+  user
+}
+
+enum ContentOrigin {
+  web
+  rss
+  api
+  manual
+}
+
+enum ResearchStatus {
+  draft
+  published
+  archived
+}
+
+enum ResearchType {
+  research
+  knowledge
+}
+
+enum CreationMethod {
+  manual
+  ai_research
+  file_import
+  confluence_import
+}
+
+enum PromoteStatus {
+  none
+  nominated
+  approved
+  rejected
+}
+
+enum AiJobStatus {
+  queued
+  running
+  partial
+  succeeded
+  failed
+  cancelled
+}
+
+enum AiJobStep {
+  plan
+  search
+  compress
+  analyze
+  write
+}
+
+enum ImportStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
+enum ImportSourceKind {
+  file
+  confluence
+}
+
+enum CommentTarget {
+  research
+  summary
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 1. users
+// ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String     @unique @db.Citext
+  name          String     @db.VarChar(80)
+  avatarUrl     String?    @db.VarChar(2048)
+  role          UserRole   @default(member)
+  disabledAt    DateTime?  @db.Timestamptz(3)
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
+
+  // 反向
+  summariesShared   Summary[]        @relation("summary_shared_by")
+  researchesAuthor  Research[]       @relation("research_author")
+  researchAudit     ResearchAudit[]
+  comments          Comment[]
+  commentStars      CommentStar[]
+  aiJobs            AiResearchJob[]
+  importJobs        ContentImportJob[]
+  adminApprovals    AdminAction[]
+
+  @@index([role, disabledAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 2. summaries — 每日摘要 + 用户分享共用
+// ─────────────────────────────────────────────────────────────────────
+
+model Summary {
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title               String         @db.VarChar(300)
+  body                String         @db.Text
+  url                 String         @db.VarChar(2048)
+  canonicalUrl        String         @unique @db.VarChar(2048)
+  source              SummarySource
+  contentOrigin       ContentOrigin  @default(web)
+  userNote            String?        @db.VarChar(500)
+  sharedByUserId      String?        @db.Uuid
+  summaryDate         DateTime       @db.Date
+  publishedAt         DateTime?      @db.Timestamptz(3)
+  // 从 URL 抓取来的 hash，用于去重
+  contentSha256       String?        @db.Char(64)
+  status              SummaryStatus  @default(candidate)
+  // 索引与分析时使用的轻量 AI 调用计数
+  ingestionTokenCount Int            @default(0)
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
+
+  sharedBy            User?          @relation("summary_shared_by", fields: [sharedByUserId], references: [id], onDelete: SetNull)
+
+  // 全文搜索（架构 §86 zhparser + tsvector/GIN；Week 4 由 prisma migration 加列）
+  // 实际 tsvector 列与触发器在第二个 migration 里手工加
+
+  comments            Comment[]      @relation("comments_summary")
+
+  @@index([source, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)], where: [status = candidate])
+  @@index([summaryDate])
+  @@index([sharedByUserId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 3. researches — 沉淀（长文 + 精华共用，按 type 切分）
+// ─────────────────────────────────────────────────────────────────────
+
+model Research {
+  id                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type                   ResearchType
+  status                 ResearchStatus @default(draft)
+  title                  String         @db.VarChar(300)
+  body                   String         @db.Text
+  background             String?        @db.VarChar(2000)
+  conclusion             String?        @db.VarChar(2000)
+  risks                  String?        @db.VarChar(2000)
+  tags                   String[]       @default([])            // 架构 §十一 用 PG 数组
+  authorId               String         @db.Uuid
+  publishedAt            DateTime?      @db.Timestamptz(3)
+
+  // AI 协助链路（架构 §十二点五 + §五 origin_content_sha256 锁定）
+  aiAssisted             Boolean        @default(false)
+  creationMethod         CreationMethod @default(manual)
+  originContentSha256    String?        @db.Char(64)             // 阻止未修改 AI 草稿直接发布
+  sourceCommentId        String?        @db.Uuid                 // type=knowledge 时指向源评论
+
+  // 热点 / 统计缓存（按需；Week 1 暂留，全部为空即可）
+  viewCount              Int            @default(0)
+  starCount              Int            @default(0)
+  commentCount           Int            @default(0)
+
+  createdAt              DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime       @updatedAt @db.Timestamptz(3)
+
+  author                 User           @relation("research_author", fields: [authorId], references: [id], onDelete: Restrict)
+  sourceComment          Comment?       @relation("comment_to_knowledge", fields: [sourceCommentId], references: [id], onDelete: SetNull)
+
+  researchSources        ResearchSource[]
+  audit                  ResearchAudit[]
+  comments               Comment[]      @relation("comments_research")
+
+  @@index([type, publishedAt(sort: Desc)])
+  @@index([authorId, status])
+  @@index([aiAssisted], where: [aiAssisted = true])
+  @@index([sourceCommentId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 4. research_sources — 沉淀的挂载资料（JSONB 引用形态）
+// ─────────────────────────────────────────────────────────────────────
+
+model ResearchSource {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchId    String   @db.Uuid
+  sourceRef     Json     // {type:url|doi|arxiv|knowledge, value:"..."}
+  canonicalKey  String   @db.VarChar(512)
+  title         String?  @db.VarChar(300)
+  description   String?  @db.VarChar(1000)
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  research      Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
+
+  // 同一调研同一 canonical 资料不重复入库
+  @@unique([researchId, canonicalKey])
+  @@index([researchId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. ai_research_jobs — 后台 AI 调研任务
+// ─────────────────────────────────────────────────────────────────────
+
+model AiResearchJob {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requesterId       String        @db.Uuid
+  topic             String        @db.VarChar(200)
+  context           String?       @db.VarChar(2000)
+  reportType        String        @default("research_report") @db.VarChar(40)  // research_report | summary_brief
+  sourcePolicy      String        @default("prefer_user_sources") @db.VarChar(40)
+  status            AiJobStatus   @default(queued)
+  currentStep       AiJobStep?    // 最近一步；中途失败时保留
+  attempts          Int           @default(0)
+  // 5 步流水线中已抓取的来源快照；partial 时保留（架构 §九 风险 10）
+  partialSources    Json          @default("[]")
+  // Worker 租约与心跳（架构 §十三 §3）
+  lockedBy          String?
+  leaseExpiresAt    DateTime?     @db.Timestamptz(3)
+  heartbeatAt       DateTime?     @db.Timestamptz(3)
+  nextRetryAt       DateTime?     @db.Timestamptz(3)
+
+  startedAt         DateTime?     @db.Timestamptz(3)
+  completedAt       DateTime?     @db.Timestamptz(3)
+  // 预算 / 成本埋点（架构 §九 风险 4）
+  tokenInputTotal   Int           @default(0)
+  tokenOutputTotal  Int           @default(0)
+  costCents         Int           @default(0)
+  // idempotency 唯一约束；同一 (用户, key) 不重复扣费
+  idempotencyKey    String?       @db.Uuid
+  errorCode         String?       @db.VarChar(64)
+  errorMessage      String?       @db.VarChar(500)
+  // 生成的研究草稿 id
+  draftResearchId   String?       @db.Uuid
+  createdAt         DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @db.Timestamptz(3)
+
+  requester         User          @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+
+  aiResearchSources AiResearchSource[]
+
+  // 主队列：抢锁 ORDER BY (status, created_at)；partial index 让查询走索引而非全表
+  @@index([status, createdAt(sort: Asc)], where: [status = queued])
+  @@index([status, leaseExpiresAt], where: [status = running])
+  @@unique([requesterId, idempotencyKey], where: [idempotencyKey IS NOT NULL])
+  @@index([requesterId, createdAt(sort: Desc)])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 6. ai_research_sources — AI 调研实际抓到的资料（与 research_sources 区分）
+// ─────────────────────────────────────────────────────────────────────
+
+model AiResearchSource {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId         String        @db.Uuid
+  sourceRef     Json          // 与 research_sources.sourceRef 同 schema
+  canonicalKey  String        @db.VarChar(512)
+  title         String?       @db.VarChar(300)
+  snippet       String?       @db.VarChar(2000)
+  score         Float?
+  stepCaptured  AiJobStep     // source 是哪一步抓到的
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+
+  job           AiResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, canonicalKey])
+  @@index([jobId])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 7. comments — 评论（用显式 FK 多态；架构 §十四 锁定）
+// ─────────────────────────────────────────────────────────────────────
+
+model Comment {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authorId       String        @db.Uuid
+  // 显式双 FK，恰好一个非空（CHECK）
+  targetType     CommentTarget
+  researchId     String?       @db.Uuid
+  summaryId      String?       @db.Uuid
+  body           String        @db.VarChar(2000)
+  parentId       String?       @db.Uuid
+  promoteStatus  PromoteStatus @default(none)
+  starCount      Int           @default(0)
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(3)
+
+  author         User          @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  parent         Comment?      @relation("comment_thread", fields: [parentId], references: [id], onDelete: SetNull)
+  children       Comment[]     @relation("comment_thread")
+  summary        Summary?      @relation("comments_summary", fields: [summaryId], references: [id], onDelete: Cascade)
+  research       Research?     @relation("comments_research", fields: [researchId], references: [id], onDelete: Cascade)
+  knowledgeFrom  Research[]    @relation("comment_to_knowledge")
+  stars          CommentStar[]
+
+  @@index([summaryId, createdAt(sort: Desc)])
+  @@index([researchId, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([promoteStatus])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 8. comment_stars — 一人一票（架构 §十四 §2）
+// ─────────────────────────────────────────────────────────────────────
+
+model CommentStar {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  commentId    String   @db.Uuid
+  userId       String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  comment      Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 9. research_audit — 已发布调研的修改留痕（架构 §十二 锁定）
+// ─────────────────────────────────────────────────────────────────────
+
+model ResearchAudit {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchId    String   @db.Uuid
+  editorId      String   @db.Uuid
+  // create | edit | publish | revert
+  action        String   @db.VarChar(16)
+  diff          Json?
+  prevSnapshot  Json?
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  research      Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  editor        User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
+
+  @@index([researchId, createdAt(sort: Desc)])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 10. content_import_jobs — 文件导入任务（架构 §四点七 锁定）
+// ─────────────────────────────────────────────────────────────────────
+
+model ContentImportJob {
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requesterId         String         @db.Uuid
+  sourceKind          ImportSourceKind
+  status              ImportStatus   @default(queued)
+  originalFilename    String?        @db.VarChar(255)
+  mimeType            String?        @db.VarChar(127)
+  sizeBytes           BigInt?
+  contentSha256       String?        @db.Char(64)
+  // P1 Confluence 用
+  sourceUrl           String?        @db.VarChar(2048)
+  externalPageId      String?        @db.VarChar(255)
+  externalVersion     String?        @db.VarChar(64)
+  // 服务端生成路径，转换后清理；不暴露
+  tempObjectKey       String?        @db.VarChar(255)
+  converterVersion    String         @db.VarChar(64)
+  warnings            Json           @default("[]")
+  errorCode           String?        @db.VarChar(64)
+  errorMessage        String?        @db.VarChar(500)
+  outputResearchId    String?        @db.Uuid
+  // worker 租约（与 ai_research_jobs 同模式）
+  lockedBy            String?
+  leaseExpiresAt      DateTime?      @db.Timestamptz(3)
+  heartbeatAt         DateTime?      @db.Timestamptz(3)
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  completedAt         DateTime?      @db.Timestamptz(3)
+
+  requester           User           @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+
+  // 同一用户同 SHA-256 已成功的任务不再创建（提示"已有导入"）
+  @@unique([requesterId, contentSha256], where: [sourceKind = file AND contentSha256 IS NOT NULL AND status = succeeded])
+  @@index([status, createdAt(sort: Asc)], where: [status = queued OR status = running])
+  @@index([requesterId, createdAt(sort: Desc)])
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 11. admin_actions（审计表）— 见 ADR 0003
+//   在 IMPLEMENTATION_PLAN §十·周度人力预算作为 Week 8 设计 admin API 时启用。
+//   schema freeze 不含此表；任何 P0 评审需要先建 ADR。
+// ─────────────────────────────────────────────────────────────────────
