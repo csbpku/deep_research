@@ -94,7 +94,7 @@
 |---|---:|---|
 | nginx | 80/443 | TLS 终止，转发 Web 和 AI API |
 | web | 3000 | Next.js、BFF、状态 API、内容导入 worker |
-| ai-engine | 8000 | AI worker、adapter、成本与来源记录 |
+| ai-engine | 4000 | AI worker、adapter、成本与来源记录 |
 | arxiv-mcp | 8001 | 可选论文读取服务 |
 | postgres | 5432 | 业务表、全文索引和两个任务队列 |
 
