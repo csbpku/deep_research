@@ -3,6 +3,17 @@ import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from '
 
 // Zod schema：API 输入约束。详细定义见 docs/contracts/api-schemas.md（待补）。
 
+const SourceRefUrl = z.object({
+  type: z.literal('url'),
+  value: z.string().url().max(2048),
+  required: z.boolean().default(false),
+});
+const SourceRefUuid = (literal: 'favorite' | 'research' | 'summary') => z.object({
+  type: z.literal(literal),
+  value: z.string().uuid(),
+  required: z.boolean().default(false),
+});
+
 /** 提交 AI 调研任务（架构 §十三） */
 export const CreateAiJobInput = z.object({
   topic: z.string().min(2).max(200),
@@ -10,11 +21,12 @@ export const CreateAiJobInput = z.object({
   reportType: z.enum(['research_report', 'summary_brief']).default('research_report'),
   sourcePolicy: z.enum([SOURCE_POLICY.PREFER_USER_SOURCES, SOURCE_POLICY.ONLY_USER_SOURCES])
     .default(SOURCE_POLICY.PREFER_USER_SOURCES),
-  sourceRefs: z.array(z.object({
-    type: z.enum(['url', 'favorite', 'research', 'summary']),
-    value: z.string().uuid().or(z.string().url()),
-    required: z.boolean().default(false),
-  })).max(10).default([]),
+  sourceRefs: z.array(z.discriminatedUnion('type', [
+    SourceRefUrl,
+    SourceRefUuid('favorite'),
+    SourceRefUuid('research'),
+    SourceRefUuid('summary'),
+  ])).max(10).default([]),
   idempotencyKey: z.string().uuid().optional(),
 });
 export type CreateAiJobInput = z.infer<typeof CreateAiJobInput>;
@@ -51,15 +63,28 @@ export const NominateCommentInput = z.object({
 export type NominateCommentInput = z.infer<typeof NominateCommentInput>;
 
 /** Admin 审批（架构 §十七） */
+const KnowledgeDraft = z.object({
+  title: z.string().min(2).max(200),
+  body: z.string().min(20).max(2000),
+  tags: z.array(z.string().min(1).max(40)).max(10).default([]),
+});
+export type KnowledgeDraft = z.infer<typeof KnowledgeDraft>;
+
 export const AdminApprovalInput = z.object({
   targetType: z.enum(['share_summary', 'nominated_comment']),
   targetId: z.string().uuid(),
   decision: z.enum(['approve', 'reject']),
-  // 仅 nominated_comment 时必填
-  knowledgeDraft: z.object({
-    title: z.string().min(2).max(200),
-    body: z.string().min(20).max(2000),
-    tags: z.array(z.string().min(1).max(40)).max(10).default([]),
-  }).optional(),
+  // 仅 nominated_comment + approve 时必填；其余组合可选
+  knowledgeDraft: KnowledgeDraft.optional(),
+}).superRefine((data, ctx) => {
+  if (data.targetType === 'nominated_comment' && data.decision === 'approve') {
+    if (!data.knowledgeDraft) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['knowledgeDraft'],
+        message: 'nominated_comment + approve 必须提供 knowledgeDraft',
+      });
+    }
+  }
 });
 export type AdminApprovalInput = z.infer<typeof AdminApprovalInput>;

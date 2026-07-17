@@ -11,9 +11,7 @@
     "test": "vitest run",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
-    "db:reset": "prisma migrate reset --force",
-    "worker:run": "tsx src/worker/index.ts",
-    "worker:lease-recover": "tsx src/worker/recover.ts"
+    "db:reset": "prisma migrate reset --force"
   },
   "dependencies": {
     "@deep-research/shared": "workspace:*",
