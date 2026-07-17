@@ -35,6 +35,48 @@ CREATE INDEX IF NOT EXISTS researches_type_published_idx
     ON "researches" (type, "publishedAt" DESC);
 
 -- ─────────────────────────────────────────────────────────────────────
+-- 3.5  partial index（Prisma 5.x schema.prisma 不支持 where 限定，
+--       架构 §十三 §3 / §四点七 必须有 partial，否则 worker 抢锁全表扫描）
+-- ─────────────────────────────────────────────────────────────────────
+
+-- AI 调研抢锁队列：只对 status='queued' 的一部分建复合索引（与小 cardinality）
+CREATE INDEX IF NOT EXISTS ai_jobs_queue_partial
+    ON "ai_research_jobs" ("createdAt" ASC)
+    WHERE status = 'queued';
+
+-- AI 调研 worker 抢锁与 reaper 查询（status='running' 且 lease 未过期）
+CREATE INDEX IF NOT EXISTS ai_jobs_running_lease_partial
+    ON "ai_research_jobs" ("leaseExpiresAt" ASC)
+    WHERE status = 'running';
+
+-- 候选摘要（每日摘要未精选前的）查询；summary_date 倒序
+CREATE INDEX IF NOT EXISTS summaries_candidate_partial
+    ON "summaries" ("createdAt" DESC)
+    WHERE status = 'candidate';
+
+-- worker 队列候选（content import）
+CREATE INDEX IF NOT EXISTS content_import_jobs_active_partial
+    ON "content_import_jobs" ("createdAt" ASC)
+    WHERE status IN ('queued', 'running');
+
+-- import 任务"已有导入"：同 user 同 SHA-256 已 succeeded 时拒绝重复创建
+CREATE UNIQUE INDEX IF NOT EXISTS content_import_user_hash_partial_uniq
+    ON "content_import_jobs" ("requesterId", "contentSha256")
+    WHERE "sourceKind" = 'file'
+      AND "contentSha256" IS NOT NULL
+      AND status = 'succeeded';
+
+-- researches 中 aiAssisted=true 的子集索引（架构 §十二点五 §3）
+CREATE INDEX IF NOT EXISTS researches_ai_assisted_partial
+    ON "researches" ("id")
+    WHERE "aiAssisted" = true;
+
+-- AI 调研 idempotency：单用户 unique（idempotencyKey 非空时）
+CREATE UNIQUE INDEX IF NOT EXISTS ai_jobs_idempotency_partial_uniq
+    ON "ai_research_jobs" ("requesterId", "idempotencyKey")
+    WHERE "idempotencyKey" IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────
 -- 4. updated_at 自动更新触发器（架构 §五 默认 now()）
 --  Prisma 不直接生成；这里手写
 -- ─────────────────────────────────────────────────────────────────────

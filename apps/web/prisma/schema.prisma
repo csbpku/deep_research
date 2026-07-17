@@ -9,7 +9,7 @@
 
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["fullTextSearchPostgres"]
+  previewFeatures = ["fullTextSearch", "postgresqlExtensions"]
 }
 
 datasource db {
@@ -129,7 +129,6 @@ model User {
   commentStars      CommentStar[]
   aiJobs            AiResearchJob[]
   importJobs        ContentImportJob[]
-  adminApprovals    AdminAction[]
 
   @@index([role, disabledAt])
 }
@@ -166,7 +165,7 @@ model Summary {
   comments            Comment[]      @relation("comments_summary")
 
   @@index([source, createdAt(sort: Desc)])
-  @@index([status, createdAt(sort: Desc)], where: [status = candidate])
+  @@index([status, createdAt(sort: Desc)])
   @@index([summaryDate])
   @@index([sharedByUserId])
 }
@@ -211,7 +210,7 @@ model Research {
 
   @@index([type, publishedAt(sort: Desc)])
   @@index([authorId, status])
-  @@index([aiAssisted], where: [aiAssisted = true])
+  @@index([aiAssisted])
   @@index([sourceCommentId])
 }
 
@@ -276,10 +275,12 @@ model AiResearchJob {
 
   aiResearchSources AiResearchSource[]
 
-  // 主队列：抢锁 ORDER BY (status, created_at)；partial index 让查询走索引而非全表
-  @@index([status, createdAt(sort: Asc)], where: [status = queued])
-  @@index([status, leaseExpiresAt], where: [status = running])
-  @@unique([requesterId, idempotencyKey], where: [idempotencyKey IS NOT NULL])
+  // 主队列：抢锁 ORDER BY (status, created_at)；partial index 在 SQL migration 加
+  // （Prisma 5.x schema 不支持 where 限定；详见 migration init_constraints）
+  @@index([status, createdAt(sort: Asc)])
+  @@index([status, leaseExpiresAt])
+  // @@unique([requesterId, idempotencyKey]) 改为 partial unique（idempotencyKey 非空）
+  // 由 migrations/init_constraints 加，避免 PG 段 非 partial + partial unique 冲突
   @@index([requesterId, createdAt(sort: Desc)])
 }
 
@@ -407,9 +408,11 @@ model ContentImportJob {
 
   requester           User           @relation(fields: [requesterId], references: [id], onDelete: Restrict)
 
-  // 同一用户同 SHA-256 已成功的任务不再创建（提示"已有导入"）
-  @@unique([requesterId, contentSha256], where: [sourceKind = file AND contentSha256 IS NOT NULL AND status = succeeded])
-  @@index([status, createdAt(sort: Asc)], where: [status = queued OR status = running])
+  // 同 (user, sha256) partial unique（sourceKind=file AND contentSha256 IS NOT NULL）
+  // 在 SQL migration init_constraints 加（Prisma 5.x 多条件 where 不支持）；
+  // schema 层不加 non-partial unique，避免 PG 段冲突
+  // @@unique([requesterId, contentSha256])
+  @@index([status, createdAt(sort: Asc)])
   @@index([requesterId, createdAt(sort: Desc)])
 }
 
