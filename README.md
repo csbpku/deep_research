@@ -1,0 +1,86 @@
+# 技术调研平台
+
+> 个人深度研究/技术调研平台。架构基线：`docs/ARCHITECTURE.md` v3.5.1。
+> 实施计划：`docs/IMPLEMENTATION_PLAN.md` v1.1（9 周开发 + 4 周试用）。
+
+## 仓库布局（monorepo）
+
+| 路径 | 角色 | 谁拥有 |
+|---|---|---|
+| `apps/web/` | Next.js 15（App Router）Web 应用 + BFF + Prisma + 后台 AI worker | **工程师 A：Web / 产品流** 独占 |
+| `packages/ai-engine/` | gpt-researcher / Claude pipeline 适配层、Fetch/Compress/Write 轻量路径 | **工程师 B：AI / 平台** 独占 |
+| `packages/shared/` | 类型（Zod schema）、常量（错误码、状态枚举）、OpenAPI 类型 | **只读，双方都不写**，由主会话变更（PR 标 `[shared]`） |
+| `infra/` | docker-compose、nginx、日志卷、备份脚本、健康检查 | **工程师 B** 主维护，**工程师 A** 在 PR 中 review 端口/域名 |
+| `prisma/` | `schema.prisma` / migrations / seed | **共享契约之一**，工程师 A/B **不直接改**；变更走 PR + 主会话 review；schema freeze 后任何人改都要走 ADR |
+| `docs/` | ARCHITECTURE / IMPLEMENTATION_PLAN / DIAGRAMS / MODULE_MAP / mockups / contracts / inputs / archive | 见各文档头部职责 |
+
+> **W1 之前的硬约束**：在 `prisma/schema.prisma` 第一次 merge 后，工程师 A/B 都不直接修改 schema。修改 schema 必须开 `[db]` PR，并由主会话或指定的 schema 维护者 review。
+
+## 先决条件
+
+| 工具 | 用途 | 说明 |
+|---|---|---|
+| Node.js ≥ 20.11 | web (Next.js) | 已知可用版本 |
+| pnpm ≥ 10 | monorepo | `corepack enable && corepack prepare pnpm@10.0.0 --activate` |
+| uv | ai-engine (Python) | 已确认本机存在 |
+| Python ≥ 3.11 | ai-engine runtime | 由 `packages/ai-engine/.python-version` 锁，uv 会自动切换 |
+| Docker / docker compose | infra 部署 | Week 8 验收。本机没 docker 时，DB 用 Postgres.app，AI engine 直接 `pnpm dev:ai` |
+
+## 共享契约（不可被 A/B 私自改）
+
+- **数据库 schema**：`prisma/schema.prisma`，见 `docs/contracts/` 索引
+- **API 错误码与状态码**：见 `docs/contracts/error-codes.md`
+- **业务状态机**：见 `docs/contracts/state-machines.md`
+- **环境变量与脚本名**：`docs/contracts/env-and-scripts.md`
+- **类型与 enum**：`packages/shared/`
+
+任何工程师对以上契约的调整必须通过 PR + 在 ARCHITECTURE.md / IMPLEMENTATION_PLAN.md 同步版本号变更。
+
+## 快速启动（Week 0 之后）
+
+```bash
+# 安装依赖
+pnpm install
+
+# 启动 web + 数据库
+pnpm db:migrate       # 首次需要
+pnpm dev:web          # → http://localhost:3000
+
+# AI engine（另一终端）
+pnpm dev:ai           # → http://localhost:4000
+
+# 自动化校验
+pnpm typecheck
+pnpm test
+```
+
+## 工程师 A/B 工作边界
+
+### 工程师 A：Web / 产品流
+
+负责 `apps/web/`、`packages/ui/`（未来），以及 Next.js / BFF / Auth / 权限 / 搜索 / Admin 控制台 UI / 详情页 / 评论组件等。可读但只读 `packages/shared/`、`prisma/schema.prisma`、`docs/contracts/`。
+
+**禁止**：
+- 改 `packages/ai-engine/`
+- 改 `infra/` 下的部署产物和 nginx 配置
+- 改 `prisma/schema.prisma`（除非走 ADR 流程）
+- 直接调用 OpenAI / Anthropic SDK（必须经过 `packages/ai-engine` 的 adapter）
+- 跳过权限 helper 写"前端先显隐、服务端不校验"的逻辑
+
+### 工程师 B：AI / 平台
+
+负责 `packages/ai-engine/` 和 `infra/` 主维护，以及 AI worker / adapter / 数据抓取 / 导入转换 / 部署 / 日志 / 成本埋点。可读但只读 `packages/shared/`、`prisma/schema.prisma`、`docs/contracts/`。
+
+**禁止**：
+- 改 `apps/web/` 下除 `apps/web/src/lib/db-queries/` 之外的代码（防止两条业务路径重复写）
+- 直接使用 next-auth 或 React 组件（Web 层负责）
+- 跳过 `Job Worker + 任务状态端点` 把 AI 调用塞进 HTTP 请求
+- 引入新第三方 LLM 服务不通知 A（共享配额 + 上下文注入规则要两边一致）
+
+## 9 周开发节奏
+
+详见 `docs/IMPLEMENTATION_PLAN.md`。每周交付记录模板在 `docs/IMPLEMENTATION_PLAN.md §十五`。
+
+## 不进 P0 的功能（禁飞区）
+
+详见 `docs/IMPLEMENTATION_PLAN.md §十四`。任何新增 P0 请求必须同时写明：替换掉哪一项、减少多少人周、是否改变 Week 13 指标。

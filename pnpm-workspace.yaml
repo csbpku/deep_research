@@ -1,0 +1,6 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "infra/*"
+# packages/shared 同时被 web 与 docs 引用，但 docs 不进工作区
+# （docs 下的 npm scripts 由各自文档的片段独立运行；不在 workspaces）

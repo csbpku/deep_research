@@ -1,0 +1,39 @@
+[project]
+name = "ai-engine"
+version = "0.1.0"
+description = "AI 调研引擎、Fetch/Compress/Write 轻量路径、SSRF-safe URL fetcher"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "httpx>=0.27.0",
+    "psycopg[binary,pool]>=3.2.0",
+    "tenacity>=9.0.0",
+    "structlog>=24.4.0",
+    "arxiv-mcp-server>=0.1.0; platform_system != 'Windows'",
+    # Week 1 spike 后再加：gpt-researcher（含 fork）或 claude-sdk
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ai_engine"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.mypy]
+strict = true
+python_version = "3.11"

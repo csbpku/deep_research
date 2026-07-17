@@ -1,0 +1,27 @@
+{
+  "name": "deep_research",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "db:migrate": "pnpm --filter @deep-research/web db:migrate",
+    "db:generate": "pnpm --filter @deep-research/web db:generate",
+    "db:reset": "pnpm --filter @deep-research/web db:reset",
+    "dev:web": "pnpm --filter @deep-research/web dev",
+    "dev:ai": "pnpm --filter @deep-research/web dev:ai",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "worker:run": "pnpm --filter @deep-research/web worker:run",
+    "worker:lease-recover": "pnpm --filter @deep-research/web worker:lease-recover"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
