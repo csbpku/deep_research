@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useSession, signOut } from 'next-auth/react';
+import { signOut } from 'next-auth/react';
+import { useEffect, useState } from 'react';
 
 /**
  * 顶部导航。
@@ -10,13 +11,40 @@ import { useSession, signOut } from 'next-auth/react';
  * - 未登录显示「登录」按钮
  *
  * 前端显隐仅作体验；直链访问 /admin* 仍会被服务端 requireAdmin() 拒绝（验收 2）。
+ *
+ * Week 2 改动：用 /api/auth/session 轻量轮询（30s）替换 Week 1 的占位；
+ * 不引入 SessionProvider —— 仅登录态显隐这一个用途。
  */
+type SessionView = {
+  user?: { email?: string; role?: 'admin' | 'member'; name?: string };
+} | null;
+
 export function Nav() {
-  // useSession 仅作为前端显隐依据；服务端以 getCurrentUser() / requireAdmin() 为准。
-  // 这里用 next-auth/react 的 SessionProvider 必须在 root 包装，Week 1 先用
-  // 一个本地轻量轮询避免引入额外 Context provider —— Week 8 接入 Admin UI 时统一改。
-  // 简化：直接读 cookie 触发显示态；通过 /api/auth/session 拉一次。
-  const session = useSessionPlaceholder();
+  const [session, setSession] = useState<SessionView>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await fetch('/api/auth/session', { cache: 'no-store' });
+        if (!r.ok) {
+          if (!cancelled) setSession(null);
+          return;
+        }
+        const body = (await r.json()) as SessionView;
+        if (!cancelled) setSession(body);
+      } catch {
+        if (!cancelled) setSession(null);
+      }
+    }
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
   const isAdmin = session?.user?.role === 'admin';
 
   return (
@@ -46,7 +74,12 @@ export function Nav() {
             <button
               type="button"
               onClick={() => signOut({ callbackUrl: '/signin' })}
-              style={{ border: '1px solid #cbd5e1', background: '#fff', padding: '4px 10px', borderRadius: 4 }}
+              style={{
+                border: '1px solid #cbd5e1',
+                background: '#fff',
+                padding: '4px 10px',
+                borderRadius: 4,
+              }}
             >
               登出
             </button>
@@ -68,20 +101,4 @@ export function Nav() {
       </div>
     </nav>
   );
-}
-
-/**
- * 占位：Week 1 不接 SessionProvider（避免在 RootLayout 引入 client provider 后
- * 把整个 layout 变 client component）。这里直接 fetch /api/auth/session 拿一次。
- *
- * Week 2 接入 next-auth/react 的 SessionProvider 后改回 useSession() 即可；
- * 渲染逻辑保持不变。
- */
-function useSessionPlaceholder(): { user?: { email?: string; role?: 'admin' | 'member' } } | null {
-  // 用 React.useSyncExternalStore 拉一次，避免引入额外依赖
-  // 这里用最朴素的版本 —— 静态 null（未登录）；admin 显隐只作前端体验；
-  // 服务端 requireAdmin 是真实拦截，前端显隐与服务端解耦。
-  // 真正实现见 Week 2。
-  if (typeof window === 'undefined') return null;
-  return null;
 }
