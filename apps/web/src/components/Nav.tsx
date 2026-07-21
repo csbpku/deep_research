@@ -12,6 +12,7 @@ import { SignOutButton } from './SignOutButton.js';
  *
  * Week 1 review 修正：原版 useSessionPlaceholder() 永远返回 null，admin 自己
  * 也看不见入口。本版用 RSC 直接调 getCurrentUser()，signOut 抽到独立 client component。
+ * Week 2 保持不变 — Nav 继续 RSC，getCurrentUser() 从数据库 session 实时读角色。
  */
 export async function Nav() {
   const user = await getCurrentUser();
