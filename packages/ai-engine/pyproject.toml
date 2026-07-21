@@ -12,7 +12,9 @@ dependencies = [
     "tenacity>=9.0.0",
     "structlog>=24.4.0",
     "arxiv-mcp-server>=0.1.0; platform_system != 'Windows'",
-    # Week 1 spike 后再加：gpt-researcher（含 fork）或 claude-sdk
+    # Week 2 spike 后固化(ADR 0004 #5):Claude pipeline adapter 走 Anthropic SDK。
+    # 本地/开发通过 ANTHROPIC_BASE_URL 接 cc-switch,生产由 KMS 注入真 key。
+    "anthropic>=0.40",
 ]
 
 [dependency-groups]
@@ -40,3 +42,6 @@ python_version = "3.11"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "requires_db: tests that hit a real Postgres — skip if DATABASE_URL is unreachable.",
+]

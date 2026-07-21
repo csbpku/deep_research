@@ -295,13 +295,21 @@ def build_store(
             or int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")),
         )
     if chosen == "db":
-        # Week 5 — until then, fail loudly so misconfig is caught at startup.
-        raise AdapterError(
-            code="NOT_IMPLEMENTED",
-            message=(
-                "DB-backed job store is Week 5 work. "
-                "Use JOB_RUNNER_BACKEND=memory for the Week 1 skeleton."
-            ),
+        # Week 2 — DB-backed store is live. We import lazily so tests that
+        # pick `memory` don't pull psycopg_pool / psycopg into memory.
+        from ai_engine.job_runner.db_store import (  # noqa: PLC0415
+            AI_TABLE,
+            DbJobStore,
+        )
+
+        # Pick the table by JOB_RUNNER_TABLE env (default AI_TABLE). Import
+        # jobs use the same runner — Week 3+ wires the switch in.
+        table_name = os.environ.get("JOB_RUNNER_TABLE", AI_TABLE)
+        return DbJobStore(
+            table_name=table_name,
+            lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "60")),
+            heartbeat_seconds=heartbeat_seconds
+            or int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")),
         )
     raise AdapterError(
         code="VALIDATION_FAILED",
