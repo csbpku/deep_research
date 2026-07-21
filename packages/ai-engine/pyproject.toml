@@ -12,7 +12,9 @@ dependencies = [
     "tenacity>=9.0.0",
     "structlog>=24.4.0",
     "arxiv-mcp-server>=0.1.0; platform_system != 'Windows'",
-    # Week 1 spike 后再加：gpt-researcher（含 fork）或 claude-sdk
+    # Week 2 spike 后固化(ADR 0004 #5):Claude pipeline adapter 走 Anthropic SDK。
+    # 本地/开发通过 ANTHROPIC_BASE_URL 接 cc-switch,生产由 KMS 注入真 key。
+    "anthropic>=0.40",
 ]
 
 [dependency-groups]
@@ -44,3 +46,6 @@ asyncio_mode = "auto"
 # Week 1 review 修正:submit 改 fire-and-forget 后台 task,需要 async 测试
 # 客户端驱动 event loop 排到后台 task。asyncio_mode = auto 让所有 test/fixture
 # 默认当 async 处理。
+markers = [
+    "requires_db: tests that hit a real Postgres — skip if DATABASE_URL is unreachable.",
+]

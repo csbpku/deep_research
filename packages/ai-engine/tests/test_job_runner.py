@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from ai_engine.adapters.fake import FakeAdapter
-from ai_engine.contracts.errors import AdapterError
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
     PARTIAL_MIN_SOURCES,
@@ -34,10 +33,19 @@ async def test_build_store_default_is_memory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_store_db_is_not_implemented_in_week1() -> None:
-    with pytest.raises(AdapterError) as exc_info:
-        build_store(name="db")
-    assert exc_info.value.code == "NOT_IMPLEMENTED"
+async def test_build_store_db_constructs_without_connecting() -> None:
+    """Week 2: DbJobStore is implemented but the pool opens lazily.
+
+    `build_store(name='db')` returns a DbJobStore without dialing Postgres.
+    The first acquire/enqueue hits the real DB. This lets the unit-test
+    suite (which doesn't need DB) keep using the memory backend.
+    """
+    from ai_engine.job_runner.db_store import DbJobStore
+
+    store = build_store(name="db")
+    assert isinstance(store, DbJobStore)
+    # Pool must not be open yet (no side-effects at construction).
+    assert store._pool_open is False
 
 
 @pytest.mark.asyncio

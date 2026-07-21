@@ -172,17 +172,16 @@ def build_adapter(name: str | None = None) -> ResearchEngineAdapter:
 
         return FakeAdapter()
     if chosen == "claude":
-        # Week 5 — placeholder until ADR 0004 is approved and main session
-        # installs anthropic SDK. We still raise so misconfig is loud.
-        raise AdapterError(
-            code="NOT_IMPLEMENTED",
-            message="claude adapter is not implemented in Week 1 skeleton",
-            request_id=None,
-        )
+        # Week 2 — real Claude adapter via Anthropic SDK (ADR 0004 #1/#5).
+        # Defaults to ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL + ANTHROPIC_MODEL
+        # from env so cc-switch works out of the box.
+        from ai_engine.adapters.claude import ClaudeAdapter
+
+        return ClaudeAdapter()
     if chosen == "gpt_researcher":
         raise AdapterError(
             code="NOT_IMPLEMENTED",
-            message="gpt_researcher adapter is not implemented in Week 1 skeleton",
+            message="gpt-researcher was rejected by ADR 0004 — not implemented.",
             request_id=None,
         )
     raise AdapterError(
