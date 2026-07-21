@@ -131,6 +131,18 @@ async def run_once(
             AI_JOB_STATUS["FAILED"],
             AI_JOB_STATUS["CANCELLED"],
         ):
+            # Week 1 review 修正：终态 poll 必须 record_progress 一次,否则
+            # row.last_sources 只反映第一次 poll(空),fake adapter 的
+            # sources 在 asyncio.create_task 完成时才填,runner 先 break 跳出
+            # 就丢失了终态 sources。
+            await store.record_progress(
+                lease,
+                current_step=status.current_step,
+                token_in=status.cost.token_input_total,
+                token_out=status.cost.token_output_total,
+                cost_cents=status.cost.cost_cents,
+                sources=status.sources,
+            )
             terminal = status
             break
         # Notify progress.

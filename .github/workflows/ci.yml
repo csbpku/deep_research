@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: web (typecheck + test + prisma validate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prisma validate (no migration)
+        run: pnpm exec prisma validate
+      - name: Prisma generate
+        run: pnpm db:generate
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+
+  monorepo-typecheck:
+    name: monorepo typecheck (shared + web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+
+  ai-engine:
+    name: ai-engine (pytest + ruff + mypy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/ai-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Sync deps
+        run: uv sync --frozen
+      - name: Pytest
+        run: uv run pytest -q
+      - name: Ruff
+        run: uv run ruff check .
+      - name: Mypy
+        run: uv run mypy ai_engine tools

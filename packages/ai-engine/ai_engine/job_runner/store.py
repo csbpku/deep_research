@@ -39,6 +39,10 @@ class _Row:
     last_token_out: int = 0
     last_cost_cents: int = 0
     last_sources: tuple[AdapterSource, ...] = ()
+    # Week 1 review 修正：GET /api/ai/jobs/{id} 需要返回终态 error_code /
+    # error_message,但原 Row 没存。mark_terminal 写入这两个字段供 HTTP 层读。
+    last_error_code: str | None = None
+    last_error_message: str | None = None
 
 
 class JobStore:
@@ -238,6 +242,8 @@ class InMemoryJobStore(JobStore):
             row.locked_by = None
             row.lease_expires_at = None
             row.heartbeat_at = None
+            row.last_error_code = error_code
+            row.last_error_message = error_message
         # Caller is responsible for downstream side-effects (e.g. draft
         # research row) — see Week 5 worker.
 

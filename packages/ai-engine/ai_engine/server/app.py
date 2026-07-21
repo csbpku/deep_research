@@ -1,25 +1,20 @@
 """Server package — FastAPI app + middleware + routes.
 
-Endpoint surface (Week 1 skeleton):
+Endpoint surface (Week 2):
 
 - `GET  /healthz` — liveness; returns adapter health + service identity.
 - `GET  /health`  — backward-compat alias of `/healthz`.
-- `POST /api/ai/jobs` — submit an AI research job (returns in <2s with a
-  job id, mirroring ARCHITECTURE §七 "POST /api/ai-research").
-- `GET  /api/ai/jobs/{job_id}` — read job status (current_step,
-  sources count, cost snapshot). Mirrors "GET /api/ai-research/{id}/status".
+- `POST /api/ai/jobs` — submit an AI research job; returns 202 within 2s
+  with a job id and `status="queued"`. Client polls `GET /api/ai/jobs/{id}`
+  every 5s for `current_step` / `final_status` / cost. Mirrors
+  ARCHITECTURE §七 "POST /api/ai-research".
+- `GET  /api/ai/jobs/{job_id}` — read job status.
 - `POST /api/ai/jobs/{job_id}/cancel` — cancel a queued or running job.
 
-Week 5 will:
-- Persist jobs via the DB-backed store (`JOB_RUNNER_BACKEND=db`).
-- Trigger the runner asynchronously after submit.
-- Wire idempotency + budget checks before submission.
-
-In Week 1 we run jobs **synchronously after submit** against the
-in-memory store so the HTTP contract is exercisable end-to-end. The
-request returns the final `RunOutcome` shape so the BFF can already
-render it; this trades a slow response for a complete Week 1 skeleton.
-This trade-off is documented as ADR 0004 #3 in the spike report.
+Week 1 review 修正：原版在 HTTP 请求内 `await run_one_available_job(...)`,
+真实 LLM 接入后时延可达 5 分钟，会把 HTTP 连接耗尽。Week 2 起改 fire-and-forget
+后台 task，HTTP 立即返回 202 + queued。Runner 真实 DB 接入留到 Week 2 runner
+（实施计划 §四 160 行：PostgreSQL shared runner）。
 """
 
 from __future__ import annotations
@@ -115,7 +110,7 @@ async def request_context_middleware(request: Request, call_next):  # type: igno
             error_message=exc.message,
         )
         return _error_response(exc, request_id)
-    except Exception:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover — defensive
         elapsed_ms = int((asyncio.get_event_loop().time() - started) * 1000)
         log.exception(
             "ai-engine.unhandled",
@@ -123,6 +118,12 @@ async def request_context_middleware(request: Request, call_next):  # type: igno
             route=request.url.path,
             latency_ms=elapsed_ms,
         )
+        # Week 1 review 修正:structlog JSONRenderer 配 exc_info 时,
+        # format_exc_info processor 没在 chain 里,异常 stack 不进 JSON。
+        # 用 traceback 显式打 stderr,运维 grep 能直接定位。
+        import traceback as _tb
+        print(f"[UNHANDLED {request_id}] {type(exc).__name__}: {exc}", file=__import__('sys').stderr)
+        _tb.print_exception(type(exc), exc, exc.__traceback__, file=__import__('sys').stderr)
         return JSONResponse(
             status_code=500,
             content={
@@ -272,7 +273,6 @@ async def submit_ai_job(
             "AI_INVALID_SOURCE_POLICY",
             "only_user_sources requires at least one source_ref",
         )
-    adapter = _adapter_singleton()
     # 1. Persist the snapshot so subsequent GET can find it.
     snapshot = make_job_snapshot(
         topic=body.topic,
@@ -296,27 +296,82 @@ async def submit_ai_job(
     )
     await store.enqueue(snapshot)
 
-    # 2. Run synchronously against the in-memory store. Week 5 will replace
-    # this with an `asyncio.create_task` so the BFF can poll.
-    outcome = await run_one_available_job(store=store, adapter=adapter)
-    if outcome is None:
-        # Shouldn't happen — we just enqueued. Defensive.
-        raise _http_error("INTERNAL", "submit lost the job immediately")
+    # 2. Fire-and-forget background runner. Week 1 review 修正：原版同步
+    # await run_one_available_job 会阻塞 HTTP 连接 5 分钟。Week 2 起改
+    # 后台 task，立即返回 202 + queued。BFF 后续 5s 轮询 GET 拿状态。
+    #
+    # 注意：必须显式把 request-scoped 的 store + adapter 捕获进 task —
+    # 否则 request 结束后依赖被释放，且测试通过 app.dependency_overrides
+    # 注入的 fake adapter / store 不会被后台 task 看到。
+    adapter = _adapter_singleton()
+    job_id = body.job_id
+    request_id = getattr(request.state, "request_id", None)
+    asyncio.create_task(
+        _background_run(
+            store=store,
+            adapter=adapter,
+            job_id=job_id,
+            request_id=request_id,
+        )
+    )
 
     return SubmitAiJobResponse(
-        job_id=outcome.job_id,
-        status="completed",
-        final_status=outcome.final_status,
-        current_step=outcome.current_step,
-        sources_count=len(outcome.sources),
-        token_input_total=outcome.cost.token_input_total,
-        token_output_total=outcome.cost.token_output_total,
-        cost_cents=outcome.cost.cost_cents,
-        search_count=outcome.cost.search_count,
-        error_code=outcome.error_code,
-        error_message=outcome.error_message,
-        request_id=getattr(request.state, "request_id", None),
+        job_id=job_id,
+        status="queued",
+        final_status=None,
+        current_step=None,
+        sources_count=0,
+        token_input_total=0,
+        token_output_total=0,
+        cost_cents=0,
+        search_count=0,
+        error_code=None,
+        error_message=None,
+        request_id=request_id,
     )
+
+
+async def _background_run(
+    *,
+    store: InMemoryJobStore,
+    adapter: ResearchEngineAdapter,
+    job_id: str,
+    request_id: str | None,
+) -> None:
+    """后台跑一个 job;出错仅记日志,不影响 HTTP 响应(已经返回)。
+
+    store / adapter 从 endpoint 显式传 — 这样:
+    1. 测试通过 app.dependency_overrides 注入的 fake adapter / InMemoryJobStore
+       在后台 task 里仍可见(endpoint 已经 resolve 过);
+    2. 生产 uvicorn 单进程场景下 request-scoped store 在 request 结束后会被释放,
+       但 submit 自身是同步 path,store 在 task 创建时已经被引用,gather 期间
+       不会释放。
+    Week 2 引入 DB-backed store 后改成 process-global singleton,本签名不变。
+    """
+    log = structlog.get_logger("ai_engine.runner")
+    try:
+        outcome = await run_one_available_job(store=store, adapter=adapter)
+        if outcome is None:
+            log.warning(
+                "ai-engine.background.no_job",
+                request_id=request_id,
+                job_id=job_id,
+            )
+        else:
+            log.info(
+                "ai-engine.background.done",
+                request_id=request_id,
+                job_id=outcome.job_id,
+                final_status=outcome.final_status,
+                current_step=outcome.current_step,
+                cost_cents=outcome.cost.cost_cents,
+            )
+    except Exception:
+        log.exception(
+            "ai-engine.background.unhandled",
+            request_id=request_id,
+            job_id=job_id,
+        )
 
 
 @app.get("/api/ai/jobs/{job_id}", response_model=SubmitAiJobResponse)
@@ -339,8 +394,8 @@ async def get_ai_job(
         token_output_total=row.last_token_out,
         cost_cents=row.last_cost_cents,
         search_count=row.last_sources.__len__() if row.last_sources else 0,
-        error_code=None,
-        error_message=None,
+        error_code=row.last_error_code,
+        error_message=row.last_error_message,
         request_id=getattr(request.state, "request_id", None),
     )
 
