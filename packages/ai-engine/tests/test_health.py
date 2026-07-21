@@ -11,4 +11,7 @@ async def test_health() -> None:
         response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    # /health is the legacy alias of /healthz; it returns adapter metadata.
+    assert body["status"] == "ok"
+    assert body["adapter"] == "fake"
