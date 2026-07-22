@@ -1,0 +1,11 @@
+# packages/ai-engine local config
+# W2 review 修正:根 .gitignore 只 ignore 顶层 .env,嵌套 packages/.env
+# 不被 ignore,曾导致真 Tavily key 被 commit 到 main。在 packages/ai-engine
+# 也加 ignore 防复发。
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
