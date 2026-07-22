@@ -103,7 +103,7 @@ class TestDbJobStoreIntegration:
             a1 = await store_a.acquire_next_job("worker-A")
             assert a1 is not None
             # 用 store_b(独立 pool)跟 store_a 竞争同一个队列
-            a2 = await store_b.acquire_next_job("worker-B")
+            _ = await store_b.acquire_next_job("worker-B")
             # 已由 store_a 独占,store_b 应该拿不到
             # 但 store_b 的 SKIP LOCKED 在独立事务里,store_a 的 lease 对其可见
             # 所以两个 worker 都有可能抢到(取决于行锁释放时机)
@@ -294,3 +294,178 @@ class TestDbJobStoreIntegration:
                 assert count == 1
         finally:
             await store.close()
+
+
+class TestImportJobStoreIntegration:
+    """W3: content_import_jobs 表全链路测试 (enqueue/acquire/heartbeat/mark_terminal/reap)。
+
+    复用 DbJobStore 的 lease 语义,验证 import 表专有字段 (sourceKind/outputResearchId)。
+    """
+
+    async def test_enqueue_and_acquire_import_job(self) -> None:
+        """enqueue + acquire 对 import 表:不抛 SQL 错误。W2 review #4 fix。"""
+        from ai_engine.job_runner.db_store import IMPORT_TABLE
+
+        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "import test")
+            await store.enqueue(snap)
+
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, snap2 = acquired
+            assert snap2.job_id == snap.job_id
+            assert snap2.status == "running"
+        finally:
+            await store.close()
+
+    async def test_heartbeat_import_job(self) -> None:
+        from ai_engine.job_runner.db_store import IMPORT_TABLE
+
+        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "import heartbeat")
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+            hb = await store.heartbeat(lease)
+            assert hb.renewed
+            assert hb.lease_expires_at is not None
+        finally:
+            await store.close()
+
+    async def test_mark_terminal_import_succeeded(self) -> None:
+        """import 表 succeeded → outputResearchId 写入。验证不抛 SQL 错误。"""
+        import uuid as _uuid
+        from ai_engine.job_runner.db_store import IMPORT_TABLE
+
+        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "import succeeded")
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+
+            # 先创建真 research row 作为 output
+            research_id = str(_uuid.uuid4())
+            async with store._pool.connection() as conn:
+                await conn.execute(
+                    'INSERT INTO "researches" ("id", "type", "status", "title", "body", "authorId", "createdAt", "updatedAt") '
+                    "VALUES (%s, 'research', 'draft', %s, 'import test body', %s, now(), now())",
+                    (research_id, "import succeeded draft", user_id),
+                )
+                await conn.commit()
+
+            await store.mark_terminal(
+                lease, "succeeded",
+                current_step=None,
+                error_code=None,
+                error_message=None,
+                draft_research_id=research_id,
+            )
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.status == "succeeded"
+        finally:
+            await store.close()
+
+    async def test_mark_terminal_import_failed(self) -> None:
+        """import 表 failed → errorCode 写入,outputResearchId=NULL。"""
+        from ai_engine.job_runner.db_store import IMPORT_TABLE
+
+        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "import failed")
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+
+            await store.mark_terminal(
+                lease, "failed",
+                current_step=None,
+                error_code="IMPORT_NOT_UTF8",
+                error_message="integration test import error",
+                draft_research_id=None,
+            )
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.status == "failed"
+            assert row.last_error_code == "IMPORT_NOT_UTF8"
+        finally:
+            await store.close()
+
+    async def test_reaper_import_job(self) -> None:
+        """import 表 reaper:过期 lease 被回收。"""
+        from ai_engine.job_runner.db_store import IMPORT_TABLE
+
+        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "import reaper")
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+            # 拨租约到过去
+            async with store._pool.connection() as conn:
+                await conn.execute(
+                    'UPDATE "content_import_jobs" SET "leaseExpiresAt" = now() - interval \'1 minute\' WHERE "id" = %s',
+                    (lease.job_id,),
+                )
+            n = await store.reap_expired_leases()
+            assert n >= 1
+        finally:
+            await store.close()
+
+
+class TestIngestionIntegration:
+    """W3: 真实 ingestion pipeline 集成测试 (RSS + Arxiv -> summaries 表)。"""
+
+    @pytest.mark.skip(reason="network-bound: run manually with real feeds")
+    async def test_ingestion_pipeline_writes_summaries(self) -> None:
+        """真 ingestion:fetch RSS + Arxiv,写入 summaries 表,验证 canonicalUrl UNIQUE 幂等。"""
+        from ai_engine.ingestion.pipeline import run_ingestion as _run_ingestion
+        from psycopg_pool import AsyncConnectionPool
+        from psycopg.rows import dict_row
+
+        dsn = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/deep_research")
+        pool = AsyncConnectionPool(
+            conninfo=dsn, min_size=1, max_size=2,
+            kwargs={"row_factory": dict_row}, open=False,
+        )
+        await pool.open()
+        await pool.wait()
+        try:
+            # Run ingestion
+            result = await _run_ingestion(pool, max_total=4, rss_per_feed=2, arxiv_count=2)
+            assert result.sources_attempted > 0, "Should fetch at least some sources"
+            total = result.summaries_inserted + result.duplicates_skipped
+            assert total > 0, "Should have at least one summary result"
+
+            # Run again — should get duplicates, not errors
+            result2 = await _run_ingestion(pool, max_total=4, rss_per_feed=2, arxiv_count=2)
+            assert len(result2.errors) == 0, f"Second run should have no errors: {result2.errors}"
+
+            # Verify data in DB
+            async with pool.connection() as conn:
+                cur = await conn.execute(
+                    'SELECT count(*) FROM "summaries" WHERE "source" = %s',
+                    ("daily",),
+                )
+                row = await cur.fetchone()
+                count = row[0] if isinstance(row, tuple) else row.get("count", 0)
+                assert count >= 1, "At least one summary should exist in DB"
+        finally:
+            await pool.close()

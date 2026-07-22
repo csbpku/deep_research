@@ -13,7 +13,14 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from ai_engine.adapters.base import AdapterSource, CostMetrics
-from ai_engine.contracts.states import AiJobStatus, AiJobStep, ReportType, SourcePolicy
+from ai_engine.contracts.states import (
+    AiJobStatus,
+    AiJobStep,
+    ImportStatus,
+    ImportSourceKind,
+    ReportType,
+    SourcePolicy,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -46,6 +53,24 @@ class JobSnapshot:
     attempts: int
     idempotency_key: str | None
     source_refs: tuple[dict[str, str | bool], ...]
+
+
+@dataclass(slots=True, frozen=True)
+class ImportJobSnapshot:
+    """Minimal row view for content_import_jobs — W3 import worker.
+
+    Mirrors the content_import_jobs columns that the worker touches.
+    """
+
+    job_id: str
+    requester_id: str
+    source_kind: ImportSourceKind
+    status: ImportStatus
+    original_filename: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    content_sha256: str | None = None
+    attempts: int = 0
 
 
 @dataclass(slots=True, frozen=True)
