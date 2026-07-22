@@ -36,7 +36,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from ai_engine.adapters.base import AdapterSource
 from ai_engine.contracts.errors import AdapterError
-from ai_engine.contracts.states import AiJobStep
+from ai_engine.contracts.states import AiJobStatus, AiJobStep
 from ai_engine.job_runner.models import (
     HeartbeatResult,
     JobLease,
@@ -88,7 +88,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
             Literal["prefer_user_sources", "only_user_sources"],
             str(row.get("sourcePolicy", "prefer_user_sources")),
         ),
-        status=str(row["status"]),  # type: ignore[arg-type]
+        status=cast(AiJobStatus, str(row["status"])),  # type: ignore[arg-type]
         current_step=cur_step_str,
         attempts=cast(int, row.get("attempts")) if row.get("attempts") is not None else 0,
         idempotency_key=(
@@ -139,6 +139,13 @@ class DbJobStore(JobStore):
     def table_name(self) -> str:
         return self._table_name
 
+    @property
+    def pool(self) -> AsyncConnectionPool:
+        """Expose the underlying psycopg pool for direct queries (ingestion, etc.)."""
+        if self._pool is None:
+            raise RuntimeError("DbJobStore.pool accessed before open()")
+        return self._pool
+
     async def open(self) -> None:
         if not self._pool_open:
             self._pool = AsyncConnectionPool(
@@ -177,29 +184,53 @@ class DbJobStore(JobStore):
     async def enqueue(self, snapshot: JobSnapshot) -> None:
         await self.open()
         t = f'"{self._table_name}"'
-        sql = (
-            f"INSERT INTO {t} "
-            f'("id", "requesterId", "topic", "context", "reportType", "sourcePolicy", '
-            f'"status", "currentStep", "attempts", "idempotencyKey", "sourceRefs", '
-            f'"partialSources", "failedSources", "updatedAt") '
-            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now()) "
-            f"ON CONFLICT (id) DO NOTHING"
-        )
-        params = (
-            snapshot.job_id,
-            snapshot.requester_id,
-            snapshot.topic,
-            snapshot.context,
-            snapshot.report_type,
-            snapshot.source_policy,
-            "queued",
-            snapshot.current_step,
-            snapshot.attempts,
-            snapshot.idempotency_key,
-            json.dumps(list(snapshot.source_refs)),
-            json.dumps([]),
-            json.dumps([]),
-        )
+        params: tuple[object, ...]
+        if self._table_name == IMPORT_TABLE:
+            # content_import_jobs has different columns from ai_research_jobs
+            # W2 review #4 fix: enqueue supports import table specific fields
+            # content_import_jobs has no updatedAt column — must avoid
+            # triggering touch_updated_at trigger which references it.
+            # The createdAt column is auto-populated by the default.
+            sql = (
+                f"INSERT INTO {t} "
+                f'("id", "requesterId", "sourceKind", "status", "attempts", '
+                f'"converterVersion", "createdAt") '
+                f"VALUES (%s, %s, %s, %s, %s, %s, now()) "
+                f"ON CONFLICT (id) DO NOTHING"
+            )
+            params = (
+                snapshot.job_id,
+                snapshot.requester_id,
+                "file",  # P0 default
+                "queued",
+                0,
+                "w3-v1",
+            )
+        else:
+            sql = (
+                f"INSERT INTO {t} "
+                f'("id", "requesterId", "topic", "context", "reportType", "sourcePolicy", '
+                f'"status", "currentStep", "attempts", "idempotencyKey", "sourceRefs", '
+                f'"partialSources", "failedSources", "updatedAt") '
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now()) "
+                f"ON CONFLICT (id) DO NOTHING"
+            )
+            ai_params: tuple[object, ...] = (
+                snapshot.job_id,
+                snapshot.requester_id,
+                snapshot.topic,
+                snapshot.context,
+                snapshot.report_type,
+                snapshot.source_policy,
+                "queued",
+                snapshot.current_step,
+                snapshot.attempts,
+                snapshot.idempotency_key,
+                json.dumps(list(snapshot.source_refs)),
+                json.dumps([]),
+                json.dumps([]),
+            )
+            params = ai_params
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(sql, params)
@@ -211,6 +242,20 @@ class DbJobStore(JobStore):
         now = _now_utc()
         lease_expires_at = now + timedelta(seconds=self._lease_seconds)
         t = f'"{self._table_name}"'
+
+        if self._table_name == IMPORT_TABLE:
+            # content_import_jobs has different columns from ai_research_jobs
+            returning_cols = (
+                "j.\"id\", j.\"requesterId\", j.\"sourceKind\", j.\"status\", j.\"attempts\", "
+                "j.\"originalFilename\", j.\"mimeType\", j.\"sizeBytes\", j.\"contentSha256\""
+            )
+        else:
+            returning_cols = (
+                'j."id", j."requesterId", j."topic", j."context", j."reportType", '
+                'j."sourcePolicy", j."status", j."currentStep", j."attempts", '
+                'j."idempotencyKey", j."sourceRefs"'
+            )
+
         sql = (
             f"WITH cte AS ("
             f'  SELECT "id" FROM {t} '
@@ -224,15 +269,12 @@ class DbJobStore(JobStore):
             f"SET \"status\" = 'running', "
             f'    "lockedBy" = %s, '
             f'    "leaseExpiresAt" = %s, '
-            f'    "heartbeatAt" = %s, '
-            f'    "startedAt" = COALESCE(j."startedAt", %s) '
+            f'    "heartbeatAt" = %s '
             f"FROM cte "
             f'WHERE j."id" = cte."id" '
-            f'RETURNING j."id", j."requesterId", j."topic", j."context", j."reportType", '
-            f'          j."sourcePolicy", j."status", j."currentStep", j."attempts", '
-            f'          j."idempotencyKey", j."sourceRefs"'
+            f"RETURNING {returning_cols}"
         )
-        params = (worker_id, lease_expires_at, now, now)
+        params = (worker_id, lease_expires_at, now)
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 cur = await conn.execute(sql, params)
@@ -242,7 +284,24 @@ class DbJobStore(JobStore):
         # W2 review 修正:psycopg 默认 row_factory 返回 dict_row,fetchone() 是 dict。
         if not isinstance(row, dict):
             row = dict(row)
-        snapshot = _row_to_snapshot(row)
+
+        # For import table, construct snapshot from import-specific columns
+        if self._table_name == IMPORT_TABLE:
+            snapshot = JobSnapshot(
+                job_id=str(row["id"]),
+                requester_id=str(row["requesterId"]),
+                topic=str(row.get("originalFilename", "import") or "import"),
+                context=None,
+                report_type="summary_brief",
+                source_policy="prefer_user_sources",
+                status=cast(AiJobStatus, str(row["status"])),
+                current_step=None,
+                attempts=cast(int, row.get("attempts")) or 0,
+                idempotency_key=None,
+                source_refs=(),
+            )
+        else:
+            snapshot = _row_to_snapshot(row)
         lease = JobLease(
             job_id=snapshot.job_id,
             worker_id=worker_id,
@@ -281,6 +340,11 @@ class DbJobStore(JobStore):
         cost_cents: int,
         sources: Iterable[AdapterSource],
     ) -> None:
+        # content_import_jobs doesn't have currentStep / tokenInputTotal / partialSources
+        # columns — record_progress is a no-op for the import table. The import worker
+        # writes outputResearchId and status via mark_terminal.
+        if self._table_name == IMPORT_TABLE:
+            return
         await self.open()
         sources_json = json.dumps(
             [
@@ -331,42 +395,65 @@ class DbJobStore(JobStore):
     ) -> None:
         await self.open()
         t = f'"{self._table_name}"'
-        # W2 review 修正:schema CHECK ai_jobs_draft_matches_status 强制
-        # succeeded 时 draftResearchId NOT NULL + FK 指向 researches.id。
-        # 全零 UUID sentinel 100% 违反 FK;W2 不再自造 sentinel。
-        # 契约:caller 必须对 succeeded 传真 draft_id。
-        if status == "succeeded" and not draft_research_id:
-            raise ValueError(
-                "mark_terminal: succeeded requires draft_research_id; "
-                "caller must INSERT a research row first and pass its id. "
-                "(schema CHECK ai_jobs_draft_matches_status)"
+        params: tuple[object, ...]
+
+        if self._table_name == IMPORT_TABLE:
+            # content_import_jobs uses outputResearchId (not draftResearchId),
+            # has no currentStep column, and accepts succeeded/failed/partial/cancelled
+            # directly (no ai_jobs_draft_matches_status CHECK for import table).
+            sql = (
+                f"UPDATE {t} "
+                f'SET "status" = %s, "errorCode" = %s, "errorMessage" = %s, '
+                f'    "outputResearchId" = %s, "completedAt" = now(), '
+                f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
+                f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
+                f'RETURNING "id"'
             )
-        if status != "succeeded" and draft_research_id is not None:
-            raise ValueError(
-                f"mark_terminal: status={status} requires draft_research_id=None "
-                f"(schema CHECK ai_jobs_draft_matches_status); got {draft_research_id}"
+            params = (
+                status,
+                error_code,
+                error_message,
+                draft_research_id,
+                lease.job_id,
+                lease.worker_id,
             )
-        # W2 review 修正:不再自造 sentinel 假 sources。schema CHECK
-        # ai_jobs_partial_sources_valid 要求 succeeded >= 1 sources,
-        # partial >= 3 sources。caller(adapter)在 mark_terminal 之前
-        # 自己 record_progress 写真 sources;db_store 不再写 partialSources。
-        sql = (
-            f"UPDATE {t} "
-            f'SET "status" = %s, "currentStep" = %s, "errorCode" = %s, "errorMessage" = %s, '
-            f'    "draftResearchId" = %s, "completedAt" = now(), '
-            f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
-            f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
-            f'RETURNING "id"'
-        )
-        params = (
-            status,
-            current_step,
-            error_code,
-            error_message,
-            draft_research_id,
-            lease.job_id,
-            lease.worker_id,
-        )
+        else:
+            # W2 review 修正:schema CHECK ai_jobs_draft_matches_status 强制
+            # succeeded 时 draftResearchId NOT NULL + FK 指向 researches.id。
+            # 全零 UUID sentinel 100% 违反 FK;W2 不再自造 sentinel。
+            # 契约:caller 必须对 succeeded 传真 draft_id。
+            if status == "succeeded" and not draft_research_id:
+                raise ValueError(
+                    "mark_terminal: succeeded requires draft_research_id; "
+                    "caller must INSERT a research row first and pass its id. "
+                    "(schema CHECK ai_jobs_draft_matches_status)"
+                )
+            if status != "succeeded" and draft_research_id is not None:
+                raise ValueError(
+                    f"mark_terminal: status={status} requires draft_research_id=None "
+                    f"(schema CHECK ai_jobs_draft_matches_status); got {draft_research_id}"
+                )
+            # W2 review 修正:不再自造 sentinel 假 sources。schema CHECK
+            # ai_jobs_partial_sources_valid 要求 succeeded >= 1 sources,
+            # partial >= 3 sources。caller(adapter)在 mark_terminal 之前
+            # 自己 record_progress 写真 sources;db_store 不再写 partialSources。
+            sql = (
+                f"UPDATE {t} "
+                f'SET "status" = %s, "currentStep" = %s, "errorCode" = %s, "errorMessage" = %s, '
+                f'    "draftResearchId" = %s, "completedAt" = now(), '
+                f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
+                f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
+                f'RETURNING "id"'
+            )
+            params = (
+                status,
+                current_step,
+                error_code,
+                error_message,
+                draft_research_id,
+                lease.job_id,
+                lease.worker_id,
+            )
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 cur = await conn.execute(sql, params)
@@ -396,14 +483,23 @@ class DbJobStore(JobStore):
         """
         await self.open()
         t = f'"{self._table_name}"'
-        sql = (
-            f'SELECT "id", "requesterId", "topic", "context", "reportType", '
-            f'       "sourcePolicy", "status", "currentStep", "attempts", '
-            f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
-            f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
-            f'       "errorCode", "errorMessage", "completedAt" '
-            f'FROM {t} WHERE "id" = %s'
-        )
+        if self._table_name == IMPORT_TABLE:
+            sql = (
+                f'SELECT "id", "requesterId", "sourceKind", "status", "attempts", '
+                f'       "originalFilename", "mimeType", "sizeBytes", "contentSha256", '
+                f'       "sourceUrl", "outputResearchId", "warnings", '
+                f'       "errorCode", "errorMessage", "completedAt" '
+                f'FROM {t} WHERE "id" = %s'
+            )
+        else:
+            sql = (
+                f'SELECT "id", "requesterId", "topic", "context", "reportType", '
+                f'       "sourcePolicy", "status", "currentStep", "attempts", '
+                f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
+                f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
+                f'       "errorCode", "errorMessage", "completedAt" '
+                f'FROM {t} WHERE "id" = %s'
+            )
         async with self._pool.connection() as conn:
             cur = await conn.execute(sql, (job_id,))
             row = await cur.fetchone()
@@ -411,6 +507,28 @@ class DbJobStore(JobStore):
             return None
         if not isinstance(row, dict):
             row = dict(row)
+        if self._table_name == IMPORT_TABLE:
+            return DbJobView(
+                snapshot=JobSnapshot(
+                    job_id=str(row["id"]),
+                    requester_id=str(row["requesterId"]),
+                    topic=str(row.get("originalFilename", "import") or "import"),
+                    context=None,
+                    report_type="summary_brief",
+                    source_policy="prefer_user_sources",
+                    status=cast(AiJobStatus, str(row.get("status", "queued"))),
+                    current_step=None,
+                    attempts=cast(int, row.get("attempts")) or 0,
+                    idempotency_key=None,
+                    source_refs=(),
+                ),
+                last_sources=(),
+                last_token_in=0,
+                last_token_out=0,
+                last_cost_cents=0,
+                last_error_code=row.get("errorCode"),
+                last_error_message=row.get("errorMessage"),
+            )
         partial_sources = row.get("partialSources") or []
         if not isinstance(partial_sources, list):
             partial_sources = []

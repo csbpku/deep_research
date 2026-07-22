@@ -47,6 +47,13 @@ IMPORT_STATUS: Final[dict[str, str]] = {
 }
 ImportStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
+# content_import_jobs.sourceKind — see docs/contracts/state-machines.md §11
+IMPORT_SOURCE_KIND: Final[dict[str, str]] = {
+    "FILE": "file",
+    "CONFLUENCE": "confluence",
+}
+ImportSourceKind = Literal["file", "confluence"]
+
 # summaries.status — see docs/contracts/state-machines.md §4
 SUMMARY_STATUS: Final[dict[str, str]] = {
     "CANDIDATE": "candidate",
