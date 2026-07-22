@@ -49,6 +49,7 @@ from ai_engine.job_runner.store import (
     build_store,
     make_job_snapshot,
 )
+from ai_engine.job_runner.models import JobSnapshot
 
 logger = logging.getLogger("ai_engine.server")
 structlog.configure(
