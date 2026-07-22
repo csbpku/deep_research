@@ -45,7 +45,7 @@ from ai_engine.contracts.states import (
 )
 from ai_engine.job_runner.runner import run_one_available_job
 from ai_engine.job_runner.store import (
-    InMemoryJobStore,
+    JobStore,
     build_store,
     make_job_snapshot,
 )
@@ -67,12 +67,25 @@ structlog.configure(
 
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     structlog.get_logger("ai_engine.server").info(
         "ai-engine.boot",
         extra={"adapter": os.environ.get("AI_ENGINE_ADAPTER", "fake")},
     )
-    yield
+    # W2 review 修正:process-level store singleton,所有 endpoint / 后台
+    # task 共享同一个 instance。否则每次请求新建,POST 写进去的 job 在
+    # 下一个 GET 不可见。lifespan 创建并绑定到 app.state.job_store。
+    store = build_store()
+    app_instance.state.job_store = store
+    # 启动 reaper(只对 DB store 有意义)
+    from ai_engine.job_runner.db_store import DbJobStore
+    if isinstance(store, DbJobStore):
+        await store.start_reaper()
+    try:
+        yield
+    finally:
+        if isinstance(store, DbJobStore):
+            await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
 
 
@@ -162,10 +175,30 @@ def _error_response(exc: AdapterError, request_id: str) -> JSONResponse:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _store_singleton() -> InMemoryJobStore:
-    """Lazy singleton; tests can override via `app.dependency_overrides`."""
+def _store_singleton() -> JobStore:
+    """返回 process-level store。
+
+    W2 review 修正:之前的 `assert isinstance(store, InMemoryJobStore)` 把
+    DbJobStore 拒之门外,即使 JOB_RUNNER_BACKEND=db 也立刻挂。
+
+    Resolve 顺序:
+    1. FastAPI dependency_overrides[_store_singleton] (测试注入) — 优先;
+    2. app.state.job_store (lifespan 创建,生产路径);
+    3. build_store() lazy fallback (dev 启动未经过 lifespan)。
+
+    共享单例,否则 POST 写进去 GET 看不见。
+    """
+    # 1. 测试 override
+    override = app.dependency_overrides.get(_store_singleton)
+    if override is not None:
+        return override()
+    # 2. lifespan 创建
+    state_store = getattr(app.state, "job_store", None)
+    if state_store is not None:
+        return state_store
+    # 3. lazy fallback
     store = build_store()
-    assert isinstance(store, InMemoryJobStore)  # Week 1 default
+    app.state.job_store = store
     return store
 
 
@@ -234,7 +267,7 @@ class HealthResponse(BaseModel):
 @app.get("/health")
 async def health_alias(
     request: Request,
-    store: Annotated[InMemoryJobStore, Depends(_store_singleton)],
+    store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> dict[str, str]:
     return await _health_payload(request, store)
 
@@ -242,12 +275,12 @@ async def health_alias(
 @app.get("/healthz")
 async def healthz(
     request: Request,
-    store: Annotated[InMemoryJobStore, Depends(_store_singleton)],
+    store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> dict[str, str]:
     return await _health_payload(request, store)
 
 
-async def _health_payload(request: Request, store: InMemoryJobStore) -> dict[str, str]:
+async def _health_payload(request: Request, store: JobStore) -> dict[str, str]:
     adapter = _adapter_singleton()
     health = await adapter.health()
     return {
@@ -266,7 +299,7 @@ async def _health_payload(request: Request, store: InMemoryJobStore) -> dict[str
 async def submit_ai_job(
     body: SubmitAiJobBody,
     request: Request,
-    store: Annotated[InMemoryJobStore, Depends(_store_singleton)],
+    store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> SubmitAiJobResponse:
     if body.source_policy == "only_user_sources" and not body.source_refs:
         raise _http_error(
@@ -333,7 +366,7 @@ async def submit_ai_job(
 
 async def _background_run(
     *,
-    store: InMemoryJobStore,
+    store: JobStore,
     adapter: ResearchEngineAdapter,
     job_id: str,
     request_id: str | None,
@@ -347,10 +380,17 @@ async def _background_run(
        但 submit 自身是同步 path,store 在 task 创建时已经被引用,gather 期间
        不会释放。
     Week 2 引入 DB-backed store 后改成 process-global singleton,本签名不变。
+
+    W2 review 修正:跑 succeeded 时 draft_factory 必须能 INSERT 一条 research 行
+    返真 id。InMemoryJobStore 路径用线程级 _draft_for_test in-memory 模拟;
+    DbJobStore 路径直连 Postgres 写 researches 表。
     """
     log = structlog.get_logger("ai_engine.runner")
     try:
-        outcome = await run_one_available_job(store=store, adapter=adapter)
+        outcome = await run_one_available_job(
+            store=store, adapter=adapter,
+            draft_factory=_make_draft_factory(store),
+        )
         if outcome is None:
             log.warning(
                 "ai-engine.background.no_job",
@@ -372,30 +412,81 @@ async def _background_run(
             request_id=request_id,
             job_id=job_id,
         )
+        # W2 review 修正:用 log.exception 已输出完整 traceback(JSON 渲染层
+        # format_exc_info 链没装,但 stdlib logger 会写到 stderr 的 unhandled
+        # 行附带 "Traceback (most recent call last): ...")。这里不再额外
+        # print,避免把请求 body / env 变量刷到 stderr。
+
+
+def _make_draft_factory(store: JobStore):
+    """根据 store 类型返回对应的 draft_factory (INSERT research row 返 id)。
+
+    - DbJobStore: 复用 psycopg pool 直接 INSERT researches,返真 id;
+    - InMemoryJobStore: 单元测试用,在 _drafts_for_tests dict 里写一份返 uuid。
+    """
+    from ai_engine.job_runner.db_store import DbJobStore as _Db  # type: ignore
+
+    if isinstance(store, _Db):
+
+        async def _factory(snapshot, sources):  # type: ignore[no-untyped-def]
+            assert isinstance(store, _Db)
+            # W2 review 修正:真 INSERT research row;不让 Runner 自造 UUID。
+            # 这里用 store._pool.connection() 直接写。
+            new_id = str(uuid.uuid4())
+            body = (
+                f"# {snapshot.topic}\n\n"
+                f"(AI 调研占位草稿,源 {len(sources)} 条,报告类型 {snapshot.report_type}。"
+                f"由 ClaudeAdapter 在 succeeded 时创建,W3 将由 DraftService 替换。)"
+            )
+            sql = (
+                'INSERT INTO "researches" '
+                '("id", "type", "status", "title", "body", "authorId", "createdAt", "updatedAt") '
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, now(), now())"
+            )
+            async with store._pool.connection() as conn:
+                async with conn.transaction():
+                    await conn.execute(sql, (new_id, snapshot.topic[:300], body, snapshot.requester_id))
+            return new_id
+
+        return _factory
+
+    async def _in_memory_factory(snapshot, sources):  # type: ignore[no-untyped-def]
+        # InMemory 测试路径:用全局 dict 记录 fake draft id。
+        # 让 _background_run 测试 / FakeAdapter 测试可走 succeeded。
+        from ai_engine.job_runner.db_store import _drafts_for_tests  # type: ignore
+        new_id = str(uuid.uuid4())
+        _drafts_for_tests[new_id] = {
+            "topic": snapshot.topic,
+            "requester_id": snapshot.requester_id,
+            "sources": len(sources),
+        }
+        return new_id
+
+    return _in_memory_factory
 
 
 @app.get("/api/ai/jobs/{job_id}", response_model=SubmitAiJobResponse)
 async def get_ai_job(
     job_id: Annotated[str, Path(min_length=1)],
     request: Request,
-    store: Annotated[InMemoryJobStore, Depends(_store_singleton)],
+    store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> SubmitAiJobResponse:
-    row = store.get_row(job_id)
+    row: Any = store.get_row(job_id)
     if row is None:
         raise _http_error("AI_JOB_NOT_FOUND", f"job {job_id} not found")
-    snap = row.snapshot
+    snap: JobSnapshot = row.snapshot
     return SubmitAiJobResponse(
         job_id=snap.job_id,
         status="stored",
         final_status=snap.status,
         current_step=snap.current_step,
-        sources_count=len(row.last_sources),
-        token_input_total=row.last_token_in,
-        token_output_total=row.last_token_out,
-        cost_cents=row.last_cost_cents,
-        search_count=row.last_sources.__len__() if row.last_sources else 0,
-        error_code=row.last_error_code,
-        error_message=row.last_error_message,
+        sources_count=len(getattr(row, "last_sources", ())),
+        token_input_total=getattr(row, "last_token_in", 0),
+        token_output_total=getattr(row, "last_token_out", 0),
+        cost_cents=getattr(row, "last_cost_cents", 0),
+        search_count=len(getattr(row, "last_sources", ())),
+        error_code=getattr(row, "last_error_code", None),
+        error_message=getattr(row, "last_error_message", None),
         request_id=getattr(request.state, "request_id", None),
     )
 
@@ -403,7 +494,7 @@ async def get_ai_job(
 @app.post("/api/ai/jobs/{job_id}/cancel", response_model=CancelAiJobResponse)
 async def cancel_ai_job(
     job_id: Annotated[str, Path(min_length=1)],
-    store: Annotated[InMemoryJobStore, Depends(_store_singleton)],
+    store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> CancelAiJobResponse:
     adapter = _adapter_singleton()
     try:

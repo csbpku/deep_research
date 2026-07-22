@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 from ai_engine.adapters.base import (
@@ -62,6 +63,7 @@ async def run_once(
     lease: JobLease,
     snapshot: JobSnapshot,
     hooks: RunnerHooks | None = None,
+    draft_factory: "Callable[[JobSnapshot, tuple[AdapterSource, ...]], Awaitable[str | None]] | None" = None,
 ) -> RunOutcome:
     """Execute one acquired job end-to-end.
 
@@ -189,10 +191,32 @@ async def run_once(
 
     final_status: AiJobStatus = terminal.status
     draft_id: str | None = None
+    sources_tuple: tuple[AdapterSource, ...] = terminal.sources
     if final_status == AI_JOB_STATUS["SUCCEEDED"]:
-        # Week 5 worker will own draft creation. We surface a flag in
-        # RunOutcome; HTTP layer can ignore for now.
-        draft_id = None
+        # W2 review 修正:schema CHECK 强制 succeeded 时 draftResearchId NOT NULL
+        # + FK 指向 researches.id。Runner 不再自造 UUID sentinel;改为调
+        # draft_factory 由 caller(adapter / worker / HTTP layer)负责真
+        # INSERT 一条 research row 拿真 id。
+        # 默认 fallback:写 _drafts_for_tests dict 拿 uuid,允许 InMemory 测试路径。
+        # 生产部署必须显式传 draft_factory 直连 DB;这由 caller(server app)在
+        # lifespan 里决定。
+        if draft_factory is None:
+            from ai_engine.job_runner.db_store import _drafts_for_tests  # type: ignore
+            import uuid as _uuid
+            draft_id = str(_uuid.uuid4())
+            _drafts_for_tests[draft_id] = {
+                "topic": snapshot.topic,
+                "requester_id": snapshot.requester_id,
+                "sources": len(sources_tuple),
+                "via": "default_factory",
+            }
+        else:
+            draft_id = await draft_factory(snapshot, sources_tuple)
+            if not draft_id:
+                raise ValueError(
+                    "run_once: draft_factory returned None for succeeded job; "
+                    "must INSERT a research row and return its id."
+                )
 
     await store.mark_terminal(
         lease,
@@ -232,6 +256,7 @@ async def run_one_available_job(
     adapter: ResearchEngineAdapter,
     worker_id: str | None = None,
     hooks: RunnerHooks | None = None,
+    draft_factory: Callable[[JobSnapshot, tuple[AdapterSource, ...]], Awaitable[str | None]] | None = None,
 ) -> RunOutcome | None:
     """Acquire + execute one job; return None if the queue is empty.
 
@@ -244,7 +269,8 @@ async def run_one_available_job(
         return None
     lease, snapshot = acquired
     return await run_once(
-        store=store, adapter=adapter, lease=lease, snapshot=snapshot, hooks=hooks
+        store=store, adapter=adapter, lease=lease, snapshot=snapshot,
+        hooks=hooks, draft_factory=draft_factory,
     )
 
 

@@ -11,6 +11,12 @@ heartbeatAt / attempts), so the store is parameterised by `table_name`.
 IMPORTANT: Column names MUST match Prisma's camelCase conventions as they
 appear in the actual Postgres tables. Prisma maps `model` fields 1:1; we
 use double-quoted identifiers everywhere to handle the mixed case.
+
+W2 review 修正:
+- 行映射:psycopg dict_row → 直接 dict(row),不再 hasattr(_fields) 探测
+- mark_terminal 加 contract:succeeded 必传真 draft_research_id;partial 不传
+- 删 sentinel 假 sources:caller 必须 record_progress 写真 sources
+- get_row 让 HTTP 层不再依赖 InMemoryJobStore 私有 _Row
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 
@@ -43,6 +50,10 @@ logger = logging.getLogger("ai_engine.job_runner.db_store")
 AI_TABLE = "ai_research_jobs"
 IMPORT_TABLE = "content_import_jobs"
 SHARED_TABLES: tuple[str, ...] = (AI_TABLE, IMPORT_TABLE)
+
+# W2 review 修正:InMemoryJobStore 测试路径(无真 DB)succeeded 时,
+# 工厂把 fake draft id 写到这里,让 runner 拿到非 None id。生产不依赖。
+_drafts_for_tests: dict[str, dict[str, object]] = {}
 
 
 def _now_utc() -> datetime:
@@ -119,44 +130,40 @@ class DbJobStore(JobStore):
             os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")
         )
         self._max_retries = int(os.environ.get("WORKER_MAX_RETRIES", "3"))
-        self._pool = AsyncConnectionPool(
-            conninfo=self._dsn,
-            min_size=min_size,
-            max_size=max_size,
-            open=False,
-            kwargs={"row_factory": dict_row},
-        )
-        self.__pool_open: bool = False
+        self._pool: AsyncConnectionPool | None = None
+        self._pool_open: bool = False
         self._reaper_task: asyncio.Task[None] | None = None
         self._reaper_stop = asyncio.Event()
 
     @property
-    def _pool_open(self) -> bool:
-        return self.__pool_open
-
-    @_pool_open.setter
-    def _pool_open(self, value: bool) -> None:
-        self.__pool_open = value
-
-    # ─────────────── lifecycle ────────────────
+    def table_name(self) -> str:
+        return self._table_name
 
     async def open(self) -> None:
-        if self._pool_open:
-            return
-        await self._pool.open(wait=False)
-        self._pool_open = True
+        if not self._pool_open:
+            self._pool = AsyncConnectionPool(
+                conninfo=self._dsn,
+                min_size=1,
+                max_size=4,
+                kwargs={"row_factory": dict_row},
+                open=False,
+            )
+            await self._pool.open()
+            await self._pool.wait()
+            self._pool_open = True
 
     async def close(self) -> None:
-        if self._reaper_task is not None:
+        if self._reaper_stop.is_set() is False:
             self._reaper_stop.set()
+        if self._reaper_task is not None and not self._reaper_task.done():
+            self._reaper_task.cancel()
             try:
-                await asyncio.wait_for(self._reaper_task, timeout=5.0)
-            except TimeoutError:
-                self._reaper_task.cancel()
-            self._reaper_task = None
-        if self._pool_open:
+                await self._reaper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._pool is not None and not self._pool.closed:
             await self._pool.close()
-            self._pool_open = False
+        self._pool_open = False
 
     async def __aenter__(self) -> "DbJobStore":
         await self.open()
@@ -189,9 +196,9 @@ class DbJobStore(JobStore):
             snapshot.current_step,
             snapshot.attempts,
             snapshot.idempotency_key,
-            json.dumps(list(snapshot.source_refs), ensure_ascii=False),
-            "[]",
-            "[]",
+            json.dumps(list(snapshot.source_refs)),
+            json.dumps([]),
+            json.dumps([]),
         )
         async with self._pool.connection() as conn:
             async with conn.transaction():
@@ -232,8 +239,10 @@ class DbJobStore(JobStore):
                 row = await cur.fetchone()
         if row is None:
             return None
-        row_dict: dict[str, object] = {str(k): v for k, v in zip(row._fields, row)} if hasattr(row, '_fields') else {}
-        snapshot = _row_to_snapshot(row_dict)
+        # W2 review 修正:psycopg 默认 row_factory 返回 dict_row,fetchone() 是 dict。
+        if not isinstance(row, dict):
+            row = dict(row)
+        snapshot = _row_to_snapshot(row)
         lease = JobLease(
             job_id=snapshot.job_id,
             worker_id=worker_id,
@@ -322,32 +331,29 @@ class DbJobStore(JobStore):
     ) -> None:
         await self.open()
         t = f'"{self._table_name}"'
-        # The CHECK ai_jobs_draft_matches_status requires draftResearchId
-        # NOT NULL on 'succeeded' and NULL on all other states.
-        # The CHECK ai_jobs_partial_sources_valid requires partialSources
-        # length >= 1 on succeeded, >= 3 on partial.
-        # When the caller doesn't set a real draft id we use a stable
-        # sentinel so the row constraint passes; the real draft row is
-        # created by the Week 5 worker.
-        _draft_id = draft_research_id or (
-            "00000000-0000-0000-0000-000000000000"
-            if status == "succeeded"
-            else None
-        )
-        # Ensure partialSources has at least 1 element for succeeded.
-        # The fake adapter produces 5 sources; real engines give >= 1.
-        # We only touch it when needed so we don't overwrite real data.
-        # NOTE: use %%s in the CASE strings so f-string doesn't interpret them.
+        # W2 review 修正:schema CHECK ai_jobs_draft_matches_status 强制
+        # succeeded 时 draftResearchId NOT NULL + FK 指向 researches.id。
+        # 全零 UUID sentinel 100% 违反 FK;W2 不再自造 sentinel。
+        # 契约:caller 必须对 succeeded 传真 draft_id。
+        if status == "succeeded" and not draft_research_id:
+            raise ValueError(
+                "mark_terminal: succeeded requires draft_research_id; "
+                "caller must INSERT a research row first and pass its id. "
+                "(schema CHECK ai_jobs_draft_matches_status)"
+            )
+        if status != "succeeded" and draft_research_id is not None:
+            raise ValueError(
+                f"mark_terminal: status={status} requires draft_research_id=None "
+                f"(schema CHECK ai_jobs_draft_matches_status); got {draft_research_id}"
+            )
+        # W2 review 修正:不再自造 sentinel 假 sources。schema CHECK
+        # ai_jobs_partial_sources_valid 要求 succeeded >= 1 sources,
+        # partial >= 3 sources。caller(adapter)在 mark_terminal 之前
+        # 自己 record_progress 写真 sources;db_store 不再写 partialSources。
         sql = (
             f"UPDATE {t} "
             f'SET "status" = %s, "currentStep" = %s, "errorCode" = %s, "errorMessage" = %s, '
             f'    "draftResearchId" = %s, "completedAt" = now(), '
-            f'    "partialSources" = CASE WHEN '
-            f"      (%s::\"AiJobStatus\" = 'succeeded' AND jsonb_array_length(\"partialSources\") < 1) "
-            f"      THEN '[{{\"_sentinel\":true}}]'::jsonb "
-            f"      WHEN (%s::\"AiJobStatus\" = 'partial' AND jsonb_array_length(\"partialSources\") < 3) "
-            f"      THEN '[{{\"_sentinel\":true}},{{\"_sentinel\":true}},{{\"_sentinel\":true}}]'::jsonb "
-            f'      ELSE "partialSources" END, '
             f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
             f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
             f'RETURNING "id"'
@@ -357,9 +363,7 @@ class DbJobStore(JobStore):
             current_step,
             error_code,
             error_message,
-            _draft_id,
-            status,  # for the CASE expression
-            status,  # for the CASE expression
+            draft_research_id,
             lease.job_id,
             lease.worker_id,
         )
@@ -385,6 +389,40 @@ class DbJobStore(JobStore):
         async with self._pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(sql, (lease.job_id, lease.worker_id))
+
+    async def get_row(self, job_id: str) -> "DbJobView | None":
+        """W2 review 修正:GET /api/ai/jobs/{id} 走 DB 路径,不能依赖 InMemoryJobStore。
+        返回 DbJobView,HTTP 层逻辑统一用 .snapshot/.last_sources 等访问。
+        """
+        await self.open()
+        t = f'"{self._table_name}"'
+        sql = (
+            f'SELECT "id", "requesterId", "topic", "context", "reportType", '
+            f'       "sourcePolicy", "status", "currentStep", "attempts", '
+            f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
+            f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
+            f'       "errorCode", "errorMessage", "completedAt" '
+            f'FROM {t} WHERE "id" = %s'
+        )
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(sql, (job_id,))
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        if not isinstance(row, dict):
+            row = dict(row)
+        partial_sources = row.get("partialSources") or []
+        if not isinstance(partial_sources, list):
+            partial_sources = []
+        return DbJobView(
+            snapshot=_row_to_snapshot(row),
+            last_sources=tuple(partial_sources),
+            last_token_in=int(row.get("tokenInputTotal") or 0),
+            last_token_out=int(row.get("tokenOutputTotal") or 0),
+            last_cost_cents=int(row.get("costCents") or 0),
+            last_error_code=row.get("errorCode"),
+            last_error_message=row.get("errorMessage"),
+        )
 
     # ─────────────── reaper ────────────────
 
@@ -492,4 +530,18 @@ class DbJobStore(JobStore):
                 await conn.execute(sql, params)
 
 
-__all__ = ["DbJobStore", "AI_TABLE", "IMPORT_TABLE", "SHARED_TABLES"]
+# 模块末尾:W2 review 加的轻量 view 类,放在 DbJobStore 之后避免
+# class 体被误中断。HTTP 层用 .snapshot/.last_sources 等访问。
+@dataclass(slots=True)
+class DbJobView:
+    """DbJobStore.get_row 返回的轻量 view,与 InMemoryJobStore._Row 接口对齐。"""
+    snapshot: JobSnapshot
+    last_sources: tuple[object, ...] = ()
+    last_token_in: int = 0
+    last_token_out: int = 0
+    last_cost_cents: int = 0
+    last_error_code: str | None = None
+    last_error_message: str | None = None
+
+
+__all__ = ["DbJobStore", "DbJobView", "AI_TABLE", "IMPORT_TABLE", "SHARED_TABLES"]

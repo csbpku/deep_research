@@ -89,6 +89,14 @@ class JobStore:
     async def release_lease(self, lease: JobLease) -> None:
         return None
 
+    async def get_row(self, job_id: str) -> "object | None":
+        """Read-only view of a job for HTTP GET. Returns None if not found.
+
+        W2 review 修正:Protocol 加这方法,DbJobStore 也实现,InMemoryJobStore
+        已有此方法。HTTP 层只读 row,不通过 worker acquire。
+        """
+        return None
+
 
 @dataclass(slots=True)
 class InMemoryJobStore(JobStore):
@@ -258,7 +266,7 @@ class InMemoryJobStore(JobStore):
 
     # ──────────────── test helpers ────────────────
 
-    def get_row(self, job_id: str) -> _Row | None:
+    def get_row(self, job_id: str) -> _Row | None:  # type: ignore[override]
         return self._rows.get(job_id)
 
     def _require_lease(self, lease: JobLease) -> _Row:

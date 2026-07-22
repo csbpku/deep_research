@@ -15,6 +15,7 @@ import { prisma } from '../../../lib/db.js';
 import { apiHandler } from '../../../lib/api-handler.js';
 import { toApiErrorResponse } from '../../../lib/errors.js';
 import { withRequestId } from '../../../lib/log.js';
+import { requireUser } from '../../../lib/auth/session.js';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
@@ -41,6 +42,11 @@ function todayUtcDateString(): string {
 }
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
+  // W2 review 修正: 摘要已发布但仍需登录访问 — 架构 §九 权限矩阵
+  // member/admin 可读 published, 未登录 401。
+  const u = await requireUser(req);
+  if (u instanceof NextResponse) return u;
+
   const requestId = withRequestId(req.headers);
   const url = new URL(req.url);
   const parsed = DateQuery.safeParse({ date: url.searchParams.get('date') ?? undefined });

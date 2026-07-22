@@ -15,12 +15,17 @@ import { prisma } from '../../../../lib/db.js';
 import { apiHandler } from '../../../../lib/api-handler.js';
 import { toApiErrorResponse } from '../../../../lib/errors.js';
 import { withRequestId } from '../../../../lib/log.js';
+import { requireUser } from '../../../../lib/auth/session.js';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
 export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
+  // W2 review 修正: 单条摘要详情也需登录 — 同 /api/summaries 列表。
+  const u = await requireUser(req);
+  if (u instanceof NextResponse) return u;
+
   const requestId = withRequestId(req.headers);
   const parsed = IdParam.safeParse(ctx.params);
   if (!parsed.success) {

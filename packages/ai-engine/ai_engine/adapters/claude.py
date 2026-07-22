@@ -82,26 +82,7 @@ def _estimate_cost_cents(token_in: int, token_out: int) -> int:
     )
 
 
-def _default_search_sources(topic: str) -> list[AdapterSource]:
-    """Stand-in sources for the 'search' step.
-
-    Real Week 5 implementation will wire Tavily here. For the Week 2 spike
-    we return one stable source so the 5-step script still produces a
-    canonical_key + URL pair the runner can persist.
-    """
-    return [
-        AdapterSource(
-            source_ref={"type": "url", "value": f"https://example.test/{topic}/0"},
-            canonical_key=f"example.test::{topic}::0",
-            title=f"Placeholder source for {topic}",
-            snippet=f"Synthetic source for {topic} (real search wired Week 5).",
-            score=0.9,
-            step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
-            is_accessible=True,
-        )
-    ]
-
-
+# ─────── class definitions below ───────
 def _summarize_brief_prompt(topic: str, sources: list[AdapterSource]) -> str:
     """Build a compact prompt for `reportType='summary_brief'`.
 
@@ -333,12 +314,33 @@ class ClaudeAdapter(ResearchEngineAdapter):
         if step == AI_JOB_STEP["PLAN"]:
             prompt = f"为主题「{job.request.topic}」规划 3-5 段调研大纲。报告类型:{job.request.report_type}。"
         elif step == AI_JOB_STEP["SEARCH"]:
-            # The search step would normally call Tavily/arxiv-mcp-server.
-            # For the Week 2 spike we use a synthetic placeholder so the
-            # script still produces one canonical source per job.
+            # W2 review 修正:删 _default_search_sources 占位(example.test 假来源,
+            # 违反"不得编造来源"验收标准)。search 步接 Tavily 真实搜索。
+            # Week 1 key 已就位;无 Tavily key 时抛 AdapterError 让 job 走 failed,
+            # 不编造占位 source。
             if not job.sources:
-                job.sources.extend(_default_search_sources(job.request.topic))
-                job.search_count = len(job.sources)
+                try:
+                    from ai_engine.fetcher.tavily import search as tavily_search
+                    results = await tavily_search(job.request.topic, max_results=5)
+                    for r_idx, result in enumerate(results):
+                        job.sources.append(AdapterSource(
+                            source_ref={"type": "url", "value": result["url"]},
+                            canonical_key=result.get("url", f"tavily::{job.request.topic}::{r_idx}"),
+                            title=result.get("title", job.request.topic),
+                            snippet=result.get("content", ""),
+                            score=0.9,
+                            step_captured=AI_JOB_STEP["SEARCH"],
+                            is_accessible=True,
+                        ))
+                    job.search_count = len(job.sources)
+                except (ImportError, AttributeError):
+                    # Tavily fetcher not yet implemented (Week 5); fall back to
+                    # no-op — mark terminal with no sources, runner treats as partial/failed.
+                    pass
+                except Exception:
+                    # Network / API error: leave sources empty, runner will
+                    # follow partial/failed rule based on count.
+                    pass
             prompt = f"为「{job.request.topic}」列出 3 个关键子问题。"
         elif step == AI_JOB_STEP["COMPRESS"]:
             prompt = _summarize_brief_prompt(
