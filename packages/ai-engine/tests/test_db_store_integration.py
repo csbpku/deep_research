@@ -16,11 +16,19 @@ import uuid
 import pytest
 
 from ai_engine.adapters.base import AdapterSource
-from ai_engine.job_runner.db_store import AI_TABLE, DbJobStore
+from ai_engine.job_runner.db_store import AI_TABLE, IMPORT_TABLE, DbJobStore
 from ai_engine.job_runner.models import JobSnapshot
 
 
 pytestmark = pytest.mark.requires_db
+
+
+async def _clean_tables(store: DbJobStore) -> None:
+    """每 test 前后清空两个表,避免 shared queue 遗留 job 导致 flaky。"""
+    async with store._pool.connection() as conn:
+        await conn.execute(f'DELETE FROM "{AI_TABLE}"')
+        await conn.execute(f'DELETE FROM "{IMPORT_TABLE}"')
+        await conn.commit()
 
 
 async def _new_store() -> DbJobStore:
@@ -71,6 +79,7 @@ class TestDbJobStoreIntegration:
         W2 review #1 的 bug:acquire 返回 dict 但原代码探测 _fields 失败。
         """
         store = await _new_store()
+        await _clean_tables(store)
         try:
             user_id = await _prepare_user(store)
             snap = await _snapshot(user_id, "acquire test")

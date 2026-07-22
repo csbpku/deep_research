@@ -11,6 +11,8 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import path from 'node:path';
+import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { prisma } from '../../../lib/db.js';
 import { apiHandler, parseBody } from '../../../lib/api-handler.js';
@@ -60,7 +62,26 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   }
 
   const filename = file.name || 'untitled';
-  const mimeType = file.type || 'text/plain';
+  // W2/W3 review 修正: 效验扩展名 — 仅允许 .md .txt .html
+  const ext = filename.lastIndexOf('.') >= 0
+    ? filename.slice(filename.lastIndexOf('.')).toLowerCase()
+    : '';
+  const ALLOWED_EXTENSIONS: Record<string, string> = {
+    '.md': 'text/markdown',
+    '.txt': 'text/plain',
+    '.html': 'text/html',
+  };
+  if (!ALLOWED_EXTENSIONS[ext]) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.IMPORT_INVALID_MIME,
+      message: `不支持的文件后缀: ${ext || '(无)'}。仅允许 .md / .txt / .html`,
+      requestId,
+    });
+  }
+  // 同时用扩展名修正客户端可能伪造的 MIME
+  const effectiveMime = ALLOWED_EXTENSIONS[ext];
+
+  const mimeType = file.type || effectiveMime;
   const sizeBytes = file.size;
 
   // ── Validate metadata ────────────────────────────────────────────────
@@ -130,52 +151,55 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   // SHA-256 去重
   const sha256 = createHash('sha256').update(contentStr, 'utf-8').digest('hex');
 
-  // 检查去重：同用户同 SHA-256 在 queued/running/succeeded 中唯一
-  const existing = await prisma.contentImportJob.findFirst({
-    where: {
-      requesterId: u.id,
-      contentSha256: sha256,
-      status: { in: [IMPORT_STATUS.QUEUED, IMPORT_STATUS.RUNNING, IMPORT_STATUS.SUCCEEDED] },
-    },
-    select: { id: true, status: true },
-  });
+  // 保存文件到临时目录(tempObjectKey 记录路径),worker 拿到真文件。
+  const tempDir = path.join(process.cwd(), 'data', 'import-tmp');
+  await fs.mkdir(tempDir, { recursive: true });
+  const tempKey = `${u.id}-${sha256}-${Date.now()}.${ext.slice(1)}`;
+  const tempPath = path.join(tempDir, tempKey);
+  await fs.writeFile(tempPath, contentStr, 'utf-8');
 
-  if (existing) {
-    return NextResponse.json(
-      {
-        jobId: existing.id,
-        status: existing.status,
-        duplicate: true,
-        message: '相同文件已存在导入任务',
+  // W2/W3 review 修正: 用 INSERT 遇到唯一约束(并发同 SHA-256)时 catch P2002,
+  // 清理 temp 文件并返回已有 job id(不是 500)。避免 findFirst+create race。
+  let job: { id: string; status: string; originalFilename: string | null; mimeType: string | null; sizeBytes: bigint | null; contentSha256: string | null; warnings: unknown; createdAt: Date };
+  let duplicate = false;
+  try {
+    job = await prisma.contentImportJob.create({
+      data: {
+        requesterId: u.id,
+        sourceKind: 'file',
+        status: IMPORT_STATUS.QUEUED,
+        originalFilename: filename,
+        mimeType,
+        sizeBytes: BigInt(sizeBytes),
+        contentSha256: sha256,
+        converterVersion: '1.0.0',
+        tempObjectKey: tempKey,
+        warnings: warnings.length > 0 ? warnings : [],
       },
-      { status: 200 },
-    );
+      select: {
+        id: true, status: true, originalFilename: true, mimeType: true,
+        sizeBytes: true, contentSha256: true, warnings: true, createdAt: true,
+      },
+    });
+  } catch (err: unknown) {
+    if ((err as { code?: string })?.code === 'P2002') {
+      const dup = await prisma.contentImportJob.findFirst({
+        where: { requesterId: u.id, contentSha256: sha256 },
+        select: {
+          id: true, status: true, originalFilename: true, mimeType: true,
+          sizeBytes: true, contentSha256: true, warnings: true, createdAt: true,
+        },
+      });
+      if (dup) {
+        await fs.unlink(tempPath).catch(() => {});
+        return NextResponse.json({
+          jobId: dup.id, status: dup.status, duplicate: true,
+          message: '相同文件已存在导入任务',
+        }, { status: 200 });
+      }
+    }
+    throw err;
   }
-
-  // ── Create import job ────────────────────────────────────────────────
-  const job = await prisma.contentImportJob.create({
-    data: {
-      requesterId: u.id,
-      sourceKind: 'file',
-      status: IMPORT_STATUS.QUEUED,
-      originalFilename: filename,
-      mimeType,
-      sizeBytes: BigInt(sizeBytes),
-      contentSha256: sha256,
-      converterVersion: '1.0.0',
-      warnings: warnings.length > 0 ? warnings : [],
-    },
-    select: {
-      id: true,
-      status: true,
-      originalFilename: true,
-      mimeType: true,
-      sizeBytes: true,
-      contentSha256: true,
-      warnings: true,
-      createdAt: true,
-    },
-  });
 
   log.info('import.create', 'job created', {
     requestId,
@@ -189,6 +213,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     {
       jobId: job.id,
       status: job.status,
+      duplicate: false,
+      tempObjectKey: tempKey,
       filename: job.originalFilename,
       mimeType: job.mimeType,
       sizeBytes: job.sizeBytes ? Number(job.sizeBytes) : null,

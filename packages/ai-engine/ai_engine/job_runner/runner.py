@@ -40,6 +40,7 @@ from ai_engine.contracts.states import (
 from ai_engine.job_runner.models import (
     JobLease,
     JobSnapshot,
+    LeaseLostError,
     RunOutcome,
     RunnerHooks,
     noop_hooks,
@@ -96,7 +97,28 @@ async def run_once(
     # Poll until terminal. Cap iterations to keep tests fast.
     deadline_monotonic = asyncio.get_event_loop().time() + request.timeout_seconds
     terminal: AdapterStatus | None = None
+    _last_heartbeat = 0.0
+    _heartbeat_seconds = 15
     while True:
+        # W2/W3 review 修正: 每 15s 调一次 store.heartbeat()。
+        # 没有 heartbeat,超过 60s 的任务被 reaper 抢回,exactly-once 不成立。
+        # 轮询间隔保持 0.5s(测试 0.05s),每 15s 给 store 续期。
+        now_ts = asyncio.get_event_loop().time()
+        if now_ts - _last_heartbeat >= _heartbeat_seconds:
+            try:
+                await store.heartbeat(lease)
+                _last_heartbeat = now_ts
+            except LeaseLostError:
+                hooks.on_lease_lost(lease)
+                return RunOutcome(
+                    job_id=lease.job_id,
+                    final_status="failed",
+                    cost=_zero_cost(),
+                    sources=(),
+                    current_step=None,
+                    error_code="WORKER_LEASE_LOST",
+                    error_message="lease expired during poll",
+                )
         try:
             status = await adapter.get_status(lease.job_id)
         except AdapterError as exc:
