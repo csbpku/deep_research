@@ -22,15 +22,7 @@ export const CreateResearchInput = z.object({
   conclusion: z.string().max(2000).optional(),
   risks: z.string().max(2000).optional(),
   tags: z.array(z.string().min(1).max(40)).max(10).default([]),
-  creationMethod: z
-    .enum([
-      CREATION_METHOD.MANUAL,
-      CREATION_METHOD.AI_RESEARCH,
-      CREATION_METHOD.FILE_IMPORT,
-      CREATION_METHOD.CONFLUENCE_IMPORT,
-    ])
-    .default(CREATION_METHOD.MANUAL),
-});
+}).strict(); // 拒绝客户端传 creationMethod（服务端写死 'manual'）
 export type CreateResearchInput = z.infer<typeof CreateResearchInput>;
 
 /** 编辑沉淀 */
@@ -63,3 +55,40 @@ export const CreateImportInput = z.object({
   sizeBytes: z.number().int().positive().max(5 * 1024 * 1024),
 });
 export type CreateImportInput = z.infer<typeof CreateImportInput>;
+
+// ──────────────────────────────────────────────────────────────────────
+// Search
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * 全文搜索查询参数（GET /api/search）。
+ * - q: 必填，1-200 字符（trim 后空字符串视为过短）
+ * - type: 可选，不传=全部
+ * - page/per_page: 分页；per_page 上限 50
+ *
+ * 契约源：docs/agent-prompts/week4-engineer-a.md §任务 2
+ * 注：触发器已保证 search_docs 只含 published 内容；草稿/归档不入搜索。
+ */
+export const SearchDocType = {
+  SUMMARY: 'summary',
+  LONG_RESEARCH: 'long_research',
+  KNOWLEDGE: 'knowledge',
+} as const;
+
+export const SearchQuery = z.object({
+  q: z
+    .string()
+    .trim()
+    .min(1, '搜索关键词不能为空')
+    .max(200, '搜索关键词不能超过 200 字符'),
+  type: z
+    .enum([
+      SearchDocType.SUMMARY,
+      SearchDocType.LONG_RESEARCH,
+      SearchDocType.KNOWLEDGE,
+    ])
+    .optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type SearchQuery = z.infer<typeof SearchQuery>;

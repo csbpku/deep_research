@@ -15,7 +15,7 @@ generator client {
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
-  extensions = [pg_trgm, citext]
+  extensions = [pg_trgm, citext]  // Week 4 中文搜索：simple 字典 + pg_trgm 字节重叠；zhparser 装机推 W5（PG16 SDK14 vs SDK26 路径阻塞 + scws 未装）
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -107,6 +107,20 @@ enum CommentTarget {
   summary
 }
 
+// Week 4 [db]：用户分享待审核
+enum ShareSubmissionStatus {
+  pending
+  approved
+  rejected
+}
+
+// Week 4 [db]：搜索 doc 类型
+enum SearchDocType {
+  summary
+  long_research
+  knowledge
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 1. users
 // ─────────────────────────────────────────────────────────────────────
@@ -131,6 +145,8 @@ model User {
   importJobs        ContentImportJob[]
   productEvents     ProductEvent[]
   adminActions      AdminAction[]
+  sharesSubmitted   ShareSubmission[] @relation("share_submitter")
+  sharesReviewed    ShareSubmission[] @relation("share_reviewer")
 
   @@index([role, disabledAt])
   @@map("users")
@@ -167,6 +183,7 @@ model Summary {
   // 实际 tsvector 列与触发器在第二个 migration 里手工加
 
   comments            Comment[]      @relation("comments_summary")
+  shareSource         ShareSubmission? @relation("share_to_summary")
 
   @@index([source, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -459,8 +476,73 @@ model ProductEvent {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// 12. admin_actions — Admin 审核与成员操作审计
+// 13. share_submissions — Week 4 用户分享待审核（架构 §九 风险 5）
 // ─────────────────────────────────────────────────────────────────────
+
+model ShareSubmission {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submitterId     String                @db.Uuid
+  url             String                @db.VarChar(2048)
+  canonicalUrl    String                @db.VarChar(2048)
+  userNote        String?               @db.VarChar(500)
+  // safe_fetch 抓取与摘要
+  fetchedTitle    String?               @db.VarChar(300)
+  fetchedMarkdown String?               @db.Text
+  summaryText     String?               @db.VarChar(2000)
+  // 抓取错误：safe_fetch 失败时记录，不阻塞 pending
+  fetchErrorCode  String?               @db.VarChar(64)
+  fetchErrorMessage String?             @db.VarChar(500)
+  // 状态机
+  status          ShareSubmissionStatus @default(pending)
+  reviewerId      String?               @db.Uuid
+  reviewedAt      DateTime?             @db.Timestamptz(3)
+  // 批准后转为 published summary 时填；保持来源可追溯
+  publishedSummaryId String?            @unique @db.Uuid
+  // 抓取元数据
+  contentSha256   String?               @db.Char(64)
+  bytesRead       Int?
+  elapsedMs       Int?
+  // worker 租约
+  attempts        Int                   @default(0)
+  lockedBy        String?
+  leaseExpiresAt  DateTime?             @db.Timestamptz(3)
+  heartbeatAt     DateTime?             @db.Timestamptz(3)
+  nextRetryAt     DateTime?             @db.Timestamptz(3)
+  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
+  completedAt     DateTime?             @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+
+  submitter       User                  @relation("share_submitter", fields: [submitterId], references: [id], onDelete: Restrict)
+  reviewer        User?                 @relation("share_reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  publishedSummary Summary?             @relation("share_to_summary", fields: [publishedSummaryId], references: [id], onDelete: SetNull)
+
+  // 同一用户对同一 URL 在活跃状态下唯一；failed 后允许重试
+  // partial unique 由 SQL 加（Prisma 5.x 不支持 where 子句）
+  @@index([status, createdAt(sort: Asc)])
+  @@index([submitterId, createdAt(sort: Desc)])
+  @@index([canonicalUrl])
+  @@map("share_submissions")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 14. search_docs — Week 4 全文搜索集中索引（zhparser + tsvector）
+// ─────────────────────────────────────────────────────────────────────
+
+model SearchDoc {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        SearchDocType
+  refId       String        @db.Uuid              // summary.id / research.id
+  title       String        @db.VarChar(300)
+  snippet     String        @db.VarChar(1000)     // 摘要片段，给搜索结果展示
+  // tsvector 列与 GIN 索引由 SQL migration 加（Prisma 不支持原生 tsvector）
+  // publishedAt 用于排序：未发布草稿不进 search_doc
+  publishedAt DateTime      @db.Timestamptz(3)
+  indexedAt   DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([type, refId])
+  @@index([type, publishedAt(sort: Desc)])
+  @@map("search_docs")
+}
 
 model AdminAction {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid

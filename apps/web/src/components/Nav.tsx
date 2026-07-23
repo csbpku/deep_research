@@ -35,6 +35,7 @@ export async function Nav() {
       <Link href="/summaries">每日摘要</Link>
       <Link href="/researches">沉淀</Link>
       <Link href="/ai-research">AI 调研</Link>
+      <Link href="/search">搜索</Link>
       {isAdmin ? <Link href="/admin">Admin</Link> : null}
       <div style={{ marginLeft: 'auto' }}>
         {user ? (

@@ -30,54 +30,55 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const body = await parseBody(req, CreateResearchInput);
   if (body instanceof NextResponse) return body;
 
-  const research = await prisma.research.create({
-    data: {
-      type: body.type,
-      title: body.title,
-      body: body.body,
-      background: body.background ?? null,
-      conclusion: body.conclusion ?? null,
-      risks: body.risks ?? null,
-      tags: body.tags,
-      authorId: u.id,
-      status: 'draft',
-      creationMethod: body.creationMethod,
-      aiAssisted: false,
-    },
-    select: {
-      id: true,
-      type: true,
-      status: true,
-      title: true,
-      body: true,
-      background: true,
-      conclusion: true,
-      risks: true,
-      tags: true,
-      authorId: true,
-      creationMethod: true,
-      aiAssisted: true,
-      publishedAt: true,
-      createdAt: true,
-      updatedAt: true,
-      author: { select: { id: true, name: true, email: true } },
-    },
-  });
-
-  // 写创建审计记录（非事务内，仅记录创建事件）
-  await prisma.researchAudit.create({
-    data: {
-      researchId: research.id,
-      editorId: u.id,
-      action: 'create',
-    },
+  const research = await prisma.$transaction(async (tx) => {
+    const created = await tx.research.create({
+      data: {
+        type: body.type,
+        title: body.title,
+        body: body.body,
+        background: body.background ?? null,
+        conclusion: body.conclusion ?? null,
+        risks: body.risks ?? null,
+        tags: body.tags,
+        authorId: u.id,
+        status: 'draft',
+        creationMethod: 'manual',
+        aiAssisted: false,
+      },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        title: true,
+        body: true,
+        background: true,
+        conclusion: true,
+        risks: true,
+        tags: true,
+        authorId: true,
+        creationMethod: true,
+        aiAssisted: true,
+        publishedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        author: { select: { id: true, name: true, email: true } },
+      },
+    });
+    await tx.researchAudit.create({
+      data: {
+        researchId: created.id,
+        editorId: u.id,
+        action: 'create',
+      },
+    });
+    return created;
   });
 
   log.info('research.create', 'draft created', {
     requestId,
     userId: u.id,
     researchId: research.id,
-    creationMethod: body.creationMethod,
+    creationMethod: 'manual',
   });
 
   return NextResponse.json(shapeResearch(research), { status: 201 });

@@ -38,6 +38,7 @@ const researchSelect = {
   creationMethod: true,
   aiAssisted: true,
   originContentSha256: true,
+  sourceCommentId: true,
   publishedAt: true,
   createdAt: true,
   updatedAt: true,
@@ -85,6 +86,13 @@ export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (
     });
   }
 
+  // 服务端 canEdit 计算（W4 review 修订：避免前端硬编码 isOwner = true）。
+  // 仅 draft/published/archived 三种状态下：
+  //   - author === me → canEdit = true
+  //   - admin → canEdit = true（admin 可代编辑走 publish action 校验）
+  // 注：admin 实际能不能改取决于 publish handler；前端仅做显隐。
+  const canEdit = research.authorId === u.id || u.role === 'admin';
+
   // 读取审计历史
   const audits = await prisma.researchAudit.findMany({
     where: { researchId: research.id },
@@ -98,8 +106,84 @@ export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (
     },
   });
 
+  // 长文（type='research'，已发布）→ 挂载 research_sources
+  // 草稿不挂载（避免泄漏未发布调研的引用；架构 §十二）。
+  // 精华（type='knowledge'）→ 不挂 research_sources，只挂 sourceComment 跳转。
+  let researchSources: Array<{
+    id: string;
+    sourceRef: unknown;
+    canonicalKey: string;
+    title: string | null;
+    description: string | null;
+  }> = [];
+
+  let sourceComment: {
+    id: string;
+    body: string;
+    authorId: string;
+    authorName: string;
+    targetType: string;
+    targetId: string | null;
+    targetTitle: string | null;
+  } | null = null;
+
+  if (research.status === RESEARCH_STATUS.PUBLISHED && research.type === 'research') {
+    const sources = await prisma.researchSource.findMany({
+      where: { researchId: research.id },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        sourceRef: true,
+        canonicalKey: true,
+        title: true,
+        description: true,
+      },
+    });
+    researchSources = sources;
+  }
+
+  if (research.sourceCommentId) {
+    const sc = await prisma.comment.findUnique({
+      where: { id: research.sourceCommentId },
+      select: {
+        id: true,
+        body: true,
+        authorId: true,
+        targetType: true,
+        summaryId: true,
+        researchId: true,
+        author: { select: { name: true } },
+        summary: { select: { title: true } },
+        research: { select: { title: true } },
+      },
+    });
+    if (sc) {
+      const targetTitle = sc.targetType === 'summary'
+        ? sc.summary?.title ?? null
+        : sc.research?.title ?? null;
+      sourceComment = {
+        id: sc.id,
+        body: sc.body,
+        authorId: sc.authorId,
+        authorName: sc.author.name,
+        targetType: sc.targetType,
+        targetId: sc.summaryId ?? sc.researchId,
+        targetTitle,
+      };
+    }
+  }
+
   return NextResponse.json({
     ...shapeResearchDetail(research),
+    canEdit,
+    researchSources: researchSources.map((s) => ({
+      id: s.id,
+      sourceRef: s.sourceRef,
+      canonicalKey: s.canonicalKey,
+      title: s.title,
+      description: s.description,
+    })),
+    sourceComment,
     audits: audits.map((a) => ({
       id: a.id,
       action: a.action,

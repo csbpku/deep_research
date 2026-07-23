@@ -1,18 +1,39 @@
 'use client';
 
-// 沉淀详情页 —— 只读视图 + 操作按钮
+// 沉淀详情页 —— 增量 W4：按 type 分支显示长文 / 精华布局。
 //
 // draft: 仅 owner 可见；显示「编辑」「发布」按钮
-// published: 全员可见；owner 可编辑
+// published: 全员可见；owner / admin 可编辑（W3 canEdit 由服务端计算）
+//
+// type='research'（长文）：背景 → 正文 → 结论 → 风险 → research_sources 列表
+// type='knowledge'（精华）：sourceComment 引用 → 短 body → 来源评论跳转
 
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 
+interface ResearchSourceItem {
+  id: string;
+  sourceRef: { type?: string; value?: string } | unknown;
+  canonicalKey: string;
+  title: string | null;
+  description: string | null;
+}
+
+interface SourceCommentItem {
+  id: string;
+  body: string;
+  authorId: string;
+  authorName: string;
+  targetType: 'research' | 'summary';
+  targetId: string | null;
+  targetTitle: string | null;
+}
+
 interface ResearchDetail {
   id: string;
-  type: string;
-  status: string;
+  type: 'research' | 'knowledge';
+  status: 'draft' | 'published' | 'archived';
   title: string;
   body: string;
   background: string | null;
@@ -26,6 +47,9 @@ interface ResearchDetail {
   createdAt: string;
   updatedAt: string;
   author: { id: string; name: string };
+  canEdit: boolean;
+  researchSources: ResearchSourceItem[];
+  sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
   commentCount?: number;
 }
@@ -67,7 +91,9 @@ export default function ResearchDetailPage() {
     );
   }
 
-  const isOwner = true; // 列表/详情页 API 都是 owner 才可编辑；前端没法可靠知道当前 userId
+  const isLongResearch = data.type === 'research';
+  const isKnowledge = data.type === 'knowledge';
+  const isDraft = data.status === 'draft';
 
   return (
     <div>
@@ -93,6 +119,17 @@ export default function ResearchDetailPage() {
               borderRadius: 4,
               fontSize: 11,
               fontWeight: 600,
+              background: isLongResearch ? '#dbeafe' : '#ffedd5',
+              color: isLongResearch ? '#1d4ed8' : '#7c2d12',
+              border: `1px solid ${isLongResearch ? '#bfdbfe' : '#fed7aa'}`,
+            }}>
+              {isLongResearch ? '长文' : '精华'}
+            </span>
+            <span style={{
+              padding: '2px 8px',
+              borderRadius: 4,
+              fontSize: 11,
+              fontWeight: 600,
               background: '#f1f5f9',
               color: '#475569',
               border: '1px solid #e2e8f0',
@@ -113,7 +150,7 @@ export default function ResearchDetailPage() {
                 AI 协助
               </span>
             )}
-            {data.status === 'draft' && (
+            {isDraft && (
               <span style={{
                 padding: '2px 8px',
                 borderRadius: 4,
@@ -135,22 +172,24 @@ export default function ResearchDetailPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Link
-            href={`/researches/${data.id}/edit`}
-            style={{
-              padding: '6px 14px',
-              border: '1px solid #0f172a',
-              borderRadius: 6,
-              background: '#fff',
-              color: '#0f172a',
-              textDecoration: 'none',
-              fontSize: 13,
-            }}
-          >
-            编辑
-          </Link>
-        </div>
+        {data.canEdit && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Link
+              href={`/researches/${data.id}/edit`}
+              style={{
+                padding: '6px 14px',
+                border: '1px solid #0f172a',
+                borderRadius: 6,
+                background: '#fff',
+                color: '#0f172a',
+                textDecoration: 'none',
+                fontSize: 13,
+              }}
+            >
+              编辑
+            </Link>
+          </div>
+        )}
       </div>
 
       {/* 标签 */}
@@ -171,51 +210,169 @@ export default function ResearchDetailPage() {
         </div>
       )}
 
-      {/* 结构化字段 */}
-      {(data.background || data.conclusion || data.risks) && (
-        <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, marginBottom: 20, background: '#f8fafc' }}>
+      {/* ── 长文布局：background → body → conclusion → risks → research_sources ── */}
+      {isLongResearch && (
+        <>
           {data.background && (
-            <div style={{ marginBottom: 12 }}>
-              <h3 style={{ fontSize: 14, color: '#475569', margin: '0 0 4px' }}>背景</h3>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: '#334155' }}>{data.background}</p>
-            </div>
+            <section style={sectionStyle}>
+              <h2 style={sectionHeaderStyle}>背景</h2>
+              <p style={sectionBodyStyle}>{data.background}</p>
+            </section>
           )}
+
+          <section style={sectionStyle}>
+            <h2 style={sectionHeaderStyle}>正文</h2>
+            <pre style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontFamily: 'inherit',
+              fontSize: 15,
+              margin: 0,
+              lineHeight: 1.8,
+              color: '#1e293b',
+            }}>
+              {data.body}
+            </pre>
+          </section>
+
           {data.conclusion && (
-            <div style={{ marginBottom: 12 }}>
-              <h3 style={{ fontSize: 14, color: '#475569', margin: '0 0 4px' }}>结论</h3>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: '#334155' }}>{data.conclusion}</p>
-            </div>
+            <section style={sectionStyle}>
+              <h2 style={sectionHeaderStyle}>结论</h2>
+              <p style={sectionBodyStyle}>{data.conclusion}</p>
+            </section>
           )}
+
           {data.risks && (
-            <div>
-              <h3 style={{ fontSize: 14, color: '#475569', margin: '0 0 4px' }}>风险</h3>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: '#334155' }}>{data.risks}</p>
-            </div>
+            <section style={sectionStyle}>
+              <h2 style={sectionHeaderStyle}>风险</h2>
+              <p style={sectionBodyStyle}>{data.risks}</p>
+            </section>
           )}
-        </div>
+
+          {/* research_sources：仅已发布长文挂载（draft 不展示） */}
+          {data.status === 'published' && data.researchSources.length > 0 && (
+            <section style={{ ...sectionStyle, background: '#f8fafc' }}>
+              <h2 style={sectionHeaderStyle}>挂载资料 ({data.researchSources.length})</h2>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {data.researchSources.map((s) => {
+                  const ref = (s.sourceRef ?? {}) as { type?: string; value?: string };
+                  const href = sourceHrefForRef(ref);
+                  return (
+                    <li
+                      key={s.id}
+                      style={{
+                        padding: '10px 0',
+                        borderBottom: '1px solid #e2e8f0',
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <span style={{
+                          padding: '1px 6px',
+                          fontSize: 10,
+                          background: '#e0e7ff',
+                          color: '#3730a3',
+                          borderRadius: 3,
+                          fontWeight: 600,
+                        }}>
+                          {ref.type ?? 'unknown'}
+                        </span>
+                        {href ? (
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            style={{ color: '#0f172a', textDecoration: 'none', fontWeight: 500 }}
+                          >
+                            {s.title ?? ref.value ?? s.canonicalKey}
+                          </a>
+                        ) : (
+                          <span style={{ color: '#0f172a', fontWeight: 500 }}>
+                            {s.title ?? s.canonicalKey}
+                          </span>
+                        )}
+                      </div>
+                      {s.description && (
+                        <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 0' }}>
+                          {s.description}
+                        </p>
+                      )}
+                      <p style={{ fontSize: 11, color: '#94a3b8', margin: '2px 0 0' }}>
+                        {s.canonicalKey}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+        </>
       )}
 
-      {/* 正文 */}
-      <div style={{
-        border: '1px solid #e2e8f0',
-        borderRadius: 8,
-        padding: 24,
-        background: '#fff',
-        lineHeight: 1.8,
-        fontSize: 15,
-        color: '#1e293b',
-      }}>
-        <pre style={{
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          fontFamily: 'inherit',
-          fontSize: 'inherit',
-          margin: 0,
-          lineHeight: 1.8,
-        }}>
-          {data.body}
-        </pre>
-      </div>
+      {/* ── 精华布局：sourceComment 引用 + 短 body + 来源评论跳转 ── */}
+      {isKnowledge && (
+        <>
+          {data.sourceComment && (
+            <section style={{ ...sectionStyle, background: '#fff7ed', borderColor: '#fed7aa' }}>
+              <h2 style={{ ...sectionHeaderStyle, color: '#9a3412' }}>来源评论</h2>
+              <blockquote style={{
+                margin: 0,
+                padding: '8px 12px',
+                background: '#fff',
+                border: '1px solid #fed7aa',
+                borderRadius: 6,
+                fontSize: 13,
+                color: '#7c2d12',
+                lineHeight: 1.6,
+              }}>
+                {data.sourceComment.body}
+              </blockquote>
+              <div style={{ display: 'flex', gap: 8, fontSize: 12, color: '#9a3412', marginTop: 8 }}>
+                <span>by {data.sourceComment.authorName}</span>
+                {data.sourceComment.targetId && (
+                  <Link
+                    href={data.sourceComment.targetType === 'summary'
+                      ? `/summaries/${data.sourceComment.targetId}`
+                      : `/researches/${data.sourceComment.targetId}`}
+                    style={{ color: '#9a3412', textDecoration: 'underline' }}
+                  >
+                    查看原始{data.sourceComment.targetType === 'summary' ? '摘要' : '长文'}: {data.sourceComment.targetTitle ?? '...'}
+                  </Link>
+                )}
+              </div>
+            </section>
+          )}
+
+          <section style={sectionStyle}>
+            <h2 style={sectionHeaderStyle}>正文</h2>
+            <pre style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontFamily: 'inherit',
+              fontSize: 15,
+              margin: 0,
+              lineHeight: 1.8,
+              color: '#1e293b',
+            }}>
+              {data.body}
+            </pre>
+          </section>
+
+          {data.background && (
+            <section style={sectionStyle}>
+              <h2 style={sectionHeaderStyle}>背景</h2>
+              <p style={sectionBodyStyle}>{data.background}</p>
+            </section>
+          )}
+
+          {data.conclusion && (
+            <section style={sectionStyle}>
+              <h2 style={sectionHeaderStyle}>结论</h2>
+              <p style={sectionBodyStyle}>{data.conclusion}</p>
+            </section>
+          )}
+        </>
+      )}
 
       {/* 审计历史 */}
       {data.audits && data.audits.length > 0 && (
@@ -240,4 +397,35 @@ export default function ResearchDetailPage() {
       )}
     </div>
   );
+}
+
+const sectionStyle: React.CSSProperties = {
+  border: '1px solid #e2e8f0',
+  borderRadius: 8,
+  padding: 20,
+  marginBottom: 16,
+  background: '#fff',
+};
+
+const sectionHeaderStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 600,
+  color: '#475569',
+  margin: '0 0 8px',
+};
+
+const sectionBodyStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  lineHeight: 1.7,
+  color: '#334155',
+  whiteSpace: 'pre-wrap',
+};
+
+function sourceHrefForRef(ref: { type?: string; value?: string }): string | null {
+  if (!ref.value) return null;
+  if (ref.type === 'url') return ref.value;
+  if (ref.type === 'doi') return `https://doi.org/${ref.value}`;
+  if (ref.type === 'arxiv') return `https://arxiv.org/abs/${ref.value}`;
+  return null;
 }

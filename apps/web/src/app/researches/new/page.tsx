@@ -1,12 +1,15 @@
 'use client';
 
-// /researches/new — 新建沉淀入口，再导出编辑器组件。
-// 编辑器本身已处理 isNew 逻辑（/app/researches/[id]/edit/page.tsx）。
-// 这个页面就是编辑器，但 params.id 不存在。
+// /researches/new — 新建沉淀入口。
 //
-// 简化实现：直接在新页路由下展示编辑 UI（避免 import 复用问题）。
+// 提供两个入口卡片：
+//   1. "从空白创建" → 表单（标题 + 正文 + 结构化字段 + 标签）
+//   2. "从文件导入" → /researches/import（弹窗 + 转换 + Markdown 预览）
+//
+// W4 review 修订：原来只有空白创建；W4 加卡片化入口，让 import 入口可见。
 
 import { useState, useCallback } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -14,6 +17,7 @@ export default function NewResearchPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
 
+  const [mode, setMode] = useState<'pick' | 'create'>('pick');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [background, setBackground] = useState('');
@@ -59,10 +63,77 @@ export default function NewResearchPage() {
     }
   }, [title, body, background, conclusion, risks, tags, router, queryClient]);
 
+  if (mode === 'pick') {
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <Link href="/researches" style={{ fontSize: 13, color: '#64748b', textDecoration: 'none' }}>
+            沉淀
+          </Link>
+          <span style={{ color: '#94a3b8' }}>/</span>
+          <span style={{ fontSize: 13, color: '#475569' }}>新建</span>
+        </div>
+        <h1 style={{ fontSize: 22, margin: '0 0 16px' }}>新建沉淀</h1>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <button
+            onClick={() => setMode('create')}
+            style={{
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+              padding: 24,
+              background: '#fff',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: 'inherit',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>从空白创建</div>
+            <div style={{ fontSize: 13, color: '#64748b' }}>
+              直接写标题 + 正文 + 背景 / 结论 / 风险 / 标签
+            </div>
+          </button>
+
+          <Link
+            href="/researches/import"
+            style={{
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+              padding: 24,
+              background: '#fff',
+              cursor: 'pointer',
+              textDecoration: 'none',
+              color: '#0f172a',
+              display: 'block',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>从文件导入</div>
+            <div style={{ fontSize: 13, color: '#64748b' }}>
+              拖拽 .md / .txt / .html（≤ 5MB）→ 自动转 Markdown → 个人草稿
+            </div>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, margin: 0 }}>新建沉淀</h1>
+        <button
+          onClick={() => setMode('pick')}
+          style={{
+            padding: '6px 12px',
+            border: '1px solid #e2e8f0',
+            borderRadius: 4,
+            background: '#fff',
+            cursor: 'pointer',
+            fontSize: 12,
+          }}
+        >
+          返回
+        </button>
       </div>
 
       {error && (
