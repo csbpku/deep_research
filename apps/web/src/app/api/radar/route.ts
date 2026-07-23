@@ -13,7 +13,7 @@ import type { NextRequest } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../lib/db';
 import { apiHandler } from '../../../lib/api-handler';
-import { requireUser } from '../../../lib/auth/session';
+import { getCurrentUser } from '../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../lib/errors';
 import { withRequestId } from '../../../lib/log';
 import { RadarListQuery } from '../../../lib/schemas';
@@ -27,8 +27,8 @@ import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
-  const u = await requireUser(req);
-  if (u instanceof NextResponse) return u;
+  const u = await getCurrentUser();
+  // 允许未登录用户查看公开候选
 
   const url = new URL(req.url);
   const parsed = RadarListQuery.safeParse({
@@ -123,7 +123,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   );
 
   const summaryIds = finalItems.map((it) => it.id);
-  const feedbackMap = await aggregateFeedbacks(prisma, summaryIds, u.id);
+  // Only fetch feedbacks if user is logged in (userId must be valid UUID)
+  const feedbackMap = u?.id
+    ? await aggregateFeedbacks(prisma, summaryIds, u.id)
+    : new Map<string, { counts: Record<string,number>; mine: string[] }>();
+
+  const emptyFeedback = (): { counts: Record<string,number>; mine: string[] } =>
+    ({ counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 }, mine: [] } as const);
 
   return NextResponse.json({
     page,
@@ -131,7 +137,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     total,
     totalPages: Math.max(1, Math.ceil(total / perPage)),
     items: finalItems.map((it) => {
-      const fb = feedbackMap.get(it.id) ?? { counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 }, mine: [] };
+      const fb = feedbackMap.get(it.id) ?? emptyFeedback() as any;
       return shapeCandidate({
         summary: it,
         feedbackCounts: fb.counts,
