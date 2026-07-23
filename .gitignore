@@ -42,3 +42,4 @@ infra/data/import-tmp/
 docs/references/
 docs/inputs/
 docs/notes/
+.claude/
