@@ -24,9 +24,10 @@ import hashlib
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Annotated, Any, cast
+from urllib.parse import urlsplit
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Path, Request, status
@@ -79,13 +80,26 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     # 下一个 GET 不可见。lifespan 创建并绑定到 app.state.job_store。
     store = build_store()
     app_instance.state.job_store = store
-    # 启动 reaper(只对 DB store 有意义)
+    # Start the process-level DB pool once. Radar routes and the share
+    # submission worker reuse this pool; HTTP handlers only enqueue work.
     from ai_engine.job_runner.db_store import DbJobStore
+    share_worker_task: asyncio.Task[None] | None = None
     if isinstance(store, DbJobStore):
+        await store.open()
+        app_instance.state.db_pool = store.pool
         await store.start_reaper()
+        share_worker_task = asyncio.create_task(
+            _share_submission_worker_loop(app_instance),
+            name="share-submission-worker",
+        )
+    app_instance.state.adapter = build_adapter()
     try:
         yield
     finally:
+        if share_worker_task is not None:
+            share_worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await share_worker_task
         if isinstance(store, DbJobStore):
             await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
@@ -93,11 +107,39 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
 
 import os  # noqa: E402  (kept here to keep import block visually grouped)
 
+
+async def _share_submission_worker_loop(app_instance: FastAPI) -> None:
+    """Poll frozen share_submissions without blocking request handlers."""
+    from ai_engine.share_submission_worker import run_one_share_submission
+
+    while True:
+        try:
+            result = await run_one_share_submission(
+                app_instance.state.db_pool,
+                app_instance.state.adapter,
+                worker_id=f"share-{os.getpid()}",
+            )
+            if result is None:
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            structlog.get_logger("ai_engine.share_submission").error(
+                "ai-engine.share_submission.loop_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(1.0)
+
+
 app = FastAPI(
     title="Deep Research AI Engine",
     version="0.1.0",
     lifespan=_lifespan,
 )
+
+from ai_engine.radar.sync_endpoint import router as radar_router  # noqa: E402
+
+app.include_router(radar_router)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -566,58 +608,65 @@ async def submit_share(
     body: ShareUrlRequest,
     request: Request,
 ) -> ShareSubmitResponse:
-    """Submit a user-shared URL for admin review.
+    """Compatibility ingress that queues the frozen share_submissions model.
 
-    W4 contract:
-    - Validates the URL & userNote (Pydantic + share.validate_share_input).
-    - Writes a `summaries` row with `source='user'` and
-      `status='pending_review'` (admin approves via W8).
-    - Returns 202 + summary_id; background worker fetches + summarises.
+    The Web BFF normally inserts this row itself. If it forwards here instead,
+    this endpoint follows the same queue and never invokes the retired
+    ``server.share`` summary path.
     """
-    from ai_engine.server.share import submit_share as _submit
-    from ai_engine.server.share import validate_share_input as _validate
-
-    # 1. Validate input shape & content (Pydantic + defence-in-depth).
-    #    Run *before* deciding DB vs in-memory so a `file://` URL is
-    #    always rejected regardless of the test/dev backend.
-    try:
-        _validate(url=body.url, user_note=body.user_note)
-    except AdapterError as exc:
-        raise _http_error(exc.code, exc.message) from exc
-
-    pool: Any | None = None
-    adapter: Any | None = None
-    store = _store_singleton()
+    from ai_engine.ingestion.pipeline import canonicalize_url
     from ai_engine.job_runner.db_store import DbJobStore as _Db
 
-    if isinstance(store, _Db):
-        pool = store.pool
-    else:
-        # In-memory backend: there is no Postgres. We treat the test
-        # path by returning a deterministic id + status. This keeps the
-        # unit-test suite happy without requiring a DB.
-        request_id = getattr(request.state, "request_id", None)
+    parts = urlsplit(body.url)
+    canonical = canonicalize_url(body.url)
+    if parts.scheme not in {"http", "https"} or not parts.hostname or not canonical:
+        raise _http_error("VALIDATION_FAILED", "url must be an HTTP(S) URL")
+    request_id = getattr(request.state, "request_id", None)
+    store = _store_singleton()
+    if not isinstance(store, _Db):
         return ShareSubmitResponse(
             summary_id="00000000-0000-0000-0000-000000000099",
-            status="pending_review",
-            canonical_url=body.url,
+            status="pending",
+            canonical_url=canonical,
             request_id=request_id,
         )
 
-    adapter = _adapter_singleton()
-    request_id = getattr(request.state, "request_id", None)
-    outcome = await _submit(
-        pool=pool,
-        user_id=body.requester_id,
-        url=body.url,
-        user_note=body.user_note,
-        request_id=request_id,
-        adapter=adapter,
-    )
+    submission_id = str(uuid.uuid4())
+    async with store.pool.connection() as conn:
+        async with conn.transaction():
+            existing = await (
+                await conn.execute(
+                    'SELECT "id", "status" FROM "share_submissions" '
+                    'WHERE "submitterId" = %s AND "canonicalUrl" = %s '
+                    "AND \"status\" = 'pending' LIMIT 1",
+                    (body.requester_id, canonical),
+                )
+            ).fetchone()
+            if existing is not None:
+                existing_row = cast(dict[str, Any], existing)
+                return ShareSubmitResponse(
+                    summary_id=str(existing_row["id"]),
+                    status=str(existing_row["status"]),
+                    canonical_url=canonical,
+                    request_id=request_id,
+                )
+            await conn.execute(
+                'INSERT INTO "share_submissions" '
+                '("id", "submitterId", "url", "canonicalUrl", "userNote", '
+                '"status", "createdAt", "updatedAt") '
+                "VALUES (%s, %s, %s, %s, %s, 'pending', now(), now())",
+                (
+                    submission_id,
+                    body.requester_id,
+                    body.url,
+                    canonical,
+                    body.user_note,
+                ),
+            )
     return ShareSubmitResponse(
-        summary_id=outcome.summary_id,
-        status=outcome.status,
-        canonical_url=outcome.canonical_url,
+        summary_id=submission_id,
+        status="pending",
+        canonical_url=canonical,
         request_id=request_id,
     )
 

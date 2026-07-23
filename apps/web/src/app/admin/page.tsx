@@ -27,12 +27,29 @@ export default async function AdminPage() {
     <div>
       <h1 style={{ fontSize: 22 }}>Admin 控制台</h1>
       <p style={{ color: '#475569' }}>
-        Week 1 占位。Week 8 落地：分享审核、提名审核、成员管理（设 admin / 禁用 / 恢复）。
+        Week 5：技术雷达候选队列入口。
       </p>
-      <EmptyState
-        title="占位"
-        description="Admin 首页 P0 只显示待审核数和失败 job 数，不实现 P1 统计图表（IMP §十四）。"
-      />
+      <ul style={{ listStyle: 'none', padding: 0, display: 'grid', gap: 8 }}>
+        <li>
+          <a
+            href="/admin/radar"
+            style={{
+              display: 'block',
+              padding: 16,
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+              background: '#fff',
+              textDecoration: 'none',
+              color: '#0f172a',
+            }}
+          >
+            <strong>雷达队列</strong>
+            <p style={{ margin: '4px 0 0', color: '#475569', fontSize: 13 }}>
+              选入每日摘要 / 创建 AI 调研 / 忽略 / 重试解读
+            </p>
+          </a>
+        </li>
+      </ul>
     </div>
   );
 }

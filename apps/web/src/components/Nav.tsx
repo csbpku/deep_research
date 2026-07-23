@@ -33,6 +33,7 @@ export async function Nav() {
         技术调研
       </Link>
       <Link href="/summaries">每日摘要</Link>
+      <Link href="/radar">技术雷达</Link>
       <Link href="/researches">沉淀</Link>
       <Link href="/ai-research">AI 调研</Link>
       <Link href="/search">搜索</Link>

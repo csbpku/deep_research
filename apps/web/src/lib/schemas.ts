@@ -7,7 +7,7 @@
 // 命名与数据库字段对齐（Research / ContentImportJob）。
 
 import { z } from 'zod';
-import { RESEARCH_TYPE, CREATION_METHOD } from '@deep-research/shared/states';
+import { RESEARCH_TYPE, CREATION_METHOD, RADAR_FEEDBACK_TYPE } from '@deep-research/shared/states';
 
 // ──────────────────────────────────────────────────────────────────────
 // Research CRUD
@@ -92,3 +92,64 @@ export const SearchQuery = z.object({
   per_page: z.coerce.number().int().min(1).max(50).default(20),
 });
 export type SearchQuery = z.infer<typeof SearchQuery>;
+
+// ──────────────────────────────────────────────────────────────────────
+// Week 5 雷达 (Radar) —— 列表 / 详情 / 反馈 / Admin 操作
+// ──────────────────────────────────────────────────────────────────────
+
+/** 雷达候选状态过滤（schema 校验 shared/SUMMARY_STATUS 子集） */
+export const RADAR_STATUS_VALUES = [
+  'candidate',
+  'pending_review',
+  'published',
+  'rejected',
+  'archived',
+] as const;
+
+/** /api/radar 列表查询参数 */
+export const RadarListQuery = z.object({
+  q: z.string().trim().max(200).optional(),
+  sourceType: z.string().trim().min(1).max(32).optional(),
+  status: z.enum(RADAR_STATUS_VALUES).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type RadarListQuery = z.infer<typeof RadarListQuery>;
+
+/** /api/radar/[id] 路径参数 */
+export const RadarIdParam = z.object({ id: z.string().uuid() });
+export type RadarIdParam = z.infer<typeof RadarIdParam>;
+
+/** POST /api/radar-feedback 提交反馈 */
+export const CreateRadarFeedbackInput = z.object({
+  summaryId: z.string().uuid(),
+  feedbackType: z.enum([
+    RADAR_FEEDBACK_TYPE.USEFUL,
+    RADAR_FEEDBACK_TYPE.INACCURATE,
+    RADAR_FEEDBACK_TYPE.USED,
+    RADAR_FEEDBACK_TYPE.FAVORITE,
+    RADAR_FEEDBACK_TYPE.SUGGEST_RESEARCH,
+  ]),
+});
+export type CreateRadarFeedbackInput = z.infer<typeof CreateRadarFeedbackInput>;
+
+/** DELETE /api/radar-feedback 查询参数 */
+export const DeleteRadarFeedbackQuery = z.object({
+  summaryId: z.string().uuid(),
+  feedbackType: z.enum([
+    RADAR_FEEDBACK_TYPE.USEFUL,
+    RADAR_FEEDBACK_TYPE.INACCURATE,
+    RADAR_FEEDBACK_TYPE.USED,
+    RADAR_FEEDBACK_TYPE.FAVORITE,
+    RADAR_FEEDBACK_TYPE.SUGGEST_RESEARCH,
+  ]),
+});
+export type DeleteRadarFeedbackQuery = z.infer<typeof DeleteRadarFeedbackQuery>;
+
+/** POST /api/admin/radar/[id]/select 选入每日摘要 */
+export const AdminRadarSelectInput = z.object({
+  summaryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, 'summaryDate must be YYYY-MM-DD'),
+  sortOrder: z.number().int().min(1).max(4),
+  selectionReason: z.string().trim().min(2).max(500),
+});
+export type AdminRadarSelectInput = z.infer<typeof AdminRadarSelectInput>;

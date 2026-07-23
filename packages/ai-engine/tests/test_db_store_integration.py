@@ -55,6 +55,29 @@ async def isolated_database() -> None:
         await store.close()
 
 
+@pytest.fixture(autouse=True)
+async def truncate_radar_tables() -> None:
+    """Keep Week 5 queue/source rows isolated without changing old assertions."""
+    store = DbJobStore(dsn=_test_dsn(), table_name=AI_TABLE)
+    await store.open()
+    try:
+        async with store.pool.connection() as conn:
+            await conn.execute(
+                'TRUNCATE TABLE "radar_feedback", "radar_sync_runs", "radar_sources", '
+                '"share_submissions" RESTART IDENTITY CASCADE'
+            )
+            await conn.commit()
+        yield
+        async with store.pool.connection() as conn:
+            await conn.execute(
+                'TRUNCATE TABLE "radar_feedback", "radar_sync_runs", "radar_sources", '
+                '"share_submissions" RESTART IDENTITY CASCADE'
+            )
+            await conn.commit()
+    finally:
+        await store.close()
+
+
 async def _new_store() -> DbJobStore:
     s = DbJobStore(dsn=_test_dsn(), table_name=AI_TABLE, lease_seconds=60, heartbeat_seconds=15)
     await s.open()

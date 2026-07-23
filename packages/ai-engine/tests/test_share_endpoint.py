@@ -48,7 +48,7 @@ async def test_share_endpoint_happy_path_returns_202() -> None:
     body = resp.json()
     # In-memory backend returns the deterministic stub id.
     assert body["summary_id"] == "00000000-0000-0000-0000-000000000099"
-    assert body["status"] == "pending_review"
+    assert body["status"] == "pending"
     assert body["canonical_url"] == "https://example.com/article"
 
 

@@ -66,7 +66,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       status: SUMMARY_STATUS.PUBLISHED,
       summaryDate,
     },
-    orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
+    orderBy: [{ sortOrder: 'asc' }, { publishedAt: 'desc' }, { createdAt: 'desc' }],
     take: 4,
     select: {
       id: true,
@@ -79,6 +79,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       publishedAt: true,
       createdAt: true,
       source: true,
+      // W5：每日摘要页展示入选理由、排序、评分
+      sortOrder: true,
+      selectionReason: true,
+      relevanceScore: true,
+      timelinessScore: true,
+      sourceQualityScore: true,
     },
   });
 
@@ -97,6 +103,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       publishedAt: s.publishedAt ? s.publishedAt.toISOString() : null,
       crawledAt: s.createdAt.toISOString(),
       source: s.source,
+      sortOrder: s.sortOrder,
+      selectionReason: s.selectionReason,
+      relevanceScore: s.relevanceScore,
+      timelinessScore: s.timelinessScore,
+      sourceQualityScore: s.sourceQualityScore,
     })),
   });
 });
