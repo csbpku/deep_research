@@ -87,3 +87,31 @@ export const USER_ROLE = {
   ADMIN: 'admin',
 } as const;
 export type UserRole = (typeof USER_ROLE)[keyof typeof USER_ROLE];
+
+// Week 5 雷达：radar_sync_runs.status
+export const RADAR_SYNC_STATUS = {
+  RUNNING: 'running',
+  COMPLETED: 'completed',
+  PARTIAL: 'partial',
+  FAILED: 'failed',
+} as const;
+export type RadarSyncStatus = (typeof RADAR_SYNC_STATUS)[keyof typeof RADAR_SYNC_STATUS];
+
+// Week 5 雷达：radar_feedback.feedbackType
+export const RADAR_FEEDBACK_TYPE = {
+  USEFUL: 'useful',
+  INACCURATE: 'inaccurate',
+  USED: 'used',
+  FAVORITE: 'favorite',
+  SUGGEST_RESEARCH: 'suggest_research',
+} as const;
+export type RadarFeedbackType = (typeof RADAR_FEEDBACK_TYPE)[keyof typeof RADAR_FEEDBACK_TYPE];
+
+// Week 5 雷达：候选处理状态（同步批次内）
+export const RADAR_CANDIDATE_STATUS = {
+  NEW: 'new',
+  INTERPRETED: 'interpreted',
+  SKIPPED: 'skipped',
+  FAILED: 'failed',
+} as const;
+export type RadarCandidateStatus = (typeof RADAR_CANDIDATE_STATUS)[keyof typeof RADAR_CANDIDATE_STATUS];
