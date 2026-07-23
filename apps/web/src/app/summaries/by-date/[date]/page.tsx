@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { EmptyState } from '../../../components/EmptyState';
+import { EmptyState } from '../../../../components/EmptyState';
 
 interface SummaryItem {
   id: string;
