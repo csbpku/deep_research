@@ -121,6 +121,31 @@ enum SearchDocType {
   knowledge
 }
 
+// Week 5 [db]：雷达候选状态（每个同步批次的候选处理阶段）
+enum RadarCandidateStatus {
+  new
+  interpreted
+  skipped
+  failed
+}
+
+// Week 5 [db]：雷达同步整体状态
+enum RadarSyncStatus {
+  running
+  completed
+  partial
+  failed
+}
+
+// Week 5 [db]：雷达反馈类型
+enum RadarFeedbackType {
+  useful
+  inaccurate
+  used
+  favorite
+  suggest_research
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 1. users
 // ─────────────────────────────────────────────────────────────────────
@@ -147,6 +172,7 @@ model User {
   adminActions      AdminAction[]
   sharesSubmitted   ShareSubmission[] @relation("share_submitter")
   sharesReviewed    ShareSubmission[] @relation("share_reviewer")
+  radarFeedback     RadarFeedback[]
 
   @@index([role, disabledAt])
   @@map("users")
@@ -182,8 +208,21 @@ model Summary {
   // 全文搜索（架构 §86 zhparser + tsvector/GIN；Week 4 由 prisma migration 加列）
   // 实际 tsvector 列与触发器在第二个 migration 里手工加
 
+  // Week 5 雷达字段：评分 / 解读 / 同步批次
+  relevanceScore      Float?              // 相关性 0..1
+  timelinessScore     Float?              // 时效/趋势 0..1
+  sourceQualityScore  Float?              // 来源质量 0..1
+  scoreVersion        String?             @db.VarChar(16)  // 评分版本号
+  scoreReason         String?             @db.VarChar(500)  // 评分可读理由
+  interpretation      String?             @db.VarChar(2000) // AI 一句话解读
+  syncRunId           String?             @db.Uuid  // radar_sync_runs.id
+  sortOrder           Int?                // Admin 排列的序号（每日 1-4）
+  selectionReason     String?             @db.VarChar(500)  // 入选每日摘要理由
+
   comments            Comment[]      @relation("comments_summary")
   shareSource         ShareSubmission? @relation("share_to_summary")
+  syncRun             RadarSyncRun?     @relation("sync_to_candidates", fields: [syncRunId], references: [id], onDelete: SetNull)
+  feedbacks           RadarFeedback[]
 
   @@index([source, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -542,6 +581,86 @@ model SearchDoc {
   @@unique([type, refId])
   @@index([type, publishedAt(sort: Desc)])
   @@map("search_docs")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 15. radar_sources — Week 5 雷达预置源（GitHub/arxiv/RSS）
+// ─────────────────────────────────────────────────────────────────────
+
+model RadarSource {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String   @db.VarChar(200)
+  sourceType      String   @db.VarChar(32)  // github | arxiv | rss
+  config          Json                        // 源特定配置：repo, category, feed URL 等
+  enabled         Boolean  @default(true)
+  lastSyncAt      DateTime? @db.Timestamptz(3)
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  syncRuns        RadarSyncRun[]
+
+  @@index([sourceType, enabled])
+  @@map("radar_sources")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 16. radar_sync_runs — Week 5 雷达同步运行记录
+// ─────────────────────────────────────────────────────────────────────
+
+model RadarSyncRun {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceId        String           @db.Uuid
+  triggeredBy     String           @db.VarChar(32)  // cron | admin
+  status          RadarSyncStatus  @default(running)
+  totalFetched    Int              @default(0)
+  totalNew        Int              @default(0)
+  totalSkipped    Int              @default(0)
+  totalFailed     Int              @default(0)
+  errorCode       String?          @db.VarChar(64)
+  errorMessage    String?          @db.VarChar(500)
+  // 成本与性能
+  tokenInputTotal  Int             @default(0)
+  tokenOutputTotal Int             @default(0)
+  costUsd         Float            @default(0)
+  elapsedMs       Int?
+  // worker 租约（复用共享 runner 契约）
+  attempts        Int              @default(0)
+  lockedBy        String?
+  leaseExpiresAt  DateTime?        @db.Timestamptz(3)
+  heartbeatAt     DateTime?        @db.Timestamptz(3)
+  nextRetryAt     DateTime?        @db.Timestamptz(3)
+  startedAt       DateTime?        @db.Timestamptz(3)
+  completedAt     DateTime?        @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+
+  source          RadarSource      @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  // 候选 summaries 回指 batch（1:many）
+  candidates      Summary[]        @relation("sync_to_candidates")
+
+  @@index([sourceId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Asc)])
+  @@map("radar_sync_runs")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 17. radar_feedback — Week 5 用户对雷达候选的反馈
+// ─────────────────────────────────────────────────────────────────────
+
+model RadarFeedback {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  summaryId       String            @db.Uuid
+  userId          String            @db.Uuid
+  feedbackType    RadarFeedbackType
+  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+
+  summary         Summary           @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 同一用户对同一候选的同类型反馈幂等
+  @@unique([summaryId, userId, feedbackType])
+  @@index([summaryId, feedbackType])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("radar_feedback")
 }
 
 model AdminAction {
