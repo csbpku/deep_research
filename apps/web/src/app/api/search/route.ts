@@ -17,7 +17,6 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { prisma } from '../../../lib/db';
 import { apiHandler } from '../../../lib/api-handler';
-import { requireUser } from '../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../lib/errors';
 import { log, withRequestId } from '../../../lib/log';
 import { SearchQuery } from '../../../lib/schemas';
@@ -26,8 +25,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
-  const u = await requireUser(req);
-  if (u instanceof NextResponse) return u;
+  // 搜索对已登录和匿名用户都开放（trigger 已保证 search_docs 只含 published 内容）
 
   const url = new URL(req.url);
   const parsed = SearchQuery.safeParse({
@@ -77,7 +75,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   log.info('search.query', 'search executed', {
     requestId,
-    userId: u.id,
     queryLength: q.length,
     type: type ?? 'all',
     total,
