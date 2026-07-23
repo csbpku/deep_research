@@ -6,10 +6,10 @@
 //   - 已登录 → 返回 SessionUser，业务 handler 继续执行。
 
 import { NextResponse } from 'next/server';
-import { auth } from './config.js';
+import { auth } from './config';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { toApiErrorResponse } from '../errors.js';
-import { withRequestId } from '../log.js';
+import { toApiErrorResponse } from '../errors';
+import { withRequestId } from '../log';
 
 export type SessionUser = {
   id: string;

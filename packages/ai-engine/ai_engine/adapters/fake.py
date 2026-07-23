@@ -60,6 +60,7 @@ class _Job:
     attempts: int = 0
     error_code: str | None = None
     error_message: str | None = None
+    body: str = ""
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     completion_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -124,6 +125,20 @@ class FakeAdapter(ResearchEngineAdapter):
                 # Idempotent on (job_id) — return existing handle.
                 return request.job_id
             job = _Job(request=request, mode=self._default_mode)
+            for index, source_ref in enumerate(request.source_refs):
+                value = source_ref.get("value")
+                if source_ref.get("type") == "url" and isinstance(value, str):
+                    job.sources.append(
+                        AdapterSource(
+                            source_ref=source_ref,
+                            canonical_key=value,
+                            title=request.topic,
+                            snippet=request.context,
+                            score=1.0,
+                            step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+                            is_accessible=True,
+                        )
+                    )
             self._jobs[request.job_id] = job
         # Kick off execution in the background. The fake does not block the
         # submitter — this mirrors how a real engine would return a queue
@@ -148,6 +163,7 @@ class FakeAdapter(ResearchEngineAdapter):
                 ),
                 error_code=job.error_code,
                 error_message=job.error_message,
+                output_text=job.body or None,
             )
 
     async def cancel(self, job_id: str) -> AdapterCancelOutcome:
@@ -228,7 +244,12 @@ class FakeAdapter(ResearchEngineAdapter):
                 await job.cancel_event.wait()
                 return
 
-            for step in AI_JOB_STEP_ORDER:
+            steps = (
+                (AI_JOB_STEP["SEARCH"], AI_JOB_STEP["COMPRESS"], AI_JOB_STEP["WRITE"])
+                if job.request.report_type == "summary_brief"
+                else AI_JOB_STEP_ORDER
+            )
+            for step in cast(tuple[AiJobStep, ...], steps):
                 if job.cancel_event.is_set():
                     return
                 await self._execute_step(job, step)
@@ -309,6 +330,7 @@ class FakeAdapter(ResearchEngineAdapter):
                 job.token_in += 400
                 job.token_out += 160
             elif step == AI_JOB_STEP["WRITE"]:
+                job.body = f"{job.request.topic}\n\n基于已验证来源生成的简要摘要。"
                 job.token_in += 500
                 job.token_out += 800
 

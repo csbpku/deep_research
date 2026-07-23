@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import type { ErrorCode } from '@deep-research/shared/errors';
-import { ERROR_HTTP_STATUS, errorStatus, buildApiError } from './errors.js';
+import { ERROR_HTTP_STATUS, errorStatus, buildApiError } from './errors';
 
 describe('ERROR_HTTP_STATUS mapping', () => {
   it('covers every ERROR_CODES key', () => {

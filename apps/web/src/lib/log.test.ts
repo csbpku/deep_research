@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { log, withRequestId, serializeError } from './log.js';
+import { log, withRequestId, serializeError } from './log';
 
 describe('log', () => {
   let stdout: string[] = [];

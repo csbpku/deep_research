@@ -13,7 +13,7 @@
 //   - 高亮来自后端 ts_headline（已用 <mark>...</mark> 包裹匹配段）
 //   - 切 tab 时：把 ?type 写到 query string；前端不刷页面，只更新 state
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
@@ -50,6 +50,14 @@ const TYPE_BADGE: Record<SearchRow['type'], { label: string; color: string; bg: 
 };
 
 export default function SearchPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 20, color: '#94a3b8' }}>加载中...</div>}>
+      <SearchContent />
+    </Suspense>
+  );
+}
+
+function SearchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 

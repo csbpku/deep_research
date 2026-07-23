@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ImportDialog } from '@/components/ImportDialog.js';
+import { ImportDialog } from '@/components/ImportDialog';
 
 export default function ImportPage() {
   const [dialogOpen, setDialogOpen] = useState(true);

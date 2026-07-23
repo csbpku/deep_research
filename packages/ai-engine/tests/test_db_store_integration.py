@@ -12,28 +12,51 @@ from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
 from ai_engine.adapters.base import AdapterSource
-from ai_engine.job_runner.db_store import AI_TABLE, IMPORT_TABLE, DbJobStore
+from ai_engine.job_runner.db_store import AI_TABLE, DbJobStore
 from ai_engine.job_runner.models import JobSnapshot
 
 
 pytestmark = pytest.mark.requires_db
 
 
+def _test_dsn() -> str:
+    return os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql://postgres:postgres@localhost:5432/deep_research_test",
+    )
+
+
 async def _clean_tables(store: DbJobStore) -> None:
-    """每 test 前后清空两个表,避免 shared queue 遗留 job 导致 flaky。"""
+    """Reset the dedicated test database so queue ordering is deterministic."""
     async with store._pool.connection() as conn:
-        await conn.execute(f'DELETE FROM "{AI_TABLE}"')
-        await conn.execute(f'DELETE FROM "{IMPORT_TABLE}"')
+        await conn.execute(
+            'TRUNCATE TABLE "admin_actions", "product_events", "comment_stars", '
+            '"comments", "ai_research_sources", "ai_research_jobs", '
+            '"content_import_jobs", "research_sources", "summaries", '
+            '"research_audit", "researches", "users" CASCADE'
+        )
         await conn.commit()
 
 
+@pytest.fixture(autouse=True)
+async def isolated_database() -> None:
+    store = DbJobStore(dsn=_test_dsn(), table_name=AI_TABLE)
+    await store.open()
+    try:
+        await _clean_tables(store)
+        yield
+        await _clean_tables(store)
+    finally:
+        await store.close()
+
+
 async def _new_store() -> DbJobStore:
-    dsn = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/deep_research")
-    s = DbJobStore(dsn=dsn, table_name=AI_TABLE, lease_seconds=60, heartbeat_seconds=15)
+    s = DbJobStore(dsn=_test_dsn(), table_name=AI_TABLE, lease_seconds=60, heartbeat_seconds=15)
     await s.open()
     return s
 
@@ -79,7 +102,6 @@ class TestDbJobStoreIntegration:
         W2 review #1 的 bug:acquire 返回 dict 但原代码探测 _fields 失败。
         """
         store = await _new_store()
-        await _clean_tables(store)
         try:
             user_id = await _prepare_user(store)
             snap = await _snapshot(user_id, "acquire test")
@@ -112,13 +134,8 @@ class TestDbJobStoreIntegration:
             a1 = await store_a.acquire_next_job("worker-A")
             assert a1 is not None
             # 用 store_b(独立 pool)跟 store_a 竞争同一个队列
-            _ = await store_b.acquire_next_job("worker-B")
-            # 已由 store_a 独占,store_b 应该拿不到
-            # 但 store_b 的 SKIP LOCKED 在独立事务里,store_a 的 lease 对其可见
-            # 所以两个 worker 都有可能抢到(取决于行锁释放时机)
-            # 本测试只保证至少一个拿到,另一个拿到或为空都合法
-            # 并发冲突的正确性由加锁语义保证,不由此断言
-            assert a1 is not None
+            a2 = await store_b.acquire_next_job("worker-B")
+            assert a2 is None
         finally:
             await store_a.close()
             await store_b.close()
@@ -315,7 +332,7 @@ class TestImportJobStoreIntegration:
         """enqueue + acquire 对 import 表:不抛 SQL 错误。W2 review #4 fix。"""
         from ai_engine.job_runner.db_store import IMPORT_TABLE
 
-        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        store = DbJobStore(dsn=_test_dsn(), table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
         await store.open()
         try:
             user_id = await _prepare_user(store)
@@ -333,7 +350,7 @@ class TestImportJobStoreIntegration:
     async def test_heartbeat_import_job(self) -> None:
         from ai_engine.job_runner.db_store import IMPORT_TABLE
 
-        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        store = DbJobStore(dsn=_test_dsn(), table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
         await store.open()
         try:
             user_id = await _prepare_user(store)
@@ -353,7 +370,7 @@ class TestImportJobStoreIntegration:
         import uuid as _uuid
         from ai_engine.job_runner.db_store import IMPORT_TABLE
 
-        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        store = DbJobStore(dsn=_test_dsn(), table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
         await store.open()
         try:
             user_id = await _prepare_user(store)
@@ -390,7 +407,7 @@ class TestImportJobStoreIntegration:
         """import 表 failed → errorCode 写入,outputResearchId=NULL。"""
         from ai_engine.job_runner.db_store import IMPORT_TABLE
 
-        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        store = DbJobStore(dsn=_test_dsn(), table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
         await store.open()
         try:
             user_id = await _prepare_user(store)
@@ -418,7 +435,7 @@ class TestImportJobStoreIntegration:
         """import 表 reaper:过期 lease 被回收。"""
         from ai_engine.job_runner.db_store import IMPORT_TABLE
 
-        store = DbJobStore(table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
+        store = DbJobStore(dsn=_test_dsn(), table_name=IMPORT_TABLE, lease_seconds=60, heartbeat_seconds=15)
         await store.open()
         try:
             user_id = await _prepare_user(store)
@@ -438,39 +455,111 @@ class TestImportJobStoreIntegration:
         finally:
             await store.close()
 
+    async def test_import_worker_creates_sanitized_private_draft(
+        self, tmp_path: Path
+    ) -> None:
+        from ai_engine.import_worker import run_one_import_job
+        from ai_engine.job_runner.db_store import IMPORT_TABLE
+
+        store = DbJobStore(dsn=_test_dsn(), table_name=IMPORT_TABLE)
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            job_id = str(uuid.uuid4())
+            object_key = f"{uuid.uuid4()}.html"
+            temp_path = tmp_path / object_key
+            temp_path.write_text(
+                '<h1>Imported</h1><p onclick="bad()">Body</p><script>secret()</script>',
+                encoding="utf-8",
+            )
+            async with store.pool.connection() as conn:
+                await conn.execute(
+                    'INSERT INTO "content_import_jobs" '
+                    '("id", "requesterId", "sourceKind", "status", "originalFilename", '
+                    '"mimeType", "sizeBytes", "tempObjectKey", "converterVersion", "createdAt") '
+                    "VALUES (%s, %s, 'file', 'queued', 'notes.html', 'text/html', %s, %s, '1.0.0', now())",
+                    (job_id, user_id, temp_path.stat().st_size, object_key),
+                )
+                await conn.commit()
+
+            assert await run_one_import_job(store, worker_id="import-test", temp_dir=tmp_path) == job_id
+            async with store.pool.connection() as conn:
+                row = await (
+                    await conn.execute(
+                        'SELECT j."status", j."outputResearchId", r."status" AS research_status, '
+                        'r."body", r."creationMethod", r."aiAssisted" '
+                        'FROM "content_import_jobs" j JOIN "researches" r '
+                        'ON r."id" = j."outputResearchId" WHERE j."id" = %s',
+                        (job_id,),
+                    )
+                ).fetchone()
+                audit = await (
+                    await conn.execute(
+                        'SELECT count(*) AS count FROM "research_audit" WHERE "researchId" = %s',
+                        (row["outputResearchId"],),
+                    )
+                ).fetchone()
+            assert row["status"] == "succeeded"
+            assert row["research_status"] == "draft"
+            assert row["creationMethod"] == "file_import"
+            assert row["aiAssisted"] is False
+            assert "# Imported" in row["body"]
+            assert "secret()" not in row["body"]
+            assert audit["count"] == 1
+            assert not temp_path.exists()
+        finally:
+            await store.close()
+
 
 class TestIngestionIntegration:
     """W3: 真实 ingestion pipeline 集成测试 (RSS + Arxiv -> summaries 表)。"""
 
-    @pytest.mark.skip(reason="network-bound: run manually with real feeds")
     async def test_ingestion_pipeline_writes_summaries(self) -> None:
-        """真 ingestion:fetch RSS + Arxiv,写入 summaries 表,验证 canonicalUrl UNIQUE 幂等。"""
+        """Deterministic adapter + real DB verifies publish and URL idempotency."""
+        from ai_engine.adapters.fake import FakeAdapter
         from ai_engine.ingestion.pipeline import run_ingestion as _run_ingestion
         from psycopg_pool import AsyncConnectionPool
         from psycopg.rows import dict_row
 
-        dsn = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/deep_research")
+        dsn = _test_dsn()
         pool = AsyncConnectionPool(
             conninfo=dsn, min_size=1, max_size=2,
             kwargs={"row_factory": dict_row}, open=False,
         )
         await pool.open()
         await pool.wait()
-        try:
-            # Run ingestion
-            result = await _run_ingestion(pool, max_total=4, rss_per_feed=2, arxiv_count=2)
-            assert result.sources_attempted > 0, "Should fetch at least some sources"
-            total = result.summaries_inserted + result.duplicates_skipped
-            assert total > 0, "Should have at least one summary result"
+        async def fake_rss(*args: object, **kwargs: object) -> list[dict[str, object]]:
+            return [{
+                "title": "DB ingestion",
+                "url": "https://example.com/db-ingestion?utm_source=test",
+                "snippet": "Verified input",
+                "source": "daily",
+                "content_origin": "rss",
+                "tags": ["test"],
+            }]
 
-            # Run again — should get duplicates, not errors
-            result2 = await _run_ingestion(pool, max_total=4, rss_per_feed=2, arxiv_count=2)
+        async def fake_arxiv(*args: object, **kwargs: object) -> list[dict[str, object]]:
+            return []
+        try:
+            args = {
+                "adapter": FakeAdapter(),
+                "fetch_rss": fake_rss,
+                "fetch_arxiv_items": fake_arxiv,
+            }
+            result = await _run_ingestion(pool, **args)
+            assert result.summaries_inserted == 1
+            assert result.token_input_total > 0
+
+            result2 = await _run_ingestion(pool, **args)
+            assert result2.duplicates_skipped == 1
             assert len(result2.errors) == 0, f"Second run should have no errors: {result2.errors}"
 
             # Verify data in DB
             async with pool.connection() as conn:
                 cur = await conn.execute(
-                    'SELECT count(*) FROM "summaries" WHERE "source" = %s',
+                    'SELECT count(*) AS count FROM "summaries" '
+                    'WHERE "source" = %s AND "status" = \'published\' '
+                    'AND "publishedAt" IS NOT NULL AND "ingestionTokenCount" > 0',
                     ("daily",),
                 )
                 row = await cur.fetchone()

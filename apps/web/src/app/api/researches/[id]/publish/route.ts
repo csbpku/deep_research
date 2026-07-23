@@ -9,11 +9,12 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { prisma } from '../../../../../lib/db.js';
-import { apiHandler } from '../../../../../lib/api-handler.js';
-import { requireUser } from '../../../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../../../lib/errors.js';
-import { log, withRequestId } from '../../../../../lib/log.js';
+import { createHash } from 'node:crypto';
+import { prisma } from '../../../../../lib/db';
+import { apiHandler } from '../../../../../lib/api-handler';
+import { requireUser } from '../../../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../../../lib/errors';
+import { log, withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 
@@ -36,7 +37,15 @@ export const POST = apiHandler<[NextRequest, { params: { id: string } }]>(async 
 
   const existing = await prisma.research.findUnique({
     where: { id: parsed.data.id },
-    select: { id: true, authorId: true, status: true, title: true, body: true },
+    select: {
+      id: true,
+      authorId: true,
+      status: true,
+      title: true,
+      body: true,
+      creationMethod: true,
+      originContentSha256: true,
+    },
   });
 
   if (!existing) {
@@ -72,6 +81,15 @@ export const POST = apiHandler<[NextRequest, { params: { id: string } }]>(async 
     });
   }
 
+  let aiAssisted = false;
+  if (existing.creationMethod === 'ai_research') {
+    const currentSha256 = createHash('sha256').update(existing.body, 'utf8').digest('hex');
+    aiAssisted = Boolean(
+      existing.originContentSha256
+      && currentSha256 !== existing.originContentSha256.trim(),
+    );
+  }
+
   // $transaction: update status + audit —— 审计失败时正文修改整体回滚
   const result = await prisma.$transaction(async (tx) => {
     const published = await tx.research.update({
@@ -79,6 +97,7 @@ export const POST = apiHandler<[NextRequest, { params: { id: string } }]>(async 
       data: {
         status: RESEARCH_STATUS.PUBLISHED,
         publishedAt: new Date(),
+        aiAssisted,
       },
       select: {
         id: true,

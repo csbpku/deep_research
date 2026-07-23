@@ -1,6 +1,6 @@
 import Link from 'next/link';
-import { getCurrentUser } from '../lib/auth/session.js';
-import { SignOutButton } from './SignOutButton.js';
+import { getCurrentUser } from '../lib/auth/session';
+import { SignOutButton } from './SignOutButton';
 
 /**
  * 顶部导航 — RSC。

@@ -54,8 +54,7 @@ const webEnvSchema = z
     MAX_UPLOAD_SIZE_MB: positiveInt.default('5'),
     TIME_VALUE_USD_PER_HOUR: positiveNumber.default('50'),
   })
-  // 不允许来自 ai-engine 的 secret 漏到 web 进程（env-and-scripts.md §2 "禁止"）
-  .strict();
+  .passthrough(); // Next.js 注入大量内部 env keys；只校验已知变量，放过未知 key
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
 

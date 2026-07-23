@@ -13,12 +13,12 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { prisma } from '../../../../lib/db.js';
-import { apiHandler, parseBody } from '../../../../lib/api-handler.js';
-import { requireUser } from '../../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../../lib/errors.js';
-import { log, withRequestId } from '../../../../lib/log.js';
-import { UpdateResearchInput } from '../../../../lib/schemas.js';
+import { prisma } from '../../../../lib/db';
+import { apiHandler, parseBody } from '../../../../lib/api-handler';
+import { requireUser } from '../../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../../lib/errors';
+import { log, withRequestId } from '../../../../lib/log';
+import { UpdateResearchInput } from '../../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 

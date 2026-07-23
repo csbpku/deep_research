@@ -5,7 +5,7 @@
 //   - docs/contracts/state-machines.md §10 UserRole（role=admin 时 disabledAt 必须 NULL；
 //     这一约束由数据库 CHECK 保障，BFF 不重复校验）
 
-import type { WebEnv } from '../env.js';
+import type { WebEnv } from '../env';
 
 export type UserLike = {
   id: string;

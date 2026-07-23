@@ -15,8 +15,8 @@ import {
   shapeSearchRow,
   detailHrefForSearchRow,
   isSearchableType,
-} from '@/lib/search/query.js';
-import { SearchQuery } from '@/lib/schemas.js';
+} from '@/lib/search/query';
+import { SearchQuery } from '@/lib/schemas';
 
 // ──────────────────────────────────────────────────────────────────────
 // SearchQuery zod schema

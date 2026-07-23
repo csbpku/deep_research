@@ -46,6 +46,7 @@ async def fetch_rss_feeds(
         ]
 
     results: list[dict[str, Any]] = []
+    successful_feeds = 0
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         for feed_url in urls:
@@ -53,6 +54,7 @@ async def fetch_rss_feeds(
                 resp = await client.get(feed_url)
                 resp.raise_for_status()
                 text = resp.text
+                successful_feeds += 1
 
                 # Parse XML manually to avoid extra dependency on feedparser.
                 items = _parse_rss_xml_simple(text)
@@ -77,12 +79,12 @@ async def fetch_rss_feeds(
 
                 logger.info(
                     "ai-engine.ingestion.rss_fetched",
-                    extra={"feed": feed_url, "items": min(len(items), max_per_feed)},
+                    extra={"items": min(len(items), max_per_feed)},
                 )
             except httpx.HTTPError as exc:
                 logger.warning(
                     "ai-engine.ingestion.rss_error",
-                    extra={"feed": feed_url, "error": str(exc)[:200]},
+                    extra={"error_type": type(exc).__name__},
                 )
             except Exception:
                 logger.warning(
@@ -91,6 +93,8 @@ async def fetch_rss_feeds(
                     exc_info=True,
                 )
 
+    if urls and successful_feeds == 0:
+        raise RuntimeError("all RSS feeds failed")
     return results
 
 
@@ -153,13 +157,15 @@ async def fetch_arxiv(
         except httpx.HTTPError as exc:
             logger.warning(
                 "ai-engine.ingestion.arxiv_error",
-                extra={"error": str(exc)[:200]},
+                extra={"error_type": type(exc).__name__},
             )
+            raise RuntimeError("arxiv API request failed") from exc
         except Exception:
             logger.warning(
                 "ai-engine.ingestion.arxiv_unhandled",
                 exc_info=True,
             )
+            raise
 
     return results
 

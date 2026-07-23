@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ERROR_CODES } from './errors.js';
+import { ERROR_CODES } from './errors';
 
 describe('ERROR_CODES', () => {
   it('uses stable unique string values matching each key', () => {

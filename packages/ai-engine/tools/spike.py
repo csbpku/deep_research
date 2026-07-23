@@ -31,6 +31,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+import httpx
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -113,8 +115,25 @@ def _human_adoptability(
 
 async def _probe_url_accessibility(adapter: ResearchEngineAdapter, job_id: str) -> tuple[int, int]:
     status = await adapter.get_status(job_id)
-    total = len(status.sources)
-    accessible = sum(1 for s in status.sources if s.is_accessible)
+    urls = [
+        str(source.source_ref["value"])
+        for source in status.sources
+        if source.source_ref.get("type") == "url" and source.source_ref.get("value")
+    ]
+
+    async def probe(client: httpx.AsyncClient, url: str) -> bool:
+        try:
+            response = await client.head(url)
+            if response.status_code in {405, 501}:
+                response = await client.get(url, headers={"Range": "bytes=0-0"})
+            return response.status_code < 400
+        except httpx.HTTPError:
+            return False
+
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        checks = await asyncio.gather(*(probe(client, url) for url in urls))
+    total = len(urls)
+    accessible = sum(checks)
     return accessible, total
 
 

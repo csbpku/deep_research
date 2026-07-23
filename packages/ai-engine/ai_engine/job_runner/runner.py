@@ -64,7 +64,7 @@ async def run_once(
     lease: JobLease,
     snapshot: JobSnapshot,
     hooks: RunnerHooks | None = None,
-    draft_factory: "Callable[[JobSnapshot, tuple[AdapterSource, ...]], Awaitable[str | None]] | None" = None,
+    draft_factory: "Callable[[JobSnapshot, tuple[AdapterSource, ...], str], Awaitable[str | None]] | None" = None,
 ) -> RunOutcome:
     """Execute one acquired job end-to-end.
 
@@ -98,7 +98,7 @@ async def run_once(
     deadline_monotonic = asyncio.get_event_loop().time() + request.timeout_seconds
     terminal: AdapterStatus | None = None
     _last_heartbeat = 0.0
-    _heartbeat_seconds = 15
+    _heartbeat_seconds = max(0.01, float(lease.heartbeat_interval_seconds))
     while True:
         # W2/W3 review 修正: 每 15s 调一次 store.heartbeat()。
         # 没有 heartbeat,超过 60s 的任务被 reaper 抢回,exactly-once 不成立。
@@ -106,9 +106,11 @@ async def run_once(
         now_ts = asyncio.get_event_loop().time()
         if now_ts - _last_heartbeat >= _heartbeat_seconds:
             try:
-                await store.heartbeat(lease)
+                heartbeat = await store.heartbeat(lease)
                 _last_heartbeat = now_ts
             except LeaseLostError:
+                heartbeat = None
+            if heartbeat is None or not heartbeat.renewed:
                 hooks.on_lease_lost(lease)
                 return RunOutcome(
                     job_id=lease.job_id,
@@ -117,7 +119,11 @@ async def run_once(
                     sources=(),
                     current_step=None,
                     error_code="WORKER_LEASE_LOST",
-                    error_message="lease expired during poll",
+                    error_message=(
+                        heartbeat.reason
+                        if heartbeat is not None and heartbeat.reason
+                        else "lease expired during poll"
+                    ),
                 )
         try:
             status = await adapter.get_status(lease.job_id)
@@ -223,7 +229,7 @@ async def run_once(
         # 生产部署必须显式传 draft_factory 直连 DB;这由 caller(server app)在
         # lifespan 里决定。
         if draft_factory is None:
-            from ai_engine.job_runner.db_store import _drafts_for_tests  # type: ignore
+            from ai_engine.job_runner.db_store import _drafts_for_tests
             import uuid as _uuid
             draft_id = str(_uuid.uuid4())
             _drafts_for_tests[draft_id] = {
@@ -233,7 +239,9 @@ async def run_once(
                 "via": "default_factory",
             }
         else:
-            draft_id = await draft_factory(snapshot, sources_tuple)
+            if not terminal.output_text:
+                raise ValueError("succeeded adapter result has no output_text")
+            draft_id = await draft_factory(snapshot, sources_tuple, terminal.output_text)
             if not draft_id:
                 raise ValueError(
                     "run_once: draft_factory returned None for succeeded job; "
@@ -278,7 +286,7 @@ async def run_one_available_job(
     adapter: ResearchEngineAdapter,
     worker_id: str | None = None,
     hooks: RunnerHooks | None = None,
-    draft_factory: Callable[[JobSnapshot, tuple[AdapterSource, ...]], Awaitable[str | None]] | None = None,
+    draft_factory: Callable[[JobSnapshot, tuple[AdapterSource, ...], str], Awaitable[str | None]] | None = None,
 ) -> RunOutcome | None:
     """Acquire + execute one job; return None if the queue is empty.
 

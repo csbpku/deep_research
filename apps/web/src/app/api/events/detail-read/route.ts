@@ -22,11 +22,11 @@ import { randomUUID } from 'node:crypto';
 import { DetailReadCompletedInput } from '@deep-research/shared/schemas';
 import { PRODUCT_EVENT_NAME } from '@deep-research/shared/metrics';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { apiHandler, parseBody } from '../../../../lib/api-handler.js';
-import { requireUser } from '../../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../../lib/errors.js';
-import { log, withRequestId } from '../../../../lib/log.js';
-import { prisma } from '../../../../lib/db.js';
+import { apiHandler, parseBody } from '../../../../lib/api-handler';
+import { requireUser } from '../../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../../lib/errors';
+import { log, withRequestId } from '../../../../lib/log';
+import { prisma } from '../../../../lib/db';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);

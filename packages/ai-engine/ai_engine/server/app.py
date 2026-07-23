@@ -20,19 +20,20 @@ Week 1 review 修正：原版在 HTTP 请求内 `await run_one_available_job(...
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Path, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from ai_engine.adapters.base import ResearchEngineAdapter, build_adapter
+from ai_engine.adapters.base import AdapterSource, ResearchEngineAdapter, build_adapter
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.contracts.errors import AdapterError, ERROR_CODES, HTTP_STATUS
 from ai_engine.contracts.states import (
@@ -192,11 +193,11 @@ def _store_singleton() -> JobStore:
     # 1. 测试 override
     override = app.dependency_overrides.get(_store_singleton)
     if override is not None:
-        return override()
+        return cast(JobStore, override())
     # 2. lifespan 创建
     state_store = getattr(app.state, "job_store", None)
     if state_store is not None:
-        return state_store
+        return cast(JobStore, state_store)
     # 3. lazy fallback
     store = build_store()
     app.state.job_store = store
@@ -419,47 +420,62 @@ async def _background_run(
         # print,避免把请求 body / env 变量刷到 stderr。
 
 
-def _make_draft_factory(store: JobStore):
+DraftFactory = Callable[[JobSnapshot, tuple[AdapterSource, ...], str], Awaitable[str | None]]
+
+
+def _make_draft_factory(store: JobStore) -> DraftFactory:
     """根据 store 类型返回对应的 draft_factory (INSERT research row 返 id)。
 
     - DbJobStore: 复用 psycopg pool 直接 INSERT researches,返真 id;
     - InMemoryJobStore: 单元测试用,在 _drafts_for_tests dict 里写一份返 uuid。
     """
-    from ai_engine.job_runner.db_store import DbJobStore as _Db  # type: ignore
+    from ai_engine.job_runner.db_store import DbJobStore as _Db
 
     if isinstance(store, _Db):
 
-        async def _factory(snapshot, sources):  # type: ignore[no-untyped-def]
+        async def _factory(
+            snapshot: JobSnapshot, sources: tuple[AdapterSource, ...], output_text: str
+        ) -> str | None:
             assert isinstance(store, _Db)
             # W2 review 修正:真 INSERT research row;不让 Runner 自造 UUID。
             # 这里用 store._pool.connection() 直接写。
             new_id = str(uuid.uuid4())
-            body = (
-                f"# {snapshot.topic}\n\n"
-                f"(AI 调研占位草稿,源 {len(sources)} 条,报告类型 {snapshot.report_type}。"
-                f"由 ClaudeAdapter 在 succeeded 时创建,W3 将由 DraftService 替换。)"
-            )
+            body = output_text.strip()
+            origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
             sql = (
                 'INSERT INTO "researches" '
-                '("id", "type", "status", "title", "body", "authorId", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, now(), now())"
+                '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
+                ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', false, %s, now(), now())"
             )
-            async with store._pool.connection() as conn:
+            async with store.pool.connection() as conn:
                 async with conn.transaction():
-                    await conn.execute(sql, (new_id, snapshot.topic[:300], body, snapshot.requester_id))
+                    await conn.execute(
+                        sql,
+                        (
+                            new_id,
+                            snapshot.topic[:300],
+                            body,
+                            snapshot.requester_id,
+                            origin_sha256,
+                        ),
+                    )
             return new_id
 
         return _factory
 
-    async def _in_memory_factory(snapshot, sources):  # type: ignore[no-untyped-def]
+    async def _in_memory_factory(
+        snapshot: JobSnapshot, sources: tuple[AdapterSource, ...], output_text: str
+    ) -> str | None:
         # InMemory 测试路径:用全局 dict 记录 fake draft id。
         # 让 _background_run 测试 / FakeAdapter 测试可走 succeeded。
-        from ai_engine.job_runner.db_store import _drafts_for_tests  # type: ignore
+        from ai_engine.job_runner.db_store import _drafts_for_tests
         new_id = str(uuid.uuid4())
         _drafts_for_tests[new_id] = {
             "topic": snapshot.topic,
             "requester_id": snapshot.requester_id,
             "sources": len(sources),
+            "body": output_text,
         }
         return new_id
 

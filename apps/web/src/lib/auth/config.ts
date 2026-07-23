@@ -12,10 +12,10 @@
 
 import NextAuth, { type NextAuthConfig } from 'next-auth';
 import Google from 'next-auth/providers/google';
-import { getWebEnv } from '../env.js';
-import { prisma } from '../db.js';
-import { canEstablishSession, isEmailAllowed } from './allowlist.js';
-import { log } from '../log.js';
+import { getWebEnv } from '../env';
+import { prisma } from '../db';
+import { canEstablishSession, isEmailAllowed } from './allowlist';
+import { log } from '../log';
 
 export const authConfig: NextAuthConfig = {
   providers: [

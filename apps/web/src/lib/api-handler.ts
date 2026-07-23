@@ -9,8 +9,8 @@
 import { NextResponse } from 'next/server';
 import type { ZodSchema } from 'zod';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { toApiErrorResponse } from './errors.js';
-import { log, withRequestId, serializeError } from './log.js';
+import { toApiErrorResponse } from './errors';
+import { log, withRequestId, serializeError } from './log';
 
 /** zod 解析 request body。失败返回 400 NextResponse，成功返回 data。 */
 export async function parseBody<S extends ZodSchema>(

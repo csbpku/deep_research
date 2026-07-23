@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { EmptyState } from '../components/EmptyState.js';
+import { EmptyState } from '../components/EmptyState';
 
 /**
  * 首页：P0 入口导航 + 空状态。

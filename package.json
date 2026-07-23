@@ -22,6 +22,8 @@
     "db:reset": "pnpm --filter @deep-research/web db:reset",
     "dev:web": "pnpm --filter @deep-research/web dev",
     "dev:ai": "cd packages/ai-engine && UV_CACHE_DIR=${UV_CACHE_DIR:-/tmp/deep-research-uv-cache} uv run uvicorn ai_engine.server.app:app --port 4000",
+    "ingest:summaries": "cd packages/ai-engine && UV_CACHE_DIR=${UV_CACHE_DIR:-/tmp/deep-research-uv-cache} uv run python -m ai_engine.ingestion.pipeline",
+    "worker:imports": "cd packages/ai-engine && UV_CACHE_DIR=${UV_CACHE_DIR:-/tmp/deep-research-uv-cache} uv run python -m ai_engine.import_worker",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",

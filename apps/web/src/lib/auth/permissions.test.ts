@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { requireRole, requireOwner } from './permissions.js';
-import type { SessionUser } from './session.js';
+import { requireRole, requireOwner } from './permissions';
+import type { SessionUser } from './session';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { NextResponse } from 'next/server';
 

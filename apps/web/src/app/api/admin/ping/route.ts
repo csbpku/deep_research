@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { apiHandler } from '../../../../lib/api-handler.js';
-import { requireAdmin } from '../../../../lib/auth/session.js';
-import { log } from '../../../../lib/log.js';
-import { getCurrentUser } from '../../../../lib/auth/session.js';
+import { apiHandler } from '../../../../lib/api-handler';
+import { requireAdmin } from '../../../../lib/auth/session';
+import { log } from '../../../../lib/log';
+import { getCurrentUser } from '../../../../lib/auth/session';
 
 /**
  * GET /api/admin/ping — Admin 健康检查 endpoint。

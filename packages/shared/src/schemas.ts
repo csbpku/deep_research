@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states.js';
+import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states';
 
 // Zod schema：API 输入约束。详细定义见 docs/contracts/api-schemas.md。
 

@@ -10,8 +10,8 @@
 
 import { NextResponse } from 'next/server';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { toApiErrorResponse } from '../errors.js';
-import type { SessionUser } from './session.js';
+import { toApiErrorResponse } from '../errors';
+import type { SessionUser } from './session';
 
 /** 角色校验：非 role 抛 PERMISSION_DENIED（403）。 */
 export function requireRole(user: SessionUser, role: 'admin' | 'member'): SessionUser | NextResponse {

@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
-import { EmptyState } from '../../components/EmptyState.js';
+import { EmptyState } from '../../components/EmptyState';
 
 interface SummaryListItem {
   id: string;

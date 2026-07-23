@@ -30,7 +30,7 @@ import os
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from ai_engine.adapters.base import (
     AdapterCancelOutcome,
@@ -252,6 +252,7 @@ class ClaudeAdapter(ResearchEngineAdapter):
             ),
             error_code=job.error_code,
             error_message=job.error_message,
+            output_text=job.body or None,
         )
 
     async def _run(self, job: _Job) -> None:
@@ -265,7 +266,12 @@ class ClaudeAdapter(ResearchEngineAdapter):
             job.status = AI_JOB_STATUS["RUNNING"]  # type: ignore[assignment]
             job.attempts += 1
         try:
-            for step in AI_JOB_STEP_ORDER:
+            steps = cast(tuple[AiJobStep, ...], (
+                (AI_JOB_STEP["SEARCH"], AI_JOB_STEP["COMPRESS"], AI_JOB_STEP["WRITE"])
+                if job.request.report_type == "summary_brief"
+                else AI_JOB_STEP_ORDER
+            ))
+            for step in steps:
                 if job.cancel_event.is_set():
                     return
                 try:
@@ -319,6 +325,21 @@ class ClaudeAdapter(ResearchEngineAdapter):
             # Week 1 key 已就位;无 Tavily key 时抛 AdapterError 让 job 走 failed,
             # 不编造占位 source。
             if not job.sources:
+                for source_ref in job.request.source_refs:
+                    value = source_ref.get("value")
+                    if source_ref.get("type") == "url" and isinstance(value, str):
+                        job.sources.append(
+                            AdapterSource(
+                                source_ref=source_ref,
+                                canonical_key=value,
+                                title=job.request.topic,
+                                snippet=job.request.context,
+                                score=1.0,
+                                step_captured=AI_JOB_STEP["SEARCH"],
+                                is_accessible=True,
+                            )
+                        )
+            if not job.sources and job.request.source_policy != "only_user_sources":
                 try:
                     from ai_engine.fetcher.tavily import search as tavily_search
                     results = await tavily_search(job.request.topic, max_results=5)
@@ -333,14 +354,16 @@ class ClaudeAdapter(ResearchEngineAdapter):
                             is_accessible=True,
                         ))
                     job.search_count = len(job.sources)
-                except (ImportError, AttributeError):
-                    # Tavily fetcher not yet implemented (Week 5); fall back to
-                    # no-op — mark terminal with no sources, runner treats as partial/failed.
-                    pass
-                except Exception:
-                    # Network / API error: leave sources empty, runner will
-                    # follow partial/failed rule based on count.
-                    pass
+                except (ImportError, AttributeError) as exc:
+                    raise AdapterError(
+                        code="AI_ENGINE_UNAVAILABLE",
+                        message="Tavily search integration is unavailable",
+                    ) from exc
+                except Exception as exc:
+                    raise AdapterError(
+                        code="AI_ENGINE_UNAVAILABLE",
+                        message=f"Tavily search failed: {type(exc).__name__}",
+                    ) from exc
             prompt = f"为「{job.request.topic}」列出 3 个关键子问题。"
         elif step == AI_JOB_STEP["COMPRESS"]:
             prompt = _summarize_brief_prompt(

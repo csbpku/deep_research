@@ -94,6 +94,7 @@ class AdapterStatus:
     cost: CostMetrics
     error_code: str | None = None
     error_message: str | None = None  # MUST be redacted; never raw stack.
+    output_text: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

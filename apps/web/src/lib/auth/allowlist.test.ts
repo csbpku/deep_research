@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEmailAllowed, isAccountActive, canEstablishSession, domainOf } from './allowlist.js';
+import { isEmailAllowed, isAccountActive, canEstablishSession, domainOf } from './allowlist';
 
 describe('domainOf', () => {
   it('extracts lowercase domain', () => {

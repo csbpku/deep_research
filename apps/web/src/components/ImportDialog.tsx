@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { MarkdownPreview } from './MarkdownPreview.js';
+import { MarkdownPreview } from './MarkdownPreview';
 
 type Phase = 'idle' | 'uploading' | 'polling' | 'succeeded' | 'failed';
 

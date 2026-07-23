@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
-import { getCurrentUser } from '../../lib/auth/session.js';
-import { EmptyState } from '../../components/EmptyState.js';
+import { getCurrentUser } from '../../lib/auth/session';
+import { EmptyState } from '../../components/EmptyState';
 
 /**
  * Admin 入口页。

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { parseBody, apiHandler } from './api-handler.js';
+import { parseBody, apiHandler } from './api-handler';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const Schema = z.object({ name: z.string().min(1).max(100), age: z.number().int().min(0) });

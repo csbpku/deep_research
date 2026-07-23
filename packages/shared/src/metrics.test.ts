@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ADMIN_ACTION_TYPE, PRODUCT_EVENT_NAME } from './metrics.js';
+import { ADMIN_ACTION_TYPE, PRODUCT_EVENT_NAME } from './metrics';
 
 describe('metric contract constants', () => {
   it('keeps event and admin action values unique', () => {

@@ -13,17 +13,16 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-import { prisma } from '../../../lib/db.js';
-import { apiHandler, parseBody } from '../../../lib/api-handler.js';
-import { requireUser } from '../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../lib/errors.js';
-import { log, withRequestId } from '../../../lib/log.js';
-import { CreateImportInput } from '../../../lib/schemas.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { prisma } from '../../../lib/db';
+import { apiHandler } from '../../../lib/api-handler';
+import { requireUser } from '../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../lib/errors';
+import { log, withRequestId } from '../../../lib/log';
+import { CreateImportInput } from '../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { IMPORT_STATUS } from '@deep-research/shared/states';
 
-const ALLOWED_MIMES = new Set(['text/markdown', 'text/plain', 'text/html']);
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -78,11 +77,25 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       requestId,
     });
   }
-  // 同时用扩展名修正客户端可能伪造的 MIME
   const effectiveMime = ALLOWED_EXTENSIONS[ext];
-
-  const mimeType = file.type || effectiveMime;
+  const suppliedMime = file.type.trim().toLowerCase();
+  if (suppliedMime && suppliedMime !== effectiveMime) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.IMPORT_INVALID_MIME,
+      message: `文件后缀 ${ext} 与 MIME ${suppliedMime} 不匹配`,
+      requestId,
+    });
+  }
+  const mimeType = effectiveMime;
   const sizeBytes = file.size;
+
+  if (sizeBytes > MAX_FILE_BYTES) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.IMPORT_FILE_TOO_LARGE,
+      message: '文件超过 5MB 限制',
+      requestId,
+    });
+  }
 
   // ── Validate metadata ────────────────────────────────────────────────
   const metaResult = CreateImportInput.safeParse({ filename, mimeType, sizeBytes });
@@ -128,25 +141,9 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  // HTML 安全检查
+  // HTML is stored as untrusted text. The import worker parses and sanitizes
+  // it before creating a Markdown draft; the raw file is never rendered.
   const warnings: string[] = [];
-
-  if (mimeType === 'text/html') {
-    const safetyResult = checkHtmlSafety(contentStr);
-    if (!safetyResult.safe) {
-      return toApiErrorResponse({
-        code: ERROR_CODES.IMPORT_HTML_UNSAFE,
-        message: safetyResult.reason ?? 'HTML 包含不安全内容',
-        requestId,
-      });
-    }
-    if (safetyResult.warnings.length > 0) {
-      warnings.push(...safetyResult.warnings);
-    }
-
-    // 对 HTML 做清洗：移除 script/style/iframe/object 和事件属性
-    contentStr = sanitizeHtml(contentStr);
-  }
 
   // SHA-256 去重
   const sha256 = createHash('sha256').update(contentStr, 'utf-8').digest('hex');
@@ -154,7 +151,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   // 保存文件到临时目录(tempObjectKey 记录路径),worker 拿到真文件。
   const tempDir = path.join(process.cwd(), 'data', 'import-tmp');
   await fs.mkdir(tempDir, { recursive: true });
-  const tempKey = `${u.id}-${sha256}-${Date.now()}.${ext.slice(1)}`;
+  const tempKey = `${randomUUID()}${ext}`;
   const tempPath = path.join(tempDir, tempKey);
   await fs.writeFile(tempPath, contentStr, 'utf-8');
 
@@ -184,7 +181,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   } catch (err: unknown) {
     if ((err as { code?: string })?.code === 'P2002') {
       const dup = await prisma.contentImportJob.findFirst({
-        where: { requesterId: u.id, contentSha256: sha256 },
+        where: {
+          requesterId: u.id,
+          contentSha256: sha256,
+          status: { in: [IMPORT_STATUS.QUEUED, IMPORT_STATUS.RUNNING, IMPORT_STATUS.SUCCEEDED] },
+        },
         select: {
           id: true, status: true, originalFilename: true, mimeType: true,
           sizeBytes: true, contentSha256: true, warnings: true, createdAt: true,
@@ -198,6 +199,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         }, { status: 200 });
       }
     }
+    await fs.unlink(tempPath).catch(() => {});
     throw err;
   }
 
@@ -214,7 +216,6 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       jobId: job.id,
       status: job.status,
       duplicate: false,
-      tempObjectKey: tempKey,
       filename: job.originalFilename,
       mimeType: job.mimeType,
       sizeBytes: job.sizeBytes ? Number(job.sizeBytes) : null,
@@ -279,48 +280,3 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     totalPages: Math.ceil(total / limit),
   });
 });
-
-// ──────────────────────────────────────────────────────────────────────
-// HTML 安全检查 + 清洗
-// ──────────────────────────────────────────────────────────────────────
-
-const DANGEROUS_TAG_RE = /<(script|style|iframe|object|embed|applet)\b[\s\S]*?<\/\1\s*>/gi;
-const DANGEROUS_TAG_SELF_CLOSING_RE = /<(script|style|iframe|object|embed|applet)\b[^>]*\/?>/gi;
-const EVENT_ATTR_RE = /\s+on\w+\s*=\s*["'][^"']*["']/gi;
-
-function checkHtmlSafety(html: string): { safe: boolean; reason?: string; warnings: string[] } {
-  const warnings: string[] = [];
-
-  const hasDangerous =
-    DANGEROUS_TAG_RE.test(html) || DANGEROUS_TAG_SELF_CLOSING_RE.test(html);
-
-  if (hasDangerous) {
-    // 危险标签严禁
-    return {
-      safe: false,
-      reason: 'HTML 包含禁止的标签（script/style/iframe/object/embed/applet）',
-      warnings,
-    };
-  }
-
-  const hasEvent = EVENT_ATTR_RE.test(html);
-  if (hasEvent) {
-    warnings.push('已移除事件处理器属性');
-  }
-
-  return { safe: true, warnings };
-}
-
-function sanitizeHtml(html: string): string {
-  // 1. 移除危险标签
-  let cleaned = html.replace(DANGEROUS_TAG_RE, '');
-  cleaned = cleaned.replace(DANGEROUS_TAG_SELF_CLOSING_RE, '');
-
-  // 2. 移除事件属性（onclick, onerror 等）
-  cleaned = cleaned.replace(EVENT_ATTR_RE, '');
-
-  // 3. 移除 javascript: 伪协议 URL
-  cleaned = cleaned.replace(/\b(href|src|action)\s*=\s*["'][\s]*javascript\s*:/gi, '$1="#"');
-
-  return cleaned;
-}

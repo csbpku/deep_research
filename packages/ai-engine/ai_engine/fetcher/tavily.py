@@ -71,26 +71,17 @@ async def search(
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = ""
-            try:
-                detail = exc.response.text[:500]
-            except Exception:
-                pass
             logger.error(
                 "ai-engine.tavily.http_error",
-                extra={
-                    "status": exc.response.status_code,
-                    "detail": detail,
-                    "query": query[:100],
-                },
+                extra={"status": exc.response.status_code},
             )
             raise RuntimeError(
-                f"Tavily API returned {exc.response.status_code}: {detail}"
+                f"Tavily API returned {exc.response.status_code}"
             ) from exc
         except httpx.RequestError as exc:
             logger.error(
                 "ai-engine.tavily.network_error",
-                extra={"error": str(exc)[:200], "query": query[:100]},
+                extra={"error_type": type(exc).__name__},
             )
             raise RuntimeError(f"Tavily API unreachable: {exc}") from exc
 
@@ -99,7 +90,6 @@ async def search(
     logger.info(
         "ai-engine.tavily.search",
         extra={
-            "query": query[:100],
             "results_count": len(results),
             "response_time": data.get("response_time", "?"),
         },

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { Providers } from './providers.js';
-import { Nav } from '../components/Nav.js';
+import { Providers } from './providers';
+import { Nav } from '../components/Nav';
 import './globals.css';
 
 export const metadata = {

@@ -1,7 +1,7 @@
 # 技术调研平台
 
-> 个人深度研究/技术调研平台。架构基线：`docs/ARCHITECTURE.md` v3.5.1。
-> 实施计划：`docs/IMPLEMENTATION_PLAN.md` v1.2（9 周开发 + 4 周试用）。
+> 个人深度研究/技术调研平台。架构基线：`docs/ARCHITECTURE.md` v3.6。
+> 实施计划：`docs/IMPLEMENTATION_PLAN.md` v1.3（9 周开发 + 4 周试用）。
 
 ## 仓库布局（monorepo）
 

@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { EmptyState } from '../../components/EmptyState.js';
+import { EmptyState } from '../../components/EmptyState';
 
 interface ApiError {
   code: string;

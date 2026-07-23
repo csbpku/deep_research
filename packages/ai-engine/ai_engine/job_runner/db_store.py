@@ -28,7 +28,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -88,7 +88,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
             Literal["prefer_user_sources", "only_user_sources"],
             str(row.get("sourcePolicy", "prefer_user_sources")),
         ),
-        status=cast(AiJobStatus, str(row["status"])),  # type: ignore[arg-type]
+        status=cast(AiJobStatus, str(row["status"])),
         current_step=cur_step_str,
         attempts=cast(int, row.get("attempts")) if row.get("attempts") is not None else 0,
         idempotency_key=(
@@ -141,9 +141,8 @@ class DbJobStore(JobStore):
 
     @property
     def pool(self) -> AsyncConnectionPool:
-        """Expose the underlying psycopg pool for direct queries (ingestion, etc.)."""
-        if self._pool is None:
-            raise RuntimeError("DbJobStore.pool accessed before open()")
+        if self._pool is None or not self._pool_open:
+            raise RuntimeError("DbJobStore pool is not open")
         return self._pool
 
     async def open(self) -> None:
@@ -231,7 +230,7 @@ class DbJobStore(JobStore):
                 json.dumps([]),
             )
             params = ai_params
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(sql, params)
 
@@ -275,33 +274,33 @@ class DbJobStore(JobStore):
             f"RETURNING {returning_cols}"
         )
         params = (worker_id, lease_expires_at, now)
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 cur = await conn.execute(sql, params)
                 row = await cur.fetchone()
         if row is None:
             return None
-        # W2 review 修正:psycopg 默认 row_factory 返回 dict_row,fetchone() 是 dict。
-        if not isinstance(row, dict):
-            row = dict(row)
+        # Pool is configured with dict_row; psycopg's generic defaults do not
+        # preserve that row shape in its public type parameter.
+        row_dict = cast(dict[str, Any], row)
 
         # For import table, construct snapshot from import-specific columns
         if self._table_name == IMPORT_TABLE:
             snapshot = JobSnapshot(
-                job_id=str(row["id"]),
-                requester_id=str(row["requesterId"]),
-                topic=str(row.get("originalFilename", "import") or "import"),
+                job_id=str(row_dict["id"]),
+                requester_id=str(row_dict["requesterId"]),
+                topic=str(row_dict.get("originalFilename", "import") or "import"),
                 context=None,
                 report_type="summary_brief",
                 source_policy="prefer_user_sources",
-                status=cast(AiJobStatus, str(row["status"])),
+                status=cast(AiJobStatus, str(row_dict["status"])),
                 current_step=None,
-                attempts=cast(int, row.get("attempts")) or 0,
+                attempts=cast(int, row_dict.get("attempts")) or 0,
                 idempotency_key=None,
                 source_refs=(),
             )
         else:
-            snapshot = _row_to_snapshot(row)
+            snapshot = _row_to_snapshot(row_dict)
         lease = JobLease(
             job_id=snapshot.job_id,
             worker_id=worker_id,
@@ -322,7 +321,7 @@ class DbJobStore(JobStore):
             f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
             f'RETURNING "leaseExpiresAt"'
         )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 cur = await conn.execute(sql, (new_expiry, now, lease.job_id, lease.worker_id))
                 row = await cur.fetchone()
@@ -368,7 +367,7 @@ class DbJobStore(JobStore):
             f'    "costCents" = %s, "partialSources" = %s::jsonb '
             f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\''
         )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(
                     sql,
@@ -454,7 +453,7 @@ class DbJobStore(JobStore):
                 lease.job_id,
                 lease.worker_id,
             )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 cur = await conn.execute(sql, params)
                 row = await cur.fetchone()
@@ -473,7 +472,7 @@ class DbJobStore(JobStore):
             f'"nextRetryAt" = now() + interval \'30 seconds\' '
             f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\''
         )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(sql, (lease.job_id, lease.worker_id))
 
@@ -500,25 +499,24 @@ class DbJobStore(JobStore):
                 f'       "errorCode", "errorMessage", "completedAt" '
                 f'FROM {t} WHERE "id" = %s'
             )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             cur = await conn.execute(sql, (job_id,))
             row = await cur.fetchone()
         if row is None:
             return None
-        if not isinstance(row, dict):
-            row = dict(row)
+        row_dict = cast(dict[str, Any], row)
         if self._table_name == IMPORT_TABLE:
             return DbJobView(
                 snapshot=JobSnapshot(
-                    job_id=str(row["id"]),
-                    requester_id=str(row["requesterId"]),
-                    topic=str(row.get("originalFilename", "import") or "import"),
+                    job_id=str(row_dict["id"]),
+                    requester_id=str(row_dict["requesterId"]),
+                    topic=str(row_dict.get("originalFilename", "import") or "import"),
                     context=None,
                     report_type="summary_brief",
                     source_policy="prefer_user_sources",
-                    status=cast(AiJobStatus, str(row.get("status", "queued"))),
+                    status=cast(AiJobStatus, str(row_dict.get("status", "queued"))),
                     current_step=None,
-                    attempts=cast(int, row.get("attempts")) or 0,
+                    attempts=cast(int, row_dict.get("attempts")) or 0,
                     idempotency_key=None,
                     source_refs=(),
                 ),
@@ -526,20 +524,20 @@ class DbJobStore(JobStore):
                 last_token_in=0,
                 last_token_out=0,
                 last_cost_cents=0,
-                last_error_code=row.get("errorCode"),
-                last_error_message=row.get("errorMessage"),
+                last_error_code=row_dict.get("errorCode"),
+                last_error_message=row_dict.get("errorMessage"),
             )
-        partial_sources = row.get("partialSources") or []
+        partial_sources = row_dict.get("partialSources") or []
         if not isinstance(partial_sources, list):
             partial_sources = []
         return DbJobView(
-            snapshot=_row_to_snapshot(row),
+            snapshot=_row_to_snapshot(row_dict),
             last_sources=tuple(partial_sources),
-            last_token_in=int(row.get("tokenInputTotal") or 0),
-            last_token_out=int(row.get("tokenOutputTotal") or 0),
-            last_cost_cents=int(row.get("costCents") or 0),
-            last_error_code=row.get("errorCode"),
-            last_error_message=row.get("errorMessage"),
+            last_token_in=int(row_dict.get("tokenInputTotal") or 0),
+            last_token_out=int(row_dict.get("tokenOutputTotal") or 0),
+            last_cost_cents=int(row_dict.get("costCents") or 0),
+            last_error_code=row_dict.get("errorCode"),
+            last_error_message=row_dict.get("errorMessage"),
         )
 
     # ─────────────── reaper ────────────────
@@ -571,7 +569,7 @@ class DbJobStore(JobStore):
             f'  AND "attempts" < %s '
             f'RETURNING "id"'
         )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 cur1 = await conn.execute(sql_failed, (now, self._max_retries))
                 rows_failed = await cur1.fetchall()
@@ -643,7 +641,7 @@ class DbJobStore(JobStore):
             json.dumps(metadata or {}, ensure_ascii=False),
             dedupe_key,
         )
-        async with self._pool.connection() as conn:
+        async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(sql, params)
 

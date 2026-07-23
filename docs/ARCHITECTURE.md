@@ -1,6 +1,6 @@
 # 技术调研平台 · 架构方案
 
-> 版本：v3.5.1 · 2026-07-17
+> 版本：v3.6 · 2026-07-23
 > 本版只保留当前有效的技术决策；历史推演和完整旧稿见 `docs/archive/`
 > 产品概览：`docs/DIAGRAMS.md`；逐周实施与验收：`docs/IMPLEMENTATION_PLAN.md`；交互原型：`docs/mockups/index.html`
 
@@ -23,20 +23,22 @@
 
 ### P0：9 周 MVP
 
-1. **每日摘要**：每天最多 4 条精选，包含标题、摘要、标签、来源和详情。
-2. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
-3. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
-4. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布。
-5. **评论与提名**：评论可星标，3 名不同成员投票后进入 Admin 提名队列。
-6. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入内容池。
-7. **精简 Admin**：审核队列、成员基础管理、失败任务入口。
-8. **运行底线**：Auth、权限、日志、成本、备份恢复和 Week 13 决策埋点。
+1. **技术雷达**：从 GitHub、arxiv、RSS 和用户分享发现候选，生成可追溯的轻量解读，支持筛选、反馈和人工流转。
+2. **每日摘要**：Admin 从雷达候选中确认每天最多 4 条精选，包含入选理由、标签、来源和详情。
+3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
+4. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
+5. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
+6. **基础评论**：雷达、摘要和沉淀可评论；P0 由 Admin 手动提炼高价值评论。
+7. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
+8. **精简 Admin**：雷达与分享审核、失败任务入口、同步状态。
+9. **运行底线**：Auth、权限、日志、成本、备份恢复和 Week 13 决策埋点。
 
 ### P1：试用数据通过后再做
 
 - Confluence 用户授权单页导入、`.docx/.pdf`、页面树批量导入和更新提醒。
-- 技术雷达完整 UI、热点主题、热门 Top 5、应用笔记与专家自动关联。
+- 热点主题、跨模块热门 Top 5、专家自动关联和复杂统计图表。
 - SSE、版本历史 UI、详细统计、机器评分排序、AI critic 和多 LLM 路由。
+- 评论星标、3 票自动提名、私有 AI 追问、成员管理 UI 和 `zhparser` 升级。
 - Prometheus/Grafana、Vault/SOPS 等增强运维能力。
 
 ### 不做
@@ -59,7 +61,7 @@
 [Next.js Web + BFF] ----------------------+
    | Auth / API / UI / permissions        |
    |                                       v
-   +--> [PostgreSQL 16 + zhparser] <--> [DB-backed workers]
+   +--> [PostgreSQL 16 + tsvector/GIN] <--> [DB-backed workers]
    |                                       | AI jobs / import jobs
    |                                       v
    +--------------------------------> [ResearchEngineAdapter]
@@ -75,7 +77,7 @@
 | Next.js Web + BFF | 页面、Auth、资源权限、输入校验、任务创建和状态查询 | 执行长时间 AI 任务 |
 | PostgreSQL | 业务数据、全文索引、AI/import 队列、租约、幂等和审计 | 保存原始导入文件 |
 | Import worker | 文件校验、HTML 清洗、Markdown 转换、warnings 和临时文件清理 | 调用 LLM 改写内容 |
-| AI worker | 抢占任务、心跳、重试、调用 adapter、记录来源和成本 | 决定内容是否公开 |
+| AI worker | 雷达同步、轻量解读、调研任务、心跳、重试、来源和成本 | 决定内容是否公开 |
 | ResearchEngineAdapter | 隔离具体 AI 引擎，统一任务、状态、来源和成本契约 | 用户权限与发布权限 |
 
 ### 技术栈
@@ -83,7 +85,7 @@
 - Web：Next.js 15、TypeScript、Tailwind CSS、shadcn/ui、TanStack Query。
 - 编辑器：react-md-editor。
 - Auth：NextAuth.js + Google OAuth。
-- ORM/数据库：Prisma + PostgreSQL 16 + zhparser + `tsvector/GIN`。
+- ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；P0 使用 `simple` 配置，`zhparser` 升级留 P1。
 - AI：Week 1 spike 后在 gpt-researcher 与简单 Claude pipeline 中选主引擎，另一条作为 fallback。
 - 数据源：Tavily、arxiv、GitHub；arxiv MCP 仅在原生 API 不够时启用。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
@@ -93,7 +95,7 @@
 | 服务 | 默认端口 | 说明 |
 |---|---:|---|
 | nginx | 80/443 | TLS 终止，转发 Web 和 AI API |
-| web | 3000 | Next.js、BFF、状态 API、内容导入 worker |
+| web | 3000 | Next.js、BFF、状态 API、导入上传入口 |
 | ai-engine | 4000 | AI worker、adapter、成本与来源记录 |
 | arxiv-mcp | 8001 | 可选论文读取服务 |
 | postgres | 5432 | 业务表、全文索引和两个任务队列 |
@@ -105,6 +107,8 @@ P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data
 ## 四、数据模型与硬约束
 
 ### 表清单
+
+当前 Week 4 Schema 有 14 张表。Week 5 开工前由主会话新增 3 张雷达表并迁移到 17 张；A/B Agent 不得自行修改 Prisma 或 migration。
 
 | 表 | 作用 |
 |---|---|
@@ -120,6 +124,11 @@ P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data
 | `content_import_jobs` | 文件转换任务；P1 扩展 Confluence |
 | `product_events` | Week 13 产品事件、metadata 和去重键 |
 | `admin_actions` | 管理员审核、角色与禁用动作审计 |
+| `share_submissions` | 用户 URL 分享的安全抓取、处理和审核状态 |
+| `search_docs` | 已发布摘要/沉淀的事务内全文索引 |
+| `radar_sources`（W5） | 预置 GitHub/arxiv/RSS 源、启停状态和抓取配置 |
+| `radar_sync_runs`（W5） | 每次同步的来源级结果、失败码、token 与成本 |
+| `radar_feedback`（W5） | 有用、不准确、我用过、收藏和建议调研；用户维度幂等 |
 
 ### 核心关系
 
@@ -129,6 +138,8 @@ P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data
 - `ai_research_jobs.draft_research_id` 与 `content_import_jobs.output_research_id` 均为唯一外键，一个草稿只对应一个来源任务。
 - 两类 job 都持有 `attempts`、`next_retry_at`、lease 与 heartbeat 字段，才能复用同一 runner。
 - `product_events.user_id → users.id`；`dedupe_key` 唯一。`admin_actions.actor_id → users.id`；`request_id` 唯一。
+- `radar_sync_runs.source_id → radar_sources.id`；候选 `summaries.sync_run_id → radar_sync_runs.id`。
+- `radar_feedback(summary_id, user_id, type)` 唯一；业务状态不能只依赖分析事件反推。
 - `comments.research_id` 与 `comments.summary_id` 必须恰好一个非空。
 - `comment_stars(comment_id, user_id)` 为复合主键，保证一人一票。
 - 私有草稿不依赖前端隐藏；所有读取均由 BFF 按 owner 和状态过滤。
@@ -176,15 +187,20 @@ AI job 使用请求者 + `Idempotency-Key` 唯一约束。单 job 最长 5 分�
 
 ## 五、核心流程
 
-### 每日摘要
+### 技术雷达与每日摘要
 
 ```text
-cron/admin trigger -> 抓取候选 -> 规范化/去重 -> 轻量摘要 -> 最多 4 条 published summary
+cron/admin trigger -> radar_sync_run -> 安全抓取 -> 规范化/去重 -> 轻量解读/评分
+  -> candidate summary -> 团队反馈/Admin 判断 -> 最多 4 条 published daily summary
 ```
 
+- 雷达候选与每日摘要复用 `summaries` 主体：`candidate` 是雷达候选，`published` 是已确认摘要；不能再维护一套平行的候选内容表。
+- 每条候选保存来源发布时间、抓取时间、结构化解读、评分维度、`score_version` 和人类可读理由。评分只参与排序，不能自动批准或公开。
+- P0 来源是预置 GitHub、arxiv、RSS，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
+- 普通成员可提交有用、不准确、我用过、收藏和建议调研；重复反馈幂等，反馈只辅助 Admin 判断。
 - P0 允许来源不足时少于 4 条，必须展示失败原因，不能编造内容补足。
 - 每条内容保留 canonical URL、来源类型、发布时间和抓取时间。
-- 用户分享与每日摘要共用 `summaries`，通过来源和审核状态区分。
+- 用户分享先进入 `share_submissions`，安全处理和人工审核后进入同一雷达候选/摘要流。
 
 ### 文件导入
 
@@ -215,24 +231,18 @@ P1 Confluence 只解析站点和 page id，正文必须通过用户委托授权�
 - `only_user_sources` 只使用指定资料；全部失败则 job 失败。
 - 用户指定 URL 与分享共用同一个安全抓取器；收藏和沉淀使用内部 ID，由 BFF 先做可见性检查。
 - 前端每 5 秒轮询 job 状态；SSE 留 P1。
-- AI 原始草稿、失败 job、partial 资料和私有追问都不自动公开。
+- AI 原始草稿、失败 job 和 partial 资料都不自动公开。
 
-### 评论、星标与审核
+### 评论与审核
 
 ```text
-评论 -> 3 名不同成员星标 -> nominated -> Admin 提炼/批准 -> published knowledge
-用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> published summary
+评论 -> Admin 选择并提炼 -> published knowledge
+用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> radar candidate / daily summary
 ```
 
-- 所有批准都必须由 Admin 明确操作；机器评分即使在 P1 也只用于排序。
-- 分享和提名复用一个 Admin 审核入口，按任务类型分 tab。
+- 所有批准都必须由 Admin 明确操作；机器评分只用于排序。
+- 分享、雷达候选和评论提炼复用一个 Admin 审核入口，按任务类型分 tab。
 - 审核记录 reviewer 和时间；精华必须能追溯到来源评论。
-
-### 私有追问
-
-- 可用于摘要、分享和调研详情。
-- P0 仅保留当前用户当前 session 的临时对话。
-- 不写入公开 comments，不进入全文搜索，不提供“一键写回评论区”。
 
 ---
 
@@ -245,9 +255,9 @@ P1 Confluence 只解析站点和 page id，正文必须通过用户委托授权�
 | 阅读 published 内容 | 是 | 是 |
 | 创建/读取自己的 draft | 是 | 是 |
 | 读取他人的 draft | 否 | 否 |
-| 评论、星标、分享 | 是 | 是 |
-| 审核分享和提名 | 否 | 是 |
-| 管理成员和角色 | 否 | 是 |
+| 雷达反馈、评论、分享 | 是 | 是 |
+| 审核雷达、分享和提炼评论 | 否 | 是 |
+| 管理雷达预置源 | 否 | 是 |
 
 Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁用成员不能建立新 session，危险角色变更需要二次确认和审计。
 
@@ -277,7 +287,8 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | `GET /api/content-import/{id}` | 返回状态、warnings、错误码和输出草稿 id |
 | `POST /api/researches/{id}/publish` | 校验 owner、状态和 AI 初始哈希；事务内发布和更新索引 |
 | `POST /api/shares` | 使用统一安全抓取器，创建待审核分享 |
-| `POST /api/comments/{id}/stars` | 一人一票；事务内更新计数和 nomination |
+| `POST /api/radar/{id}/feedback` | 相同用户、候选和反馈类型幂等 |
+| `POST /api/radar/sync` | Admin-only；触发同步并返回 run id |
 | `POST /api/admin/reviews/{id}` | Admin-only；明确批准或拒绝并写审计 |
 
 错误响应使用稳定业务码和 `request_id`，不把供应商错误、prompt、access token、API key 或 secret 直接返回前端。
@@ -296,8 +307,8 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 
 ### 配额与成本
 
-- AI 调研、私有追问和用户分享轻量摘要共用全团 20 次/日硬预算。
-- 个人 5 次/日为软提醒；团队池为追问保留 5 次。
+- AI 调研、雷达轻量解读和用户分享摘要共用成本预算；AI 调研全团 20 次/日硬限制，雷达按同步批次单独记录成本。
+- 个人 AI 调研 5 次/日为软提醒。
 - 规划月成本 `$75-160`，预算硬上限 `$200`。
 - 文件转 Markdown 是确定性本地转换，模型成本为 `$0`。
 

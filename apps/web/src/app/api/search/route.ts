@@ -15,13 +15,13 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { prisma } from '../../../lib/db.js';
-import { apiHandler } from '../../../lib/api-handler.js';
-import { requireUser } from '../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../lib/errors.js';
-import { log, withRequestId } from '../../../lib/log.js';
-import { SearchQuery } from '../../../lib/schemas.js';
-import { buildSearchSql, shapeSearchRow, isSearchableType } from '../../../lib/search/query.js';
+import { prisma } from '../../../lib/db';
+import { apiHandler } from '../../../lib/api-handler';
+import { requireUser } from '../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../lib/errors';
+import { log, withRequestId } from '../../../lib/log';
+import { SearchQuery } from '../../../lib/schemas';
+import { buildSearchSql, shapeSearchRow, isSearchableType } from '../../../lib/search/query';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {

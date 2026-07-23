@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DetailReadCompletedInput, RecordTimeSavedInput } from './schemas.js';
+import { DetailReadCompletedInput, RecordTimeSavedInput } from './schemas';
 
 const UUID = '123e4567-e89b-42d3-a456-426614174000';
 

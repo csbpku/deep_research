@@ -22,11 +22,11 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { CreateAiJobInput } from '@deep-research/shared/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { apiHandler, parseBody } from '../../../lib/api-handler.js';
-import { requireUser } from '../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../lib/errors.js';
-import { log, withRequestId, serializeError } from '../../../lib/log.js';
-import { getWebEnv } from '../../../lib/env.js';
+import { apiHandler, parseBody } from '../../../lib/api-handler';
+import { requireUser } from '../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../lib/errors';
+import { log, withRequestId, serializeError } from '../../../lib/log';
+import { getWebEnv } from '../../../lib/env';
 
 const AI_ENGINE_TIMEOUT_MS = 10_000;
 

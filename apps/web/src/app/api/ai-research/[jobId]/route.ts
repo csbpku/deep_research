@@ -8,11 +8,11 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { apiHandler } from '../../../../lib/api-handler.js';
-import { requireUser } from '../../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../../lib/errors.js';
-import { log, withRequestId, serializeError } from '../../../../lib/log.js';
-import { getWebEnv } from '../../../../lib/env.js';
+import { apiHandler } from '../../../../lib/api-handler';
+import { requireUser } from '../../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../../lib/errors';
+import { log, withRequestId, serializeError } from '../../../../lib/log';
+import { getWebEnv } from '../../../../lib/env';
 
 const IdParam = z.object({ jobId: z.string().uuid() });
 const AI_ENGINE_TIMEOUT_MS = 5_000;

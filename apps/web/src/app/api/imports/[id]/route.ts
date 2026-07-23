@@ -6,11 +6,11 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { prisma } from '../../../../lib/db.js';
-import { apiHandler } from '../../../../lib/api-handler.js';
-import { requireUser } from '../../../../lib/auth/session.js';
-import { toApiErrorResponse } from '../../../../lib/errors.js';
-import { withRequestId } from '../../../../lib/log.js';
+import { prisma } from '../../../../lib/db';
+import { apiHandler } from '../../../../lib/api-handler';
+import { requireUser } from '../../../../lib/auth/session';
+import { toApiErrorResponse } from '../../../../lib/errors';
+import { withRequestId } from '../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const IdParam = z.object({ id: z.string().uuid() });

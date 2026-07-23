@@ -124,6 +124,36 @@ async def test_heartbeat_rejects_wrong_worker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_stops_immediately_when_heartbeat_loses_lease() -> None:
+    class LostLeaseStore(InMemoryJobStore):
+        async def heartbeat(self, lease):  # type: ignore[no-untyped-def]
+            return HeartbeatResult(
+                renewed=False,
+                lease_expires_at=None,
+                reason="lease_lost",
+            )
+
+    store = LostLeaseStore()
+    adapter = FakeAdapter(default_mode="success")
+    snap = make_job_snapshot(topic="lost lease")
+    await store.enqueue(snap)
+    acquired = await store.acquire_next_job("w-1")
+    assert acquired is not None
+    lease, snapshot = acquired
+
+    outcome = await run_once(
+        store=store,
+        adapter=adapter,
+        lease=lease,
+        snapshot=snapshot,
+    )
+
+    assert outcome.final_status == "failed"
+    assert outcome.error_code == "WORKER_LEASE_LOST"
+    assert outcome.error_message == "lease_lost"
+
+
+@pytest.mark.asyncio
 async def test_mark_terminal_rejects_wrong_worker() -> None:
     store = InMemoryJobStore()
     snap = make_job_snapshot()
