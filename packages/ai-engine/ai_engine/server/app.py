@@ -264,6 +264,9 @@ class SubmitAiJobBody(BaseModel):
 
     Validated via Pydantic instead of Zod to keep the engine self-contained.
     The Web BFF still validates first; this is defence-in-depth.
+
+    W6: 加 `idempotency_key` 字段 —— BFF 把客户端 `Idempotency-Key` header
+    透传到这里;同一 (requester_id, key) 二次提交返回原 job,不再 enqueue 也不扣 quota。
     """
 
     job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -273,6 +276,7 @@ class SubmitAiJobBody(BaseModel):
     report_type: ReportType = Field(default="research_report")
     source_policy: SourcePolicy = Field(default="prefer_user_sources")
     source_refs: list[dict[str, str | bool]] = Field(default_factory=list, max_length=10)
+    idempotency_key: str | None = Field(default=None, max_length=64)
 
 
 class SubmitAiJobResponse(BaseModel):

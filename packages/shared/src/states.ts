@@ -115,3 +115,18 @@ export const RADAR_CANDIDATE_STATUS = {
   FAILED: 'failed',
 } as const;
 export type RadarCandidateStatus = (typeof RADAR_CANDIDATE_STATUS)[keyof typeof RADAR_CANDIDATE_STATUS];
+
+// Week 6：AI 多轮追问会话状态（架构 §六点一）
+export const AI_CHAT_SESSION_STATUS = {
+  ACTIVE: 'active',
+  CLOSED: 'closed',
+} as const;
+export type AiChatSessionStatus =
+  (typeof AI_CHAT_SESSION_STATUS)[keyof typeof AI_CHAT_SESSION_STATUS];
+
+// Week 6：AI 多轮追问消息角色（架构 §六点一）
+export const AI_CHAT_ROLE = {
+  USER: 'user',
+  ASSISTANT: 'assistant',
+} as const;
+export type AiChatRole = (typeof AI_CHAT_ROLE)[keyof typeof AI_CHAT_ROLE];
