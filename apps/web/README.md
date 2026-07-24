@@ -1,95 +1,57 @@
-# apps/web — Web 应用 + BFF + Prisma
+# apps/web — Web 应用、BFF 与 Prisma
 
-> 工程师 A：Web / 产品流 独占领域。其他角色可读，不可写。
-> 详见根 README "工程师 A 工作边界" 段。
+Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/内容工作流和 Prisma 数据访问。跨运行时契约以根目录 `docs/contracts/`、`packages/shared/` 和 `apps/web/prisma/schema.prisma` 为准。
 
-## 模块边界
+## 当前能力（2026-07-24）
 
-```
+- 页面：技术雷达与详情、每日摘要、沉淀列表/详情/编辑、文件导入、AI 调研、搜索、登录和精简 Admin。
+- API：researches、imports、summaries、radar、shares、search、AI research、chat session/message、auth 与 admin routes。
+- 基础设施：NextAuth Google OAuth、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma。
+- Week 6 新增摘要上下文 AI 讨论抽屉及对应 BFF；具体历史验收见 `docs/weekly/week6-delivery.md`。
+
+## 目录
+
+```text
 apps/web/
-├── prisma/
-│   └── schema.prisma       # 由主会话变更；A/B 不得直接改
-├── src/
-│   ├── app/                # Next.js 15 App Router 页面
-│   │   ├── api/auth/[...nextauth]   # NextAuth handler（Google OAuth）
-│   │   └── api/admin/ping            # Admin endpoint（验收 2 测试样本）
-│   ├── lib/
-│   │   ├── env.ts          # 启动期 Zod env 校验（§7）
-│   │   ├── db.ts           # Prisma client singleton
-│   │   ├── log.ts          # 结构化 JSON logger + 脱敏
-│   │   ├── errors.ts       # ERROR_CODE → HTTP_STATUS 映射表
-│   │   ├── api-handler.ts  # parseBody + 统一错误响应
-│   │   └── auth/           # NextAuth config + session + permissions + allowlist
-│   ├── components/         # 共享 UI 组件
-│   └── types/next-auth.d.ts          # Session/JWT 类型扩展
-├── tests/                  # 单元 + 集成测试（vitest）
-└── data/import-tmp/        # P0 文件导入临时目录（24h 清理，gitignore）
+├── prisma/                 # schema、migrations、seed、preflight smoke
+├── src/app/                # App Router 页面和 api/* BFF routes
+├── src/components/         # 共享 UI 与交互组件
+├── src/lib/                # auth、db、env、errors、logging、radar、search、chat BFF
+└── src/types/              # NextAuth 类型扩展
 ```
 
 ## 本地开发
 
+从仓库根目录执行：
+
 ```bash
-pnpm install                # 在仓库根
+pnpm install
 pnpm --filter @deep-research/web exec prisma validate
-pnpm --filter @deep-research/web db:generate
-pnpm --filter @deep-research/web dev    # http://localhost:3000
+pnpm db:generate
+pnpm dev:web                 # http://localhost:3000
 ```
 
-Migration 只由主会话执行。工程师 A/B 不创建或运行 migration。
+数据库 schema 和 migration 是共享契约；除非任务明确授权，不创建、修改或执行 migration。
 
-AI/import worker 位于 `packages/ai-engine/`，不与 Next.js HTTP 进程混跑。
-
-## Week 1 落地范围
-
-- **env 启动期校验** (`src/lib/env.ts`)：9 个字段 + strict 模式拒绝 ai-engine secret。
-- **结构化日志** (`src/lib/log.ts`)：JSON 行 + `request_id` + 敏感字段名脱敏（password/token/cookie/api_key/secret/prompt/body/query/email 等）。
-- **错误码 → HTTP 映射** (`src/lib/errors.ts`)：覆盖 `packages/shared/src/errors.ts` 的全部 39 个 key，缺失时兜底 500。
-- **Auth** (`src/lib/auth/`)：NextAuth v5 + Google OAuth + JWT 策略（**不接 PrismaAdapter**，因 schema 没有 Account/Session/VerificationToken 三张表）。
-  - signIn callback 校验 ALLOWED_EMAIL_DOMAINS + disabledAt
-  - jwt callback 注入 uid/role/disabledAt
-  - session callback 透传到 session.user
-- **BFF helper**：
-  - `requireUser(req)` → 401 if unauthenticated
-  - `requireAdmin(req)` → 401/403 if not admin
-  - `requireRole(user, 'admin')` / `requireOwner(user, resource)`
-- **页面**：
-  - `/` 首页（3 个 P0 入口卡片）
-  - `/summaries` `/researches` `/ai-research` 占位页
-  - `/admin` 服务端拦截：未登录 → /signin；非 admin → 403 提示
-  - `/signin` 登录占位 + Google OAuth 提示
-
-## 验收用例（Week 1 · IMPLEMENTATION_PLAN §三·验收 1-3）
-
-| 用例 | 路径 | 期望 |
-|---|---|---|
-| 1a 正常登录 | 配置 GOOGLE_CLIENT_ID/SECRET + allowlist 用户登录 | 跳回首页，session 写入 |
-| 1b 非 allowlist | 域外 Google 账号登录 | NextAuth `?error=AccessDenied` |
-| 1c 已禁用账号 | DB `users.disabledAt` 非空用户登录 | signIn callback 返回 false |
-| 2a Member 访问 Admin API | member 调用 `GET /api/admin/ping` | 403 PERMISSION_DENIED |
-| 2b 直链 Admin 页面 | member 浏览器访问 `/admin` | 渲染 403 EmptyState |
-| 2c 未登录访问 Admin | 浏览器访问 `/admin` | redirect `/signin?callbackUrl=/admin` |
-| 3 schema 状态 | `prisma validate` / `db:generate` | 通过；本分支未产生新 migration |
-
-## 自动化测试
+## 验证
 
 ```bash
-pnpm --filter @deep-research/web typecheck    # tsc --noEmit
-pnpm --filter @deep-research/web test         # vitest run
+pnpm --filter @deep-research/web typecheck
+pnpm --filter @deep-research/web test
+pnpm --filter @deep-research/web build
 ```
 
-当前覆盖（54 个 case）：env 校验 / 脱敏日志 / 错误码映射 / allowlist / permissions / api-handler parseBody。
+不要在 README 固化测试数量；以当前命令输出和 CI 为准。
 
-## Google OAuth 配置
+## Google OAuth
 
-1. 在 Google Cloud Console 创建 OAuth 2.0 Client（Web 应用类型）。
-2. 「Authorized redirect URIs」登记：`http://localhost:3000/api/auth/callback/google`（与 NEXTAUTH_URL 一致）。
-3. 把 Client ID / Secret 写入 `apps/web/.env`。
-4. ALLOWED_EMAIL_DOMAINS 列出允许的邮箱域（CSV）。
-5. 启动 `pnpm dev:web`，访问 `/signin`，用允许域的 Google 账号登录。
+1. 创建 Google OAuth Web Client。
+2. 本地 redirect URI 使用 `http://localhost:3000/api/auth/callback/google`。
+3. 将配置写入 `apps/web/.env`，变量名以 `docs/contracts/env-and-scripts.md` 和 `.env.example` 为准。
+4. 使用 `ALLOWED_EMAIL_DOMAINS` 限制允许登录的邮箱域。
 
-## 已知限制（Week 1 不实现）
+## 边界
 
-- shadcn UI 全套组件未接入（Week 1 仅装 Tailwind；shadcn-ui 包是 CLI 而非组件库）
-- NextAuth 的 React SessionProvider 未接入 `RootLayout`（Nav 的 admin 显隐占位由静态常量提供，Week 2 改造为 `useSession()`）
-- 全套 admin 页面 UI / 审核队列 / 成员管理 = Week 8 任务
-- 文件导入 / AI 调研 / 评论 / 分享 = Week 3+ 任务
+- AI adapter、worker、抓取与长任务执行位于 `packages/ai-engine/`，不要放入 Next.js 请求进程。
+- 错误码、状态和 schema 变更必须同步对应契约与跨语言镜像。
+- 历史周交付记录只作为证据，不替代当前代码、测试与本 README。

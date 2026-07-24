@@ -1,13 +1,21 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
 import { EmptyState } from '../../components/EmptyState';
 
 interface ApiError {
   code: string;
   message: string;
   requestId?: string;
+}
+
+interface RadarSeed {
+  id: string;
+  title: string;
+  url: string;
+  interpretation: string | null;
+  body: string | null;
 }
 
 const REPORT_TYPES: Array<{ value: 'research_report' | 'summary_brief'; label: string; desc: string }> = [
@@ -23,13 +31,52 @@ const REPORT_TYPES: Array<{ value: 'research_report' | 'summary_brief'; label: s
   },
 ];
 
-export default function AiResearchPage() {
+function AiResearchForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const seedId = searchParams.get('seed');
   const [topic, setTopic] = useState('');
   const [context, setContext] = useState('');
   const [reportType, setReportType] = useState<'research_report' | 'summary_brief'>('research_report');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [seedWarning, setSeedWarning] = useState<string | null>(null);
+  const [seededSummaryId, setSeededSummaryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!seedId) return;
+
+    let cancelled = false;
+    setSeedWarning(null);
+    void fetch(`/api/radar/${encodeURIComponent(seedId)}`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('种子雷达候选不可读');
+        return await response.json() as RadarSeed;
+      })
+      .then((seed) => {
+        if (cancelled) return;
+        const seedContext = [
+          seed.interpretation ?? '',
+          `来源: ${seed.url}`,
+          '',
+          (seed.body ?? '').slice(0, 800),
+        ].filter(Boolean).join('\n');
+        setTopic(seed.title.slice(0, 200));
+        setContext(seedContext.slice(0, 2000));
+        setSeededSummaryId(seed.id);
+      })
+      .catch((seedError: unknown) => {
+        if (!cancelled) {
+          setSeedWarning(seedError instanceof Error
+            ? `预填失败：${seedError.message}，可手动输入`
+            : '预填失败，可手动输入');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [seedId]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -40,6 +87,9 @@ export default function AiResearchPage() {
     }
     setSubmitting(true);
     try {
+      const sourceRefs = seededSummaryId
+        ? [{ type: 'summary' as const, value: seededSummaryId, required: false }]
+        : [];
       const r = await fetch('/api/ai-research', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -47,8 +97,8 @@ export default function AiResearchPage() {
           topic: topic.trim(),
           context: context.trim() || undefined,
           reportType,
-          sourcePolicy: 'prefer_user_sources',
-          sourceRefs: [],
+          sourcePolicy: seededSummaryId ? 'only_user_sources' : 'prefer_user_sources',
+          sourceRefs,
         }),
       });
       if (!r.ok) {
@@ -72,6 +122,22 @@ export default function AiResearchPage() {
       <p style={{ color: '#475569', marginTop: 0 }}>
         输入主题和团队背景；提交后会立刻拿到 job id 然后每 5 秒拉取一次状态。
       </p>
+
+      {seedWarning ? (
+        <div
+          role="alert"
+          style={{
+            padding: '8px 12px',
+            marginTop: 12,
+            borderRadius: 4,
+            background: '#fef3c7',
+            color: '#92400e',
+            fontSize: 13,
+          }}
+        >
+          {seedWarning}
+        </div>
+      ) : null}
 
       <form onSubmit={onSubmit} style={{ display: 'grid', gap: 12, maxWidth: 640, marginTop: 16 }}>
         <label style={{ display: 'grid', gap: 4 }}>
@@ -129,7 +195,11 @@ export default function AiResearchPage() {
         </fieldset>
 
         <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>
-          source_policy 默认 <code>prefer_user_sources</code>；如需切换到 <code>only_user_sources</code>，请同时提供 sourceRefs。
+          {seededSummaryId ? (
+            <>已绑定雷达候选，使用 <code>only_user_sources</code>。</>
+          ) : (
+            <>source_policy 默认 <code>prefer_user_sources</code>。</>
+          )}
         </p>
 
         {err ? (
@@ -164,6 +234,14 @@ export default function AiResearchPage() {
         />
       </div>
     </div>
+  );
+}
+
+export default function AiResearchPage() {
+  return (
+    <Suspense fallback={<p style={{ color: '#475569' }}>加载调研表单…</p>}>
+      <AiResearchForm />
+    </Suspense>
   );
 }
 

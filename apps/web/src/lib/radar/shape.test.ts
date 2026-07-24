@@ -32,7 +32,7 @@ describe('excerptOf', () => {
   it('hard truncates with ellipsis if no boundary found', () => {
     const long = 'a'.repeat(500);
     const r = excerptOf(long, 50);
-    expect(r.length).toBe(51);
+    expect(r.length).toBe(50);
     expect(r.endsWith('…')).toBe(true);
   });
 });

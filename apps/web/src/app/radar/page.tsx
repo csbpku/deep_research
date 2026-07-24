@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { EmptyState } from '../../components/EmptyState';
+import { AskAiDrawer } from '../../components/radar/AskAiDrawer';
 import { RadarCandidateCard } from '../../components/radar/RadarCandidateCard';
 import type { RadarFeedbackCounts } from '../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
@@ -55,6 +56,13 @@ export default function RadarPage() {
   const [sourceType, setSourceType] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
+  const [drawer, setDrawer] = useState({
+    open: false,
+    summaryId: '',
+    title: '',
+    url: '',
+    interpretation: null as string | null,
+  });
 
   const query = useQuery<RadarListResponse>({
     queryKey: ['radar', q, sourceType, status, page],
@@ -165,7 +173,13 @@ export default function RadarPage() {
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
           {items.map((it) => (
-            <RadarCandidateCard key={it.id} candidate={it} />
+            <RadarCandidateCard
+              key={it.id}
+              candidate={it}
+              onAskAi={(summaryId, title, url, interpretation) => {
+                setDrawer({ open: true, summaryId, title, url, interpretation });
+              }}
+            />
           ))}
         </div>
       )}
@@ -202,6 +216,15 @@ export default function RadarPage() {
           </button>
         </nav>
       ) : null}
+
+      <AskAiDrawer
+        summaryId={drawer.summaryId}
+        summaryTitle={drawer.title}
+        summaryUrl={drawer.url}
+        summaryInterpretation={drawer.interpretation}
+        open={drawer.open}
+        onOpenChange={(open) => setDrawer((current) => ({ ...current, open }))}
+      />
     </div>
   );
 }

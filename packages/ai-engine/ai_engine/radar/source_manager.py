@@ -53,7 +53,10 @@ async def fetch_source(
         "arxiv": fetch_arxiv_candidates,
         "rss": fetch_rss_candidates,
     }
-    if source.source_type == "github":
+    handler: SourceFetcher | None
+    if fetchers is not None and source.source_type in handlers:
+        handler = handlers[source.source_type]
+    elif source.source_type == "github":
         mode = str(source.config.get("mode") or "trending").lower()
         handler_key = "github_trending" if mode == "trending" else "github"
         handler = handlers.get(handler_key)

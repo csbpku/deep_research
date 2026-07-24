@@ -25,12 +25,12 @@ const CreateChatMessageInput = z.object({
   content: z.string().trim().min(1).max(4000),
 }).strict();
 
-export const POST = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
+export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const user = await requireUser(req);
   if (user instanceof NextResponse) return user;
 
-  const parsed = SessionIdParam.safeParse(ctx.params);
+  const parsed = SessionIdParam.safeParse(await ctx.params);
   if (!parsed.success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,

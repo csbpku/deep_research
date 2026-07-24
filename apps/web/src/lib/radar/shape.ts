@@ -124,10 +124,16 @@ export function shapeCandidate(input: {
 /** 取前 N 个字符；保留换行前的整段语义边界（句号/问号/感叹号/换行）。 */
 export function excerptOf(body: string, max: number): string {
   if (body.length <= max) return body;
-  const sliced = body.slice(0, max);
-  const m = sliced.match(/[\.!?\n][^.\n!?]*$/u);
-  if (m && m.index !== undefined && m.index >= max / 2) {
-    return sliced.slice(0, m.index + 1);
+  const contentLimit = Math.max(0, max - 1);
+  const sliced = body.slice(0, contentLimit);
+  const boundary = Math.max(
+    sliced.lastIndexOf('.'),
+    sliced.lastIndexOf('!'),
+    sliced.lastIndexOf('?'),
+    sliced.lastIndexOf('\n'),
+  );
+  if (boundary >= contentLimit / 3) {
+    return sliced.slice(0, boundary + 1);
   }
   return sliced + '…';
 }

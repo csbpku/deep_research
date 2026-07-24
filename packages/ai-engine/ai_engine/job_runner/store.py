@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, Protocol
 
 from ai_engine.adapters.base import AdapterSource
 from ai_engine.contracts.errors import AdapterError
@@ -27,6 +27,10 @@ from ai_engine.contracts.states import AiJobStatus, AiJobStep, ReportType, Sourc
 from ai_engine.job_runner.models import HeartbeatResult, JobLease, JobSnapshot, LeaseLostError
 
 BackendName = Literal["memory", "db"]
+
+
+class JobRowView(Protocol):
+    snapshot: JobSnapshot
 
 
 @dataclass(slots=True)
@@ -99,7 +103,7 @@ class JobStore:
 
     async def find_by_idempotency_key(
         self, requester_id: str, idempotency_key: str
-    ) -> "object | None":
+    ) -> "JobRowView | None":
         """W6: 同 (requester_id, idempotency_key) 已存在任务则返回它的 row;
         否则 None。idempotency replay 在 quota check 之前执行,replay 不
         双扣 quota。

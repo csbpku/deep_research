@@ -2,7 +2,9 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import { useState } from 'react';
 import { EmptyState } from '../../../components/EmptyState';
+import { AskAiDrawer } from '../../../components/radar/AskAiDrawer';
 import { RadarFeedbackBar } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackCounts } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
@@ -33,6 +35,7 @@ interface RadarDetail {
 }
 
 export default function RadarDetailPage({ params }: { params: { id: string } }) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const q = useQuery<RadarDetail>({
     queryKey: ['radar', params.id],
     queryFn: async () => {
@@ -208,6 +211,38 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
           initialMine={d.myFeedbacks}
         />
 
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          <Link
+            href={`/ai-research?seed=${encodeURIComponent(d.id)}`}
+            style={{
+              padding: '6px 12px',
+              border: '1px solid #7c3aed',
+              borderRadius: 4,
+              background: '#7c3aed',
+              color: '#fff',
+              textDecoration: 'none',
+              fontSize: 13,
+            }}
+          >
+            ✨ 建议深入调研
+          </Link>
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            style={{
+              padding: '6px 12px',
+              border: '1px solid #cbd5e1',
+              borderRadius: 4,
+              background: '#fff',
+              color: '#334155',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            💬 与 AI 讨论
+          </button>
+        </div>
+
         <a
           href={d.url}
           target="_blank"
@@ -242,6 +277,15 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
             Admin：前往 <Link href={`/admin/radar?focus=${d.id}`} style={{ color: '#0f172a' }}>/admin/radar</Link> 管理此候选。
           </div>
         ) : null}
+
+        <AskAiDrawer
+          summaryId={d.id}
+          summaryTitle={d.title}
+          summaryUrl={d.url}
+          summaryInterpretation={d.interpretation}
+          open={drawerOpen}
+          onOpenChange={setDrawerOpen}
+        />
       </article>
     </div>
   );

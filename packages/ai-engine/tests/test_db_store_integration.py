@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -43,6 +44,23 @@ async def _clean_tables(store: DbJobStore) -> None:
         await conn.commit()
 
 
+async def _clean_optional_radar_tables(store: DbJobStore) -> None:
+    """Clean Week 5 tables when the selected test database has that migration."""
+    async with store.pool.connection() as conn:
+        rows = await (
+            await conn.execute(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' "
+                "AND tablename = ANY(%s)",
+                (["radar_feedback", "radar_sync_runs", "radar_sources", "share_submissions"],),
+            )
+        ).fetchall()
+        table_names = [f'"{row["tablename"]}"' for row in rows]
+        if table_names:
+            await conn.execute(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE")
+        await conn.commit()
+
+
 @pytest.fixture(autouse=True)
 async def isolated_database() -> None:
     store = DbJobStore(dsn=_test_dsn(), table_name=AI_TABLE)
@@ -61,19 +79,9 @@ async def truncate_radar_tables() -> None:
     store = DbJobStore(dsn=_test_dsn(), table_name=AI_TABLE)
     await store.open()
     try:
-        async with store.pool.connection() as conn:
-            await conn.execute(
-                'TRUNCATE TABLE "radar_feedback", "radar_sync_runs", "radar_sources", '
-                '"share_submissions" RESTART IDENTITY CASCADE'
-            )
-            await conn.commit()
+        await _clean_optional_radar_tables(store)
         yield
-        async with store.pool.connection() as conn:
-            await conn.execute(
-                'TRUNCATE TABLE "radar_feedback", "radar_sync_runs", "radar_sources", '
-                '"share_submissions" RESTART IDENTITY CASCADE'
-            )
-            await conn.commit()
+        await _clean_optional_radar_tables(store)
     finally:
         await store.close()
 
@@ -154,11 +162,11 @@ class TestDbJobStoreIntegration:
             snap = await _snapshot(user_id, "double acquire")
             await store_a.enqueue(snap)
 
-            a1 = await store_a.acquire_next_job("worker-A")
-            assert a1 is not None
-            # 用 store_b(独立 pool)跟 store_a 竞争同一个队列
-            a2 = await store_b.acquire_next_job("worker-B")
-            assert a2 is None
+            a1, a2 = await asyncio.gather(
+                store_a.acquire_next_job("worker-A"),
+                store_b.acquire_next_job("worker-B"),
+            )
+            assert sum(item is not None for item in (a1, a2)) == 1
         finally:
             await store_a.close()
             await store_b.close()

@@ -1,60 +1,68 @@
-# packages/ai-engine
+# packages/ai-engine — AI 与后台任务服务
 
-AI 调研引擎、Fetch/Compress/Write 轻量路径、SSRF-safe URL fetcher。
-工程师 B：AI / 平台 独占领地。其他角色可读，不写。
+FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓取与解读、导入/分享 worker、SSRF-safe URL fetch，以及摘要上下文 AI 讨论。
 
-## 模块边界
+## 当前能力（2026-07-24）
 
-```
+- `adapters/`：统一 `ResearchEngineAdapter` 协议，提供 fake 与 Claude 实现。
+- `job_runner/`：内存/数据库 store、幂等 replay、日配额、lease、reaper 和任务执行。
+- `radar/`：GitHub、arXiv、RSS source 管理、抓取、同步与解释流水线。
+- `fetcher/`：安全 URL fetch 与 Tavily/source URL 处理。
+- `server/`：health、AI job、radar sync、share submission 和 chat endpoints。
+- 顶层 worker：文件导入与分享提交处理。
+
+`gpt-researcher` 不是当前运行时 adapter；相关 spike 报告保留在 `reports/`，引擎选型见 `docs/decisions/0004-ai-engine-selection.md`。
+
+## 目录
+
+```text
 packages/ai-engine/
 ├── ai_engine/
-│   ├── adapters/           # ResearchEngineAdapter（fake / claude / gpt-researcher）
-│   ├── contracts/          # 镜像 packages/shared/src/{errors,states}.ts (ADR 0002 #8 关闭)
-│   ├── fetcher/            # SSRF-safe URL fetcher（Week 4 交付）
-│   ├── summary/            # 摘要轻量模式 reportType=summary_brief（Week 2）
-│   ├── research/           # 五步调研流水线（Week 5）
-│   ├── job_runner/         # InMemory store + run_once（Week 1）; DB store 在 Week 5
-│   ├── server/             # FastAPI app — /healthz /api/ai/jobs (Week 1)
-│   └── clients/            # Postgres / Tavily / arxiv-mcp / GitHub API（后续周）
-├── tools/
-│   └── spike.py            # Week 1 spike harness（fake / claude / gpt_researcher）
-├── reports/                # spike 报告生成物（每次跑追加 spike-summary.md）
+│   ├── adapters/           # fake / Claude adapter
+│   ├── contracts/          # packages/shared 状态和错误码的 Python 镜像
+│   ├── fetcher/            # SSRF-safe fetch、Tavily、source URLs
+│   ├── ingestion/          # 摘要摄取流水线
+│   ├── job_runner/         # stores、runner、任务模型
+│   ├── radar/              # sources、fetchers、pipeline、sync
+│   └── server/             # FastAPI app、chat、share
 ├── tests/
-└── pyproject.toml
+├── tools/                  # spike 与运维工具
+└── reports/                # 历史 spike 输出
 ```
 
 ## 本地开发
 
 ```bash
-# 1. 安装依赖
+cd packages/ai-engine
 uv sync
-
-# 2. 跑测试（fake adapter、job runner、HTTP 端点、spike harness）
-uv run pytest
-
-# 3. 启动 ai-engine 骨架（与根脚本 `pnpm dev:ai` 等价）
 uv run uvicorn ai_engine.server.app:app --port 4000
-
-# 4. 跑 Week 1 spike（默认 3 个中文主题 + fake adapter）
-uv run python tools/spike.py --adapter fake
-uv run python tools/spike.py --adapter claude          # Week 5 stub
-uv run python tools/spike.py --adapter gpt_researcher  # Week 5 stub
 ```
 
-## 端点(Week 1)
+从仓库根目录执行 `pnpm dev:ai` 等价，并把 uv cache 放到 `/tmp`。
 
-- `GET  /healthz` / `/health` — 适配器健康 + service 身份。
-- `POST /api/ai/jobs` — 提交任务；Week 1 同步运行(返回 `final_status`),Week 5 改为异步 + 2 秒内返回 id。
-- `GET  /api/ai/jobs/{id}` — 读取已持久化的快照。
-- `POST /api/ai/jobs/{id}/cancel` — 取消 queued/running 任务。
+## 主要端点
 
-## 共享契约(只读)
+- `GET /health`、`GET /healthz`
+- `POST /api/ai/jobs`、`GET /api/ai/jobs/{id}`、`POST /api/ai/jobs/{id}/cancel`
+- `POST /api/ai/radar/sync`
+- `POST /api/ai/shares/{share_id}/submit`
+- `POST /api/chat/sessions`、`GET /api/chat/sessions/{id}`、`POST /api/chat/sessions/{id}/messages`
 
-- `packages/shared/src/errors.ts` → TS 类型
-- `apps/web/prisma/schema.prisma` → 数据库结构(只读;可 validate/generate,**不**迁移或手写 SQL)
-- 错误码 / 状态机 / env 名见根 README 与 `docs/contracts/`
+精确请求/响应、错误码和状态机以 `docs/contracts/` 为准。
 
-## Week 1 ADR 草案
+## 验证
 
-主引擎选型 ADR 草案见 `docs/decisions/0004-ai-engine-selection.md`(由主会话在 PR
-review 后落库,工程师 B 在 PR 摘要里给出草稿)。
+```bash
+cd packages/ai-engine
+uv run pytest -q
+uv run ruff check .
+uv run mypy ai_engine tools
+```
+
+需要真实 PostgreSQL 或真实 Claude key 的验证必须单独标注；没有凭证时不要把 mock/fake 结果描述成真实链路通过。
+
+## 边界
+
+- `apps/web/prisma/schema.prisma`、`packages/shared/` 和 `docs/contracts/` 是共享契约；修改需要显式 review。
+- TypeScript 与 Python 的错误码/状态镜像必须同时更新并测试。
+- API secret 只通过环境注入，变量名以 `docs/contracts/env-and-scripts.md` 和 `.env.example` 为准。

@@ -35,6 +35,12 @@ interface RadarCandidateCardProps {
   candidate: RadarCandidate;
   /** Admin 操作按钮组（select/dismiss/retry）；不传则不展示 */
   adminActions?: React.ReactNode;
+  onAskAi?: (
+    summaryId: string,
+    title: string,
+    url: string,
+    interpretation: string | null,
+  ) => void;
 }
 
 function ScoreChip({ label, value }: { label: string; value: number | null }) {
@@ -103,7 +109,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCardProps) {
+export function RadarCandidateCard({ candidate, adminActions, onAskAi }: RadarCandidateCardProps) {
   return (
     <article
       style={{
@@ -223,6 +229,30 @@ export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCa
         initialCounts={candidate.feedbackCounts}
         initialMine={candidate.myFeedbacks}
       />
+
+      {onAskAi ? (
+        <button
+          type="button"
+          onClick={() => onAskAi(
+            candidate.id,
+            candidate.title,
+            candidate.url,
+            candidate.interpretation,
+          )}
+          style={{
+            alignSelf: 'flex-start',
+            padding: '4px 10px',
+            border: '1px solid #cbd5e1',
+            borderRadius: 4,
+            background: '#fff',
+            color: '#475569',
+            cursor: 'pointer',
+            fontSize: 12,
+          }}
+        >
+          💬 AI 讨论
+        </button>
+      ) : null}
 
       {adminActions ? (
         <div

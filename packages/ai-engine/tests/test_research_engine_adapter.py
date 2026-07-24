@@ -56,6 +56,14 @@ async def test_build_adapter_explicit_fake() -> None:
 
 
 @pytest.mark.asyncio
+async def test_factory_result_uses_the_same_adapter_protocol() -> None:
+    adapter: ResearchEngineAdapter = build_adapter(name="fake")
+    job_id = await adapter.submit(_request())
+    status = await adapter.get_status(job_id)
+    assert status.job_id == job_id
+
+
+@pytest.mark.asyncio
 async def test_build_adapter_unknown_raises_validation_failed() -> None:
     with pytest.raises(AdapterError) as exc_info:
         build_adapter(name="bogus")

@@ -1,7 +1,7 @@
 // Unit tests: W5 BFF routes —— /api/radar / /api/radar/[id] / /api/radar-feedback
 // / /api/admin/radar / /api/admin/radar/[id]/select|dismiss|retry-interpretation
 //
-// 测试策略：mock prisma + mock requireUser/requireAdmin，覆盖：
+// 测试策略：mock prisma + mock session/auth helpers，覆盖：
 //   - 正常路径（list/detail 候选、POST 反馈、select/dismiss/retry）
 //   - 无权限路径（admin 端点对 member 返回 403）
 //   - 失败路径（zod 校验、404 来源、409 唯一约束、422 sortOrder 冲突）
@@ -9,6 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  getCurrentUser: vi.fn(),
   requireUser: vi.fn(),
   requireAdmin: vi.fn(),
   summaryFindMany: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('../../../lib/api-handler.js', async (importOriginal) => ({
 }));
 
 vi.mock('../../../lib/auth/session.js', () => ({
+  getCurrentUser: mocks.getCurrentUser,
   requireUser: mocks.requireUser,
   requireAdmin: mocks.requireAdmin,
 }));
@@ -90,6 +92,7 @@ const SUM_ID = '11111111-1111-4111-8111-111111111111';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.getCurrentUser.mockResolvedValue(MEMBER);
   mocks.requireUser.mockResolvedValue(MEMBER);
   mocks.requireAdmin.mockResolvedValue(ADMIN);
   mocks.transaction.mockImplementation((cb) => cb({
@@ -119,14 +122,13 @@ beforeEach(() => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar', () => {
-  it('returns 401 when requireUser yields error', async () => {
-    const { NextResponse } = await import('next/server');
-    mocks.requireUser.mockResolvedValueOnce(NextResponse.json(
-      { code: 'AUTH_NOT_AUTHENTICATED', message: '需要登录', requestId: 'r' },
-      { status: 401 },
-    ));
+  it('returns public candidates when no user session exists', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(null);
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
     const r = await radarList(new Request('http://localhost/api/radar') as never);
-    expect(r.status).toBe(401);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ items: [], total: 0 });
   });
 
   it('returns 400 on invalid query params', async () => {
@@ -224,7 +226,7 @@ describe('GET /api/radar/[id]', () => {
   it('returns 400 on bad uuid', async () => {
     const r = await radarDetail(
       new Request('http://localhost/api/radar/xxx') as never,
-      { params: { id: 'xxx' } },
+      { params: Promise.resolve({ id: 'xxx' }) },
     );
     expect(r.status).toBe(400);
     expect((await r.json()).code).toBe('VALIDATION_FAILED');
@@ -241,7 +243,7 @@ describe('GET /api/radar/[id]', () => {
     });
     const r = await radarDetail(
       new Request('http://localhost/api/radar/x') as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     expect(r.status).toBe(404);
     expect((await r.json()).code).toBe('DRAFT_NOT_FOUND');
@@ -262,7 +264,7 @@ describe('GET /api/radar/[id]', () => {
     mocks.radarFeedbackFindMany.mockResolvedValue([]);
     const r = await radarDetail(
       new Request('http://localhost/api/radar/x') as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     const body = await r.json();
     expect(r.status).toBe(200);
@@ -272,6 +274,7 @@ describe('GET /api/radar/[id]', () => {
   });
 
   it('canManage=true for admin caller', async () => {
+    mocks.requireUser.mockResolvedValueOnce(ADMIN);
     mocks.summaryFindUnique.mockResolvedValue({
       id: SUM_ID, title: 'A', body: 'a', url: 'u', tags: [], status: 'candidate',
       summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
@@ -285,7 +288,7 @@ describe('GET /api/radar/[id]', () => {
     mocks.radarFeedbackFindMany.mockResolvedValue([]);
     const r = await radarDetail(
       new Request('http://localhost/api/radar/x') as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     const body = await r.json();
     expect(body.canManage).toBe(true);
@@ -443,7 +446,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
     mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'user', syncRunId: null, status: 'candidate' });
     const req = new Request('http://localhost/x', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
+      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'reason' }),
     });
     const r = await adminSelect(req as never, { params: { id: SUM_ID } });
     expect(r.status).toBe(404);

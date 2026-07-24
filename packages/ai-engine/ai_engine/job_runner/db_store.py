@@ -34,7 +34,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from ai_engine.adapters.base import AdapterSource, CostMetrics
+from ai_engine.adapters.base import AdapterSource
 from ai_engine.contracts.errors import AdapterError
 from ai_engine.contracts.states import AiJobStatus, AiJobStep
 from ai_engine.job_runner.models import (
@@ -262,10 +262,7 @@ class DbJobStore(JobStore):
         snapshot = _row_to_snapshot(dict(row))
         return DbJobView(
             snapshot=snapshot,
-            # unused fields for idempotency path:
-            lease=None,
-            last_sources=[],
-            cost=CostMetrics(),
+            last_sources=(),
         )
 
     async def count_submissions_today(
@@ -297,7 +294,8 @@ class DbJobStore(JobStore):
         sql = f"SELECT count(*) AS cnt FROM {t} WHERE {' AND '.join(where)}"
         async with self.pool.connection() as conn:
             row = await (await conn.execute(sql, tuple(params))).fetchone()
-        return int(row["cnt"]) if row else 0
+        row_data = cast(dict[str, Any] | None, row)
+        return int(row_data["cnt"]) if row_data else 0
 
     async def acquire_next_job(
         self, worker_id: str

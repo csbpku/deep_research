@@ -16,17 +16,17 @@ later edits to the underlying summary don't mutate the chat history.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+import uuid
+from typing import Annotated, Any, cast
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
-from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
-from ai_engine.adapters.base import ResearchEngineAdapter
+from ai_engine.adapters.base import ResearchEngineAdapter, ResearchRequest
 from ai_engine.contracts.errors import ERROR_CODES, HTTP_STATUS, AdapterError
 from ai_engine.contracts.states import (
     AI_CHAT_ROLE,
@@ -107,7 +107,7 @@ class GetSessionResponse(BaseModel):
 
 class AppendMessageBody(BaseModel):
     user_id: str
-    role: AiChatRole = Field(default=AI_CHAT_ROLE["USER"])
+    role: AiChatRole = Field(default="user")
     content: str = Field(min_length=1, max_length=4000)
 
 
@@ -273,7 +273,7 @@ async def create_session(
     if summary is None:
         raise _http_error("AI_CHAT_SEED_NOT_FOUND", "种子摘要不存在")
 
-    snapshot = {
+    snapshot: dict[str, object] = {
         "id": str(summary["id"]),
         "title": summary["title"] or "",
         "url": summary["url"] or "",
@@ -305,9 +305,9 @@ async def create_session(
     )
     return CreateChatSessionResponse(
         session_id=str(row["id"]),
-        status=AI_CHAT_SESSION_STATUS["ACTIVE"],
+        status=cast(AiChatSessionStatus, AI_CHAT_SESSION_STATUS["ACTIVE"]),
         created_at=row["createdAt"].isoformat(),
-        seed_snapshot=ChatSeedSnapshot(**snapshot),
+        seed_snapshot=ChatSeedSnapshot.model_validate(snapshot),
         message_count=0,
     )
 
@@ -321,7 +321,6 @@ async def get_session(
     pool: Annotated[Any, Depends(_pool)],
     session_id: Annotated[str, Path(min_length=1)],
 ) -> GetSessionResponse:
-    request_id = getattr(request.state, "request_id", "")
     async with pool.connection() as conn:
         s_row = await (
             await conn.execute(
@@ -351,7 +350,7 @@ async def get_session(
         messages.append(
             ChatMessageOut(
                 id=str(m["id"]),
-                role=m["role"],
+                role=cast(AiChatRole, m["role"]),
                 content=m["content"],
                 sources_json=list(sources) if isinstance(sources, list) else None,
                 latency_ms=m.get("latencyMs"),
@@ -365,10 +364,10 @@ async def get_session(
     return GetSessionResponse(
         session_id=str(s["id"]),
         user_id=str(s["userId"]),
-        status=s["status"],
+        status=cast(AiChatSessionStatus, s["status"]),
         created_at=s["createdAt"].isoformat(),
         updated_at=s["updatedAt"].isoformat(),
-        seed_snapshot=ChatSeedSnapshot(**snapshot),
+        seed_snapshot=ChatSeedSnapshot.model_validate(snapshot),
         messages=messages,
     )
 
@@ -452,45 +451,27 @@ async def append_message(
 
     started = time.monotonic()
     try:
-        # Use the existing adapter protocol — ClaudeAdapter implements .generate_brief
-        # for the summary_brief path; here we call a thin wrapper. Since adapter
-        # Protocol doesn't expose a generic "complete", we reuse summary_brief.
-        from ai_engine.adapters.fake import FakeAdapter
-
-        if isinstance(adapter, FakeAdapter):
-            brief = await adapter.generate_brief(
-                {"title": snapshot.get("title", ""), "snippet": prompt[:2000]},
-                prompt[:2000],
-            )
-        else:
-            # ClaudeAdapter: best-effort single-call via .submit + .get_status
-            # for the chat use case. We keep it minimal in W6; deeper integration
-            # is a follow-up.
-            from ai_engine.adapters.base import ResearchRequest
-
-            req = ResearchRequest(
-                job_id=str(__import__("uuid").uuid4()),
-                request_id=f"chat-{session_id}",
-                topic=str(snapshot.get("title") or "Chat"),
-                context=prompt,
-                report_type="summary_brief",
-                source_policy="only_user_sources",
-                source_refs=(),
-                timeout_seconds=60.0,
-            )
-            await adapter.submit(req)
-            # Poll
-            import asyncio as _asyncio
-            deadline = time.monotonic() + 60.0
-            brief = None
-            while time.monotonic() < deadline:
-                await _asyncio.sleep(0.1)
-                status = await adapter.get_status(req.job_id)
-                if status.status in {"succeeded", "failed", "partial", "cancelled"}:
-                    brief = status
-                    break
-            if brief is None:
-                raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 60s 超时")
+        req = ResearchRequest(
+            job_id=str(uuid.uuid4()),
+            request_id=f"chat-{session_id}",
+            topic=str(snapshot.get("title") or "Chat"),
+            context=prompt,
+            report_type="summary_brief",
+            source_policy="only_user_sources",
+            source_refs=(),
+            timeout_seconds=60,
+        )
+        await adapter.submit(req)
+        deadline = time.monotonic() + 60.0
+        brief = None
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+            status = await adapter.get_status(req.job_id)
+            if status.status in {"succeeded", "failed", "partial", "cancelled"}:
+                brief = status
+                break
+        if brief is None:
+            raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 60s 超时")
         latency_ms = int((time.monotonic() - started) * 1000)
         content = (brief.output_text or "").strip() or "(空响应)"
     except AdapterError as exc:
@@ -532,7 +513,7 @@ async def append_message(
     )
     return ChatMessageOut(
         id=str(a_row["id"]),
-        role=AI_CHAT_ROLE["ASSISTANT"],
+        role=cast(AiChatRole, AI_CHAT_ROLE["ASSISTANT"]),
         content=content,
         sources_json=None,
         latency_ms=latency_ms,

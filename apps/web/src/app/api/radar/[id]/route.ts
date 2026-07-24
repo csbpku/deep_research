@@ -18,12 +18,12 @@ import { RadarIdParam } from '../../../../lib/schemas';
 import { aggregateFeedbacks, shapeCandidate } from '../../../../lib/radar/shape';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
-export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
+export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
   if (u instanceof NextResponse) return u;
 
-  const parsed = RadarIdParam.safeParse(ctx.params);
+  const parsed = RadarIdParam.safeParse(await ctx.params);
   if (!parsed.success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
