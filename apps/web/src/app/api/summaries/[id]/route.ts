@@ -15,16 +15,15 @@ import { prisma } from '../../../../lib/db';
 import { apiHandler } from '../../../../lib/api-handler';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
-import { requireUser } from '../../../../lib/auth/session';
+import { getCurrentUser } from '../../../../lib/auth/session';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
 export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
-  // W2 review 修正: 单条摘要详情也需登录 — 同 /api/summaries 列表。
-  const u = await requireUser(req);
-  if (u instanceof NextResponse) return u;
+  // W5 fix: published 摘要公开可读，与 radar/search API 一致
+  const u = await getCurrentUser();
 
   const requestId = withRequestId(req.headers);
   const parsed = IdParam.safeParse(ctx.params);

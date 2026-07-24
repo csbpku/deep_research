@@ -31,3 +31,4 @@ class RadarCandidate:
     content_origin: ContentOrigin = "api"
     tags: tuple[str, ...] = field(default_factory=tuple)
     source_quality_hint: float | None = None
+    timeliness_hint: float | None = None

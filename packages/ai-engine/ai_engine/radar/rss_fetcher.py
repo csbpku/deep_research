@@ -32,7 +32,16 @@ async def fetch_rss_candidates(
     *,
     fetcher: SafeFetcher = safe_fetch,
 ) -> list[RadarCandidate]:
-    """Fetch one configured feed through ``safe_fetch`` and parse RSS items."""
+    """Fetch one configured feed through ``safe_fetch`` and parse RSS items.
+
+    Config keys:
+      - ``feedUrl`` (required)
+      - ``maxResults`` (default 50, range 1-100)
+      - ``maxAgeHours`` (default None = no filter): drop items whose
+        ``published_at`` is older than ``now - maxAgeHours``. Items with
+        no parseable ``published_at`` are kept (matches kaiye's behavior
+        of returning them when cutoff cannot be evaluated).
+    """
 
     feed_url = str(config.get("feedUrl") or "").strip()
     if not feed_url:
@@ -44,6 +53,16 @@ async def fetch_rss_candidates(
     if max_results < 1 or max_results > 100:
         raise ValueError("RSS maxResults must be between 1 and 100")
 
+    raw_max_age = config.get("maxAgeHours")
+    cutoff = None
+    if raw_max_age is not None:
+        if isinstance(raw_max_age, bool):
+            raise ValueError("RSS maxAgeHours must be a number")
+        hours = float(raw_max_age)
+        if hours < 0 or hours > 24 * 30:
+            raise ValueError("RSS maxAgeHours must be between 0 and 720")
+        cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+
     document = await fetcher(feed_url)
     text = document.content.decode("utf-8", errors="replace")
     items = _parse_rss_xml_simple(text)
@@ -52,12 +71,16 @@ async def fetch_rss_candidates(
         link = item.get("link", "").strip()
         if not link:
             continue
+        published_at = _published_at(item.get("pubDate", "").strip())
+        if cutoff is not None and published_at is not None:
+            if published_at.timestamp() < cutoff:
+                continue
         candidates.append(
             RadarCandidate(
                 title=(item.get("title") or "Untitled").strip()[:300],
                 url=link,
                 snippet=item.get("description", "").strip()[:2000],
-                published_at=_published_at(item.get("pubDate", "").strip()),
+                published_at=published_at,
                 content_origin="rss",
                 tags=("rss",),
                 source_quality_hint=0.7,

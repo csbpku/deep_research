@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
 from ai_engine.radar.github import fetch_github
+from ai_engine.radar.github_trending import fetch_github_trending
 from ai_engine.radar.models import RadarCandidate, RadarSource, SourceType
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
 
@@ -45,15 +46,29 @@ async def fetch_source(
     *,
     fetchers: dict[str, SourceFetcher] | None = None,
 ) -> list[RadarCandidate]:
+    """Dispatch based on `source_type`; honor `mode` for GitHub."""
     handlers: dict[str, SourceFetcher] = fetchers or {
-        "github": fetch_github,
+        "github_trending": fetch_github_trending,
+        "github": _github_dispatch,
         "arxiv": fetch_arxiv_candidates,
         "rss": fetch_rss_candidates,
     }
-    fetcher = handlers.get(source.source_type)
-    if fetcher is None:
+    if source.source_type == "github":
+        mode = str(source.config.get("mode") or "trending").lower()
+        handler_key = "github_trending" if mode == "trending" else "github"
+        handler = handlers.get(handler_key)
+    else:
+        handler = handlers.get(source.source_type)
+    if handler is None:
         raise ValueError(f"unsupported radar source type: {source.source_type}")
-    return await fetcher(source.config)
+    return await handler(source.config)
+
+
+async def _github_dispatch(
+    config: Mapping[str, Any],
+) -> list[RadarCandidate]:
+    """Forward to the REST API fetcher, masking the GitHub-mode branching."""
+    return await fetch_github(config)
 
 
 __all__ = ["SourceFetcher", "fetch_source", "load_enabled_sources"]

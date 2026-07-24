@@ -15,7 +15,7 @@ import { prisma } from '../../../lib/db';
 import { apiHandler } from '../../../lib/api-handler';
 import { toApiErrorResponse } from '../../../lib/errors';
 import { withRequestId } from '../../../lib/log';
-import { requireUser } from '../../../lib/auth/session';
+import { getCurrentUser } from '../../../lib/auth/session';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
@@ -42,10 +42,8 @@ function todayUtcDateString(): string {
 }
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
-  // W2 review 修正: 摘要已发布但仍需登录访问 — 架构 §九 权限矩阵
-  // member/admin 可读 published, 未登录 401。
-  const u = await requireUser(req);
-  if (u instanceof NextResponse) return u;
+  // W5 fix: published 摘要公开可读，与 radar/search API 一致
+  const u = await getCurrentUser();
 
   const requestId = withRequestId(req.headers);
   const url = new URL(req.url);
