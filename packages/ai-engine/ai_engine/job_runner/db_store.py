@@ -34,7 +34,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from ai_engine.adapters.base import AdapterSource
+from ai_engine.adapters.base import AdapterSource, CostMetrics
 from ai_engine.contracts.errors import AdapterError
 from ai_engine.contracts.states import AiJobStatus, AiJobStep
 from ai_engine.job_runner.models import (
@@ -233,6 +233,71 @@ class DbJobStore(JobStore):
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 await conn.execute(sql, params)
+
+    async def find_by_idempotency_key(
+        self, requester_id: str, idempotency_key: str
+    ) -> "DbJobView | None":
+        """W6: Look up an existing job by (requester_id, idempotency_key).
+
+        Backed by a partial unique index on ai_research_jobs (see migration
+        init_constraints). Returns a DbJobView so the caller can read .snapshot.
+        """
+        await self.open()
+        # Partial unique applies only when idempotencyKey IS NOT NULL.
+        if self._table_name != AI_TABLE:
+            return None
+        t = f'"{self._table_name}"'
+        sql = (
+            f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
+            f"j.\"reportType\", j.\"sourcePolicy\", j.\"status\", j.\"currentStep\", "
+            f"j.\"attempts\", j.\"idempotencyKey\", j.\"sourceRefs\" "
+            f"FROM {t} j "
+            f"WHERE j.\"requesterId\" = %s AND j.\"idempotencyKey\" = %s "
+            f"LIMIT 1"
+        )
+        async with self.pool.connection() as conn:
+            row = await (await conn.execute(sql, (requester_id, idempotency_key))).fetchone()
+        if row is None:
+            return None
+        snapshot = _row_to_snapshot(dict(row))
+        return DbJobView(
+            snapshot=snapshot,
+            # unused fields for idempotency path:
+            lease=None,
+            last_sources=[],
+            cost=CostMetrics(),
+        )
+
+    async def count_submissions_today(
+        self,
+        *,
+        requester_id: str | None = None,
+        team_scope: bool = False,
+    ) -> int:
+        """W6: count submissions since today UTC midnight.
+
+        - requester_id non-None → per-user count (team_scope must be False)
+        - team_scope=True → team-wide count (requester_id must be None)
+
+        Counts all statuses EXCEPT cancelled (those don't count toward quota).
+        """
+        await self.open()
+        if team_scope and requester_id is not None:
+            raise ValueError(
+                "count_submissions_today: pick one of team_scope or requester_id"
+            )
+        if self._table_name != AI_TABLE:
+            return 0
+        t = f'"{self._table_name}"'
+        params: list[object] = []
+        where = ['"createdAt" >= date_trunc(\'day\', now())', '"status" <> \'cancelled\'']
+        if requester_id is not None:
+            where.append('"requesterId" = %s')
+            params.append(requester_id)
+        sql = f"SELECT count(*) AS cnt FROM {t} WHERE {' AND '.join(where)}"
+        async with self.pool.connection() as conn:
+            row = await (await conn.execute(sql, tuple(params))).fetchone()
+        return int(row["cnt"]) if row else 0
 
     async def acquire_next_job(
         self, worker_id: str

@@ -138,8 +138,10 @@ app = FastAPI(
 )
 
 from ai_engine.radar.sync_endpoint import router as radar_router  # noqa: E402
+from ai_engine.server.chat import router as chat_router  # noqa: E402
 
 app.include_router(radar_router)
+app.include_router(chat_router)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -264,6 +266,9 @@ class SubmitAiJobBody(BaseModel):
 
     Validated via Pydantic instead of Zod to keep the engine self-contained.
     The Web BFF still validates first; this is defence-in-depth.
+
+    W6: 加 `idempotency_key` 字段 —— BFF 把客户端 `Idempotency-Key` header
+    透传到这里;同一 (requester_id, key) 二次提交返回原 job,不再 enqueue 也不扣 quota。
     """
 
     job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -273,6 +278,7 @@ class SubmitAiJobBody(BaseModel):
     report_type: ReportType = Field(default="research_report")
     source_policy: SourcePolicy = Field(default="prefer_user_sources")
     source_refs: list[dict[str, str | bool]] = Field(default_factory=list, max_length=10)
+    idempotency_key: str | None = Field(default=None, max_length=64)
 
 
 class SubmitAiJobResponse(BaseModel):
@@ -350,6 +356,51 @@ async def submit_ai_job(
             "AI_INVALID_SOURCE_POLICY",
             "only_user_sources requires at least one source_ref",
         )
+
+    # W6: Idempotency replay — same (requester_id, idempotency_key) returns the
+    # original job without enqueueing a new one. Status 200 instead of 202 so
+    # clients can distinguish replay from fresh submit.
+    if body.idempotency_key:
+        existing = await store.find_by_idempotency_key(
+            body.requester_id, body.idempotency_key
+        )
+        if existing is not None:
+            snap = existing.snapshot
+            return SubmitAiJobResponse(
+                job_id=snap.job_id,
+                status=snap.status,
+                final_status=snap.status if snap.status in {"succeeded", "failed", "partial", "cancelled"} else None,
+                current_step=snap.current_step,
+                sources_count=len(snap.source_refs),
+                token_input_total=0,
+                token_output_total=0,
+                cost_cents=0,
+                search_count=0,
+                error_code=None,
+                error_message=None,
+                request_id=getattr(request.state, "request_id", None),
+            )
+
+    # W6: Quota check — happens AFTER idempotency replay so replays don't
+    # double-charge. Counts today's accepted submissions for the user and the
+    # team (DB path sums across all users).
+    user_used = await store.count_submissions_today(requester_id=body.requester_id)
+    team_used = await store.count_submissions_today(team_scope=True)
+    user_limit = int(os.environ.get("BUDGET_USER_DAILY", "5"))
+    team_limit = int(os.environ.get("BUDGET_TEAM_DAILY", "20"))
+    if user_used >= user_limit:
+        raise _http_error_with_details(
+            "AI_QUOTA_EXCEEDED",
+            "个人今日 AI 调研配额已用完",
+            {"scope": "user", "used": user_used, "limit": user_limit},
+        )
+    if team_used >= team_limit:
+        raise _http_error_with_details(
+            "AI_QUOTA_EXCEEDED",
+            "团队今日 AI 调研配额已用完",
+            {"scope": "team", "used": team_used, "limit": team_limit},
+        )
+
     # 1. Persist the snapshot so subsequent GET can find it.
     snapshot = make_job_snapshot(
         topic=body.topic,
@@ -368,7 +419,7 @@ async def submit_ai_job(
         status=snapshot.status,
         current_step=snapshot.current_step,
         attempts=snapshot.attempts,
-        idempotency_key=snapshot.idempotency_key,
+        idempotency_key=body.idempotency_key,
         source_refs=tuple(body.source_refs),
     )
     await store.enqueue(snapshot)
@@ -684,6 +735,19 @@ def _http_error(code: str, message: str) -> HTTPException:
     return HTTPException(
         status_code=http_status,
         detail={"code": code, "message": message},
+    )
+
+
+def _http_error_with_details(
+    code: str, message: str, details: dict[str, object]
+) -> HTTPException:
+    """Like ``_http_error`` but attaches a `details` object for the BFF."""
+    if code not in ERROR_CODES:
+        code = "INTERNAL"
+    http_status = HTTP_STATUS.get(code, 500)
+    return HTTPException(
+        status_code=http_status,
+        detail={"code": code, "message": message, "details": details},
     )
 
 

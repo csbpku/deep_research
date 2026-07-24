@@ -111,6 +111,20 @@ USER_ROLE: Final[dict[str, str]] = {
 }
 UserRole = Literal["member", "admin"]
 
+# Week 6: AI 多轮追问会话状态（架构 §六点一）
+AI_CHAT_SESSION_STATUS: Final[dict[str, str]] = {
+    "ACTIVE": "active",
+    "CLOSED": "closed",
+}
+AiChatSessionStatus = Literal["active", "closed"]
+
+# Week 6: AI 多轮追问消息角色
+AI_CHAT_ROLE: Final[dict[str, str]] = {
+    "USER": "user",
+    "ASSISTANT": "assistant",
+}
+AiChatRole = Literal["user", "assistant"]
+
 # AI research job `reportType` (DB column is VarChar(40)). The contract uses
 # these two values only — see docs/contracts/api-schemas.md and state-machines.md.
 REPORT_TYPE: Final[dict[str, str]] = {
