@@ -49,6 +49,7 @@ export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (
       createdAt: true,
       source: true,
       status: true,
+      interpretation: true,
       sharedBy: { select: { id: true, name: true, email: true } },
     },
   });
