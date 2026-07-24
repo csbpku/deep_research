@@ -7,7 +7,7 @@
 
 - Week 6 已合入 `main`：技术雷达、每日摘要、沉淀/导入、分享、搜索、AI 任务、幂等与配额、摘要上下文 AI 讨论均已有代码与测试覆盖。
 - Week 6 收尾已提交（commit 1a0253d）：AI 讨论抽屉、雷达种子调研预填、Next.js 15 异步路由修复和文档同步。自动化门禁全绿。
-- 真实 API walkthrough（3 次同步 + 2 次每日摘要发布）的前置凭据已就绪（Google OAuth、Claude key、GitHub trending 无需 token），但 walkthrough 本身尚未执行。
+- 真实 API walkthrough（3 次同步 + 2 次每日摘要发布）的前置凭据已就绪，推迟至 Week 7 与 AI 调研端到端一并验证。
 - Week 7 的 AI 调研端到端流程是下一阶段，详见 `docs/IMPLEMENTATION_PLAN.md` 与 `docs/weekly/week6-delivery.md`。
 - `infra/docker-compose.yml` 仍是部署脚手架；引用的 Dockerfile 尚未入库，尚未完成 Week 8 部署验收。
 
