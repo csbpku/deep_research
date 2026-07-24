@@ -1,0 +1,546 @@
+"""AI chat (drawer) endpoints — Week 6.
+
+Implements POST /api/chat/sessions, GET /api/chat/sessions/{id},
+POST /api/chat/sessions/{id}/messages. Session + messages are persisted
+in `ai_chat_sessions` and `ai_chat_messages` (see Prisma migration
+20260724000000_w6_chat_schema).
+
+Architecture §6.1 context compression: when round >= 3 (i.e. user message
+count >= 4), older history is summarized into a single "Earlier Q&A
+summary" segment before the Claude call, keeping the last 2 turns in full.
+Per-call input token budget is 1500 hard-capped.
+
+The session creation also persists a snapshot of the seed summary so
+later edits to the underlying summary don't mutate the chat history.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from psycopg.rows import dict_row
+from pydantic import BaseModel, Field
+
+from ai_engine.adapters.base import ResearchEngineAdapter
+from ai_engine.contracts.errors import ERROR_CODES, HTTP_STATUS, AdapterError
+from ai_engine.contracts.states import (
+    AI_CHAT_ROLE,
+    AI_CHAT_SESSION_STATUS,
+    AiChatRole,
+    AiChatSessionStatus,
+)
+
+router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+logger = structlog.get_logger("ai_engine.chat")
+
+# Per-call input token hard cap. Tokens are estimated as chars/4 (rough
+# heuristic — Claude's tokenizer averages ~4 chars/token for English and
+# mixed CN/EN). This keeps us well under the 200k context window and
+# protects against runaway costs.
+_MAX_INPUT_TOKENS = 1500
+_MAX_OUTPUT_TOKENS = 800
+
+# When history has more than this many user messages, the older ones are
+# compressed into a summary segment; only the last 2 turns remain verbatim.
+_COMPRESS_AT_USER_COUNT = 4
+
+# Snapshot body truncation. Real summaries can be huge; we cap the snapshot
+# so chat prompts never grow unbounded with old sessions.
+_SNAPSHOT_BODY_MAX = 50_000
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Request/response models
+# ──────────────────────────────────────────────────────────────────────
+
+
+class CreateChatSessionBody(BaseModel):
+    user_id: str
+    seed_summary_id: str
+
+
+class ChatSeedSnapshot(BaseModel):
+    id: str
+    title: str
+    url: str
+    body: str
+    interpretation: str | None
+    summary_date: str
+    tags: list[str]
+
+
+class CreateChatSessionResponse(BaseModel):
+    session_id: str
+    status: AiChatSessionStatus
+    created_at: str
+    seed_snapshot: ChatSeedSnapshot
+    message_count: int = 0
+
+
+class ChatMessageOut(BaseModel):
+    id: str
+    role: AiChatRole
+    content: str
+    sources_json: list[dict[str, str]] | None = None
+    latency_ms: int | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_cents: int | None = None
+    created_at: str
+
+
+class GetSessionResponse(BaseModel):
+    session_id: str
+    user_id: str
+    status: AiChatSessionStatus
+    created_at: str
+    updated_at: str
+    seed_snapshot: ChatSeedSnapshot
+    messages: list[ChatMessageOut]
+
+
+class AppendMessageBody(BaseModel):
+    user_id: str
+    role: AiChatRole = Field(default=AI_CHAT_ROLE["USER"])
+    content: str = Field(min_length=1, max_length=4000)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Dependencies
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _pool(request: Request) -> Any:
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail={"code": "AI_ENGINE_UNAVAILABLE"})
+    return pool
+
+
+def _adapter(request: Request) -> ResearchEngineAdapter:
+    adapter = getattr(request.app.state, "adapter", None)
+    if adapter is None:
+        from ai_engine.adapters.base import build_adapter
+
+        adapter = build_adapter()
+    return adapter
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _http_error(code: str, message: str, details: dict[str, Any] | None = None) -> HTTPException:
+    if code not in ERROR_CODES:
+        code = "INTERNAL"
+    body: dict[str, Any] = {"code": code, "message": message}
+    if details is not None:
+        body["details"] = details
+    return HTTPException(status_code=HTTP_STATUS.get(code, 500), detail=body)
+
+
+def _estimate_tokens(text: str) -> int:
+    """~4 chars/token heuristic. Conservative for mixed CN/EN."""
+    return max(1, len(text) // 4)
+
+
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    if _estimate_tokens(text) <= max_tokens:
+        return text
+    max_chars = max_tokens * 4
+    return text[:max_chars]
+
+
+async def _load_summary(pool: Any, summary_id: str) -> dict[str, Any] | None:
+    async with pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                'SELECT "id", "title", "url", "body", "interpretation", '
+                '"summaryDate", "tags" FROM "summaries" WHERE "id" = %s',
+                (summary_id,),
+            )
+        ).fetchone()
+    return dict(row) if row else None
+
+
+async def _count_messages(pool: Any, session_id: str) -> int:
+    async with pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                'SELECT count(*) AS cnt FROM "ai_chat_messages" WHERE "sessionId" = %s',
+                (session_id,),
+            )
+        ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+async def _count_user_messages_today(pool: Any, user_id: str) -> int:
+    async with pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                "SELECT count(*) AS cnt FROM \"ai_chat_messages\" m "
+                "JOIN \"ai_chat_sessions\" s ON s.\"id\" = m.\"sessionId\" "
+                "WHERE s.\"userId\" = %s AND m.\"role\" = 'user' "
+                "AND m.\"createdAt\" >= date_trunc('day', now())",
+                (user_id,),
+            )
+        ).fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+async def _build_prompt(
+    pool: Any,
+    snapshot: dict[str, Any],
+    history: list[dict[str, Any]],
+    user_msg: dict[str, Any],
+    adapter: ResearchEngineAdapter,
+) -> tuple[str, int]:
+    """Assemble the assistant prompt under 1500-token budget.
+
+    Returns (prompt, estimated_tokens).
+    """
+    system = (
+        "你是团队的 AI 调研助手。基于一篇种子摘要回答成员的多轮追问。"
+        "回答必须使用中文,简洁、可读;若不确定就明说。"
+    )
+    seed_body = (snapshot.get("body") or "")[:30000]
+    seed_interp = (snapshot.get("interpretation") or "")[:2000]
+    seed_title = snapshot.get("title") or ""
+
+    parts: list[str] = [
+        f"## 种子摘要\n标题: {seed_title}\n\n{seed_body}",
+    ]
+    if seed_interp:
+        parts.append(f"## AI 摘要\n{seed_interp}")
+
+    user_message_count = sum(1 for m in history if m["role"] == "user")
+    # Compress older turns when round >= 3 (>= 4 user messages total).
+    if user_message_count >= _COMPRESS_AT_USER_COUNT:
+        older = history[:-4]  # drop the last 2 user/assistant pairs
+        recent = history[-4:]
+        if older:
+            try:
+                from ai_engine.ingestion.pipeline import _generate_brief
+
+                summary_input = "\n".join(
+                    f"[{m['role']}] {m['content']}" for m in older
+                )
+                brief = await _generate_brief(
+                    adapter,
+                    {"title": "Earlier Q&A", "snippet": summary_input[:8000]},
+                    "earlier-qa",
+                    timeout_seconds=20.0,
+                )
+                compressed = (brief.output_text or "").strip() or "(上下文已压缩)"
+            except Exception:
+                compressed = "(上下文已压缩,详见对话历史)"
+            parts.append(f"## 早期问答摘要\n{compressed[:1500]}")
+        history = recent
+
+    for m in history:
+        parts.append(f"[{m['role']}]\n{m['content']}")
+    parts.append(f"[user]\n{user_msg['content']}")
+
+    prompt = system + "\n\n" + "\n\n".join(parts)
+    prompt = _truncate_to_tokens(prompt, _MAX_INPUT_TOKENS)
+    return prompt, _estimate_tokens(prompt)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Routes
+# ──────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/sessions",
+    response_model=CreateChatSessionResponse,
+    status_code=200,
+)
+async def create_session(
+    body: CreateChatSessionBody,
+    request: Request,
+    pool: Annotated[Any, Depends(_pool)],
+) -> CreateChatSessionResponse:
+    request_id = getattr(request.state, "request_id", "")
+    summary = await _load_summary(pool, body.seed_summary_id)
+    if summary is None:
+        raise _http_error("AI_CHAT_SEED_NOT_FOUND", "种子摘要不存在")
+
+    snapshot = {
+        "id": str(summary["id"]),
+        "title": summary["title"] or "",
+        "url": summary["url"] or "",
+        "body": (summary["body"] or "")[:_SNAPSHOT_BODY_MAX],
+        "interpretation": summary.get("interpretation"),
+        "summary_date": summary["summaryDate"].isoformat()[:10]
+        if summary.get("summaryDate") else "",
+        "tags": list(summary.get("tags") or []),
+    }
+
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            row = await (
+                await conn.execute(
+                    'INSERT INTO "ai_chat_sessions" '
+                    '("id", "userId", "seedSummaryId", "seedSnapshot", "status", '
+                    '"createdAt", "updatedAt") '
+                    "VALUES (gen_random_uuid(), %s, %s, %s::jsonb, 'active', now(), now()) "
+                    'RETURNING "id", "createdAt"',
+                    (body.user_id, body.seed_summary_id, json.dumps(snapshot)),
+                )
+            ).fetchone()
+
+    logger.info(
+        "ai-engine.chat.session_created",
+        request_id=request_id,
+        user_id=body.user_id,
+        session_id=str(row["id"]),
+    )
+    return CreateChatSessionResponse(
+        session_id=str(row["id"]),
+        status=AI_CHAT_SESSION_STATUS["ACTIVE"],
+        created_at=row["createdAt"].isoformat(),
+        seed_snapshot=ChatSeedSnapshot(**snapshot),
+        message_count=0,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}",
+    response_model=GetSessionResponse,
+)
+async def get_session(
+    request: Request,
+    pool: Annotated[Any, Depends(_pool)],
+    session_id: Annotated[str, Path(min_length=1)],
+) -> GetSessionResponse:
+    request_id = getattr(request.state, "request_id", "")
+    async with pool.connection() as conn:
+        s_row = await (
+            await conn.execute(
+                'SELECT "id", "userId", "status", "createdAt", "updatedAt", '
+                '"seedSnapshot" FROM "ai_chat_sessions" WHERE "id" = %s',
+                (session_id,),
+            )
+        ).fetchone()
+    if s_row is None:
+        raise _http_error("AI_CHAT_SESSION_NOT_FOUND", "会话不存在")
+    s = dict(s_row)
+    snapshot = s["seedSnapshot"] if isinstance(s["seedSnapshot"], dict) else json.loads(s["seedSnapshot"])
+    async with pool.connection() as conn:
+        msg_rows = await (
+            await conn.execute(
+                'SELECT "id", "role", "content", "sourcesJson", "latencyMs", '
+                '"tokensIn", "tokensOut", "costCents", "createdAt" '
+                'FROM "ai_chat_messages" WHERE "sessionId" = %s ORDER BY "createdAt" ASC',
+                (session_id,),
+            )
+        ).fetchall()
+
+    messages = []
+    for r in msg_rows:
+        m = dict(r)
+        sources = m.get("sourcesJson")
+        messages.append(
+            ChatMessageOut(
+                id=str(m["id"]),
+                role=m["role"],
+                content=m["content"],
+                sources_json=list(sources) if isinstance(sources, list) else None,
+                latency_ms=m.get("latencyMs"),
+                tokens_in=m.get("tokensIn"),
+                tokens_out=m.get("tokensOut"),
+                cost_cents=m.get("costCents"),
+                created_at=m["createdAt"].isoformat(),
+            )
+        )
+
+    return GetSessionResponse(
+        session_id=str(s["id"]),
+        user_id=str(s["userId"]),
+        status=s["status"],
+        created_at=s["createdAt"].isoformat(),
+        updated_at=s["updatedAt"].isoformat(),
+        seed_snapshot=ChatSeedSnapshot(**snapshot),
+        messages=messages,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/messages",
+    response_model=ChatMessageOut,
+    status_code=200,
+)
+async def append_message(
+    body: AppendMessageBody,
+    request: Request,
+    pool: Annotated[Any, Depends(_pool)],
+    adapter: Annotated[ResearchEngineAdapter, Depends(_adapter)],
+    session_id: Annotated[str, Path(min_length=1)],
+) -> ChatMessageOut:
+    import time
+
+    request_id = getattr(request.state, "request_id", "")
+    if body.role != AI_CHAT_ROLE["USER"]:
+        raise _http_error("VALIDATION_FAILED", "只接受 user 角色消息")
+
+    user_quota = int(os.environ.get("BUDGET_USER_DAILY", "5"))
+    used = await _count_user_messages_today(pool, body.user_id)
+    if used >= user_quota:
+        raise _http_error(
+            "AI_QUOTA_EXCEEDED",
+            "个人今日 AI 追问配额已用完",
+            {"scope": "user", "used": used, "limit": user_quota},
+        )
+
+    async with pool.connection() as conn:
+        s_row = await (
+            await conn.execute(
+                'SELECT "id", "userId", "status", "seedSnapshot" '
+                'FROM "ai_chat_sessions" WHERE "id" = %s',
+                (session_id,),
+            )
+        ).fetchone()
+    if s_row is None:
+        raise _http_error("AI_CHAT_SESSION_NOT_FOUND", "会话不存在")
+    s = dict(s_row)
+    if str(s["userId"]) != body.user_id:
+        raise _http_error("AI_CHAT_SESSION_NOT_FOUND", "会话不存在")
+    if s["status"] != AI_CHAT_SESSION_STATUS["ACTIVE"]:
+        raise _http_error("AI_CHAT_SESSION_CLOSED", "会话已关闭,不能再追加")
+
+    snapshot = s["seedSnapshot"] if isinstance(s["seedSnapshot"], dict) else json.loads(s["seedSnapshot"])
+
+    # Insert user message first
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            u_row = await (
+                await conn.execute(
+                    'INSERT INTO "ai_chat_messages" '
+                    '("id", "sessionId", "role", "content", "createdAt") '
+                    "VALUES (gen_random_uuid(), %s, 'user', %s, now()) "
+                    'RETURNING "id", "createdAt"',
+                    (session_id, body.content),
+                )
+            ).fetchone()
+            # Bump session updatedAt
+            await conn.execute(
+                'UPDATE "ai_chat_sessions" SET "updatedAt" = now() WHERE "id" = %s',
+                (session_id,),
+            )
+
+    # Load history (excluding the just-inserted user msg, which we'll re-add)
+    async with pool.connection() as conn:
+        h_rows = await (
+            await conn.execute(
+                'SELECT "role", "content" FROM "ai_chat_messages" '
+                'WHERE "sessionId" = %s AND "id" <> %s ORDER BY "createdAt" ASC',
+                (session_id, str(u_row["id"])),
+            )
+        ).fetchall()
+    history = [{"role": r["role"], "content": r["content"]} for r in h_rows]
+    user_msg = {"role": "user", "content": body.content}
+
+    prompt, tokens_in_est = await _build_prompt(pool, snapshot, history, user_msg, adapter)
+
+    started = time.monotonic()
+    try:
+        # Use the existing adapter protocol — ClaudeAdapter implements .generate_brief
+        # for the summary_brief path; here we call a thin wrapper. Since adapter
+        # Protocol doesn't expose a generic "complete", we reuse summary_brief.
+        from ai_engine.adapters.fake import FakeAdapter
+
+        if isinstance(adapter, FakeAdapter):
+            brief = await adapter.generate_brief(
+                {"title": snapshot.get("title", ""), "snippet": prompt[:2000]},
+                prompt[:2000],
+            )
+        else:
+            # ClaudeAdapter: best-effort single-call via .submit + .get_status
+            # for the chat use case. We keep it minimal in W6; deeper integration
+            # is a follow-up.
+            from ai_engine.adapters.base import ResearchRequest
+
+            req = ResearchRequest(
+                job_id=str(__import__("uuid").uuid4()),
+                request_id=f"chat-{session_id}",
+                topic=str(snapshot.get("title") or "Chat"),
+                context=prompt,
+                report_type="summary_brief",
+                source_policy="only_user_sources",
+                source_refs=(),
+                timeout_seconds=60.0,
+            )
+            await adapter.submit(req)
+            # Poll
+            import asyncio as _asyncio
+            deadline = time.monotonic() + 60.0
+            brief = None
+            while time.monotonic() < deadline:
+                await _asyncio.sleep(0.1)
+                status = await adapter.get_status(req.job_id)
+                if status.status in {"succeeded", "failed", "partial", "cancelled"}:
+                    brief = status
+                    break
+            if brief is None:
+                raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 60s 超时")
+        latency_ms = int((time.monotonic() - started) * 1000)
+        content = (brief.output_text or "").strip() or "(空响应)"
+    except AdapterError as exc:
+        raise _http_error(exc.code, exc.message)
+
+    # Insert assistant message
+    cost_cents = int(getattr(brief.cost, "cost_cents", 0))
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            a_row = await (
+                await conn.execute(
+                    'INSERT INTO "ai_chat_messages" '
+                    '("id", "sessionId", "role", "content", "sourcesJson", '
+                    '"latencyMs", "tokensIn", "tokensOut", "costCents", "createdAt") '
+                    "VALUES (gen_random_uuid(), %s, 'assistant', %s, NULL, %s, %s, %s, %s, now()) "
+                    'RETURNING "id", "createdAt"',
+                    (
+                        session_id,
+                        content[:50000],
+                        latency_ms,
+                        tokens_in_est,
+                        int(getattr(brief.cost, "token_output_total", 0) or 0),
+                        cost_cents,
+                    ),
+                )
+            ).fetchone()
+            await conn.execute(
+                'UPDATE "ai_chat_sessions" SET "updatedAt" = now() WHERE "id" = %s',
+                (session_id,),
+            )
+
+    logger.info(
+        "ai-engine.chat.message_appended",
+        request_id=request_id,
+        session_id=session_id,
+        role="assistant",
+        tokens_in=tokens_in_est,
+        cost_cents=cost_cents,
+    )
+    return ChatMessageOut(
+        id=str(a_row["id"]),
+        role=AI_CHAT_ROLE["ASSISTANT"],
+        content=content,
+        sources_json=None,
+        latency_ms=latency_ms,
+        tokens_in=tokens_in_est,
+        tokens_out=int(getattr(brief.cost, "token_output_total", 0) or 0),
+        cost_cents=cost_cents,
+        created_at=a_row["createdAt"].isoformat(),
+    )
+
+
+__all__ = ["router"]
