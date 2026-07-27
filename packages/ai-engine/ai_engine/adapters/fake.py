@@ -61,6 +61,9 @@ class _Job:
     error_code: str | None = None
     error_message: str | None = None
     body: str = ""
+    # W7 (工程师 B): mark output as inferred when no source was
+    # captured (mirrors ClaudeAdapter.inferred for the contract).
+    inferred: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     completion_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -164,6 +167,7 @@ class FakeAdapter(ResearchEngineAdapter):
                 error_code=job.error_code,
                 error_message=job.error_message,
                 output_text=job.body or None,
+                output_metadata={"is_inferred": job.inferred} if job.inferred else None,
             )
 
     async def cancel(self, job_id: str) -> AdapterCancelOutcome:
@@ -255,6 +259,12 @@ class FakeAdapter(ResearchEngineAdapter):
                 await self._execute_step(job, step)
                 async with job.lock:
                     job.current_step = step
+
+            # W7 (工程师 B): if no source made it through, mark the
+            # output as inferred so the BFF can render it accordingly.
+            async with job.lock:
+                if not job.sources:
+                    job.inferred = True
 
             # Final outcome.
             async with job.lock:

@@ -294,6 +294,9 @@ class SubmitAiJobResponse(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     request_id: str | None = None
+    # W7 (工程师 B): structured output flag. True when the engine
+    # produced a conclusion without any grounded source.
+    is_inferred: bool = False
 
 
 class CancelAiJobResponse(BaseModel):
@@ -585,19 +588,25 @@ async def get_ai_job(
     if row is None:
         raise _http_error("AI_JOB_NOT_FOUND", f"job {job_id} not found")
     snap: JobSnapshot = row.snapshot
+    last_sources = getattr(row, "last_sources", ())
+    # W7 (工程师 B): an inferred conclusion is one that succeeded with
+    # zero grounded sources. We surface this on the response so the
+    # BFF / UI can render it differently.
+    is_inferred = snap.status == "succeeded" and len(last_sources) == 0
     return SubmitAiJobResponse(
         job_id=snap.job_id,
         status="stored",
         final_status=snap.status,
         current_step=snap.current_step,
-        sources_count=len(getattr(row, "last_sources", ())),
+        sources_count=len(last_sources),
         token_input_total=getattr(row, "last_token_in", 0),
         token_output_total=getattr(row, "last_token_out", 0),
         cost_cents=getattr(row, "last_cost_cents", 0),
-        search_count=len(getattr(row, "last_sources", ())),
+        search_count=len(last_sources),
         error_code=getattr(row, "last_error_code", None),
         error_message=getattr(row, "last_error_message", None),
         request_id=getattr(request.state, "request_id", None),
+        is_inferred=is_inferred,
     )
 
 

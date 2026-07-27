@@ -276,6 +276,13 @@ async def run_once(
         field_metadata={
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "search_count": str(terminal.cost.search_count),
+            # W7 (工程师 B): surface the inferred flag from the adapter's
+            # structured output so the BFF can render no-source conclusions
+            # differently.
+            "is_inferred": "true" if (
+                terminal.output_metadata
+                and bool(terminal.output_metadata.get("is_inferred"))
+            ) else "false",
         },
     )
 

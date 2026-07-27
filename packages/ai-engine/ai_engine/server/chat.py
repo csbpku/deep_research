@@ -204,21 +204,18 @@ async def _build_prompt(
 ) -> tuple[str, int]:
     """Assemble the assistant prompt under 1500-token budget.
 
+    W7 (工程师 B): delegates the budget + untrusted-input boundary to
+    ``prompt.build_chat_prompt`` so the chat path and the long-research
+    path share one source of truth. The LLM-based "earlier turns"
+    compression (W6 §6.1) is still applied BEFORE the shared builder
+    so the prompt stays well under the 1500-token cap.
+
     Returns (prompt, estimated_tokens).
     """
-    system = (
-        "你是团队的 AI 调研助手。基于一篇种子摘要回答成员的多轮追问。"
-        "回答必须使用中文,简洁、可读;若不确定就明说。"
-    )
+    from ai_engine.prompt import build_chat_prompt
+
     seed_body = (snapshot.get("body") or "")[:30000]
     seed_interp = (snapshot.get("interpretation") or "")[:2000]
-    seed_title = snapshot.get("title") or ""
-
-    parts: list[str] = [
-        f"## 种子摘要\n标题: {seed_title}\n\n{seed_body}",
-    ]
-    if seed_interp:
-        parts.append(f"## AI 摘要\n{seed_interp}")
 
     user_message_count = sum(1 for m in history if m["role"] == "user")
     # Compress older turns when round >= 3 (>= 4 user messages total).
@@ -241,16 +238,22 @@ async def _build_prompt(
                 compressed = (brief.output_text or "").strip() or "(上下文已压缩)"
             except Exception:
                 compressed = "(上下文已压缩,详见对话历史)"
-            parts.append(f"## 早期问答摘要\n{compressed[:1500]}")
-        history = recent
+            # Prepend the compressed segment so it lands in the budget
+            # before the recent turns and the new user message.
+            history = (
+                [{"role": "system", "content": f"[Earlier Q&A summary] {compressed[:1500]}"}]
+                + recent
+            )
+        else:
+            history = recent
 
-    for m in history:
-        parts.append(f"[{m['role']}]\n{m['content']}")
-    parts.append(f"[user]\n{user_msg['content']}")
-
-    prompt = system + "\n\n" + "\n\n".join(parts)
-    prompt = _truncate_to_tokens(prompt, _MAX_INPUT_TOKENS)
-    return prompt, _estimate_tokens(prompt)
+    built = build_chat_prompt(
+        snapshot_body=seed_body,
+        snapshot_interpretation=seed_interp,
+        history=history,
+        user_msg=user_msg["content"],
+    )
+    return built.system + "\n\n" + built.user, built.estimated_tokens
 
 
 # ──────────────────────────────────────────────────────────────────────

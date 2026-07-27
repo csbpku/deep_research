@@ -93,6 +93,57 @@ async def client_with_failed_low_sources() -> (
         yield c
 
 
+@pytest.fixture
+async def client_with_no_sources() -> (
+    AsyncIterator[tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter]]
+):
+    """W7 (工程师 B): fake adapter that succeeds but captures zero
+    sources — used to verify the inferred flag is set in the
+    HTTP response.
+    """
+    async for c in _make_client(default_mode="success", sources_per_job=0):
+        yield c
+
+
+async def test_submit_inferred_flag_when_no_sources(
+    client_with_no_sources: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    """W7 (工程师 B): when the engine succeeds without capturing any
+    source, the GET response carries ``is_inferred: True`` so the
+    BFF can render it as an inferred (no-source) conclusion.
+    """
+    client, _store, _adapter = client_with_no_sources
+    resp = await client.post(
+        "/api/ai/jobs",
+        json={"topic": "没有任何来源的主题", "source_policy": "prefer_user_sources"},
+    )
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+    final = await _wait_final_status(client, job_id)
+    assert final["final_status"] == "succeeded"
+    assert final["is_inferred"] is True
+    assert final["sources_count"] == 0
+
+
+async def test_submit_inferred_false_when_sources_captured(
+    client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    """W7 (工程师 B): when sources ARE captured, the inferred flag
+    is False (not just absent).
+    """
+    client, _store, _adapter = client_with_store
+    resp = await client.post(
+        "/api/ai/jobs",
+        json={"topic": "有来源的主题", "source_policy": "prefer_user_sources"},
+    )
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+    final = await _wait_final_status(client, job_id)
+    assert final["final_status"] == "succeeded"
+    assert final["is_inferred"] is False
+    assert final["sources_count"] >= 3
+
+
 async def test_healthz_returns_adapter_metadata(
     client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
 ) -> None:
@@ -214,6 +265,105 @@ async def test_submit_rejects_topic_too_short(
     client, _store, _adapter = client_with_store
     resp = await client.post("/api/ai/jobs", json={"topic": "a"})
     assert resp.status_code == 422  # pydantic validation
+
+
+# ───────────── W7 (engineer B): quota hard-limit / soft-reminder ─────────────
+
+
+class _QuotaStoreProxy:
+    """Test helper — wraps an InMemoryJobStore and overrides
+    ``count_submissions_today`` so we can pin the quota at 0/1/2/...
+    without seeding real rows.
+    """
+
+    def __init__(self, inner: InMemoryJobStore, *, user_count: int, team_count: int) -> None:
+        self._inner = inner
+        self._user_count = user_count
+        self._team_count = team_count
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+    async def count_submissions_today(
+        self,
+        *,
+        requester_id: str | None = None,
+        team_scope: bool = False,
+    ) -> int:
+        if team_scope:
+            return self._team_count
+        return self._user_count
+
+
+async def _make_quota_client(
+    *, user_count: int, team_count: int
+) -> AsyncIterator[tuple[httpx.AsyncClient, FakeAdapter]]:
+    """Build a client backed by a proxy store that returns canned quota counts.
+
+    Tests pass ``user_count`` and ``team_count`` to force a specific
+    branch in the quota check (acceptance vs. 429).
+    """
+    store = InMemoryJobStore()
+    adapter = FakeAdapter(default_mode="success", sources_per_job=5)
+    proxy = _QuotaStoreProxy(store, user_count=user_count, team_count=team_count)
+
+    app.dependency_overrides[_store_singleton] = lambda: proxy
+    from ai_engine.server import app as app_module  # noqa: PLC0415
+    original = app_module._adapter_singleton
+    app_module._adapter_singleton = lambda: adapter  # type: ignore[assignment]
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        try:
+            yield client, adapter
+        finally:
+            app_module._adapter_singleton = original  # type: ignore[assignment]
+            app.dependency_overrides.clear()
+
+
+async def test_submit_rejects_user_quota_exceeded() -> None:
+    """When the user has already used 5 of 5 (default BUDGET_USER_DAILY),
+    a new submission returns 429 AI_QUOTA_EXCEEDED with ``scope='user'``.
+    """
+    async for client, _adapter in _make_quota_client(user_count=5, team_count=0):
+        resp = await client.post(
+            "/api/ai/jobs",
+            json={"topic": "配额已满测试", "requester_id": "00000000-0000-0000-0000-000000000001"},
+        )
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["detail"]["code"] == "AI_QUOTA_EXCEEDED"
+    assert body["detail"]["details"]["scope"] == "user"
+    assert body["detail"]["details"]["used"] == 5
+    assert body["detail"]["details"]["limit"] == 5
+
+
+async def test_submit_rejects_team_quota_exceeded() -> None:
+    """Team hard-cap of 20/day is independent of per-user cap. If the
+    user still has budget but the team has used 20/20, reject with
+    ``scope='team'``.
+    """
+    async for client, _adapter in _make_quota_client(user_count=0, team_count=20):
+        resp = await client.post(
+            "/api/ai/jobs",
+            json={"topic": "团队配额已满", "requester_id": "00000000-0000-0000-0000-000000000001"},
+        )
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["detail"]["code"] == "AI_QUOTA_EXCEEDED"
+    assert body["detail"]["details"]["scope"] == "team"
+    assert body["detail"]["details"]["used"] == 20
+    assert body["detail"]["details"]["limit"] == 20
+
+
+async def test_submit_accepts_when_under_user_quota() -> None:
+    """Under the 5/day limit the submission must succeed (202 queued)."""
+    async for client, _adapter in _make_quota_client(user_count=2, team_count=5):
+        resp = await client.post(
+            "/api/ai/jobs",
+            json={"topic": "低于配额", "requester_id": "00000000-0000-0000-0000-000000000001"},
+        )
+    assert resp.status_code == 202
 
 
 async def test_get_job_returns_stored_snapshot(

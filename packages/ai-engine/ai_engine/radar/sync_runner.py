@@ -62,12 +62,57 @@ def _cost_usd(cost: CostMetrics) -> float:
 
 
 def _safe_error_code(exc: BaseException) -> str:
+    """Map an exception raised in the source / candidate path to a contract code.
+
+    Preserves the caller-visible root cause instead of collapsing every
+    failure into ``AI_ENGINE_UNAVAILABLE``. We surface:
+    - ``SafeFetchError`` codes (URL_FETCH_*, URL_REDIRECT_LIMIT) verbatim
+    - ``asyncio.TimeoutError`` / ``TimeoutError`` → ``WORKER_TIMEOUT``
+    - ``ValueError`` → ``VALIDATION_FAILED``
+    - ``httpx.HTTPError`` → ``URL_FETCH_TIMEOUT`` (TimeoutException) or
+      ``URL_FETCH_BLOCKED`` (everything else — DNS, connect, TLS, protocol)
+    - ``RuntimeError`` raised by ``ingestion.sources.fetch_arxiv`` (prefix
+      ``arxiv_*``) → specific codes so dashboards can split transport
+      failures from rate-limit hits and parse errors
+    - anything else → ``AI_ENGINE_UNAVAILABLE`` (genuine unknown)
+    """
     if isinstance(exc, SafeFetchError):
         return exc.code
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return "WORKER_TIMEOUT"
     if isinstance(exc, ValueError):
         return "VALIDATION_FAILED"
+    # httpx errors surface from safe_fetch wrappers + the arxiv fetcher.
+    # We import lazily to avoid pulling httpx into sync_runner tests.
+    import httpx as _httpx
+
+    if isinstance(exc, _httpx.TimeoutException):
+        return "URL_FETCH_TIMEOUT"
+    if isinstance(exc, (_httpx.ConnectError, _httpx.ConnectTimeout,
+                        _httpx.NetworkError, _httpx.RemoteProtocolError)):
+        return "URL_FETCH_BLOCKED"
+    if isinstance(exc, _httpx.HTTPError):
+        return "URL_FETCH_BLOCKED"
+    # fetch_arxiv classifies its own failures with leading ``arxiv_*`` tags.
+    msg = str(exc) or ""
+    if msg.startswith("arxiv_"):
+        tag = msg.split(":", 1)[0]
+        # Translate the arxiv-specific tags to the public contract codes
+        # so dashboards / alerts can group by HTTP-style semantics.
+        if tag == "arxiv_timeout":
+            return "WORKER_TIMEOUT"
+        if tag == "arxiv_rate_limited":
+            return "URL_FETCH_TOO_LARGE"  # closest pre-existing 4xx rate-limit code
+        if tag == "arxiv_too_large":
+            return "URL_FETCH_TOO_LARGE"
+        if tag == "arxiv_network":
+            return "URL_FETCH_BLOCKED"
+        if tag in {"arxiv_http_error", "arxiv_decode_failed"}:
+            return "URL_FETCH_BLOCKED"
+        if tag in {"arxiv_parse_failed", "arxiv_empty_response"}:
+            # Body-level failures: most likely upstream schema change.
+            return "VALIDATION_FAILED"
+        # Unknown arxiv_* tag — fall through to default.
     return "AI_ENGINE_UNAVAILABLE"
 
 

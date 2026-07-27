@@ -95,6 +95,10 @@ class AdapterStatus:
     error_code: str | None = None
     error_message: str | None = None  # MUST be redacted; never raw stack.
     output_text: str | None = None
+    # W7 (工程师 B): structured output flags. Currently used to surface
+    # ``{"is_inferred": True}`` when the engine produced a conclusion
+    # without any grounded source (the LLM fell back on its own weights).
+    output_metadata: dict[str, object] | None = None
 
 
 @dataclass(slots=True, frozen=True)

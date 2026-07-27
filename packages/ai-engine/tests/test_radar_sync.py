@@ -234,3 +234,35 @@ async def test_dispatch_source_configuration_is_passed() -> None:
 
     await dispatch_source(source, fetchers={"rss": handler})
     assert seen == [{"feedUrl": "https://feed.test"}]
+
+
+# ───────────── W7 (engineer B): S1 #7 regression ─────────────
+
+
+async def test_arxiv_source_failure_surfaces_typed_root_cause() -> None:
+    """Regression for S1 #7: when the arxiv fetcher fails, the sync
+    runner's `error_code` must reflect the *root cause* (e.g. a
+    network/timeout/parse error) instead of collapsing everything to
+    ``AI_ENGINE_UNAVAILABLE``.
+    """
+    pool = _Pool([_source("arxiv-1", "arxiv")])
+
+    async def broken_arxiv(config: dict[str, Any]) -> list[RadarCandidate]:
+        # Simulate ``fetch_arxiv`` raising a typed RuntimeError when
+        # the upstream service is unreachable.
+        raise RuntimeError("arxiv_timeout:ReadTimeout")
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"arxiv": broken_arxiv},
+        document_fetcher=_safe_fetch,
+    )
+    assert result.runs[0].status == "failed"
+    # The arxiv_timeout prefix must be translated to WORKER_TIMEOUT,
+    # NOT AI_ENGINE_UNAVAILABLE — the walkthrough regression that
+    # this test pins.
+    assert result.runs[0].error_code == "WORKER_TIMEOUT", (
+        f"expected WORKER_TIMEOUT, got {result.runs[0].error_code!r}"
+    )

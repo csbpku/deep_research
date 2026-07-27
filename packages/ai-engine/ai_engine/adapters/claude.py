@@ -128,6 +128,11 @@ class _Job:
     error_code: str | None = None
     error_message: str | None = None
     body: str = ""
+    # W7 (工程师 B): if we reach the WRITE step without any grounded
+    # source, mark the output as inferred. The flag propagates to the
+    # BFF via RunOutcome.field_metadata so the UI can render
+    # "inferred" conclusions differently.
+    inferred: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     completion_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -253,6 +258,7 @@ class ClaudeAdapter(ResearchEngineAdapter):
             error_code=job.error_code,
             error_message=job.error_message,
             output_text=job.body or None,
+            output_metadata={"is_inferred": job.inferred} if job.inferred else None,
         )
 
     async def _run(self, job: _Job) -> None:
@@ -290,6 +296,12 @@ class ClaudeAdapter(ResearchEngineAdapter):
                     return
                 async with job.lock:
                     job.current_step = step
+            # W7 (工程师 B): if the WRITE step ran without any grounded
+            # source, surface the inferred flag so the BFF can render it.
+            # Empty sources list = the LLM fell back on its own weights.
+            async with job.lock:
+                if not job.sources:
+                    job.inferred = True
 
             async with job.lock:
                 if job.cancel_event.is_set():
@@ -317,8 +329,36 @@ class ClaudeAdapter(ResearchEngineAdapter):
         if job.cancel_event.is_set():
             return
         # Build the prompt depending on step + report_type.
+        # W7 (工程师 B): every step's user-message is wrapped by the
+        # shared prompt assembler so we get (a) the 1500-token cap and
+        # (b) the [source]…[/source] untrusted-input boundary. The
+        # step-specific tail is appended AFTER the budget is computed
+        # so a long instruction can never starve the cap.
+        from ai_engine.prompt import (
+            SourceSnippet,
+            _MAX_INPUT_TOKENS,
+            _SYSTEM_PROMPT_RESEARCH,
+            build_research_prompt,
+        )
+
+        snippet_sources = [
+            SourceSnippet(
+                canonical_key=s.canonical_key,
+                title=s.title,
+                snippet=s.snippet,
+                score=s.score,
+            )
+            for s in job.sources
+        ]
+        # The user-supplied ``context`` field is also untrusted.
+        base = build_research_prompt(
+            topic=job.request.topic,
+            context=job.request.context,
+            sources=snippet_sources,
+            report_type=job.request.report_type,
+        )
         if step == AI_JOB_STEP["PLAN"]:
-            prompt = f"为主题「{job.request.topic}」规划 3-5 段调研大纲。报告类型:{job.request.report_type}。"
+            step_tail = "请规划 3-5 段调研大纲(每段一行,中文,聚焦可验证的子问题)。"
         elif step == AI_JOB_STEP["SEARCH"]:
             # W2 review 修正:删 _default_search_sources 占位(example.test 假来源,
             # 违反"不得编造来源"验收标准)。search 步接 Tavily 真实搜索。
@@ -364,25 +404,32 @@ class ClaudeAdapter(ResearchEngineAdapter):
                         code="AI_ENGINE_UNAVAILABLE",
                         message=f"Tavily search failed: {type(exc).__name__}",
                     ) from exc
-            prompt = f"为「{job.request.topic}」列出 3 个关键子问题。"
+            step_tail = "请列出 3 个关键子问题(用于驱动下游 compress 步骤)。"
         elif step == AI_JOB_STEP["COMPRESS"]:
-            prompt = _summarize_brief_prompt(
-                job.request.topic, job.sources
-            ) if job.request.report_type == "summary_brief" else _summarize_full_prompt(
-                job.request.topic, job.request.context, job.sources
-            )
+            step_tail = "请基于上述 [source] 块,用中文压缩出 4 段以内的提要,保留所有可引用数字与结论。"
         elif step == AI_JOB_STEP["ANALYZE"]:
-            prompt = f"针对「{job.request.topic}」给出 3 条关键洞察。"
+            step_tail = "请基于压缩后的提要,给出 3 条关键洞察;若无来源支撑请显式标注 [推断]。"
         elif step == AI_JOB_STEP["WRITE"]:
-            prompt = f"基于上述步骤, 用一段中文总结「{job.request.topic}」的调研结论。"
+            step_tail = "请基于上述步骤,撰写一份中文调研结论;无来源支撑的结论必须以 [推断] 标记。"
         else:
-            prompt = job.request.topic
+            step_tail = job.request.topic
+
+        # Compose final user message. The cap is enforced by truncating
+        # from the tail of ``step_tail`` (instruction priority > source).
+        cap_for_user = max(0, _MAX_INPUT_TOKENS - len(_SYSTEM_PROMPT_RESEARCH) // 4)
+        # 4 chars / token heuristic — matches chat.py.
+        max_chars = cap_for_user * 4
+        step_tail = step_tail[:max_chars]
+        user_message = base.user + "\n\n## 当前步骤\n" + step_tail
+        if len(user_message) > max_chars:
+            user_message = user_message[:max_chars]
 
         try:
             message = await self._client.messages.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
-                messages=[{"role": "user", "content": prompt}],
+                system=base.system,
+                messages=[{"role": "user", "content": user_message}],
             )
         except AnthropicAPIError:
             raise
