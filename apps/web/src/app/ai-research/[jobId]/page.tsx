@@ -13,6 +13,7 @@ interface AiJobStatus {
   tokenInputTotal: number;
   tokenOutputTotal: number;
   costCents: number;
+  draftResearchId: string | null;
   errorCode: string | null;
   errorMessage: string | null;
 }
@@ -106,9 +107,19 @@ function StatusBody({ s }: { s: AiJobStatus }) {
           每 5 秒自动刷新；任务进入终态（succeeded / failed / cancelled / partial）后停止。
         </p>
       ) : finalStatus === 'succeeded' ? (
-        <p style={{ marginTop: 12, color: '#15803d' }}>
-          调研完成。W3+ 启用「打开私有草稿」入口（W2 仅显示状态，不创建草稿）。
-        </p>
+        <div style={{ marginTop: 12 }}>
+          <p style={{ color: '#15803d' }}>调研完成，私有草稿仅你本人可见。</p>
+          {s.draftResearchId ? (
+            <Link
+              href={`/researches/${s.draftResearchId}/edit`}
+              style={{ display: 'inline-block', padding: '8px 14px', borderRadius: 6, background: '#0f172a', color: '#fff', textDecoration: 'none', fontSize: 14 }}
+            >
+              打开私有草稿
+            </Link>
+          ) : (
+            <p role="alert" style={{ color: '#b45309', fontSize: 13 }}>任务成功但尚未返回草稿，请稍后刷新。</p>
+          )}
+        </div>
       ) : finalStatus === 'partial' ? (
         <p style={{ marginTop: 12, color: '#b45309' }}>
           部分成功（≥3 sources 但流水线某步失败）。未创建草稿。

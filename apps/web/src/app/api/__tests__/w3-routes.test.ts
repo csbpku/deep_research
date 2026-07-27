@@ -151,15 +151,16 @@ describe('research provenance input', () => {
   });
 
   it.each([
-    ['unchanged', 'AI output', false],
-    ['edited', 'Owner edited output', true],
-  ])('publishes %s AI content with expected provenance', async (_label, body, expected) => {
+    ['unchanged', 'AI output', 400, null],
+    ['edited', 'Owner edited output', 200, true],
+  ])('publishes %s AI content with expected provenance', async (_label, body, expectedStatus, expectedAiAssisted) => {
     const now = new Date();
     const origin = createHash('sha256').update('AI output').digest('hex');
     mocks.researchFindUnique.mockResolvedValue({
       id: '22222222-2222-2222-2222-222222222222',
       authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
-      title: 'AI draft', body, creationMethod: 'ai_research', originContentSha256: origin,
+      title: 'AI draft', body, background: null, conclusion: null, risks: null, tags: [],
+      creationMethod: 'ai_research', originContentSha256: origin,
     });
     mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
       id: '22222222-2222-2222-2222-222222222222', type: 'research',
@@ -174,8 +175,13 @@ describe('research provenance input', () => {
       new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
       { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
     );
-    expect(response.status).toBe(200);
-    expect((await response.json()).aiAssisted).toBe(expected);
-    expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(expected);
+    expect(response.status).toBe(expectedStatus);
+    if (expectedAiAssisted === null) {
+      expect(await response.json()).toMatchObject({ code: 'VALIDATION_FAILED' });
+      expect(mocks.researchUpdate).not.toHaveBeenCalled();
+    } else {
+      expect((await response.json()).aiAssisted).toBe(expectedAiAssisted);
+      expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(expectedAiAssisted);
+    }
   });
 });
