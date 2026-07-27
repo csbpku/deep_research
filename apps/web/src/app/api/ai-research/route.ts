@@ -62,6 +62,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     context: body.context ?? null,
     report_type: body.reportType,
     source_policy: body.sourcePolicy,
+    idempotency_key: body.idempotencyKey ?? null,
     source_refs: body.sourceRefs.map((r) => ({
       type: r.type,
       value: r.value,

@@ -18,6 +18,13 @@ interface RadarSeed {
   body: string | null;
 }
 
+interface SourceRefInput {
+  id: string;
+  type: 'url' | 'summary' | 'research';
+  value: string;
+  required: boolean;
+}
+
 const REPORT_TYPES: Array<{ value: 'research_report' | 'summary_brief'; label: string; desc: string }> = [
   {
     value: 'research_report',
@@ -42,6 +49,8 @@ function AiResearchForm() {
   const [err, setErr] = useState<string | null>(null);
   const [seedWarning, setSeedWarning] = useState<string | null>(null);
   const [seededSummaryId, setSeededSummaryId] = useState<string | null>(null);
+  const [sourcePolicy, setSourcePolicy] = useState<'prefer_user_sources' | 'only_user_sources'>('prefer_user_sources');
+  const [sources, setSources] = useState<SourceRefInput[]>([]);
 
   useEffect(() => {
     if (!seedId) return;
@@ -64,6 +73,9 @@ function AiResearchForm() {
         setTopic(seed.title.slice(0, 200));
         setContext(seedContext.slice(0, 2000));
         setSeededSummaryId(seed.id);
+        setSources((current) => current.some((source) => source.type === 'summary' && source.value === seed.id)
+          ? current
+          : [...current, { id: crypto.randomUUID(), type: 'summary', value: seed.id, required: true }]);
       })
       .catch((seedError: unknown) => {
         if (!cancelled) {
@@ -85,11 +97,15 @@ function AiResearchForm() {
       setErr('主题至少 2 个字');
       return;
     }
+    if (sourcePolicy === 'only_user_sources' && !sources.some((source) => source.value.trim())) {
+      setErr('only 模式至少需要一条指定资料');
+      return;
+    }
     setSubmitting(true);
     try {
-      const sourceRefs = seededSummaryId
-        ? [{ type: 'summary' as const, value: seededSummaryId, required: false }]
-        : [];
+      const sourceRefs = sources
+        .filter((source) => source.value.trim())
+        .map((source) => ({ type: source.type, value: source.value.trim(), required: source.required }));
       const r = await fetch('/api/ai-research', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -97,8 +113,9 @@ function AiResearchForm() {
           topic: topic.trim(),
           context: context.trim() || undefined,
           reportType,
-          sourcePolicy: seededSummaryId ? 'only_user_sources' : 'prefer_user_sources',
+          sourcePolicy,
           sourceRefs,
+          idempotencyKey: crypto.randomUUID(),
         }),
       });
       if (!r.ok) {
@@ -166,6 +183,61 @@ function AiResearchForm() {
         </label>
 
         <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
+          <legend style={{ fontSize: 13, color: '#334155', padding: '0 4px' }}>指定资料（最多 10 条）</legend>
+          <p style={{ color: '#64748b', fontSize: 12, marginTop: 0 }}>
+            可添加外部 URL、雷达候选（summary UUID）或已发布沉淀（research UUID）。
+          </p>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {sources.map((source) => (
+              <div key={source.id} style={{ display: 'grid', gridTemplateColumns: '120px 1fr auto auto', gap: 6, alignItems: 'center' }}>
+                <select
+                  aria-label="资料类型"
+                  value={source.type}
+                  disabled={source.type === 'summary' && source.value === seededSummaryId}
+                  onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, type: e.target.value as SourceRefInput['type'], value: '' } : item))}
+                  style={inputStyle}
+                >
+                  <option value="url">指定 URL</option>
+                  <option value="summary">雷达候选</option>
+                  <option value="research">沉淀</option>
+                </select>
+                <input
+                  aria-label="资料地址或 ID"
+                  type="text"
+                  value={source.value}
+                  readOnly={source.type === 'summary' && source.value === seededSummaryId}
+                  placeholder={source.type === 'url' ? 'https://example.com/article' : 'UUID'}
+                  onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, value: e.target.value } : item))}
+                  style={inputStyle}
+                />
+                <label style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <input type="checkbox" checked={source.required} onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, required: e.target.checked } : item))} /> 必须使用
+                </label>
+                <button type="button" onClick={() => setSources((current) => current.filter((item) => item.id !== source.id))} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: '#b91c1c' }}>移除</button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={sources.length >= 10}
+            onClick={() => setSources((current) => [...current, { id: crypto.randomUUID(), type: 'url', value: '', required: false }])}
+            style={{ marginTop: 8, padding: '5px 10px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#fff', cursor: 'pointer' }}
+          >
+            + 添加资料
+          </button>
+        </fieldset>
+
+        <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
+          <legend style={{ fontSize: 13, color: '#334155', padding: '0 4px' }}>资料优先级</legend>
+          <label style={{ display: 'block', fontSize: 13, marginBottom: 6 }}>
+            <input type="radio" name="sourcePolicy" checked={sourcePolicy === 'prefer_user_sources'} onChange={() => setSourcePolicy('prefer_user_sources')} /> 优先使用指定资料，可补充外部搜索（prefer）
+          </label>
+          <label style={{ display: 'block', fontSize: 13 }}>
+            <input type="radio" name="sourcePolicy" checked={sourcePolicy === 'only_user_sources'} onChange={() => setSourcePolicy('only_user_sources')} /> 仅使用指定资料（only）
+          </label>
+        </fieldset>
+
+        <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
           <legend style={{ fontSize: 13, color: '#334155', padding: '0 4px' }}>报告类型</legend>
           {REPORT_TYPES.map((rt) => (
             <label
@@ -195,11 +267,7 @@ function AiResearchForm() {
         </fieldset>
 
         <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>
-          {seededSummaryId ? (
-            <>已绑定雷达候选，使用 <code>only_user_sources</code>。</>
-          ) : (
-            <>source_policy 默认 <code>prefer_user_sources</code>。</>
-          )}
+          当前模式：<code>{sourcePolicy}</code>；已指定 {sources.filter((source) => source.value.trim()).length} 条资料。
         </p>
 
         {err ? (

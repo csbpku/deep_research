@@ -47,7 +47,7 @@ BEGIN
   END IF;
 
   v_title := NEW.title;
-  v_snippet := left(regexp_replace(coalesce(NEW.body, ''), E'<[^>]+>|[*#`>_\-\[\]]+', ' ', 'g'), 1000);
+  v_snippet := left(regexp_replace(coalesce(NEW.body, ''), E'<[^>]+>|[-*#>_\[\]]+|\x60+', ' ', 'g'), 1000);
   v_published_at := NEW.publishedAt;
 
   INSERT INTO search_docs (id, type, refId, title, snippet, publishedAt, indexedAt, doc_tsv)
@@ -113,7 +113,7 @@ BEGIN
   v_snippet := left(
     regexp_replace(
       coalesce(NEW.background, '') || E'\n' || coalesce(NEW.body, ''),
-      E'<[^>]+>|[*#`>_\-\[\]]+', ' ', 'g'
+      E'<[^>]+>|[-*#>_\[\]]+|\x60+', ' ', 'g'
     ),
     1000
   );
@@ -157,7 +157,7 @@ SELECT
   'summary',
   s.id,
   s.title,
-  left(regexp_replace(coalesce(s.body, ''), E'<[^>]+>|[*#`>_\-\[\]]+', ' ', 'g'), 1000),
+  left(regexp_replace(coalesce(s.body, ''), E'<[^>]+>|[-*#>_\[\]]+|\x60+', ' ', 'g'), 1000),
   s."publishedAt",
   now(),
   setweight(to_tsvector('simple', coalesce(s.title, '')), 'A')
@@ -172,7 +172,7 @@ SELECT
   CASE WHEN r.type = 'research' THEN 'long_research'::"SearchDocType" ELSE 'knowledge'::"SearchDocType" END,
   r.id,
   r.title,
-  left(regexp_replace(coalesce(r.background,'') || E'\n' || coalesce(r.body,''), E'<[^>]+>|[*#`>_\-\[\]]+', ' ', 'g'), 1000),
+  left(regexp_replace(coalesce(r.background,'') || E'\n' || coalesce(r.body,''), E'<[^>]+>|[-*#>_\[\]]+|\x60+', ' ', 'g'), 1000),
   r."publishedAt",
   now(),
   setweight(to_tsvector('simple', coalesce(r.title, '')), 'A')

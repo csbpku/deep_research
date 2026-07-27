@@ -26,7 +26,7 @@ interface UpstreamJobOut {
   token_input_total?: number;
   token_output_total?: number;
   cost_cents?: number;
-  search_count?: number;
+  draft_research_id?: string | null;
   error_code?: string | null;
   error_message?: string | null;
   request_id?: string | null;
@@ -106,6 +106,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     tokenInputTotal: up.token_input_total ?? 0,
     tokenOutputTotal: up.token_output_total ?? 0,
     costCents: up.cost_cents ?? 0,
+    draftResearchId: up.draft_research_id ?? null,
     errorCode: up.error_code ?? null,
     errorMessage: up.error_message ?? null,
   });

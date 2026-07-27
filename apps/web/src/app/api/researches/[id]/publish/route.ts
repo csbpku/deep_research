@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { normalizedSha256, legacyBodySha256 } from '../../../../../lib/research-content-hash';
 import { prisma } from '../../../../../lib/db';
 import { apiHandler } from '../../../../../lib/api-handler';
 import { requireUser } from '../../../../../lib/auth/session';
@@ -43,6 +43,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       status: true,
       title: true,
       body: true,
+      background: true,
+      conclusion: true,
+      risks: true,
+      tags: true,
       creationMethod: true,
       originContentSha256: true,
     },
@@ -83,11 +87,27 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
   let aiAssisted = false;
   if (existing.creationMethod === 'ai_research') {
-    const currentSha256 = createHash('sha256').update(existing.body, 'utf8').digest('hex');
-    aiAssisted = Boolean(
-      existing.originContentSha256
-      && currentSha256 !== existing.originContentSha256.trim(),
+    const originSha256 = existing.originContentSha256?.trim();
+    const currentNormalizedSha256 = normalizedSha256({
+      title: existing.title,
+      body: existing.body,
+      background: existing.background,
+      conclusion: existing.conclusion,
+      risks: existing.risks,
+      tags: existing.tags,
+    });
+    const unchanged = Boolean(originSha256) && (
+      currentNormalizedSha256 === originSha256
+      || legacyBodySha256(existing.body) === originSha256
     );
+    if (!originSha256 || unchanged) {
+      return toApiErrorResponse({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'AI 原稿必须由成员实际修改后才能发布',
+        requestId,
+      });
+    }
+    aiAssisted = true;
   }
 
   // $transaction: update status + audit —— 审计失败时正文修改整体回滚

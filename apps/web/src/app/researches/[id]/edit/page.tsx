@@ -145,6 +145,15 @@ export default function EditorPage() {
     }
   }, [saveMutation]);
 
+  const hasAiDraftChanges = Boolean(existing?.creationMethod === 'ai_research' && (
+    title !== existing.title
+    || body !== existing.body
+    || background !== (existing.background ?? '')
+    || conclusion !== (existing.conclusion ?? '')
+    || risks !== (existing.risks ?? '')
+    || tagsInput !== existing.tags.join(', ')
+  ));
+
   // 发布
   const publishMutation = useMutation({
     mutationFn: async () => {
@@ -167,8 +176,11 @@ export default function EditorPage() {
   const handlePublish = useCallback(async () => {
     if (!existing) return;
     setError('');
+    if (existing.creationMethod === 'ai_research' && hasAiDraftChanges) {
+      await saveMutation.mutateAsync();
+    }
     await publishMutation.mutateAsync();
-  }, [existing, publishMutation]);
+  }, [existing, hasAiDraftChanges, publishMutation, saveMutation]);
 
   return (
     <div>
@@ -352,19 +364,19 @@ export default function EditorPage() {
         {existing && existing.status === 'draft' && (
           <button
             onClick={handlePublish}
-            disabled={publishMutation.isPending}
+            disabled={publishMutation.isPending || (existing.creationMethod === 'ai_research' && !hasAiDraftChanges)}
             style={{
               padding: '8px 20px',
               border: 'none',
               borderRadius: 6,
               background: '#0f172a',
               color: '#fff',
-              cursor: publishMutation.isPending ? 'default' : 'pointer',
+              cursor: publishMutation.isPending || (existing.creationMethod === 'ai_research' && !hasAiDraftChanges) ? 'not-allowed' : 'pointer',
               fontSize: 13,
-              opacity: publishMutation.isPending ? 0.6 : 1,
+              opacity: publishMutation.isPending || (existing.creationMethod === 'ai_research' && !hasAiDraftChanges) ? 0.6 : 1,
             }}
           >
-            {publishMutation.isPending ? '发布中...' : '发布'}
+            {existing.creationMethod === 'ai_research' && !hasAiDraftChanges ? '请先实际修改 AI 原稿' : publishMutation.isPending ? '发布中...' : '发布'}
           </button>
         )}
       </div>
