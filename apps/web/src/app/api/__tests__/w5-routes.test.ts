@@ -429,7 +429,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
     });
-    const r = await adminSelect(req as never, { params: { id: SUM_ID } });
+    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
     expect(r.status).toBe(403);
   });
 
@@ -438,7 +438,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 99, selectionReason: 'r' }),
     });
-    const r = await adminSelect(req as never, { params: { id: SUM_ID } });
+    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
     expect(r.status).toBe(400);
   });
 
@@ -448,7 +448,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'reason' }),
     });
-    const r = await adminSelect(req as never, { params: { id: SUM_ID } });
+    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
     expect(r.status).toBe(404);
   });
 
@@ -462,7 +462,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
     });
-    const r = await adminSelect(req as never, { params: { id: SUM_ID } });
+    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
     expect(r.status).toBe(400);
   });
 
@@ -477,7 +477,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
     });
-    const r = await adminSelect(req as never, { params: { id: SUM_ID } });
+    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
     expect(r.status).toBe(400);
   });
 
@@ -492,7 +492,7 @@ describe('POST /api/admin/radar/[id]/select', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'reason here' }),
     });
-    const r = await adminSelect(req as never, { params: { id: SUM_ID } });
+    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
     const body = await r.json();
     expect(r.status).toBe(200);
     expect(body.ok).toBe(true);
@@ -513,7 +513,7 @@ describe('POST /api/admin/radar/[id]/dismiss', () => {
     mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'user', syncRunId: null, status: 'candidate' });
     const r = await adminDismiss(
       new Request('http://localhost/x', { method: 'POST' }) as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     expect(r.status).toBe(404);
   });
@@ -527,7 +527,7 @@ describe('POST /api/admin/radar/[id]/dismiss', () => {
     });
     const r = await adminDismiss(
       new Request('http://localhost/x', { method: 'POST' }) as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     const body = await r.json();
     expect(r.status).toBe(200);
@@ -547,7 +547,7 @@ describe('POST /api/admin/radar/[id]/retry-interpretation', () => {
     mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'user', syncRunId: null, status: 'candidate' });
     const r = await adminRetry(
       new Request('http://localhost/x', { method: 'POST' }) as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     expect(r.status).toBe(404);
   });
@@ -562,7 +562,7 @@ describe('POST /api/admin/radar/[id]/retry-interpretation', () => {
     });
     const r = await adminRetry(
       new Request('http://localhost/x', { method: 'POST' }) as never,
-      { params: { id: SUM_ID } },
+      { params: Promise.resolve({ id: SUM_ID }) },
     );
     const body = await r.json();
     expect(r.status).toBe(200);

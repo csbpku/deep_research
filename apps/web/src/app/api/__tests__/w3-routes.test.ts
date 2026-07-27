@@ -172,7 +172,7 @@ describe('research provenance input', () => {
 
     const response = await publishPost(
       new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
-      { params: { id: '22222222-2222-2222-2222-222222222222' } },
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
     );
     expect(response.status).toBe(200);
     expect((await response.json()).aiAssisted).toBe(expected);

@@ -21,12 +21,12 @@ import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
-export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
+export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   // W5 fix: published 摘要公开可读，与 radar/search API 一致
   const u = await getCurrentUser();
 
   const requestId = withRequestId(req.headers);
-  const parsed = IdParam.safeParse(ctx.params);
+  const parsed = IdParam.safeParse(await ctx.params);
   if (!parsed.success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,

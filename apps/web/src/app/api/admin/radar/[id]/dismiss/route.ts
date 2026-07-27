@@ -20,12 +20,12 @@ import {
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
-export const POST = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
+export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
 
-  const idParsed = RadarIdParam.safeParse(ctx.params);
+  const idParsed = RadarIdParam.safeParse(await ctx.params);
   if (!idParsed.success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,

@@ -15,12 +15,12 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
-export const GET = apiHandler<[NextRequest, { params: { id: string } }]>(async (req, ctx) => {
+export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
   if (u instanceof NextResponse) return u;
 
-  const parsed = IdParam.safeParse(ctx.params);
+  const parsed = IdParam.safeParse(await ctx.params);
   if (!parsed.success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
