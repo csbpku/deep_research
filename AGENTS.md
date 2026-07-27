@@ -32,6 +32,6 @@ Personal technical-research platform: radar discovery, daily summaries, saved re
 
 ## Current State
 
-- As of 2026-07-24, Week 6 is merged on `main`; local uncommitted closeout fixes pass the current automated gates but are not committed.
-- Week 7 end-to-end AI research is next according to `docs/IMPLEMENTATION_PLAN.md`.
+- As of 2026-07-27, Week 7 is complete: 3 real Chinese-topic e2e research runs succeeded, private draft permissions and SHA-256 publish guard verified via real API.
+- Week 8 (basic comments, Admin, deployment and recovery) is next according to `docs/IMPLEMENTATION_PLAN.md`.
 - `infra/docker-compose.yml` is a deployment scaffold, not a verified deployment: referenced Dockerfiles are currently absent.
