@@ -13,8 +13,19 @@ concurrency:
 
 jobs:
   web-unit:
-    name: web (typecheck + unit)
+    name: web (typecheck + unit + build smoke)
     runs-on: ubuntu-latest
+    env:
+      # next build 在收集 page data 时校验 env；用 fake 值满足校验
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/_unused
+      NEXTAUTH_SECRET: ci-build-smoke-fake-secret-not-used-at-build-time
+      NEXTAUTH_URL: http://localhost:3000
+      GOOGLE_CLIENT_ID: ci-build-fake-client-id
+      GOOGLE_CLIENT_SECRET: ci-build-fake-client-secret
+      ALLOWED_EMAIL_DOMAINS: example.com
+      AI_ENGINE_URL: http://localhost:4000
+      TAVILY_API_KEY: tvly-ci-fake-key
+      ANTHROPIC_API_KEY: sk-ant-ci-fake-key
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
