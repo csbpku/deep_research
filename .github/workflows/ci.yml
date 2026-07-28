@@ -28,11 +28,10 @@ jobs:
         run: pnpm -r typecheck
       - name: Web unit tests
         run: pnpm --filter @deep-research/web test
-      - name: Python unit tests (pytest)
-        working-directory: packages/ai-engine
-        run: |
-          uv sync --frozen
-          uv run pytest -q
+      # Python unit + e2e 都跑在 python-e2e job（统一 uv 环境）
+      - name: Web build smoke
+        run: pnpm --filter @deep-research/web build
+        timeout-minutes: 5
       - name: Python ruff
         working-directory: packages/ai-engine
         run: uv run ruff check .
@@ -170,3 +169,17 @@ jobs:
         working-directory: packages/ai-engine
         run: AI_ENGINE_ADAPTER=fake JOB_RUNNER_BACKEND=db uv run pytest -m e2e -v
         timeout-minutes: 8
+
+      - name: Python unit tests
+        working-directory: packages/ai-engine
+        run: uv run pytest -q
+        timeout-minutes: 5
+
+      - name: Python ruff
+        working-directory: packages/ai-engine
+        run: uv run ruff check .
+
+      - name: Python mypy
+        working-directory: packages/ai-engine
+        run: uv run mypy ai_engine tools
+        continue-on-error: true  # W9 收尾
