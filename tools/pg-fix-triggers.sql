@@ -1,5 +1,5 @@
-// Trigger fix SQL — apply to deep_research DB to fix publishedAt column refs.
-// Run: psql -U postgres -d deep_research -f tools/pg-fix-triggers.sql
+-- Trigger fix SQL — apply to deep_research DB to fix publishedAt column refs.
+-- Run: psql -U postgres -d deep_research -f tools/pg-fix-triggers.sql
 
 -- Drop existing triggers and functions
 DROP TRIGGER IF EXISTS sync_search_docs_research ON researches CASCADE;

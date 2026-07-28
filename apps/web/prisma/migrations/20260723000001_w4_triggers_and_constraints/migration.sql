@@ -34,23 +34,23 @@ DECLARE
   v_published_at timestamptz;
   v_should_index boolean;
 BEGIN
-  v_should_index := (NEW.status = 'published' AND NEW.publishedAt IS NOT NULL);
+  v_should_index := (NEW.status = 'published' AND NEW."publishedAt" IS NOT NULL);
 
   IF TG_OP = 'DELETE' THEN
-    DELETE FROM search_docs WHERE type = 'summary' AND refId = OLD.id;
+    DELETE FROM search_docs WHERE type = 'summary' AND "refId" = OLD.id;
     RETURN OLD;
   END IF;
 
   IF NOT v_should_index THEN
-    DELETE FROM search_docs WHERE type = 'summary' AND refId = NEW.id;
+    DELETE FROM search_docs WHERE type = 'summary' AND "refId" = NEW.id;
     RETURN NEW;
   END IF;
 
   v_title := NEW.title;
   v_snippet := left(regexp_replace(coalesce(NEW.body, ''), E'<[^>]+>|[-*#>_\[\]]+|\x60+', ' ', 'g'), 1000);
-  v_published_at := NEW.publishedAt;
+  v_published_at := NEW."publishedAt";
 
-  INSERT INTO search_docs (id, type, refId, title, snippet, publishedAt, indexedAt, doc_tsv)
+  INSERT INTO search_docs (id, type, "refId", title, snippet, "publishedAt", "indexedAt", doc_tsv)
   VALUES (
     gen_random_uuid(),
     'summary',
@@ -62,11 +62,11 @@ BEGIN
     setweight(to_tsvector('simple', coalesce(v_title, '')), 'A')
       || setweight(to_tsvector('simple', coalesce(v_snippet, '')), 'B')
   )
-  ON CONFLICT (type, refId) DO UPDATE SET
+  ON CONFLICT (type, "refId") DO UPDATE SET
     title = EXCLUDED.title,
     snippet = EXCLUDED.snippet,
-    publishedAt = EXCLUDED.publishedAt,
-    indexedAt = now(),
+    "publishedAt" = EXCLUDED."publishedAt",
+    "indexedAt" = now(),
     doc_tsv = EXCLUDED.doc_tsv;
 
   RETURN NEW;
@@ -85,11 +85,11 @@ DECLARE
   v_doc_type "SearchDocType";
   v_should_index boolean;
 BEGIN
-  v_should_index := (NEW.status = 'published' AND NEW.publishedAt IS NOT NULL);
+  v_should_index := (NEW.status = 'published' AND NEW."publishedAt" IS NOT NULL);
 
   IF TG_OP = 'DELETE' THEN
     DELETE FROM search_docs
-      WHERE refId = OLD.id
+      WHERE "refId" = OLD.id
         AND ((OLD.type = 'research' AND type = 'long_research')
           OR (OLD.type = 'knowledge' AND type = 'knowledge'));
     RETURN OLD;
@@ -97,7 +97,7 @@ BEGIN
 
   IF NOT v_should_index THEN
     DELETE FROM search_docs
-      WHERE refId = NEW.id
+      WHERE "refId" = NEW.id
         AND ((NEW.type = 'research' AND type = 'long_research')
           OR (NEW.type = 'knowledge' AND type = 'knowledge'));
     RETURN NEW;
@@ -117,9 +117,9 @@ BEGIN
     ),
     1000
   );
-  v_published_at := NEW.publishedAt;
+  v_published_at := NEW."publishedAt";
 
-  INSERT INTO search_docs (id, type, refId, title, snippet, publishedAt, indexedAt, doc_tsv)
+  INSERT INTO search_docs (id, type, "refId", title, snippet, "publishedAt", "indexedAt", doc_tsv)
   VALUES (
     gen_random_uuid(),
     v_doc_type,
@@ -131,11 +131,11 @@ BEGIN
     setweight(to_tsvector('simple', coalesce(v_title, '')), 'A')
       || setweight(to_tsvector('simple', coalesce(v_snippet, '')), 'B')
   )
-  ON CONFLICT (type, refId) DO UPDATE SET
+  ON CONFLICT (type, "refId") DO UPDATE SET
     title = EXCLUDED.title,
     snippet = EXCLUDED.snippet,
-    publishedAt = EXCLUDED.publishedAt,
-    indexedAt = now(),
+    "publishedAt" = EXCLUDED."publishedAt",
+    "indexedAt" = now(),
     doc_tsv = EXCLUDED.doc_tsv;
 
   RETURN NEW;
