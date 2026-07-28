@@ -181,7 +181,7 @@ jobs:
 
       - name: Python E2E (real PG + fake adapter)
         working-directory: packages/ai-engine
-        run: E2E=1 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/deep_research_test_py AI_ENGINE_ADAPTER=fake JOB_RUNNER_BACKEND=db uv run pytest -m e2e -v
+        run: E2E=1 uv run pytest -m e2e -v
         timeout-minutes: 8
 
       - name: Python unit tests

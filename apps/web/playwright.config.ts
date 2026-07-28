@@ -15,8 +15,8 @@ const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
 
 export default defineConfig({
   testDir: './e2e',
-  // 显式限制匹配：只跑 .spec.ts（避免扫到 vitest 的 .test.ts）
-  testMatch: /.*\.spec\.ts/,
+  // 匹配 testDir 下的 .spec.ts 文件（避免扫到 src/** 的 vitest .test.ts）
+  testMatch: '**/*.spec.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
