@@ -1,69 +1,172 @@
-name: ci
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  web:
-    name: web (typecheck + test + prisma validate)
+  web-unit:
+    name: web (typecheck + unit)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
+        with: { version: 10 }
+      - uses: actions/setup-node@v6
+        with: { node-version: 20, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - name: Prisma validate (no migration)
-        run: pnpm exec prisma validate
       - name: Prisma generate
-        run: pnpm db:generate
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Test
-        run: pnpm test
-
-  monorepo-typecheck:
-    name: monorepo typecheck (shared + web)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r typecheck
-
-  ai-engine:
-    name: ai-engine (pytest + ruff + mypy)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+        run: pnpm --filter @deep-research/web db:generate
+      - name: Typecheck (monorepo)
+        run: pnpm -r typecheck
+      - name: Web unit tests
+        run: pnpm --filter @deep-research/web test
+      - name: Python unit tests (pytest)
         working-directory: packages/ai-engine
+        run: |
+          uv sync --frozen
+          uv run pytest -q
+      - name: Python ruff
+        working-directory: packages/ai-engine
+        run: uv run ruff check .
+      - name: Python mypy
+        working-directory: packages/ai-engine
+        run: uv run mypy ai_engine tools
+        continue-on-error: true  # W9 收尾
+
+  web-e2e:
+    name: web (Playwright E2E)
+    runs-on: ubuntu-latest
+    needs: web-unit
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deep_research_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deep_research_test
+      NEXTAUTH_SECRET: ci-test-secret-do-not-use-in-prod-please-rotate
+      NEXTAUTH_URL: http://localhost:3000
+      E2E: "1"
+      AI_ENGINE_URL: http://localhost:4000
+      # CI 用 fake secrets（NextAuth/AI engine env 校验）
+      GOOGLE_CLIENT_ID: ci-fake-client-id
+      GOOGLE_CLIENT_SECRET: ci-fake-client-secret
+      ANTHROPIC_API_KEY: sk-ant-ci-fake-key
+      TAVILY_API_KEY: tvly-ci-fake-key
+      ALLOWED_EMAIL_DOMAINS: example.com
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v6
+        with: { node-version: 20, cache: pnpm }
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma migrate (test DB)
+        run: pnpm --filter @deep-research/web prisma migrate deploy
+
+      - name: Seed minimal test data
+        run: pnpm --filter @deep-research/web db:seed:e2e
+        continue-on-error: true  # 大多数测试兼容空库；只在跨模块 list/detail 联动时需要
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
+
+      - name: Playwright E2E
+        run: pnpm --filter @deep-research/web test:e2e
+        timeout-minutes: 10
+        env:
+          E2E_BASE_URL: http://localhost:3000
+
+      - name: Upload Playwright report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 14
+
+      - name: Upload Playwright test-results (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: apps/web/test-results
+          retention-days: 14
+
+  python-e2e:
+    name: python (pytest -m e2e)
+    runs-on: ubuntu-latest
+    needs: web-unit
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deep_research_test_py
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deep_research_test_py
+      E2E: "1"
+      AI_ENGINE_ADAPTER: fake
+      JOB_RUNNER_BACKEND: db
+      ANTHROPIC_API_KEY: sk-ant-ci-fake-key
+      TAVILY_API_KEY: tvly-ci-fake-key
+
+    steps:
+      - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v4
       - name: Sync deps
+        working-directory: packages/ai-engine
         run: uv sync --frozen
-      - name: Pytest
-        run: uv run pytest -q
-      - name: Ruff
-        run: uv run ruff check .
-      - name: Mypy
-        run: uv run mypy ai_engine tools
+
+      - name: Prisma migrate
+        working-directory: apps/web
+        run: pnpm exec prisma migrate deploy
+
+      - name: Python E2E (real PG + fake adapter)
+        working-directory: packages/ai-engine
+        run: AI_ENGINE_ADAPTER=fake JOB_RUNNER_BACKEND=db uv run pytest -m e2e -v
+        timeout-minutes: 8

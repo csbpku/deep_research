@@ -2,21 +2,26 @@
 
 > 个人深度研究/技术调研平台。架构基线：`docs/ARCHITECTURE.md` v3.6。
 > 实施计划：`docs/IMPLEMENTATION_PLAN.md` v1.3（9 周开发 + 4 周试用）。
+> **当前状态入口**：[`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)
 
-## 当前状态（2026-07-24）
+[![CI](https://github.com/OWNER/deep-research/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/deep-research/actions/workflows/ci.yml)
 
-- Week 6 已合入 `main`：技术雷达、每日摘要、沉淀/导入、分享、搜索、AI 任务、幂等与配额、摘要上下文 AI 讨论均已有代码与测试覆盖。
-- Week 6 收尾已提交（commit 1a0253d）：AI 讨论抽屉、雷达种子调研预填、Next.js 15 异步路由修复和文档同步。自动化门禁全绿。
-- Week 1-6 遗留验收项（真实 API walkthrough、Claude fallback 切换演练、W5 真手工验收、W1 S3 残留确认）统一归入 Week 7 周初完成，详见 `docs/IMPLEMENTATION_PLAN.md` §九。
-- Week 7 已完成：3 个真实中文主题端到端调研全部 succeeded，私有草稿权限和 SHA-256 发布校验通过真实 API 验证。下一阶段是 Week 8（基础评论、Admin、部署与恢复）。
-- `infra/docker-compose.yml` 仍是部署脚手架；引用的 Dockerfile 尚未入库，尚未完成 Week 8 部署验收。
+> **CI 状态**：跑测试 + E2E（[配置说明](./docs/E2E_TESTING.md)）。把 `OWNER` 替换成你的 GitHub 用户名。
+
+## 当前状态（2026-07-28）
+
+- Week 7 已完成（AI engine 切到 `gpt-researcher`，ADR 0004 复评通过；3 个真实中文主题端到端调研 succeeded）。
+- Week 8 已完成（M4 审核闭环：评论 + 点赞 + 删除、Admin 评论提名 promote/dismiss、Admin 分享 approve/reject、Admin Dashboard、部署脚手架 docker-compose + nginx + Dockerfiles + pg-backup/restore + import-tmp-cleanup + Web healthz）。typecheck + 234 web 单测 + 193 Python 单测 + ruff + mypy + 生产构建全绿；现场修复 `conftest.py` 让本地 `.env` 不再污染 pytest。详见 `docs/weekly/week8-delivery.md`。
+- **测试指标（2026-07-28 实测）**：Web 单测 303 ✅、Web E2E 21 passed/2 skipped ✅、Python 单测 193 ✅、Python E2E 11 passed/2 skipped ✅。CI 配置（GitHub Actions）于 Week 9 一起配。
+- 下一阶段 Week 9（§十一 M5 试用就绪）：冻结 P0 scope，全量回归 + 权限矩阵 + 10 AI 样本 + 20 导入样本 + 备份恢复演练 + 月成本外推 ≤ $200 + 4 决策指标基线快照 + 试用名单与说明。
+- `infra/docker-compose.yml` + Dockerfiles + 备份恢复脚本是部署脚手架；live `docker compose build` + 真实备份恢复演练显式归入 Week 9 验收门（`infra/README.md` 已自标记）。
 
 ## 仓库布局（monorepo）
 
 | 路径 | 角色 | 谁拥有 |
 |---|---|---|
 | `apps/web/` | Next.js 15（App Router）Web 应用 + BFF + Prisma | **工程师 A：Web / 产品流** 独占 |
-| `packages/ai-engine/` | Claude/fake adapter、异步任务、雷达抓取与后台 worker | **工程师 B：AI / 平台** 独占 |
+| `packages/ai-engine/` | gpt-researcher/fake adapter、异步任务、雷达抓取与后台 worker | **工程师 B：AI / 平台** 独占 |
 | `packages/shared/` | 类型（Zod schema）、常量（错误码、状态枚举）、OpenAPI 类型 | **只读，双方都不写**，由主会话变更（PR 标 `[shared]`） |
 | `infra/` | docker-compose、nginx、日志卷、备份脚本、健康检查 | **工程师 B** 主维护，**工程师 A** 在 PR 中 review 端口/域名 |
 | `apps/web/prisma/` | `schema.prisma` / migrations / smoke test | **共享契约之一**，工程师 A/B **不直接改**；仅主会话迁移，变更走 ADR + review |
@@ -73,7 +78,7 @@ pnpm test
 - 改 `packages/ai-engine/`
 - 改 `infra/` 下的部署产物和 nginx 配置
 - 改 `apps/web/prisma/`（除非走 ADR 并由主会话实施）
-- 直接调用 OpenAI / Anthropic SDK（必须经过 `packages/ai-engine` 的 adapter）
+- 直接调用 LLM SDK（必须经过 `packages/ai-engine` 的 adapter）
 - 跳过权限 helper 写"前端先显隐、服务端不校验"的逻辑
 
 ### 工程师 B：AI / 平台
