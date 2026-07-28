@@ -1,0 +1,49 @@
+// Playwright E2E 配置 —— Week 9+ 补测。
+//
+// 覆盖：
+//   - 公共：登录跳转、Admin 权限拦截
+//   - 雷达/摘要/沉淀/AI 调研/Admin 各模块关键流程
+//   - 跨模块关键路径
+//
+// 状态：
+//   - 本地可跑：pnpm test:e2e（需要先 build + 起 web + 真实 DB + 真实 AI engine）
+//   - CI 集成：Week 11 之后接入（暂未实现；详见 docs/E2E_TESTING.md）
+
+import { defineConfig, devices } from '@playwright/test';
+
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+
+export default defineConfig({
+  testDir: './e2e',
+  // 显式限制匹配：只跑 .spec.ts（避免扫到 vitest 的 .test.ts）
+  testMatch: /.*\.spec\.ts/,
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 2 : undefined,
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+
+  // 串行启动 web（ai-engine 由 dev:ai 单独起；详见 docs/E2E_TESTING.md）
+  webServer: {
+    command: 'E2E=1 pnpm dev',
+    url: BASE_URL,
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  },
+
+  use: {
+    baseURL: BASE_URL,
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+  },
+
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+});
