@@ -90,6 +90,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prisma generate (web-e2e needs it before next dev)
+        run: pnpm --filter @deep-research/web db:generate
+
       - name: Prisma migrate (test DB)
         run: pnpm --filter @deep-research/web prisma migrate deploy
 
