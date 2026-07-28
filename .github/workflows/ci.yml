@@ -77,6 +77,8 @@ jobs:
       ANTHROPIC_API_KEY: sk-ant-ci-fake-key
       TAVILY_API_KEY: tvly-ci-fake-key
       ALLOWED_EMAIL_DOMAINS: example.com
+      # 阻止 dev server 启动时尝试拉取 telemetry / 远程字体
+      NEXT_TELEMETRY_DISABLED: "1"
 
     steps:
       - uses: actions/checkout@v6
