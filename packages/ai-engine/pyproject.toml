@@ -12,9 +12,22 @@ dependencies = [
     "tenacity>=9.0.0",
     "structlog>=24.4.0",
     "arxiv-mcp-server>=0.1.0; platform_system != 'Windows'",
-    # Week 2 spike 后固化(ADR 0004 #5):Claude pipeline adapter 走 Anthropic SDK。
-    # 本地/开发通过 ANTHROPIC_BASE_URL 接 cc-switch,生产由 KMS 注入真 key。
-    "anthropic>=0.40",
+    # ADR 0004 复评 (2026-07-27): 主引擎切换为 gpt-researcher (0.15.x)。
+    # litellm 锁定 <1.90 避免 Rust 编译 (maturin/cargo)。
+    # langchain-anthropic 让 gpt-researcher 支持 Anthropic LLM provider。
+    "gpt-researcher>=0.15.0",
+    "litellm<1.90",
+    "langchain-anthropic>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langchain-community>=0.3.0",
+    "faiss-cpu>=1.8.0",
+    "tiktoken>=0.7.0",
+    "json-repair>=0.30.0",
+    "beautifulsoup4>=4.12.0",
+    "markdown2>=2.5.0",
+    "pymupdf>=1.24.0",
+    "colorama>=0.4.6",
+    "markdown>=3.7",
 ]
 
 [dependency-groups]
@@ -41,6 +54,10 @@ strict = true
 python_version = "3.11"
 
 [tool.pytest.ini_options]
+# 限定 pytest 从 tests/ 收集。避免 scripts/ 下的工具脚本（如
+# test_sources_no_llm.py，DB 探测脚本）被误识别为 test_*，否则在 CI
+# collection 阶段会卡 psycopg pool timeout 30s。
+testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 # Week 1 review 修正:submit 改 fire-and-forget 后台 task,需要 async 测试
@@ -48,4 +65,8 @@ asyncio_mode = "auto"
 # 默认当 async 处理。
 markers = [
     "requires_db: tests that hit a real Postgres — skip if DATABASE_URL is unreachable.",
+    "e2e: end-to-end tests that need a real Postgres + real workers. Run with `pytest -m e2e` (and E2E=1).",
 ]
+# 默认排除 e2e 标记。需要 `pytest -m e2e` 才跑。显式 -m e2e 会覆盖 addopts。
+# 注意：addopts 仅在用户没显式提供 -m 时生效。
+# noqa: 用 pytest 的默认 addopts 模式，通过 marker 控制。

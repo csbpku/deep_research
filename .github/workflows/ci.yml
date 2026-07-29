@@ -186,7 +186,10 @@ jobs:
 
       - name: Python unit tests
         working-directory: packages/ai-engine
-        run: E2E=0 uv run pytest -q
+        # 排除 e2e（CI 上一条 step 单独跑）和 requires_db（需要专用 test DB，本 step
+        # 复用 deep_research_test_py 跑 e2e 后已 truncate，跑 requires_db 会踩到别的状态；
+        # 真要跑 requires_db 在本地 `uv run pytest -m requires_db`）。
+        run: E2E=0 uv run pytest -q -m "not e2e and not requires_db"
         timeout-minutes: 5
 
       - name: Python ruff
