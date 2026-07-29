@@ -235,6 +235,7 @@ async def fetch_arxiv(
                 "snippet": summary[:500],
                 "content_origin": "api",
                 "source": "daily",
+                "authors": entry.get("authors", []),
                 "published_at": published if published else _now_iso(),
                 "tags": ["ai", "research", "arxiv"],
             })
@@ -283,14 +284,14 @@ def _parse_rss_xml_simple(text: str) -> list[dict[str, str]]:
     return items
 
 
-def _parse_arxiv_atom_simple(text: str) -> list[dict[str, str]]:
-    """Parse Arxiv Atom XML and extract <entry> elements."""
-    entries: list[dict[str, str]] = []
+def _parse_arxiv_atom_simple(text: str) -> list[dict[str, Any]]:
+    """Parse Arxiv Atom XML and extract <entry> elements, including authors."""
+    entries: list[dict[str, Any]] = []
 
     entry_pattern = _re.compile(r"<entry>(.*?)</entry>", _re.DOTALL)
     for match in entry_pattern.finditer(text):
         block = match.group(1)
-        entry: dict[str, str] = {}
+        entry: dict[str, Any] = {}
 
         for field in ("title", "id", "summary", "published"):
             field_pattern = _re.compile(
@@ -300,9 +301,24 @@ def _parse_arxiv_atom_simple(text: str) -> list[dict[str, str]]:
             if fm:
                 value = fm.group(1).strip()
                 value = _html.unescape(value)
-                # Arxiv titles often have extra whitespace
                 value = _re.sub(r"\s+", " ", value)
                 entry[field] = value
+
+        # Parse authors with affiliations
+        authors: list[dict[str, str]] = []
+        author_pattern = _re.compile(r"<author>(.*?)</author>", _re.DOTALL)
+        for auth_match in author_pattern.finditer(block):
+            auth_block = auth_match.group(1)
+            name_m = _re.search(r"<name>(.*?)</name>", auth_block)
+            affil_m = _re.search(r"<arxiv:affiliation[^>]*>(.*?)</arxiv:affiliation>", auth_block)
+            if name_m:
+                author_name = _html.unescape(name_m.group(1).strip())
+                author_entry: dict[str, str] = {"name": author_name}
+                if affil_m:
+                    author_entry["affiliation"] = _html.unescape(affil_m.group(1).strip())
+                authors.append(author_entry)
+        if authors:
+            entry["authors"] = authors
 
         if entry:
             entries.append(entry)

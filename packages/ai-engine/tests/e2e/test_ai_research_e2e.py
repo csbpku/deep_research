@@ -24,7 +24,6 @@ import uuid
 import psycopg
 import pytest
 
-from ai_engine.contracts.states import AiJobStep
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
