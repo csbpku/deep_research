@@ -31,5 +31,7 @@ os.environ.setdefault(
     "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/deep_research"
 )
 # Default in-memory backend for unit tests; DB tests opt in via marker.
-os.environ.setdefault("JOB_RUNNER_BACKEND", "memory")
-os.environ.setdefault("AI_ENGINE_ADAPTER", "fake")
+# Force-override: a local `.env` may set JOB_RUNNER_BACKEND=db for runtime;
+# setdefault would silently flip the unit suite onto DbJobStore.
+os.environ["JOB_RUNNER_BACKEND"] = "memory"
+os.environ["AI_ENGINE_ADAPTER"] = "fake"  # tests always use fake adapter

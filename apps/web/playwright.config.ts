@@ -17,6 +17,10 @@ export default defineConfig({
   testDir: './e2e',
   // 匹配 testDir 下的 .spec.ts 文件（避免扫到 src/** 的 vitest .test.ts）
   testMatch: '**/*.spec.ts',
+  // 预热所有 E2E 用到的 route：next dev 懒编译 + 多 worker 并行
+  // 首次请求未编译 route 时偶发 500。globalSetup 触发一次编译，
+  // 让所有 spec 拿到的是已就绪的 endpoint。
+  globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
