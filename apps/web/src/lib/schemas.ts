@@ -120,6 +120,14 @@ export type RadarListQuery = z.infer<typeof RadarListQuery>;
 export const RadarIdParam = z.object({ id: z.string().uuid() });
 export type RadarIdParam = z.infer<typeof RadarIdParam>;
 
+/** /api/summaries/[id] 路径参数 */
+export const SummaryIdParam = z.object({ id: z.string().uuid() });
+export type SummaryIdParam = z.infer<typeof SummaryIdParam>;
+
+/** /api/researches/[id] 路径参数 */
+export const ResearchIdParam = z.object({ id: z.string().uuid() });
+export type ResearchIdParam = z.infer<typeof ResearchIdParam>;
+
 /** POST /api/radar-feedback 提交反馈 */
 export const CreateRadarFeedbackInput = z.object({
   summaryId: z.string().uuid(),
@@ -153,3 +161,77 @@ export const AdminRadarSelectInput = z.object({
   selectionReason: z.string().trim().min(2).max(500),
 });
 export type AdminRadarSelectInput = z.infer<typeof AdminRadarSelectInput>;
+
+// ──────────────────────────────────────────────────────────────────────
+// Week 8 评论 (Comments)
+// ──────────────────────────────────────────────────────────────────────
+
+/** 评论目标类型：summary / research，恰好一个非空（由 schema CHECK 保证） */
+export const COMMENT_TARGET_VALUES = ['summary', 'research'] as const;
+
+/** POST /api/summaries/[date]/comments 或 /api/researches/[id]/comments */
+export const CreateCommentInput = z.object({
+  body: z.string().trim().min(1).max(2000),
+  parentId: z.string().uuid().optional(),
+});
+export type CreateCommentInput = z.infer<typeof CreateCommentInput>;
+
+/** 评论列表查询 */
+export const CommentListQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(50).default(20),
+  sort: z.enum(['newest', 'oldest']).default('newest'),
+});
+export type CommentListQuery = z.infer<typeof CommentListQuery>;
+
+/** 评论 ID 路径参数 */
+export const CommentIdParam = z.object({ id: z.string().uuid() });
+export type CommentIdParam = z.infer<typeof CommentIdParam>;
+
+/** POST /api/admin/comments/[id]/promote —— Admin 从评论提炼成精华 */
+export const AdminCommentPromoteInput = z.object({
+  /** 提炼后的精华标题 */
+  title: z.string().trim().min(2).max(300),
+  /** 提炼后的精华正文 */
+  body: z.string().trim().min(1).max(50000),
+  /** 可选覆盖结论 */
+  conclusion: z.string().trim().max(2000).optional(),
+  /** 可选标签 */
+  tags: z.array(z.string().min(1).max(40)).max(10).default([]),
+});
+export type AdminCommentPromoteInput = z.infer<typeof AdminCommentPromoteInput>;
+
+/** POST /api/admin/comments/[id]/dismiss —— Admin 拒绝评论提名 */
+export const AdminCommentDismissInput = z.object({
+  reason: z.string().trim().min(2).max(500),
+});
+export type AdminCommentDismissInput = z.infer<typeof AdminCommentDismissInput>;
+
+/** GET /api/admin/shares —— 分享审核列表 */
+export const AdminShareListQuery = z.object({
+  status: z.enum(['pending', 'approved', 'rejected']).default('pending'),
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type AdminShareListQuery = z.infer<typeof AdminShareListQuery>;
+
+/** POST /api/admin/shares/[id]/review —— 批准/拒绝分享 */
+export const AdminShareReviewInput = z
+  .object({
+    action: z.enum(['approve', 'reject']),
+    reason: z.string().trim().min(2).max(500).optional(),
+  })
+  .strict();
+export type AdminShareReviewInput = z.infer<typeof AdminShareReviewInput>;
+
+/** GET /api/admin/comments —— 评论提名列表 */
+export const AdminCommentListQuery = z.object({
+  status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
+  page: z.coerce.number().int().min(1).default(1),
+  per_page: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type AdminCommentListQuery = z.infer<typeof AdminCommentListQuery>;
+
+/** GET /api/admin/dashboard —— Admin 首页统计 */
+export const AdminDashboardQuery = z.object({});
+export type AdminDashboardQuery = z.infer<typeof AdminDashboardQuery>;

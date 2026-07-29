@@ -8,17 +8,56 @@
 //   - signIn callback 做邮箱 allowlist + disabledAt 双重校验，未通过直接 false，
 //     NextAuth 会跳到 ?error=AccessDenied 页面。
 //
+// E2E 模式（process.env.E2E === '1'）：额外启用 Credentials provider
+//   允许用 email 直登，方便 Playwright 注入 session。
+//
 // 注意：env 解析在 lib/env.ts 完成；本文件只引用 getWebEnv()。
 
 import NextAuth, { type NextAuthConfig } from 'next-auth';
 import Google from 'next-auth/providers/google';
+import Credentials from 'next-auth/providers/credentials';
 import { getWebEnv } from '../env';
 import { prisma } from '../db';
 import { canEstablishSession, isEmailAllowed } from './allowlist';
 import { log } from '../log';
 
+const isE2E = process.env.E2E === '1';
+
 export const authConfig: NextAuthConfig = {
   providers: [
+    ...(isE2E
+      ? [
+          Credentials({
+            id: 'e2e-credentials',
+            name: 'E2E Test Login',
+            credentials: {
+              email: { label: 'Email', type: 'email' },
+              role: { label: 'Role', type: 'text' },
+            },
+            async authorize(credentials) {
+              const email = (credentials?.email as string | undefined)?.toLowerCase();
+              const role = (credentials?.role as 'member' | 'admin' | undefined) ?? 'member';
+              if (!email) return null;
+              const env = getWebEnv();
+              if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
+              const u = await prisma.user.upsert({
+                where: { email },
+                create: { email, name: email.split('@')[0], role },
+                update: { name: email.split('@')[0], role },
+              });
+              if (!canEstablishSession(u)) return null;
+              return {
+                id: u.id,
+                email: u.email,
+                name: u.name,
+                role: u.role,
+                image: u.avatarUrl,
+                disabledAt: u.disabledAt,
+              };
+            },
+          }),
+        ]
+      : []),
     Google({
       clientId: getWebEnv().GOOGLE_CLIENT_ID,
       clientSecret: getWebEnv().GOOGLE_CLIENT_SECRET,

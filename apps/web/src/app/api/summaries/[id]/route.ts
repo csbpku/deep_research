@@ -74,6 +74,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     publishedAt: summary.publishedAt ? summary.publishedAt.toISOString() : null,
     crawledAt: summary.createdAt.toISOString(),
     source: summary.source,
+    interpretation: summary.interpretation,
     sharedBy: summary.sharedBy
       ? {
           id: summary.sharedBy.id,
