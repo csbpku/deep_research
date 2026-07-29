@@ -94,7 +94,10 @@ jobs:
         run: pnpm --filter @deep-research/web db:generate
 
       - name: Prisma migrate (test DB)
-        run: pnpm --filter @deep-research/web prisma migrate deploy
+        # 用 `exec` 显式说明是执行命令（不要把 `prisma` 当 script 名）。
+        # 没有 `exec` 时 pnpm 找不到名为 "prisma" 的 script，会以 exit 0 静默退出，
+        # 导致 schema 永远没 migrate，dev server 一查表就 500。
+        run: pnpm --filter @deep-research/web exec prisma migrate deploy
 
       - name: Seed minimal test data
         run: pnpm --filter @deep-research/web db:seed:e2e
