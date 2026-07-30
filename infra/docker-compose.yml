@@ -47,6 +47,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 400M
 
   web:
     build:
@@ -71,8 +75,12 @@ services:
     volumes:
       - import-tmp:/data/import-tmp       # P0 文件导入隔离
       - ./logs/web:/var/log/web           # 结构化访问日志
-      - ./infra/import-tmp-cleanup.sh:/usr/local/bin/import-tmp-cleanup.sh:ro
+      - ./import-tmp-cleanup.sh:/usr/local/bin/import-tmp-cleanup.sh:ro
     # HEALTHCHECK 已写在 Dockerfile 内
+    deploy:
+      resources:
+        limits:
+          memory: 400M
 
   ai-engine:
     build:

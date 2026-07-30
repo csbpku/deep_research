@@ -6,7 +6,7 @@
 #   docker run --rm -p 3000:3000 --env-file apps/web/.env deep-research-web
 
 # ──────────────────────────── Stage 1: deps ────────────────────────────
-FROM node:20-alpine AS deps
+FROM --platform=linux/amd64 node:20-alpine AS deps
 RUN apk add --no-cache openssl
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 WORKDIR /repo
@@ -42,7 +42,7 @@ ENV ALLOWED_EMAIL_DOMAINS=example.com
 RUN cd apps/web && pnpm build
 
 # ──────────────────────────── Stage 3: runner ──────────────────────────
-FROM node:20-alpine AS runner
+FROM --platform=linux/amd64 node:20-alpine AS runner
 RUN apk add --no-cache openssl
 WORKDIR /repo
 

@@ -6,7 +6,7 @@
 #   docker run --rm -p 4000:4000 --env-file packages/ai-engine/.env deep-research-ai
 
 # ──────────────────────────── Stage 1: deps ────────────────────────────
-FROM python:3.11-slim AS deps
+FROM --platform=linux/amd64 python:3.11-slim AS deps
 WORKDIR /app
 
 RUN pip install --no-cache-dir uv==0.5.20
@@ -20,7 +20,7 @@ WORKDIR /app/packages/ai-engine
 RUN uv sync --no-dev --no-install-project
 
 # ──────────────────────────── Stage 2: runtime ──────────────────────────
-FROM python:3.11-slim AS runtime
+FROM --platform=linux/amd64 python:3.11-slim AS runtime
 WORKDIR /app
 
 COPY --from=deps /app/packages/ai-engine/.venv /app/.venv

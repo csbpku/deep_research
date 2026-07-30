@@ -10,7 +10,11 @@ from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.source_manager import fetch_source as dispatch_source
-from ai_engine.radar.sync_runner import run_radar_sync
+from ai_engine.radar.sync_runner import (
+    _NAV_NOISE_PATTERNS,
+    _clean_content,
+    run_radar_sync,
+)
 
 
 class _Cursor:
@@ -266,3 +270,62 @@ async def test_arxiv_source_failure_surfaces_typed_root_cause() -> None:
     assert result.runs[0].error_code == "WORKER_TIMEOUT", (
         f"expected WORKER_TIMEOUT, got {result.runs[0].error_code!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Week 9 收尾：_clean_content 单元测试
+# 行为契约：
+#   - 空串 / 短串 → ""
+#   - 移除 _NAV_NOISE_PATTERNS 中的所有片段（多次出现也全删）
+#   - 多余空白折叠为单空格
+#   - 清洗后仍短于 min_len → ""（用 default_score 兜底）
+# ---------------------------------------------------------------------------
+
+
+def test_clean_content_strips_all_navigation_patterns() -> None:
+    body = (
+        "Skip to main content Skip to content Log in Sign in Try ChatGPT "
+        "Try ChatGPT (opens in a new window) Navigation menu Search "
+        "Create account Close Add reaction Like Unicorn Jump to Comments "
+        "Powered by Algolia Back to Articles "
+    )
+    # 200+ 字符纯噪音应被完全清空（移除后 < min_len=200）
+    assert _clean_content(body) == ""
+
+
+def test_clean_content_keeps_substantive_text() -> None:
+    body = (
+        "Skip to main content Log in "
+        "A new study on hierarchical planning in LLM agents. " * 5
+    )
+    cleaned = _clean_content(body)
+    assert "Skip to main content" not in cleaned
+    assert "Log in" not in cleaned
+    assert "hierarchical planning" in cleaned
+    assert len(cleaned) >= 200
+
+
+def test_clean_content_returns_empty_for_short_input() -> None:
+    assert _clean_content("") == ""
+    assert _clean_content("short") == ""
+    assert _clean_content("a" * 199) == ""
+
+
+def test_clean_content_collapses_whitespace() -> None:
+    body = "A " + ("\n\n\t " * 30) + ("study on retrieval-augmented generation. " * 6)
+    cleaned = _clean_content(body)
+    assert "  " not in cleaned
+    assert "\n" not in cleaned
+    assert "\t" not in cleaned
+
+
+def test_clean_content_threshold_after_cleaning() -> None:
+    # 原 250 字符但含大量 nav，洗净后 < 200 → 返回 ""
+    body = ("Skip to main content " * 20) + "word " * 30
+    assert _clean_content(body) == ""
+
+
+def test_nav_noise_patterns_list_is_non_empty() -> None:
+    # 防止有人意外清空列表导致退化为恒等
+    assert len(_NAV_NOISE_PATTERNS) >= 5
+    assert all(isinstance(p, str) and p for p in _NAV_NOISE_PATTERNS)

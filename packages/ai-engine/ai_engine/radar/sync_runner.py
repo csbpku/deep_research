@@ -355,6 +355,29 @@ def _build_score_reason(score: Any, distilled: Any | None) -> str:
     return " | ".join(parts)[:500]
 
 
+_NAV_NOISE_PATTERNS = [
+    "Skip to main content", "Skip to content", "Log in", "Sign in",
+    "Try ChatGPT", "Try ChatGPT (opens in a new window)",
+    "Navigation menu", "Search", "Create account", "Close",
+    "Add reaction", "Like Unicorn", "Jump to Comments",
+    "Powered by Algolia", "Back to Articles",
+]
+
+
+def _clean_content(text: str, min_len: int = 200) -> str:
+    """Remove navigation noise. Returns empty string if too short after cleaning."""
+    if not text or len(text) < min_len:
+        return ""
+    cleaned = text
+    for pattern in _NAV_NOISE_PATTERNS:
+        cleaned = cleaned.replace(pattern, "")
+    import re as _re
+    cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) < min_len:
+        return ""
+    return cleaned
+
+
 def _strip_html_tags(html: str) -> str:
     """Strip HTML tags and collapse whitespace."""
     import re as _re
@@ -523,14 +546,20 @@ async def _run_source(
                     from ai_engine.scoring.scoring_profiles import profile_for_source
 
                     profile, _ = profile_for_source(source.source_type)
-                    distilled_result = await distilled_scorer(
-                        normalized.title,
-                        markdown or normalized.snippet,
-                        profile=profile,
-                        source_type=source.source_type,
-                        url=normalized.url,
-                        published_at=normalized.published_at,
-                    )
+                    raw_content = markdown or normalized.snippet
+                    cleaned = _clean_content(raw_content)
+                    if cleaned:
+                        distilled_result = await distilled_scorer(
+                            normalized.title,
+                            cleaned,
+                            profile=profile,
+                            source_type=source.source_type,
+                            url=normalized.url,
+                            published_at=normalized.published_at,
+                        )
+                    else:
+                        from ai_engine.radar.distilled_scorer import default_score
+                        distilled_result = default_score(profile)
                     if monitor is not None:
                         monitor.record(distilled_result)
                 extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
