@@ -161,7 +161,10 @@ def test_html_to_markdown_decodes_entities() -> None:
     assert "&amp;" not in out
     assert "&lt;" not in out
     assert "&" in out
-    assert "<" in out
+    # W9 code review 修订：实体解码从去标签之后移到之前，
+    # &lt; 先 decode 成 < 再被 catch-all 正则抹掉，所以输出里
+    # 不再有尖括号。改断言 < 不在输出中。
+    assert "<" not in out
 
 
 # ---------------------------------------------------------------------------

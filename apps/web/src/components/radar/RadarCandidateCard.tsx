@@ -9,6 +9,8 @@ import Link from 'next/link';
 import { RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
+import type { DistilledScore } from '@deep-research/shared/schemas';
+import { DistilledScorePanel } from './DistilledScorePanel';
 
 interface RadarCandidate {
   id: string;
@@ -25,6 +27,7 @@ interface RadarCandidate {
   relevanceScore: number | null;
   timelinessScore: number | null;
   sourceQualityScore: number | null;
+  distilledScore: DistilledScore | null;
   selectionReason: string | null;
   sortOrder: number | null;
   feedbackCounts: RadarFeedbackCounts;
@@ -194,10 +197,20 @@ export function RadarCandidateCard({ candidate, adminActions, onAskAi }: RadarCa
         </div>
       ) : null}
 
+      {candidate.distilledScore ? (
+        <DistilledScorePanel score={candidate.distilledScore} compact />
+      ) : (
+        <div>
+          <div style={{ marginBottom: 4, fontSize: 11, color: '#64748b' }}>启发式预筛分</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            <ScoreChip label="相关性" value={candidate.relevanceScore} />
+            <ScoreChip label="时效" value={candidate.timelinessScore} />
+            <ScoreChip label="来源质量" value={candidate.sourceQualityScore} />
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        <ScoreChip label="相关性" value={candidate.relevanceScore} />
-        <ScoreChip label="时效" value={candidate.timelinessScore} />
-        <ScoreChip label="来源质量" value={candidate.sourceQualityScore} />
         {candidate.scoreReason ? (
           <span
             title={candidate.scoreReason}

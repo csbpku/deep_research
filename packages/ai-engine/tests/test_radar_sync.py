@@ -123,7 +123,7 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "'candidate'" in sql
     assert "'daily'" in sql
     assert params[5] == "rss"
-    assert params[14] == "1.0"
+    assert params[14] == "1.2"
     assert "仅用于排序，不自动发布" in params[15]
 
 

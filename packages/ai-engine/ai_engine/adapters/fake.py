@@ -62,7 +62,7 @@ class _Job:
     error_message: str | None = None
     body: str = ""
     # W7 (工程师 B): mark output as inferred when no source was
-    # captured (mirrors ClaudeAdapter.inferred for the contract).
+    # captured (mirrors GptResearcherAdapter.inferred for the contract).
     inferred: bool = False
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)

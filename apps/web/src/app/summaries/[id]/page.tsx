@@ -1,14 +1,19 @@
 'use client';
 
+import { useParams } from 'next/navigation';
+
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { EmptyState } from '../../../components/EmptyState';
+import { CommentSection } from '../../../components/CommentSection';
+import { useCurrentUser } from '../../../lib/auth/client';
 
 interface SummaryDetail {
   id: string;
   title: string;
   body: string;
+  interpretation: string | null;
   url: string;
   tags: string[];
   contentOrigin: string;
@@ -28,7 +33,8 @@ interface SummaryDetail {
  *   - 预留评论 / 追问区域（本周 W3+ 才实现交互）
  *   - 30s 前台 + 50% 滚动双条件 → POST /api/events/detail-read
  */
-export default function SummaryDetailPage({ params }: { params: { id: string } }) {
+export default function SummaryDetailPage() {
+  const params = useParams<{ id: string }>();
   const q = useQuery<SummaryDetail>({
     queryKey: ['summary', params.id],
     queryFn: async () => {
@@ -89,16 +95,35 @@ function DetailBody({ data }: { data: SummaryDetail }) {
         </div>
       ) : null}
 
-      <div
-        style={{
-          whiteSpace: 'pre-wrap',
-          color: '#1e293b',
-          fontSize: 15,
-          margin: '12px 0 24px',
-        }}
-      >
-        {data.body}
-      </div>
+      {data.interpretation ? (
+        <p
+          style={{
+            padding: '12px 16px',
+            background: '#f8fafc',
+            borderRadius: 6,
+            borderLeft: '3px solid #0f172a',
+            color: '#1e293b',
+            fontSize: 15,
+            margin: '8px 0 16px',
+          }}
+        >
+          <span style={{ color: '#64748b', fontSize: 12, marginRight: 6 }}>AI 一句话解读：</span>
+          {data.interpretation}
+        </p>
+      ) : null}
+
+      {data.body && data.body !== data.interpretation ? (
+        <div
+          style={{
+            whiteSpace: 'pre-wrap',
+            color: '#1e293b',
+            fontSize: 15,
+            margin: '12px 0 24px',
+          }}
+        >
+          {data.body}
+        </div>
+      ) : null}
 
       <a
         href={data.url}
@@ -118,7 +143,34 @@ function DetailBody({ data }: { data: SummaryDetail }) {
         打开原文 ↗
       </a>
 
-      {/* W3+ 区域 */}
+      {/* W8 评论区 */}
+      <CommentSectionWrapper
+        summaryId={data.id}
+        indicator={<>
+          <strong style={{ color: '#0f172a' }}>阅读追踪</strong>
+          <p style={{ margin: '4px 0 0' }}>
+            停留 ≥30 秒且滚动 ≥50% 时自动上报一次阅读完成事件。
+          </p>
+          <p style={{ margin: '4px 0 0', fontSize: 12 }}>
+            状态：{eventState.label}
+            {eventState.submitted ? ' · 已上报' : eventState.eligible ? ' · 待提交' : ''}
+          </p>
+        </>}
+      />
+    </article>
+  );
+}
+
+function CommentSectionWrapper({
+  summaryId,
+  indicator,
+}: {
+  summaryId: string;
+  indicator: React.ReactNode;
+}) {
+  const me = useCurrentUser();
+  return (
+    <>
       <section
         style={{
           marginTop: 32,
@@ -129,18 +181,17 @@ function DetailBody({ data }: { data: SummaryDetail }) {
           color: '#475569',
           fontSize: 14,
         }}
-        aria-label="评论与追问区（占位）"
+        aria-label="阅读追踪"
       >
-        <strong style={{ color: '#0f172a' }}>评论与追问</strong>
-        <p style={{ margin: '4px 0 0' }}>
-          Week 3+ 启用评论与追问交互。当前页面会记录你的阅读行为（停留 ≥30 秒且滚动 ≥50% 时上报）。
-        </p>
-        <p style={{ margin: '4px 0 0', fontSize: 12 }}>
-          状态：{eventState.label}
-          {eventState.submitted ? ' · 已上报' : eventState.eligible ? ' · 待提交' : ''}
-        </p>
+        {indicator}
       </section>
-    </article>
+      <CommentSection
+        targetType="summary"
+        targetId={summaryId}
+        currentUserId={me.data?.id ?? null}
+        currentUserRole={me.data?.role ?? null}
+      />
+    </>
   );
 }
 

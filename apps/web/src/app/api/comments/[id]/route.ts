@@ -13,6 +13,7 @@ import { getCurrentUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { log, withRequestId } from '../../../../lib/log';
 import { CommentIdParam } from '../../../../lib/schemas';
+import { newAdminActionRequestId, writeAdminAction } from '../../../../lib/radar/admin-actions';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
@@ -68,6 +69,7 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
 
   // 计算实际要减的 commentCount：删自己 + 删多少 children
   // 最简方式：直接用 transaction 删除，然后通过删除前后 total count 差来减
+  const actionRequestId = newAdminActionRequestId();
   await prisma.$transaction(async (tx) => {
     // 删自己（cascade 删 children 与 stars）
     await tx.comment.delete({
@@ -84,6 +86,25 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
         where: { id: comment.researchId },
         data: { commentCount: remaining },
         select: { id: true },
+      });
+    }
+
+    // W9 安全复审修订：此前 promote/dismiss 都写 admin_actions 审计，
+    // 唯独 DELETE 不写。补齐：仅 admin（非作者）删除时写审计。
+    if (isAdmin && !isAuthor) {
+      await writeAdminAction(tx, {
+        actorId: u.id,
+        requestId: actionRequestId,
+        action: 'comments.delete',
+        targetType: 'comment',
+        targetId: comment.id,
+        metadata: {
+          deletedAuthor: comment.authorId,
+          researchId: comment.researchId ?? null,
+          summaryId: comment.summaryId ?? null,
+          childCount: comment._count.children,
+          starCount: comment._count.stars,
+        },
       });
     }
   });

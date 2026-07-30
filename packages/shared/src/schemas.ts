@@ -1,6 +1,32 @@
 import { z } from 'zod';
 import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states';
 
+export const DistilledTierSchema = z.enum(['collection', 'deep_read', 'skim', 'noise']);
+export const DistilledProfileSchema = z.enum(['paper', 'engineering', 'news']);
+export const DistilledDimensionScoresSchema = z.object({
+  informationGain: z.number().int().min(0).max(3),
+  analysisDepth: z.number().int().min(0).max(3),
+  actionability: z.number().int().min(0).max(3),
+  factualReliability: z.number().int().min(0).max(3),
+  currentApplicability: z.number().int().min(0).max(3),
+  expressionQuality: z.number().int().min(0).max(3),
+  audienceFit: z.number().int().min(0).max(3),
+}).strict();
+export const DistilledScoreSchema = z.object({
+  total: z.number().min(0).max(100),
+  tier: DistilledTierSchema,
+  mustRead: z.boolean(),
+  dimensions: DistilledDimensionScoresSchema,
+  weakPoint: z.string().max(100),
+  veto: z.enum(['unsafe_content', 'title_content_mismatch']).nullable(),
+  riskFlags: z.array(z.enum(['security_review_required', 'suspected_repost'])),
+  profile: DistilledProfileSchema,
+  profileFallback: z.boolean().optional(),
+  isDefault: z.boolean(),
+  version: z.string().min(1).max(16),
+}).strict();
+export type DistilledScore = z.infer<typeof DistilledScoreSchema>;
+
 // Zod schema：API 输入约束。详细定义见 docs/contracts/api-schemas.md。
 
 const SourceRefUrl = z.object({

@@ -30,6 +30,7 @@ from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
 
 import structlog
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -53,6 +54,8 @@ from ai_engine.job_runner.store import (
 )
 from ai_engine.job_runner.models import JobSnapshot
 
+load_dotenv()
+
 logger = logging.getLogger("ai_engine.server")
 structlog.configure(
     processors=[
@@ -73,7 +76,7 @@ structlog.configure(
 async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     structlog.get_logger("ai_engine.server").info(
         "ai-engine.boot",
-        extra={"adapter": os.environ.get("AI_ENGINE_ADAPTER", "fake")},
+        extra={"adapter": os.environ.get("AI_ENGINE_ADAPTER", "gpt_researcher")},
     )
     # W2 review 修正:process-level store singleton,所有 endpoint / 后台
     # task 共享同一个 instance。否则每次请求新建,POST 写进去的 job 在

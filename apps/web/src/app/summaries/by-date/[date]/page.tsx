@@ -1,5 +1,7 @@
 'use client';
 
+import { useParams } from 'next/navigation';
+
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { EmptyState } from '../../../../components/EmptyState';
@@ -33,7 +35,8 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 }
 
-export default function SummariesByDatePage({ params }: { params: { date: string } }) {
+export default function SummariesByDatePage() {
+  const params = useParams<{ date: string }>();
   // YYYY-MM-DD 校验；前端轻校验，错误走 EmptyState
   const dateOk = /^\d{4}-\d{2}-\d{2}$/u.test(params.date);
 

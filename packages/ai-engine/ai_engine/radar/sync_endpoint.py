@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ai_engine.adapters.base import ResearchEngineAdapter
 from ai_engine.radar.sync_runner import retry_radar_run, run_radar_sync
+from ai_engine.radar.distilled_scorer import ScoringMonitor, score_with_llm
 
 router = APIRouter(prefix="/api/radar", tags=["radar"])
 
@@ -72,12 +73,24 @@ async def _run_background(
 ) -> None:
     log = structlog.get_logger("ai_engine.radar")
     try:
-        result = await run_radar_sync(pool, triggered_by=triggered_by, adapter=adapter)
+        monitor = ScoringMonitor()
+        result = await run_radar_sync(
+            pool,
+            triggered_by=triggered_by,
+            adapter=adapter,
+            distilled_scorer=score_with_llm,
+            monitor=monitor,
+        )
+        alerts = monitor.evaluate()
         log.info(
             "ai-engine.radar.sync_done",
             request_id=request_id,
             batch_id=result.batch_id,
             source_runs=len(result.runs),
+            distilled_scored=monitor.total_count - monitor.default_count,
+            distilled_default=monitor.default_count,
+            must_read=monitor.must_read_count,
+            alerts=alerts,
         )
     except Exception as exc:
         log.error(
@@ -172,7 +185,14 @@ async def retry_sync(
 
     async def _retry() -> None:
         try:
-            await retry_radar_run(pool, run_id, adapter=adapter)
+            monitor = ScoringMonitor()
+            await retry_radar_run(
+                pool,
+                run_id,
+                adapter=adapter,
+                distilled_scorer=score_with_llm,
+                monitor=monitor,
+            )
         except Exception as exc:
             structlog.get_logger("ai_engine.radar").error(
                 "ai-engine.radar.retry_unhandled",

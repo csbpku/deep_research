@@ -9,12 +9,12 @@ Runs a topic through a chosen adapter and records 7 metrics:
 - estimated cost (USD)
 - human-adoptability score
 
-Week 2 update: `claude` adapter is now implemented. The harness delegates
+The harness delegates
 to `build_adapter()` (same factory the server uses), so it Just Works when
-`AI_ENGINE_ADAPTER=claude` is set in the environment.
+`AI_ENGINE_ADAPTER=gpt_researcher` is set in the environment.
 
 Usage:
-    AI_ENGINE_ADAPTER=claude uv run python tools/spike.py --adapter claude
+    AI_ENGINE_ADAPTER=gpt_researcher uv run python tools/spike.py --adapter gpt_researcher
     uv run python tools/spike.py --adapter fake
 """
 
@@ -45,7 +45,7 @@ from ai_engine.contracts.states import (  # noqa: E402
 from ai_engine.job_runner.runner import run_one_available_job  # noqa: E402
 from ai_engine.job_runner.store import InMemoryJobStore, make_job_snapshot  # noqa: E402
 
-SUPPORTED_ADAPTERS = ("fake", "claude", "gpt_researcher")
+SUPPORTED_ADAPTERS = ("fake", "gpt_researcher")
 
 DEFAULT_TOPICS = [
     "2025 年大模型 Agent 框架对比",
@@ -147,22 +147,6 @@ async def run_one(
 ) -> SpikeMetrics:
     """Run a single (adapter, topic) spike and return its metrics."""
     notes: list[str] = []
-    if adapter_name == "gpt_researcher":
-        notes.append(
-            "adapter=gpt_researcher was rejected by ADR 0004; "
-            "this row is a stub failure."
-        )
-        return SpikeMetrics(
-            adapter=adapter_name, topic=topic, report_type=report_type,
-            source_policy=source_policy, final_status=AI_JOB_STATUS["FAILED"],
-            elapsed_ms=0, sources_captured=0, sources_accessible=0,
-            sources_accessible_ratio=0.0, search_count=0, token_input_total=0,
-            token_output_total=0, cost_cents=0, cost_usd=0.0,
-            human_adoptability=0.0, has_structured_fields=False,
-            notes=notes, error_code="NOT_IMPLEMENTED",
-            error_message="gpt-researcher was rejected by ADR 0004.",
-        )
-
     try:
         adapter = build_adapter(name=adapter_name)
     except Exception as exc:

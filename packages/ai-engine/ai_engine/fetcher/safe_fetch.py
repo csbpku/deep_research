@@ -53,6 +53,19 @@ logger = logging.getLogger("ai_engine.fetcher.safe_fetch")
 # Week 4 contract: ports allowed by default (override via constructor).
 DEFAULT_ALLOWED_PORTS: Final[tuple[int, ...]] = (80, 443, 8080, 8443)
 
+# W9 code review 修订：Content-Type 白名单（契约 §2.3）。
+# 只允许文本类型；二进制 / application-* 一律拒绝，防止 PDF/ZIP/octet-stream
+# 经过弱正则清洗后当成正文喂给 LLM。
+_ALLOWED_CONTENT_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "text/html", "application/xhtml+xml",
+        "text/plain", "text/markdown",
+        "application/rss+xml", "application/xml",
+        "text/xml", "application/atom+xml",
+        "application/json",
+    }
+)
+
 # Default domain deny list (exact / suffix match).
 DEFAULT_DENY_DOMAINS: Final[tuple[str, ...]] = (
     "localhost",
@@ -208,6 +221,7 @@ async def safe_fetch(
     client: httpx.AsyncClient | None = None,
     extra_denied_hosts: tuple[str, ...] = (),
     extra_allowed_ports: tuple[int, ...] = (),
+    allow_localhost: bool = False,
 ) -> FetchedDocument:
     """Fetch `url` with SSRF guards; returns a `FetchedDocument`.
 
@@ -227,7 +241,13 @@ async def safe_fetch(
         if extra_allowed_ports
         else DEFAULT_ALLOWED_PORTS
     )
-    denied_hosts = tuple(set(DEFAULT_DENY_DOMAINS) | set(extra_denied_hosts))
+    if allow_localhost:
+        denied_hosts = tuple(
+            h for h in (set(DEFAULT_DENY_DOMAINS) | set(extra_denied_hosts))
+            if h != "localhost"
+        )
+    else:
+        denied_hosts = tuple(set(DEFAULT_DENY_DOMAINS) | set(extra_denied_hosts))
 
     max_bytes = max_bytes or int(os.environ.get("URL_FETCH_MAX_BYTES", _DEFAULT_MAX_BYTES))
     timeout = timeout or float(
@@ -244,11 +264,14 @@ async def safe_fetch(
     ip = _resolve_ip(host)
     blocked, reason = _is_blocked_ip(ip)
     if blocked:
-        raise SafeFetchError(
-            code="URL_FETCH_BLOCKED",
-            message=f"resolved IP {ip} is blocked ({reason})",
-            host=host,
-        )
+        if allow_localhost and reason == "loopback":
+            pass  # allow localhost feeds (e.g. WeWe-RSS)
+        else:
+            raise SafeFetchError(
+                code="URL_FETCH_BLOCKED",
+                message=f"resolved IP {ip} is blocked ({reason})",
+                host=host,
+            )
 
     owns_client = client is None
     if owns_client:
@@ -284,11 +307,14 @@ async def safe_fetch(
                 cur_ip = _resolve_ip(cur_host)
                 blocked, reason = _is_blocked_ip(cur_ip)
                 if blocked:
-                    raise SafeFetchError(
-                        code="URL_FETCH_BLOCKED",
-                        message=f"resolved IP {cur_ip} is blocked ({reason})",
-                        host=cur_host,
-                    )
+                    if allow_localhost and reason == "loopback":
+                        pass
+                    else:
+                        raise SafeFetchError(
+                            code="URL_FETCH_BLOCKED",
+                            message=f"resolved IP {cur_ip} is blocked ({reason})",
+                            host=cur_host,
+                        )
                 last_ip = cur_ip
                 last_host = cur_host
 
@@ -334,6 +360,20 @@ async def safe_fetch(
             or last_response.headers.get("Content-Type")
             or ""
         ).lower()
+
+        # W9 code review 修订：此前未校验 Content-Type，二进制 / PDF / ZIP
+        # 会被当成正文读入，再通过 _html_to_text / share 的弱正则清洗后
+        # 喂给 LLM 作为"来源"。契约 §2.3 要求拒绝非 text 类型并返回
+        # CONTENT_TYPE_REJECTED（HTTP 415 → 映射为 Bad Request）。
+        if content_type:
+            mime = content_type.split(";", 1)[0].strip()
+            if mime not in _ALLOWED_CONTENT_TYPES:
+                raise SafeFetchError(
+                    code="CONTENT_TYPE_REJECTED",
+                    message=f"Content-Type {mime!r} not allowed; "
+                    f"expect {_ALLOWED_CONTENT_TYPES}",
+                    host=last_host,
+                )
 
         # Read body with size cap (early abort). If the cap is exceeded
         # we raise TOO_LARGE so the caller knows the body is incomplete.

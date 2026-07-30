@@ -1,16 +1,16 @@
 """Lightweight rule-based candidate filter — skip low-quality articles before LLM.
 
-Filter rules:
-  - composite score < threshold → skip
-  - known noise patterns in title → skip
-  - PR soft article → tag only (not skip)
+Inspired by Distilled's two-stage approach: heuristic prefilter before any
+LLM call. The filter uses a topic gate (relevance must be > 0) combined with
+a per-source-type composite threshold.
 
-Thresholds by source type:
-  - vendor_news: 0.30 (vendor official, high trust)
-  - hackernews / lobsters / github_trending / arxiv: 0.35
-  - devto / reddit / wechat: 0.40
-  - rss (unaudited): 0.45
-  - producthunt: 0.50
+Filter rules:
+  1. Noise patterns in title (job, promo, AMA, etc.) → skip
+  2. Relevance == 0 (no keyword match at all) → skip for high-noise sources
+  3. Composite score < threshold → skip
+  4. PR soft article → tag only (not skip)
+
+Composite formula: relevance * 0.35 + timeliness * 0.30 + source_quality * 0.35
 """
 
 from __future__ import annotations
@@ -37,21 +37,36 @@ _PR_PATTERNS: list[_re.Pattern[str]] = [
     _re.compile(r"正式发布|全新升级|重磅推出", _re.IGNORECASE),
 ]
 
+# Sources where zero keyword match = almost certainly noise.
+# These are high-volume community feeds where most content is off-topic.
+_STRICT_TOPIC_GATE: frozenset[str] = frozenset({
+    "hackernews", "lobsters", "reddit", "devto",
+    "rss", "producthunt",
+})
+
+# Sources where zero keyword match is acceptable (already pre-filtered
+# or inherently topically relevant).
+_LENIENT_TOPIC_GATE: frozenset[str] = frozenset({
+    "arxiv", "vendor_news", "wechat",
+})
+
+# Composite thresholds calibrated for v1.2 scoring (relevance uses sqrt curve).
+# A single tier-1 hit gives relevance ~0.77; a single tier-2 hit ~0.63.
 _THRESHOLDS: dict[str, float] = {
-    "hackernews": 0.35,
-    "reddit": 0.40,
-    "lobsters": 0.35,
-    "devto": 0.40,
-    "github": 0.35,
-    "github_trending": 0.35,
-    "arxiv": 0.35,
-    "producthunt": 0.50,
-    "rss": 0.45,
-    "vendor_news": 0.30,
-    "wechat": 0.40,
+    "hackernews": 0.55,
+    "reddit": 0.52,
+    "lobsters": 0.55,
+    "devto": 0.50,
+    "github": 0.48,
+    "github_trending": 0.48,
+    "arxiv": 0.40,
+    "producthunt": 0.58,
+    "rss": 0.50,
+    "vendor_news": 0.35,
+    "wechat": 0.42,
 }
 
-_DEFAULT_THRESHOLD = 0.45
+_DEFAULT_THRESHOLD = 0.50
 
 
 @dataclass
@@ -59,6 +74,7 @@ class FilterResult:
     keep: bool
     reason: str
     is_pr: bool = False
+    needs_embedding_rescue: bool = False
 
 
 def _composite(score: CandidateScore) -> float:
@@ -72,10 +88,26 @@ def filter_candidate(
 ) -> FilterResult:
     title = candidate.title
 
+    # Rule 1: noise patterns
     for pat in _NOISE_PATTERNS:
         if pat.search(title):
             return FilterResult(keep=False, reason=f"noise: {pat.pattern[:40]}")
 
+    # Rule 2: topic gate — zero relevance means no keyword matched at all.
+    # High-quality sources get a second chance via embedding rescue (Stage 1b).
+    if score.relevance == 0.0 and source_type not in _LENIENT_TOPIC_GATE:
+        if score.source_quality >= 0.70:
+            return FilterResult(
+                keep=False,
+                reason=f"topic_gate: no keyword match ({source_type}), flagged for embedding rescue",
+                needs_embedding_rescue=True,
+            )
+        return FilterResult(
+            keep=False,
+            reason=f"topic_gate: no keyword match ({source_type})",
+        )
+
+    # Rule 3: composite threshold
     composite = _composite(score)
     threshold = _THRESHOLDS.get(source_type, _DEFAULT_THRESHOLD)
     if composite < threshold:
@@ -86,6 +118,7 @@ def filter_candidate(
                    f"qual={score.source_quality:.2f})",
         )
 
+    # Rule 4: PR soft article tag
     for pat in _PR_PATTERNS:
         if pat.search(title):
             return FilterResult(keep=True, reason=f"pr: {pat.pattern[:40]}", is_pr=True)

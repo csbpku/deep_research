@@ -7,7 +7,12 @@ export default function SignInPage({
   searchParams: { error?: string; callbackUrl?: string };
 }) {
   const error = searchParams?.error;
-  const callbackUrl = searchParams?.callbackUrl ?? '/';
+  // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
+  // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
+  // 攻击者可构造 /signin?callbackUrl=https://evil.com 做开放重定向钓鱼。
+  // 现在只接受以 / 开头的相对路径（同源），任何绝对 URL 一律丢掉。
+  const raw = searchParams?.callbackUrl;
+  const callbackUrl = raw && raw.startsWith('/') ? raw : '/';
 
   if (error) {
     return (

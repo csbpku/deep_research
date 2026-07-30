@@ -116,23 +116,6 @@ def test_main_writes_per_topic_files_and_summary(tmp_path: Path) -> None:
     assert payload["final_status"] in ("succeeded", "partial", "failed")
 
 
-def test_main_stub_adapter_records_not_implemented(tmp_path: Path) -> None:
-    """Week 2: claude adapter is now implemented. gpt_researcher remains a stub."""
-    rc = spike_mod.main([
-        "--adapter",
-        "gpt_researcher",
-        "--topic",
-        "gpt demo",
-        "--output",
-        str(tmp_path),
-    ])
-    assert rc == 0
-    md = (tmp_path / "spike-gpt_researcher-gpt-demo.md").read_text(encoding="utf-8")
-    assert "NOT_IMPLEMENTED" in md
-    summary = (tmp_path / "spike-summary.md").read_text(encoding="utf-8")
-    # First run -> "已跑通的 adapter" section is empty, but the stub section appears.
-    assert "未实现的 adapter" in summary
-
 
 def test_slugify_handles_chinese() -> None:
     assert spike_mod._slugify("中文 主题 test")  # just non-empty

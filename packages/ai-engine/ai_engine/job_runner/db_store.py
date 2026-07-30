@@ -619,6 +619,22 @@ class DbJobStore(JobStore):
             f'  AND "attempts" >= %s '
             f'RETURNING "id"'
         )
+        # W9 code review 修订：此前 requeue 只重置 status/attempts/lockedBy/lease，
+        # 但不清除 partialSources / failedSources / tokenTotal / costCents。
+        # 多次重试后前一次的 JSON 片段和 token 计数累积在列里，导致
+        # 「≥3 个来源才记 succeeded」的校验可能被陈旧数据凑够。
+        # 每个 attempt 应该从干净状态开始。
+        # 注意：这些 AI 专属列仅存在于 ai_research_jobs；
+        # content_import_jobs 没有，所以按 table_name 条件拼接。
+        ai_reset = ""
+        if self._table_name == AI_TABLE:
+            ai_reset = (
+                ', "partialSources" = \'[]\'::jsonb'
+                ', "failedSources" = \'[]\'::jsonb'
+                ', "tokenInputTotal" = 0'
+                ', "tokenOutputTotal" = 0'
+                ', "costCents" = 0'
+            )
         sql_requeue = (
             f"UPDATE {t} "
             f'SET "status" = \'queued\', "attempts" = "attempts" + 1, '
@@ -627,7 +643,8 @@ class DbJobStore(JobStore):
             f"        WHEN 2 THEN '120 seconds'::interval "
             f"        WHEN 3 THEN '300 seconds'::interval "
             f"        ELSE '30 seconds'::interval END), "
-            f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
+            f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, '
+            f'    "heartbeatAt" = NULL{ai_reset} '
             f'WHERE "status" = \'running\' AND "leaseExpiresAt" < %s '
             f'  AND "attempts" < %s '
             f'RETURNING "id"'

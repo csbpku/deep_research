@@ -31,6 +31,7 @@ async def fetch_rss_candidates(
     config: Mapping[str, Any],
     *,
     fetcher: SafeFetcher = safe_fetch,
+    allow_localhost: bool = False,
 ) -> list[RadarCandidate]:
     """Fetch one configured feed through ``safe_fetch`` and parse RSS items.
 
@@ -59,11 +60,27 @@ async def fetch_rss_candidates(
         if isinstance(raw_max_age, bool):
             raise ValueError("RSS maxAgeHours must be a number")
         hours = float(raw_max_age)
-        if hours < 0 or hours > 24 * 30:
-            raise ValueError("RSS maxAgeHours must be between 0 and 720")
-        cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+        if hours > 0:
+            if hours > 24 * 365:
+                raise ValueError("RSS maxAgeHours must be between 0 and 8760")
+            cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+        # hours == 0 means no age filter
 
-    document = await fetcher(feed_url)
+    # allow_localhost can be set via kwarg or config dict
+    allow_local = allow_localhost or bool(config.get("allowLocalhost", False))
+    fetch_kwargs: dict[str, Any] = {}
+    if allow_local:
+        fetch_kwargs["allow_localhost"] = True
+        # WeWe-RSS runs on port 4001; allow it
+        raw_port = config.get("localPort")
+        if raw_port:
+            fetch_kwargs["extra_allowed_ports"] = (int(raw_port),)
+        else:
+            fetch_kwargs["extra_allowed_ports"] = (4001,)
+        # WeWe-RSS feeds include full article bodies; can be 30MB+.
+        # Raise cap to 32MB to accommodate large feeds.
+        fetch_kwargs["max_bytes"] = 32 * 1024 * 1024
+    document = await fetcher(feed_url, **fetch_kwargs)
     text = document.content.decode("utf-8", errors="replace")
     items = _parse_rss_xml_simple(text)
     candidates: list[RadarCandidate] = []

@@ -138,6 +138,14 @@ export const authConfig: NextAuthConfig = {
       } else if (typeof token.uid === 'string') {
         // 后续请求；重新读一次 user（admin 禁用立即生效；性能开销可接受）
         const u = await prisma.user.findUnique({ where: { id: token.uid } });
+
+        // W9 安全复审修订：envHash 此前写入 JWT 但从不校验。
+        // secret / GOOGLE_CLIENT_ID 轮换后旧 JWT 继续有效直到 7 天自然过期。
+        // 现在在每次后续请求上比对；env 变化 → 立即失效登出。
+        if (token.envHash && token.envHash !== envHash(env)) {
+          return null as unknown as typeof token;
+        }
+
         if (!u) {
           // user row 缺失（不应发生）；清空 token 触发登出
           return null as unknown as typeof token;

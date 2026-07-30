@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-SourceType = Literal["github", "arxiv", "rss"]
+SourceType = Literal[
+    "github", "github_trending", "arxiv", "rss",
+    "hackernews", "reddit", "lobsters", "devto",
+    "producthunt", "sitemap_watch", "vendor_guides", "wechat",
+    "github_topic_search", "huggingface_models",
+]
 ContentOrigin = Literal["api", "rss", "web"]
 
 

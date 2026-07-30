@@ -1,18 +1,17 @@
 """Research engine adapter layer.
 
 Exposes a single Protocol — `ResearchEngineAdapter` — that the worker
-calls regardless of whether the underlying engine is `fake`, `claude`, or
+calls regardless of whether the underlying engine is `fake` or
 `gpt_researcher`. Business code never depends on a vendor's data shape
 (see IMPLEMENTATION_PLAN §一全局 DoD "业务层不直接依赖 gpt-researcher 数据结构").
 
 Subpackages:
-- ai_engine.adapters.base   — Protocol + Pydantic DTOs
-- ai_engine.adapters.fake   — deterministic in-memory implementation
-- ai_engine.adapters.claude — Anthropic SDK (Week 2 ships; ADR 0004 #5)
-- ai_engine.adapters.gpt_researcher — REJECTED by ADR 0004
+- ai_engine.adapters.base           — Protocol + Pydantic DTOs
+- ai_engine.adapters.fake           — deterministic in-memory implementation
+- ai_engine.adapters.gpt_researcher — GPT Researcher (primary engine, ADR 0004)
 
-The factory `build_adapter()` reads `AI_ENGINE_ADAPTER` (default: fake) so
-tests and the local skeleton run with zero API keys.
+The factory `build_adapter()` reads `AI_ENGINE_ADAPTER` (default:
+gpt_researcher) so tests and CI can opt into `fake` with zero API keys.
 """
 
 from ai_engine.adapters.base import (
@@ -26,19 +25,19 @@ from ai_engine.adapters.base import (
     build_adapter,
 )
 
-# Lazy re-export so tests that don't need anthropic don't import the SDK.
+# Lazy re-export so tests that don't need gpt-researcher don't import it.
 try:  # pragma: no cover — defensive
-    from ai_engine.adapters.claude import ClaudeAdapter  # noqa: F401
+    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter  # noqa: F401
 except ImportError:  # pragma: no cover
-    ClaudeAdapter = None  # type: ignore[assignment,misc]
+    GptResearcherAdapter = None  # type: ignore[assignment,misc]
 
 __all__ = [
     "AdapterCancelOutcome",
     "AdapterHealth",
     "AdapterSource",
     "AdapterStatus",
-    "ClaudeAdapter",
     "CostMetrics",
+    "GptResearcherAdapter",
     "ResearchEngineAdapter",
     "ResearchRequest",
     "build_adapter",

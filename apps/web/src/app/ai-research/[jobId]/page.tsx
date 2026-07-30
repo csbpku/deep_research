@@ -1,5 +1,7 @@
 'use client';
 
+import { useParams } from 'next/navigation';
+
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { EmptyState } from '../../../components/EmptyState';
@@ -28,7 +30,8 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
  * 当前 ai-engine（Week 1）同步执行 fake adapter；多数情况下首次轮询即拿到终态。
  * 本前端代码在 Week 5 ai-engine 接入 DB + 队列后无需改动。
  */
-export default function AiJobStatusPage({ params }: { params: { jobId: string } }) {
+export default function AiJobStatusPage() {
+  const params = useParams<{ jobId: string }>();
   const q = useQuery<AiJobStatus>({
     queryKey: ['ai-job', params.jobId],
     queryFn: async () => {

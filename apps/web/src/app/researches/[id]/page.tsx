@@ -7,10 +7,13 @@
 //
 // type='research'（长文）：背景 → 正文 → 结论 → 风险 → research_sources 列表
 // type='knowledge'（精华）：sourceComment 引用 → 短 body → 来源评论跳转
+// W8：在 published 页面底部追加 CommentSection。
 
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
+import { CommentSection } from '../../../components/CommentSection';
+import { useCurrentUser } from '../../../lib/auth/client';
 
 interface ResearchSourceItem {
   id: string;
@@ -395,7 +398,24 @@ export default function ResearchDetailPage() {
           </div>
         </details>
       )}
+
+      {/* W8 评论区（仅已发布状态可见） */}
+      {data.status === 'published' && (
+        <PublishedCommentSection researchId={data.id} />
+      )}
     </div>
+  );
+}
+
+function PublishedCommentSection({ researchId }: { researchId: string }) {
+  const me = useCurrentUser();
+  return (
+    <CommentSection
+      targetType="research"
+      targetId={researchId}
+      currentUserId={me.data?.id ?? null}
+      currentUserRole={me.data?.role ?? null}
+    />
   );
 }
 

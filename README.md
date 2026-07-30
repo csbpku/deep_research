@@ -50,7 +50,34 @@
 
 任何工程师对以上契约的调整必须通过 PR + 在 ARCHITECTURE.md / IMPLEMENTATION_PLAN.md 同步版本号变更。
 
-## 本地开发
+## 快速开始（clone 后首次）
+
+```bash
+# 一键配置：检测环境 → 装依赖 → 生成 .env → 建库 → 跑 migration
+./scripts/setup.sh
+
+# 只想看看 UI？不需要 LLM API key：
+./scripts/setup.sh --quick
+
+# Docker 部署？生成 .env 后给你 step-by-step 提示：
+./scripts/setup.sh --docker
+```
+
+setup 脚本会自动生成 `NEXTAUTH_SECRET` 等随机密钥、创建数据库、跑 Prisma migration。
+完成后只需填入 API key（`--quick` 模式连这都不需要），然后：
+
+```bash
+pnpm dev:web    # → http://localhost:3000
+pnpm dev:ai     # → http://localhost:4000（另一终端）
+```
+
+需要填的 key（非 quick 模式）：
+- `ANTHROPIC_API_KEY` — https://console.anthropic.com/settings/keys
+- `TAVILY_API_KEY` — https://tavily.com（有免费额度）
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — https://console.cloud.google.com/apis/credentials
+  （callback: `http://localhost:3000/api/auth/callback/google`）
+
+## 本地开发（手动）
 
 ```bash
 # 安装依赖

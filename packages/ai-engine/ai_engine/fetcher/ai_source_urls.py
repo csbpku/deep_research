@@ -238,15 +238,18 @@ def _html_to_text(html: str) -> str:
         html,
         flags=re.IGNORECASE,
     )
-    text = re.sub(r"<[^>]+>", " ", html)
+    # W9 code review 修订：此前实体解码放在标签剥离之后，
+    # 导致 &lt;script&gt;…&lt;/script&gt; 被 decode 成活体标签残片。
+    # 已对调顺序：先解码再用 catch-all 正则抹掉所有尖括号标签。
     text = (
-        text.replace("&nbsp;", " ")
+        html.replace("&nbsp;", " ")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", '"')
         .replace("&#39;", "'")
     )
+    text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 

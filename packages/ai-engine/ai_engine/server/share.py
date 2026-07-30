@@ -160,18 +160,19 @@ def html_to_markdown(html: str) -> str:
     Markdown.
     """
     safe = _strip_dangerous_html(html)
-    # Strip remaining tags; keep text + newlines.
-    text = re.sub(r"<[^>]+>", " ", safe)
-    # Decode common HTML entities (avoid pulling in html.unescape for
-    # minimal deps; the rules are the ones we actually emit).
+    # W9 code review 修订：此前实体解码在标签剥离之后，
+    # 导致 &lt;script&gt;…&lt;/script&gt; 被 decode 成活体标签残片。
+    # 对调顺序：先解码，再让 catch-all 正则抹掉所有尖括号标签。
     text = (
-        text.replace("&nbsp;", " ")
+        safe.replace("&nbsp;", " ")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", '"')
         .replace("&#39;", "'")
     )
+    # Strip remaining tags; keep text + newlines.
+    text = re.sub(r"<[^>]+>", " ", text)
     # Collapse runs of whitespace.
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -495,7 +496,7 @@ async def _summarise_via_adapter(
     name = getattr(adapter, "name", None)
     if name != "claude":
         return None
-    # For ClaudeAdapter, we don't have a 1-shot summary endpoint, so
+    # For GptResearcherAdapter, we don't have a 1-shot summary endpoint, so
     # we keep the markdown body. W5 worker will replace this with
     # the real summary pipeline once `summary_brief` supports a
     # single-source input.

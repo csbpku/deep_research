@@ -446,13 +446,19 @@ class DimensionScorer(Protocol):
 # ── Anthropic implementation ───────────────────────────────────────
 
 
-async def anthropic_scorer(title: str, content: str) -> str:
+async def anthropic_scorer(
+    title: str,
+    content: str,
+    *,
+    profile: ScoringProfile | None = None,
+    source_type: str | None = None,
+    url: str | None = None,
+    published_at: datetime | None = None,
+) -> str:
     """Call Anthropic API to score article dimensions. Returns raw JSON string.
 
-    Backward-compatible signature: existing call sites that pass only
-    (title, content) keep working. New call sites that need to pass
-    extra prompt context should use ``build_user_prompt`` directly and
-    a custom scorer.
+    Passes profile / source_type / url / published_at to the prompt so
+    the LLM has temporal and source context for accurate scoring.
     """
     from anthropic import AsyncAnthropic
 
@@ -476,7 +482,13 @@ async def anthropic_scorer(title: str, content: str) -> str:
         max_tokens=1024,
         timeout=60.0,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_user_prompt(title, content)}],
+        messages=[{"role": "user", "content": build_user_prompt(
+            title, content,
+            profile=profile,
+            source_type=source_type,
+            url=url,
+            published_at=published_at,
+        )}],
     )
     parts = [
         block.text
@@ -734,8 +746,14 @@ async def score_with_llm(
     *,
     scorer: DimensionScorer | None = None,
     profile: ScoringProfile | None = None,
+    source_type: str | None = None,
+    url: str | None = None,
+    published_at: datetime | None = None,
 ) -> DistilledScore:
     """Score an article using the LLM dimension scorer.
+
+    Passes source_type / url / published_at to the LLM prompt so the
+    scorer has temporal and source context.
 
     Retries up to _LLM_MAX_RETRIES times on failure, with _LLM_RETRY_DELAY
     seconds between attempts. Falls back to default_score() only if all
@@ -746,7 +764,16 @@ async def score_with_llm(
         if not os.environ.get("ANTHROPIC_API_KEY"):
             logger.debug("distilled_scorer.fallback: no ANTHROPIC_API_KEY")
             return default_score(profile)
-        scorer = anthropic_scorer
+        # Use anthropic_scorer with full context
+        async def _contextual_scorer(t: str, c: str) -> str:
+            return await anthropic_scorer(
+                t, c,
+                profile=profile,
+                source_type=source_type,
+                url=url,
+                published_at=published_at,
+            )
+        scorer = _contextual_scorer
 
     for attempt in range(_LLM_MAX_RETRIES + 1):
         try:

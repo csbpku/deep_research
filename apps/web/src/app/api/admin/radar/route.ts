@@ -63,7 +63,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       : {}),
   };
 
-  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [{ createdAt: 'desc' }];
+  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
+    { distilledMustRead: 'desc' },
+    { distilledTotal: 'desc' },
+    { createdAt: 'desc' },
+  ];
 
   const [rawItems, total] = await Promise.all([
     prisma.summary.findMany({
@@ -87,6 +91,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         relevanceScore: true,
         timelinessScore: true,
         sourceQualityScore: true,
+        distilledScore: true,
         selectionReason: true,
         sortOrder: true,
         syncRunId: true,

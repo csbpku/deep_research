@@ -7,6 +7,7 @@ import { EmptyState } from '../../../components/EmptyState';
 import { RadarCandidateCard } from '../../../components/radar/RadarCandidateCard';
 import type { RadarFeedbackCounts } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
+import type { DistilledScore } from '@deep-research/shared/schemas';
 
 interface RadarCandidateListItem {
   id: string;
@@ -23,6 +24,7 @@ interface RadarCandidateListItem {
   relevanceScore: number | null;
   timelinessScore: number | null;
   sourceQualityScore: number | null;
+  distilledScore: DistilledScore | null;
   selectionReason: string | null;
   sortOrder: number | null;
   feedbackCounts: RadarFeedbackCounts;

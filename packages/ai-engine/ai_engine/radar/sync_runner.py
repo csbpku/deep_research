@@ -527,6 +527,9 @@ async def _run_source(
                         normalized.title,
                         markdown or normalized.snippet,
                         profile=profile,
+                        source_type=source.source_type,
+                        url=normalized.url,
+                        published_at=normalized.published_at,
                     )
                     if monitor is not None:
                         monitor.record(distilled_result)

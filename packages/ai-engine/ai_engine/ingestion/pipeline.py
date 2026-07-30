@@ -21,7 +21,14 @@ from ai_engine.job_runner.db_store import AI_TABLE, DbJobStore
 logger = logging.getLogger("ai_engine.ingestion.pipeline")
 FetchRss = Callable[..., Awaitable[list[dict[str, Any]]]]
 FetchArxiv = Callable[..., Awaitable[list[dict[str, Any]]]]
-_TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+# W9 code review 修订：此前三份 canonical URL 实现的 tracking key 清单不一致。
+# share.py / ai_source_urls.py 去 ref+source+msclkid+mc_cid+mc_eid+utm_*+fbclid+gclid，
+# pipeline.py 只去 fbclid/gclid/mc_cid/mc_eid/utm_*，漏了 ref/source/msclkid。
+# 现在统一成同一份白名单。
+_TRACKING_PARAMS = frozenset({
+    "fbclid", "gclid", "msclkid", "mc_cid", "mc_eid",
+    "ref", "source",  # W9: 补齐 pipeline 原来漏掉的
+})
 
 
 @dataclass

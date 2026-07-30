@@ -12,6 +12,7 @@ Each source returns a list of normalized dicts with keys:
 
 from __future__ import annotations
 
+import asyncio
 import html as _html
 import logging
 import re as _re
@@ -33,6 +34,8 @@ _ARXIV_USER_AGENT = "deep-research-ai-engine/0.1 (+https://example.com/deep-rese
 # distinct error so callers can fall back. 503 with Retry-After → rate limit.
 _ARXIV_RATE_LIMIT_STATUS = 429
 _ARXIV_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_ARXIV_MAX_RETRIES = 2
+_ARXIV_RETRY_DEFAULT_WAIT = 5.0  # seconds
 
 
 async def fetch_rss_feeds(
@@ -141,39 +144,53 @@ async def fetch_arxiv(
         headers={"User-Agent": _ARXIV_USER_AGENT},
         follow_redirects=True,
     ) as client:
-        try:
-            resp = await client.get(query_url)
-        except httpx.TimeoutException as exc:
-            logger.warning(
-                "ai-engine.ingestion.arxiv_timeout",
-                extra={"categories": cats, "timeout_s": timeout},
-            )
-            raise RuntimeError(f"arxiv_timeout:{type(exc).__name__}") from exc
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            # DNS / TCP / TLS failures — network layer, not the arxiv service.
-            logger.warning(
-                "ai-engine.ingestion.arxiv_network",
-                extra={"categories": cats, "error_type": type(exc).__name__},
-            )
-            raise RuntimeError(f"arxiv_network:{type(exc).__name__}") from exc
-        except httpx.HTTPError as exc:
-            # Catch-all for the rest of httpx (RemoteProtocolError, etc).
-            logger.warning(
-                "ai-engine.ingestion.arxiv_http_error",
-                extra={"categories": cats, "error_type": type(exc).__name__},
-            )
-            raise RuntimeError(f"arxiv_http_error:{type(exc).__name__}") from exc
+        resp: httpx.Response | None = None
+        for _attempt in range(_ARXIV_MAX_RETRIES + 1):
+            try:
+                resp = await client.get(query_url)
+            except httpx.TimeoutException as exc:
+                logger.warning(
+                    "ai-engine.ingestion.arxiv_timeout",
+                    extra={"categories": cats, "timeout_s": timeout},
+                )
+                raise RuntimeError(f"arxiv_timeout:{type(exc).__name__}") from exc
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                logger.warning(
+                    "ai-engine.ingestion.arxiv_network",
+                    extra={"categories": cats, "error_type": type(exc).__name__},
+                )
+                raise RuntimeError(f"arxiv_network:{type(exc).__name__}") from exc
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "ai-engine.ingestion.arxiv_http_error",
+                    extra={"categories": cats, "error_type": type(exc).__name__},
+                )
+                raise RuntimeError(f"arxiv_http_error:{type(exc).__name__}") from exc
 
-        # Status-code classification happens BEFORE we touch the body.
-        if resp.status_code == _ARXIV_RATE_LIMIT_STATUS or (
-            resp.status_code == 503 and resp.headers.get("retry-after")
-        ):
-            retry_after = resp.headers.get("retry-after", "")
-            logger.warning(
-                "ai-engine.ingestion.arxiv_rate_limited",
-                extra={"categories": cats, "status": resp.status_code, "retry_after": retry_after},
-            )
-            raise RuntimeError(f"arxiv_rate_limited:{resp.status_code}")
+            # Status-code classification happens BEFORE we touch the body.
+            if resp.status_code == _ARXIV_RATE_LIMIT_STATUS or (
+                resp.status_code == 503 and resp.headers.get("retry-after")
+            ):
+                retry_after_raw = resp.headers.get("retry-after", "")
+                if _attempt < _ARXIV_MAX_RETRIES:
+                    try:
+                        wait_s = float(retry_after_raw) if retry_after_raw else _ARXIV_RETRY_DEFAULT_WAIT
+                    except ValueError:
+                        wait_s = _ARXIV_RETRY_DEFAULT_WAIT
+                    logger.info(
+                        "ai-engine.ingestion.arxiv_retry",
+                        extra={"categories": cats, "attempt": _attempt + 1, "wait_s": wait_s},
+                    )
+                    await asyncio.sleep(wait_s)
+                    continue
+                logger.warning(
+                    "ai-engine.ingestion.arxiv_rate_limited",
+                    extra={"categories": cats, "status": resp.status_code, "retry_after": retry_after_raw},
+                )
+                raise RuntimeError(f"arxiv_rate_limited:{resp.status_code}")
+            break
+
+        assert resp is not None  # noqa: S101 — loop always assigns
         if resp.status_code >= 400:
             logger.warning(
                 "ai-engine.ingestion.arxiv_http_error",
@@ -252,34 +269,65 @@ async def fetch_arxiv(
 
 
 def _parse_rss_xml_simple(text: str) -> list[dict[str, str]]:
-    """Parse RSS 2.0 XML and extract <item> entries.
+    """Parse RSS 2.0 and Atom XML, extracting <item> or <entry> elements.
 
     Uses simple regex parsing to avoid feedparser dep. Handles basic CDATA.
+    Atom <entry> elements are mapped to the same dict shape as RSS <item>.
     """
     items: list[dict[str, str]] = []
 
-    # Find all <item>...</item> blocks
-    item_pattern = _re.compile(r"<item>(.*?)</item>", _re.DOTALL)
-    for match in item_pattern.finditer(text):
+    # RSS 2.0: <item>...</item>
+    for match in _re.finditer(r"<item>(.*?)</item>", text, _re.DOTALL):
         block = match.group(1)
         item: dict[str, str] = {}
-
         for field in ("title", "link", "description", "pubDate"):
-            field_pattern = _re.compile(
-                rf"<{field}[^>]*>(.*?)</{field}>", _re.DOTALL
-            )
-            fm = field_pattern.search(block)
+            fm = _re.search(rf"<{field}[^>]*>(.*?)</{field}>", block, _re.DOTALL)
             if fm:
                 value = fm.group(1).strip()
-                # Strip CDATA wrappers
                 if value.startswith("<![CDATA[") and value.endswith("]]>"):
                     value = value[9:-3]
-                # Decode HTML entities
                 value = _html.unescape(value)
                 item[field] = value
-
         if item:
             items.append(item)
+
+    # Atom: <entry>...</entry>
+    # Atom uses <link href="..."/> and <published>/<updated> instead of
+    # <link>...</link> and <pubDate>.
+    for match in _re.finditer(r"<entry>(.*?)</entry>", text, _re.DOTALL):
+        block = match.group(1)
+        atom_item: dict[str, str] = {}
+        # title
+        fm = _re.search(r"<title[^>]*>(.*?)</title>", block, _re.DOTALL)
+        if fm:
+            value = fm.group(1).strip()
+            if value.startswith("<![CDATA[") and value.endswith("]]>"):
+                value = value[9:-3]
+            atom_item["title"] = _html.unescape(value)
+        # link: prefer rel="alternate" (the actual article URL), not
+        # rel="replies" or rel="self" which point to feed/comments.
+        lm = _re.search(r'<link[^>]*rel="alternate"[^>]*href="([^"]+)"', block)
+        if not lm:
+            lm = _re.search(r'<link[^>]*href="([^"]+)"', block)
+        if lm:
+            atom_item["link"] = lm.group(1).strip()
+        # summary/content
+        sm = _re.search(r"<summary[^>]*>(.*?)</summary>", block, _re.DOTALL)
+        if not sm:
+            sm = _re.search(r"<content[^>]*>(.*?)</content>", block, _re.DOTALL)
+        if sm:
+            value = sm.group(1).strip()
+            if value.startswith("<![CDATA[") and value.endswith("]]>"):
+                value = value[9:-3]
+            atom_item["description"] = _html.unescape(value)
+        # published/updated
+        pm = _re.search(r"<published[^>]*>(.*?)</published>", block, _re.DOTALL)
+        if not pm:
+            pm = _re.search(r"<updated[^>]*>(.*?)</updated>", block, _re.DOTALL)
+        if pm:
+            atom_item["pubDate"] = pm.group(1).strip()
+        if atom_item:
+            items.append(atom_item)
 
     return items
 

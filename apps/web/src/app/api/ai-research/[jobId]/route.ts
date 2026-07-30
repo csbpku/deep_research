@@ -9,6 +9,7 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { apiHandler } from '../../../../lib/api-handler';
+import { prisma } from '../../../../lib/db';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { log, withRequestId, serializeError } from '../../../../lib/log';
@@ -44,6 +45,25 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
       message: 'jobId 必须为 UUID',
       requestId,
       details: parsed.error.flatten(),
+    });
+  }
+
+  // 归属校验（W9 code review 修订，S0 越权）：
+  // 此前本端只做 requireUser（确认已登录）就把 jobId 透传给上游，
+  // 而上游 GET /api/ai/jobs/{id} 也只按 job_id 取行，任何登录用户
+  // 拿到别人的 jobId 即可读到其 costCents / tokenTotal / errorMessage /
+  // draftResearchId。这里在反代前先确认 job 属于当前用户。
+  // 非 owner 一律返回 AI_JOB_NOT_FOUND（而非 PERMISSION_DENIED），
+  // 避免把「该 job 存在」这一事实泄露出去。
+  const job = await prisma.aiResearchJob.findUnique({
+    where: { id: parsed.data.jobId },
+    select: { requesterId: true },
+  });
+  if (job === null || job.requesterId !== u.id) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.AI_JOB_NOT_FOUND,
+      message: '任务不存在',
+      requestId,
     });
   }
 

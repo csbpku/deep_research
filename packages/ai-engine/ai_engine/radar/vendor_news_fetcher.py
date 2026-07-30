@@ -23,6 +23,10 @@ from ai_engine.radar.models import RadarCandidate
 
 logger = logging.getLogger("vendor_news_fetcher")
 
+# Cap on first-run fetch: when no previous state exists, all sitemap URLs
+# are "new". This limit prevents fetching hundreds of pages on first run.
+_FIRST_RUN_MAX_FETCH = 10
+
 _VENDOR_CONFIGS: dict[str, dict[str, Any]] = {
     "anthropic": {
         "sitemap_url": "https://www.anthropic.com/sitemap.xml",
@@ -31,8 +35,8 @@ _VENDOR_CONFIGS: dict[str, dict[str, Any]] = {
         "tags": ("vendor", "anthropic"),
     },
     "openai": {
-        "sitemap_url": "https://openai.com/sitemap.xml",
-        "url_pattern": r"/news/|/blog/",
+        "sitemap_url": "https://openai.com/news/rss.xml",
+        "url_pattern": r"/index/|/news/|/blog/",
         "quality_hint": 0.9,
         "tags": ("vendor", "openai"),
     },
@@ -73,10 +77,18 @@ async def _fetch_sitemap(url: str, *, client: httpx.AsyncClient) -> str:
 
 
 def _parse_sitemap(xml: str, url_pattern: str) -> dict[str, str]:
-    """Parse sitemap XML, return {url: lastmod} for matching urls."""
+    """Parse sitemap XML or RSS feed, return {url: lastmod} for matching urls.
+
+    Handles three formats:
+    - Sitemap index: <sitemap><loc>...</loc></sitemap> → returns empty
+      (caller should follow sub-sitemaps; not implemented here)
+    - URL sitemap: <url><loc>...</loc><lastmod>...</lastmod></url>
+    - RSS feed: <item><link>...</link><pubDate>...</pubDate></item>
+    """
     results: dict[str, str] = {}
     pattern = _re.compile(url_pattern)
-    # Handle both flat sitemap and sitemap index
+
+    # URL sitemap entries
     for match in _re.finditer(
         r"<url>\s*<loc>(.*?)</loc>(?:\s*<lastmod>(.*?)</lastmod>)?",
         xml, _re.DOTALL,
@@ -85,6 +97,29 @@ def _parse_sitemap(xml: str, url_pattern: str) -> dict[str, str]:
         if not pattern.search(url):
             continue
         results[url] = (match.group(2) or "").strip()
+
+    # RSS feed entries (for vendors that offer RSS instead of sitemap)
+    for match in _re.finditer(
+        r"<item>.*?<link>(.*?)</link>.*?(?:<pubDate>(.*?)</pubDate>)?",
+        xml, _re.DOTALL,
+    ):
+        url = match.group(1).strip()
+        if not pattern.search(url):
+            continue
+        if url not in results:
+            results[url] = (match.group(2) or "").strip()
+
+    # Atom feed entries
+    for match in _re.finditer(
+        r"<entry>.*?<link[^>]*href=\"([^\"]+)\".*?(?:<published>(.*?)</published>)?",
+        xml, _re.DOTALL,
+    ):
+        url = match.group(1).strip()
+        if not pattern.search(url):
+            continue
+        if url not in results:
+            results[url] = (match.group(2) or "").strip()
+
     return results
 
 
@@ -103,6 +138,25 @@ def _extract_article_text(html: str) -> str:
     text = _re.sub(r"\n\s*\n", "\n\n", text)
     lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) > 5]
     return "\n".join(lines)
+
+
+def _parse_rss_items(xml: str) -> dict[str, dict[str, str]]:
+    """Parse RSS <item> elements, return {url: {title, description, pubDate}}."""
+    results: dict[str, dict[str, str]] = {}
+    for match in _re.finditer(r"<item>(.*?)</item>", xml, _re.DOTALL):
+        block = match.group(1)
+        item: dict[str, str] = {}
+        for field in ("title", "link", "description", "pubDate"):
+            fm = _re.search(rf"<{field}[^>]*>(.*?)</{field}>", block, _re.DOTALL)
+            if fm:
+                value = fm.group(1).strip()
+                if value.startswith("<![CDATA[") and value.endswith("]]>"):
+                    value = value[9:-3]
+                item[field] = value
+        link = item.get("link", "").strip()
+        if link:
+            results[link] = item
+    return results
 
 
 def _infer_title(text: str, url: str) -> str:
@@ -144,23 +198,57 @@ async def check_and_fetch_vendor_news(
         # 2. Diff with previous state
         state = _load_state()
         previous = state.get(vendor, {})
+        is_first_run = len(previous) == 0
         new_or_changed = []
         for url, lastmod in current_urls.items():
             prev = previous.get(url)
             if prev is None or (lastmod and prev != lastmod):
                 new_or_changed.append(url)
 
+        # First-run cap: only fetch the N most recent URLs to avoid
+        # overwhelming the vendor site and our pipeline on initial setup.
+        if is_first_run and len(new_or_changed) > _FIRST_RUN_MAX_FETCH:
+            logger.info(
+                "vendor_news_first_run_cap",
+                extra={
+                    "vendor": vendor,
+                    "total_new": len(new_or_changed),
+                    "capped_to": _FIRST_RUN_MAX_FETCH,
+                },
+            )
+            new_or_changed = new_or_changed[:_FIRST_RUN_MAX_FETCH]
+
         # 3. Persist state
         state[vendor] = current_urls
         _save_state(state)
 
-        # 4. Fetch new/changed pages
+        # 4. Parse RSS metadata for fallback (when HTML pages require JS)
+        rss_metadata = _parse_rss_items(xml) if "<item>" in xml else {}
+
+        # 5. Fetch new/changed pages
         for url in new_or_changed:
             try:
                 resp = await http.get(url)
                 resp.raise_for_status()
                 text = _extract_article_text(resp.text)
                 if len(text) < 100:
+                    # HTML extraction failed (JS-required pages like OpenAI).
+                    # Fall back to RSS <description> if available.
+                    meta = rss_metadata.get(url, {})
+                    desc = meta.get("description", "").strip()
+                    rss_title = meta.get("title", "").strip()
+                    if rss_title or desc:
+                        title = rss_title or _infer_title(desc, url)
+                        snippet = desc[:500] if desc else title
+                        candidates.append(RadarCandidate(
+                            title=title[:300],
+                            url=url,
+                            snippet=snippet,
+                            published_at=datetime.now(timezone.utc),
+                            content_origin="web",
+                            tags=cfg["tags"],
+                            source_quality_hint=cfg["quality_hint"],
+                        ))
                     continue
                 title = _infer_title(text, url)
                 snippet = text[:500].replace("\n", " ")
@@ -174,7 +262,24 @@ async def check_and_fetch_vendor_news(
                     source_quality_hint=cfg["quality_hint"],
                 ))
             except Exception as exc:
-                logger.warning("vendor_news_fetch_failed", extra={"url": url, "error": str(exc)})
+                # Last resort: use RSS metadata if HTML fetch failed entirely
+                meta = rss_metadata.get(url, {})
+                rss_title = meta.get("title", "").strip()
+                desc = meta.get("description", "").strip()
+                if rss_title or desc:
+                    title = rss_title or _infer_title(desc, url)
+                    snippet = desc[:500] if desc else title
+                    candidates.append(RadarCandidate(
+                        title=title[:300],
+                        url=url,
+                        snippet=snippet,
+                        published_at=datetime.now(timezone.utc),
+                        content_origin="web",
+                        tags=cfg["tags"],
+                        source_quality_hint=cfg["quality_hint"],
+                    ))
+                else:
+                    logger.warning("vendor_news_fetch_failed", extra={"url": url, "error": str(exc)})
 
         logger.info(
             "vendor_news_checked",
