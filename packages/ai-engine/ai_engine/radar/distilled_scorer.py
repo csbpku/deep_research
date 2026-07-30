@@ -43,6 +43,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -773,11 +774,13 @@ async def score_with_llm(
                 url=url,
                 published_at=published_at,
             )
-        scorer = _contextual_scorer
+        active_scorer: Callable[[str, str], Awaitable[str]] = _contextual_scorer
+    else:
+        active_scorer = scorer
 
     for attempt in range(_LLM_MAX_RETRIES + 1):
         try:
-            raw = await scorer(title, content)
+            raw = await active_scorer(title, content)
             parsed = _parse_llm_response(raw)
             return compute_score(parsed, profile=profile)
         except Exception as exc:

@@ -213,3 +213,31 @@ __all__ = [
     "get_profile",
     "list_profiles",
 ]
+
+# ── Source-type → profile mapping ─────────────────────────────────
+
+_SOURCE_PROFILE_MAP: dict[str, str] = {
+    "arxiv": PROFILE_PAPER,
+    "github": PROFILE_ENGINEERING,
+    "github_trending": PROFILE_ENGINEERING,
+    "github_topic_search": PROFILE_ENGINEERING,
+    "huggingface_models": PROFILE_ENGINEERING,
+    "devto": PROFILE_ENGINEERING,
+    "producthunt": PROFILE_NEWS,
+    "rss": PROFILE_NEWS,
+    "hackernews": PROFILE_NEWS,
+    "reddit": PROFILE_NEWS,
+    "lobsters": PROFILE_NEWS,
+    "wechat": PROFILE_NEWS,
+    "vendor_news": PROFILE_NEWS,
+    "sitemap_watch": PROFILE_NEWS,
+}
+
+
+def profile_for_source(source_type: str) -> tuple[ScoringProfile, str]:
+    """Return (profile, profile_id) for a given radar source type.
+
+    Unknown source types default to ``engineering``.
+    """
+    profile_id = _SOURCE_PROFILE_MAP.get(source_type, PROFILE_ENGINEERING)
+    return get_profile(profile_id), profile_id

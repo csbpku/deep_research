@@ -44,3 +44,25 @@ docs/inputs/
 docs/notes/
 .claude/
 packages/ai-engine/reports/
+
+# 真实数据 / 运行时产物（绝对不能进 git）
+# infra/backups: pg_dump 产物，含用户邮箱、文章正文、评论
+infra/backups/
+# infra/wewe-rss: 独立 WeChat RSS 附属栈，data/ 下是真实 SQLite 订阅库
+infra/wewe-rss/data/
+# docker compose 启动时在宿主机创建的挂载目录
+infra/logs/
+infra/certs/
+
+# 测试产物
+apps/web/test-results/
+apps/web/playwright-report/
+
+# Colima / lima / docker temp binaries (local testing only)
+/.bin/
+/.lima
+/.lima-dist/
+/.lima-native/
+/.limactl
+/.omo/
+.vendor_news_state.json
