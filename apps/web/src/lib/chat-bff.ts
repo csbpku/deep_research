@@ -20,6 +20,11 @@ export interface ChatSeedSnapshot {
   interpretation: string | null;
   summary_date: string;
   tags: string[];
+  // Phase 1 deep-dive: original source captured by radar sync. Null
+  // for pre-Phase-0 rows; chat UI should hide the "AI 上下文：原文"
+  // chip when both are null.
+  original_markdown: string | null;
+  original_kind: string | null;
 }
 
 export interface UpstreamChatMessage {
@@ -128,7 +133,9 @@ export async function readUpstreamJson(
     code,
     message: upstream.message ?? `ai-engine 返回 ${response.status}`,
     requestId: upstream.requestId ?? upstream.request_id ?? requestId,
-    details: upstream.details,
+    // W9 安全复审修订：此前 upstream.details 原样透传，若 ai-engine
+    // 内网异常时带堆栈/路径，这些信息会泄露给客户端。已改为只记录日志，
+    // 不再包含在客户端响应里。
   });
 }
 
@@ -158,6 +165,8 @@ export function publicChatSession(session: UpstreamChatSession) {
       interpretation: session.seed_snapshot.interpretation,
       summaryDate: session.seed_snapshot.summary_date,
       tags: session.seed_snapshot.tags,
+      originalMarkdown: session.seed_snapshot.original_markdown,
+      originalKind: session.seed_snapshot.original_kind,
     },
     ...(session.message_count !== undefined ? { messageCount: session.message_count } : {}),
     ...(session.messages

@@ -1,13 +1,21 @@
 'use client';
 
+import { useParams } from 'next/navigation';
+
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
 import { EmptyState } from '../../../components/EmptyState';
+import { CommentSection } from '../../../components/CommentSection';
+import { useCurrentUser } from '../../../lib/auth/client';
 import { AskAiDrawer } from '../../../components/radar/AskAiDrawer';
 import { RadarFeedbackBar } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackCounts } from '../../../components/radar/RadarFeedbackBar';
+import { RadarRepoStructureCard } from '../../../components/radar/RadarRepoStructureCard';
+import { RadarArxivPaperCard } from '../../../components/radar/RadarArxivPaperCard';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
+import type { DistilledScore } from '@deep-research/shared/schemas';
+import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
 
 interface RadarDetail {
   id: string;
@@ -26,15 +34,45 @@ interface RadarDetail {
   relevanceScore: number | null;
   timelinessScore: number | null;
   sourceQualityScore: number | null;
+  distilledScore: DistilledScore | null;
   selectionReason: string | null;
   sortOrder: number | null;
   summaryDate: string;
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
   canManage: boolean;
+  // Phase 2A deep-dive: originalKind dispatches to a structured card;
+  // originalMeta carries GitHub repo enrichment payload.
+  originalKind: string | null;
+  originalMarkdown: string | null;
+  originalMeta: RepoMeta | null;
+  // Phase 2B deep-dive: arxiv paper parsed structure.
+  tldr: string | null;
+  sections: Array<{ title: string; level: number; startOffset: number; page?: number }> | null;
+  figures: Array<{ page: number; caption?: string; dataUrl?: string }> | null;
+  authors: string[];
 }
 
-export default function RadarDetailPage({ params }: { params: { id: string } }) {
+interface RepoMeta {
+  provider?: string;
+  defaultBranch?: string | null;
+  language?: string | null;
+  stars?: number | null;
+  lastPushedAt?: string | null;
+  description?: string | null;
+  tree?: Array<{ path: string; type: 'blob' | 'tree' | 'commit'; size?: number; key?: boolean }>;
+  entryPoints?: string[];
+  fetchedAt?: string;
+  trimmed?: boolean;
+}
+
+function parseOwnerRepo(url: string): { owner: string; repo: string } | null {
+  const m = url.match(/github\.com\/([^/]+)\/([^/]+)/);
+  return m ? { owner: m[1], repo: m[2].replace(/\.git$/, '') } : null;
+}
+
+export default function RadarDetailPage() {
+  const params = useParams<{ id: string }>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const q = useQuery<RadarDetail>({
     queryKey: ['radar', params.id],
@@ -88,6 +126,21 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
           >
             来源 {d.sourceType ?? 'unknown'}
           </span>
+          {d.originalKind ? (
+            <span
+              data-testid="original-kind-badge"
+              style={{
+                padding: '2px 8px',
+                border: '1px solid #7c3aed',
+                borderRadius: 12,
+                fontSize: 11,
+                color: '#7c3aed',
+                background: '#faf5ff',
+              }}
+            >
+              {d.originalKind}
+            </span>
+          ) : null}
           <span style={{ fontSize: 12, color: '#94a3b8' }}>
             抓取 {new Date(d.crawledAt).toISOString().slice(0, 10)}
           </span>
@@ -97,6 +150,30 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
         </header>
 
         <h1 style={{ fontSize: 24, marginTop: 12, marginBottom: 8 }}>{d.title}</h1>
+
+        {d.originalKind === 'github_repo' && d.originalMeta && (() => {
+          const parsed = parseOwnerRepo(d.url);
+          if (!parsed) return null;
+          return (
+            <RadarRepoStructureCard
+              meta={d.originalMeta}
+              owner={parsed.owner}
+              repo={parsed.repo}
+            />
+          );
+        })()}
+
+        {d.originalKind === 'arxiv' && (
+          <RadarArxivPaperCard
+            meta={(d.originalMeta as RepoMeta) ?? {}}
+            title={d.title}
+            authors={d.authors}
+            tldr={d.tldr}
+            sections={d.sections ?? []}
+            figures={d.figures ?? []}
+            markdown={d.originalMarkdown}
+          />
+        )}
 
         {d.interpretation ? (
           <p
@@ -115,34 +192,40 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
           </p>
         ) : null}
 
-        <section
-          aria-label="三维评分"
-          style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}
-        >
-          {(['relevanceScore', 'timelinessScore', 'sourceQualityScore'] as const).map((k) => {
-            const v = d[k];
-            const labels: Record<string, string> = {
-              relevanceScore: '相关性',
-              timelinessScore: '时效',
-              sourceQualityScore: '来源质量',
-            };
-            if (v === null) return null;
-            return (
-              <span
-                key={k}
-                style={{
-                  padding: '4px 10px',
-                  background: '#f1f5f9',
-                  borderRadius: 14,
-                  fontSize: 13,
-                  color: '#334155',
-                }}
-              >
-                <strong>{labels[k]}</strong> {v.toFixed(2)}
-              </span>
-            );
-          })}
-        </section>
+        {d.distilledScore ? (
+          <div style={{ margin: '12px 0' }}>
+            <DistilledScorePanel score={d.distilledScore} />
+          </div>
+        ) : (
+          <section
+            aria-label="启发式预筛分"
+            style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}
+          >
+            {(['relevanceScore', 'timelinessScore', 'sourceQualityScore'] as const).map((k) => {
+              const v = d[k];
+              const labels: Record<string, string> = {
+                relevanceScore: '相关性',
+                timelinessScore: '时效',
+                sourceQualityScore: '来源质量',
+              };
+              if (v === null) return null;
+              return (
+                <span
+                  key={k}
+                  style={{
+                    padding: '4px 10px',
+                    background: '#f1f5f9',
+                    borderRadius: 14,
+                    fontSize: 13,
+                    color: '#334155',
+                  }}
+                >
+                  <strong>{labels[k]}</strong> {v.toFixed(2)}
+                </span>
+              );
+            })}
+          </section>
+        )}
 
         {d.scoreReason ? (
           <p style={{ fontSize: 13, color: '#475569', margin: '4px 0 12px' }}>
@@ -169,7 +252,7 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
           </p>
         ) : null}
 
-        {d.body ? (
+        {d.body && d.body !== d.interpretation ? (
           <div
             style={{
               whiteSpace: 'pre-wrap',
@@ -287,6 +370,35 @@ export default function RadarDetailPage({ params }: { params: { id: string } }) 
           onOpenChange={setDrawerOpen}
         />
       </article>
+
+      {/* W9 code review 修订：Week 8 计划 §十 要求「在雷达、摘要和沉淀详情
+          复用基础评论组件」，此前只接了摘要和沉淀两处，雷达这条腿一直缺。
+          雷达候选本身就是 summaries 行（/api/radar/[id] 走 prisma.summary），
+          所以 targetType 用 'summary' 即可，不需要动已冻结的 schema。
+
+          只在 published 时渲染：/api/summaries/[id]/comments 对非 published
+          目标一律返回 404（route.ts:57,132）。候选在 candidate /
+          pending_review 态挂评论区，只会得到一个必然报错的空壳。 */}
+      <RadarComments summaryId={d.id} status={d.status} />
     </div>
+  );
+}
+
+function RadarComments({ summaryId, status }: { summaryId: string; status: string }) {
+  const me = useCurrentUser();
+  if (status !== 'published') {
+    return (
+      <p style={{ marginTop: 32, fontSize: 13, color: '#94a3b8' }}>
+        该候选尚未选入每日摘要，选入发布后可在此讨论。
+      </p>
+    );
+  }
+  return (
+    <CommentSection
+      targetType="summary"
+      targetId={summaryId}
+      currentUserId={me.data?.id ?? null}
+      currentUserRole={me.data?.role ?? null}
+    />
   );
 }

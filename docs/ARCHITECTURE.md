@@ -86,7 +86,7 @@
 - 编辑器：react-md-editor。
 - Auth：NextAuth.js + Google OAuth。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；P0 使用 `simple` 配置，`zhparser` 升级留 P1。
-- AI：Week 1 spike 后在 gpt-researcher 与简单 Claude pipeline 中选主引擎，另一条作为 fallback。
+- AI：主引擎 gpt-researcher (ADR 0004, 2026-07-27 复评通过)；FakeAdapter 为测试/CI fallback。
 - 数据源：Tavily、arxiv、GitHub；arxiv MCP 仅在原生 API 不够时启用。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
 
@@ -331,7 +331,7 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 
 | 风险 | P0 处理 |
 |---|---|
-| AI 引擎中文质量或集成成本不达标 | Week 1 三个真实主题 spike，不达标切简单 Claude pipeline |
+| AI 引擎中文质量或集成成本不达标 | Week 1 三个真实主题 spike；2026-07-27 复评切 gpt-researcher (ADR 0004) |
 | 长任务超时、重复计费或永久 running | DB queue、幂等 key、租约、心跳、重试、5 分钟超时 |
 | URL SSRF | 统一抓取器、逐次重定向 IP 校验、大小与时间限制 |
 | 文件携带恶意 HTML 或静默丢内容 | MIME + 扩展名校验、HTML 清洗、warnings、24 小时 TTL |

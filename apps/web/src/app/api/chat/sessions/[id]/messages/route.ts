@@ -23,6 +23,10 @@ import type { UpstreamChatMessage, UpstreamChatSession } from '../../../../../..
 const SessionIdParam = z.object({ id: z.string().uuid() });
 const CreateChatMessageInput = z.object({
   content: z.string().trim().min(1).max(4000),
+  // Phase 3.b: optional text-selection anchor
+  anchor: z
+    .object({ quote: z.string().max(4000), startOffset: z.number().int(), endOffset: z.number().int() })
+    .optional(),
 }).strict();
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
@@ -68,6 +72,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         user_id: user.id,
         role: 'user',
         content: input.content,
+        // Phase 3.b: forward text-selection anchor to ai-engine
+        ...(input.anchor ? { anchor: input.anchor } : {}),
       }),
     },
     requestId,

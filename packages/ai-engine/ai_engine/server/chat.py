@@ -73,6 +73,11 @@ class ChatSeedSnapshot(BaseModel):
     interpretation: str | None
     summary_date: str
     tags: list[str]
+    # Phase 1 deep-dive: full original source captured by radar sync
+    # (see packages/ai-engine/ai_engine/radar/sync_runner.py). Optional
+    # because pre-Phase-0 rows won't have it; chat behaves as before when null.
+    original_markdown: str | None = None
+    original_kind: str | None = None
 
 
 class CreateChatSessionResponse(BaseModel):
@@ -109,6 +114,10 @@ class AppendMessageBody(BaseModel):
     user_id: str
     role: AiChatRole = Field(default="user")
     content: str = Field(min_length=1, max_length=4000)
+    # Phase 3.b: optional text-selection anchor.
+    # When present, the selected quote is prepended to the user message
+    # so the assistant can ground its answer in the exact passage.
+    anchor: dict[str, Any] | None = None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -163,7 +172,8 @@ async def _load_summary(pool: Any, summary_id: str) -> dict[str, Any] | None:
         row = await (
             await conn.execute(
                 'SELECT "id", "title", "url", "body", "interpretation", '
-                '"summaryDate", "tags" FROM "summaries" WHERE "id" = %s',
+                '"summaryDate", "tags", "originalMarkdown", "originalKind" '
+                'FROM "summaries" WHERE "id" = %s',
                 (summary_id,),
             )
         ).fetchone()
@@ -252,6 +262,12 @@ async def _build_prompt(
         snapshot_interpretation=seed_interp,
         history=history,
         user_msg=user_msg["content"],
+        original_markdown=snapshot.get("original_markdown"),
+        original_kind=snapshot.get("original_kind"),
+        # include_original defaults True; the UI toggle will plumb a
+        # session-level flag in Phase 1.4 (left as future work — current
+        # default behaviour is to use the original when available).
+        include_original=True,
     )
     return built.system + "\n\n" + built.user, built.estimated_tokens
 
@@ -285,6 +301,11 @@ async def create_session(
         "summary_date": summary["summaryDate"].isoformat()[:10]
         if summary.get("summaryDate") else "",
         "tags": list(summary.get("tags") or []),
+        # Phase 1 deep-dive fields — may be None for rows ingested
+        # before Phase 0 sync ran.
+        "original_markdown": (summary.get("originalMarkdown") or "")[:_SNAPSHOT_BODY_MAX]
+        if summary.get("originalMarkdown") else None,
+        "original_kind": summary.get("originalKind"),
     }
 
     async with pool.connection() as conn:
@@ -448,7 +469,15 @@ async def append_message(
             )
         ).fetchall()
     history = [{"role": r["role"], "content": r["content"]} for r in h_rows]
-    user_msg = {"role": "user", "content": body.content}
+    user_msg_content = body.content
+    # Phase 3.b: prepend anchor quote to user message
+    if body.anchor and isinstance(body.anchor, dict) and body.anchor.get("quote"):
+        anchor_quote: Any = body.anchor["quote"]
+        user_msg_content = (
+            f'[引用] "{anchor_quote}"\n\n'
+            + user_msg_content
+        )
+    user_msg: dict[str, str] = {"role": "user", "content": user_msg_content}
 
     prompt, tokens_in_est = await _build_prompt(pool, snapshot, history, user_msg, adapter)
 

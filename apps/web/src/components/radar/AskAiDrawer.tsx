@@ -32,6 +32,10 @@ interface ChatSession {
     interpretation: string | null;
     summaryDate: string;
     tags: string[];
+    // Phase 1 deep-dive: original source captured by radar sync. Null
+    // for pre-Phase-0 rows.
+    originalMarkdown: string | null;
+    originalKind: string | null;
   };
   messages: ChatMessage[];
 }
@@ -133,7 +137,7 @@ export function AskAiDrawer({
     }, 300);
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, anchor?: { quote: string; startOffset: number; endOffset: number } | null) {
     const trimmed = content.trim();
     if (!trimmed || !session || sending) return;
     setSending(true);
@@ -150,10 +154,19 @@ export function AskAiDrawer({
     });
     setInput('');
     try {
+      // Phase 3.b: attach anchor if user selected text before asking
+      const body: Record<string, unknown> = { content: trimmed };
+      if (anchor?.quote) {
+        body.anchor = {
+          quote: anchor.quote,
+          startOffset: anchor.startOffset,
+          endOffset: anchor.endOffset,
+        };
+      }
       const res = await fetch(`/api/chat/sessions/${session.sessionId}/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: trimmed }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -180,7 +193,7 @@ export function AskAiDrawer({
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      void sendMessage(input);
+      void sendMessage(input, null);
     }
   }
 
@@ -293,7 +306,11 @@ export function AskAiDrawer({
           }}
         >
           <span style={{ color: '#7c3aed' }}>✨</span>
-          <span>AI 上下文：原文 + interpretation</span>
+          <span>
+            {session?.seedSnapshot.originalMarkdown
+              ? 'AI 上下文：原文 + 解读 + 摘要'
+              : 'AI 上下文：原文 + interpretation'}
+          </span>
         </div>
 
         {/* Suggestion chips */}
@@ -310,7 +327,7 @@ export function AskAiDrawer({
                 key={s}
                 type="button"
                 disabled={sending || !session}
-                onClick={() => void sendMessage(s)}
+                onClick={() => void sendMessage(s, null)}
                 style={{
                   fontSize: 12,
                   padding: '4px 10px',

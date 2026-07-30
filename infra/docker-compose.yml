@@ -1,3 +1,27 @@
+# Docker Compose for the Deep Research platform (P0 target topology).
+#
+# 服务：
+#   - postgres (16-alpine)：业务库 + 两个任务队列 + 全文索引
+#   - web (apps/web)：Next.js 15 + BFF + Prisma client
+#   - ai-engine (packages/ai-engine)：FastAPI + workers
+#   - nginx (1.27-alpine)：TLS 终止 + 反代
+#
+# 重要约定（架构 §十三 §3）：
+#   - import-tmp 是隔离卷；不进入数据库备份
+#   - backups 挂到 postgres 容器内 /backups，由 pg-backup.sh 写入
+#   - 健康检查：postgres 用 pg_isready；web/ai-engine 用各自 /healthz
+#
+# 启动：
+#   cp .env.example .env && vi .env   # 填 TAVILY/ANTHROPIC key
+#   docker compose build
+#   docker compose up -d
+#
+# 备份：
+#   docker compose exec postgres bash -c '/usr/local/bin/pg-backup.sh'
+#
+# 清理：
+#   docker compose exec web bash -c '/usr/local/bin/import-tmp-cleanup.sh --apply'
+
 name: deep-research
 
 services:
@@ -6,13 +30,18 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # W9 code review 修订：此前硬编码 postgres/postgres。改为强制从 .env 注入，
+      # 缺失时 compose 直接失败，不给弱口令留默认值。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: deep_research
     ports:
-      - "5432:5432"
+      # W9 code review 修订：此前是 "5432:5432"，即绑 0.0.0.0，部署到 VPS 后
+      # Postgres 直接暴露在公网。web / ai-engine 走 compose 内网访问，不需要
+      # 端口映射；这里只绑回环，保留本机 psql / Prisma Studio 的调试通路。
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./backups:/backups                # 备份输出（按 §十三 §8 pg_dump 落这里）
+      - ./backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -25,9 +54,13 @@ services:
       dockerfile: infra/web.Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/deep_research
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/deep_research
       AI_ENGINE_URL: http://ai-engine:4000
       NODE_ENV: production
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set in .env}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "3000:3000"
     depends_on:
@@ -36,7 +69,10 @@ services:
       ai-engine:
         condition: service_started
     volumes:
-      - import-tmp:/data/import-tmp       # P0 文件导入隔离（架构 §四点七）
+      - import-tmp:/data/import-tmp       # P0 文件导入隔离
+      - ./logs/web:/var/log/web           # 结构化访问日志
+      - ./infra/import-tmp-cleanup.sh:/usr/local/bin/import-tmp-cleanup.sh:ro
+    # HEALTHCHECK 已写在 Dockerfile 内
 
   ai-engine:
     build:
@@ -44,14 +80,42 @@ services:
       dockerfile: infra/ai-engine.Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/deep_research
-      TAVILY_API_KEY: ${TAVILY_API_KEY:?set in .env}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set in .env}
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/deep_research
+      JOB_RUNNER_BACKEND: db
+      AI_ENGINE_ADAPTER: gpt_researcher
+      SMART_LLM: ${SMART_LLM:-anthropic:claude-haiku-4-5@20251001}
+      FAST_LLM: ${FAST_LLM:-anthropic:deepseek-v4-flash}
+      STRATEGIC_LLM: ${STRATEGIC_LLM:-anthropic:claude-haiku-4-5@20251001}
+      BRIEF_LLM: ${BRIEF_LLM:-anthropic:deepseek-v4-flash}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      RETRIEVER: ${RETRIEVER:-tavily}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      # Heavy tier (Shopee compass gateway) — optional, falls back to light.
+      ANTHROPIC_API_KEY_HEAVY: ${ANTHROPIC_API_KEY_HEAVY:-}
+      ANTHROPIC_BASE_URL_HEAVY: ${ANTHROPIC_BASE_URL_HEAVY:-}
+      # Radar 源 token（缺失时对应源快速失败，不影响其他源）
+      GH_TOKEN: ${GH_TOKEN:-}
+      PRODUCTHUNT_API_TOKEN: ${PRODUCTHUNT_API_TOKEN:-}
+      # Radar deep-dive feature flag (Phase 0+)
+      RADAR_DEEPDIVE_ENABLED: ${RADAR_DEEPDIVE_ENABLED:-true}
+      BUDGET_TEAM_DAILY: "20"
+      BUDGET_USER_DAILY: "5"
+      WORKER_LEASE_SECONDS: "60"
+      WORKER_HEARTBEAT_SECONDS: "15"
+      WORKER_MAX_RETRIES: "3"
+      WORKER_REAPER_INTERVAL_SECONDS: "30"
+      URL_FETCH_MAX_BYTES: "2097152"
+      URL_FETCH_TIMEOUT_SECONDS: "10"
+      URL_FETCH_MAX_REDIRECTS: "3"
     ports:
       - "4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./logs/ai-engine:/var/log/ai-engine
+    # HEALTHCHECK 已写在 Dockerfile 内
 
   nginx:
     image: nginx:1.27-alpine
@@ -62,6 +126,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
+      - ./logs/nginx:/var/log/nginx
     depends_on:
       - web
       - ai-engine

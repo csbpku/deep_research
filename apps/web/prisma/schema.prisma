@@ -15,7 +15,7 @@ generator client {
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
-  extensions = [pg_trgm, citext]  // Week 4 中文搜索：simple 字典 + pg_trgm 字节重叠；zhparser 装机推 W5（PG16 SDK14 vs SDK26 路径阻塞 + scws 未装）
+  extensions = [pg_trgm, citext] // Week 4 中文搜索：simple 字典 + pg_trgm 字节重叠；zhparser 装机推 W5（PG16 SDK14 vs SDK26 路径阻塞 + scws 未装）
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -163,29 +163,29 @@ enum AiChatRole {
 // ─────────────────────────────────────────────────────────────────────
 
 model User {
-  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email         String     @unique @db.Citext
-  name          String     @db.VarChar(80)
-  avatarUrl     String?    @db.VarChar(2048)
-  role          UserRole   @default(member)
-  disabledAt    DateTime?  @db.Timestamptz(3)
-  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email      String    @unique @db.Citext
+  name       String    @db.VarChar(80)
+  avatarUrl  String?   @db.VarChar(2048)
+  role       UserRole  @default(member)
+  disabledAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   // 反向
-  summariesShared   Summary[]        @relation("summary_shared_by")
-  researchesAuthor  Research[]       @relation("research_author")
-  researchAudit     ResearchAudit[]
-  comments          Comment[]
-  commentStars      CommentStar[]
-  aiJobs            AiResearchJob[]
-  importJobs        ContentImportJob[]
-  productEvents     ProductEvent[]
-  adminActions      AdminAction[]
-  sharesSubmitted   ShareSubmission[] @relation("share_submitter")
-  sharesReviewed    ShareSubmission[] @relation("share_reviewer")
-  radarFeedback     RadarFeedback[]
-  chatSessions      AiChatSession[]
+  summariesShared  Summary[]          @relation("summary_shared_by")
+  researchesAuthor Research[]         @relation("research_author")
+  researchAudit    ResearchAudit[]
+  comments         Comment[]
+  commentStars     CommentStar[]
+  aiJobs           AiResearchJob[]
+  importJobs       ContentImportJob[]
+  productEvents    ProductEvent[]
+  adminActions     AdminAction[]
+  sharesSubmitted  ShareSubmission[]  @relation("share_submitter")
+  sharesReviewed   ShareSubmission[]  @relation("share_reviewer")
+  radarFeedback    RadarFeedback[]
+  chatSessions     AiChatSession[]
 
   @@index([role, disabledAt])
   @@map("users")
@@ -196,52 +196,78 @@ model User {
 // ─────────────────────────────────────────────────────────────────────
 
 model Summary {
-  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  title               String         @db.VarChar(300)
-  body                String         @db.Text
-  url                 String         @db.VarChar(2048)
-  canonicalUrl        String         @unique @db.VarChar(2048)
+  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title               String        @db.VarChar(300)
+  body                String        @db.Text
+  url                 String        @db.VarChar(2048)
+  canonicalUrl        String        @unique @db.VarChar(2048)
   source              SummarySource
-  contentOrigin       ContentOrigin  @default(web)
-  userNote            String?        @db.VarChar(500)
-  sharedByUserId      String?        @db.Uuid
-  summaryDate         DateTime       @db.Date
-  publishedAt         DateTime?      @db.Timestamptz(3)
+  contentOrigin       ContentOrigin @default(web)
+  userNote            String?       @db.VarChar(500)
+  sharedByUserId      String?       @db.Uuid
+  summaryDate         DateTime      @db.Date
+  publishedAt         DateTime?     @db.Timestamptz(3)
   // 从 URL 抓取来的 hash，用于去重
-  contentSha256       String?        @db.Char(64)
-  status              SummaryStatus  @default(candidate)
+  contentSha256       String?       @db.Char(64)
+  status              SummaryStatus @default(candidate)
   // 索引与分析时使用的轻量 AI 调用计数
-  ingestionTokenCount Int            @default(0)
-  tags                String[]       @default([])
-  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
+  ingestionTokenCount Int           @default(0)
+  tags                String[]      @default([])
+  createdAt           DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime      @updatedAt @db.Timestamptz(3)
 
-  sharedBy            User?          @relation("summary_shared_by", fields: [sharedByUserId], references: [id], onDelete: SetNull)
+  sharedBy User? @relation("summary_shared_by", fields: [sharedByUserId], references: [id], onDelete: SetNull)
 
   // 全文搜索（架构 §86 zhparser + tsvector/GIN；Week 4 由 prisma migration 加列）
   // 实际 tsvector 列与触发器在第二个 migration 里手工加
 
   // Week 5 雷达字段：评分 / 解读 / 同步批次
-  relevanceScore      Float?              // 相关性 0..1
-  timelinessScore     Float?              // 时效/趋势 0..1
-  sourceQualityScore  Float?              // 来源质量 0..1
-  scoreVersion        String?             @db.VarChar(16)  // 评分版本号
-  scoreReason         String?             @db.VarChar(500)  // 评分可读理由
-  interpretation      String?             @db.VarChar(2000) // AI 一句话解读
-  syncRunId           String?             @db.Uuid  // radar_sync_runs.id
-  sortOrder           Int?                // Admin 排列的序号（每日 1-4）
-  selectionReason     String?             @db.VarChar(500)  // 入选每日摘要理由
+  relevanceScore     Float? // 相关性 0..1
+  timelinessScore    Float? // 时效/趋势 0..1
+  sourceQualityScore Float? // 来源质量 0..1
+  scoreVersion       String?  @db.VarChar(16) // Stage 1 评分版本号
+  scoreReason        String?  @db.VarChar(500) // 评分可读理由
+  distilledScore     Json?    @db.JsonB // Distilled v2 完整结构化评分
+  distilledTotal     Float? // Distilled 加权总分 0..100
+  distilledTier      String?  @db.VarChar(16)
+  distilledMustRead  Boolean?
+  distilledProfile   String?  @db.VarChar(16)
+  interpretation     String?  @db.VarChar(2000) // AI 一句话解读
+  syncRunId          String?  @db.Uuid // radar_sync_runs.id
+  sortOrder          Int? // Admin 排列的序号（每日 1-4）
+  selectionReason    String?  @db.VarChar(500) // 入选每日摘要理由
 
-  comments            Comment[]      @relation("comments_summary")
-  shareSource         ShareSubmission? @relation("share_to_summary")
-  syncRun             RadarSyncRun?     @relation("sync_to_candidates", fields: [syncRunId], references: [id], onDelete: SetNull)
-  feedbacks           RadarFeedback[]
-  seedChatSessions    AiChatSession[]   @relation("summary_seed_chat")
+  // Phase 0 deep-dive 字段：sync 时抓取的原始内容，供后续 chat 读原文/结构化视图使用
+  originalMarkdown  String?   @db.Text // ≤64KB markdown
+  originalKind      String?   @db.VarChar(24) // github_repo | github_release | arxiv | rss | web_share
+  originalFetchedAt DateTime? @db.Timestamptz(3)
+  originalBytes     Int?
+  originalSha256    String?   @db.Char(64)
+  // Phase 2A deep-dive: enrichment metadata (GitHub repo tree + entry points).
+  // Schema: { provider: "github", defaultBranch, language, stars, lastPushedAt,
+  //           tree: [{path, type, size?}, ...], entryPoints: [string], fetchedAt }
+  originalMeta      Json?     @db.JsonB
+  // Phase 2B deep-dive: arxiv paper parsed structure.
+  // tldr: AI 一句话摘要 (≤500 chars); sections: [{title, level, startOffset, endOffset}];
+  // figures: [{page, bbox, caption?, dataUrl?}] (dataUrl is base64 PNG, optional);
+  // authors: parsed from arxiv Atom XML (cached separately from originalMarkdown).
+  tldr              String?   @db.VarChar(500)
+  sections          Json?     @db.JsonB
+  figures           Json?     @db.JsonB
+  authors           String[]  @default([])
+
+  comments         Comment[]        @relation("comments_summary")
+  shareSource      ShareSubmission? @relation("share_to_summary")
+  syncRun          RadarSyncRun?    @relation("sync_to_candidates", fields: [syncRunId], references: [id], onDelete: SetNull)
+  feedbacks        RadarFeedback[]
+  seedChatSessions AiChatSession[]  @relation("summary_seed_chat")
 
   @@index([source, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@index([summaryDate])
   @@index([sharedByUserId])
+  @@index([distilledMustRead, distilledTotal(sort: Desc), createdAt(sort: Desc)])
+  @@index([distilledProfile, distilledTotal(sort: Desc)])
   @@map("summaries")
 }
 
@@ -250,40 +276,40 @@ model Summary {
 // ─────────────────────────────────────────────────────────────────────
 
 model Research {
-  id                     String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  type                   ResearchType
-  status                 ResearchStatus @default(draft)
-  title                  String         @db.VarChar(300)
-  body                   String         @db.Text
-  background             String?        @db.VarChar(2000)
-  conclusion             String?        @db.VarChar(2000)
-  risks                  String?        @db.VarChar(2000)
-  tags                   String[]       @default([])            // 架构 §十一 用 PG 数组
-  authorId               String         @db.Uuid
-  publishedAt            DateTime?      @db.Timestamptz(3)
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        ResearchType
+  status      ResearchStatus @default(draft)
+  title       String         @db.VarChar(300)
+  body        String         @db.Text
+  background  String?        @db.VarChar(2000)
+  conclusion  String?        @db.VarChar(2000)
+  risks       String?        @db.VarChar(2000)
+  tags        String[]       @default([]) // 架构 §十一 用 PG 数组
+  authorId    String         @db.Uuid
+  publishedAt DateTime?      @db.Timestamptz(3)
 
   // AI 协助链路（架构 §十二点五 + §五 origin_content_sha256 锁定）
-  aiAssisted             Boolean        @default(false)
-  creationMethod         CreationMethod @default(manual)
-  originContentSha256    String?        @db.Char(64)             // 阻止未修改 AI 草稿直接发布
-  sourceCommentId        String?        @db.Uuid                 // type=knowledge 时指向源评论
+  aiAssisted          Boolean        @default(false)
+  creationMethod      CreationMethod @default(manual)
+  originContentSha256 String?        @db.Char(64) // 阻止未修改 AI 草稿直接发布
+  sourceCommentId     String?        @db.Uuid // type=knowledge 时指向源评论
 
   // 热点 / 统计缓存（按需；Week 1 暂留，全部为空即可）
-  viewCount              Int            @default(0)
-  starCount              Int            @default(0)
-  commentCount           Int            @default(0)
+  viewCount    Int @default(0)
+  starCount    Int @default(0)
+  commentCount Int @default(0)
 
-  createdAt              DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt              DateTime       @updatedAt @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  author                 User           @relation("research_author", fields: [authorId], references: [id], onDelete: Restrict)
-  sourceComment          Comment?       @relation("comment_to_knowledge", fields: [sourceCommentId], references: [id], onDelete: SetNull)
+  author        User     @relation("research_author", fields: [authorId], references: [id], onDelete: Restrict)
+  sourceComment Comment? @relation("comment_to_knowledge", fields: [sourceCommentId], references: [id], onDelete: SetNull)
 
-  researchSources        ResearchSource[]
-  audit                  ResearchAudit[]
-  comments               Comment[]      @relation("comments_research")
-  sourceAiJob            AiResearchJob? @relation("ai_job_draft")
-  sourceImportJob        ContentImportJob? @relation("import_job_output")
+  researchSources ResearchSource[]
+  audit           ResearchAudit[]
+  comments        Comment[]         @relation("comments_research")
+  sourceAiJob     AiResearchJob?    @relation("ai_job_draft")
+  sourceImportJob ContentImportJob? @relation("import_job_output")
 
   @@index([type, publishedAt(sort: Desc)])
   @@index([authorId, status])
@@ -297,15 +323,15 @@ model Research {
 // ─────────────────────────────────────────────────────────────────────
 
 model ResearchSource {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  researchId    String   @db.Uuid
-  sourceRef     Json     // {type:url|doi|arxiv|knowledge, value:"..."}
-  canonicalKey  String   @db.VarChar(512)
-  title         String?  @db.VarChar(300)
-  description   String?  @db.VarChar(1000)
-  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchId   String   @db.Uuid
+  sourceRef    Json // {type:url|doi|arxiv|knowledge, value:"..."}
+  canonicalKey String   @db.VarChar(512)
+  title        String?  @db.VarChar(300)
+  description  String?  @db.VarChar(1000)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
-  research      Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  research Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
 
   // 同一调研同一 canonical 资料不重复入库
   @@unique([researchId, canonicalKey])
@@ -318,42 +344,42 @@ model ResearchSource {
 // ─────────────────────────────────────────────────────────────────────
 
 model AiResearchJob {
-  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  requesterId       String        @db.Uuid
-  topic             String        @db.VarChar(200)
-  context           String?       @db.VarChar(2000)
-  reportType        String        @default("research_report") @db.VarChar(40)  // research_report | summary_brief
-  sourcePolicy      String        @default("prefer_user_sources") @db.VarChar(40)
-  status            AiJobStatus   @default(queued)
-  currentStep       AiJobStep?    // 最近一步；中途失败时保留
-  attempts          Int           @default(0)
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requesterId    String      @db.Uuid
+  topic          String      @db.VarChar(200)
+  context        String?     @db.VarChar(2000)
+  reportType     String      @default("research_report") @db.VarChar(40) // research_report | summary_brief
+  sourcePolicy   String      @default("prefer_user_sources") @db.VarChar(40)
+  status         AiJobStatus @default(queued)
+  currentStep    AiJobStep? // 最近一步；中途失败时保留
+  attempts       Int         @default(0)
   // 5 步流水线中已抓取的来源快照；partial 时保留（架构 §九 风险 10）
-  partialSources    Json          @default("[]")
-  sourceRefs        Json          @default("[]")
-  failedSources     Json          @default("[]")
+  partialSources Json        @default("[]")
+  sourceRefs     Json        @default("[]")
+  failedSources  Json        @default("[]")
   // Worker 租约与心跳（架构 §十三 §3）
-  lockedBy          String?
-  leaseExpiresAt    DateTime?     @db.Timestamptz(3)
-  heartbeatAt       DateTime?     @db.Timestamptz(3)
-  nextRetryAt       DateTime?     @db.Timestamptz(3)
+  lockedBy       String?
+  leaseExpiresAt DateTime?   @db.Timestamptz(3)
+  heartbeatAt    DateTime?   @db.Timestamptz(3)
+  nextRetryAt    DateTime?   @db.Timestamptz(3)
 
-  startedAt         DateTime?     @db.Timestamptz(3)
-  completedAt       DateTime?     @db.Timestamptz(3)
+  startedAt        DateTime? @db.Timestamptz(3)
+  completedAt      DateTime? @db.Timestamptz(3)
   // 预算 / 成本埋点（架构 §九 风险 4）
-  tokenInputTotal   Int           @default(0)
-  tokenOutputTotal  Int           @default(0)
-  costCents         Int           @default(0)
+  tokenInputTotal  Int       @default(0)
+  tokenOutputTotal Int       @default(0)
+  costCents        Int       @default(0)
   // idempotency 唯一约束；同一 (用户, key) 不重复扣费
-  idempotencyKey    String?       @db.Uuid
-  errorCode         String?       @db.VarChar(64)
-  errorMessage      String?       @db.VarChar(500)
+  idempotencyKey   String?   @db.Uuid
+  errorCode        String?   @db.VarChar(64)
+  errorMessage     String?   @db.VarChar(500)
   // 生成的研究草稿 id
-  draftResearchId   String?       @unique @db.Uuid
-  createdAt         DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime      @updatedAt @db.Timestamptz(3)
+  draftResearchId  String?   @unique @db.Uuid
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
 
-  requester         User          @relation(fields: [requesterId], references: [id], onDelete: Restrict)
-  draftResearch     Research?     @relation("ai_job_draft", fields: [draftResearchId], references: [id], onDelete: SetNull)
+  requester     User      @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+  draftResearch Research? @relation("ai_job_draft", fields: [draftResearchId], references: [id], onDelete: SetNull)
 
   aiResearchSources AiResearchSource[]
 
@@ -372,17 +398,17 @@ model AiResearchJob {
 // ─────────────────────────────────────────────────────────────────────
 
 model AiResearchSource {
-  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  jobId         String        @db.Uuid
-  sourceRef     Json          // 与 research_sources.sourceRef 同 schema
-  canonicalKey  String        @db.VarChar(512)
-  title         String?       @db.VarChar(300)
-  snippet       String?       @db.VarChar(2000)
-  score         Float?
-  stepCaptured  AiJobStep     // source 是哪一步抓到的
-  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId        String    @db.Uuid
+  sourceRef    Json // 与 research_sources.sourceRef 同 schema
+  canonicalKey String    @db.VarChar(512)
+  title        String?   @db.VarChar(300)
+  snippet      String?   @db.VarChar(2000)
+  score        Float?
+  stepCaptured AiJobStep // source 是哪一步抓到的
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
 
-  job           AiResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job AiResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@unique([jobId, canonicalKey])
   @@index([jobId])
@@ -394,26 +420,26 @@ model AiResearchSource {
 // ─────────────────────────────────────────────────────────────────────
 
 model Comment {
-  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  authorId       String        @db.Uuid
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authorId      String        @db.Uuid
   // 显式双 FK，恰好一个非空（CHECK）
-  targetType     CommentTarget
-  researchId     String?       @db.Uuid
-  summaryId      String?       @db.Uuid
-  body           String        @db.VarChar(2000)
-  parentId       String?       @db.Uuid
-  promoteStatus  PromoteStatus @default(none)
-  starCount      Int           @default(0)
-  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime      @updatedAt @db.Timestamptz(3)
+  targetType    CommentTarget
+  researchId    String?       @db.Uuid
+  summaryId     String?       @db.Uuid
+  body          String        @db.VarChar(2000)
+  parentId      String?       @db.Uuid
+  promoteStatus PromoteStatus @default(none)
+  starCount     Int           @default(0)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
 
-  author         User          @relation(fields: [authorId], references: [id], onDelete: Restrict)
-  parent         Comment?      @relation("comment_thread", fields: [parentId], references: [id], onDelete: SetNull)
-  children       Comment[]     @relation("comment_thread")
-  summary        Summary?      @relation("comments_summary", fields: [summaryId], references: [id], onDelete: Cascade)
-  research       Research?     @relation("comments_research", fields: [researchId], references: [id], onDelete: Cascade)
-  knowledgeFrom  Research[]    @relation("comment_to_knowledge")
-  stars          CommentStar[]
+  author        User          @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  parent        Comment?      @relation("comment_thread", fields: [parentId], references: [id], onDelete: SetNull)
+  children      Comment[]     @relation("comment_thread")
+  summary       Summary?      @relation("comments_summary", fields: [summaryId], references: [id], onDelete: Cascade)
+  research      Research?     @relation("comments_research", fields: [researchId], references: [id], onDelete: Cascade)
+  knowledgeFrom Research[]    @relation("comment_to_knowledge")
+  stars         CommentStar[]
 
   @@index([summaryId, createdAt(sort: Desc)])
   @@index([researchId, createdAt(sort: Desc)])
@@ -428,13 +454,13 @@ model Comment {
 // ─────────────────────────────────────────────────────────────────────
 
 model CommentStar {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  commentId    String   @db.Uuid
-  userId       String   @db.Uuid
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  commentId String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
-  comment      Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([commentId, userId])
   @@index([userId, createdAt(sort: Desc)])
@@ -446,17 +472,17 @@ model CommentStar {
 // ─────────────────────────────────────────────────────────────────────
 
 model ResearchAudit {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  researchId    String   @db.Uuid
-  editorId      String   @db.Uuid
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchId   String   @db.Uuid
+  editorId     String   @db.Uuid
   // create | edit | publish | revert
-  action        String   @db.VarChar(16)
-  diff          Json?
-  prevSnapshot  Json?
-  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+  action       String   @db.VarChar(16)
+  diff         Json?
+  prevSnapshot Json?
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
-  research      Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
-  editor        User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  research Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  editor   User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
 
   @@index([researchId, createdAt(sort: Desc)])
   @@map("research_audit")
@@ -467,36 +493,36 @@ model ResearchAudit {
 // ─────────────────────────────────────────────────────────────────────
 
 model ContentImportJob {
-  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  requesterId         String         @db.Uuid
-  sourceKind          ImportSourceKind
-  status              ImportStatus   @default(queued)
-  originalFilename    String?        @db.VarChar(255)
-  mimeType            String?        @db.VarChar(127)
-  sizeBytes           BigInt?
-  contentSha256       String?        @db.Char(64)
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requesterId      String           @db.Uuid
+  sourceKind       ImportSourceKind
+  status           ImportStatus     @default(queued)
+  originalFilename String?          @db.VarChar(255)
+  mimeType         String?          @db.VarChar(127)
+  sizeBytes        BigInt?
+  contentSha256    String?          @db.Char(64)
   // P1 Confluence 用
-  sourceUrl           String?        @db.VarChar(2048)
-  externalPageId      String?        @db.VarChar(255)
-  externalVersion     String?        @db.VarChar(64)
+  sourceUrl        String?          @db.VarChar(2048)
+  externalPageId   String?          @db.VarChar(255)
+  externalVersion  String?          @db.VarChar(64)
   // 服务端生成路径，转换后清理；不暴露
-  tempObjectKey       String?        @db.VarChar(255)
-  converterVersion    String         @db.VarChar(64)
-  warnings            Json           @default("[]")
-  errorCode           String?        @db.VarChar(64)
-  errorMessage        String?        @db.VarChar(500)
-  outputResearchId    String?        @unique @db.Uuid
+  tempObjectKey    String?          @db.VarChar(255)
+  converterVersion String           @db.VarChar(64)
+  warnings         Json             @default("[]")
+  errorCode        String?          @db.VarChar(64)
+  errorMessage     String?          @db.VarChar(500)
+  outputResearchId String?          @unique @db.Uuid
   // worker 租约（与 ai_research_jobs 同模式）
-  attempts            Int            @default(0)
-  lockedBy            String?
-  leaseExpiresAt      DateTime?      @db.Timestamptz(3)
-  heartbeatAt         DateTime?      @db.Timestamptz(3)
-  nextRetryAt         DateTime?      @db.Timestamptz(3)
-  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
-  completedAt         DateTime?      @db.Timestamptz(3)
+  attempts         Int              @default(0)
+  lockedBy         String?
+  leaseExpiresAt   DateTime?        @db.Timestamptz(3)
+  heartbeatAt      DateTime?        @db.Timestamptz(3)
+  nextRetryAt      DateTime?        @db.Timestamptz(3)
+  createdAt        DateTime         @default(now()) @db.Timestamptz(3)
+  completedAt      DateTime?        @db.Timestamptz(3)
 
-  requester           User           @relation(fields: [requesterId], references: [id], onDelete: Restrict)
-  outputResearch      Research?      @relation("import_job_output", fields: [outputResearchId], references: [id], onDelete: SetNull)
+  requester      User      @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+  outputResearch Research? @relation("import_job_output", fields: [outputResearchId], references: [id], onDelete: SetNull)
 
   // 同 (user, sha256) 在 queued/running/succeeded 中 partial unique；failed 后可重试。
   // 在 SQL migration preflight_contract_completion 加（Prisma 5.x 多条件 where 不支持）；
@@ -512,16 +538,16 @@ model ContentImportJob {
 // ─────────────────────────────────────────────────────────────────────
 
 model ProductEvent {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId       String   @db.Uuid
-  eventName    String   @db.VarChar(64)
-  entityType   String?  @db.VarChar(32)
-  entityId     String?  @db.Uuid
-  metadata     Json     @default("{}")
-  dedupeKey    String   @unique @db.VarChar(255)
-  occurredAt   DateTime @default(now()) @db.Timestamptz(3)
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @db.Uuid
+  eventName  String   @db.VarChar(64)
+  entityType String?  @db.VarChar(32)
+  entityId   String?  @db.Uuid
+  metadata   Json     @default("{}")
+  dedupeKey  String   @unique @db.VarChar(255)
+  occurredAt DateTime @default(now()) @db.Timestamptz(3)
 
-  user         User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([eventName, occurredAt])
   @@index([userId, occurredAt])
@@ -533,41 +559,41 @@ model ProductEvent {
 // ─────────────────────────────────────────────────────────────────────
 
 model ShareSubmission {
-  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  submitterId     String                @db.Uuid
-  url             String                @db.VarChar(2048)
-  canonicalUrl    String                @db.VarChar(2048)
-  userNote        String?               @db.VarChar(500)
+  id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submitterId        String                @db.Uuid
+  url                String                @db.VarChar(2048)
+  canonicalUrl       String                @db.VarChar(2048)
+  userNote           String?               @db.VarChar(500)
   // safe_fetch 抓取与摘要
-  fetchedTitle    String?               @db.VarChar(300)
-  fetchedMarkdown String?               @db.Text
-  summaryText     String?               @db.VarChar(2000)
+  fetchedTitle       String?               @db.VarChar(300)
+  fetchedMarkdown    String?               @db.Text
+  summaryText        String?               @db.VarChar(2000)
   // 抓取错误：safe_fetch 失败时记录，不阻塞 pending
-  fetchErrorCode  String?               @db.VarChar(64)
-  fetchErrorMessage String?             @db.VarChar(500)
+  fetchErrorCode     String?               @db.VarChar(64)
+  fetchErrorMessage  String?               @db.VarChar(500)
   // 状态机
-  status          ShareSubmissionStatus @default(pending)
-  reviewerId      String?               @db.Uuid
-  reviewedAt      DateTime?             @db.Timestamptz(3)
+  status             ShareSubmissionStatus @default(pending)
+  reviewerId         String?               @db.Uuid
+  reviewedAt         DateTime?             @db.Timestamptz(3)
   // 批准后转为 published summary 时填；保持来源可追溯
-  publishedSummaryId String?            @unique @db.Uuid
+  publishedSummaryId String?               @unique @db.Uuid
   // 抓取元数据
-  contentSha256   String?               @db.Char(64)
-  bytesRead       Int?
-  elapsedMs       Int?
+  contentSha256      String?               @db.Char(64)
+  bytesRead          Int?
+  elapsedMs          Int?
   // worker 租约
-  attempts        Int                   @default(0)
-  lockedBy        String?
-  leaseExpiresAt  DateTime?             @db.Timestamptz(3)
-  heartbeatAt     DateTime?             @db.Timestamptz(3)
-  nextRetryAt     DateTime?             @db.Timestamptz(3)
-  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
-  completedAt     DateTime?             @db.Timestamptz(3)
-  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  attempts           Int                   @default(0)
+  lockedBy           String?
+  leaseExpiresAt     DateTime?             @db.Timestamptz(3)
+  heartbeatAt        DateTime?             @db.Timestamptz(3)
+  nextRetryAt        DateTime?             @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  completedAt        DateTime?             @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @db.Timestamptz(3)
 
-  submitter       User                  @relation("share_submitter", fields: [submitterId], references: [id], onDelete: Restrict)
-  reviewer        User?                 @relation("share_reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
-  publishedSummary Summary?             @relation("share_to_summary", fields: [publishedSummaryId], references: [id], onDelete: SetNull)
+  submitter        User     @relation("share_submitter", fields: [submitterId], references: [id], onDelete: Restrict)
+  reviewer         User?    @relation("share_reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  publishedSummary Summary? @relation("share_to_summary", fields: [publishedSummaryId], references: [id], onDelete: SetNull)
 
   // 同一用户对同一 URL 在活跃状态下唯一；failed 后允许重试
   // partial unique 由 SQL 加（Prisma 5.x 不支持 where 子句）
@@ -584,9 +610,9 @@ model ShareSubmission {
 model SearchDoc {
   id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   type        SearchDocType
-  refId       String        @db.Uuid              // summary.id / research.id
+  refId       String        @db.Uuid // summary.id / research.id
   title       String        @db.VarChar(300)
-  snippet     String        @db.VarChar(1000)     // 摘要片段，给搜索结果展示
+  snippet     String        @db.VarChar(1000) // 摘要片段，给搜索结果展示
   // tsvector 列与 GIN 索引由 SQL migration 加（Prisma 不支持原生 tsvector）
   // publishedAt 用于排序：未发布草稿不进 search_doc
   publishedAt DateTime      @db.Timestamptz(3)
@@ -602,16 +628,16 @@ model SearchDoc {
 // ─────────────────────────────────────────────────────────────────────
 
 model RadarSource {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name            String   @db.VarChar(200)
-  sourceType      String   @db.VarChar(32)  // github | arxiv | rss
-  config          Json                        // 源特定配置：repo, category, feed URL 等
-  enabled         Boolean  @default(true)
-  lastSyncAt      DateTime? @db.Timestamptz(3)
-  createdAt       DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String    @db.VarChar(200)
+  sourceType String    @db.VarChar(32) // github | arxiv | rss
+  config     Json // 源特定配置：repo, category, feed URL 等
+  enabled    Boolean   @default(true)
+  lastSyncAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
-  syncRuns        RadarSyncRun[]
+  syncRuns RadarSyncRun[]
 
   @@index([sourceType, enabled])
   @@map("radar_sources")
@@ -622,34 +648,34 @@ model RadarSource {
 // ─────────────────────────────────────────────────────────────────────
 
 model RadarSyncRun {
-  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sourceId        String           @db.Uuid
-  triggeredBy     String           @db.VarChar(32)  // cron | admin
-  status          RadarSyncStatus  @default(running)
-  totalFetched    Int              @default(0)
-  totalNew        Int              @default(0)
-  totalSkipped    Int              @default(0)
-  totalFailed     Int              @default(0)
-  errorCode       String?          @db.VarChar(64)
-  errorMessage    String?          @db.VarChar(500)
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceId         String          @db.Uuid
+  triggeredBy      String          @db.VarChar(32) // cron | admin
+  status           RadarSyncStatus @default(running)
+  totalFetched     Int             @default(0)
+  totalNew         Int             @default(0)
+  totalSkipped     Int             @default(0)
+  totalFailed      Int             @default(0)
+  errorCode        String?         @db.VarChar(64)
+  errorMessage     String?         @db.VarChar(500)
   // 成本与性能
   tokenInputTotal  Int             @default(0)
   tokenOutputTotal Int             @default(0)
-  costUsd         Float            @default(0)
-  elapsedMs       Int?
+  costUsd          Float           @default(0)
+  elapsedMs        Int?
   // worker 租约（复用共享 runner 契约）
-  attempts        Int              @default(0)
-  lockedBy        String?
-  leaseExpiresAt  DateTime?        @db.Timestamptz(3)
-  heartbeatAt     DateTime?        @db.Timestamptz(3)
-  nextRetryAt     DateTime?        @db.Timestamptz(3)
-  startedAt       DateTime?        @db.Timestamptz(3)
-  completedAt     DateTime?        @db.Timestamptz(3)
-  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  attempts         Int             @default(0)
+  lockedBy         String?
+  leaseExpiresAt   DateTime?       @db.Timestamptz(3)
+  heartbeatAt      DateTime?       @db.Timestamptz(3)
+  nextRetryAt      DateTime?       @db.Timestamptz(3)
+  startedAt        DateTime?       @db.Timestamptz(3)
+  completedAt      DateTime?       @db.Timestamptz(3)
+  createdAt        DateTime        @default(now()) @db.Timestamptz(3)
 
-  source          RadarSource      @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  source     RadarSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   // 候选 summaries 回指 batch（1:many）
-  candidates      Summary[]        @relation("sync_to_candidates")
+  candidates Summary[]   @relation("sync_to_candidates")
 
   @@index([sourceId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Asc)])
@@ -661,14 +687,14 @@ model RadarSyncRun {
 // ─────────────────────────────────────────────────────────────────────
 
 model RadarFeedback {
-  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  summaryId       String            @db.Uuid
-  userId          String            @db.Uuid
-  feedbackType    RadarFeedbackType
-  createdAt       DateTime          @default(now()) @db.Timestamptz(3)
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  summaryId    String            @db.Uuid
+  userId       String            @db.Uuid
+  feedbackType RadarFeedbackType
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
 
-  summary         Summary           @relation(fields: [summaryId], references: [id], onDelete: Cascade)
-  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  summary Summary @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // 同一用户对同一候选的同类型反馈幂等
   @@unique([summaryId, userId, feedbackType])
@@ -678,16 +704,16 @@ model RadarFeedback {
 }
 
 model AdminAction {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  actorId      String   @db.Uuid
-  action       String   @db.VarChar(64)
-  targetType   String   @db.VarChar(32)
-  targetId     String   @db.Uuid
-  requestId    String   @unique @db.Uuid
-  metadata     Json     @default("{}")
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId    String   @db.Uuid
+  action     String   @db.VarChar(64)
+  targetType String   @db.VarChar(32)
+  targetId   String   @db.Uuid
+  requestId  String   @unique @db.Uuid
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
-  actor        User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
 
   @@index([actorId, createdAt])
   @@index([targetType, targetId, createdAt])
@@ -703,20 +729,20 @@ model AdminAction {
 // ─────────────────────────────────────────────────────────────────────
 
 model AiChatSession {
-  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId          String              @db.Uuid
-  seedSummaryId   String?             @db.Uuid
+  id            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String              @db.Uuid
+  seedSummaryId String?             @db.Uuid
   // 创建时刻的种子摘要 JSON 快照；后续摘要更新不影响 session 历史。
   // 与契约对齐：默认空对象，让 POST handler 写入真实快照。
-  seedSnapshot    Json                @default("{}")
-  status          AiChatSessionStatus @default(active)
-  createdAt       DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+  seedSnapshot  Json                @default("{}")
+  status        AiChatSessionStatus @default(active)
+  createdAt     DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @db.Timestamptz(3)
 
-  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  seedSummary     Summary?            @relation("summary_seed_chat", fields: [seedSummaryId], references: [id], onDelete: SetNull)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seedSummary Summary? @relation("summary_seed_chat", fields: [seedSummaryId], references: [id], onDelete: SetNull)
 
-  messages        AiChatMessage[]
+  messages AiChatMessage[]
 
   @@index([userId, updatedAt(sort: Desc)])
   @@index([status, updatedAt])
@@ -732,21 +758,30 @@ model AiChatSession {
 // ─────────────────────────────────────────────────────────────────────
 
 model AiChatMessage {
-  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sessionId    String         @db.Uuid
-  role         AiChatRole
-  content      String         @db.Text
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId   String     @db.Uuid
+  role        AiChatRole
+  content     String     @db.Text
   // nullable：user 消息没来源；assistant 消息也允许空。
   // 默认 NULL 让 schema 与契约 default("null") 字面对齐。
-  sourcesJson  Json?
-  latencyMs    Int?
-  tokensIn     Int?
-  tokensOut    Int?
-  costCents    Int?
-  createdAt    DateTime       @default(now()) @db.Timestamptz(3)
+  sourcesJson Json?
+  latencyMs   Int?
+  tokensIn    Int?
+  tokensOut   Int?
+  costCents   Int?
+  createdAt   DateTime   @default(now()) @db.Timestamptz(3)
 
-  session      AiChatSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session AiChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt(sort: Asc)])
   @@map("ai_chat_messages")
 }
+
+// Phase 3: Radar deep-dive inline annotations (W3C Web Annotation aligned).
+//
+// radar_annotations stores per-user text selection anchors against the canonical
+// originalMarkdown text. radar_annotation_stars is a per-user-per-annotation
+// fav toggle (same ergonomics as comment_stars). Neither uses a @relation on
+// Summary because the Prisma relation traversal was broken by the model order
+// and scaffolding regeneration is fragile—we use raw SQL instead.
+

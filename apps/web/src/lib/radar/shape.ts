@@ -7,6 +7,10 @@
 //   3. 组装候选 + 当前用户反馈 + 计数
 
 import type { RadarFeedbackType } from '@deep-research/shared/states';
+import {
+  DistilledScoreSchema,
+  type DistilledScore,
+} from '@deep-research/shared/schemas';
 
 export type RadarFeedbackCount = {
   useful: number;
@@ -43,12 +47,23 @@ export type RadarCandidateShape = {
   relevanceScore: number | null;
   timelinessScore: number | null;
   sourceQualityScore: number | null;
+  distilledScore: DistilledScore | null;
   summaryDate: string;
   selectionReason: string | null;
   sortOrder: number | null;
   sharedBy: { id: string; name: string } | null;
   feedbackCounts: RadarFeedbackCount;
   myFeedbacks: RadarFeedbackType[];
+  // Phase 2A deep-dive: original source + enrichment metadata. Optional
+  // — pre-Phase-0 rows will be null across the board.
+  originalKind: string | null;
+  originalMarkdown: string | null;
+  originalMeta: unknown;
+  // Phase 2B deep-dive: arxiv paper parsed structure.
+  tldr: string | null;
+  sections: Array<{ title: string; level: number; startOffset: number; page?: number }> | null;
+  figures: Array<{ page: number; caption?: string; dataUrl?: string }> | null;
+  authors: string[];
 };
 
 /** 列表默认反馈计数（避免每个候选都 groupBy 一次）。 */
@@ -74,9 +89,17 @@ export function shapeCandidate(input: {
     relevanceScore: number | null;
     timelinessScore: number | null;
     sourceQualityScore: number | null;
+    distilledScore: unknown;
     selectionReason: string | null;
     sortOrder: number | null;
     syncRunId: string | null;
+    originalKind?: string | null;
+    originalMarkdown?: string | null;
+    originalMeta?: unknown;
+    tldr?: string | null;
+    sections?: unknown;
+    figures?: unknown;
+    authors?: string[];
     sharedBy?: { id: string; name: string } | null;
     syncRun?: {
       id: string;
@@ -91,6 +114,7 @@ export function shapeCandidate(input: {
   const s = input.summary;
   const counts = input.feedbackCounts ?? emptyFeedbackCounts();
   const mine = input.myFeedbacks ?? [];
+  const distilled = DistilledScoreSchema.safeParse(s.distilledScore);
   return {
     id: s.id,
     title: s.title,
@@ -112,12 +136,24 @@ export function shapeCandidate(input: {
     relevanceScore: s.relevanceScore,
     timelinessScore: s.timelinessScore,
     sourceQualityScore: s.sourceQualityScore,
+    distilledScore: distilled.success ? distilled.data : null,
     summaryDate: s.summaryDate.toISOString().slice(0, 10),
     selectionReason: s.selectionReason,
     sortOrder: s.sortOrder,
     sharedBy: s.sharedBy ?? null,
     feedbackCounts: counts,
     myFeedbacks: mine,
+    originalKind: s.originalKind ?? null,
+    originalMarkdown: s.originalMarkdown ?? null,
+    originalMeta: s.originalMeta ?? null,
+    tldr: s.tldr ?? null,
+    sections: Array.isArray(s.sections)
+      ? (s.sections as Array<{ title: string; level: number; startOffset: number; page?: number }>)
+      : null,
+    figures: Array.isArray(s.figures)
+      ? (s.figures as Array<{ page: number; caption?: string; dataUrl?: string }>)
+      : null,
+    authors: Array.isArray(s.authors) ? s.authors : [],
   };
 }
 

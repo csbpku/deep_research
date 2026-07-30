@@ -2,11 +2,11 @@
 
 The Protocol describes the contract that the Week 5 worker, the Week 2
 summary ingestion, and the test suite all depend on. Implementations live
-in sibling modules (`fake.py`, `claude.py`, `gpt_researcher.py`).
+in sibling modules (`fake.py`, `gpt_researcher.py`).
 
 Why Protocol + DTOs and not concrete classes:
 - The business layer must not depend on a vendor's data shape
-  (gpt-researcher returns `ResearchResult` / `Source` / `Cost`; claude-sdk
+  (gpt-researcher returns Markdown + costs; the Protocol DTOs are
    returns `Message` / `Usage`). DTOs are the contract.
 - Duck-typing keeps the fake adapter cheap to instantiate in tests.
 """
@@ -164,31 +164,24 @@ CreationMethodLiteral = CreationMethod  # type alias for clarity
 
 
 def build_adapter(name: str | None = None) -> ResearchEngineAdapter:
-    """Factory selected by `AI_ENGINE_ADAPTER` env var (default: `fake`).
+    """Factory selected by `AI_ENGINE_ADAPTER` env var (default: `gpt_researcher`).
 
     The factory keeps the engine entry point explicit and easy to mock. It
-    is the only place that imports concrete adapter classes — keeping the
-    lazy import means missing optional deps (claude-sdk, gpt-researcher)
-    surface as ImportError at startup, not at import time of `adapters`.
+    is the only place that imports concrete adapter classes — missing
+    optional deps (gpt-researcher) surface as ImportError at startup,
+    not at import time of `adapters`.
     """
-    chosen = (name or os.environ.get("AI_ENGINE_ADAPTER") or "fake").lower()
+    chosen = (
+        name or os.environ.get("AI_ENGINE_ADAPTER") or "gpt_researcher"
+    ).lower()
     if chosen == "fake":
         from ai_engine.adapters.fake import FakeAdapter
 
         return FakeAdapter()
-    if chosen == "claude":
-        # Week 2 — real Claude adapter via Anthropic SDK (ADR 0004 #1/#5).
-        # Defaults to ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL + ANTHROPIC_MODEL
-        # from env so cc-switch works out of the box.
-        from ai_engine.adapters.claude import ClaudeAdapter
-
-        return ClaudeAdapter()
     if chosen == "gpt_researcher":
-        raise AdapterError(
-            code="NOT_IMPLEMENTED",
-            message="gpt-researcher was rejected by ADR 0004 — not implemented.",
-            request_id=None,
-        )
+        from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+        return GptResearcherAdapter()
     raise AdapterError(
         code="VALIDATION_FAILED",
         message=f"unknown AI_ENGINE_ADAPTER={chosen!r}",

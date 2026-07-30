@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
+import os
+import re as _re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -23,6 +26,7 @@ from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError, safe_fetch
 from ai_engine.ingestion.pipeline import _generate_brief
 from ai_engine.radar.models import RadarCandidate, RadarSource
+from ai_engine.radar.candidate_filter import FilterResult, filter_candidate
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.source_manager import SourceFetcher, fetch_source, load_enabled_sources
 from ai_engine.server.share import _infer_title, html_to_markdown
@@ -30,6 +34,42 @@ from ai_engine.server.share import _infer_title, html_to_markdown
 logger = logging.getLogger("ai_engine.radar.sync_runner")
 BriefGenerator = Callable[..., Awaitable[Any]]
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
+DistilledScorerFn = Callable[..., Awaitable[Any]]
+EmbeddingScorerFn = Any  # BatchEmbeddingScorer or None
+
+# Phase 0 deep-dive: original markdown is capped to 64KB to keep Postgres
+# rows under the TOAST threshold and chat prompt snapshot under 50KB.
+ORIGINAL_MARKDOWN_MAX_BYTES = 65_536
+
+# Feature flag: when false, sync behaves as Week 9 (no capture, no UI).
+DEEPDIVE_ENABLED = os.environ.get("RADAR_DEEPDIVE_ENABLED", "true").lower() in (
+    "1", "true", "yes", "on",
+)
+
+
+def _classify_original_kind(source_type: str, url: str) -> str:
+    """Map (source_type, url) to a deep-dive renderer discriminator.
+
+    Why a free-form string and not a Prisma enum: the radar daily currently
+    captures ``content_origin`` (web|rss|api|manual) but we cannot tell an
+    arxiv abstract from a Hacker News link from a GitHub README from those
+    four values. The deep-dive renderer paths diverge widely per source type
+    (zread.ai-style for repos, Lumi-style for arxiv, plain markdown for
+    prose blogs) so we need a richer discriminator.
+    """
+    u = (url or "").lower()
+    if "arxiv.org/abs/" in u or source_type == "arxiv":
+        return "arxiv"
+    if source_type in ("github", "github_trending") or "github.com" in u:
+        if "/releases/tag/" in u:
+            return "github_release"
+        # repo root: github.com/{owner}/{repo} (optionally trailing slash)
+        if _GITHUB_REPO_RE.match(u):
+            return "github_repo"
+        return "github_other"
+    if source_type == "rss" or source_type == "devto":
+        return "rss"
+    return "web_share"
 
 
 @dataclass(slots=True, frozen=True)
@@ -55,6 +95,9 @@ class RadarSyncResult:
 
 def _host(value: str) -> str:
     return (urlsplit(value).hostname or "").lower()
+
+
+_GITHUB_REPO_RE = _re.compile(r"https?://(?:www\.)?github\.com/[^/]+/[^/]+/?$")
 
 
 def _cost_usd(cost: CostMetrics) -> float:
@@ -200,11 +243,46 @@ async def _insert_candidate(
     run_id: str,
     score: Any,
     cost: CostMetrics,
+    extra_tags: tuple[str, ...] = (),
+    distilled: Any | None = None,
 ) -> bool:
     title = candidate.title or _infer_title(fetched, markdown)
-    body = markdown[:2000] or candidate.snippet or interpretation
+
+    merged_tags = list(candidate.tags) + list(extra_tags)
+    persisted_distilled = (
+        distilled if distilled is not None and not distilled.is_default else None
+    )
+    if persisted_distilled is not None:
+        if persisted_distilled.must_read:
+            merged_tags.append("must_read")
+        if persisted_distilled.tier:
+            merged_tags.append(f"tier_{persisted_distilled.tier}")
+        if persisted_distilled.veto:
+            merged_tags.append(f"veto_{persisted_distilled.veto}")
+        if persisted_distilled.risk_flag:
+            merged_tags.append(f"risk_{persisted_distilled.risk_flag}")
+        if persisted_distilled.suspected_repost:
+            merged_tags.append("risk_suspected_repost")
+        merged_tags.append(f"profile_{persisted_distilled.profile_id}")
+    # Prefer the AI-generated interpretation as the display body.
+    # Raw scraped markdown is noisy (nav menus, footers) for sites like GitHub.
+    body = interpretation or candidate.snippet or markdown[:2000]
     content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     published_at = candidate.published_at
+
+    # Phase 0 deep-dive: persist original markdown + classifier metadata.
+    # 64KB cap keeps the Postgres row under TOAST threshold and the chat
+    # seed snapshot (50KB cap) safely bounded. Skipped entirely when the
+    # feature flag is off (Week 9 parity).
+    original_markdown: str | None = None
+    original_kind: str | None = None
+    original_bytes: int | None = None
+    if DEEPDIVE_ENABLED:
+        original_kind = _classify_original_kind(source.source_type, candidate.url)
+        truncated = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES]
+        original_markdown = truncated.decode("utf-8", errors="replace")
+        original_bytes = len(truncated)
+
     async with pool.connection() as conn:
         async with conn.transaction():
             row = await (
@@ -214,9 +292,15 @@ async def _insert_candidate(
                     '"contentOrigin", "summaryDate", "publishedAt", "contentSha256", '
                     '"ingestionTokenCount", "tags", "status", "relevanceScore", '
                     '"timelinessScore", "sourceQualityScore", "scoreVersion", '
-                    '"scoreReason", "interpretation", "syncRunId", "createdAt", "updatedAt") '
+                    '"scoreReason", "distilledScore", "distilledTotal", "distilledTier", '
+                    '"distilledMustRead", "distilledProfile", "interpretation", "syncRunId", '
+                    '"originalMarkdown", "originalKind", "originalFetchedAt", '
+                    '"originalBytes", "originalSha256", '
+                    '"createdAt", "updatedAt") '
                     "VALUES (%s, %s, %s, %s, %s, 'daily', %s, %s, %s, %s, %s, %s::text[], "
-                    "'candidate', %s, %s, %s, %s, %s, %s, %s, now(), now()) "
+                    "'candidate', %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, "
+                    "%s, %s, now(), %s, %s, "
+                    "now(), now()) "
                     'ON CONFLICT ("canonicalUrl") DO NOTHING RETURNING "id"',
                     (
                         str(uuid.uuid4()),
@@ -229,18 +313,137 @@ async def _insert_candidate(
                         published_at,
                         content_sha256,
                         cost.token_input_total + cost.token_output_total,
-                        list(candidate.tags),
+                        merged_tags,
                         score.relevance,
                         score.timeliness,
                         score.source_quality,
                         score.version,
-                        score.reason,
+                        _build_score_reason(score, persisted_distilled),
+                        (
+                            json.dumps(persisted_distilled.to_dict(), ensure_ascii=False)
+                            if persisted_distilled is not None
+                            else None
+                        ),
+                        persisted_distilled.total if persisted_distilled is not None else None,
+                        persisted_distilled.tier if persisted_distilled is not None else None,
+                        persisted_distilled.must_read if persisted_distilled is not None else None,
+                        persisted_distilled.profile if persisted_distilled is not None else None,
                         interpretation[:2000],
                         run_id,
+                        original_markdown,
+                        original_kind,
+                        original_bytes,
+                        content_sha256,
                     ),
                 )
             ).fetchone()
     return row is not None
+
+
+def _build_score_reason(score: Any, distilled: Any | None) -> str:
+    """Combine heuristic score reason with Distilled dimensions."""
+    parts = [score.reason]
+    if distilled is not None and not distilled.is_default:
+        dim_str = ", ".join(
+            f"{k}={v}" for k, v in distilled.dimension_scores.items()
+        )
+        parts.append(
+            f"Distilled: {distilled.total:.1f}/100 "
+            f"({distilled.tier}, must_read={distilled.must_read}); "
+            f"维度: {dim_str}; 弱项: {distilled.weak_point}"
+        )
+    return " | ".join(parts)[:500]
+
+
+def _strip_html_tags(html: str) -> str:
+    """Strip HTML tags and collapse whitespace."""
+    import re as _re
+    text = _re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=_re.DOTALL)
+    text = _re.sub(r"<style[^>]*>.*?</style>", " ", text, flags=_re.DOTALL)
+    text = _re.sub(r"<nav[^>]*>.*?</nav>", " ", text, flags=_re.DOTALL)
+    text = _re.sub(r"<footer[^>]*>.*?</footer>", " ", text, flags=_re.DOTALL)
+    text = _re.sub(r"<header[^>]*>.*?</header>", " ", text, flags=_re.DOTALL)
+    text = _re.sub(r"<aside[^>]*>.*?</aside>", " ", text, flags=_re.DOTALL)
+    text = _re.sub(r"<[^>]+>", " ", text)
+    text = _re.sub(r"&nbsp;", " ", text)
+    text = _re.sub(r"&amp;", "&", text)
+    text = _re.sub(r"&lt;", "<", text)
+    text = _re.sub(r"&gt;", ">", text)
+    text = _re.sub(r"&quot;", '"', text)
+    text = _re.sub(r"&#39;", "'", text)
+    text = _re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _extract_article_content(html: str, url: str, source_type: str) -> str:
+    """Extract clean article text from HTML, optimized per source type.
+
+    Each source type has a different page structure. We try to extract
+    the main content block, not the entire page with nav/sidebar/footer.
+    Falls back to html_to_markdown (whole page) if extraction fails.
+    """
+    import re as _re
+
+    # ── ArXiv: extract abstract from <blockquote class="abstract"> ──
+    if source_type == "arxiv" or "arxiv.org/abs/" in url:
+        m = _re.search(
+            r'<blockquote[^>]*class="[^"]*abstract[^"]*"[^>]*>(.*?)</blockquote>',
+            html, _re.DOTALL | _re.IGNORECASE,
+        )
+        if m:
+            abstract = _strip_html_tags(m.group(1))
+            if len(abstract) > 50:
+                return abstract[:8000]
+
+    # ── GitHub: extract README article content ──
+    if source_type in ("github", "github_trending") or "github.com" in url:
+        # Try <article> tag (GitHub wraps README in <article class="markdown-body">)
+        m = _re.search(
+            r'<article[^>]*class="[^"]*markdown-body[^"]*"[^>]*>(.*?)</article>',
+            html, _re.DOTALL | _re.IGNORECASE,
+        )
+        if m:
+            readme = _strip_html_tags(m.group(1))
+            if len(readme) > 100:
+                return readme[:8000]
+        # Fallback: try <div id="readme">
+        m = _re.search(r'<div[^>]*id="readme"[^>]*>(.*?)</div>\s*</div>',
+                        html, _re.DOTALL | _re.IGNORECASE)
+        if m:
+            readme = _strip_html_tags(m.group(1))
+            if len(readme) > 100:
+                return readme[:8000]
+
+    # ── Dev.to: extract <div id="article-body"> ──
+    if source_type == "devto" or "dev.to" in url:
+        m = _re.search(
+            r'<div[^>]*id="article-body"[^>]*>(.*?)</div>\s*</div>',
+            html, _re.DOTALL | _re.IGNORECASE,
+        )
+        if m:
+            body = _strip_html_tags(m.group(1))
+            if len(body) > 100:
+                return body[:8000]
+
+    # ── Generic: strip nav/header/footer/aside, then extract <main> or <article> ──
+    # Try <main> tag first
+    m = _re.search(r"<main[^>]*>(.*?)</main>", html, _re.DOTALL | _re.IGNORECASE)
+    if m:
+        body = _strip_html_tags(m.group(1))
+        if len(body) > 100:
+            return body[:8000]
+    # Try <article> tag
+    m = _re.search(r"<article[^>]*>(.*?)</article>", html, _re.DOTALL | _re.IGNORECASE)
+    if m:
+        body = _strip_html_tags(m.group(1))
+        if len(body) > 100:
+            return body[:8000]
+    # Last resort: strip known noise sections from full page
+    cleaned = _strip_html_tags(html)
+    if len(cleaned) > 200:
+        return cleaned[:8000]
+    # Absolute fallback: original html_to_markdown
+    return html_to_markdown(html)[:8000]
 
 
 async def _run_source(
@@ -253,6 +456,9 @@ async def _run_source(
     document_fetcher: SafeFetcher,
     generate_brief: BriefGenerator,
     generation_timeout_seconds: float,
+    distilled_scorer: DistilledScorerFn | None = None,
+    monitor: Any | None = None,
+    embedding_scorer: EmbeddingScorerFn | None = None,
 ) -> SourceRunResult:
     run_id = await _create_run(pool, source, triggered_by)
     started = time.monotonic()
@@ -269,8 +475,33 @@ async def _run_source(
                 if await _candidate_exists(pool, normalized.canonical_url):
                     total_skipped += 1
                     continue
+
+                # Fast keyword-based score BEFORE fetching or LLM
+                score = score_candidate(normalized, source_type=source.source_type)
+                filter_result = filter_candidate(normalized, score, source.source_type)
+                if not filter_result.keep:
+                    # Stage 1b: embedding semantic rescue for high-quality sources
+                    if filter_result.needs_embedding_rescue and embedding_scorer is not None:
+                        rescued, sim = await embedding_scorer.should_rescue(
+                            normalized.title,
+                            normalized.snippet,
+                            score.source_quality,
+                        )
+                        if rescued:
+                            filter_result = FilterResult(
+                                keep=True,
+                                reason=f"embedding_rescue: sim={sim:.3f}",
+                            )
+                        else:
+                            total_skipped += 1
+                            continue
+                    else:
+                        total_skipped += 1
+                        continue
+
                 fetched = await document_fetcher(raw_candidate.url)
-                markdown = html_to_markdown(fetched.content.decode("utf-8", errors="replace"))[:50000]
+                raw_html = fetched.content.decode("utf-8", errors="replace")
+                markdown = _extract_article_content(raw_html, raw_candidate.url, source.source_type)
                 item = {
                     "title": normalized.title,
                     "snippet": (markdown or normalized.snippet)[:2000],
@@ -286,7 +517,20 @@ async def _run_source(
                 cost_usd += _cost_usd(brief.cost)
                 if brief.status != AI_JOB_STATUS["SUCCEEDED"] or not brief.output_text:
                     raise RuntimeError(f"brief generation ended in {brief.status}")
-                score = score_candidate(normalized, source_type=source.source_type)
+                # Distilled 7-dimension LLM scoring (Stage 2)
+                distilled_result = None
+                if distilled_scorer is not None:
+                    from ai_engine.scoring.scoring_profiles import profile_for_source
+
+                    profile, _ = profile_for_source(source.source_type)
+                    distilled_result = await distilled_scorer(
+                        normalized.title,
+                        markdown or normalized.snippet,
+                        profile=profile,
+                    )
+                    if monitor is not None:
+                        monitor.record(distilled_result)
+                extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
                 inserted = await _insert_candidate(
                     pool,
                     candidate=raw_candidate,
@@ -298,6 +542,8 @@ async def _run_source(
                     run_id=run_id,
                     score=score,
                     cost=brief.cost,
+                    extra_tags=tuple(extra_tags_list),
+                    distilled=distilled_result,
                 )
                 if inserted:
                     total_new += 1
@@ -386,6 +632,9 @@ async def run_radar_sync(
     document_fetcher: SafeFetcher = safe_fetch,
     generate_brief: BriefGenerator = _generate_brief,
     generation_timeout_seconds: float = 60.0,
+    distilled_scorer: DistilledScorerFn | None = None,
+    monitor: Any | None = None,
+    embedding_scorer: EmbeddingScorerFn | None = None,
 ) -> RadarSyncResult:
     """Run all enabled sources independently and return source-level results."""
 
@@ -407,6 +656,9 @@ async def run_radar_sync(
                 document_fetcher=document_fetcher,
                 generate_brief=generate_brief,
                 generation_timeout_seconds=generation_timeout_seconds,
+                distilled_scorer=distilled_scorer,
+                monitor=monitor,
+                embedding_scorer=embedding_scorer,
             )
             for source in sources
         )
@@ -422,6 +674,9 @@ async def retry_radar_run(
     fetchers: dict[str, SourceFetcher] | None = None,
     document_fetcher: SafeFetcher = safe_fetch,
     generate_brief: BriefGenerator = _generate_brief,
+    distilled_scorer: DistilledScorerFn | None = None,
+    monitor: Any | None = None,
+    embedding_scorer: EmbeddingScorerFn | None = None,
 ) -> RadarSyncResult:
     async with pool.connection() as conn:
         row = await (
@@ -442,6 +697,9 @@ async def retry_radar_run(
         fetchers=fetchers,
         document_fetcher=document_fetcher,
         generate_brief=generate_brief,
+        distilled_scorer=distilled_scorer,
+        monitor=monitor,
+        embedding_scorer=embedding_scorer,
     )
 
 
