@@ -8,12 +8,12 @@
 
 > **CI 状态**：跑测试 + E2E（[配置说明](./docs/E2E_TESTING.md)）。把 `OWNER` 替换成你的 GitHub 用户名。
 
-## 当前状态（2026-07-28）
+## 当前状态（2026-07-30）
 
 - Week 7 已完成（AI engine 切到 `gpt-researcher`，ADR 0004 复评通过；3 个真实中文主题端到端调研 succeeded）。
-- Week 8 已完成（M4 审核闭环：评论 + 点赞 + 删除、Admin 评论提名 promote/dismiss、Admin 分享 approve/reject、Admin Dashboard、部署脚手架 docker-compose + nginx + Dockerfiles + pg-backup/restore + import-tmp-cleanup + Web healthz）。typecheck + 234 web 单测 + 193 Python 单测 + ruff + mypy + 生产构建全绿；现场修复 `conftest.py` 让本地 `.env` 不再污染 pytest。详见 `docs/weekly/week8-delivery.md`。
-- **测试指标（2026-07-28 实测）**：Web 单测 303 ✅、Web E2E 21 passed/2 skipped ✅、Python 单测 193 ✅、Python E2E 11 passed/2 skipped ✅。CI 配置（GitHub Actions）于 Week 9 一起配。
-- 下一阶段 Week 9（§十一 M5 试用就绪）：冻结 P0 scope，全量回归 + 权限矩阵 + 10 AI 样本 + 20 导入样本 + 备份恢复演练 + 月成本外推 ≤ $200 + 4 决策指标基线快照 + 试用名单与说明。
+- Week 8 已完成（M4 审核闭环：评论 + 点赞 + 删除、Admin 评论提名 promote/dismiss、Admin 分享 approve/reject、Admin Dashboard、部署脚手架 docker-compose + nginx + Dockerfiles + pg-backup/restore + import-tmp-cleanup + Web healthz）。typecheck + 234 web 单测 + 193 Python 单测 + ruff + mypy + 生产构建全绿；现场修复 `conftest.py` 让本地 `.env` 不再污染 pytest。Week 8 交付明细见 `docs/PROJECT_STATUS.md`（`docs/weekly/week8-delivery.md` 未单独创建）。
+- **测试指标（2026-07-30 实测）**：Web 单测 303 ✅、Web E2E 21 passed/2 skipped ✅、Python 单测 244（含 51 distilled_scorer）✅、Python E2E 11 passed/2 skipped ✅、typecheck + ruff 全绿、GitHub Actions CI 已配置（`.github/workflows/ci.yml`）。
+- Week 9 已完成（M5 试用就绪）：新增 scoring 模块 + distilled_scorer + DistilledScorePanel + helper scripts + GitHub Actions CI。进入试用冻结期（Week 10–13），剩余待办：10 AI 样本 + 20 导入样本 + 月成本外推 + 带数据备份恢复演练。
 - `infra/docker-compose.yml` + Dockerfiles + 备份恢复脚本是部署脚手架；live `docker compose build` + 真实备份恢复演练显式归入 Week 9 验收门（`infra/README.md` 已自标记）。
 
 ## 仓库布局（monorepo）

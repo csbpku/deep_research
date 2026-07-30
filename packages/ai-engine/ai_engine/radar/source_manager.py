@@ -16,7 +16,7 @@ from ai_engine.radar.vendor_news_fetcher import check_and_fetch_vendor_news
 # Missing modules are caught at handler registration time so sources that
 # depend on them fail fast instead of breaking the entire sync runner.
 try:
-    from ai_engine.radar.community_fetcher import (  # type: ignore[import-untyped]
+    from ai_engine.radar.community_fetcher import (
         fetch_hackernews_candidates,
         fetch_reddit_candidates,
         fetch_lobsters_candidates,
@@ -25,31 +25,31 @@ try:
     _HAVE_COMMUNITY = True
 except ModuleNotFoundError:
     _HAVE_COMMUNITY = False
-    fetch_hackernews_candidates = None
-    fetch_reddit_candidates = None
-    fetch_lobsters_candidates = None
-    fetch_devto_candidates = None
+    fetch_hackernews_candidates = None  # type: ignore[assignment]
+    fetch_reddit_candidates = None  # type: ignore[assignment]
+    fetch_lobsters_candidates = None  # type: ignore[assignment]
+    fetch_devto_candidates = None  # type: ignore[assignment]
 
 try:
-    from ai_engine.radar.producthunt_fetcher import fetch_producthunt_candidates  # type: ignore[import-untyped]
+    from ai_engine.radar.producthunt_fetcher import fetch_producthunt_candidates
     _HAVE_PRODUCTHUNT = True
 except ModuleNotFoundError:
     _HAVE_PRODUCTHUNT = False
-    fetch_producthunt_candidates = None
+    fetch_producthunt_candidates = None  # type: ignore[assignment]
 
 try:
-    from ai_engine.radar.github_topic_search import fetch_github_topic_search  # type: ignore[import-untyped]
+    from ai_engine.radar.github_topic_search import fetch_github_topic_search
     _HAVE_TOPIC_SEARCH = True
 except ModuleNotFoundError:
     _HAVE_TOPIC_SEARCH = False
-    fetch_github_topic_search = None
+    fetch_github_topic_search = None  # type: ignore[assignment]
 
 try:
-    from ai_engine.radar.huggingface_fetcher import fetch_huggingface_models  # type: ignore[import-untyped]
+    from ai_engine.radar.huggingface_fetcher import fetch_huggingface_models
     _HAVE_HF = True
 except ModuleNotFoundError:
     _HAVE_HF = False
-    fetch_huggingface_models = None
+    fetch_huggingface_models = None  # type: ignore[assignment]
 
 SourceFetcher = Callable[[dict[str, Any]], Awaitable[list[RadarCandidate]]]
 
