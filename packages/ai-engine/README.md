@@ -11,7 +11,7 @@ FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓�
 - `server/`：health、AI job、radar sync、share submission 和 chat endpoints。
 - 顶层 worker：文件导入与分享提交处理。
 
-`gpt-researcher` 不是当前运行时 adapter；相关 spike 报告保留在 `reports/`，引擎选型见 `docs/decisions/0004-ai-engine-selection.md`。
+`gpt-researcher` 是当前运行时主适配（Week 7 切回，ADR 0004 复评通过）；`fake` 是测试/CI fallback。Claude 适配（`adapters/claude.py`）已从 `build_adapter` 工厂移除，历史 spike 报告保留在 `reports/`，引擎选型见 `docs/decisions/0004-ai-engine-selection.md`。默认 retriever 为 tavily（`fetcher/tavily.py`），`TAVILY_API_KEY` 仍为必填。
 
 ## 目录
 
