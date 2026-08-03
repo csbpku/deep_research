@@ -211,9 +211,10 @@
     --tw-prose-th-borders: hsl(var(--border));
     --tw-prose-td-borders: hsl(var(--border));
 
-    /* 中文长文阅读：字号 17px、行高 1.8 —— 视觉密度更接近学术/出版物 */
-    font-size: 1.0625rem; /* 17px */
-    line-height: 1.8;
+    /* 中文长文阅读：字号 14.5px、行高 1.65 —— Swiss-data-dense 排版，
+       缩短屏读时间但不挤；token 化的紧凑档见 .prose-compact (13.5px)。 */
+    font-size: 0.90625rem; /* 14.5px */
+    line-height: 1.65;
   }
 
   .prose :where(code):not(:where(pre code)) {
@@ -243,10 +244,11 @@
     @apply px-3 py-2;
   }
 
-  /* AI 草稿与编辑器预览：更适合逐段校稿的紧凑排版。 */
+  /* AI 草稿与编辑器预览：紧凑排版 —— 13.5px / 1.6。
+     与默认 .prose 共享颜色 + 链接 + 表格 token；仅调字号/行距。 */
   .prose.prose-compact {
-    font-size: 0.9375rem;
-    line-height: 1.75;
+    font-size: 0.84375rem; /* 13.5px */
+    line-height: 1.6;
   }
 
   .prose.prose-compact :where(h1) {

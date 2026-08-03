@@ -1,22 +1,25 @@
 import Link from 'next/link';
-import { ArrowRight, Library, Newspaper, Radar, Search, Workflow, type LucideIcon } from 'lucide-react';
+import {
+  Radar as RadarIcon,
+  Rocket,
+  Search as SearchIcon,
+  Workflow,
+  type LucideIcon,
+} from 'lucide-react';
 
 import { RecentActivityStrip } from '@/components/home/RecentActivityStrip';
-import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/domain/PageHeader';
+import { Button } from '@/components/ui/button';
 
 /**
  * 首页：工程师的"晨报 + 调研入口"。
  *
- * UI 重设计第二轮（基于 ui-ux-pro-max 评审 + frontend-design skill）：
- *   1. 顶部加"最近活动"事件条（RecentActivityStrip），从 /api/summaries、
- *      /api/radar、/api/ai-research/jobs 拉最近 1+3+1 条。
- *      —— 数据库规则 #1：工程师首次访问要有价值信号，不必先点子页。
- *   2. 下方保留 4 个能力入口卡（产品本身是什么）。
- *   3. 未登录时事件条自动不渲染（fetch 会 401，整块 hide）。
- *
- * Admin 入口仅在 role === 'admin' 时由 AppShell 侧栏显示（前端显隐）；
- * 直链 /admin 仍会被服务端 requireAdmin() 拒绝（验收 2）。
+ * UI 重设计第三轮：
+ *   1. 顶部 PageHeader 一句话点题
+ *   2. RecentActivityStrip：拿最近的日报 / 候选 / AI 任务作为状态信号
+ *   3. "快速开始"一行：3 个动作（提交 AI 调研 / 浏览技术雷达 / 打开搜索），
+ *      不再堆 4 张卡 —— 调研库、AI 雷达日报等入口全部经侧栏导航
+ *   4. Admin 入口由 AppShell 侧栏控制（前端显隐）；直链 /admin 仍被服务端拦截
  */
 export default function HomePage() {
   return (
@@ -28,60 +31,66 @@ export default function HomePage() {
 
       <RecentActivityStrip />
 
-      <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <EntryCard
-          href="/summaries"
-          icon={Newspaper}
-          title="AI 雷达日报"
-          desc="每日汇总各源高分信号，链接雷达详情并可讨论"
-        />
-        <EntryCard
-          href="/radar"
-          icon={Radar}
-          title="技术雷达"
-          desc="候选池：论文、仓库、文章的 AI 解读与七维打分"
-        />
-        <EntryCard
+      <section
+        aria-label="快速开始"
+        className="mt-5 flex flex-col gap-2 rounded-lg border border-border bg-card p-3 sm:flex-row sm:items-center sm:gap-3"
+      >
+        <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:shrink-0">
+          快速开始
+        </p>
+        <QuickAction
           href="/ai-research"
-          icon={Workflow}
-          title="AI 调研"
-          desc="主题 → 抓取 → 压缩 → 分析 → 写作，端到端产出草稿"
+          icon={Rocket}
+          label="提交 AI 调研"
+          desc="主题 → 抓取 → 写作，端到端"
+          primary
         />
-        <EntryCard
-          href="/researches"
-          icon={Search}
-          title="调研库"
-          desc="长文与精华：调研结论的长期归档与检索"
+        <QuickAction
+          href="/radar"
+          icon={RadarIcon}
+          label="浏览技术雷达"
+          desc="候选池与每日评分"
+        />
+        <QuickAction
+          href="/search"
+          icon={SearchIcon}
+          label="打开搜索"
+          desc="跨雷达 / 摘要 / 长文检索"
         />
       </section>
     </div>
   );
 }
 
-function EntryCard({
+function QuickAction({
   href,
-  title,
-  desc,
   icon: Icon,
+  label,
+  desc,
+  primary = false,
 }: {
   href: string;
-  title: string;
-  desc: string;
   icon: LucideIcon;
+  label: string;
+  desc: string;
+  primary?: boolean;
 }) {
   return (
-    <Link
-      href={href}
-      className="group flex flex-col rounded-lg border border-border bg-card p-4 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <Button
+      asChild
+      variant={primary ? 'default' : 'outline'}
+      size="sm"
+      className="h-auto justify-start gap-2 px-3 py-2"
     >
-      <div className="flex items-center gap-2">
-        <Icon className="size-4 shrink-0 text-primary" />
-        <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
-        <ArrowRight className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-primary" />
-      </div>
-      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{desc}</p>
-    </Link>
+      <Link href={href} className="flex items-center gap-2">
+        <Icon className="size-4 shrink-0" />
+        <span className="flex flex-col items-start text-left">
+          <span className="text-sm font-medium leading-tight">{label}</span>
+          <span className="text-[11px] font-normal leading-tight text-muted-foreground">
+            {desc}
+          </span>
+        </span>
+      </Link>
+    </Button>
   );
 }
-
-export { EmptyState };

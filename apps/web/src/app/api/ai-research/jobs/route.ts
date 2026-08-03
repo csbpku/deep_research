@@ -22,8 +22,9 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { apiHandler } from '../../../../lib/api-handler';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
-import { log, withRequestId, serializeError } from '../../../../lib/log';
+import { log, withRequestId } from '../../../../lib/log';
 import { getWebEnv } from '../../../../lib/env';
+import { fetchAiEngine } from '../../../../lib/ai-bff/fetch-ai-engine';
 
 const QuerySchema = z.object({
   status: z.string().min(1).max(64).optional(),
@@ -38,8 +39,6 @@ const QuerySchema = z.object({
     .transform((v) => Math.max(0, parseInt(v, 10)))
     .optional(),
 });
-
-const AI_ENGINE_TIMEOUT_MS = 5_000;
 
 interface ListAiJobsItem {
   job_id: string;
@@ -94,53 +93,19 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   upstream.searchParams.set('limit', String(limit ?? 20));
   upstream.searchParams.set('offset', String(offset ?? 0));
 
-  let upstreamRes: Response;
-  try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
-    upstreamRes = await fetch(upstream, {
-      headers: { 'x-request-id': requestId },
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-  } catch (err) {
-    log.warn('ai.bff.list', 'upstream fetch failed', {
-      requestId,
-      err: serializeError(err),
-      upstream: upstream.toString(),
-    });
+  const fetched = await fetchAiEngine<UpstreamResponse>({
+    url: upstream.toString(),
+    requestId,
+    context: 'ai.bff.list',
+  });
+  if (!fetched.ok) {
     return toApiErrorResponse({
-      code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
-      message: 'ai-engine 不可达',
-      requestId,
+      code: fetched.code,
+      message: fetched.message,
+      requestId: fetched.requestId,
     });
   }
-
-  const text = await upstreamRes.text();
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    return toApiErrorResponse({
-      code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
-      message: 'ai-engine 返回非 JSON',
-      requestId,
-    });
-  }
-
-  if (!upstreamRes.ok) {
-    const obj = body as { detail?: unknown; message?: string };
-    const code =
-      upstreamRes.status === 422 ? ERROR_CODES.VALIDATION_FAILED : ERROR_CODES.AI_ENGINE_UNAVAILABLE;
-    return toApiErrorResponse({
-      code,
-      message: obj.message ?? `ai-engine 返回 ${upstreamRes.status}`,
-      requestId,
-      details: obj.detail,
-    });
-  }
-
-  const up = body as UpstreamResponse;
+  const up = fetched.body;
   return NextResponse.json({
     items: up.items.map((it) => ({
       jobId: it.job_id,

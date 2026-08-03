@@ -16,6 +16,8 @@ import {
   Lightbulb,
   Link2,
   MessageSquare,
+  Settings as SettingsIcon,
+  User,
   Radar as RadarIcon,
   ShieldCheck,
   Sparkles,
@@ -24,19 +26,28 @@ import {
 } from 'lucide-react';
 
 import { StatCard } from '@/components/domain/StatCard';
+import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/domain/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { AdminActionDialog, type AdminActionValues } from '@/components/admin/AdminActionDialog';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { formatSourceType } from '@/lib/radar/source-labels';
 import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 
-type Tab = 'dashboard' | 'radar' | 'shares' | 'comments';
+type Tab = 'dashboard' | 'radar' | 'shares' | 'comments' | 'users' | 'settings';
 
 const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'dashboard', label: '仪表板', icon: ShieldCheck },
   { key: 'radar', label: '雷达候选', icon: RadarIcon },
   { key: 'shares', label: '用户分享', icon: Link2 },
   { key: 'comments', label: '评论提名', icon: Lightbulb },
+  { key: 'users', label: '成员', icon: User },
+  { key: 'settings', label: '设置', icon: SettingsIcon },
 ];
 
 interface DashboardData {
@@ -156,6 +167,8 @@ export default function AdminConsole() {
         {tab === 'radar' && <RadarTab />}
         {tab === 'shares' && <SharesTab />}
         {tab === 'comments' && <CommentsTab />}
+        {tab === 'users' && <UsersTab />}
+        {tab === 'settings' && <SettingsTab />}
       </div>
     </div>
   );
@@ -292,7 +305,7 @@ function DashboardTab() {
               <strong className="font-medium text-foreground">
                 {d.radar.lastSync.source?.name ?? '未知源'}
               </strong>
-              （{d.radar.lastSync.source?.sourceType ?? '?'}）
+              （{formatSourceType(d.radar.lastSync.source?.sourceType).short}）
             </p>
             <p className="flex flex-wrap items-center gap-1.5">
               状态：
@@ -409,17 +422,21 @@ function RadarTab() {
 
       <ul className="grid list-none gap-2 p-0">
         {(q.data?.items ?? []).map((it) => (
-          <li key={it.id} className="rounded-lg border border-border bg-card p-3">
-            <Link
-              href={`/admin/radar/${it.id}`}
-              className="block text-sm font-medium hover:text-primary hover:underline"
-            >
-              {it.title}
-            </Link>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {it.sourceType ?? '?'} · {new Date(it.crawledAt).toLocaleDateString('zh-CN')}
-              {it.interpretation && ` · ${it.interpretation.slice(0, 60)}…`}
-            </div>
+          <li key={it.id}>
+            <Card className="transition-colors duration-200 hover:border-primary/40">
+              <CardContent className="p-3">
+                <Link
+                  href={`/admin/radar/${it.id}`}
+                  className="block text-sm font-medium hover:text-primary hover:underline"
+                >
+                  {it.title}
+                </Link>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {formatSourceType(it.sourceType).short} · {new Date(it.crawledAt).toLocaleDateString('zh-CN')}
+                  {it.interpretation && ` · ${it.interpretation.slice(0, 60)}…`}
+                </div>
+              </CardContent>
+            </Card>
           </li>
         ))}
       </ul>
@@ -466,6 +483,7 @@ const SHARE_STATUS_OPTIONS = [
 function SharesTab() {
   const [status, setStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [page, setPage] = useState(1);
+  const [rejectingShare, setRejectingShare] = useState<{ id: string; title: string } | null>(null);
   const queryClient = useQueryClient();
 
   const q = useQuery<ShareListResponse>({
@@ -514,7 +532,9 @@ function SharesTab() {
 
       <ul className="grid list-none gap-2.5 p-0">
         {(q.data?.items ?? []).map((it) => (
-          <li key={it.id} className="rounded-lg border border-border bg-card p-3.5">
+          <li key={it.id}>
+            <Card className="transition-colors duration-200 hover:border-primary/40">
+              <CardContent className="p-3.5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-semibold">
@@ -570,10 +590,7 @@ function SharesTab() {
                     size="xs"
                     className="text-destructive"
                     disabled={reviewMut.isPending}
-                    onClick={() => {
-                      const reason = prompt('拒绝原因：');
-                      if (reason) reviewMut.mutate({ id: it.id, action: 'reject', reason });
-                    }}
+                    onClick={() => setRejectingShare({ id: it.id, title: it.fetchedTitle ?? it.url })}
                   >
                     <X />
                     拒绝
@@ -581,6 +598,8 @@ function SharesTab() {
                 </div>
               )}
             </div>
+              </CardContent>
+            </Card>
           </li>
         ))}
       </ul>
@@ -590,6 +609,24 @@ function SharesTab() {
           操作失败：{(reviewMut.error as Error).message}
         </p>
       )}
+
+      <AdminActionDialog
+        open={!!rejectingShare}
+        onOpenChange={(o) => !o && setRejectingShare(null)}
+        title="拒绝分享"
+        description={rejectingShare ? <>分享：<strong className="font-medium text-foreground">{rejectingShare.title}</strong></> : undefined}
+        fields={[
+          { kind: 'textarea', id: 'reason', label: '拒绝原因', required: true, rows: 3, placeholder: '例如：与平台主题无关 / 内容质量不足' },
+        ]}
+        confirmLabel="确认拒绝"
+        destructive
+        pending={reviewMut.isPending}
+        onSubmit={async (values) => {
+          if (!rejectingShare) return;
+          await reviewMut.mutateAsync({ id: rejectingShare.id, action: 'reject', reason: String(values.reason) });
+          setRejectingShare(null);
+        }}
+      />
     </div>
   );
 }
@@ -607,6 +644,8 @@ const COMMENT_STATUS_OPTIONS = [
 
 function CommentsTab() {
   const [status, setStatus] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [promotingComment, setPromotingComment] = useState<{ id: string; defaultTitle: string; body: string } | null>(null);
+  const [dismissingComment, setDismissingComment] = useState<{ id: string; excerpt: string } | null>(null);
   const queryClient = useQueryClient();
 
   const q = useQuery<CommentListResponse>({
@@ -620,11 +659,11 @@ function CommentsTab() {
   });
 
   const promoteMut = useMutation({
-    mutationFn: async (input: { id: string; title: string; body: string; tags: string[] }) => {
+    mutationFn: async (input: { id: string; title: string; body: string; tags: string[]; conclusion?: string }) => {
       const r = await fetch(`/api/admin/comments/${input.id}/promote`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: input.title, body: input.body, tags: input.tags }),
+        body: JSON.stringify({ title: input.title, body: input.body, tags: input.tags, conclusion: input.conclusion }),
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({ message: '提炼失败' }));
@@ -671,8 +710,10 @@ function CommentsTab() {
 
       <ul className="grid list-none gap-2.5 p-0">
         {(q.data?.items ?? []).map((it) => (
-          <li key={it.id} className="rounded-lg border border-border bg-card p-3.5">
-            <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+          <li key={it.id}>
+            <Card className="transition-colors duration-200 hover:border-primary/40">
+              <CardContent className="p-3.5">
+                <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
               <strong className="font-medium text-foreground">{it.author.name}</strong>（
               {it.author.email}） · {new Date(it.createdAt).toLocaleString('zh-CN')} ·
               <span className="inline-flex items-center gap-0.5">
@@ -710,11 +751,7 @@ function CommentsTab() {
                   type="button"
                   size="xs"
                   disabled={promoteMut.isPending || dismissMut.isPending}
-                  onClick={() => {
-                    const title = prompt('精华标题：', it.body.slice(0, 30));
-                    if (!title) return;
-                    promoteMut.mutate({ id: it.id, title, body: it.body, tags: [] });
-                  }}
+                  onClick={() => setPromotingComment({ id: it.id, defaultTitle: it.body.slice(0, 30), body: it.body })}
                 >
                   <Sparkles />
                   提炼为精华
@@ -725,10 +762,7 @@ function CommentsTab() {
                   size="xs"
                   className="text-destructive"
                   disabled={dismissMut.isPending}
-                  onClick={() => {
-                    const reason = prompt('拒绝原因：');
-                    if (reason) dismissMut.mutate({ id: it.id, reason });
-                  }}
+                  onClick={() => setDismissingComment({ id: it.id, excerpt: it.body.slice(0, 80) })}
                 >
                   <X />
                   拒绝
@@ -744,9 +778,133 @@ function CommentsTab() {
             {it.promoteStatus === 'rejected' && (
               <p className="text-xs text-muted-foreground">已拒绝</p>
             )}
+              </CardContent>
+            </Card>
           </li>
         ))}
       </ul>
+
+      <AdminActionDialog
+        open={!!promotingComment}
+        onOpenChange={(o) => !o && setPromotingComment(null)}
+        title="提炼为精华"
+        description="系统会基于评论原文生成精华条目，标题可自定义。"
+        fields={[
+          { kind: 'text', id: 'title', label: '精华标题', required: true, maxLength: 80, defaultValue: promotingComment?.defaultTitle },
+          { kind: 'markdown', id: 'body', label: '精华正文', required: true, defaultValue: promotingComment?.body, maxLength: 50000, rows: 10 },
+          { kind: 'tags', id: 'tags', label: '标签', defaultValue: [], maxTagLength: 40, maxTags: 10 },
+          { kind: 'textarea', id: 'conclusion', label: '结论（可选）', rows: 3, maxLength: 2000 },
+        ]}
+        confirmLabel="提炼"
+        pending={promoteMut.isPending}
+        onSubmit={async (values) => {
+          if (!promotingComment) return;
+          await promoteMut.mutateAsync({ id: promotingComment.id, title: String(values.title), body: String(values.body), tags: Array.isArray(values.tags) ? values.tags : [], conclusion: String(values.conclusion || '').trim() || undefined });
+          setPromotingComment(null);
+        }}
+      />
+
+      <AdminActionDialog
+        open={!!dismissingComment}
+        onOpenChange={(o) => !o && setDismissingComment(null)}
+        title="拒绝评论提名"
+        description={dismissingComment ? <>评论原文：<span className="text-foreground">{dismissingComment.excerpt}{dismissingComment.excerpt.length === 80 ? '…' : ''}</span></> : undefined}
+        fields={[
+          { kind: 'textarea', id: 'reason', label: '拒绝原因', required: true, rows: 3, placeholder: '例如：与精华主题不符' },
+        ]}
+        confirmLabel="确认拒绝"
+        destructive
+        pending={dismissMut.isPending}
+        onSubmit={async (values) => {
+          if (!dismissingComment) return;
+          await dismissMut.mutateAsync({ id: dismissingComment.id, reason: String(values.reason) });
+          setDismissingComment(null);
+        }}
+      />
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// 成员
+// ──────────────────────────────────────────────────────────────────────
+
+interface UserListResponse { items: Array<{ id: string; email: string; name: string; role: 'admin' | 'member'; createdAt: string; disabledAt: string | null }> }
+
+function UsersTab() {
+  const q = useQuery<UserListResponse>({
+    queryKey: ['admin-users'],
+    queryFn: async () => {
+      const r = await fetch('/api/admin/users', { cache: 'no-store' });
+      if (!r.ok) throw new Error('加载成员失败');
+      return r.json();
+    },
+  });
+  if (q.isLoading) return <QueueSkeleton />;
+  if (q.isError) return <p className="text-sm text-destructive">{(q.error as Error).message}</p>;
+  const items = q.data?.items ?? [];
+  if (items.length === 0) return <EmptyState title="还没有成员" description="成员由 SSO / 邀请注册后自动加入。" />;
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-4 py-2.5 font-medium">姓名</th>
+              <th className="px-4 py-2.5 font-medium">邮箱</th>
+              <th className="px-4 py-2.5 font-medium">角色</th>
+              <th className="px-4 py-2.5 font-medium">状态</th>
+              <th className="px-4 py-2.5 font-medium">加入时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((u) => (
+              <tr key={u.id} className="border-t border-border transition-colors hover:bg-muted/30">
+                <td className="px-4 py-2.5">{u.name || '—'}</td>
+                <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{u.email}</td>
+                <td className="px-4 py-2.5"><Badge variant={u.role === 'admin' ? 'destructive' : 'secondary'}>{u.role === 'admin' ? '管理员' : '成员'}</Badge></td>
+                <td className="px-4 py-2.5 text-xs text-muted-foreground">{u.disabledAt ? '已禁用' : '正常'}</td>
+                <td className="px-4 py-2.5 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString('zh-CN')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// 设置（占位，Phase 1 暂不开放编辑）
+// ──────────────────────────────────────────────────────────────────────
+
+const SETTINGS_FIELDS = [
+  { id: 'share_daily_cap', label: '分享每日上限', desc: '每位成员每 24h 可提交分享的最大数量。', default: 5, suffix: '次/日' },
+  { id: 'ai_budget', label: 'AI 调研预算', desc: '单个 AI 调研任务的硬性成本上限。', default: 200, suffix: '美分' },
+  { id: 'score_threshold', label: '雷达打分阈值', desc: '候选进入精选池所需的最低分。', default: 60, suffix: '分' },
+] as const;
+
+function SettingsTab() {
+  const [values, setValues] = useState<Record<string, number>>(() => Object.fromEntries(SETTINGS_FIELDS.map((f) => [f.id, f.default])));
+  return (
+    <div className="grid gap-3">
+      <div className="rounded-md border border-amber-300/40 bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+        Phase 1 阶段设置项仅展示，不可保存；待 P2 阶段开放编辑。
+      </div>
+      {SETTINGS_FIELDS.map((f) => (
+        <Card key={f.id}>
+          <CardContent className="grid gap-2 p-4 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <p className="text-sm font-medium">{f.label}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{f.desc}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input type="number" value={values[f.id]} disabled onChange={() => undefined} className="w-24 text-right" />
+              <span className="text-xs text-muted-foreground">{f.suffix}</span>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

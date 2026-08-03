@@ -2,7 +2,17 @@
 
 import Link from 'next/link';
 import { signOut } from 'next-auth/react';
-import { ChevronDown, FilePenLine, LogIn, LogOut, ShieldCheck, User } from 'lucide-react';
+import {
+  Bookmark,
+  ChevronDown,
+  FilePenLine,
+  LogIn,
+  LogOut,
+  Pin,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  User,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -73,6 +83,24 @@ export function UserMenu({
           <Link href={researchTabHref('draft')}>
             <FilePenLine />
             我的草稿
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/me/favorites">
+            <Bookmark />
+            我的收藏
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/me/topics">
+            <Pin />
+            我的主题关注
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/me/settings">
+            <SettingsIcon />
+            个人设置
           </Link>
         </DropdownMenuItem>
 

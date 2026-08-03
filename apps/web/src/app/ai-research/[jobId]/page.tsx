@@ -17,6 +17,9 @@ import {
 } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { friendlyMessage } from '@/lib/errors/friendly';
+import { toApiHttpError } from '@/lib/errors/api-error';
+import { retryOnceAi } from '@/lib/errors/friendly';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -66,12 +69,10 @@ export default function AiJobStatusPage() {
     queryKey: ['ai-job', params.jobId],
     queryFn: async () => {
       const r = await fetch(`/api/ai-research/${params.jobId}`, { cache: 'no-store' });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ message: '加载失败' }));
-        throw new Error(err.message ?? '加载失败');
-      }
+      if (!r.ok) throw await toApiHttpError(r, '加载失败');
       return (await r.json()) as AiJobStatus;
     },
+    retry: retryOnceAi,
     refetchInterval: (data) => {
       const s = data?.state.data;
       if (!s) return 5_000;
@@ -95,15 +96,15 @@ export default function AiJobStatusPage() {
       <h1 className="text-xl font-semibold tracking-tight">
         {q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
       </h1>
-      <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-        job id: {params.jobId}
+      <p className="mt-1 text-xs text-muted-foreground">
+        {q.data?.topic ?? '本次调研'}
       </p>
 
       <div className="mt-4">
         {q.isLoading ? (
           <Skeleton className="h-64 w-full" />
         ) : q.isError ? (
-          <EmptyState title="加载失败" description={String((q.error as Error).message)} />
+          <EmptyState title="加载失败" description={friendlyMessage(q.error, '请稍后重试')} />
         ) : q.data ? (
           <StatusBody s={q.data} />
         ) : null}
@@ -126,9 +127,6 @@ function StatusBody({ s }: { s: AiJobStatus }) {
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4">
         <div className="min-w-0">
           <h2 className="text-base font-semibold leading-snug">{s.topic ?? 'AI 调研任务'}</h2>
-          <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground/70">
-            {s.jobId}
-          </div>
           <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <StatusBadge kind="job" value={statusLabel} label={statusLabel} />
             {activeIdx >= 0 ? (
@@ -137,14 +135,14 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               </span>
             ) : null}
             <span>已耗时 {elapsed}</span>
-            {!isTerminal ? <span>预计 30-60s</span> : null}
+            {!isTerminal ? <span>完成后会自动跳到草稿</span> : null}
           </div>
         </div>
         <div className="shrink-0 text-right">
           <div className="font-mono text-3xl font-bold leading-none tabular-nums text-primary">
             {pct}%
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">progress_pct</div>
+          <div className="mt-1 text-xs text-muted-foreground">完成进度</div>
         </div>
       </div>
 
@@ -191,7 +189,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
 
       {!isTerminal ? (
         <p className="border-t border-border p-4 text-sm text-muted-foreground">
-          每 5 秒自动刷新；完成后草稿只会出现在「我的草稿」，不会直接进入调研库。
+          完成后草稿只会出现在「我的草稿」，不会直接进入调研库。
         </p>
       ) : null}
 
@@ -372,7 +370,6 @@ function JobStatusDisclosure({
       </button>
       {open && (
         <div className="grid gap-x-4 gap-y-2 border-t border-border bg-muted/40 px-4 py-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
-          <DetailRow label="任务 ID" value={s.jobId} mono />
           <DetailRow label="正在处理" value={s.currentStep ?? '—'} mono />
           <DetailRow label="已抓取" value={String(s.partialSourcesCount)} mono />
           <DetailRow label="抓取失败" value={String(s.failedSourcesCount)} mono />

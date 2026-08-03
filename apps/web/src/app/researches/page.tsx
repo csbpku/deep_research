@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import {
   parseResearchTab,
@@ -252,39 +253,43 @@ function ResearchesContent() {
             <Link
               key={item.id}
               href={`/researches/${item.id}`}
-              className="block rounded-lg border border-border bg-card p-4 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="group block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                <StatusBadge kind="method" value={item.creationMethod} />
-                {item.aiAssisted && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-method-ai/40 px-2 py-0.5 text-xs text-method-ai">
-                    <Wand2 className="size-3" />
-                    AI 协助
-                  </span>
-                )}
-                {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
-              </div>
+              <Card className="transition-all duration-200 group-hover:-translate-y-px group-hover:border-primary/40 group-hover:shadow-sm">
+                <CardContent className="p-4">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                    <StatusBadge kind="method" value={item.creationMethod} />
+                    {item.aiAssisted && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-method-ai/40 px-2 py-0.5 text-xs text-method-ai">
+                        <Wand2 className="size-3" />
+                        AI 协助
+                      </span>
+                    )}
+                    {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
+                  </div>
 
-              <h2 className="text-sm font-semibold leading-snug">{item.title}</h2>
+                  <h2 className="text-sm font-semibold leading-snug">{item.title}</h2>
 
-              <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
-                {excerpt(item.body, 200)}
-              </p>
+                  <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                    {excerpt(item.body, 200)}
+                  </p>
 
-              {item.tags.length > 0 && (
-                <TagList className="mt-2.5">
-                  {item.tags.map((t) => (
-                    <TagChip key={t}>{t}</TagChip>
-                  ))}
-                </TagList>
-              )}
+                  {item.tags.length > 0 && (
+                    <TagList className="mt-2.5">
+                      {item.tags.map((t) => (
+                        <TagChip key={t}>{t}</TagChip>
+                      ))}
+                    </TagList>
+                  )}
 
-              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
-                <span>{item.author.name}</span>
-                <span className="font-mono tabular-nums">
-                  {new Date(item.publishedAt ?? item.createdAt).toLocaleDateString('zh-CN')}
-                </span>
-              </div>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                    <span>{item.author.name}</span>
+                    <span className="font-mono tabular-nums">
+                      {new Date(item.publishedAt ?? item.createdAt).toLocaleDateString('zh-CN')}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
             </Link>
           ))}
         </div>

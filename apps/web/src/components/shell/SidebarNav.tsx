@@ -75,11 +75,13 @@ export function SidebarNav({
             onClick={onNavigate}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'group flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors duration-150',
+              // 左侧 2px 高亮条：给 active 状态更强的视觉权重
+              'group relative flex items-center gap-2.5 rounded-md py-1.5 pl-3.5 pr-2.5 text-sm transition-colors duration-150',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors before:duration-150',
               active
-                ? 'bg-accent font-medium text-accent-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                ? 'bg-accent font-medium text-accent-foreground before:bg-primary'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground hover:before:bg-muted-foreground/30',
             )}
           >
             <Icon className="size-4 shrink-0" />

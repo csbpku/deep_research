@@ -12,13 +12,17 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Suspense, useEffect, useState } from 'react';
+
+import { useMediaQuery } from '@/lib/hooks/use-media-query';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   FolderOpen,
   Loader2,
   Plus,
   Rocket,
+  Send,
   X,
 } from 'lucide-react';
 
@@ -38,6 +42,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { friendlyMessage } from '@/lib/errors/friendly';
+import { toApiHttpError } from '@/lib/errors/api-error';
+import { retryOnceAi } from '@/lib/errors/friendly';
 
 interface ApiError {
   code: string;
@@ -78,19 +85,41 @@ function FormSection({
   legend,
   hint,
   children,
+  defaultOpen = true,
 }: {
   legend: string;
   hint?: string;
   children: React.ReactNode;
+  /** 移动端默认是否折叠。桌面下默认始终展开。 */
+  defaultOpen?: boolean;
 }) {
+  // 移动端（< md）默认折叠，减少首屏信息量；桌面保持展开。
+  const isDesktop = useMediaQuery('(min-width: 768px)');
+  const [open, setOpen] = useState(isDesktop || defaultOpen);
+  // 切到桌面时强制展开；切回移动端时跟随 defaultOpen。
+  useEffect(() => {
+    if (isDesktop) setOpen(true);
+    else setOpen(defaultOpen);
+  }, [isDesktop, defaultOpen]);
+
   return (
-    <fieldset className="rounded-lg border border-border bg-card p-3">
-      <legend className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {legend}
-      </legend>
-      {hint ? <p className="mb-2 text-xs text-muted-foreground">{hint}</p> : null}
-      {children}
-    </fieldset>
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      className="rounded-lg border border-border bg-card p-3 [&_summary::-webkit-details-marker]:hidden"
+    >
+      <summary className="-mx-1 flex cursor-pointer list-none items-center justify-between gap-2 rounded px-1 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <span className="inline-flex items-center gap-1.5">
+          <ChevronRight className={cn('size-3.5 transition-transform duration-200', open && 'rotate-90')} aria-hidden />
+          {legend}
+        </span>
+        <span className="text-[10px] font-normal normal-case tracking-normal text-muted-foreground/70">
+          {open ? '收起' : '展开'}
+        </span>
+      </summary>
+      {hint ? <p className="mb-2 mt-2 text-xs text-muted-foreground">{hint}</p> : null}
+      <div className="mt-2">{children}</div>
+    </details>
   );
 }
 
@@ -205,7 +234,7 @@ function AiResearchForm() {
     <div>
       <PageHeader
         title="AI 调研"
-        description="输入主题与团队背景；提交后立即拿到任务 ID，每 5 秒拉取一次状态。"
+        description="输入主题与团队背景；提交后自动跟踪调研进度。"
       />
 
       {seedWarning ? (
@@ -369,9 +398,9 @@ function AiResearchForm() {
           </div>
         ) : null}
 
-        <div>
+        <div className="sticky bottom-0 -mx-4 mt-2 flex justify-end gap-2 border-t border-border bg-background/90 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:static sm:mx-0 sm:mt-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
           <Button type="submit" disabled={submitting}>
-            {submitting ? <Loader2 className="animate-spin" /> : <Rocket />}
+            {submitting ? <Loader2 className="animate-spin" /> : <Send />}
             {submitting ? '提交中…' : '提交调研'}
           </Button>
         </div>
@@ -529,8 +558,7 @@ function LastSubmittedBanner({
     >
       <Rocket className="size-4 shrink-0" />
       <span className="flex-1">
-        刚提交的：<strong className="font-medium">{entry.topic}</strong>（jobId{' '}
-        <code className="rounded bg-muted px-1 font-mono text-xs">{entry.jobId.slice(0, 8)}…</code>）
+        刚提交的：<strong className="font-medium">{entry.topic}</strong>
       </span>
       <Button asChild size="xs">
         <Link href={`/ai-research/${entry.jobId}`}>查看进度</Link>
@@ -560,12 +588,10 @@ export function AiResearchHistory() {
       if (status) params.set('status', status);
       params.set('limit', '50');
       const r = await fetch(`/api/ai-research/jobs?${params.toString()}`, { cache: 'no-store' });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ message: '加载历史失败' }));
-        throw new Error(err.message ?? '加载历史失败');
-      }
+      if (!r.ok) throw await toApiHttpError(r, '加载历史失败');
       return (await r.json()) as { items: HistoryItem[]; total: number };
     },
+    retry: retryOnceAi,
     refetchInterval: (data) => {
       // 进行中状态下每 8s 拉一次；终态停下来以免噪音
       const items = data?.state.data?.items ?? [];
@@ -604,7 +630,8 @@ export function AiResearchHistory() {
       });
       if (!r.ok) {
         const err = (await r.json().catch(() => ({ message: '重跑失败' }))) as { message?: string };
-        setRerunError(`重跑失败：${err.message ?? r.statusText}`);
+        const msg = err instanceof Error ? friendlyMessage(err, `重跑失败（${r.statusText ?? '网络异常'}）`) : `重跑失败：${r.statusText ?? '网络异常'}`;
+        setRerunError(msg);
         return;
       }
       const data = (await r.json()) as { jobId: string };
@@ -669,9 +696,11 @@ export function AiResearchHistory() {
             ))}
           </div>
         ) : q.isError ? (
-          <p className="p-6 text-center text-sm text-destructive">
-            加载历史失败：{String((q.error as Error).message)}
-          </p>
+          <div className="grid gap-1.5 p-6 text-center">
+            <p className="text-sm font-medium text-destructive">{friendlyMessage(q.error, '加载历史失败')}</p>
+            {q.error instanceof Error ? null : null}
+            <p className="text-xs text-muted-foreground">已自动重试一次，可刷新再试。</p>
+          </div>
         ) : filteredItems.length === 0 ? (
           <p className="p-6 text-center text-sm text-muted-foreground">
             暂无{tabCounts.all === 0 ? '调研任务。提交上面表单后会出现在这里。' : '当前过滤下的任务。'}

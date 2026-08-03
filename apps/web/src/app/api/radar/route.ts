@@ -75,8 +75,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         ? [
             {
               OR: [
-                { title: { contains: q, mode: 'insensitive' } },
-                { interpretation: { contains: q, mode: 'insensitive' } },
+                { title: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+                { interpretation: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
                 { tags: { has: q } },
               ],
             },

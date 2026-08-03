@@ -47,7 +47,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="shrink-0 border-t border-border px-4 py-2.5">
-          <p className="font-mono text-[11px] text-muted-foreground">deep_research</p>
+          <p className="text-[11px] text-muted-foreground">研究工作台 · 内部预览版</p>
         </div>
       </aside>
 

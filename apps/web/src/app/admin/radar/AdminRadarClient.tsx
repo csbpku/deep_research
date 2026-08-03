@@ -16,6 +16,7 @@ import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { AdminActionDialog } from '@/components/admin/AdminActionDialog';
 import {
   Select,
   SelectContent,
@@ -24,6 +25,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
+import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 
 interface RadarCandidateListItem {
@@ -74,6 +76,7 @@ export default function AdminRadarClient() {
   const [sourceType, setSourceType] = useState(ALL_SOURCES);
   const [page, setPage] = useState(1);
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const [dismissing, setDismissing] = useState<{ id: string; title: string } | null>(null);
 
   const query = useQuery<RadarListResponse>({
     queryKey: ['adminRadar', status, sourceType, page],
@@ -198,9 +201,9 @@ export default function AdminRadarClient() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_SOURCES}>全部来源</SelectItem>
-            <SelectItem value="github">GitHub</SelectItem>
-            <SelectItem value="arxiv">arXiv</SelectItem>
-            <SelectItem value="rss">RSS</SelectItem>
+            {SOURCE_TYPE_FILTER_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </FilterBar>
@@ -248,7 +251,7 @@ export default function AdminRadarClient() {
                       variant="outline"
                       size="xs"
                       className="text-destructive"
-                      onClick={() => dismissMutation.mutate(it.id)}
+                      onClick={() => setDismissing({ id: it.id, title: it.title })}
                       disabled={dismissMutation.isPending}
                     >
                       <X />
@@ -277,6 +280,25 @@ export default function AdminRadarClient() {
         totalPages={totalPages}
         onPageChange={setPage}
         disabled={query.isFetching}
+      />
+
+      <AdminActionDialog
+        open={!!dismissing}
+        onOpenChange={(o) => !o && setDismissing(null)}
+        title="忽略该雷达候选？"
+        description={dismissing ? <>候选：<strong className="font-medium text-foreground">{dismissing.title}</strong>。忽略后该条目会被标记为「已忽略」，不会再出现在候选列表中。</> : undefined}
+        fields={[
+          { kind: 'static', id: 'note', label: '说明', value: '该操作会写入 admin_actions 审计日志，提交后可在「已忽略」状态下回看。' },
+        ]}
+        confirmLabel="忽略"
+        cancelLabel="保留候选"
+        destructive
+        pending={dismissMutation.isPending}
+        onSubmit={async () => {
+          if (!dismissing) return;
+          await dismissMutation.mutateAsync(dismissing.id);
+          setDismissing(null);
+        }}
       />
     </div>
   );

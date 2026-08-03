@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent } from '@/components/ui/card';
 
 interface SearchRow {
   id: string;
@@ -229,33 +230,37 @@ function SearchContent() {
             <p className="mb-2 text-xs tabular-nums text-muted-foreground">
               共 {data.total} 条结果
             </p>
-            <ul className="grid list-none gap-2 p-0">
+            <ul className="grid list-none gap-2.5 p-0">
               {items.map((row) => {
                 const badge = TYPE_BADGE[row.type];
                 return (
-                  <li key={row.id} className="rounded-lg border border-border bg-card p-3.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}
-                      >
-                        {badge.label}
-                      </span>
-                      <Link
-                        href={detailHref(row)}
-                        className="text-sm font-medium hover:text-primary hover:underline"
-                      >
-                        {row.title}
-                      </Link>
-                    </div>
-                    {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
-                        并在返回前转义来源文本，只保留高亮标签。 */}
-                    <p
-                      className="mt-1.5 text-sm leading-relaxed text-muted-foreground [&_mark]:rounded-sm [&_mark]:bg-status-queued-bg [&_mark]:px-0.5 [&_mark]:text-status-queued-fg"
-                      dangerouslySetInnerHTML={{ __html: row.highlighted }}
-                    />
-                    <div className="mt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
-                      {new Date(row.publishedAt).toLocaleString('zh-CN')}
-                    </div>
+                  <li key={row.id}>
+                    <Card className="transition-colors duration-200 hover:border-primary/40">
+                      <CardContent className="p-3.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}
+                          >
+                            {badge.label}
+                          </span>
+                          <Link
+                            href={detailHref(row)}
+                            className="text-sm font-medium hover:text-primary hover:underline"
+                          >
+                            {row.title}
+                          </Link>
+                        </div>
+                        {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
+                            并在返回前转义来源文本，只保留高亮标签。 */}
+                        <p
+                          className="mt-1.5 text-sm leading-relaxed text-muted-foreground [&_mark]:rounded-sm [&_mark]:bg-status-queued-bg [&_mark]:px-0.5 [&_mark]:text-status-queued-fg"
+                          dangerouslySetInnerHTML={{ __html: row.highlighted }}
+                        />
+                        <div className="mt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
+                          {new Date(row.publishedAt).toLocaleString('zh-CN')}
+                        </div>
+                      </CardContent>
+                    </Card>
                   </li>
                 );
               })}

@@ -24,7 +24,10 @@ import {
   Eye,
   Heading2,
   Italic,
+  Keyboard,
   List,
+  Maximize2,
+  Minimize2,
   PenLine,
   Save,
   Send,
@@ -36,6 +39,8 @@ import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { useUnsavedGuard } from '@/lib/editor/use-unsaved-guard';
+import { useAutoSave } from '@/lib/editor/use-auto-save';
 
 interface ResearchDetail {
   id: string;
@@ -74,6 +79,7 @@ export default function EditorPage() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [view, setView] = useState<'write' | 'split' | 'preview'>('write');
+  const [fullscreen, setFullscreen] = useState(false);
   const [background, setBackground] = useState('');
   const [conclusion, setConclusion] = useState('');
   const [risks, setRisks] = useState('');
@@ -128,7 +134,22 @@ export default function EditorPage() {
     [title, body, background, conclusion, risks, tagsInput],
   );
   const isDirty = currentSnapshot !== savedSnapshot;
+  // 编辑器离开保护：dirty 时拦截同窗口导航与浏览器关闭，并弹确认。
+  const { guardedRouter, allowNext, confirmDialog } = useUnsavedGuard(isDirty, '尚未保存的修改会在离开后丢失。');
+
   const wordCount = body.replace(/\s/gu, '').length;
+
+  // 解析 H1~H3 标题作为大纲；空文档返回空数组。
+  const outline = useMemo(() => {
+    const re = /^(#{1,3})\s+(.+)$/gm;
+    const out: { id: string; level: 1 | 2 | 3; text: string }[] = [];
+    let m: RegExpExecArray | null;
+    let i = 0;
+    while ((m = re.exec(body)) !== null) {
+      out.push({ id: `h-${i++}-${m[2].slice(0, 16).replace(/\s+/g, '-')}`, level: m[1].length as 1 | 2 | 3, text: m[2].trim() });
+    }
+    return out;
+  }, [body]);
 
   // 保存草稿
   const saveMutation = useMutation({
@@ -163,6 +184,9 @@ export default function EditorPage() {
       setLastSavedAt(new Date());
       queryClient.invalidateQueries({ queryKey: ['researches'] });
       if (isNew) {
+        // 保存成功 + isDirty 即将变 false，但 React 重渲染之前
+        // history 仍处于拦截态。allowNext 给本次 replace 开一道门。
+        allowNext();
         router.replace(`/researches/${data.id}/edit`);
       }
     },
@@ -180,6 +204,18 @@ export default function EditorPage() {
       setSaving(false);
     }
   }, [saveMutation]);
+
+  // 自动保存（draft 状态启用，发布后停止）；失败容错由 useAutoSave 内部 state 标识。
+  const autoSave = useAutoSave(JSON.stringify({ title, body, background, conclusion, risks, tagsInput }), {
+    delayMs: 1500,
+    onSave: async (snapshot) => {
+      if (!isDirty) return;
+      const parsed = JSON.parse(snapshot) as typeof currentSnapshot & { tagsInput: string };
+      if (JSON.stringify(parsed) === savedSnapshot) return;
+      await saveMutation.mutateAsync();
+    },
+  });
+  const showAutoStatus = Boolean(existing && existing.status === 'draft' && autoSave.status !== 'idle');
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -269,7 +305,7 @@ export default function EditorPage() {
     <div className="mx-auto max-w-shell">
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
         <div className="flex min-w-0 items-center gap-3">
-          <Button type="button" variant="ghost" size="icon-sm" onClick={() => router.back()} aria-label="返回">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={guardedRouter.back} aria-label="返回">
             <ArrowLeft />
           </Button>
           <div className="min-w-0">
@@ -329,6 +365,7 @@ export default function EditorPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/30 px-3 py-2">
+            <Button type="button" variant="ghost" size="icon-sm" onClick={() => setFullscreen((f) => !f)} title={fullscreen ? '退出全屏' : '全屏编辑'} aria-label={fullscreen ? '退出全屏' : '全屏编辑'}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</Button>
             {editorTools.map((tool) => {
               const Icon = tool.icon;
               return (
@@ -339,6 +376,18 @@ export default function EditorPage() {
             })}
             <span className="mx-1 h-5 w-px bg-border" />
             <span className="hidden text-[11px] text-muted-foreground sm:inline">Markdown</span>
+            <details className="relative ml-1">
+              <summary className="inline-flex size-7 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="快捷键说明"><Keyboard className="size-3.5" /></summary>
+              <div className="absolute right-0 top-9 z-20 w-56 rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-md">
+                <p className="mb-1 font-medium text-foreground">键盘快捷键</p>
+                <ul className="space-y-1 text-muted-foreground">
+                  <li><kbd className="font-mono">⌘/Ctrl + S</kbd> 保存草稿</li>
+                  <li><kbd className="font-mono">⌘/Ctrl + B</kbd> 加粗（选中文字）</li>
+                  <li><kbd className="font-mono">⌘/Ctrl + I</kbd> 斜体</li>
+                  <li>工具栏：加粗 / 斜体 / 标题 / 列表 / 行内代码</li>
+                </ul>
+              </div>
+            </details>
             <div className="ml-auto inline-flex rounded-md border border-border bg-card p-0.5" role="group" aria-label="编辑器视图">
               {([
                 { key: 'write', label: '编辑', icon: PenLine },
@@ -367,7 +416,7 @@ export default function EditorPage() {
                   onChange={(e) => setBody(e.target.value)}
                   placeholder={'# 从问题背景开始\n\n写下事实、判断和仍需验证的风险…'}
                   spellCheck={false}
-                  className="min-h-[560px] resize-y rounded-none border-0 bg-transparent px-5 py-5 font-mono text-[13px] leading-6 shadow-none focus-visible:ring-0"
+                  className="min-h-[560px] resize-y rounded-none border-0 bg-transparent px-5 py-5 font-sans text-[14px] leading-[1.6] shadow-none focus-visible:ring-0"
                 />
               </div>
             )}
@@ -384,6 +433,7 @@ export default function EditorPage() {
             <span>{wordCount.toLocaleString('zh-CN')} 字</span>
             <span aria-hidden>·</span>
             <span>⌘/Ctrl + S 保存</span>
+            {showAutoStatus ? <span className="ml-auto">{autoSaveLabel(autoSave.status)}</span> : null}
             {existing?.aiAssisted ? <span className="ml-auto">AI 协助产物，请在发布前核对来源</span> : null}
           </footer>
         </section>
@@ -450,6 +500,7 @@ export default function EditorPage() {
           </div>
         </aside>
       </div>
+      {confirmDialog}
     </div>
   );
 }
@@ -463,4 +514,14 @@ function draftSnapshot(fields: {
   tagsInput: string;
 }): string {
   return JSON.stringify(fields);
+}
+
+function autoSaveLabel(status: 'idle' | 'pending' | 'saving' | 'saved' | 'error') {
+  switch (status) {
+    case 'pending': return '编辑中…';
+    case 'saving': return '自动保存中…';
+    case 'saved': return '已自动保存';
+    case 'error': return '自动保存失败（点保存草稿重试）';
+    default: return '';
+  }
 }

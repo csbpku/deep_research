@@ -12,11 +12,11 @@ import { apiHandler } from '../../../../lib/api-handler';
 import { prisma } from '../../../../lib/db';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
-import { log, withRequestId, serializeError } from '../../../../lib/log';
+import { log, withRequestId } from '../../../../lib/log';
 import { getWebEnv } from '../../../../lib/env';
+import { fetchAiEngine } from '../../../../lib/ai-bff/fetch-ai-engine';
 
 const IdParam = z.object({ jobId: z.string().uuid() });
-const AI_ENGINE_TIMEOUT_MS = 5_000;
 
 interface UpstreamJobOut {
   job_id: string;
@@ -77,53 +77,19 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   const env = getWebEnv();
   const url = `${env.AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/jobs/${parsed.data.jobId}`;
 
-  let upstreamRes: Response;
-  try {
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
-    upstreamRes = await fetch(url, {
-      method: 'GET',
-      headers: { 'x-request-id': requestId },
-      signal: ac.signal,
-    });
-    clearTimeout(timer);
-  } catch (err) {
-    log.warn('ai.bff.status', 'upstream fetch failed', {
-      requestId,
-      err: serializeError(err),
-      upstream: url,
-    });
+  const fetched = await fetchAiEngine<UpstreamJobOut>({
+    url,
+    requestId,
+    context: 'ai.bff.status',
+  });
+  if (!fetched.ok) {
     return toApiErrorResponse({
-      code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
-      message: 'ai-engine 不可达',
-      requestId,
+      code: fetched.code,
+      message: fetched.message,
+      requestId: fetched.requestId,
     });
   }
-
-  const text = await upstreamRes.text();
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    return toApiErrorResponse({
-      code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
-      message: 'ai-engine 返回非 JSON',
-      requestId,
-    });
-  }
-
-  if (!upstreamRes.ok) {
-    const obj = body as { code?: string; message?: string; requestId?: string; details?: unknown };
-    const code = (obj.code as keyof typeof ERROR_CODES) ?? ERROR_CODES.AI_ENGINE_UNAVAILABLE;
-    return toApiErrorResponse({
-      code,
-      message: obj.message ?? `ai-engine 返回 ${upstreamRes.status}`,
-      requestId: obj.requestId ?? requestId,
-      details: obj.details,
-    });
-  }
-
-  const up = body as UpstreamJobOut;
+  const up = fetched.body;
   return NextResponse.json({
     jobId: up.job_id,
     status: up.status,

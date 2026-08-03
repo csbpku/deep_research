@@ -14,6 +14,7 @@ import { AlertTriangle, ArrowRight } from 'lucide-react';
 import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent } from '@/components/ui/card';
 
 interface DigestRankedItem {
   summaryId: string | null;
@@ -89,28 +90,31 @@ export default function SummariesPage() {
             <Link
               key={d.summaryId}
               href={`/summaries/${d.date}`}
-              className="group block rounded-lg border border-border bg-card p-4 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="group block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <div className="flex flex-wrap items-baseline gap-2.5">
-                <h2 className="font-mono text-base font-semibold tabular-nums">{d.date}</h2>
-                <span className="text-xs text-muted-foreground">{formatTime(d.publishedAt)}</span>
-                {d.narrativeDegraded ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-xs text-status-partial-fg">
-                    <AlertTriangle className="size-3" />
-                    降级生成
-                  </span>
-                ) : null}
-                <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-primary" />
-              </div>
+              <Card className="transition-all duration-200 group-hover:-translate-y-px group-hover:border-primary/40 group-hover:shadow-sm">
+                <CardContent className="p-4">
+                  <div className="flex flex-wrap items-baseline gap-2.5">
+                    <h2 className="font-mono text-base font-semibold tabular-nums">{d.date}</h2>
+                    <span className="text-xs text-muted-foreground">{formatTime(d.publishedAt)}</span>
+                    {d.narrativeDegraded ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-xs text-status-partial-fg">
+                        <AlertTriangle className="size-3" />
+                        降级生成
+                      </span>
+                    ) : null}
+                    <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-primary" />
+                  </div>
 
-              <h3 className="mt-2 text-sm font-medium leading-snug">{d.title}</h3>
+                  <h3 className="mt-2 text-sm font-medium leading-snug">{d.title}</h3>
 
-              {d.tldr ? (
-                <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
-                  {d.tldr}
-                </p>
-              ) : null}
-
+                  {d.tldr ? (
+                    <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
+                      {d.tldr}
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
             </Link>
           ))}
         </div>

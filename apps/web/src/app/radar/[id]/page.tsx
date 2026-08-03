@@ -1,5 +1,11 @@
 'use client';
 
+/**
+ * ⚠️ Sentinel page —— inline style 保留（用户在 Week 9 review 时要求保留，
+ * 作为"工艺快照"与其它页面的 design-token 化形成对照）。其余页面统一走
+ * globals.css + tailwind。如需迁移，先开 P1 + 设计评审，避免静默删改。
+ */
+
 import { useParams } from 'next/navigation';
 
 import { useQuery } from '@tanstack/react-query';
@@ -19,6 +25,7 @@ import { RadarArticleHighlights } from '../../../components/radar/RadarArticleHi
 import type { RadarGithubItemMeta } from '../../../lib/radar/shape';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import { formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
 import { Button } from '../../../components/ui/button';
 import {
@@ -127,6 +134,7 @@ export default function RadarDetailPage() {
   if (!q.data) return null;
 
   const d = q.data;
+  const sourceLabel = formatSourceType(d.sourceType);
 
   return (
     <div>
@@ -143,9 +151,26 @@ export default function RadarDetailPage() {
               color: '#475569',
               background: '#fff',
             }}
+            aria-label={sourceLabel.full}
+            title={sourceLabel.full}
           >
-            来源 {d.sourceType ?? 'unknown'}
+            {sourceLabel.short}
           </span>
+          {d.originalKind ? (
+            <span
+              data-testid="original-kind-badge"
+              style={{
+                padding: '2px 8px',
+                border: '1px solid #bfdbfe',
+                borderRadius: 12,
+                fontSize: 11,
+                color: '#1d4ed8',
+                background: '#eff6ff',
+              }}
+            >
+              内容类型 {d.originalKind === 'arxiv' ? 'arXiv 论文' : d.originalKind}
+            </span>
+          ) : null}
           <span style={{ fontSize: 12, color: '#94a3b8' }}>
             抓取 {new Date(d.crawledAt).toISOString().slice(0, 10)}
           </span>

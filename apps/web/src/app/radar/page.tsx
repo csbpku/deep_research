@@ -30,6 +30,7 @@ import { EmptyState } from '@/components/EmptyState';
 import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 
 interface RadarCandidateListItem {
   id: string;
@@ -66,15 +67,7 @@ const ALL = '__all__';
 
 const SOURCE_TYPE_OPTIONS = [
   { value: ALL, label: '全部来源' },
-  { value: 'github', label: 'GitHub' },
-  { value: 'arxiv', label: 'arXiv' },
-  { value: 'rss', label: 'RSS' },
-  { value: 'hackernews', label: 'Hacker News' },
-  { value: 'producthunt', label: 'Product Hunt' },
-  { value: 'reddit', label: 'Reddit' },
-  { value: 'devto', label: 'Dev.to' },
-  { value: 'vendor_news', label: '厂商新闻' },
-  { value: 'lobsters', label: 'Lobste.rs' },
+  ...SOURCE_TYPE_FILTER_OPTIONS,
 ];
 
 const STATUS_OPTIONS = [

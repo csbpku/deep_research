@@ -7,10 +7,11 @@
 //
 // type='research'（长文）：背景 → 正文 → 结论 → 风险 → research_sources 列表
 // type='knowledge'（精华）：sourceComment 引用 → 短 body → 来源评论跳转
-// W8：在 published 页面底部追加 CommentSection。
+// W9：评论改为右下浮按钮 + Sheet 抽屉；正文 SectionCard 减少（仅保留 tone 区分手感）。
 //
 // 布局：max-w-measure（760px）—— 中文长文的舒适量度。
 
+import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -23,6 +24,7 @@ import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCurrentUser } from '@/lib/auth/client';
 import {
@@ -31,6 +33,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Info,
+  Link2,
   MessageSquare,
   Pencil,
   User,
@@ -227,17 +230,17 @@ export default function ResearchDetailPage() {
 
             {/* research_sources：仅已发布长文挂载（draft 不展示） */}
             {data.status === 'published' && data.researchSources.length > 0 && (
-              <SectionCard
-                title={`挂载资料 (${data.researchSources.length})`}
-                tone="muted"
-                bodyClassName="p-0"
-              >
+              <section className="mt-6 border-t border-border pt-4">
+                <h2 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <Link2 className="size-3.5" />
+                  挂载资料 · {data.researchSources.length}
+                </h2>
                 <ul className="list-none divide-y divide-border p-0">
                   {data.researchSources.map((s) => {
                     const ref = (s.sourceRef ?? {}) as { type?: string; value?: string };
                     const href = sourceHrefForRef(ref);
                     return (
-                      <li key={s.id} className="px-4 py-2.5 text-sm">
+                      <li key={s.id} className="py-2.5 text-sm">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded bg-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-accent-foreground">
                             {ref.type ?? 'unknown'}
@@ -266,7 +269,7 @@ export default function ResearchDetailPage() {
                     );
                   })}
                 </ul>
-              </SectionCard>
+              </section>
             )}
           </>
         )}
@@ -347,21 +350,58 @@ export default function ResearchDetailPage() {
         </details>
       )}
 
-      {/* W8 评论区（仅已发布状态可见） */}
-      {data.status === 'published' && <PublishedCommentSection researchId={data.id} />}
+      {/* 评论：右下浮按钮 + Sheet 抽屉（仅已发布可见） */}
+      {data.status === 'published' ? <CommentsFab researchId={data.id} commentCount={data.commentCount ?? 0} /> : null}
     </div>
   );
 }
 
-function PublishedCommentSection({ researchId }: { researchId: string }) {
+function CommentsFab({
+  researchId,
+  commentCount,
+}: {
+  researchId: string;
+  commentCount: number;
+}) {
   const me = useCurrentUser();
+  const [open, setOpen] = useState(false);
   return (
-    <CommentSection
-      targetType="research"
-      targetId={researchId}
-      currentUserId={me.data?.id ?? null}
-      currentUserRole={me.data?.role ?? null}
-    />
+    <>
+      <Button
+        type="button"
+        size="sm"
+        onClick={() => setOpen(true)}
+        aria-label={`打开讨论 · ${commentCount} 条`}
+        className="fixed bottom-5 right-5 z-30 h-11 gap-2 rounded-full px-4 shadow-lg"
+      >
+        <MessageSquare className="size-4" />
+        讨论
+        {commentCount > 0 ? (
+          <span className="rounded-full bg-primary-foreground/20 px-1.5 font-mono text-[11px] tabular-nums">
+            {commentCount}
+          </span>
+        ) : null}
+      </Button>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          side="right"
+          className="flex w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
+        >
+          <SheetTitle className="flex h-topbar items-center gap-2 border-b border-border px-4 text-sm font-semibold">
+            <MessageSquare className="size-4 text-muted-foreground" />
+            讨论 · {commentCount} 条
+          </SheetTitle>
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <CommentSection
+              targetType="research"
+              targetId={researchId}
+              currentUserId={me.data?.id ?? null}
+              currentUserRole={me.data?.role ?? null}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
