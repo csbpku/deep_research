@@ -51,6 +51,9 @@ class ResearchRequest:
     # AdapterError(code=WORKER_TIMEOUT) past this. Default 5 min — see
     # ARCHITECTURE §四.
     timeout_seconds: int = 300
+    # Optional cap for the LLM context window (defaults are adapter-specific).
+    # Repo digests need more room than a single page brief.
+    context_max_chars: int | None = None
 
 
 @dataclass(slots=True, frozen=True)

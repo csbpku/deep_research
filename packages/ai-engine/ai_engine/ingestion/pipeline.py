@@ -68,17 +68,24 @@ async def _generate_brief(
     canonical_url: str,
     *,
     timeout_seconds: float,
+    context_max_chars: int | None = None,
 ) -> Any:
     job_id = str(uuid.uuid4())
+    context = str(item.get("snippet") or "")
+    if context_max_chars is not None:
+        context = context[: max(1, context_max_chars)]
+    else:
+        context = context[:2000]
     request = ResearchRequest(
         job_id=job_id,
         request_id=f"ingestion-{job_id}",
         topic=str(item.get("title") or "Untitled")[:200],
-        context=str(item.get("snippet") or "")[:2000] or None,
+        context=context or None,
         report_type="summary_brief",
         source_policy="only_user_sources",
         source_refs=({"type": "url", "value": canonical_url},),
         timeout_seconds=max(1, int(timeout_seconds)),
+        context_max_chars=context_max_chars,
     )
     await adapter.submit(request)
     deadline = time.monotonic() + timeout_seconds

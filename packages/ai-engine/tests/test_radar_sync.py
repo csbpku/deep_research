@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+import pytest
 
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
-from ai_engine.radar.models import RadarCandidate, RadarSource
+from ai_engine.radar.models import RadarCandidate, RadarSource, RepoActivity, RepoActivityItem
 from ai_engine.radar.source_manager import fetch_source as dispatch_source
 from ai_engine.radar.sync_runner import (
     _NAV_NOISE_PATTERNS,
     _clean_content,
+    _generate_brief_with_retry,
+    _is_low_quality_content,
     run_radar_sync,
 )
+from ai_engine.contracts.states import AI_JOB_STATUS
 
 
 class _Cursor:
@@ -89,13 +94,80 @@ def _candidate(url: str = "https://example.com/item") -> RadarCandidate:
     )
 
 
+def _repo_digest_candidate() -> RadarCandidate:
+    """One tracked repo carrying issues/PRs/releases from the last 24h."""
+    activity = RepoActivity(
+        repo="acme/agent",
+        issues=(
+            RepoActivityItem(
+                kind="issue",
+                number="42",
+                title="Fix agent crash on retries",
+                url="https://github.com/acme/agent/issues/42",
+                state="open",
+                author="alice",
+                comments=5,
+                labels=("bug",),
+                created_at="2026-07-30T12:00:00Z",
+                updated_at="2026-07-30T12:00:00Z",
+                body="Agent crash repro and proposed fix.",
+            ),
+        ),
+        prs=(
+            RepoActivityItem(
+                kind="pr",
+                number="101",
+                title="Add MCP tool registry",
+                url="https://github.com/acme/agent/pull/101",
+                state="open",
+                author="bob",
+                comments=3,
+                created_at="2026-07-30T13:00:00Z",
+                updated_at="2026-07-30T13:00:00Z",
+                body="Adds registry with tool schemas.",
+            ),
+        ),
+        releases=(
+            RepoActivityItem(
+                kind="release",
+                number="v2.0",
+                title="v2.0",
+                url="https://github.com/acme/agent/releases/tag/v2.0",
+                state="published",
+                author="alice",
+                created_at="2026-07-30T14:00:00Z",
+                updated_at="2026-07-30T14:00:00Z",
+                published_at="2026-07-30T14:00:00Z",
+                body="Release with new agent runtime.",
+            ),
+        ),
+    )
+    return RadarCandidate(
+        title="acme/agent 24h GitHub 动态",
+        url="https://github.com/acme/agent?digest=2026-07-31",
+        snippet="acme/agent 24h GitHub 动态",
+        published_at=datetime.now(timezone.utc),
+        content_origin="api",
+        tags=("github", "tracked", "acme/agent", "repo_digest"),
+        source_quality_hint=0.90,
+        repo_activity=activity,
+    )
+
+
 def _document(url: str = "https://example.com/item") -> FetchedDocument:
+    body = (
+        "A new study on hierarchical planning in LLM agents with "
+        "retrieval-augmented generation. The authors evaluate sparse and "
+        "dense retrieval over a mixed corpus and report that structured "
+        "prompting improves task completion while cutting token waste. "
+        "This matters for production agents that must stay within a budget."
+    ) * 2
     return FetchedDocument(
         url=url,
         final_ip="93.184.216.34",
         status=200,
         headers={"content-type": "text/html"},
-        content=b"<title>LLM agent update</title><p>Verified RAG source</p>",
+        content=f"<title>LLM agent update</title><p>{body}</p>".encode(),
         content_type="text/html",
         elapsed_ms=5,
         redirect_count=0,
@@ -147,6 +219,75 @@ async def test_sync_duplicate_canonical_url_rerun_does_not_insert() -> None:
     assert first.runs[0].total_new == 1
     assert second.runs[0].total_new == 0
     assert second.runs[0].total_skipped == 1
+    assert second.runs[0].skipped_existing == 1
+    assert second.runs[0].skipped_rule_noise == 0
+    assert second.runs[0].skipped_distilled_noise == 0
+    assert second.runs[0].skipped_conflict == 0
+
+
+async def test_sync_tracks_default_score_as_fallback_and_skips_noise() -> None:
+    from ai_engine.radar.distilled_scorer import default_score
+
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate()]
+
+    async def default_scorer_fn(title: str, content: str, **kwargs: Any) -> Any:
+        return default_score()
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        distilled_scorer=default_scorer_fn,
+    )
+    run = result.runs[0]
+    assert run.fallback_count == 1
+    assert run.skipped_distilled_noise == 1
+    assert run.total_new == 0
+
+
+async def test_run_radar_sync_limits_source_concurrency() -> None:
+    pool = _Pool([
+        _source("rss-1", "rss"),
+        _source("gh-1", "github"),
+        _source("devto-1", "devto"),
+    ])
+    active = 0
+    max_active = 0
+
+    async def fetcher(url: str) -> Any:
+        async def handler(config: dict[str, Any]) -> list[RadarCandidate]:
+            return [_candidate(url)]
+        return handler
+
+    async def slow_generate(adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any) -> Any:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.1)
+        active -= 1
+        from ai_engine.ingestion.pipeline import _generate_brief
+        return await _generate_brief(adapter, item, canonical, **kwargs)
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={
+            "rss": await fetcher("https://example.com/rss"),
+            "github": await fetcher("https://example.com/github"),
+            "devto": await fetcher("https://example.com/devto"),
+        },
+        document_fetcher=_safe_fetch,
+        generate_brief=slow_generate,
+        source_concurrency=2,
+    )
+    assert max_active <= 2
+    assert all(run.total_new == 1 for run in result.runs)
 
 
 async def test_source_failure_does_not_block_other_source() -> None:
@@ -218,6 +359,67 @@ async def test_generate_failure_isolated_from_next_candidate() -> None:
     assert result.runs[0].status == "partial"
     assert result.runs[0].total_failed == 1
     assert result.runs[0].total_new == 1
+
+
+async def test_github_tracked_repo_digest_uses_one_combined_activity_brief() -> None:
+    """A tracked repo is summarized once over its combined activity.
+
+    Regression: the generic sync path used to fetch the repo HTML page and
+    feed the README to the brief LLM, ignoring ``repo_activity`` entirely.
+    The digest branch must skip HTML fetching and pass issues/PRs/releases
+    together to exactly one per-repo brief call.
+    """
+    pool = _Pool([_source("tracked-1", "github_tracked")])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_repo_digest_candidate()]
+
+    fetched_urls: list[str] = []
+
+    async def no_html_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        fetched_urls.append(url)
+        return _document(url)
+
+    brief_items: list[dict[str, Any]] = []
+
+    async def record_brief(
+        adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any
+    ) -> Any:
+        brief_items.append(item)
+        from ai_engine.ingestion.pipeline import _generate_brief
+
+        return await _generate_brief(adapter, item, canonical, **kwargs)
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"github_tracked": fetcher},
+        document_fetcher=no_html_fetch,
+        generate_brief=record_brief,
+    )
+    run = result.runs[0]
+    assert run.status == "completed"
+    assert run.total_new == 1
+    assert run.fallback_count == 0
+    assert fetched_urls == []
+    assert len(brief_items) == 1
+    context = brief_items[0]["snippet"]
+    assert "# acme/agent" in context
+    assert "Fix agent crash on retries" in context
+    assert "Add MCP tool registry" in context
+    assert "v2.0" in context
+    assert "README" not in context
+
+    insert = next(
+        item
+        for item in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in item[0]
+    )
+    _, params = insert
+    assert params[23].startswith("# acme/agent")
+    assert "Add MCP tool registry" in params[23]
+    assert params[24] == "github_repo"
 
 
 async def test_sync_rejects_invalid_trigger() -> None:
@@ -329,3 +531,149 @@ def test_nav_noise_patterns_list_is_non_empty() -> None:
     # 防止有人意外清空列表导致退化为恒等
     assert len(_NAV_NOISE_PATTERNS) >= 5
     assert all(isinstance(p, str) and p for p in _NAV_NOISE_PATTERNS)
+
+
+# ───────────── W10: low-quality fallback + 429 retry ─────────────
+
+
+def test_is_low_quality_content_detects_short_and_cloudflare_text() -> None:
+    assert _is_low_quality_content("")
+    assert _is_low_quality_content("short")
+    assert _is_low_quality_content("x" * 199)
+    long_cloudflare = (
+        "Just a moment... Enable JavaScript and cookies to continue. "
+        "Checking your browser before accessing the site. "
+        "Performance & security by Cloudflare."
+    ) * 5
+    assert _is_low_quality_content(long_cloudflare)
+    assert not _is_low_quality_content(
+        "A real article about LLM agents with enough body text to summarize. " * 5
+    )
+
+
+async def test_short_content_fallback_skips_llm_and_keeps_raw_text() -> None:
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate()]
+
+    brief_called = False
+
+    async def should_not_be_called(**kwargs: Any) -> Any:
+        nonlocal brief_called
+        brief_called = True
+        raise AssertionError("brief LLM must not run for short content")
+
+    async def short_doc(url: str, **kwargs: Any) -> FetchedDocument:
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=b"<p>Too short to summarize.</p>",
+            content_type="text/html",
+            elapsed_ms=5,
+            redirect_count=0,
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=short_doc,
+        generate_brief=should_not_be_called,
+    )
+    run = result.runs[0]
+    assert run.fallback_count == 1
+    assert run.total_new == 1
+    assert run.token_input_total == 0
+    assert run.cost_usd == 0.0
+    assert brief_called is False
+    insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
+    sql, params = insert
+    assert params[21] == "Too short to summarize."
+
+
+async def test_cloudflare_content_fallback_keeps_raw_text() -> None:
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate("https://example.com/producthunt")]
+
+    body = (
+        "Just a moment... Enable JavaScript and cookies to continue. "
+        "Checking your browser before accessing the site."
+    ) * 6
+
+    async def cloudflare_doc(url: str, **kwargs: Any) -> FetchedDocument:
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=body.encode(),
+            content_type="text/html",
+            elapsed_ms=5,
+            redirect_count=0,
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=cloudflare_doc,
+    )
+    run = result.runs[0]
+    assert run.fallback_count == 1
+    assert run.total_new == 1
+    insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
+    _, params = insert
+    assert params[21] == body.strip()[:2000]
+
+
+async def test_generate_brief_with_retry_retries_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+    calls = 0
+
+    async def flaky_generate(
+        adapter: Any, item: dict[str, Any], canonical_url: str, **kwargs: Any
+    ) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            return type(
+                "Brief",
+                (),
+                {
+                    "status": AI_JOB_STATUS["FAILED"],
+                    "error_code": "AI_ENGINE_UNAVAILABLE",
+                    "error_message": "HTTP 429 too many requests",
+                },
+            )()
+        return type(
+            "Brief",
+            (),
+            {
+                "status": AI_JOB_STATUS["SUCCEEDED"],
+                "output_text": "ok",
+                "cost": type("Cost", (), {"token_input_total": 1, "token_output_total": 2, "cost_cents": 0.3})(),
+            },
+        )()
+
+    brief = await _generate_brief_with_retry(
+        flaky_generate,
+        FakeAdapter(),
+        {"title": "x", "snippet": "y"},
+        "https://example.com/x",
+        timeout_seconds=30.0,
+    )
+    assert calls == 3
+    assert sleeps == [5.0, 10.0]
+    assert brief.output_text == "ok"

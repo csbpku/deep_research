@@ -15,10 +15,23 @@
 //   7. 调用方权限不足（401/403）→ router.push('/signin')
 //
 // 来源：docs/agent-prompts/week4-engineer-a.md §任务 1
+//
+// UI 重设计后：弹窗改用 shadcn Dialog（Radix），焦点陷阱 / ESC / 滚动锁
+// 由 Radix 提供，不再手写 overlay + stopPropagation。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { AlertTriangle, CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
+
 import { MarkdownPreview } from './MarkdownPreview';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 type Phase = 'idle' | 'uploading' | 'polling' | 'succeeded' | 'failed';
 
@@ -183,46 +196,11 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   }, [job, router]);
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(15, 23, 42, 0.4)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: '#fff',
-          borderRadius: 12,
-          padding: 24,
-          width: 640,
-          maxWidth: '90vw',
-          maxHeight: '90vh',
-          overflow: 'auto',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h2 style={{ fontSize: 18, margin: 0 }}>从文件导入</h2>
-          <button
-            onClick={onClose}
-            style={{
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              fontSize: 20,
-              color: '#94a3b8',
-            }}
-          >
-            ×
-          </button>
-        </div>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>从文件导入</DialogTitle>
+        </DialogHeader>
 
         {/* 拖拽区 */}
         {phase === 'idle' && (
@@ -234,47 +212,40 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             onClick={() => inputRef.current?.click()}
-            style={{
-              border: `2px dashed ${dragOver ? '#0f172a' : '#cbd5e1'}`,
-              borderRadius: 8,
-              padding: 40,
-              textAlign: 'center',
-              cursor: 'pointer',
-              background: dragOver ? '#f8fafc' : '#fff',
-            }}
+            className={cn(
+              'cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors duration-200',
+              dragOver ? 'border-primary bg-accent/40' : 'border-border bg-card hover:bg-muted/40',
+            )}
           >
             <input
               ref={inputRef}
               type="file"
               accept=".md,.txt,.html"
               onChange={handleInputChange}
-              style={{ display: 'none' }}
+              className="hidden"
             />
-            <p style={{ margin: 0, fontSize: 14, color: '#475569' }}>
+            <UploadCloud className="mx-auto size-6 text-muted-foreground" />
+            <p className="mt-2 text-sm text-muted-foreground">
               拖拽 .md / .txt / .html 文件到此处
               <br />
               或点击选择文件
             </p>
-            <p style={{ margin: '8px 0 0', fontSize: 12, color: '#94a3b8' }}>
-              单文件 ≤ 5MB
-            </p>
+            <p className="mt-2 text-xs text-muted-foreground">单文件 ≤ 5MB</p>
           </div>
         )}
 
         {/* 上传中 / 轮询中 */}
         {(phase === 'uploading' || phase === 'polling') && job && (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-              <Spinner />
-              <span style={{ fontSize: 14, color: '#475569' }}>
-                {phase === 'uploading' ? '上传中...' : `转换中... (${job.status})`}
+            <div className="mb-3 flex items-center gap-3">
+              <Loader2 className="size-4 animate-spin text-primary" />
+              <span className="text-sm text-muted-foreground">
+                {phase === 'uploading' ? '上传中…' : `转换中… (${job.status})`}
               </span>
             </div>
             <ProgressBar />
             {job.filename && (
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: '8px 0 0' }}>
-                {job.filename}
-              </p>
+              <p className="mt-2 font-mono text-xs text-muted-foreground">{job.filename}</p>
             )}
           </div>
         )}
@@ -282,71 +253,44 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
         {/* 成功 */}
         {phase === 'succeeded' && job && (
           <div>
-            <div style={{
-              border: '1px solid #bbf7d0',
-              background: '#f0fdf4',
-              color: '#15803d',
-              padding: 12,
-              borderRadius: 6,
-              marginBottom: 12,
-              fontSize: 13,
-            }}>
+            <div className="mb-3 flex items-center gap-2 rounded-md bg-status-succeeded-bg p-3 text-sm text-status-succeeded-fg">
+              <CheckCircle2 className="size-4 shrink-0" />
               转换成功！{job.outputResearchId ? '已生成个人草稿。' : ''}
             </div>
 
             {Array.isArray(job.warnings) && job.warnings.length > 0 ? (
-              <div style={{ marginBottom: 12 }}>
-                <h3 style={{ fontSize: 13, color: '#92400e', margin: '0 0 4px' }}>
+              <div className="mb-3 rounded-md bg-status-partial-bg p-3 text-status-partial-fg">
+                <h3 className="flex items-center gap-1.5 text-sm font-medium">
+                  <AlertTriangle className="size-3.5" />
                   转换告警 ({job.warnings.length})
                 </h3>
-                <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12, color: '#92400e' }}>
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
                   {(job.warnings as unknown[]).map((w, i) => (
                     <li key={i}>{String(w)}</li>
                   ))}
                 </ul>
               </div>
             ) : (
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 12px' }}>无警告</p>
+              <p className="mb-3 text-xs text-muted-foreground">无警告</p>
             )}
 
             {draftBody !== null && (
-              <div style={{ marginBottom: 12 }}>
-                <h3 style={{ fontSize: 13, color: '#475569', margin: '0 0 4px' }}>
+              <div className="mb-3">
+                <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Markdown 预览
                 </h3>
                 <MarkdownPreview source={draftBody} />
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                onClick={onClose}
-                style={{
-                  padding: '8px 14px',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 6,
-                  background: '#fff',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                }}
-              >
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={onClose}>
                 关闭
-              </button>
+              </Button>
               {job.outputResearchId && (
-                <button
-                  onClick={handleViewDraft}
-                  style={{
-                    padding: '8px 16px',
-                    border: 'none',
-                    borderRadius: 6,
-                    background: '#0f172a',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    fontSize: 13,
-                  }}
-                >
+                <Button type="button" onClick={handleViewDraft}>
                   查看个人草稿
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -355,108 +299,47 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
         {/* 失败 */}
         {phase === 'failed' && (
           <div>
-            <div style={{
-              border: '1px solid #fecaca',
-              background: '#fef2f2',
-              color: '#dc2626',
-              padding: 12,
-              borderRadius: 6,
-              marginBottom: 12,
-              fontSize: 13,
-            }}>
+            <div
+              role="alert"
+              className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+            >
               {error ?? job?.errorMessage ?? '导入失败'}
             </div>
             {job?.errorCode && (
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 12px' }}>
+              <p className="mb-3 font-mono text-xs text-muted-foreground">
                 错误码: {job.errorCode}
               </p>
             )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                onClick={onClose}
-                style={{
-                  padding: '8px 14px',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 6,
-                  background: '#fff',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                }}
-              >
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={onClose}>
                 关闭
-              </button>
-              <button
-                onClick={handleRetry}
-                style={{
-                  padding: '8px 16px',
-                  border: 'none',
-                  borderRadius: 6,
-                  background: '#0f172a',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                }}
-              >
+              </Button>
+              <Button type="button" onClick={handleRetry}>
                 重试
-              </button>
+              </Button>
             </div>
           </div>
         )}
 
         {/* idle 状态下显示错误 */}
         {phase === 'idle' && error && (
-          <div style={{
-            border: '1px solid #fecaca',
-            background: '#fef2f2',
-            color: '#dc2626',
-            padding: 12,
-            borderRadius: 6,
-            marginTop: 12,
-            fontSize: 13,
-          }}>
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+          >
             {error}
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-function Spinner() {
-  return (
-    <span
-      style={{
-        width: 16,
-        height: 16,
-        border: '2px solid #e2e8f0',
-        borderTopColor: '#0f172a',
-        borderRadius: '50%',
-        animation: 'spin 0.8s linear infinite',
-        display: 'inline-block',
-      }}
-    >
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </span>
-  );
-}
-
+/** 不定长进度条 —— 转换耗时未知，只表达「在动」。 */
 function ProgressBar() {
   return (
-    <div style={{
-      width: '100%',
-      height: 4,
-      background: '#e2e8f0',
-      borderRadius: 2,
-      overflow: 'hidden',
-    }}>
-      <div style={{
-        width: '40%',
-        height: '100%',
-        background: '#0f172a',
-        animation: 'progress 1.5s ease-in-out infinite',
-      }}>
-        <style>{`@keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }`}</style>
-      </div>
+    <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+      <div className="h-full w-1/4 animate-indeterminate-bar rounded-full bg-primary" />
     </div>
   );
 }

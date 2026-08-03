@@ -5,17 +5,28 @@ import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
+import { ExternalLink, MessageSquare } from 'lucide-react';
 import { EmptyState } from '../../../components/EmptyState';
 import { CommentSection } from '../../../components/CommentSection';
 import { useCurrentUser } from '../../../lib/auth/client';
 import { AskAiDrawer } from '../../../components/radar/AskAiDrawer';
 import { RadarFeedbackBar } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackCounts } from '../../../components/radar/RadarFeedbackBar';
-import { RadarRepoStructureCard } from '../../../components/radar/RadarRepoStructureCard';
 import { RadarArxivPaperCard } from '../../../components/radar/RadarArxivPaperCard';
+import { RadarRepoSummary } from '../../../components/radar/RadarRepoSummary';
+import { RadarGithubItemSummary } from '../../../components/radar/RadarGithubItemSummary';
+import { RadarArticleHighlights } from '../../../components/radar/RadarArticleHighlights';
+import type { RadarGithubItemMeta } from '../../../lib/radar/shape';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
+import { Button } from '../../../components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '../../../components/ui/tooltip';
 
 interface RadarDetail {
   id: string;
@@ -45,7 +56,21 @@ interface RadarDetail {
   // originalMeta carries GitHub repo enrichment payload.
   originalKind: string | null;
   originalMarkdown: string | null;
-  originalMeta: RepoMeta | null;
+  originalMeta: unknown;
+  githubItemMeta: RadarGithubItemMeta | null;
+  repoSummary: string | null;
+  highlights: {
+    summary: string;
+    highlights: string[];
+    keyQuote: string | null;
+  } | null;
+  arxivAnalysis: {
+    tldr: string;
+    motivation: string;
+    method: string;
+    result: string;
+    conclusion: string;
+  } | null;
   // Phase 2B deep-dive: arxiv paper parsed structure.
   tldr: string | null;
   sections: Array<{ title: string; level: number; startOffset: number; page?: number }> | null;
@@ -64,11 +89,6 @@ interface RepoMeta {
   entryPoints?: string[];
   fetchedAt?: string;
   trimmed?: boolean;
-}
-
-function parseOwnerRepo(url: string): { owner: string; repo: string } | null {
-  const m = url.match(/github\.com\/([^/]+)\/([^/]+)/);
-  return m ? { owner: m[1], repo: m[2].replace(/\.git$/, '') } : null;
 }
 
 export default function RadarDetailPage() {
@@ -126,54 +146,12 @@ export default function RadarDetailPage() {
           >
             来源 {d.sourceType ?? 'unknown'}
           </span>
-          {d.originalKind ? (
-            <span
-              data-testid="original-kind-badge"
-              style={{
-                padding: '2px 8px',
-                border: '1px solid #7c3aed',
-                borderRadius: 12,
-                fontSize: 11,
-                color: '#7c3aed',
-                background: '#faf5ff',
-              }}
-            >
-              {d.originalKind}
-            </span>
-          ) : null}
           <span style={{ fontSize: 12, color: '#94a3b8' }}>
             抓取 {new Date(d.crawledAt).toISOString().slice(0, 10)}
           </span>
-          {d.scoreVersion ? (
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>评分版本 {d.scoreVersion}</span>
-          ) : null}
         </header>
 
         <h1 style={{ fontSize: 24, marginTop: 12, marginBottom: 8 }}>{d.title}</h1>
-
-        {d.originalKind === 'github_repo' && d.originalMeta && (() => {
-          const parsed = parseOwnerRepo(d.url);
-          if (!parsed) return null;
-          return (
-            <RadarRepoStructureCard
-              meta={d.originalMeta}
-              owner={parsed.owner}
-              repo={parsed.repo}
-            />
-          );
-        })()}
-
-        {d.originalKind === 'arxiv' && (
-          <RadarArxivPaperCard
-            meta={(d.originalMeta as RepoMeta) ?? {}}
-            title={d.title}
-            authors={d.authors}
-            tldr={d.tldr}
-            sections={d.sections ?? []}
-            figures={d.figures ?? []}
-            markdown={d.originalMarkdown}
-          />
-        )}
 
         {d.interpretation ? (
           <p
@@ -196,38 +174,9 @@ export default function RadarDetailPage() {
           <div style={{ margin: '12px 0' }}>
             <DistilledScorePanel score={d.distilledScore} />
           </div>
-        ) : (
-          <section
-            aria-label="启发式预筛分"
-            style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}
-          >
-            {(['relevanceScore', 'timelinessScore', 'sourceQualityScore'] as const).map((k) => {
-              const v = d[k];
-              const labels: Record<string, string> = {
-                relevanceScore: '相关性',
-                timelinessScore: '时效',
-                sourceQualityScore: '来源质量',
-              };
-              if (v === null) return null;
-              return (
-                <span
-                  key={k}
-                  style={{
-                    padding: '4px 10px',
-                    background: '#f1f5f9',
-                    borderRadius: 14,
-                    fontSize: 13,
-                    color: '#334155',
-                  }}
-                >
-                  <strong>{labels[k]}</strong> {v.toFixed(2)}
-                </span>
-              );
-            })}
-          </section>
-        )}
+        ) : null}
 
-        {d.scoreReason ? (
+        {!d.distilledScore && d.scoreReason ? (
           <p style={{ fontSize: 13, color: '#475569', margin: '4px 0 12px' }}>
             <strong>评分理由：</strong>
             {d.scoreReason}
@@ -252,6 +201,27 @@ export default function RadarDetailPage() {
           </p>
         ) : null}
 
+        {d.originalKind === 'github_repo' && d.repoSummary ? (
+          <RadarRepoSummary summary={d.repoSummary} meta={(d.originalMeta ?? null) as RepoMeta | null} />
+        ) : null}
+
+        {d.originalKind === 'arxiv' ? (
+          <RadarArxivPaperCard
+            meta={(d.originalMeta ?? {}) as { arxivId?: string; keyContributions?: string[]; sectionCount?: number }}
+            authors={d.authors}
+            tldr={d.tldr}
+            analysis={d.arxivAnalysis}
+          />
+        ) : null}
+
+        {(d.originalKind === 'github_other' || d.originalKind === 'github_release') && d.githubItemMeta ? (
+          <RadarGithubItemSummary meta={d.githubItemMeta} />
+        ) : null}
+
+        {(d.originalKind === 'rss' || d.originalKind === 'web_share') && d.highlights ? (
+          <RadarArticleHighlights {...d.highlights} />
+        ) : null}
+
         {d.body && d.body !== d.interpretation ? (
           <div
             style={{
@@ -269,81 +239,69 @@ export default function RadarDetailPage() {
           </div>
         ) : null}
 
-        {d.tags.length > 0 ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
-            {d.tags.map((t) => (
-              <span
-                key={t}
-                style={{
-                  padding: '2px 10px',
-                  background: '#f1f5f9',
-                  color: '#475569',
-                  borderRadius: 12,
-                  fontSize: 12,
-                }}
-              >
-                #{t}
-              </span>
-            ))}
-          </div>
-        ) : null}
+        {(() => {
+          const displayTags = d.tags.filter((t) => {
+            if (t === 'must_read' || t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
+            if (t === 'rss' || t === 'api' || t === 'web' || t === 'github' || t === 'tracked' || t === 'repo_digest') return false;
+            return true;
+          });
+          if (displayTags.length === 0) return null;
+          return (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
+              {displayTags.map((t) => (
+                <span
+                  key={t}
+                  style={{
+                    padding: '2px 10px',
+                    background: '#f1f5f9',
+                    color: '#475569',
+                    borderRadius: 12,
+                    fontSize: 12,
+                  }}
+                >
+                  #{t}
+                </span>
+              ))}
+            </div>
+          );
+        })()}
 
-        <RadarFeedbackBar
-          summaryId={d.id}
-          initialCounts={d.feedbackCounts}
-          initialMine={d.myFeedbacks}
-        />
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-          <Link
-            href={`/ai-research?seed=${encodeURIComponent(d.id)}`}
-            style={{
-              padding: '6px 12px',
-              border: '1px solid #7c3aed',
-              borderRadius: 4,
-              background: '#7c3aed',
-              color: '#fff',
-              textDecoration: 'none',
-              fontSize: 13,
-            }}
-          >
-            ✨ 建议深入调研
-          </Link>
-          <button
-            type="button"
-            onClick={() => setDrawerOpen(true)}
-            style={{
-              padding: '6px 12px',
-              border: '1px solid #cbd5e1',
-              borderRadius: 4,
-              background: '#fff',
-              color: '#334155',
-              cursor: 'pointer',
-              fontSize: 13,
-            }}
-          >
-            💬 与 AI 讨论
-          </button>
+        <div className="mt-4 flex flex-nowrap items-center gap-1 overflow-x-auto border-t border-border py-3">
+          <RadarFeedbackBar
+            summaryId={d.id}
+            initialCounts={d.feedbackCounts}
+            initialMine={d.myFeedbacks}
+            className="shrink-0 gap-1 py-0"
+          />
+          <span className="h-5 w-px shrink-0 bg-border" aria-hidden />
+          <TooltipProvider delayDuration={120}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  onClick={() => setDrawerOpen(true)}
+                  variant="outline"
+                  size="xs"
+                  className="h-7 w-7 shrink-0 px-0"
+                  aria-label="与 AI 讨论"
+                >
+                  <MessageSquare />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>与 AI 讨论</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button asChild size="xs" className="h-7 w-7 shrink-0 px-0">
+                  <a href={d.url} target="_blank" rel="noopener noreferrer" aria-label="打开原文">
+                    <ExternalLink />
+                  </a>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>打开原文</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
-
-        <a
-          href={d.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            display: 'inline-block',
-            padding: '8px 14px',
-            border: '1px solid #0f172a',
-            background: '#0f172a',
-            color: '#fff',
-            borderRadius: 4,
-            textDecoration: 'none',
-            fontSize: 14,
-            marginTop: 8,
-          }}
-        >
-          打开原文 ↗
-        </a>
 
         {d.canManage ? (
           <div
@@ -365,7 +323,6 @@ export default function RadarDetailPage() {
           summaryId={d.id}
           summaryTitle={d.title}
           summaryUrl={d.url}
-          summaryInterpretation={d.interpretation}
           open={drawerOpen}
           onOpenChange={setDrawerOpen}
         />

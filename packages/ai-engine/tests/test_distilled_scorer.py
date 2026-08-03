@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -22,6 +23,7 @@ from ai_engine.radar.distilled_scorer import (
     TIER_SKIM,
     VETO_MISMATCH,
     VETO_UNSAFE,
+    anthropic_scorer,
     build_user_prompt,
     compute_score,
     default_score,
@@ -40,6 +42,10 @@ from ai_engine.scoring.scoring_profiles import (
     get_profile,
     list_profiles,
 )
+
+
+class _RateLimitError(RuntimeError):
+    status_code = 429
 
 
 # ── Fixtures ──────────────────────────────────────────────────────
@@ -541,9 +547,63 @@ async def test_score_with_llm_no_api_key_returns_default(
 ) -> None:
     """When no ANTHROPIC_API_KEY is set, returns default score."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     result = await score_with_llm("title", "content")
     assert result.is_default is True
     assert result.total == 0.0
+
+
+async def test_score_with_llm_local_proxy_empty_key_proceeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty key + local proxy base URL must not short-circuit to default."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:15721")
+
+    async def fake_scorer(title: str, content: str) -> str:
+        return json.dumps(_all_max_parsed())
+
+    result = await score_with_llm("title", "content", scorer=fake_scorer)
+    assert result.is_default is False
+
+
+async def test_anthropic_scorer_substitutes_placeholder_for_empty_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """anthropic_scorer sends a non-empty placeholder key to local proxies."""
+    captured: dict[str, object] = {}
+
+    class _Block:
+        type = "text"
+        text = (
+            '{"信息增量": 2, "分析深度": 2, "可行动性": 2, "事实可信度": 2, '
+            '"时效性": 2, "表达质量": 2, "综合信号": 2, "weak_point": "", '
+            '"veto": null, "risk_flag": null, "suspected_repost": false}'
+        )
+
+    class _Message:
+        content = [_Block()]
+
+    class _Messages:
+        async def create(self, **kwargs: object) -> _Message:
+            captured.update(kwargs)
+            return _Message()
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["api_key"] = kwargs.get("api_key")
+            captured["base_url"] = kwargs.get("base_url")
+
+        messages = _Messages()
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", _Client)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:15721")
+
+    raw = await anthropic_scorer("title", "content")
+    assert captured["api_key"] == "sk-placeholder-for-cc-switch"
+    assert captured["base_url"] == "http://127.0.0.1:15721"
+    assert '"信息增量": 2' in raw
 
 
 async def test_score_with_llm_custom_scorer() -> None:
@@ -595,6 +655,73 @@ async def test_score_with_llm_passes_profile_to_compute(
 
     result = await score_with_llm("title", "content", scorer=mock_scorer)
     assert result.profile_id == PROFILE_PAPER
+
+
+async def test_score_with_llm_retries_on_429_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import distilled_scorer
+
+    monkeypatch.setattr(distilled_scorer, "_LLM_RATE_LIMIT_DELAY", 0.01)
+    calls = {"count": 0}
+
+    async def flaky_scorer(title: str, content: str) -> str:
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise _RateLimitError("rate limited")
+        return json.dumps(_all_max_parsed())
+
+    result = await score_with_llm("title", "content", scorer=flaky_scorer)
+    assert calls["count"] == 3
+    assert result.is_default is False
+    assert result.total == 100.0
+
+
+async def test_score_with_llm_429_exhausted_returns_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import distilled_scorer
+
+    monkeypatch.setattr(distilled_scorer, "_LLM_RATE_LIMIT_DELAY", 0.01)
+    calls = {"count": 0}
+
+    async def always_429(title: str, content: str) -> str:
+        calls["count"] += 1
+        raise _RateLimitError("429 too many requests")
+
+    result = await score_with_llm("title", "content", scorer=always_429)
+    assert result.is_default is True
+    assert calls["count"] == distilled_scorer._LLM_RATE_LIMIT_MAX_RETRIES + 1
+
+
+async def test_score_with_llm_limits_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import distilled_scorer
+
+    semaphore = asyncio.Semaphore(2)
+    monkeypatch.setitem(
+        distilled_scorer._loop_score_semaphores,
+        asyncio.get_running_loop(),
+        semaphore,
+    )
+    active = 0
+    max_active = 0
+    payload = json.dumps(_all_max_parsed())
+
+    async def slow_scorer(title: str, content: str) -> str:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        return payload
+
+    results = await asyncio.gather(
+        *(score_with_llm("title", "content", scorer=slow_scorer) for _ in range(8))
+    )
+    assert max_active <= 2
+    assert all(r.is_default is False for r in results)
 
 
 # ── ScoringMonitor ────────────────────────────────────────────────

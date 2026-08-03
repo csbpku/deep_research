@@ -26,7 +26,7 @@ from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError, safe_fetch
 from ai_engine.ingestion.pipeline import _generate_brief
 from ai_engine.radar.models import RadarCandidate, RadarSource
-from ai_engine.radar.candidate_filter import FilterResult, filter_candidate
+from ai_engine.radar.candidate_filter import filter_candidate
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.source_manager import SourceFetcher, fetch_source, load_enabled_sources
 from ai_engine.server.share import _infer_title, html_to_markdown
@@ -46,6 +46,37 @@ DEEPDIVE_ENABLED = os.environ.get("RADAR_DEEPDIVE_ENABLED", "true").lower() in (
     "1", "true", "yes", "on",
 )
 
+# Bound concurrent source runs (each source has at most one LLM call in
+# flight: brief, then score) so a full sync cannot saturate the local LLM
+# proxy. Mirrors agents-radar's LLM_CONCURRENCY=5.
+RADAR_SOURCE_CONCURRENCY = int(os.environ.get("RADAR_SOURCE_CONCURRENCY", "5"))
+
+# Brief generation retry policy mirrors agents-radar/src/report.ts:
+# HTTP 429 gets up to 3 retries with 5s/10s/20s backoff.
+_BRIEF_RATE_LIMIT_RETRIES = 3
+_BRIEF_RATE_LIMIT_BACKOFF = (5.0, 10.0, 20.0)
+
+# Pages that are too short, or bot-verification shells, are not useful
+# LLM brief material. Product Hunt is the common case: safe_fetch often
+# lands on a Cloudflare "Just a moment..." page.
+_LOW_QUALITY_MARKERS = (
+    "just a moment",
+    "enable javascript and cookies",
+    "challenge-platform",
+    "verify you are human",
+    "checking your browser",
+    "attention required! | cloudflare",
+    "performance & security by cloudflare",
+    "cf-chl-",
+    "access denied",
+)
+
+# Tracked-repo digests carry structured GitHub API data (issues/PRs/
+# releases) instead of an HTML page. The combined activity feed is the LLM
+# context, capped below the 64KB deep-dive limit so one prompt can cover a
+# whole repo's 24h activity.
+_REPO_DIGEST_CONTEXT_MAX_CHARS = 8000
+
 
 def _classify_original_kind(source_type: str, url: str) -> str:
     """Map (source_type, url) to a deep-dive renderer discriminator.
@@ -64,7 +95,9 @@ def _classify_original_kind(source_type: str, url: str) -> str:
         if "/releases/tag/" in u:
             return "github_release"
         # repo root: github.com/{owner}/{repo} (optionally trailing slash)
-        if _GITHUB_REPO_RE.match(u):
+        # Tracked-repo digests append ?digest=YYYY-MM-DD; strip the query so
+        # the deep-dive renderer still treats them as repo pages.
+        if _GITHUB_REPO_RE.match(u.split("?", 1)[0]):
             return "github_repo"
         return "github_other"
     if source_type == "rss" or source_type == "devto":
@@ -85,6 +118,11 @@ class SourceRunResult:
     token_output_total: int
     cost_usd: float
     error_code: str | None = None
+    fallback_count: int = 0
+    skipped_existing: int = 0
+    skipped_rule_noise: int = 0
+    skipped_distilled_noise: int = 0
+    skipped_conflict: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -378,6 +416,92 @@ def _clean_content(text: str, min_len: int = 200) -> str:
     return cleaned
 
 
+def _is_low_quality_content(text: str) -> bool:
+    """Detect content too short to summarize or blocked by a bot check.
+
+    When this returns True the sync runner skips the brief LLM entirely
+    and stores the raw snippet instead, so Cloudflare/verification pages
+    never get a hallucinated interpretation.
+    """
+    if not text or len(text.strip()) < 200:
+        return True
+    lowered = text.lower()
+    return any(marker in lowered for marker in _LOW_QUALITY_MARKERS)
+
+
+def _is_rate_limited_brief(brief: Any | None = None, exc: BaseException | None = None) -> bool:
+    if exc is not None:
+        text = str(exc)
+    else:
+        text = " ".join(
+            str(getattr(brief, key, "") or "")
+            for key in ("error_code", "error_message")
+        )
+    lowered = text.lower()
+    return (
+        "429" in lowered
+        or "too many requests" in lowered
+        or "rate limit" in lowered
+        or "ratelimit" in lowered
+    )
+
+
+async def _generate_brief_with_retry(
+    generate_brief: BriefGenerator,
+    adapter: ResearchEngineAdapter,
+    item: dict[str, Any],
+    canonical_url: str,
+    *,
+    timeout_seconds: float,
+    context_max_chars: int | None = None,
+) -> Any:
+    """Call generate_brief, retrying HTTP-429 failures with 5/10/20s backoff."""
+    last: Any = None
+    for attempt in range(_BRIEF_RATE_LIMIT_RETRIES + 1):
+        delay = (
+            _BRIEF_RATE_LIMIT_BACKOFF[attempt]
+            if attempt < len(_BRIEF_RATE_LIMIT_BACKOFF)
+            else 0.0
+        )
+        try:
+            brief = await generate_brief(
+                adapter,
+                item,
+                canonical_url,
+                timeout_seconds=timeout_seconds,
+                context_max_chars=context_max_chars,
+            )
+            if (
+                brief.status == AI_JOB_STATUS["FAILED"]
+                and _is_rate_limited_brief(brief=brief)
+            ):
+                last = brief
+                if delay <= 0:
+                    break
+                logger.info(
+                    "ai-engine.radar.brief_retry",
+                    extra={"attempt": attempt + 1, "delay_s": delay},
+                )
+                await asyncio.sleep(delay)
+                continue
+            return brief
+        except Exception as exc:
+            last = exc
+            if _is_rate_limited_brief(exc=exc):
+                if delay <= 0:
+                    break
+                logger.info(
+                    "ai-engine.radar.brief_retry",
+                    extra={"attempt": attempt + 1, "delay_s": delay},
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise
+    if isinstance(last, BaseException):
+        raise last
+    return last
+
+
 def _strip_html_tags(html: str) -> str:
     """Strip HTML tags and collapse whitespace."""
     import re as _re
@@ -469,6 +593,25 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
     return html_to_markdown(html)[:8000]
 
 
+def _repo_activity_document(url: str, markdown: str) -> FetchedDocument:
+    """Build a synthetic fetched document for API-sourced repo digests.
+
+    Tracked-repo candidates already carry the full activity payload, so the
+    sync runner should not re-fetch the repo HTML page. This placeholder
+    keeps the rest of the pipeline (insert, logging) on the same contract.
+    """
+    return FetchedDocument(
+        url=url,
+        final_ip="",
+        status=200,
+        headers={"content-type": "text/markdown"},
+        content=markdown.encode("utf-8"),
+        content_type="text/markdown",
+        elapsed_ms=0,
+        redirect_count=0,
+    )
+
+
 async def _run_source(
     pool: Any,
     *,
@@ -486,6 +629,11 @@ async def _run_source(
     run_id = await _create_run(pool, source, triggered_by)
     started = time.monotonic()
     total_fetched = total_new = total_skipped = total_failed = 0
+    fallback_count = 0
+    skipped_existing = 0
+    skipped_rule_noise = 0
+    skipped_distilled_noise = 0
+    skipped_conflict = 0
     token_in = token_out = 0
     cost_usd = 0.0
     first_error_code: str | None = None
@@ -497,56 +645,105 @@ async def _run_source(
                 normalized = normalize_candidate(raw_candidate)
                 if await _candidate_exists(pool, normalized.canonical_url):
                     total_skipped += 1
+                    skipped_existing += 1
                     continue
 
-                # Fast keyword-based score BEFORE fetching or LLM
+                # Heuristic score (for admin-queue sort only) + noise-pattern filter.
                 score = score_candidate(normalized, source_type=source.source_type)
                 filter_result = filter_candidate(normalized, score, source.source_type)
                 if not filter_result.keep:
-                    # Stage 1b: embedding semantic rescue for high-quality sources
-                    if filter_result.needs_embedding_rescue and embedding_scorer is not None:
-                        rescued, sim = await embedding_scorer.should_rescue(
-                            normalized.title,
-                            normalized.snippet,
-                            score.source_quality,
-                        )
-                        if rescued:
-                            filter_result = FilterResult(
-                                keep=True,
-                                reason=f"embedding_rescue: sim={sim:.3f}",
-                            )
-                        else:
-                            total_skipped += 1
-                            continue
-                    else:
-                        total_skipped += 1
-                        continue
+                    total_skipped += 1
+                    skipped_rule_noise += 1
+                    continue
 
-                fetched = await document_fetcher(raw_candidate.url)
-                raw_html = fetched.content.decode("utf-8", errors="replace")
-                markdown = _extract_article_content(raw_html, raw_candidate.url, source.source_type)
+                repo_activity = raw_candidate.repo_activity
+                if repo_activity is not None:
+                    from ai_engine.radar.github_tracked import format_repo_activity
+
+                    markdown = format_repo_activity(
+                        repo_activity,
+                        max_chars=_REPO_DIGEST_CONTEXT_MAX_CHARS,
+                    )
+                    fetched = _repo_activity_document(raw_candidate.url, markdown)
+                else:
+                    fetched = await document_fetcher(raw_candidate.url)
+                    raw_html = fetched.content.decode("utf-8", errors="replace")
+                    markdown = _extract_article_content(
+                        raw_html, raw_candidate.url, source.source_type
+                    )
+                raw_content = markdown or normalized.snippet
+                # Tracked-repo digests are structured API data: always run
+                # the per-repo LLM summary over the combined activity rather
+                # than treating a short digest as a low-quality scrape.
+                low_quality = (
+                    repo_activity is None and _is_low_quality_content(raw_content)
+                )
+                brief: Any = None
+                interpretation = ""
+                if low_quality:
+                    # Page fetch landed on a bot check (Cloudflare etc.) or a
+                    # too-short shell. If the fetcher supplied a snippet (even if
+                    # short, like a Product Hunt tagline), use that as the LLM
+                    # context. Only skip if the snippet itself contains anti-bot
+                    # markers or is completely empty.
+                    snippet_clean = normalized.snippet.strip()
+                    if snippet_clean and not any(
+                        m in snippet_clean.lower() for m in _LOW_QUALITY_MARKERS
+                    ):
+                        logger.info(
+                            "ai-engine.radar.low_quality_page_use_snippet",
+                            extra={
+                                "request_id": run_id,
+                                "source_id": source.id,
+                                "title": normalized.title[:200],
+                                "url": normalized.url[:2048],
+                            },
+                        )
+                        brief_context = snippet_clean
+                    else:
+                        logger.info(
+                            "ai-engine.radar.low_quality_skip",
+                            extra={
+                                "request_id": run_id,
+                                "source_id": source.id,
+                                "title": normalized.title[:200],
+                                "url": normalized.url[:2048],
+                            },
+                        )
+                        total_skipped += 1
+                        fallback_count += 1
+                        continue
+                else:
+                    brief_context = raw_content if repo_activity is not None else (markdown or normalized.snippet)
+
                 item = {
                     "title": normalized.title,
-                    "snippet": (markdown or normalized.snippet)[:2000],
+                    "snippet": brief_context[:2000],
                 }
-                brief = await generate_brief(
+                brief = await _generate_brief_with_retry(
+                    generate_brief,
                     adapter,
                     item,
                     normalized.canonical_url,
                     timeout_seconds=generation_timeout_seconds,
+                    context_max_chars=(
+                        _REPO_DIGEST_CONTEXT_MAX_CHARS
+                        if repo_activity is not None
+                        else None
+                    ),
                 )
                 token_in += brief.cost.token_input_total
                 token_out += brief.cost.token_output_total
                 cost_usd += _cost_usd(brief.cost)
                 if brief.status != AI_JOB_STATUS["SUCCEEDED"] or not brief.output_text:
                     raise RuntimeError(f"brief generation ended in {brief.status}")
+                interpretation = brief.output_text.strip()
                 # Distilled 7-dimension LLM scoring (Stage 2)
                 distilled_result = None
-                if distilled_scorer is not None:
+                if distilled_scorer is not None and brief is not None:
                     from ai_engine.scoring.scoring_profiles import profile_for_source
 
                     profile, _ = profile_for_source(source.source_type)
-                    raw_content = markdown or normalized.snippet
                     cleaned = _clean_content(raw_content)
                     if cleaned:
                         distilled_result = await distilled_scorer(
@@ -560,20 +757,49 @@ async def _run_source(
                     else:
                         from ai_engine.radar.distilled_scorer import default_score
                         distilled_result = default_score(profile)
+                    if distilled_result.is_default:
+                        fallback_count += 1
                     if monitor is not None:
                         monitor.record(distilled_result)
                 extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
+                # Distilled v2 is the sole quality gate. Skip `tier=noise`
+                # rows from entering the DB entirely (Day 4 change). A
+                # low-quality fallback never has a real LLM verdict, so it
+                # stays in the queue for human review instead of being
+                # auto-skipped as noise.
+                if (
+                    distilled_result is not None
+                    and brief is not None
+                    and getattr(distilled_result, "tier", None) == "noise"
+                ):
+                    logger.info(
+                        "ai-engine.radar.noise_skipped",
+                        extra={
+                            "request_id": run_id,
+                            "source_id": source.id,
+                            "title": normalized.title[:200],
+                            "url": normalized.url[:2048],
+                        },
+                    )
+                    total_skipped += 1
+                    skipped_distilled_noise += 1
+                    continue
+
                 inserted = await _insert_candidate(
                     pool,
                     candidate=raw_candidate,
                     canonical_url=normalized.canonical_url,
                     fetched=fetched,
                     markdown=markdown,
-                    interpretation=brief.output_text.strip(),
+                    interpretation=interpretation,
                     source=source,
                     run_id=run_id,
                     score=score,
-                    cost=brief.cost,
+                    cost=(
+                        brief.cost
+                        if brief is not None
+                        else CostMetrics(0, 0, 0, 0)
+                    ),
                     extra_tags=tuple(extra_tags_list),
                     distilled=distilled_result,
                 )
@@ -581,6 +807,7 @@ async def _run_source(
                     total_new += 1
                 else:
                     total_skipped += 1
+                    skipped_conflict += 1
                 logger.info(
                     "ai-engine.radar.candidate_processed",
                     extra={
@@ -651,6 +878,11 @@ async def _run_source(
         token_output_total=token_out,
         cost_usd=round(cost_usd, 6),
         error_code=first_error_code,
+        fallback_count=fallback_count,
+        skipped_existing=skipped_existing,
+        skipped_rule_noise=skipped_rule_noise,
+        skipped_distilled_noise=skipped_distilled_noise,
+        skipped_conflict=skipped_conflict,
     )
 
 
@@ -667,6 +899,7 @@ async def run_radar_sync(
     distilled_scorer: DistilledScorerFn | None = None,
     monitor: Any | None = None,
     embedding_scorer: EmbeddingScorerFn | None = None,
+    source_concurrency: int | None = None,
 ) -> RadarSyncResult:
     """Run all enabled sources independently and return source-level results."""
 
@@ -677,9 +910,11 @@ async def run_radar_sync(
         sources = [source for source in sources if source.id in source_ids]
     engine = adapter or build_adapter()
     batch_id = str(uuid.uuid4())
-    results = await asyncio.gather(
-        *(
-            _run_source(
+    source_semaphore = asyncio.Semaphore(max(1, source_concurrency or RADAR_SOURCE_CONCURRENCY))
+
+    async def _run_bounded(source: RadarSource) -> SourceRunResult:
+        async with source_semaphore:
+            return await _run_source(
                 pool,
                 source=source,
                 triggered_by=triggered_by,
@@ -692,8 +927,9 @@ async def run_radar_sync(
                 monitor=monitor,
                 embedding_scorer=embedding_scorer,
             )
-            for source in sources
-        )
+
+    results = await asyncio.gather(
+        *(_run_bounded(source) for source in sources)
     )
     return RadarSyncResult(batch_id=batch_id, runs=tuple(results))
 

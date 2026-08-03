@@ -228,6 +228,7 @@ async def test_submit_partial_records_workflow_state(
     final = await _wait_final_status(client, job_id)
     assert final["final_status"] == "partial"
     assert final["error_code"] == "WORKER_TIMEOUT"
+    assert final["error_stage"] == "search"
 
 
 async def test_submit_failed_when_below_threshold(
@@ -376,7 +377,16 @@ async def test_get_job_returns_stored_snapshot(
     # 等后台 task 跑完,再断言 final_status 落定
     final = await _wait_final_status(client, job_id)
     assert final["job_id"] == job_id
+    assert final["status"] == "stored"
     assert final["final_status"] in ("succeeded", "partial", "failed")
+    assert final["topic"] == "用于回查"
+    assert final["partial_sources_count"] >= 3
+    assert final["failed_sources_count"] == 0
+    assert final["error_stage"] is None
+    assert "draft_research_id" in final
+    assert final["draft_research_id"] is not None
+    for field in ("started_at", "created_at", "completed_at"):
+        assert field in final
 
 
 async def test_get_job_returns_404_when_unknown(
@@ -416,3 +426,26 @@ async def test_logs_do_not_contain_secrets(
     text = captured.out + captured.err
     assert sensitive not in text, f"secret leaked into logs: {text}"
     assert "ai-engine.request" in text, f"missing request log line: {text}"
+
+
+async def test_logging_failure_does_not_replace_json_response(
+    client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken/reconfigured structlog must not turn a valid response into text 500."""
+
+    class BrokenLogger:
+        def info(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("logging backend unavailable")
+
+    client, _store, _adapter = client_with_store
+    monkeypatch.setattr(
+        "ai_engine.server.app.structlog.get_logger",
+        lambda *_args, **_kwargs: BrokenLogger(),
+    )
+
+    response = await client.get("/health")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["status"] == "ok"

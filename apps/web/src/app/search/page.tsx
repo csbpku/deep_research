@@ -4,22 +4,31 @@
 //
 // 行为：
 //   - 顶部搜索框：保留 query string（刷新不丢）
-//   - 按 type 分组 tab（全部 / 摘要 / 长文 / 精华）
+//   - 按 type 分组 tab（全部 / 雷达 / 摘要 / 长文 / 精华）
 //   - 每条结果：type 标签 + 标题（链接到详情）+ 高亮 snippet
-//   - 未登录：服务端 redirect 到 signin（layout 级或本页 useEffect 触发）
+//   - 未登录：服务端 redirect 到 signin
 //
 // 设计：
 //   - 客户端发起 GET /api/search?q=&type=&page=&per_page=
 //   - 高亮来自后端 ts_headline（已用 <mark>...</mark> 包裹匹配段）
 //   - 切 tab 时：把 ?type 写到 query string；前端不刷页面，只更新 state
 
-import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { Search as SearchIcon } from 'lucide-react';
+
+import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/domain/PageHeader';
+import { Pagination } from '@/components/domain/Pagination';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 interface SearchRow {
   id: string;
-  type: 'summary' | 'long_research' | 'knowledge';
+  type: 'summary' | 'long_research' | 'knowledge' | 'radar';
   refId: string;
   title: string;
   snippet: string;
@@ -36,22 +45,34 @@ interface SearchResponse {
   totalPages: number;
 }
 
-const TYPE_TABS: Array<{ key: '' | 'summary' | 'long_research' | 'knowledge'; label: string }> = [
-  { key: '', label: '全部' },
+// Radix Tabs 的 value 不能是空串，用 all 哨兵；发请求时映射回空。
+const ALL = 'all';
+
+const TYPE_TABS: Array<{ key: string; label: string }> = [
+  { key: ALL, label: '全部' },
+  { key: 'radar', label: '雷达' },
   { key: 'summary', label: '摘要' },
   { key: 'long_research', label: '长文' },
   { key: 'knowledge', label: '精华' },
 ];
 
-const TYPE_BADGE: Record<SearchRow['type'], { label: string; color: string; bg: string }> = {
-  summary: { label: '摘要', color: '#0f766e', bg: '#ccfbf1' },
-  long_research: { label: '长文', color: '#1d4ed8', bg: '#dbeafe' },
-  knowledge: { label: '精华', color: '#7c2d12', bg: '#ffedd5' },
+const TYPE_BADGE: Record<SearchRow['type'], { label: string; className: string }> = {
+  radar: { label: '雷达', className: 'bg-radar-candidate-bg text-radar-candidate-fg' },
+  summary: { label: '摘要', className: 'bg-radar-published-bg text-radar-published-fg' },
+  long_research: { label: '长文', className: 'bg-status-running-bg text-status-running-fg' },
+  knowledge: { label: '精华', className: 'bg-status-queued-bg text-status-queued-fg' },
 };
 
 export default function SearchPage() {
   return (
-    <Suspense fallback={<div style={{ padding: 20, color: '#94a3b8' }}>加载中...</div>}>
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-shell space-y-2">
+          <Skeleton className="h-8 w-40" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      }
+    >
       <SearchContent />
     </Suspense>
   );
@@ -62,18 +83,19 @@ function SearchContent() {
   const searchParams = useSearchParams();
 
   const initialQ = searchParams.get('q') ?? '';
-  const initialType = (searchParams.get('type') ?? '') as '' | SearchRow['type'];
+  const initialType = searchParams.get('type') || ALL;
   const initialPage = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1);
 
   const [q, setQ] = useState(initialQ);
   const [submittedQ, setSubmittedQ] = useState(initialQ);
-  const [type, setType] = useState<'' | SearchRow['type']>(initialType);
+  const [type, setType] = useState<string>(initialType);
   const [page, setPage] = useState(initialPage);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const detailHref = useCallback((row: SearchRow) => {
+    if (row.type === 'radar') return `/radar/${row.refId}`;
     if (row.type === 'summary') return `/summaries/${row.refId}`;
     return `/researches/${row.refId}`;
   }, []);
@@ -82,7 +104,7 @@ function SearchContent() {
   useEffect(() => {
     const params = new URLSearchParams();
     if (submittedQ) params.set('q', submittedQ);
-    if (type) params.set('type', type);
+    if (type !== ALL) params.set('type', type);
     if (page > 1) params.set('page', String(page));
     const qs = params.toString();
     router.replace(qs ? `/search?${qs}` : '/search');
@@ -99,7 +121,7 @@ function SearchContent() {
     setError(null);
     const params = new URLSearchParams();
     params.set('q', submittedQ);
-    if (type) params.set('type', type);
+    if (type !== ALL) params.set('type', type);
     params.set('page', String(page));
     params.set('per_page', '20');
     fetch(`/api/search?${params.toString()}`)
@@ -137,190 +159,117 @@ function SearchContent() {
   const items = data?.items ?? [];
 
   return (
-    <div>
-      <h1 style={{ fontSize: 22, margin: '0 0 16px' }}>搜索</h1>
+    <div className="mx-auto max-w-shell">
+      <PageHeader
+        title="搜索"
+        description="跨雷达、摘要与调研库检索；标题优先，兼顾词组和近似匹配。"
+      />
 
-      {/* 搜索框 */}
-      <form onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <input
+      <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
+        <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="搜索摘要 / 长文 / 精华..."
-          style={{
-            flex: 1,
-            padding: '8px 12px',
-            border: '1px solid #e2e8f0',
-            borderRadius: 6,
-            fontSize: 14,
-            boxSizing: 'border-box',
-          }}
+          placeholder='例如 "RAG 评估" OR GraphRAG'
+          aria-label="搜索关键词"
+          className="flex-1"
         />
-        <button
-          type="submit"
-          disabled={loading || !q.trim()}
-          style={{
-            padding: '8px 16px',
-            border: 'none',
-            borderRadius: 6,
-            background: '#0f172a',
-            color: '#fff',
-            cursor: loading || !q.trim() ? 'default' : 'pointer',
-            fontSize: 13,
-            opacity: loading || !q.trim() ? 0.6 : 1,
-          }}
-        >
-          {loading ? '搜索中...' : '搜索'}
-        </button>
+        <Button type="submit" disabled={loading || !q.trim()}>
+          <SearchIcon />
+          {loading ? '搜索中…' : '搜索'}
+        </Button>
       </form>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
-        {TYPE_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => {
-              setType(tab.key);
-              setPage(1);
-            }}
-            style={{
-              padding: '8px 14px',
-              border: 'none',
-              borderBottom: type === tab.key ? '2px solid #0f172a' : '2px solid transparent',
-              background: 'transparent',
-              cursor: 'pointer',
-              fontSize: 13,
-              color: type === tab.key ? '#0f172a' : '#64748b',
-              fontWeight: type === tab.key ? 600 : 400,
-              marginBottom: -1,
-            }}
+      <Tabs
+        value={type}
+        onValueChange={(v) => {
+          setType(v);
+          setPage(1);
+        }}
+      >
+        <TabsList className="w-full justify-start">
+          {TYPE_TABS.map((tab) => (
+            <TabsTrigger key={tab.key} value={tab.key}>
+              {tab.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      <div className="mt-4">
+        {error && (
+          <div
+            role="alert"
+            className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
           >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {error && (
-        <div
-          style={{
-            border: '1px solid #fecaca',
-            background: '#fef2f2',
-            color: '#dc2626',
-            padding: 12,
-            borderRadius: 6,
-            marginBottom: 12,
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      {!submittedQ && (
-        <div style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>
-          输入关键词以搜索已发布的摘要、长文和精华
-        </div>
-      )}
-
-      {submittedQ && !loading && data && items.length === 0 && (
-        <div style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>
-          没有匹配的内容
-        </div>
-      )}
-
-      {data && items.length > 0 && (
-        <>
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>
-            共 {data.total} 条结果
+            {error}
           </div>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {items.map((row) => {
-              const badge = TYPE_BADGE[row.type];
-              return (
-                <li
-                  key={row.id}
-                  style={{
-                    border: '1px solid #e2e8f0',
-                    borderRadius: 8,
-                    padding: 14,
-                    marginBottom: 8,
-                    background: '#fff',
-                  }}
-                >
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
-                    <span
-                      style={{
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        background: badge.bg,
-                        color: badge.color,
-                      }}
-                    >
-                      {badge.label}
-                    </span>
-                    <Link
-                      href={detailHref(row)}
-                      style={{ fontSize: 15, color: '#0f172a', textDecoration: 'none', fontWeight: 500 }}
-                    >
-                      {row.title}
-                    </Link>
-                  </div>
-                  {/* highlighted snippet —— 后端用 <mark> 包裹匹配段 */}
-                  <p
-                    style={{
-                      fontSize: 13,
-                      color: '#475569',
-                      margin: '4px 0 0',
-                      lineHeight: 1.6,
-                    }}
-                    // 后端 ts_headline 输出经 plainto_tsquery 生成的词条 + snippet 文本
-                    // <mark> 是合法高亮标签，不引入 XSS（snippet 是 DB 来源）
-                    dangerouslySetInnerHTML={{ __html: row.highlighted }}
-                  />
-                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                    {new Date(row.publishedAt).toLocaleString('zh-CN')}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+        )}
 
-          {/* 分页 */}
-          {totalPages > 1 && (
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16 }}>
-              <button
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                style={paginationButtonStyle(page <= 1)}
-              >
-                上一页
-              </button>
-              <span style={{ fontSize: 13, color: '#475569', alignSelf: 'center' }}>
-                第 {page} / {totalPages} 页
-              </span>
-              <button
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-                style={paginationButtonStyle(page >= totalPages)}
-              >
-                下一页
-              </button>
-            </div>
-          )}
-        </>
-      )}
+        {!submittedQ && (
+          <EmptyState title="开始搜索" description="输入关键词以搜索雷达、摘要、长文和精华。" />
+        )}
+
+        {loading && (
+          <div className="grid gap-2">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-3.5">
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-3 w-full" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {submittedQ && !loading && data && items.length === 0 && (
+          <EmptyState title="没有匹配的内容" description="换个关键词，或切换到其他类型再试。" />
+        )}
+
+        {data && items.length > 0 && (
+          <>
+            <p className="mb-2 text-xs tabular-nums text-muted-foreground">
+              共 {data.total} 条结果
+            </p>
+            <ul className="grid list-none gap-2 p-0">
+              {items.map((row) => {
+                const badge = TYPE_BADGE[row.type];
+                return (
+                  <li key={row.id} className="rounded-lg border border-border bg-card p-3.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}
+                      >
+                        {badge.label}
+                      </span>
+                      <Link
+                        href={detailHref(row)}
+                        className="text-sm font-medium hover:text-primary hover:underline"
+                      >
+                        {row.title}
+                      </Link>
+                    </div>
+                    {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
+                        并在返回前转义来源文本，只保留高亮标签。 */}
+                    <p
+                      className="mt-1.5 text-sm leading-relaxed text-muted-foreground [&_mark]:rounded-sm [&_mark]:bg-status-queued-bg [&_mark]:px-0.5 [&_mark]:text-status-queued-fg"
+                      dangerouslySetInnerHTML={{ __html: row.highlighted }}
+                    />
+                    <div className="mt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
+                      {new Date(row.publishedAt).toLocaleString('zh-CN')}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              disabled={loading}
+            />
+          </>
+        )}
+      </div>
     </div>
   );
-}
-
-function paginationButtonStyle(disabled: boolean): React.CSSProperties {
-  return {
-    padding: '6px 12px',
-    border: '1px solid #e2e8f0',
-    borderRadius: 4,
-    background: '#fff',
-    cursor: disabled ? 'default' : 'pointer',
-    fontSize: 13,
-    opacity: disabled ? 0.5 : 1,
-  };
 }

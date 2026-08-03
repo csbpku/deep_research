@@ -10,10 +10,18 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Re
 from pydantic import BaseModel, Field
 
 from ai_engine.adapters.base import ResearchEngineAdapter
+from ai_engine.radar.daily_digest import generate_daily_digest
+from ai_engine.radar.enrichment_worker import run_enrichment_for_pending
+from ai_engine.radar.tracked_repo_manager import run_tracked_repo_postprocessing
 from ai_engine.radar.sync_runner import retry_radar_run, run_radar_sync
 from ai_engine.radar.distilled_scorer import ScoringMonitor, score_with_llm
 
 router = APIRouter(prefix="/api/radar", tags=["radar"])
+
+from ai_engine.radar.enrichment_worker import _generate_web_highlights as _gen_highlights
+from ai_engine.radar.sync_runner import _is_low_quality_content as _is_lq_highlight
+
+
 
 
 class RadarSyncBody(BaseModel):
@@ -64,6 +72,50 @@ def _adapter(request: Request) -> ResearchEngineAdapter:
     return adapter
 
 
+@router.post("/enrich/highlights", status_code=status.HTTP_202_ACCEPTED)
+async def enqueue_highlights(
+    pool: Any = Depends(_pool),
+) -> dict[str, Any]:
+    """Batch re-generate highlights for web/rss candidates."""
+    import json as _json
+    import structlog
+
+    async def _run() -> None:
+        async with pool.connection() as conn:
+            rows = await (await conn.execute(
+                "SELECT \"id\", \"title\", \"originalMarkdown\" FROM \"summaries\" "
+                "WHERE \"originalMarkdown\" IS NOT NULL "
+                "AND \"originalMarkdown\" <> \'\' "
+                "AND \"originalKind\" IN (\'rss\', \'web_share\') "
+                "AND (\"highlights\" IS NULL OR \"highlights\" = \'{}\'::jsonb) "
+                "ORDER BY \"createdAt\" DESC LIMIT 50"
+            )).fetchall()
+        if not rows:
+            return
+        succeeded = 0
+        for r in rows:
+            sid = str(r["id"])
+            title = str(r["title"] or "")
+            md = str(r["originalMarkdown"] or "")
+            if not md or _is_lq_highlight(md):
+                continue
+            hl = await _gen_highlights(md, title)
+            if hl:
+                async with pool.connection() as conn2:
+                    await conn2.execute(
+                        "UPDATE \"summaries\" SET \"highlights\" = %s::jsonb, \"updatedAt\" = now() WHERE \"id\" = %s",
+                        (_json.dumps(hl, ensure_ascii=False), sid),
+                    )
+                succeeded += 1
+        structlog.get_logger("ai_engine.radar").info(
+            "ai-engine.radar.highlights_done", enriched=succeeded,
+        )
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_run())
+    return {"status": "queued"}
+
+
 async def _run_background(
     *,
     pool: Any,
@@ -92,6 +144,65 @@ async def _run_background(
             must_read=monitor.must_read_count,
             alerts=alerts,
         )
+        # Phase 1.5: Tracked repo lifecycle management
+        try:
+            from datetime import date
+            run_id_map: dict[str, str] = {}
+            async with pool.connection() as _conn:
+                for r in result.runs:
+                    _row = await (await _conn.execute(
+                        'SELECT "sourceType" FROM "radar_sources" WHERE "id" = %s',
+                        (r.source_id,),
+                    )).fetchone()
+                    if _row:
+                        run_id_map[str(_row["sourceType"])] = r.run_id
+            tracked_result = await run_tracked_repo_postprocessing(
+                pool, run_id_map,
+            )
+            log.info(
+                "ai-engine.radar.tracked_repo_done",
+                request_id=request_id,
+                **tracked_result,
+            )
+        except Exception as repo_exc:
+            log.warning(
+                "ai-engine.radar.tracked_repo_failed",
+                request_id=request_id,
+                error_type=type(repo_exc).__name__,
+            )
+        # Phase 2: enrichment for github/arxiv/rss/web candidates
+        try:
+            enriched = await run_enrichment_for_pending(pool, limit=50)
+            log.info(
+                "ai-engine.radar.enrich_done",
+                request_id=request_id,
+                enriched_count=enriched,
+            )
+        except Exception as enrich_exc:
+            log.warning(
+                "ai-engine.radar.enrich_failed",
+                request_id=request_id,
+                error_type=type(enrich_exc).__name__,
+            )
+        # Daily digest
+        try:
+            digest_result = await generate_daily_digest(
+                pool,
+                target_date=date.today(),
+            )
+            log.info(
+                "ai-engine.radar.digest_done",
+                request_id=request_id,
+                summary_id=digest_result.summary_id,
+                candidate_count=digest_result.candidate_count,
+                narrative_degraded=digest_result.narrative_degraded,
+            )
+        except Exception as digest_exc:
+            log.warning(
+                "ai-engine.radar.digest_failed",
+                request_id=request_id,
+                error_type=type(digest_exc).__name__,
+            )
     except Exception as exc:
         log.error(
             "ai-engine.radar.sync_unhandled",

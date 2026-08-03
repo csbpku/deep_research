@@ -1,5 +1,7 @@
-// BFF handler: POST /api/researches — 创建沉淀草稿
-//               GET  /api/researches — 列表查询（已发布 + 自己草稿）
+// BFF handler: POST /api/researches — 创建调研库草稿
+//               GET  /api/researches — 列表查询
+//                 ?scope=published（默认）只返回已发布内容
+//                 ?scope=draft 只返回当前用户自己的草稿
 //
 // 契约源：
 //   - apps/web/prisma/schema.prisma: Research
@@ -7,8 +9,8 @@
 //   - 验收: 草稿仅 owner 可见; creation_method 区分来源
 //
 // POST: requireUser → zod 解析 → 写入 research + research_audit(action='create')
-// GET:  ?type=research|knowledge&page=1&limit=20
-//       返回已发布的全部 + 自己的 draft（不会泄露他人的 draft）
+// GET:  ?type=research|knowledge&scope=published|draft&page=1&limit=20
+//       主列表不混入草稿；草稿独立 scope 且仅 owner 可见
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -94,6 +96,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const url = new URL(req.url);
   const parsed = ResearchListQuery.safeParse({
     type: url.searchParams.get('type') ?? undefined,
+    scope: url.searchParams.get('scope') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     limit: url.searchParams.get('limit') ?? undefined,
   });
@@ -106,20 +109,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { type, page, limit } = parsed.data;
+  const { type, scope, page, limit } = parsed.data;
 
-  // 安全规则：只能看到 published 的，或者自己 authored 的 draft
-  const where: Prisma.ResearchWhereInput = {
-    AND: [
-      ...(type ? [{ type: type as Prisma.EnumResearchTypeFilter['equals'] }] : []),
-      {
-        OR: [
-          { status: RESEARCH_STATUS.PUBLISHED as Prisma.EnumResearchStatusFilter['equals'] },
-          { authorId: u.id, status: { equals: 'draft' } },
-        ],
-      },
-    ],
-  };
+  // 安全规则：published scope 所有人可见；draft scope 仅 owner 自己可见
+  const where = researchListWhere(scope, u.id, type);
 
   const [items, total] = await Promise.all([
     prisma.research.findMany({
@@ -174,6 +167,22 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     totalPages: Math.ceil(total / limit),
   });
 });
+
+/** 列表查询的安全过滤条件（独立导出便于单测）。 */
+export function researchListWhere(
+  scope: 'published' | 'draft',
+  userId: string,
+  type?: 'research' | 'knowledge',
+): Prisma.ResearchWhereInput {
+  return {
+    AND: [
+      ...(type ? [{ type: { equals: type as Prisma.EnumResearchTypeFilter['equals'] } }] : []),
+      scope === 'draft'
+        ? { authorId: userId, status: { equals: 'draft' as const } }
+        : { status: { equals: RESEARCH_STATUS.PUBLISHED as Prisma.EnumResearchStatusFilter['equals'] } },
+    ],
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Research → API response shape

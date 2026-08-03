@@ -6,8 +6,8 @@
 // 修法：page.tsx 改为 server component，直接在 server 端 redirect。
 
 import { redirect } from 'next/navigation';
-import { getCurrentUser } from '../../../lib/auth/session';
-import { EmptyState } from '../../../components/EmptyState';
+import { getCurrentUser } from '@/lib/auth/session';
+import { EmptyState } from '@/components/EmptyState';
 import AdminRadarClient from './AdminRadarClient';
 
 export default async function AdminRadarPage() {
@@ -17,11 +17,11 @@ export default async function AdminRadarPage() {
   }
   if (u.role !== 'admin') {
     return (
-      <div>
-        <h1 style={{ fontSize: 22 }}>Admin</h1>
+      <div className="mx-auto max-w-measure">
+        <h1 className="mb-4 text-xl font-semibold tracking-tight">Admin</h1>
         <EmptyState
           title="403 — 需要管理员权限"
-          description={`当前账号 ${u.email} 角色为 ${u.role}；Admin 入口仅 admin 可见。`}
+          description={`当前账号 ${u.email} 角色为普通成员；Admin 入口仅管理员可见。`}
         />
       </div>
     );

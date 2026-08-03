@@ -5,9 +5,14 @@ import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { EmptyState } from '../../../components/EmptyState';
-import { CommentSection } from '../../../components/CommentSection';
-import { useCurrentUser } from '../../../lib/auth/client';
+import { AlertTriangle, ArrowLeft, ExternalLink } from 'lucide-react';
+
+import { EmptyState } from '@/components/EmptyState';
+import { CommentSection } from '@/components/CommentSection';
+import { TagChip, TagList } from '@/components/domain/TagChip';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useCurrentUser } from '@/lib/auth/client';
 
 interface SummaryDetail {
   id: string;
@@ -24,6 +29,30 @@ interface SummaryDetail {
   sharedBy: { id: string; name: string } | null;
 }
 
+interface DigestRankedItem {
+  summaryId: string | null;
+  title: string;
+  url: string;
+  radarUrl: string | null;
+  oneLineReason: string;
+}
+
+interface DigestArticleData {
+  summaryId: string;
+  date: string;
+  title: string;
+  publishedAt: string | null;
+  tldr: string;
+  sections: Array<{ title: string; body: string }>;
+  highlights: string[];
+  ranked: DigestRankedItem[];
+  sourcesUsed: string[];
+  candidateCount: number;
+  narrativeDegraded: boolean;
+  model: string | null;
+  generatedAt: string | null;
+}
+
 /**
  * 详情页。
  *
@@ -35,8 +64,11 @@ interface SummaryDetail {
  */
 export default function SummaryDetailPage() {
   const params = useParams<{ id: string }>();
+  // 日期段（YYYY-MM-DD）走日报文章；UUID 走单条摘要详情。
+  const isDate = /^\d{4}-\d{2}-\d{2}$/u.test(params.id);
   const q = useQuery<SummaryDetail>({
     queryKey: ['summary', params.id],
+    enabled: !isDate,
     queryFn: async () => {
       const r = await fetch(`/api/summaries/${params.id}`, { cache: 'no-store' });
       if (!r.ok) {
@@ -47,22 +79,171 @@ export default function SummaryDetailPage() {
     },
   });
 
+  if (isDate) {
+    return <DigestDatePage date={params.id} />;
+  }
+
   return (
-    <div>
-      <Link href="/summaries" style={{ fontSize: 13, color: '#475569' }}>
-        ← 返回摘要列表
-      </Link>
+    <div className="mx-auto max-w-measure">
+      <Button asChild variant="link" size="xs" className="mb-2 h-auto p-0">
+        <Link href="/summaries">
+          <ArrowLeft />
+          返回摘要列表
+        </Link>
+      </Button>
 
       {q.isLoading ? (
-        <p style={{ color: '#475569', marginTop: 16 }}>加载中…</p>
+        <DetailSkeleton />
       ) : q.isError ? (
-        <div style={{ marginTop: 16 }}>
-          <EmptyState title="加载失败" description={String((q.error as Error).message)} />
-        </div>
+        <EmptyState title="加载失败" description={String((q.error as Error).message)} />
       ) : q.data ? (
         <DetailBody data={q.data} />
       ) : null}
     </div>
+  );
+}
+
+/** 详情页骨架屏 —— 日报与单条摘要共用。 */
+function DetailSkeleton() {
+  return (
+    <div className="space-y-3">
+      <Skeleton className="h-8 w-2/3" />
+      <Skeleton className="h-4 w-48" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-40 w-full" />
+    </div>
+  );
+}
+
+function DigestDatePage({ date }: { date: string }) {
+  const q = useQuery<{ date: string; item: DigestArticleData }>({
+    queryKey: ['digest', date],
+    queryFn: async () => {
+      const r = await fetch(`/api/summaries?date=${date}`, { cache: 'no-store' });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ message: '加载失败' }));
+        throw new Error(err.message ?? '加载失败');
+      }
+      return (await r.json()) as { date: string; item: DigestArticleData };
+    },
+  });
+
+  return (
+    <div className="mx-auto max-w-measure">
+      <Button asChild variant="link" size="xs" className="mb-2 h-auto p-0">
+        <Link href="/summaries">
+          <ArrowLeft />
+          返回日报列表
+        </Link>
+      </Button>
+
+      {q.isLoading ? (
+        <DetailSkeleton />
+      ) : q.isError ? (
+        <EmptyState title="加载失败" description={String((q.error as Error).message)} />
+      ) : q.data ? (
+        <DigestArticle data={q.data.item} />
+      ) : null}
+    </div>
+  );
+}
+
+function DigestArticle({ data }: { data: DigestArticleData }) {
+  const me = useCurrentUser();
+  const fmt = (iso: string | null) =>
+    iso ? new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '—';
+
+  return (
+    <article>
+      <h1 className="text-2xl font-semibold leading-tight tracking-tight">{data.title}</h1>
+      <div className="mt-2 text-xs text-muted-foreground">
+        <span className="font-mono">{data.date}</span>
+        {' · '}发布 <span className="font-mono">{fmt(data.publishedAt)}</span>
+        {' · '}
+        {data.candidateCount} 条高分信号
+        {' · '}来源 {data.sourcesUsed.join(', ') || '—'}
+      </div>
+
+      {data.narrativeDegraded ? (
+        <p className="mt-3 flex items-start gap-2 rounded-r-md border-l-2 border-l-status-partial-fg bg-status-partial-bg px-3 py-2 text-sm text-status-partial-fg">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          本次摘要生成降级为候选列表，未生成叙事性文章。
+        </p>
+      ) : null}
+
+      {data.tldr ? (
+        <blockquote className="my-4 rounded-r-md border-l-2 border-l-primary bg-muted/50 px-4 py-3 text-[15px] leading-relaxed">
+          {data.tldr}
+        </blockquote>
+      ) : null}
+
+      {data.highlights.length > 0 ? (
+        <section className="mb-5">
+          <h2 className="mb-2 text-base font-semibold">今日看点</h2>
+          <ul className="list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">
+            {data.highlights.map((h) => (
+              <li key={h}>{h}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {data.sections.length > 0 ? (
+        <section className="mb-5">
+          <h2 className="mb-2 text-base font-semibold">分类综述</h2>
+          <div className="space-y-3">
+            {data.sections.map((sec) => (
+              <div key={sec.title}>
+                <h3 className="mb-1 text-sm font-semibold">{sec.title}</h3>
+                <p className="text-[15px] leading-relaxed">{sec.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {data.ranked.length > 0 ? (
+        <section className="mb-6">
+          <h2 className="mb-2 text-base font-semibold">今日榜单</h2>
+          <ol className="list-decimal space-y-2.5 pl-5">
+            {data.ranked.map((item) => (
+              <li key={`${item.summaryId ?? item.title}`}>
+                {item.radarUrl ? (
+                  <Link href={item.radarUrl} className="font-medium text-primary hover:underline">
+                    {item.title}
+                  </Link>
+                ) : (
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                  >
+                    {item.title}
+                    <ExternalLink className="size-3" />
+                  </a>
+                )}
+                <p className="mt-0.5 text-sm text-muted-foreground">{item.oneLineReason}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
+      {data.model || data.generatedAt ? (
+        <p className="border-t border-border pt-2.5 font-mono text-xs text-muted-foreground">
+          {data.generatedAt ? `生成 ${fmt(data.generatedAt)}` : ''}
+          {data.model ? ` · ${data.model}` : ''}
+        </p>
+      ) : null}
+
+      <CommentSection
+        targetType="summary"
+        targetId={data.summaryId}
+        currentUserId={me.data?.id ?? null}
+        currentUserRole={me.data?.role ?? null}
+      />
+    </article>
   );
 }
 
@@ -72,90 +253,57 @@ function DetailBody({ data }: { data: SummaryDetail }) {
   const eventState = useDetailReadTracker(data.id, 'summary', articleRef);
 
   return (
-    <article ref={articleRef} style={{ marginTop: 16, lineHeight: 1.65 }}>
-      <h1 style={{ fontSize: 26, marginTop: 0, marginBottom: 8 }}>{data.title}</h1>
+    <article ref={articleRef}>
+      <h1 className="text-2xl font-semibold leading-tight tracking-tight">{data.title}</h1>
       <Meta data={data} />
 
-      {data.tags.length > 0 ? (
-        <div style={{ margin: '12px 0', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {data.tags.map((t) => (
-            <span
-              key={t}
-              style={{
-                padding: '2px 10px',
-                borderRadius: 12,
-                background: '#f1f5f9',
-                color: '#334155',
-                fontSize: 12,
-              }}
-            >
-              #{t}
-            </span>
-          ))}
-        </div>
-      ) : null}
+      {(() => {
+        const displayTags = data.tags.filter((t) => {
+          if (t === 'must_read' || t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
+          if (t === 'rss' || t === 'api' || t === 'web' || t === 'github' || t === 'tracked' || t === 'repo_digest' || t === 'pr_soft') return false;
+          return true;
+        });
+        if (displayTags.length === 0) return null;
+        return (
+          <TagList className="my-3">
+            {displayTags.map((t) => (
+              <TagChip key={t}>{t}</TagChip>
+            ))}
+          </TagList>
+        );
+      })()}
 
       {data.interpretation ? (
-        <p
-          style={{
-            padding: '12px 16px',
-            background: '#f8fafc',
-            borderRadius: 6,
-            borderLeft: '3px solid #0f172a',
-            color: '#1e293b',
-            fontSize: 15,
-            margin: '8px 0 16px',
-          }}
-        >
-          <span style={{ color: '#64748b', fontSize: 12, marginRight: 6 }}>AI 一句话解读：</span>
+        <p className="my-3 rounded-r-md border-l-2 border-l-primary bg-muted/50 px-4 py-3 text-[15px] leading-relaxed">
+          <span className="mr-1.5 text-xs text-muted-foreground">AI 一句话解读：</span>
           {data.interpretation}
         </p>
       ) : null}
 
       {data.body && data.body !== data.interpretation ? (
-        <div
-          style={{
-            whiteSpace: 'pre-wrap',
-            color: '#1e293b',
-            fontSize: 15,
-            margin: '12px 0 24px',
-          }}
-        >
-          {data.body}
-        </div>
+        <div className="my-4 whitespace-pre-wrap text-[15px] leading-relaxed">{data.body}</div>
       ) : null}
 
-      <a
-        href={data.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{
-          display: 'inline-block',
-          padding: '8px 14px',
-          border: '1px solid #0f172a',
-          background: '#0f172a',
-          color: '#fff',
-          borderRadius: 4,
-          textDecoration: 'none',
-          fontSize: 14,
-        }}
-      >
-        打开原文 ↗
-      </a>
+      <Button asChild size="sm">
+        <a href={data.url} target="_blank" rel="noopener noreferrer">
+          打开原文
+          <ExternalLink />
+        </a>
+      </Button>
 
       {/* W8 评论区 */}
       <CommentSectionWrapper
         summaryId={data.id}
-        indicator={<>
-          <strong style={{ color: '#0f172a' }}>阅读追踪</strong>
-          <p style={{ margin: '4px 0 0' }}>
-            停留 ≥30 秒且滚动 ≥50% 时自动上报一次阅读完成事件。
-          </p>
-          <p style={{ margin: '4px 0 0', fontSize: 12 }}>
-            状态：{eventState.label}
-            {eventState.submitted ? ' · 已上报' : eventState.eligible ? ' · 待提交' : ''}
-          </p>
-        </>}
+        indicator={
+          <>
+            <strong className="font-medium text-foreground">阅读追踪</strong>
+            <p className="mt-1">停留 ≥30 秒且滚动 ≥50% 时自动上报一次阅读完成事件。</p>
+            <p className="mt-1 text-xs">
+              状态：{eventState.label}
+              {eventState.submitted ? ' · 已上报' : eventState.eligible ? ' · 待提交' : ''}
+            </p>
+          </>
+        }
       />
     </article>
   );
@@ -171,16 +319,9 @@ function CommentSectionWrapper({
   const me = useCurrentUser();
   return (
     <>
+      {/* ⚠️ e2e 契约：aria-label="阅读追踪" */}
       <section
-        style={{
-          marginTop: 32,
-          padding: 16,
-          border: '1px dashed #cbd5e1',
-          borderRadius: 8,
-          background: '#f8fafc',
-          color: '#475569',
-          fontSize: 14,
-        }}
+        className="mt-8 rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground"
         aria-label="阅读追踪"
       >
         {indicator}
@@ -199,12 +340,10 @@ function Meta({ data }: { data: SummaryDetail }) {
   const fmt = (iso: string | null) =>
     iso ? new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '—';
   return (
-    <div style={{ color: '#64748b', fontSize: 13, marginBottom: 8 }}>
-      来源 <code style={{ background: '#f1f5f9', padding: '0 4px', borderRadius: 3 }}>{data.contentOrigin}</code>
-      {' · '}
-      抓取时间 {fmt(data.crawledAt)}
-      {' · '}
-      发布日期 {data.summaryDate}
+    <div className="mt-2 text-xs text-muted-foreground">
+      来源 <code className="rounded bg-muted px-1 font-mono">{data.contentOrigin}</code>
+      {' · '}抓取时间 <span className="font-mono">{fmt(data.crawledAt)}</span>
+      {' · '}发布日期 <span className="font-mono">{data.summaryDate}</span>
       {data.publishedAt ? ` · 发布时间 ${fmt(data.publishedAt)}` : ''}
       {data.sharedBy ? ` · 分享人 ${data.sharedBy.name}` : ''}
     </div>

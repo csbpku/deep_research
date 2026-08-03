@@ -10,7 +10,8 @@ import { toApiErrorResponse } from './errors';
 import { log, serializeError } from './log';
 
 export const CHAT_READ_TIMEOUT_MS = 5_000;
-export const CHAT_WRITE_TIMEOUT_MS = 10_000;
+// LLM 追问端到端可能 10-20s；10s 会让 BFF 提前 abort，用户看到“ai-engine 不可达”
+export const CHAT_WRITE_TIMEOUT_MS = 30_000;
 
 export interface ChatSeedSnapshot {
   id: string;

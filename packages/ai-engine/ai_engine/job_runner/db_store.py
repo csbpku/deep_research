@@ -25,7 +25,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
@@ -43,7 +43,7 @@ from ai_engine.job_runner.models import (
     JobSnapshot,
     LeaseLostError,
 )
-from ai_engine.job_runner.store import JobStore
+from ai_engine.job_runner.store import JobRowView, JobStore
 
 logger = logging.getLogger("ai_engine.job_runner.db_store")
 
@@ -95,6 +95,26 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
             str(row["idempotencyKey"]) if row.get("idempotencyKey") else None
         ),
         source_refs=tuple(clean),
+    )
+
+
+def _view_from_row(row_dict: dict[str, Any]) -> DbJobView:
+    """Build a DbJobView from a raw row dict.
+
+    Shared by :meth:`DbJobStore.get_row` and :meth:`DbJobStore.list_jobs`.
+    Note: callers are responsible for hydrating ``last_token_in/out/cost_cents``
+    and ``last_error_code/message`` from the row dict — the two call sites
+    differ slightly (get_row hydrates from current columns, list_jobs hydrates
+    from a join-superset that also carries ``publishedResearchId``).
+    """
+    return DbJobView(
+        snapshot=_row_to_snapshot(row_dict),
+        last_sources=(),
+        last_token_in=int(row_dict.get("tokenInputTotal") or 0),
+        last_token_out=int(row_dict.get("tokenOutputTotal") or 0),
+        last_cost_cents=int(row_dict.get("costCents") or 0),
+        last_error_code=row_dict.get("errorCode"),
+        last_error_message=row_dict.get("errorMessage"),
     )
 
 
@@ -559,7 +579,8 @@ class DbJobStore(JobStore):
                 f'       "sourcePolicy", "status", "currentStep", "attempts", '
                 f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
                 f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
-                f'       "errorCode", "errorMessage", "completedAt" '
+                f'       "errorCode", "errorMessage", "startedAt", "createdAt", '
+                f'       "completedAt", "draftResearchId" '
                 f'FROM {t} WHERE "id" = %s'
             )
         async with self.pool.connection() as conn:
@@ -593,15 +614,134 @@ class DbJobStore(JobStore):
         partial_sources = row_dict.get("partialSources") or []
         if not isinstance(partial_sources, list):
             partial_sources = []
+        failed_sources = row_dict.get("failedSources") or []
+        if not isinstance(failed_sources, list):
+            failed_sources = []
+        view = _view_from_row(row_dict)
+        view.draft_research_id = (
+            str(row_dict["draftResearchId"])
+            if row_dict.get("draftResearchId") is not None
+            else None
+        )
         return DbJobView(
-            snapshot=_row_to_snapshot(row_dict),
+            snapshot=view.snapshot,
             last_sources=tuple(partial_sources),
+            last_failed_sources=tuple(failed_sources),
             last_token_in=int(row_dict.get("tokenInputTotal") or 0),
             last_token_out=int(row_dict.get("tokenOutputTotal") or 0),
             last_cost_cents=int(row_dict.get("costCents") or 0),
             last_error_code=row_dict.get("errorCode"),
             last_error_message=row_dict.get("errorMessage"),
+            draft_research_id=view.draft_research_id,
+            started_at=row_dict.get("startedAt"),
+            created_at=row_dict.get("createdAt"),
+            completed_at=row_dict.get("completedAt"),
         )
+
+    # ─────────────── list + count (history page) ────────────────
+
+    async def list_jobs(
+        self,
+        *,
+        requester_id: str,
+        status_filter: tuple[str, ...] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[JobRowView]:
+        """Return this user's jobs, newest first.
+
+        `status_filter` is an optional tuple of ``AiJobStatus`` values
+        (e.g. ``("queued", "running")``). Implemented as a parameterized
+        ``IN (...)`` clause — safe against injection regardless of caller.
+
+        Only meaningful for ``ai_research_jobs``; returns ``[]`` for the
+        import table (which has different columns + semantics).
+        """
+        await self.open()
+        if self._table_name != AI_TABLE:
+            return []
+        t = f'"{self._table_name}"'
+        params: list[object] = []
+        where = ['j."requesterId" = %s']
+        params.append(requester_id)
+        if status_filter:
+            placeholders = ",".join(["%s"] * len(status_filter))
+            where.append(f'j."status" IN ({placeholders})')
+            params.extend(status_filter)
+        sql = (
+            f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
+            f"       j.\"reportType\", j.\"sourcePolicy\", j.\"status\", "
+            f"       j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", "
+            f"       j.\"sourceRefs\", j.\"partialSources\", j.\"failedSources\", "
+            f"       j.\"tokenInputTotal\", j.\"tokenOutputTotal\", j.\"costCents\", "
+            f"       j.\"errorCode\", j.\"errorMessage\", j.\"startedAt\", "
+            f"       j.\"completedAt\", j.\"createdAt\", j.\"updatedAt\", "
+            f"       j.\"draftResearchId\", "
+            f"       r.\"id\" AS \"publishedResearchId\" "
+            f"FROM {t} j "
+            f"LEFT JOIN \"researches\" r "
+            f'  ON r."id" = j."draftResearchId" AND r."status" = \'published\' '
+            f"WHERE {' AND '.join(where)} "
+            f"ORDER BY j.\"createdAt\" DESC "
+            f"LIMIT %s OFFSET %s"
+        )
+        params.extend([limit, offset])
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(sql, tuple(params))
+            rows = await cur.fetchall()
+        views: list[DbJobView] = []
+        for raw in rows:
+            row_dict = cast(dict[str, Any], raw)
+            view = _view_from_row(row_dict)
+            # Hydrate list-only fields. Use getattr() so the view remains
+            # compatible with the import / get_row paths that don't set
+            # these (slots dataclass does not allow extra kwargs either).
+            partial_sources = row_dict.get("partialSources") or []
+            view.last_sources = tuple(partial_sources) if isinstance(partial_sources, list) else ()
+            failed_sources = row_dict.get("failedSources") or []
+            view.last_failed_sources = (
+                tuple(failed_sources) if isinstance(failed_sources, list) else ()
+            )
+            view.draft_research_id = (
+                str(row_dict["draftResearchId"])
+                if row_dict.get("draftResearchId") is not None
+                else None
+            )
+            view.published_research_id = (
+                str(row_dict["publishedResearchId"])
+                if row_dict.get("publishedResearchId") is not None
+                else None
+            )
+            view.created_at = row_dict.get("createdAt")
+            view.started_at = row_dict.get("startedAt")
+            view.updated_at = row_dict.get("updatedAt")
+            view.completed_at = row_dict.get("completedAt")
+            views.append(view)
+        return views
+
+    async def count_jobs(
+        self,
+        *,
+        requester_id: str,
+        status_filter: tuple[str, ...] | None = None,
+    ) -> int:
+        """See :meth:`list_jobs` for params."""
+        await self.open()
+        if self._table_name != AI_TABLE:
+            return 0
+        t = f'"{self._table_name}"'
+        params: list[object] = []
+        where = ['"requesterId" = %s']
+        params.append(requester_id)
+        if status_filter:
+            placeholders = ",".join(["%s"] * len(status_filter))
+            where.append(f'"status" IN ({placeholders})')
+            params.extend(status_filter)
+        sql = f"SELECT count(*) AS cnt FROM {t} WHERE {' AND '.join(where)}"
+        async with self.pool.connection() as conn:
+            row = await (await conn.execute(sql, tuple(params))).fetchone()
+        row_data = cast(dict[str, Any] | None, row)
+        return int(row_data["cnt"]) if row_data else 0
 
     # ─────────────── reaper ────────────────
 
@@ -730,14 +870,29 @@ class DbJobStore(JobStore):
 # class 体被误中断。HTTP 层用 .snapshot/.last_sources 等访问。
 @dataclass(slots=True)
 class DbJobView:
-    """DbJobStore.get_row 返回的轻量 view,与 InMemoryJobStore._Row 接口对齐。"""
+    """DbJobStore.get_row 返回的轻量 view,与 InMemoryJobStore._Row 接口对齐。
+
+    列表接口 (``list_jobs``) 在此之上再带 created_at / updated_at /
+    completed_at / elapsed_ms / draft_research_id / published_research_id;
+    get_row 与单查路径使用同样的字段集 —— 字段数比接口需求多但 slots
+    类没有额外的内存开销,且 SQLite/Postgres 的 row dict 都可以丢进
+    同一个 view,SQL 层差异在 list_jobs 的 SELECT 里表达。
+    """
     snapshot: JobSnapshot
     last_sources: tuple[object, ...] = ()
+    last_failed_sources: tuple[object, ...] = ()
     last_token_in: int = 0
     last_token_out: int = 0
     last_cost_cents: int = 0
     last_error_code: str | None = None
     last_error_message: str | None = None
+    # 由 list_jobs 填充,get_row 路径留 None
+    draft_research_id: str | None = None
+    published_research_id: str | None = None
+    started_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 __all__ = ["DbJobStore", "DbJobView", "AI_TABLE", "IMPORT_TABLE", "SHARED_TABLES"]

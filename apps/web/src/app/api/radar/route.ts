@@ -47,7 +47,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { q, sourceType, status, page, per_page: perPage } = parsed.data;
+  const { q, sourceType, status, quality, page, per_page: perPage } = parsed.data;
 
   // 雷达候选 = source='daily' 且 syncRunId 非空（架构 §五 + §七）
   // 默认排除 archived，让 published/rejected 也可检索（admin 队列场景）。
@@ -55,15 +55,34 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     source: 'daily',
     syncRunId: { not: null },
     ...(status ? { status } : {}),
-    ...(q && q.length > 0
+    ...(sourceType
       ? {
-          OR: [
-            { title: { contains: q, mode: 'insensitive' } },
-            { interpretation: { contains: q, mode: 'insensitive' } },
-            { tags: { has: q } },
-          ],
+          syncRun: {
+            source: {
+              sourceType:
+                sourceType === 'github'
+                  ? { startsWith: 'github' }
+                  : sourceType,
+            },
+          },
         }
       : {}),
+    AND: [
+      ...(quality === 'relevant'
+        ? [{ OR: [{ distilledTier: { not: 'noise' } }, { distilledTier: null }] }]
+        : []),
+      ...(q && q.length > 0
+        ? [
+            {
+              OR: [
+                { title: { contains: q, mode: 'insensitive' } },
+                { interpretation: { contains: q, mode: 'insensitive' } },
+                { tags: { has: q } },
+              ],
+            },
+          ]
+        : []),
+    ],
   };
 
   const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
@@ -111,10 +130,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     prisma.summary.count({ where }),
   ]);
 
-  // 客户端 sourceType 过滤：在 app 侧完成（避免复杂的 nested where 写法）
-  const itemsAfterSourceType = sourceType
-    ? rawItems.filter((it) => it.syncRun?.source?.sourceType === sourceType)
-    : rawItems;
+  // sourceType is filtered in the Prisma query so pagination and total align.
+  const itemsAfterSourceType = rawItems;
 
   // 二次兜底：DB-side OR 包含 q 的情况下，Postgres `contains` 对 tags 数组敏感不到；
   // 在应用层补做精确匹配。生产可由 pg_trgm 接管（W4 review 决议）。

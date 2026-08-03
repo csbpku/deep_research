@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
 from ai_engine.radar.github import fetch_github
+from ai_engine.radar.github_tracked import fetch_github_tracked
 from ai_engine.radar.github_trending import fetch_github_trending
 from ai_engine.radar.models import RadarCandidate, RadarSource, SourceType
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
@@ -54,7 +55,7 @@ except ModuleNotFoundError:
 SourceFetcher = Callable[[dict[str, Any]], Awaitable[list[RadarCandidate]]]
 
 _KNOWN_SOURCE_TYPES: set[str] = {
-    "github", "github_trending", "arxiv", "rss",
+    "github", "github_trending", "github_tracked", "arxiv", "rss",
     "hackernews", "reddit", "lobsters", "devto",
     "producthunt", "vendor_news", "sitemap_watch", "wechat",
     "github_topic_search", "huggingface_models",
@@ -62,6 +63,7 @@ _KNOWN_SOURCE_TYPES: set[str] = {
 
 _HANDLERS: dict[str, SourceFetcher] = {
     "github_trending": fetch_github_trending,
+    "github_tracked": fetch_github_tracked,
     "github": lambda cfg: fetch_github(cfg),
     "github_topic_search": fetch_github_topic_search,
     "arxiv": fetch_arxiv_candidates,

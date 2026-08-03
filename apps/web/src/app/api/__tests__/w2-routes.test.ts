@@ -287,15 +287,18 @@ describe('detail-read deduplication', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// Nav: RSC async component can't be imported in vitest jsdom (next-auth
+// AppShell: RSC async component can't be imported in vitest jsdom (next-auth
 // module resolution fails in test runner). Covered by e2e smoke test instead.
+//
+// UI 重设计后 Nav.tsx 已被 components/shell/AppShell.tsx 取代
+// （侧栏 + 顶栏），getCurrentUser() 的 RSC 调用与 admin 显隐逻辑一并迁入。
 // ──────────────────────────────────────────────────────────────────────
 
-describe('Nav imports without crash', () => {
-  it('the Nav component file exists on disk', () => {
-    // Vitest jsdom can't resolve next-auth/server from within Nav.tsx RSC
+describe('AppShell imports without crash', () => {
+  it('the AppShell component file exists on disk', () => {
+    // Vitest jsdom can't resolve next-auth/server from within AppShell.tsx RSC
     // due to ESM export map mismatch. Validate the file exists instead.
-    const navPath = path.join(process.cwd(), 'src/components/Nav.tsx');
-    expect(existsSync(navPath)).toBe(true);
+    const shellPath = path.join(process.cwd(), 'src/components/shell/AppShell.tsx');
+    expect(existsSync(shellPath)).toBe(true);
   });
 });

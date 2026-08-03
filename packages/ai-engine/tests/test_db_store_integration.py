@@ -300,6 +300,7 @@ class TestDbJobStoreIntegration:
             assert row is not None
             assert row.snapshot.status == "succeeded"
             assert len(row.last_sources) >= 1
+            assert row.draft_research_id == research_id
         finally:
             await store.close()
 

@@ -111,8 +111,11 @@ ENGINEERING_PROFILE = ScoringProfile(
     id=PROFILE_ENGINEERING,
     description=(
         "AI engineering and tooling articles (frameworks, deployment, "
-        "infra, code-level tutorials). Audience: AI engineers, MLOps, "
-        "backend/platform engineers. Reward actionability and novelty."
+        "infra, code-level tutorials). Audience: software engineers at an "
+        "e-commerce company, AI application engineers, MLOps, backend and "
+        "platform engineers. Reward actionability and direct relevance to "
+        "building or operating AI-powered e-commerce systems; penalize "
+        "unrelated novelty and hobby projects."
     ),
     weights={
         _DIM_INFO_INCREMENT: 25,
@@ -134,9 +137,12 @@ ENGINEERING_PROFILE = ScoringProfile(
 NEWS_PROFILE = ScoringProfile(
     id=PROFILE_NEWS,
     description=(
-        "Industry news, product launches, market announcements. "
-        "Audience: product managers, content creators, executives. "
-        "Reward timeliness and clarity; relax information density."
+        "Industry news, product launches, and market announcements relevant "
+        "to software engineers at an e-commerce company. Audience: e-commerce "
+        "software engineers, AI application engineers, platform/infra "
+        "engineers. Reward direct relevance to building, operating, and "
+        "improving AI-powered e-commerce products; penalize unrelated tech "
+        "curiosity, retro/hobby content, and non-applicable news."
     ),
     weights={
         _DIM_INFO_INCREMENT: 15,

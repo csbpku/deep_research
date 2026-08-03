@@ -21,17 +21,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import structlog
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Path, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -43,6 +45,7 @@ from ai_engine.contracts.states import (
     CREATION_METHOD,
     REPORT_TYPE,
     SOURCE_POLICY,
+    AiJobStatus,
     ReportType,
     SourcePolicy,
 )
@@ -87,14 +90,26 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     # submission worker reuse this pool; HTTP handlers only enqueue work.
     from ai_engine.job_runner.db_store import DbJobStore
     share_worker_task: asyncio.Task[None] | None = None
+    ai_job_worker_task: asyncio.Task[None] | None = None
+    radar_daily_task: asyncio.Task[None] | None = None
     if isinstance(store, DbJobStore):
         await store.open()
         app_instance.state.db_pool = store.pool
+        app_instance.state.radar_sync_lock = asyncio.Lock()
         await store.start_reaper()
         share_worker_task = asyncio.create_task(
             _share_submission_worker_loop(app_instance),
             name="share-submission-worker",
         )
+        ai_job_worker_task = asyncio.create_task(
+            _ai_job_worker_loop(app_instance),
+            name="ai-job-worker",
+        )
+        if os.environ.get("RADAR_DAILY_CRON_ENABLED", "1") == "1":
+            radar_daily_task = asyncio.create_task(
+                _radar_daily_loop(app_instance),
+                name="radar-daily-cron",
+            )
     app_instance.state.adapter = build_adapter()
     try:
         yield
@@ -103,6 +118,14 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             share_worker_task.cancel()
             with suppress(asyncio.CancelledError):
                 await share_worker_task
+        if ai_job_worker_task is not None:
+            ai_job_worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await ai_job_worker_task
+        if radar_daily_task is not None:
+            radar_daily_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await radar_daily_task
         if isinstance(store, DbJobStore):
             await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
@@ -134,6 +157,104 @@ async def _share_submission_worker_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(1.0)
 
 
+async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
+    """Poll ai_research_jobs every 1s, acquire+run one job at a time.
+
+    Mirrors share_submission loop — single acquire+run per iteration;
+    returns after each job so failures never block the entire queue.
+    """
+    store: JobStore = app_instance.state.job_store
+    adapter: ResearchEngineAdapter = app_instance.state.adapter
+    logger = structlog.get_logger("ai_engine.worker")
+    wid = f"ai-worker-{os.getpid()}"
+    while True:
+        try:
+            await store.open()
+            outcome = await run_one_available_job(
+                store=store,
+                adapter=adapter,
+                worker_id=wid,
+                draft_factory=_make_draft_factory(store),
+            )
+            if outcome is None:
+                await asyncio.sleep(1.0)
+            else:
+                logger.info(
+                    "ai-engine.worker.done",
+                    job_id=outcome.job_id,
+                    final_status=outcome.final_status,
+                    cost_cents=outcome.cost.cost_cents,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("ai-engine.worker.loop_failed", exc_info=True)
+            await asyncio.sleep(1.0)
+
+
+def _seconds_until_next_radar_window(
+    schedule: str,
+    tz: ZoneInfo,
+    *,
+    now: datetime | None = None,
+) -> float:
+    """Seconds until the next daily HH:MM window in ``tz`` (Asia/Shanghai)."""
+    try:
+        hour_s, _, minute_s = schedule.partition(":")
+        hour = int(hour_s)
+        minute = int(minute_s)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+    except ValueError:
+        hour, minute = 8, 0
+    now = now or datetime.now(tz)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def _radar_daily_loop(app_instance: FastAPI) -> None:
+    """Daily radar pipeline: sync → enrichment → digest at 08:00 Asia/Shanghai.
+
+    Controlled by ``RADAR_DAILY_CRON_ENABLED`` (default 1 when a real DB pool
+    is present) and ``RADAR_DAILY_CRON_TIME`` (default "08:00"). The shared
+    ``radar_sync_lock`` prevents overlap with an admin-triggered sync.
+    """
+    from ai_engine.radar.sync_endpoint import run_radar_daily_job
+
+    log = structlog.get_logger("ai_engine.radar")
+    schedule = os.environ.get("RADAR_DAILY_CRON_TIME", "08:00")
+    tz = ZoneInfo("Asia/Shanghai")
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_next_radar_window(schedule, tz))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.daily_schedule_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(3600.0)
+            continue
+        try:
+            await run_radar_daily_job(
+                pool=app_instance.state.db_pool,
+                adapter=app_instance.state.adapter,
+                triggered_by="cron",
+                request_id=f"cron-{uuid.uuid4()}",
+                lock=getattr(app_instance.state, "radar_sync_lock", None),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.daily_job_failed",
+                error_type=type(exc).__name__,
+            )
+
+
 app = FastAPI(
     title="Deep Research AI Engine",
     version="0.1.0",
@@ -156,13 +277,18 @@ app.include_router(chat_router)
 async def request_context_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
-    log = structlog.get_logger("ai_engine.http")
+    try:
+        log = structlog.get_logger("ai_engine.http")
+    except Exception:  # pragma: no cover - third-party logging configuration
+        log = None
     started = asyncio.get_event_loop().time()
     try:
         response = await call_next(request)
     except AdapterError as exc:
         elapsed_ms = int((asyncio.get_event_loop().time() - started) * 1000)
-        log.error(
+        _safe_structlog(
+            log,
+            "error",
             "ai-engine.error",
             request_id=request_id,
             route=request.url.path,
@@ -174,7 +300,9 @@ async def request_context_middleware(request: Request, call_next):  # type: igno
         return _error_response(exc, request_id)
     except Exception as exc:  # pragma: no cover — defensive
         elapsed_ms = int((asyncio.get_event_loop().time() - started) * 1000)
-        log.exception(
+        _safe_structlog(
+            log,
+            "exception",
             "ai-engine.unhandled",
             request_id=request_id,
             route=request.url.path,
@@ -195,7 +323,13 @@ async def request_context_middleware(request: Request, call_next):  # type: igno
             },
         )
     elapsed_ms = int((asyncio.get_event_loop().time() - started) * 1000)
-    log.info(
+    # Access logging happens after the handler has produced a response. A
+    # third-party research dependency may reconfigure structlog at runtime;
+    # logging must never turn an otherwise valid response into Starlette's
+    # plain-text ``500 Internal Server Error``.
+    _safe_structlog(
+        log,
+        "info",
         "ai-engine.request",
         request_id=request_id,
         route=request.url.path,
@@ -206,6 +340,17 @@ async def request_context_middleware(request: Request, call_next):  # type: igno
     # Surface the request_id on every response so the BFF can correlate.
     response.headers["x-request-id"] = request_id
     return response
+
+
+def _safe_structlog(log: Any, method_name: str, event: str, **kwargs: Any) -> None:
+    """Emit a structured log without allowing logging failures into HTTP."""
+    if log is None:
+        return
+    try:
+        getattr(log, method_name)(event, **kwargs)
+    except Exception:  # pragma: no cover - logging is best-effort by design
+        with suppress(Exception):
+            logger.exception("structured logging failed for %s", event)
 
 
 def _error_response(exc: AdapterError, request_id: str) -> JSONResponse:
@@ -287,9 +432,14 @@ class SubmitAiJobBody(BaseModel):
 class SubmitAiJobResponse(BaseModel):
     job_id: str
     status: str
+    topic: str | None = None
     final_status: str | None = None
     current_step: str | None = None
     sources_count: int = 0
+    partial_sources_count: int = 0
+    failed_sources_count: int = 0
+    error_stage: str | None = None
+    draft_research_id: str | None = None
     token_input_total: int = 0
     token_output_total: int = 0
     cost_cents: int = 0
@@ -297,6 +447,9 @@ class SubmitAiJobResponse(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     request_id: str | None = None
+    started_at: str | None = None
+    created_at: str | None = None
+    completed_at: str | None = None
     # W7 (工程师 B): structured output flag. True when the engine
     # produced a conclusion without any grounded source.
     is_inferred: bool = False
@@ -306,6 +459,42 @@ class CancelAiJobResponse(BaseModel):
     job_id: str
     was_queued: bool
     was_running: bool
+
+
+class ListAiJobsItem(BaseModel):
+    """One row in :class:`ListAiJobsResponse`.
+
+    Mirrors the columns the BFF history page needs. ``published_research_id``
+    is non-null iff ``status == "succeeded"`` AND the linked draft has been
+    promoted to a published Research row (joined in the SQL).
+
+    Note: ``status`` is typed as ``str`` (not ``AiJobStatus``) because
+    Pydantic v2 cannot resolve ``Literal`` aliases that come from a sibling
+    module — for v0 we keep the contract simple and validate at the BFF.
+    """
+    job_id: str
+    topic: str
+    status: str
+    current_step: str | None = None
+    report_type: str
+    source_policy: str
+    token_input_total: int = 0
+    token_output_total: int = 0
+    cost_cents: int = 0
+    draft_research_id: str | None = None
+    published_research_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    completed_at: str | None = None
+
+
+class ListAiJobsResponse(BaseModel):
+    items: list[ListAiJobsItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class HealthResponse(BaseModel):
@@ -581,27 +770,134 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
     return _in_memory_factory
 
 
+# ─── 列表（兼容 GET /api/ai/jobs） ───────────────────────────────────────────
+#
+# 历史表（v0）：列出某用户最近的 ai_research_jobs 行。
+# 鉴权依赖 BFF：web 在调用本端前已 requireUser(query req.cookie) 并把 u.id
+# 注入 querystring 的 requester_id。本端用 Pydantic `Query(min_length=36,
+# max_length=36)` 强制 UUID —— 漏传/伪造直接 422，关闭 IDOR。
+# "已发布" 判定在 SQL 层 LEFT JOIN researches WHERE status='published'，
+# BFF 拿到 publishedResearchId 后挂"已发布" pill，无需前端跑 N+1。
+
+
+# 只接受枚举里的合法值,空白/None 等同于"全部"
+_VALID_LIST_STATUSES: tuple[AiJobStatus, ...] = (
+    "queued", "running", "partial", "succeeded", "failed", "cancelled",
+)
+
+
+def _parse_status_filter(raw: str | None) -> tuple[AiJobStatus, ...] | None:
+    """Comma-separated subset of AiJobStatus. None / "" → no filter.
+
+    Raises HTTPException(422) on unknown values so the BFF surfaces the
+    reason instead of getting an opaque empty list.
+    """
+    if not raw:
+        return None
+    out: list[AiJobStatus] = []
+    for piece in (p.strip() for p in raw.split(",")):
+        if not piece:
+            continue
+        if piece not in _VALID_LIST_STATUSES:
+            # Keep it inside the catch-block so the BFF can translate.
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "VALIDATION_FAILED",
+                        "message": f"unknown status {piece!r}"},
+            )
+        if piece not in out:
+            out.append(piece)
+    return tuple(out) if out else None
+
+
+@app.get("/api/ai/jobs", response_model=ListAiJobsResponse)
+async def list_ai_jobs(
+    request: Request,
+    store: Annotated[JobStore, Depends(_store_singleton)],
+    requester_id: Annotated[str, Query(min_length=36, max_length=36)],
+    status: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ListAiJobsResponse:
+    rows = await store.list_jobs(
+        requester_id=requester_id,
+        status_filter=_parse_status_filter(status),
+        limit=limit,
+        offset=offset,
+    )
+    total = await store.count_jobs(
+        requester_id=requester_id,
+        status_filter=_parse_status_filter(status),
+    )
+
+    items: list[ListAiJobsItem] = []
+    for view in rows:
+        snap = view.snapshot
+        items.append(
+            ListAiJobsItem(
+                job_id=snap.job_id,
+                topic=snap.topic,
+                status=snap.status,
+                current_step=snap.current_step,
+                report_type=snap.report_type,
+                source_policy=snap.source_policy,
+                token_input_total=getattr(view, "last_token_in", 0),
+                token_output_total=getattr(view, "last_token_out", 0),
+                cost_cents=getattr(view, "last_cost_cents", 0),
+                draft_research_id=getattr(view, "draft_research_id", None),
+                published_research_id=getattr(view, "published_research_id", None),
+                error_code=getattr(view, "last_error_code", None),
+                error_message=getattr(view, "last_error_message", None),
+                created_at=_iso(getattr(view, "created_at", None)),
+                updated_at=_iso(getattr(view, "updated_at", None)),
+                completed_at=_iso(getattr(view, "completed_at", None)),
+            )
+        )
+    return ListAiJobsResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _iso(value: datetime | None) -> str | None:
+    """ISO-8601 UTC string for the row timestamp; empty string → None."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 @app.get("/api/ai/jobs/{job_id}", response_model=SubmitAiJobResponse)
 async def get_ai_job(
     job_id: Annotated[str, Path(min_length=1)],
     request: Request,
     store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> SubmitAiJobResponse:
-    row: Any = store.get_row(job_id)
+    row: Any = await _store_get_row(store, job_id)
     if row is None:
         raise _http_error("AI_JOB_NOT_FOUND", f"job {job_id} not found")
     snap: JobSnapshot = row.snapshot
     last_sources = getattr(row, "last_sources", ())
+    last_failed_sources = getattr(row, "last_failed_sources", ())
     # W7 (工程师 B): an inferred conclusion is one that succeeded with
     # zero grounded sources. We surface this on the response so the
     # BFF / UI can render it differently.
     is_inferred = snap.status == "succeeded" and len(last_sources) == 0
+    error_stage = snap.current_step if snap.status in ("failed", "partial") else None
     return SubmitAiJobResponse(
         job_id=snap.job_id,
         status="stored",
+        topic=snap.topic,
         final_status=snap.status,
         current_step=snap.current_step,
         sources_count=len(last_sources),
+        partial_sources_count=len(last_sources),
+        failed_sources_count=len(last_failed_sources),
+        error_stage=error_stage,
+        draft_research_id=getattr(row, "draft_research_id", None),
         token_input_total=getattr(row, "last_token_in", 0),
         token_output_total=getattr(row, "last_token_out", 0),
         cost_cents=getattr(row, "last_cost_cents", 0),
@@ -609,8 +905,19 @@ async def get_ai_job(
         error_code=getattr(row, "last_error_code", None),
         error_message=getattr(row, "last_error_message", None),
         request_id=getattr(request.state, "request_id", None),
+        started_at=_iso(getattr(row, "started_at", None)),
+        created_at=_iso(getattr(row, "created_at", None)),
+        completed_at=_iso(getattr(row, "completed_at", None)),
         is_inferred=is_inferred,
     )
+
+
+async def _store_get_row(store: JobStore, job_id: str) -> Any | None:
+    """Read a job row across sync (InMemory) and async (DB) stores."""
+    maybe = store.get_row(job_id)
+    if inspect.isawaitable(maybe):
+        return await maybe
+    return maybe
 
 
 @app.post("/api/ai/jobs/{job_id}/cancel", response_model=CancelAiJobResponse)

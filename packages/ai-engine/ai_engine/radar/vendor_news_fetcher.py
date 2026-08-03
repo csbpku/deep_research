@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import re as _re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +24,9 @@ from ai_engine.radar.models import RadarCandidate
 logger = logging.getLogger("vendor_news_fetcher")
 
 # Cap on first-run fetch: when no previous state exists, all sitemap URLs
-# are "new". This limit prevents fetching hundreds of pages on first run.
-_FIRST_RUN_MAX_FETCH = 10
+# are "new". Matches agents-radar's MAX_CONTENT_FETCH_FIRST_RUN per site.
+_FIRST_RUN_MAX_FETCH = 25
+_VENDOR_NEWS_MAX_AGE_HOURS = 72
 
 _VENDOR_CONFIGS: dict[str, dict[str, Any]] = {
     "anthropic": {
@@ -159,6 +160,26 @@ def _parse_rss_items(xml: str) -> dict[str, dict[str, str]]:
     return results
 
 
+def _parse_pubdate_from_rss(xml: str, url: str) -> datetime | None:
+    """Extract RFC 822 pubDate for a specific URL from an RSS feed."""
+    from email.utils import parsedate_to_datetime
+    for match in _re.finditer(r"<item>(.*?)</item>", xml, _re.DOTALL):
+        block = match.group(1)
+        link_m = _re.search(r"<link[^>]*>(.*?)</link>", block, _re.DOTALL)
+        if not link_m:
+            continue
+        link = link_m.group(1).strip()
+        if link.strip("<>\"'") != url:
+            continue
+        pd_m = _re.search(r"<pubDate[^>]*>(.*?)</pubDate>", block, _re.DOTALL)
+        if pd_m:
+            try:
+                return parsedate_to_datetime(pd_m.group(1).strip())
+            except Exception:
+                pass
+    return None
+
+
 def _infer_title(text: str, url: str) -> str:
     lines = text.strip().split("\n")
     for line in lines:
@@ -172,6 +193,7 @@ def _infer_title(text: str, url: str) -> str:
 async def check_and_fetch_vendor_news(
     vendor: str,
     *,
+    lookback_hours: int | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> list[RadarCandidate]:
     """Check vendor sitemap for new/updated news pages and fetch them.
@@ -188,6 +210,8 @@ async def check_and_fetch_vendor_news(
         headers={"User-Agent": "deep-research-vendor-news/0.1"},
         follow_redirects=True,
     )
+    max_age_hours = lookback_hours or _VENDOR_NEWS_MAX_AGE_HOURS
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     candidates: list[RadarCandidate] = []
 
     try:
@@ -199,11 +223,15 @@ async def check_and_fetch_vendor_news(
         state = _load_state()
         previous = state.get(vendor, {})
         is_first_run = len(previous) == 0
-        new_or_changed = []
+        new_or_changed: list[tuple[str, datetime]] = []
         for url, lastmod in current_urls.items():
             prev = previous.get(url)
             if prev is None or (lastmod and prev != lastmod):
-                new_or_changed.append(url)
+                # Always apply time window filter based on RSS pubDate
+                pub_date = _parse_pubdate_from_rss(xml, url)
+                if pub_date is not None and pub_date < cutoff:
+                    continue
+                new_or_changed.append((url, pub_date or datetime.now(timezone.utc)))
 
         # First-run cap: only fetch the N most recent URLs to avoid
         # overwhelming the vendor site and our pipeline on initial setup.
@@ -216,6 +244,8 @@ async def check_and_fetch_vendor_news(
                     "capped_to": _FIRST_RUN_MAX_FETCH,
                 },
             )
+            # Sort by pubDate descending, then take the most recent
+            new_or_changed.sort(key=lambda x: x[1], reverse=True)
             new_or_changed = new_or_changed[:_FIRST_RUN_MAX_FETCH]
 
         # 3. Persist state
@@ -226,7 +256,7 @@ async def check_and_fetch_vendor_news(
         rss_metadata = _parse_rss_items(xml) if "<item>" in xml else {}
 
         # 5. Fetch new/changed pages
-        for url in new_or_changed:
+        for url, pub_dt in new_or_changed:
             try:
                 resp = await http.get(url)
                 resp.raise_for_status()
@@ -244,7 +274,7 @@ async def check_and_fetch_vendor_news(
                             title=title[:300],
                             url=url,
                             snippet=snippet,
-                            published_at=datetime.now(timezone.utc),
+                            published_at=pub_dt,
                             content_origin="web",
                             tags=cfg["tags"],
                             source_quality_hint=cfg["quality_hint"],
@@ -256,7 +286,7 @@ async def check_and_fetch_vendor_news(
                     title=title,
                     url=url,
                     snippet=snippet,
-                    published_at=datetime.now(timezone.utc),
+                    published_at=pub_dt,
                     content_origin="web",
                     tags=cfg["tags"],
                     source_quality_hint=cfg["quality_hint"],
@@ -273,7 +303,7 @@ async def check_and_fetch_vendor_news(
                         title=title[:300],
                         url=url,
                         snippet=snippet,
-                        published_at=datetime.now(timezone.utc),
+                        published_at=pub_dt,
                         content_origin="web",
                         tags=cfg["tags"],
                         source_quality_hint=cfg["quality_hint"],

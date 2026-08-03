@@ -26,16 +26,18 @@ test.describe('Cross-module API consistency', () => {
     }
   });
 
-  test('summaries list and detail both accessible', async ({ request }) => {
+  test('digest list and date detail both accessible', async ({ request }) => {
     const listRes = await request.get('/api/summaries');
     expect(listRes.status()).toBe(200);
     const list = await listRes.json();
-    if (list.items && list.items.length > 0) {
-      const firstId = list.items[0].id;
-      const detailRes = await request.get(`/api/summaries/${firstId}`);
+    if (list.dates && list.dates.length > 0) {
+      const first = list.dates[0];
+      const detailRes = await request.get(`/api/summaries?date=${first.date}`);
       expect(detailRes.status()).toBe(200);
+      const detail = await detailRes.json();
+      expect(detail.item.summaryId).toBe(first.summaryId);
     } else {
-      // 空列表也 OK；just no id to drill into
+      // 空列表也 OK；只是没有日报可展开
       test.skip();
     }
   });

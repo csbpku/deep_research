@@ -1,31 +1,290 @@
-/* Tailwind base —— Week 1 不引入 shadcn 全套组件（避免膨胀依赖；只装原生 Tailwind）。
-   全局重置与浅色色板后续按需扩展；这里只确保样式在 dev 下不出现「无样式 HTML」。 */
+/* ============================================================================
+   技术调研平台 — 全局样式与设计 token
+   ----------------------------------------------------------------------------
+   设计方向：Data-Dense Dashboard × Swiss Modernism 2.0
+   - 密度 8/10：侧栏 240px、顶栏 56px、表格行 36px、卡片内边距 12px
+   - 动效 3/10：150–300ms，尊重 prefers-reduced-motion
+   - 强调色：Indigo #4F46E5（单一色相；终端绿留给 score tier）
+
+   token 采用 shadcn 的 HSL 三元组约定（"H S% L%"，不带 hsl() 包裹），
+   由 tailwind.config.ts 里的 `hsl(var(--x))` 消费。
+
+   ⚠️ 组件内禁止裸 hex。唯一例外：CommentSection 的 Avatar 用
+   `hsl(${hashHue} 70% 55%)` 做运行时算色，无法 token 化。
+   ========================================================================== */
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light;
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* ---- 表面：暖白系（Notion 风）—— 区别于 v1 的冷蓝灰 ---- */
+    --background: 40 30% 98%; /* #FAF9F5 —— Notion sidebar 近邻 */
+    --foreground: 30 7% 22%; /* #37352F —— Notion text 近邻 */
+    --card: 40 20% 99%; /* #FCFBF8 */
+    --card-foreground: 30 7% 22%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 30 7% 22%;
+
+    /* ---- 强调色：蓝（非 v1 的靛蓝）—— 更接近 mockup 的 #2383E2 ---- */
+    --primary: 212 80% 47%; /* #2383E2 */
+    --primary-foreground: 0 0% 100%;
+
+    /* ---- 中性：暖灰系 ---- */
+    --secondary: 40 16% 94%; /* #F1F1EE */
+    --secondary-foreground: 30 6% 30%;
+    --muted: 40 16% 94%;
+    --muted-foreground: 30 5% 47%; /* #787774 —— Notion text2 */
+    --accent: 212 95% 96%; /* 蓝底 hover */
+    --accent-foreground: 212 80% 38%;
+
+    /* ---- 破坏性 ---- */
+    --destructive: 0 72% 51%; /* #DC2626 */
+    --destructive-foreground: 0 0% 100%;
+
+    /* ---- 线条与焦点 ---- */
+    --border: 36 14% 90%; /* #E9E9E7 —— Notion border */
+    --input: 36 14% 90%;
+    --ring: 212 80% 47%;
+
+    --radius: 0.5rem;
+
+    /* ---- 领域语义：AI 调研 job 状态 ---- */
+    --status-queued-bg: 48 96% 89%;
+    --status-queued-fg: 32 81% 27%;
+    --status-running-bg: 214 95% 93%;
+    --status-running-fg: 224 76% 38%;
+    --status-succeeded-bg: 141 79% 90%;
+    --status-succeeded-fg: 143 64% 22%;
+    --status-failed-bg: 0 93% 94%;
+    --status-failed-fg: 0 70% 38%;
+    --status-cancelled-bg: 210 40% 94%;
+    --status-cancelled-fg: 215 19% 35%;
+    --status-partial-bg: 48 96% 89%;
+    --status-partial-fg: 32 81% 27%;
+
+    /* ---- 领域语义：雷达候选生命周期 ---- */
+    --radar-candidate-bg: 55 97% 88%;
+    --radar-candidate-fg: 32 81% 27%;
+    --radar-published-bg: 141 79% 90%;
+    --radar-published-fg: 143 64% 22%;
+    --radar-rejected-bg: 0 93% 94%;
+    --radar-rejected-fg: 0 70% 38%;
+    --radar-archived-bg: 210 40% 94%;
+    --radar-archived-fg: 215 19% 35%;
+    --radar-pending-bg: 48 96% 89%;
+    --radar-pending-fg: 32 81% 27%;
+
+    /* ---- 领域语义：Distilled score tier（deep_read/skim/collection/noise） ---- */
+    --tier-collection: 142 71% 30%;
+    --tier-deep-read: 199 89% 33%;
+    --tier-skim: 38 92% 40%;
+    --tier-noise: 215 16% 56%;
+    --score-track: 214 32% 91%;
+
+    /* ---- 领域语义：创作方式 ---- */
+    --method-manual: 215 19% 38%;
+    --method-ai: 263 60% 45%;
+    --method-file: 199 89% 33%;
+    --method-import: 158 64% 26%;
+
+    /* ---- 布局尺度（Data-Dense） ---- */
+    --shell-sidebar: 240px;
+    --shell-topbar: 56px;
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    /* ---- 深色：冷蓝灰底（暖白底不适合深色，更稳） ---- */
+    --background: 222 47% 11%; /* #0F172A */
+    --foreground: 210 40% 98%; /* #F8FAFC */
+    --card: 222 32% 14%; /* 略浅于 bg，让卡片浮起来 */
+    --card-foreground: 210 40% 98%;
+    --popover: 222 32% 14%;
+    --popover-foreground: 210 40% 98%;
+
+    /* 深底上提亮，保证 4.5:1 */
+    --primary: 212 90% 68%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217 25% 22%; /* #272F42 */
+    --secondary-foreground: 214 25% 84%;
+    --muted: 217 25% 22%;
+    --muted-foreground: 215 20% 70%;
+    --accent: 212 50% 25%;
+    --accent-foreground: 212 95% 85%;
+
+    --destructive: 0 72% 62%;
+    --destructive-foreground: 222 47% 11%;
+
+    --border: 217 25% 27%; /* #334155 */
+    --input: 217 25% 27%;
+    --ring: 212 90% 68%;
+
+    /* 深色下状态色：低饱和底 + 高亮字，维持 4.5:1 */
+    --status-queued-bg: 38 50% 20%;
+    --status-queued-fg: 48 96% 77%;
+    --status-running-bg: 224 50% 24%;
+    --status-running-fg: 213 94% 80%;
+    --status-succeeded-bg: 143 45% 17%;
+    --status-succeeded-fg: 141 79% 74%;
+    --status-failed-bg: 0 45% 22%;
+    --status-failed-fg: 0 100% 88%;
+    --status-cancelled-bg: 217 25% 24%;
+    --status-cancelled-fg: 215 20% 76%;
+    --status-partial-bg: 38 50% 20%;
+    --status-partial-fg: 48 96% 77%;
+
+    --radar-candidate-bg: 38 50% 20%;
+    --radar-candidate-fg: 48 96% 77%;
+    --radar-published-bg: 143 45% 17%;
+    --radar-published-fg: 141 79% 74%;
+    --radar-rejected-bg: 0 45% 22%;
+    --radar-rejected-fg: 0 94% 82%;
+    --radar-archived-bg: 217 25% 24%;
+    --radar-archived-fg: 215 20% 76%;
+    --radar-pending-bg: 38 50% 20%;
+    --radar-pending-fg: 48 96% 77%;
+
+    --tier-collection: 141 70% 62%;
+    --tier-deep-read: 199 89% 66%;
+    --tier-skim: 43 96% 68%;
+    --tier-noise: 215 16% 55%;
+    --score-track: 217 25% 27%;
+
+    --method-manual: 215 20% 70%;
+    --method-ai: 263 80% 78%;
+    --method-file: 199 89% 66%;
+    --method-import: 158 60% 62%;
+  }
 }
 
-html,
-body {
-  height: 100%;
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    margin: 0;
+    font-feature-settings:
+      'liga' 1,
+      'calt' 1;
+  }
+
+  /* 焦点可见性 —— 不允许任何地方 outline:none 而无替代 */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
 }
 
-body {
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    'Helvetica Neue',
-    Arial,
-    'PingFang SC',
-    'Microsoft YaHei',
-    sans-serif;
-  margin: 0;
-  background: #f8fafc;
-  color: #0f172a;
+/* ----------------------------------------------------------------------------
+   长文排版（@tailwindcss/typography 的 token 化覆盖）
+   MarkdownContent 用 `prose` 消费；MarkdownPreview 是另一套手写解析器，不走这里。
+   中文长文：字号 15px、行高 1.75、量度由页面容器控制（760px）。
+   -------------------------------------------------------------------------- */
+@layer components {
+  .prose {
+    --tw-prose-body: hsl(var(--foreground));
+    --tw-prose-headings: hsl(var(--foreground));
+    --tw-prose-lead: hsl(var(--muted-foreground));
+    --tw-prose-links: hsl(var(--primary));
+    --tw-prose-bold: hsl(var(--foreground));
+    --tw-prose-counters: hsl(var(--muted-foreground));
+    --tw-prose-bullets: hsl(var(--border));
+    --tw-prose-hr: hsl(var(--border));
+    --tw-prose-quotes: hsl(var(--muted-foreground));
+    --tw-prose-quote-borders: hsl(var(--border));
+    --tw-prose-captions: hsl(var(--muted-foreground));
+    --tw-prose-code: hsl(var(--accent-foreground));
+    --tw-prose-pre-code: hsl(var(--background));
+    --tw-prose-pre-bg: hsl(var(--foreground));
+    --tw-prose-th-borders: hsl(var(--border));
+    --tw-prose-td-borders: hsl(var(--border));
+
+    /* 中文长文阅读：字号 17px、行高 1.8 —— 视觉密度更接近学术/出版物 */
+    font-size: 1.0625rem; /* 17px */
+    line-height: 1.8;
+  }
+
+  .prose :where(code):not(:where(pre code)) {
+    @apply rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] font-normal;
+  }
+
+  /* typography 插件给 inline code 加了反引号伪元素，去掉 */
+  .prose :where(code):not(:where(pre code))::before,
+  .prose :where(code):not(:where(pre code))::after {
+    content: none;
+  }
+
+  .prose :where(blockquote) {
+    @apply rounded-r-md border-l-2 bg-muted/50 py-1 pr-3 font-normal not-italic;
+  }
+
+  .prose :where(blockquote p):first-of-type::before,
+  .prose :where(blockquote p):last-of-type::after {
+    content: none;
+  }
+
+  .prose :where(table) {
+    @apply text-sm;
+  }
+
+  .prose :where(th, td) {
+    @apply px-3 py-2;
+  }
+
+  /* AI 草稿与编辑器预览：更适合逐段校稿的紧凑排版。 */
+  .prose.prose-compact {
+    font-size: 0.9375rem;
+    line-height: 1.75;
+  }
+
+  .prose.prose-compact :where(h1) {
+    margin-bottom: 0.8em;
+    margin-top: 0;
+    font-size: 1.6em;
+    line-height: 1.25;
+  }
+
+  .prose.prose-compact :where(h2) {
+    margin-bottom: 0.65em;
+    margin-top: 1.5em;
+    font-size: 1.3em;
+    line-height: 1.35;
+  }
+
+  .prose.prose-compact :where(h3) {
+    margin-bottom: 0.5em;
+    margin-top: 1.25em;
+    font-size: 1.1em;
+  }
+
+  .prose.prose-compact :where(p, ul, ol) {
+    margin-bottom: 0.9em;
+    margin-top: 0.9em;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   动效降级：系统开启「减弱动态效果」后全局关掉动画与过渡。
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

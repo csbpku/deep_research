@@ -2,10 +2,10 @@
 //
 // 契约源：
 //   - docs/agent-prompts/week4-engineer-a.md §任务 2
-//   - apps/web/prisma/schema.prisma: SearchDoc (trigger 已保证 published-only)
-//   - docs/decisions/0006-w4-zhparser-deferred.md: 用 simple 字典
+//   - SearchDoc（published-only）+ summaries 中的雷达候选
+//   - simple 字典全文检索 + pg_trgm 近似匹配
 //
-// 入参：q (1-200)、type (summary|long_research|knowledge，可选)、page、per_page (≤50)
+// 入参：q (1-200)、type (summary|long_research|knowledge|radar，可选)、page、per_page (≤50)
 // 出参：{ items: SearchRow[], total, page, per_page }
 // 权限：已登录可访问；搜索结果只可能来自已发布内容（trigger 过滤）。
 //
@@ -25,7 +25,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
-  // 搜索对已登录和匿名用户都开放（trigger 已保证 search_docs 只含 published 内容）
+  // 搜索对已登录和匿名用户都开放；雷达候选与 /api/radar 的公开可见性一致。
 
   const url = new URL(req.url);
   const parsed = SearchQuery.safeParse({

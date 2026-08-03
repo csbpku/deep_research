@@ -15,6 +15,7 @@ import {
   shapeSearchRow,
   detailHrefForSearchRow,
   isSearchableType,
+  sanitizeSearchHighlight,
 } from '@/lib/search/query';
 import { SearchQuery } from '@/lib/schemas';
 
@@ -65,7 +66,7 @@ describe('SearchQuery schema', () => {
   });
 
   it('accepts each valid type', () => {
-    for (const t of ['summary', 'long_research', 'knowledge']) {
+    for (const t of ['summary', 'long_research', 'knowledge', 'radar']) {
       const r = SearchQuery.safeParse({ q: 'AI', type: t });
       expect(r.success).toBe(true);
     }
@@ -100,19 +101,21 @@ describe('buildSearchSql', () => {
     expect(params[3]).toBe(0); // offset = (1-1)*20
   });
 
-  it('uses simple dictionary explicitly', () => {
+  it('uses simple dictionary web search plus trigram fallback', () => {
     const { rowsSql, countSql } = buildSearchSql({
       q: 'AI',
       type: undefined,
       page: 1,
       perPage: 20,
     });
-    // 搜索匹配：doc_tsv 是 trigger 预先生成的 tsvector 列（用 simple 字典），
-    // 这里只需要 plainto_tsquery('simple', $1) 去匹配；
-    // ts_headline 也用 simple 字典以保证与 doc_tsv 一致
-    expect(rowsSql).toContain("plainto_tsquery('simple', $1)");
-    expect(countSql).toContain("plainto_tsquery('simple', $1)");
-    expect(rowsSql).toContain("ts_headline(\n        'simple'");
+    // search_docs 的 tsvector 与动态雷达向量都使用 simple 字典；
+    // websearch_to_tsquery 额外支持短语与 OR，trigram 负责近似匹配。
+    expect(rowsSql).toContain("websearch_to_tsquery('simple', $1)");
+    expect(countSql).toContain("websearch_to_tsquery('simple', $1)");
+    expect(rowsSql).toContain('similarity(lower(sd.title), sq.needle)');
+    expect(rowsSql).toContain('strict_word_similarity(sq.needle, lower(sd.title))');
+    expect(rowsSql).toContain('ts_headline(');
+    expect(rowsSql).toContain("'StartSel=<mark>, StopSel=</mark>");
     // 显式不写其它字典
     expect(rowsSql).not.toContain("chinese_zh");
     expect(rowsSql).not.toContain("english");
@@ -169,7 +172,7 @@ describe('buildSearchSql', () => {
       page: 1,
       perPage: 20,
     });
-    expect(countSql).toContain('type::text = $2');
+    expect(countSql).toContain('type = $2');
   });
 
   it('includes search_docs table (published-only by trigger)', () => {
@@ -182,6 +185,19 @@ describe('buildSearchSql', () => {
     expect(rowsSql).toContain('FROM search_docs');
     // 触发器已经过滤草稿/归档；SQL 不需要额外的 status 过滤
     expect(rowsSql).not.toContain('WHERE status');
+  });
+
+  it('federates public radar candidates without a schema migration', () => {
+    const { rowsSql } = buildSearchSql({
+      q: 'GraphRAG',
+      type: 'radar',
+      page: 1,
+      perPage: 20,
+    });
+    expect(rowsSql).toContain('UNION ALL');
+    expect(rowsSql).toContain('FROM summaries s');
+    expect(rowsSql).toContain("s.source::text = 'daily'");
+    expect(rowsSql).toContain("s.status::text <> 'archived'");
   });
 
   it('excludes type filter from WHERE when not provided', () => {
@@ -266,6 +282,10 @@ describe('detailHrefForSearchRow', () => {
   it('knowledge → /researches/[id]', () => {
     expect(detailHrefForSearchRow('knowledge', 'abc')).toBe('/researches/abc');
   });
+
+  it('radar → /radar/[id]', () => {
+    expect(detailHrefForSearchRow('radar', 'abc')).toBe('/radar/abc');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -283,6 +303,10 @@ describe('isSearchableType', () => {
 
   it('accepts knowledge', () => {
     expect(isSearchableType('knowledge')).toBe(true);
+  });
+
+  it('accepts radar', () => {
+    expect(isSearchableType('radar')).toBe(true);
   });
 
   it('rejects other strings', () => {
@@ -306,9 +330,17 @@ describe('simple-dictionary Chinese matching contract', () => {
       page: 1,
       perPage: 20,
     });
-    expect(rowsSql).toContain("plainto_tsquery('simple', $1)");
+    expect(rowsSql).toContain("websearch_to_tsquery('simple', $1)");
     // 不应试图切词
     expect(rowsSql).not.toContain('zhparser');
     expect(rowsSql).not.toContain('chinese_zh');
+  });
+});
+
+describe('search highlight sanitization', () => {
+  it('keeps mark tags and escapes source HTML', () => {
+    expect(sanitizeSearchHighlight('<script>alert(1)</script><mark>RAG</mark>')).toBe(
+      '&lt;script&gt;alert(1)&lt;/script&gt;<mark>RAG</mark>',
+    );
   });
 });

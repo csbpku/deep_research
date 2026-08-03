@@ -8,6 +8,7 @@ from typing import Any
 
 from ai_engine.fetcher.safe_fetch import FetchedDocument, safe_fetch
 from ai_engine.ingestion.sources import _parse_rss_xml_simple
+from ai_engine.radar.community_fetcher import _is_ai_related
 from ai_engine.radar.models import RadarCandidate
 
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
@@ -83,20 +84,30 @@ async def fetch_rss_candidates(
     document = await fetcher(feed_url, **fetch_kwargs)
     text = document.content.decode("utf-8", errors="replace")
     items = _parse_rss_xml_simple(text)
+    # Source-side AI keyword filter (mirrors agents-radar pattern).
+    # Default: ON. Set applyAiFilter=False in config for AI-only feeds
+    # (e.g. OpenAI News, Anthropic News, Google AI Blog) to skip the check.
+    apply_ai_filter = bool(config.get("applyAiFilter", True))
     candidates: list[RadarCandidate] = []
     for item in items[:max_results]:
         link = item.get("link", "").strip()
         if not link:
             continue
+        title = (item.get("title") or "Untitled").strip()[:300]
+        description = item.get("description", "").strip()[:2000]
+        if apply_ai_filter:
+            # Check title + description (case-insensitive regex)
+            if not _is_ai_related(f"{title}\n{description}"):
+                continue
         published_at = _published_at(item.get("pubDate", "").strip())
         if cutoff is not None and published_at is not None:
             if published_at.timestamp() < cutoff:
                 continue
         candidates.append(
             RadarCandidate(
-                title=(item.get("title") or "Untitled").strip()[:300],
+                title=title,
                 url=link,
-                snippet=item.get("description", "").strip()[:2000],
+                snippet=description,
                 published_at=published_at,
                 content_origin="rss",
                 tags=("rss",),

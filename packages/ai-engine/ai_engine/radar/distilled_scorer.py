@@ -279,11 +279,13 @@ SERIAL_KEY_TO_CN: dict[str, str] = {v: k for k, v in SERIAL_KEYS.items()}
 # ── LLM scoring ───────────────────────────────────────────────────
 
 
-SYSTEM_PROMPT = """你是一名严苛的评审员，为一个面向 AI 工程师的雷达筛选文章。
+SYSTEM_PROMPT = """你是一名严苛的评审员，为一个电商公司的软件工程师团队筛选 AI 雷达文章。
 
 受众画像：
-- 主要工作：构建 LLM 应用、Agent 系统、RAG、AI 工具链
-- 不需要：纯商业新闻、非 AI 学科（地理/金融/体育/医疗）、纯营销稿
+- 主要工作：在电商业务中构建 LLM 应用、Agent 系统、RAG、AI 工具链、平台工程
+- 直接相关：AI 框架/模型部署、Agent 设计模式、RAG 管线、电商场景 AI 应用、LLM 工具链
+- 不需要：纯商业新闻、非 AI 学科（地理/金融/体育/医疗）、纯营销稿、复古/玩具/业余项目
+- 如果文章与电商软件工程师的实际工作无关，即便有趣也不得给高分
 
 前置过滤规则（优先级最高）：
 1. 文章是否与 AI/LLM/Agent 工程实践直接相关？如果答案是"否"，受众匹配度必须为 0-1 分
@@ -467,6 +469,13 @@ async def anthropic_scorer(
     light_url = os.environ.get("ANTHROPIC_BASE_URL")
     api_key = light_key or os.environ.get("ANTHROPIC_API_KEY_HEAVY", "")
     base_url = light_url or os.environ.get("ANTHROPIC_BASE_URL_HEAVY")
+    # cc-switch and similar local Anthropic-compatible proxies do not
+    # validate the key, but the SDK rejects placeholder-shaped values
+    # (e.g. "local-cc-switch") before sending. Substitute a non-empty
+    # placeholder so local-proxy scoring works even when .env leaves
+    # ANTHROPIC_API_KEY empty.
+    if not api_key or api_key.startswith("local-"):
+        api_key = "sk-placeholder-for-cc-switch"
     client = AsyncAnthropic(
         api_key=api_key,
         base_url=base_url,
@@ -480,7 +489,10 @@ async def anthropic_scorer(
 
     message = await client.messages.create(
         model=model_name,
-        max_tokens=1024,
+        # Local proxies route through a thinking-capable model; 1024 tokens
+        # can be consumed entirely by the thinking block, leaving no text
+        # block for the JSON scorer and forcing a default-score fallback.
+        max_tokens=_LLM_SCORING_MAX_TOKENS,
         timeout=60.0,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_user_prompt(
@@ -739,6 +751,42 @@ def default_score(profile: ScoringProfile | None = None) -> DistilledScore:
 
 _LLM_MAX_RETRIES = 2
 _LLM_RETRY_DELAY = 3.0
+# Rate-limit (HTTP 429) handling mirrors agents-radar's report.ts:
+# up to 3 retries with 5s/10s/20s backoff. Local proxies recover once the
+# burst drains, so being patient here beats dropping to a default score.
+_LLM_RATE_LIMIT_MAX_RETRIES = 3
+_LLM_RATE_LIMIT_DELAY = 5.0
+# Cap in-flight scoring calls so a full radar sync cannot saturate the
+# local LLM proxy (mirrors agents-radar's LLM_CONCURRENCY=5).
+_LLM_SCORING_CONCURRENCY = int(os.environ.get("RADAR_SCORING_CONCURRENCY", "5"))
+_LLM_SCORING_MAX_TOKENS = int(os.environ.get("RADAR_SCORING_MAX_TOKENS", "4096"))
+_loop_score_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _score_semaphore() -> asyncio.Semaphore:
+    """Return a per-event-loop semaphore bounding concurrent scorer calls.
+
+    asyncio primitives bind to the loop that first uses them; caching one per
+    running loop keeps tests (each with its own loop) from sharing a bound
+    primitive while production callers share a single limit.
+    """
+    loop = asyncio.get_running_loop()
+    semaphore = _loop_score_semaphores.get(loop)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_LLM_SCORING_CONCURRENCY)
+        _loop_score_semaphores[loop] = semaphore
+    return semaphore
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    text = str(exc).lower()
+    return (
+        "ratelimit" in type(exc).__name__.lower()
+        or "rate limit" in text
+        or "429" in text
+    )
 
 
 async def score_with_llm(
@@ -762,7 +810,13 @@ async def score_with_llm(
     """
     profile = profile or active_profile()
     if scorer is None:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get(
+            "ANTHROPIC_API_KEY_HEAVY", ""
+        )
+        base_url = os.environ.get("ANTHROPIC_BASE_URL", "") or os.environ.get(
+            "ANTHROPIC_BASE_URL_HEAVY", ""
+        )
+        if not key and not base_url:
             logger.debug("distilled_scorer.fallback: no ANTHROPIC_API_KEY")
             return default_score(profile)
         # Use anthropic_scorer with full context
@@ -778,27 +832,45 @@ async def score_with_llm(
     else:
         active_scorer = scorer
 
-    for attempt in range(_LLM_MAX_RETRIES + 1):
+    attempt = 0
+    while True:
         try:
-            raw = await active_scorer(title, content)
+            async with _score_semaphore():
+                raw = await active_scorer(title, content)
             parsed = _parse_llm_response(raw)
             return compute_score(parsed, profile=profile)
         except Exception as exc:
-            if attempt < _LLM_MAX_RETRIES:
-                logger.info(
-                    "distilled_scorer.retry",
-                    extra={"attempt": attempt + 1, "error_type": type(exc).__name__},
-                )
-                await asyncio.sleep(_LLM_RETRY_DELAY)
-            else:
+            rate_limited = _is_rate_limit_error(exc)
+            max_retries = (
+                _LLM_RATE_LIMIT_MAX_RETRIES if rate_limited else _LLM_MAX_RETRIES
+            )
+            if attempt >= max_retries:
                 logger.warning(
                     "distilled_scorer.fallback",
                     extra={
                         "error_type": type(exc).__name__,
                         "error": str(exc)[:200],
                         "attempts": attempt + 1,
+                        "rate_limited": rate_limited,
                     },
                 )
+                break
+            delay = (
+                _LLM_RATE_LIMIT_DELAY * (2**attempt)
+                if rate_limited
+                else _LLM_RETRY_DELAY
+            )
+            logger.info(
+                "distilled_scorer.retry",
+                extra={
+                    "attempt": attempt + 1,
+                    "error_type": type(exc).__name__,
+                    "rate_limited": rate_limited,
+                    "delay": delay,
+                },
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
     return default_score(profile)
 
 

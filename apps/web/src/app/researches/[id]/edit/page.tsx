@@ -1,6 +1,6 @@
 'use client';
 
-// 沉淀编辑器页面 —— 新建 + 编辑。
+// 调研库编辑器页面 —— 新建 + 编辑。
 //
 // 路由：
 //   /researches/new  → 空白编辑器（创建新草稿）
@@ -13,9 +13,29 @@
 //   - 保存草稿 / 发布
 //   - creationMethod 徽标
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  ArrowLeft,
+  Bold,
+  Braces,
+  Columns2,
+  Eye,
+  Heading2,
+  Italic,
+  List,
+  PenLine,
+  Save,
+  Send,
+} from 'lucide-react';
+
+import MarkdownContent from '@/components/MarkdownContent';
+import { StatusBadge } from '@/components/domain/StatusBadge';
+import { TagChip, TagList } from '@/components/domain/TagChip';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 interface ResearchDetail {
   id: string;
@@ -45,15 +65,6 @@ interface AuditEntry {
   editor: { id: string; name: string };
 }
 
-function methodBg(method: string): string {
-  switch (method) {
-    case 'ai_research': return '#ede9fe';
-    case 'file_import': return '#e0f2fe';
-    case 'manual': return '#f1f5f9';
-    default: return '#f1f5f9';
-  }
-}
-
 export default function EditorPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -62,12 +73,18 @@ export default function EditorPage() {
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [view, setView] = useState<'write' | 'split' | 'preview'>('write');
   const [background, setBackground] = useState('');
   const [conclusion, setConclusion] = useState('');
   const [risks, setRisks] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [savedSnapshot, setSavedSnapshot] = useState(() =>
+    draftSnapshot({ title: '', body: '', background: '', conclusion: '', risks: '', tagsInput: '' }),
+  );
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   // 加载已有数据
   const { data: existing, isLoading: loadingExisting } = useQuery<ResearchDetail>({
@@ -88,6 +105,16 @@ export default function EditorPage() {
       setConclusion(existing.conclusion ?? '');
       setRisks(existing.risks ?? '');
       setTagsInput(existing.tags.join(', '));
+      setSavedSnapshot(
+        draftSnapshot({
+          title: existing.title,
+          body: existing.body,
+          background: existing.background ?? '',
+          conclusion: existing.conclusion ?? '',
+          risks: existing.risks ?? '',
+          tagsInput: existing.tags.join(', '),
+        }),
+      );
     }
   }, [existing]);
 
@@ -95,6 +122,13 @@ export default function EditorPage() {
     .split(',')
     .map((t) => t.trim())
     .filter(Boolean);
+
+  const currentSnapshot = useMemo(
+    () => draftSnapshot({ title, body, background, conclusion, risks, tagsInput }),
+    [title, body, background, conclusion, risks, tagsInput],
+  );
+  const isDirty = currentSnapshot !== savedSnapshot;
+  const wordCount = body.replace(/\s/gu, '').length;
 
   // 保存草稿
   const saveMutation = useMutation({
@@ -107,7 +141,7 @@ export default function EditorPage() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             ...payload,
-            title: title || '未命名沉淀',
+            title: title || '未命名调研库',
             body: body || '# 开始编写...',
           }),
         });
@@ -125,6 +159,8 @@ export default function EditorPage() {
       return res.json();
     },
     onSuccess: (data) => {
+      setSavedSnapshot(currentSnapshot);
+      setLastSavedAt(new Date());
       queryClient.invalidateQueries({ queryKey: ['researches'] });
       if (isNew) {
         router.replace(`/researches/${data.id}/edit`);
@@ -144,6 +180,41 @@ export default function EditorPage() {
       setSaving(false);
     }
   }, [saveMutation]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void handleSave();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleSave]);
+
+  const applyMarkdown = useCallback(
+    (before: string, after = before, placeholder = '文本', linePrefix = false) => {
+      const textarea = bodyRef.current;
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const selected = body.slice(start, end) || placeholder;
+      const insertion = linePrefix
+        ? selected
+            .split('\n')
+            .map((line) => `${before}${line}`)
+            .join('\n')
+        : `${before}${selected}${after}`;
+      const next = `${body.slice(0, start)}${insertion}${body.slice(end)}`;
+      setBody(next);
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const selectionStart = start + before.length;
+        textarea.setSelectionRange(selectionStart, selectionStart + selected.length);
+      });
+    },
+    [body],
+  );
 
   const hasAiDraftChanges = Boolean(existing?.creationMethod === 'ai_research' && (
     title !== existing.title
@@ -182,204 +253,214 @@ export default function EditorPage() {
     await publishMutation.mutateAsync();
   }, [existing, hasAiDraftChanges, publishMutation, saveMutation]);
 
+  const publishDisabled =
+    publishMutation.isPending ||
+    (existing?.creationMethod === 'ai_research' && !hasAiDraftChanges);
+
+  const editorTools = [
+    { label: '加粗', icon: Bold, action: () => applyMarkdown('**', '**', '重点') },
+    { label: '斜体', icon: Italic, action: () => applyMarkdown('*', '*', '强调') },
+    { label: '二级标题', icon: Heading2, action: () => applyMarkdown('## ', '', '小节标题', true) },
+    { label: '列表', icon: List, action: () => applyMarkdown('- ', '', '列表项', true) },
+    { label: '行内代码', icon: Braces, action: () => applyMarkdown('`', '`', 'code') },
+  ] as const;
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, margin: 0 }}>
-          {isNew ? '新建沉淀' : `编辑: ${existing?.title ?? '...'}`}
-        </h1>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {existing?.creationMethod && (
-            <span style={{
-              padding: '2px 10px',
-              borderRadius: 6,
-              fontSize: 12,
-              background: methodBg(existing.creationMethod),
-              color: '#475569',
-              border: '1px solid #e2e8f0',
-            }}>
-              {existing.creationMethod === 'manual' ? '手写' :
-               existing.creationMethod === 'ai_research' ? 'AI 调研' :
-               existing.creationMethod === 'file_import' ? '文件导入' : 'Confluence'}
-            </span>
+    <div className="mx-auto max-w-shell">
+      <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={() => router.back()} aria-label="返回">
+            <ArrowLeft />
+          </Button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-base font-semibold tracking-tight">
+                {isNew ? '新建调研' : '编辑草稿'}
+              </h1>
+              {existing?.creationMethod && (
+                <StatusBadge kind="method" value={existing.creationMethod} />
+              )}
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {isDirty ? '有未保存修改' : lastSavedAt ? '刚刚保存' : '已加载最新版本'}
+              <span className="mx-1.5">·</span>
+              {wordCount.toLocaleString('zh-CN')} 字
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={handleSave} disabled={saving || !isDirty}>
+            <Save />
+            {saving ? '保存中…' : '保存草稿'}
+          </Button>
+          {existing && existing.status === 'draft' && (
+            <Button type="button" size="sm" onClick={handlePublish} disabled={publishDisabled}>
+              <Send />
+              {existing.creationMethod === 'ai_research' && !hasAiDraftChanges
+                ? '修改后发布'
+                : publishMutation.isPending
+                  ? '发布中…'
+                  : '发布调研'}
+            </Button>
           )}
         </div>
-      </div>
+      </header>
 
       {error && (
-        <div style={{ border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', padding: '12px', borderRadius: 6, marginBottom: 12 }}>
+        <div
+          role="alert"
+          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
           {error}
         </div>
       )}
 
-      {/* 标题 */}
-      <div style={{ marginBottom: 12 }}>
-        <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#475569' }}>
-          标题
-        </label>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="输入标题..."
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            border: '1px solid #e2e8f0',
-            borderRadius: 6,
-            fontSize: 15,
-            boxSizing: 'border-box',
-          }}
-        />
-      </div>
-
-      {/* 正文 */}
-      <div style={{ marginBottom: 12 }}>
-        <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#475569' }}>
-          正文 (Markdown)
-        </label>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="使用 Markdown 编写..."
-          rows={20}
-          style={{
-            width: '100%',
-            padding: '12px',
-            border: '1px solid #e2e8f0',
-            borderRadius: 6,
-            fontSize: 14,
-            fontFamily: 'monospace',
-            lineHeight: 1.6,
-            resize: 'vertical',
-            boxSizing: 'border-box',
-          }}
-        />
-      </div>
-
-      {/* 结构化字段 */}
-      <details style={{ marginBottom: 12 }}>
-        <summary style={{ fontSize: 13, fontWeight: 500, color: '#475569', cursor: 'pointer' }}>
-          结构化字段（可选）
-        </summary>
-        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>背景</label>
-            <textarea
-              value={background}
-              onChange={(e) => setBackground(e.target.value)}
-              rows={3}
-              placeholder="调研背景..."
-              style={{ width: '100%', padding: '6px 10px', border: '1px solid #e2e8f0', borderRadius: 4, fontSize: 13, boxSizing: 'border-box', resize: 'vertical' }}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+          <div className="border-b border-border px-5 py-3">
+            <label htmlFor="edit-title" className="sr-only">标题</label>
+            <Input
+              id="edit-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="给这份调研起一个明确的标题…"
+              className="h-auto border-0 bg-transparent px-0 py-1 text-xl font-semibold shadow-none focus-visible:ring-0"
             />
           </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>结论</label>
-            <textarea
-              value={conclusion}
-              onChange={(e) => setConclusion(e.target.value)}
-              rows={3}
-              placeholder="调研结论..."
-              style={{ width: '100%', padding: '6px 10px', border: '1px solid #e2e8f0', borderRadius: 4, fontSize: 13, boxSizing: 'border-box', resize: 'vertical' }}
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>风险</label>
-            <textarea
-              value={risks}
-              onChange={(e) => setRisks(e.target.value)}
-              rows={3}
-              placeholder="风险与待验证项..."
-              style={{ width: '100%', padding: '6px 10px', border: '1px solid #e2e8f0', borderRadius: 4, fontSize: 13, boxSizing: 'border-box', resize: 'vertical' }}
-            />
-          </div>
-        </div>
-      </details>
 
-      {/* 标签 */}
-      <div style={{ marginBottom: 20 }}>
-        <label style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#475569' }}>
-          标签（逗号分隔）
-        </label>
-        <input
-          value={tagsInput}
-          onChange={(e) => setTagsInput(e.target.value)}
-          placeholder="例如: React, TypeScript, 架构"
-          style={{
-            width: '100%',
-            padding: '8px 12px',
-            border: '1px solid #e2e8f0',
-            borderRadius: 6,
-            fontSize: 14,
-            boxSizing: 'border-box',
-          }}
-        />
-        {tags.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-            {tags.map((t) => (
-              <span key={t} style={{
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontSize: 12,
-                background: '#f1f5f9',
-                color: '#475569',
-                border: '1px solid #e2e8f0',
-              }}>
-                {t}
-              </span>
+          <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/30 px-3 py-2">
+            {editorTools.map((tool) => {
+              const Icon = tool.icon;
+              return (
+                <Button key={tool.label} type="button" variant="ghost" size="icon-sm" onClick={tool.action} title={tool.label} aria-label={tool.label} disabled={view === 'preview'}>
+                  <Icon />
+                </Button>
+              );
+            })}
+            <span className="mx-1 h-5 w-px bg-border" />
+            <span className="hidden text-[11px] text-muted-foreground sm:inline">Markdown</span>
+            <div className="ml-auto inline-flex rounded-md border border-border bg-card p-0.5" role="group" aria-label="编辑器视图">
+              {([
+                { key: 'write', label: '编辑', icon: PenLine },
+                { key: 'split', label: '分栏', icon: Columns2 },
+                { key: 'preview', label: '预览', icon: Eye },
+              ] as const).map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Button key={item.key} type="button" variant={view === item.key ? 'secondary' : 'ghost'} size="xs" aria-pressed={view === item.key} onClick={() => setView(item.key)} className="gap-1.5">
+                    <Icon />
+                    <span className="hidden sm:inline">{item.label}</span>
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className={view === 'split' ? 'grid xl:grid-cols-2' : ''}>
+            {view !== 'preview' && (
+              <div>
+                <label htmlFor="edit-body" className="sr-only">正文 Markdown</label>
+                <Textarea
+                  ref={bodyRef}
+                  id="edit-body"
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder={'# 从问题背景开始\n\n写下事实、判断和仍需验证的风险…'}
+                  spellCheck={false}
+                  className="min-h-[560px] resize-y rounded-none border-0 bg-transparent px-5 py-5 font-mono text-[13px] leading-6 shadow-none focus-visible:ring-0"
+                />
+              </div>
+            )}
+            {view !== 'write' && (
+              <div className={view === 'split' ? 'min-h-[560px] border-t border-border px-6 py-5 xl:border-l xl:border-t-0' : 'min-h-[560px] px-7 py-6'}>
+                <MarkdownContent content={body || '# 开始编写...'} compact />
+              </div>
+            )}
+          </div>
+
+          <footer className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
+            <span>{isDirty ? '未保存' : '已保存'}</span>
+            <span aria-hidden>·</span>
+            <span>{wordCount.toLocaleString('zh-CN')} 字</span>
+            <span aria-hidden>·</span>
+            <span>⌘/Ctrl + S 保存</span>
+            {existing?.aiAssisted ? <span className="ml-auto">AI 协助产物，请在发布前核对来源</span> : null}
+          </footer>
+        </section>
+
+        <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
+          <details open className="rounded-lg border border-border bg-card p-3">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+            研究摘要
+          </summary>
+          <div className="mt-3 space-y-2.5">
+            {(
+              [
+                { id: 'bg', label: '背景', value: background, set: setBackground, ph: '调研背景…' },
+                { id: 'cc', label: '结论', value: conclusion, set: setConclusion, ph: '调研结论…' },
+                { id: 'rk', label: '风险', value: risks, set: setRisks, ph: '风险与待验证项…' },
+              ] as const
+            ).map((f) => (
+              <div key={f.id} className="grid gap-1">
+                <label htmlFor={`edit-${f.id}`} className="text-xs text-muted-foreground">
+                  {f.label}
+                </label>
+                <Textarea
+                  id={`edit-${f.id}`}
+                  value={f.value}
+                  onChange={(e) => f.set(e.target.value)}
+                  rows={3}
+                  placeholder={f.ph}
+                  className="resize-y text-[13px]"
+                />
+              </div>
             ))}
           </div>
-        )}
-      </div>
+          </details>
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid #e2e8f0', paddingTop: 16 }}>
-        <button
-          onClick={() => router.back()}
-          style={{
-            padding: '8px 16px',
-            border: '1px solid #e2e8f0',
-            borderRadius: 6,
-            background: '#fff',
-            cursor: 'pointer',
-            fontSize: 13,
-          }}
-        >
-          取消
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            padding: '8px 16px',
-            border: '1px solid #0f172a',
-            borderRadius: 6,
-            background: '#fff',
-            cursor: saving ? 'default' : 'pointer',
-            fontSize: 13,
-            opacity: saving ? 0.6 : 1,
-          }}
-        >
-          {saving ? '保存中...' : '保存草稿'}
-        </button>
-        {existing && existing.status === 'draft' && (
-          <button
-            onClick={handlePublish}
-            disabled={publishMutation.isPending || (existing.creationMethod === 'ai_research' && !hasAiDraftChanges)}
-            style={{
-              padding: '8px 20px',
-              border: 'none',
-              borderRadius: 6,
-              background: '#0f172a',
-              color: '#fff',
-              cursor: publishMutation.isPending || (existing.creationMethod === 'ai_research' && !hasAiDraftChanges) ? 'not-allowed' : 'pointer',
-              fontSize: 13,
-              opacity: publishMutation.isPending || (existing.creationMethod === 'ai_research' && !hasAiDraftChanges) ? 0.6 : 1,
-            }}
-          >
-            {existing.creationMethod === 'ai_research' && !hasAiDraftChanges ? '请先实际修改 AI 原稿' : publishMutation.isPending ? '发布中...' : '发布'}
-          </button>
-        )}
+          <div className="rounded-lg border border-border bg-card p-3">
+          <label htmlFor="edit-tags" className="text-sm font-medium">
+            标签
+          </label>
+          <Input
+            id="edit-tags"
+            value={tagsInput}
+            onChange={(e) => setTagsInput(e.target.value)}
+            placeholder="例如: React, TypeScript, 架构"
+          />
+          {tags.length > 0 && (
+            <TagList className="mt-1">
+              {tags.map((t) => (
+                <TagChip key={t}>{t}</TagChip>
+              ))}
+            </TagList>
+          )}
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+            用逗号分隔。建议保留 2–5 个能帮助团队检索的技术词。
+          </p>
+          </div>
+
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+            <p className="font-medium text-foreground">发布检查</p>
+            <ul className="mt-2 space-y-1.5">
+              <li>标题能说明研究问题</li>
+              <li>结论与证据可以相互对应</li>
+              <li>风险和待验证项已明确</li>
+            </ul>
+          </div>
+        </aside>
       </div>
     </div>
   );
+}
+
+function draftSnapshot(fields: {
+  title: string;
+  body: string;
+  background: string;
+  conclusion: string;
+  risks: string;
+  tagsInput: string;
+}): string {
+  return JSON.stringify(fields);
 }

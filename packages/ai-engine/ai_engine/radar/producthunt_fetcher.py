@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -22,7 +22,18 @@ _AI_KEYWORDS = [
     "inference", "prompt", "workflow automation",
 ]
 
-_AI_TOPICS = {"ai", "artificial-intelligence", "machine-learning", "developer-tools", "productivity", "open-source", "data-analytics"}
+_AI_TOPICS = {
+    "artificial-intelligence",
+    "machine-learning",
+    "ai",
+    "chatgpt",
+    "llm",
+    "developer-tools",
+    "open-source",
+    "natural-language-processing",
+    "chatbots",
+    "generative-ai",
+}
 
 _SHORT_KW_RE_PH: dict[str, re.Pattern[str]] = {}
 for _kw in _AI_KEYWORDS:
@@ -54,20 +65,23 @@ async def fetch_producthunt_candidates(
     *,
     client: httpx.AsyncClient | None = None,
 ) -> list[RadarCandidate]:
-    max_results = max(1, min(25, int(config.get("max_results", 10))))
+    max_results = max(1, min(30, int(config.get("max_results", 30))))
+    fetch_count = 20  # PH API complexity limit caps this at ~20
 
     query = """
-    query($first: Int!) {
-      posts(first: $first, order: VOTES) {
+    query($first: Int!, $postedAfter: DateTime, $postedBefore: DateTime) {
+      posts(first: $first, postedAfter: $postedAfter, postedBefore: $postedBefore, order: VOTES) {
         edges {
           node {
             id
             name
             tagline
             url
+            website
             votesCount
+            commentsCount
             createdAt
-            topics { edges { node { name } } }
+            topics { edges { node { slug name } } }
           }
         }
       }
@@ -80,12 +94,22 @@ async def fetch_producthunt_candidates(
 
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15.0)
-    candidates: list[RadarCandidate] = []
+    candidates: list[tuple[RadarCandidate, int]] = []
+    now = datetime.now(timezone.utc)
 
     try:
+        posted_after = now - timedelta(hours=48)
+        posted_before = now - timedelta(hours=24)
         resp = await http.post(
             _PH_API,
-            json={"query": query, "variables": {"first": max_results * 2}},
+            json={
+                "query": query,
+                "variables": {
+                    "first": fetch_count,
+                    "postedAfter": posted_after.isoformat(),
+                    "postedBefore": posted_before.isoformat(),
+                },
+            },
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -102,7 +126,7 @@ async def fetch_producthunt_candidates(
             await http.aclose()
 
     edges = data.get("data", {}).get("posts", {}).get("edges", [])
-    for edge in edges[:max_results * 2]:
+    for edge in edges[:fetch_count]:
         node = edge.get("node", {})
         if not isinstance(node, dict):
             continue
@@ -110,13 +134,24 @@ async def fetch_producthunt_candidates(
         tagline = node.get("tagline", "").strip()
         url = node.get("url", "").strip()
         votes = int(node.get("votesCount") or 0)
+        comments = int(node.get("commentsCount") or 0)
         created_str = node.get("createdAt", "")
         topics_raw = node.get("topics", {}).get("edges", [])
-        topic_names = [t.get("node", {}).get("name", "") for t in topics_raw if isinstance(t, dict)]
+        topic_names: list[str] = []
+        topic_slugs: list[str] = []
+        for t in topics_raw:
+            if not isinstance(t, dict):
+                continue
+            topic_node = t.get("node", {})
+            if isinstance(topic_node, dict):
+                if topic_node.get("name"):
+                    topic_names.append(str(topic_node["name"]))
+                if topic_node.get("slug"):
+                    topic_slugs.append(str(topic_node["slug"]))
 
         if not name or not url:
             continue
-        if not _is_ai_related(name, tagline, topic_names):
+        if not _is_ai_related(name, tagline, topic_slugs + topic_names):
             continue
 
         published = None
@@ -126,8 +161,8 @@ async def fetch_producthunt_candidates(
             except ValueError:
                 published = datetime.now(timezone.utc)
 
-        snippet = f"{tagline} | votes: {votes} | topics: {', '.join(topic_names[:4])}"
-        candidates.append(RadarCandidate(
+        snippet = f"{tagline} | votes: {votes} | comments: {comments} | topics: {', '.join(topic_names[:4])}"
+        candidates.append((RadarCandidate(
             title=name,
             url=url,
             snippet=snippet[:500],
@@ -135,8 +170,7 @@ async def fetch_producthunt_candidates(
             content_origin="api",
             tags=("producthunt", "ai_tool") + tuple(t.lower().replace(" ", "-") for t in topic_names[:4]),
             source_quality_hint=0.75,
-        ))
-        if len(candidates) >= max_results:
-            break
+        ), votes))
 
-    return candidates
+    ranked = sorted(candidates, key=lambda pair: pair[1], reverse=True)
+    return [candidate for candidate, _ in ranked[:max_results]]

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Protocol
@@ -47,6 +47,7 @@ class _Row:
     # error_message,但原 Row 没存。mark_terminal 写入这两个字段供 HTTP 层读。
     last_error_code: str | None = None
     last_error_message: str | None = None
+    draft_research_id: str | None = None
 
 
 class JobStore:
@@ -56,6 +57,14 @@ class JobStore:
     in-memory version uses a single `asyncio.Lock` per row to keep
     semantics honest.
     """
+
+    async def open(self) -> None:
+        """Bring any lazily-initialized resources online (no-op for memory)."""
+        return None
+
+    async def close(self) -> None:
+        """Release any resources held by the store (no-op for memory)."""
+        return None
 
     async def enqueue(self, snapshot: JobSnapshot) -> None:
         return None
@@ -100,6 +109,26 @@ class JobStore:
         已有此方法。HTTP 层只读 row,不通过 worker acquire。
         """
         return None
+
+    async def list_jobs(
+        self,
+        *,
+        requester_id: str,
+        status_filter: tuple[str, ...] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[JobRowView]:
+        """Return a user's job rows, newest first. Default no-op returns []."""
+        return []
+
+    async def count_jobs(
+        self,
+        *,
+        requester_id: str,
+        status_filter: tuple[str, ...] | None = None,
+    ) -> int:
+        """Return the total row count for the same filters as list_jobs."""
+        return 0
 
     async def find_by_idempotency_key(
         self, requester_id: str, idempotency_key: str
@@ -156,6 +185,40 @@ class InMemoryJobStore(JobStore):
         async with self._global_lock:
             self._rows[snapshot.job_id] = _Row(snapshot=snapshot)
             self._row_locks.setdefault(snapshot.job_id, asyncio.Lock())
+
+    async def list_jobs(
+        self,
+        *,
+        requester_id: str,
+        status_filter: tuple[str, ...] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[JobRowView]:
+        """In-memory mirror of the DB history query (newest first)."""
+        async with self._global_lock:
+            rows = [
+                row
+                for row in self._rows.values()
+                if row.snapshot.requester_id == requester_id
+                and (status_filter is None or row.snapshot.status in status_filter)
+            ]
+        rows.sort(key=lambda row: row.snapshot.job_id, reverse=True)
+        return list(rows[offset : offset + limit])
+
+    async def count_jobs(
+        self,
+        *,
+        requester_id: str,
+        status_filter: tuple[str, ...] | None = None,
+    ) -> int:
+        """In-memory mirror of the DB count query."""
+        async with self._global_lock:
+            return sum(
+                1
+                for row in self._rows.values()
+                if row.snapshot.requester_id == requester_id
+                and (status_filter is None or row.snapshot.status in status_filter)
+            )
 
     async def acquire_next_job(
         self, worker_id: str
@@ -280,6 +343,7 @@ class InMemoryJobStore(JobStore):
             row.heartbeat_at = None
             row.last_error_code = error_code
             row.last_error_message = error_message
+            row.draft_research_id = draft_research_id
         # Caller is responsible for downstream side-effects (e.g. draft
         # research row) — see Week 5 worker.
 

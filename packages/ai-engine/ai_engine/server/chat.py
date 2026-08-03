@@ -308,18 +308,26 @@ async def create_session(
         "original_kind": summary.get("originalKind"),
     }
 
-    async with pool.connection() as conn:
-        async with conn.transaction():
-            row = await (
-                await conn.execute(
-                    'INSERT INTO "ai_chat_sessions" '
-                    '("id", "userId", "seedSummaryId", "seedSnapshot", "status", '
-                    '"createdAt", "updatedAt") '
-                    "VALUES (gen_random_uuid(), %s, %s, %s::jsonb, 'active', now(), now()) "
-                    'RETURNING "id", "createdAt"',
-                    (body.user_id, body.seed_summary_id, json.dumps(snapshot)),
-                )
-            ).fetchone()
+    try:
+        async with pool.connection() as conn:
+            async with conn.transaction():
+                row = await (
+                    await conn.execute(
+                        'INSERT INTO "ai_chat_sessions" '
+                        '("id", "userId", "seedSummaryId", "seedSnapshot", "status", '
+                        '"createdAt", "updatedAt") '
+                        "VALUES (gen_random_uuid(), %s, %s, %s::jsonb, 'active', now(), now()) "
+                        'RETURNING "id", "createdAt"',
+                        (body.user_id, body.seed_summary_id, json.dumps(snapshot)),
+                    )
+                ).fetchone()
+    except Exception as exc:
+        # 用户 id 不存在（如 E2E 直连 ai-engine 用了假的 requester_id）时
+        # 返回 404 而不是 500，避免 BFF 侧显示“ai-engine 不可达”。
+        code = getattr(exc, 'sqlstate', '')
+        if code == '23503':
+            raise _http_error("AI_CHAT_SEED_NOT_FOUND", "用户不存在")
+        raise
 
     logger.info(
         "ai-engine.chat.session_created",

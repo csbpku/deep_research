@@ -114,6 +114,8 @@ export function apiHandler<TArgs extends unknown[]>(
     } catch (err) {
       // 已经是 NextResponse 的错误（业务 helper 返回的）直接透传
       if (err instanceof NextResponse) return err;
+      // eslint-disable-next-line no-console
+      console.error('[api.handler] unhandled error', { requestId, err: serializeError(err) });
       log.error('api.handler', 'unhandled error', {
         requestId,
         err: serializeError(err),

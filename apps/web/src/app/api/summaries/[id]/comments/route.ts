@@ -49,15 +49,15 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   }
   const { page, per_page, sort } = parsed.data;
 
-  // 先校验 summary 存在（published 状态才允许评论）
+  // 先校验 summary 存在（published 或雷达候选均可评论）
   const summary = await prisma.summary.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, source: true, syncRunId: true },
   });
-  if (!summary || summary.status !== 'published') {
+  if (!summary || (summary.status !== 'published' && !(summary.source === 'daily' && summary.syncRunId != null))) {
     return toApiErrorResponse({
       code: ERROR_CODES.NOT_FOUND,
-      message: '摘要不存在或未发布',
+      message: '摘要不存在或不可评论',
       requestId,
     });
   }
@@ -124,15 +124,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const body = await parseBody(req, CreateCommentInput);
   if (body instanceof NextResponse) return body;
 
-  // 校验 summary 存在且已发布
+  // 校验 summary 存在且可评论
   const summary = await prisma.summary.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, source: true, syncRunId: true },
   });
-  if (!summary || summary.status !== 'published') {
+  if (!summary || (summary.status !== 'published' && !(summary.source === 'daily' && summary.syncRunId != null))) {
     return toApiErrorResponse({
       code: ERROR_CODES.NOT_FOUND,
-      message: '摘要不存在或未发布',
+      message: '摘要不存在或不可评论',
       requestId,
     });
   }
@@ -171,7 +171,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     },
   });
 
-  // 增加 Research.commentCount（用于沉淀详情统计口径）
+  // 增加 Research.commentCount（用于调研库详情统计口径）
   // 但 summary.commentCount 不存在（schema 没有该字段）。如果日后加入，可在这里同步。
 
   log.info('api.summary.comment.create', 'summary comment created', {

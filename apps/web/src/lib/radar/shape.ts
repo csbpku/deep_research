@@ -59,6 +59,14 @@ export type RadarCandidateShape = {
   originalKind: string | null;
   originalMarkdown: string | null;
   originalMeta: unknown;
+  githubItemMeta: RadarGithubItemMeta | null;
+  repoSummary: string | null;
+  highlights: {
+    summary: string;
+    highlights: string[];
+    keyQuote: string | null;
+  } | null;
+  arxivAnalysis: RadarArxivAnalysis | null;
   // Phase 2B deep-dive: arxiv paper parsed structure.
   tldr: string | null;
   sections: Array<{ title: string; level: number; startOffset: number; page?: number }> | null;
@@ -96,6 +104,9 @@ export function shapeCandidate(input: {
     originalKind?: string | null;
     originalMarkdown?: string | null;
     originalMeta?: unknown;
+    repoSummary?: string | null;
+    highlights?: unknown;
+    arxivAnalysis?: unknown;
     tldr?: string | null;
     sections?: unknown;
     figures?: unknown;
@@ -114,7 +125,10 @@ export function shapeCandidate(input: {
   const s = input.summary;
   const counts = input.feedbackCounts ?? emptyFeedbackCounts();
   const mine = input.myFeedbacks ?? [];
-  const distilled = DistilledScoreSchema.safeParse(s.distilledScore);
+  const distilledScore = parseDistilledScore(s.distilledScore);
+  const highlights = parseHighlights(s.highlights);
+  const arxivAnalysis = parseArxivAnalysis(s.arxivAnalysis);
+  const githubItemMeta = parseGithubItemMeta(s.originalMeta);
   return {
     id: s.id,
     title: s.title,
@@ -136,7 +150,7 @@ export function shapeCandidate(input: {
     relevanceScore: s.relevanceScore,
     timelinessScore: s.timelinessScore,
     sourceQualityScore: s.sourceQualityScore,
-    distilledScore: distilled.success ? distilled.data : null,
+    distilledScore,
     summaryDate: s.summaryDate.toISOString().slice(0, 10),
     selectionReason: s.selectionReason,
     sortOrder: s.sortOrder,
@@ -146,6 +160,10 @@ export function shapeCandidate(input: {
     originalKind: s.originalKind ?? null,
     originalMarkdown: s.originalMarkdown ?? null,
     originalMeta: s.originalMeta ?? null,
+    githubItemMeta,
+    repoSummary: s.repoSummary ?? null,
+    highlights,
+    arxivAnalysis,
     tldr: s.tldr ?? null,
     sections: Array.isArray(s.sections)
       ? (s.sections as Array<{ title: string; level: number; startOffset: number; page?: number }>)
@@ -155,6 +173,148 @@ export function shapeCandidate(input: {
       : null,
     authors: Array.isArray(s.authors) ? s.authors : [],
   };
+}
+
+export type RadarArxivAnalysis = {
+  tldr: string;
+  motivation: string;
+  method: string;
+  result: string;
+  conclusion: string;
+};
+
+export type RadarGithubItemMeta = {
+  kind: 'issue' | 'pr' | 'release';
+  owner: string;
+  repo: string;
+  numberOrTag: string;
+  state: string | null;
+  labels: string[];
+  comments: number;
+  author: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  publishedAt: string | null;
+  tagName: string | null;
+  draft: boolean;
+  locked: boolean;
+  assetCount: number;
+  bodyPreview: string | null;
+  commentPreviews: Array<{ author: string | null; body: string; createdAt: string | null }>;
+};
+
+export function parseGithubItemMeta(value: unknown): RadarGithubItemMeta | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.provider !== 'github_item') return null;
+  if (raw.kind !== 'issue' && raw.kind !== 'pr' && raw.kind !== 'release') return null;
+
+  const owner = typeof raw.owner === 'string' ? raw.owner.trim() : '';
+  const repo = typeof raw.repo === 'string' ? raw.repo.trim() : '';
+  const numberOrTag = typeof raw.numberOrTag === 'string' ? raw.numberOrTag.trim() : '';
+  if (!owner || !repo || !numberOrTag) return null;
+  const optionalText = (value: unknown) =>
+    typeof value === 'string' && value.trim() ? value.trim() : null;
+  const commentPreviews = Array.isArray(raw.commentPreviews)
+    ? raw.commentPreviews.flatMap((value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+      const comment = value as Record<string, unknown>;
+      const body = optionalText(comment.body);
+      if (!body) return [];
+      return [{
+        author: optionalText(comment.author),
+        body,
+        createdAt: optionalText(comment.createdAt),
+      }];
+    }).slice(0, 3)
+    : [];
+
+  return {
+    kind: raw.kind,
+    owner,
+    repo,
+    numberOrTag,
+    state: optionalText(raw.state),
+    labels: Array.isArray(raw.labels)
+      ? raw.labels.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 20)
+      : [],
+    comments: typeof raw.comments === 'number' && raw.comments >= 0 ? raw.comments : 0,
+    author: optionalText(raw.author),
+    createdAt: optionalText(raw.createdAt),
+    updatedAt: optionalText(raw.updatedAt),
+    publishedAt: optionalText(raw.published_at ?? raw.publishedAt),
+    tagName: optionalText(raw.tag_name ?? raw.tagName),
+    draft: raw.draft === true,
+    locked: raw.locked === true,
+    assetCount: typeof raw.assetCount === 'number' && raw.assetCount >= 0 ? raw.assetCount : 0,
+    bodyPreview: optionalText(raw.bodyPreview),
+    commentPreviews,
+  };
+}
+
+export function parseArxivAnalysis(value: unknown): RadarArxivAnalysis | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const text = (key: keyof RadarArxivAnalysis) =>
+    typeof raw[key] === 'string' ? raw[key].trim() : '';
+  const analysis = {
+    tldr: text('tldr'),
+    motivation: text('motivation'),
+    method: text('method'),
+    result: text('result'),
+    conclusion: text('conclusion'),
+  };
+  return Object.values(analysis).some(Boolean) ? analysis : null;
+}
+
+/** Accept current camelCase scores and the snake_case payload written by early v2 syncs. */
+export function parseDistilledScore(value: unknown): DistilledScore | null {
+  const current = DistilledScoreSchema.safeParse(value);
+  if (current.success) return current.data;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const raw = value as Record<string, unknown>;
+  const dimensions = raw.dimensions;
+  if (!dimensions || typeof dimensions !== 'object' || Array.isArray(dimensions)) return null;
+  const dims = dimensions as Record<string, unknown>;
+  const normalized = {
+    total: raw.total,
+    tier: raw.tier,
+    mustRead: raw.mustRead ?? raw.must_read,
+    dimensions: {
+      informationGain: dims.informationGain ?? dims.info_increment,
+      analysisDepth: dims.analysisDepth ?? dims.analysis_depth,
+      actionability: dims.actionability,
+      factualReliability: dims.factualReliability ?? dims.fact_credibility,
+      currentApplicability: dims.currentApplicability ?? dims.timeliness,
+      expressionQuality: dims.expressionQuality ?? dims.expression_quality,
+      audienceFit: dims.audienceFit ?? dims.audience_fit,
+    },
+    weakPoint: raw.weakPoint ?? raw.weak_point,
+    veto: raw.veto,
+    riskFlags: raw.riskFlags ?? raw.risk_flags ?? [],
+    profile: raw.profile,
+    profileFallback: raw.profileFallback ?? raw.profile_fallback,
+    isDefault: raw.isDefault ?? raw.is_default,
+    version: raw.version,
+  };
+  const legacy = DistilledScoreSchema.safeParse(normalized);
+  return legacy.success ? legacy.data : null;
+}
+
+export function parseHighlights(value: unknown): RadarCandidateShape['highlights'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const points = Array.isArray(raw.highlights)
+    ? raw.highlights.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
+  const keyQuoteRaw = raw.key_quote ?? raw.keyQuote;
+  const keyQuote = typeof keyQuoteRaw === 'string' && keyQuoteRaw.trim()
+    ? keyQuoteRaw.trim()
+    : null;
+  if (!summary && points.length === 0 && !keyQuote) return null;
+  return { summary, highlights: points, keyQuote };
 }
 
 /** 取前 N 个字符；保留换行前的整段语义边界（句号/问号/感叹号/换行）。 */

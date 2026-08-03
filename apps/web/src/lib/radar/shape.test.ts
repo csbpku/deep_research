@@ -15,6 +15,10 @@ import {
   aggregateFeedbacks,
   emptyFeedbackCounts,
   RADAR_FEEDBACK_TYPES,
+  parseDistilledScore,
+  parseHighlights,
+  parseArxivAnalysis,
+  parseGithubItemMeta,
 } from './shape';
 
 describe('excerptOf', () => {
@@ -114,6 +118,101 @@ describe('emptyFeedbackCounts', () => {
   it('returns all zero', () => {
     const c = emptyFeedbackCounts();
     expect(c).toEqual({ useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 });
+  });
+});
+
+describe('parseDistilledScore', () => {
+  it('normalizes legacy snake_case v2 payloads', () => {
+    const score = parseDistilledScore({
+      total: 90,
+      tier: 'collection',
+      must_read: true,
+      dimensions: {
+        info_increment: 3,
+        analysis_depth: 2,
+        actionability: 3,
+        fact_credibility: 2,
+        timeliness: 3,
+        expression_quality: 3,
+        audience_fit: 3,
+      },
+      weak_point: '缺少机制分析',
+      veto: null,
+      risk_flags: [],
+      profile: 'engineering',
+      is_default: false,
+      version: '2.0',
+    });
+
+    expect(score?.total).toBe(90);
+    expect(score?.mustRead).toBe(true);
+    expect(score?.dimensions.analysisDepth).toBe(2);
+    expect(score?.dimensions.currentApplicability).toBe(3);
+    expect(score?.weakPoint).toBe('缺少机制分析');
+  });
+});
+
+describe('parseHighlights', () => {
+  it('shapes article enrichment and maps key_quote', () => {
+    expect(parseHighlights({
+      summary: '一句话摘要',
+      highlights: ['亮点一', '', '亮点二'],
+      key_quote: '关键原文',
+    })).toEqual({
+      summary: '一句话摘要',
+      highlights: ['亮点一', '亮点二'],
+      keyQuote: '关键原文',
+    });
+  });
+});
+
+describe('parseArxivAnalysis', () => {
+  it('shapes the five-field paper analysis', () => {
+    expect(parseArxivAnalysis({
+      tldr: '一句话结论',
+      motivation: '研究动机',
+      method: '研究方法',
+      result: '实验结果',
+      conclusion: '最终结论',
+    })).toEqual({
+      tldr: '一句话结论',
+      motivation: '研究动机',
+      method: '研究方法',
+      result: '实验结果',
+      conclusion: '最终结论',
+    });
+  });
+});
+
+describe('parseGithubItemMeta', () => {
+  it('shapes GitHub item metadata and limits comment previews', () => {
+    const meta = parseGithubItemMeta({
+      provider: 'github_item',
+      kind: 'pr',
+      owner: 'acme',
+      repo: 'agent',
+      numberOrTag: '7',
+      state: 'open',
+      labels: ['enhancement'],
+      comments: 4,
+      author: 'octocat',
+      bodyPreview: 'Adds a streaming transport.',
+      commentPreviews: [
+        { author: 'a', body: 'First', createdAt: '2026-08-01T00:00:00Z' },
+        { author: 'b', body: 'Second' },
+        { author: 'c', body: 'Third' },
+        { author: 'd', body: 'Fourth' },
+      ],
+    });
+
+    expect(meta?.kind).toBe('pr');
+    expect(meta?.bodyPreview).toBe('Adds a streaming transport.');
+    expect(meta?.commentPreviews).toHaveLength(3);
+    expect(meta?.commentPreviews[1]).toEqual({ author: 'b', body: 'Second', createdAt: null });
+  });
+
+  it('rejects unrelated metadata', () => {
+    expect(parseGithubItemMeta({ provider: 'github', kind: 'issue' })).toBeNull();
   });
 });
 

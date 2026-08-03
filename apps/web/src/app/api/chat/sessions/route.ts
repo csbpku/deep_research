@@ -34,12 +34,13 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   // candidate / rejected / archived 态）发起 AI 对话并读取其全文。
   // 错误码 AI_CHAT_FORBIDDEN_SEED 在 errors.py 和 chat-bff.ts 里
   // 已定义但从未被 raise —— 基础设施存在但未连线。
-  // 现在在反代前校验：种子必须存在、已发布、且可见于当前用户。
+  // 现在在反代前校验：种子必须存在，且为已发布摘要或雷达候选
+  // （source='daily' 且 syncRunId 非空），防止拿任意 summary 开对话。
   const seed = await prisma.summary.findUnique({
     where: { id: input.seedSummaryId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, source: true, syncRunId: true },
   });
-  if (!seed || seed.status !== 'published') {
+  if (!seed || (seed.status !== 'published' && !(seed.source === 'daily' && seed.syncRunId != null))) {
     return toApiErrorResponse({
       code: ERROR_CODES.AI_CHAT_FORBIDDEN_SEED,
       message: '该摘要不可用于对话',

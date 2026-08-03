@@ -7,48 +7,43 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { Upload } from 'lucide-react';
+
 import { ImportDialog } from '@/components/ImportDialog';
+import { Button } from '@/components/ui/button';
 
 export default function ImportPage() {
   const [dialogOpen, setDialogOpen] = useState(true);
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <Link href="/researches" style={{ fontSize: 13, color: '#64748b', textDecoration: 'none' }}>
-          沉淀
+    <div className="mx-auto max-w-measure">
+      <nav className="mb-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <Link href="/researches" className="hover:text-foreground hover:underline">
+          调研库
         </Link>
-        <span style={{ color: '#94a3b8' }}>/</span>
-        <Link href="/researches/new" style={{ fontSize: 13, color: '#64748b', textDecoration: 'none' }}>
+        <span>/</span>
+        <Link href="/researches/new" className="hover:text-foreground hover:underline">
           新建
         </Link>
-        <span style={{ color: '#94a3b8' }}>/</span>
-        <span style={{ fontSize: 13, color: '#475569' }}>从文件导入</span>
-      </div>
+        <span>/</span>
+        <span>从文件导入</span>
+      </nav>
 
-      <h1 style={{ fontSize: 22, margin: '0 0 16px' }}>从文件导入</h1>
+      <h1 className="mb-3 text-xl font-semibold tracking-tight">从文件导入</h1>
 
-      <p style={{ fontSize: 14, color: '#475569', margin: '0 0 16px', lineHeight: 1.7 }}>
-        支持导入 <code>.md</code> / <code>.txt</code> / <code>.html</code> 文件（单文件 ≤ 5MB）。
+      <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
+        支持导入 <code className="rounded bg-muted px-1 font-mono text-xs">.md</code> /{' '}
+        <code className="rounded bg-muted px-1 font-mono text-xs">.txt</code> /{' '}
+        <code className="rounded bg-muted px-1 font-mono text-xs">.html</code> 文件（单文件 ≤ 5MB）。
         系统会清除 HTML 中的危险标签与事件属性，并把内容转换为 Markdown。
         成功后会创建一份个人草稿（不自动发布），可继续编辑。
       </p>
 
       {!dialogOpen && (
-        <button
-          onClick={() => setDialogOpen(true)}
-          style={{
-            padding: '10px 20px',
-            border: 'none',
-            borderRadius: 6,
-            background: '#0f172a',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: 14,
-          }}
-        >
+        <Button type="button" onClick={() => setDialogOpen(true)}>
+          <Upload />
           选择文件
-        </button>
+        </Button>
       )}
 
       {dialogOpen && <ImportDialog onClose={() => setDialogOpen(false)} />}

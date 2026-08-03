@@ -39,6 +39,7 @@ export type UpdateResearchInput = z.infer<typeof UpdateResearchInput>;
 /** 查询沉淀列表 */
 export const ResearchListQuery = z.object({
   type: z.enum([RESEARCH_TYPE.RESEARCH, RESEARCH_TYPE.KNOWLEDGE]).optional(),
+  scope: z.enum(['published', 'draft']).default('published'),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
@@ -67,12 +68,13 @@ export type CreateImportInput = z.infer<typeof CreateImportInput>;
  * - page/per_page: 分页；per_page 上限 50
  *
  * 契约源：docs/agent-prompts/week4-engineer-a.md §任务 2
- * 注：触发器已保证 search_docs 只含 published 内容；草稿/归档不入搜索。
+ * 注：摘要/长文/精华来自 published-only search_docs；雷达候选动态查询 summaries。
  */
 export const SearchDocType = {
   SUMMARY: 'summary',
   LONG_RESEARCH: 'long_research',
   KNOWLEDGE: 'knowledge',
+  RADAR: 'radar',
 } as const;
 
 export const SearchQuery = z.object({
@@ -86,6 +88,7 @@ export const SearchQuery = z.object({
       SearchDocType.SUMMARY,
       SearchDocType.LONG_RESEARCH,
       SearchDocType.KNOWLEDGE,
+      SearchDocType.RADAR,
     ])
     .optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -111,6 +114,7 @@ export const RadarListQuery = z.object({
   q: z.string().trim().max(200).optional(),
   sourceType: z.string().trim().min(1).max(32).optional(),
   status: z.enum(RADAR_STATUS_VALUES).optional(),
+  quality: z.enum(['relevant', 'all']).default('relevant'),
   page: z.coerce.number().int().min(1).default(1),
   per_page: z.coerce.number().int().min(1).max(50).default(20),
 });

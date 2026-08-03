@@ -12,6 +12,23 @@
 // - Footer textarea + send button (⌘+Enter)
 
 import { useEffect, useRef, useState } from 'react';
+import {
+  ExternalLink,
+  FileText,
+  Lightbulb,
+  Link2,
+  Paperclip,
+  Send,
+  Sparkles,
+  X,
+} from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+} from '@/components/ui/sheet';
 
 interface ChatMessage {
   id: string;
@@ -51,7 +68,6 @@ interface Props {
   summaryId: string;
   summaryTitle: string;
   summaryUrl: string;
-  summaryInterpretation: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -80,7 +96,6 @@ export function AskAiDrawer({
   summaryId,
   summaryTitle,
   summaryUrl,
-  summaryInterpretation,
   open,
   onOpenChange,
 }: Props) {
@@ -197,115 +212,46 @@ export function AskAiDrawer({
     }
   }
 
+
   return (
-    <>
-      <div
-        aria-hidden={!open}
-        onClick={close}
-        style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0, 0, 0, 0.3)',
-          opacity: open ? 1 : 0,
-          pointerEvents: open ? 'auto' : 'none',
-          transition: 'opacity 0.3s ease',
-          zIndex: 40,
-        }}
-      />
-      <aside
-        aria-hidden={!open}
-        style={{
-          position: 'fixed',
-          top: 0,
-          right: 0,
-          height: '100%',
-          width: '480px',
-          maxWidth: '90vw',
-          background: '#fff',
-          boxShadow: '-4px 0 24px rgba(0, 0, 0, 0.08)',
-          transform: open ? 'translateX(0)' : 'translateX(100%)',
-          transition: 'transform 0.3s ease-out',
-          zIndex: 50,
-          display: 'flex',
-          flexDirection: 'column',
-          borderLeft: '1px solid #e2e8f0',
-        }}
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col p-0 sm:max-w-md"
       >
         {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 20px',
-            borderBottom: '1px solid #e2e8f0',
-            gap: 8,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-            <span aria-hidden>📄</span>
+        <SheetHeader>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <span
-              style={{
-                fontWeight: 500,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: 14,
-              }}
+              className="truncate text-sm font-medium"
               title={summaryTitle}
             >
               {summaryTitle}
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-            <a
-              href={summaryUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                fontSize: 12,
-                padding: '4px 8px',
-                color: '#7c3aed',
-                textDecoration: 'none',
-                borderRadius: 4,
-              }}
-            >
-              ↗ 看原文
-            </a>
-            <button
+          <div className="flex shrink-0 items-center gap-1">
+            <Button asChild variant="link" size="xs" className="h-auto p-0 text-method-ai">
+              <a href={summaryUrl} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="size-3" />
+                看原文
+              </a>
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-sm"
               onClick={close}
               aria-label="关闭"
-              style={{
-                width: 28,
-                height: 28,
-                border: 'none',
-                background: 'transparent',
-                fontSize: 18,
-                cursor: 'pointer',
-                color: '#64748b',
-                borderRadius: 4,
-              }}
             >
-              ×
-            </button>
+              <X className="size-4" />
+            </Button>
           </div>
-        </div>
+        </SheetHeader>
 
         {/* Context strip */}
-        <div
-          style={{
-            padding: '8px 20px',
-            background: '#f8fafc',
-            borderBottom: '1px solid #e2e8f0',
-            fontSize: 12,
-            color: '#475569',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          <span style={{ color: '#7c3aed' }}>✨</span>
+        <div className="flex items-center gap-1.5 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+          <Sparkles className="size-3 text-method-ai" />
           <span>
             {session?.seedSnapshot.originalMarkdown
               ? 'AI 上下文：原文 + 解读 + 摘要'
@@ -314,160 +260,78 @@ export function AskAiDrawer({
         </div>
 
         {/* Suggestion chips */}
-        <div
-          style={{
-            padding: '12px 20px',
-            borderBottom: '1px solid #e2e8f0',
-          }}
-        >
-          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>💡 试试这些问题</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div className="border-b border-border px-4 py-3">
+          <div className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
+            <Lightbulb className="size-3" />
+            试试这些问题
+          </div>
+          <div className="flex flex-wrap gap-1.5">
             {SUGGESTIONS.map((s) => (
-              <button
+              <Button
                 key={s}
                 type="button"
+                variant="outline"
+                size="xs"
+                className="rounded-full"
                 disabled={sending || !session}
                 onClick={() => void sendMessage(s, null)}
-                style={{
-                  fontSize: 12,
-                  padding: '4px 10px',
-                  background: '#f1f5f9',
-                  border: 'none',
-                  borderRadius: 12,
-                  cursor: sending || !session ? 'not-allowed' : 'pointer',
-                  color: '#334155',
-                  opacity: sending || !session ? 0.6 : 1,
-                }}
               >
                 {s}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
 
         {/* Messages */}
-        <div
-          ref={messagesRef}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '16px 20px',
-            background: '#fff',
-          }}
-        >
+        <div ref={messagesRef} className="flex-1 overflow-y-auto bg-card px-4 py-4">
           {loading ? (
-            <div style={{ fontSize: 13, color: '#64748b', textAlign: 'center', padding: 16 }}>
-              加载会话中…
-            </div>
+            <div className="py-4 text-center text-sm text-muted-foreground">加载会话中…</div>
           ) : err ? (
             <div
               role="alert"
-              style={{
-                fontSize: 13,
-                color: '#b91c1c',
-                padding: '8px 12px',
-                background: '#fef2f2',
-                borderRadius: 4,
-              }}
+              className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
             >
               {err}
             </div>
           ) : (
             <>
               {session && session.messages.length === 0 ? (
-                <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                <div className="mb-3 flex gap-3">
                   <div
                     aria-hidden
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: '50%',
-                      background: '#7c3aed',
-                      color: '#fff',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 12,
-                      flexShrink: 0,
-                    }}
+                    className="flex size-7 shrink-0 items-center justify-center rounded-full bg-method-ai text-xs text-primary-foreground"
                   >
-                    ✨
+                    <Sparkles className="size-3.5" />
                   </div>
-                  <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
+                  <div className="text-sm leading-relaxed text-muted-foreground">
                     我已读了原文和 AI 摘要。想了解什么？
-                    <div style={{ fontSize: 11, marginTop: 4 }}>
-                      可以引用文章中的具体段落，或直接发问。
-                    </div>
+                    <div className="mt-1 text-[11px]">可以引用文章中的具体段落，或直接发问。</div>
                   </div>
                 </div>
               ) : null}
 
               {(session?.messages ?? []).map((m) =>
                 m.role === 'user' ? (
-                  <div
-                    key={m.id}
-                    style={{
-                      display: 'flex',
-                      gap: 12,
-                      marginBottom: 8,
-                      justifyContent: 'flex-end',
-                    }}
-                  >
-                    <div
-                      style={{
-                        background: '#f1f5f9',
-                        borderRadius: 16,
-                        borderTopLeftRadius: 4,
-                        padding: '8px 14px',
-                        maxWidth: '78%',
-                        fontSize: 13,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
+                  <div key={m.id} className="mb-2 flex justify-end">
+                    <div className="max-w-[78%] rounded-2xl rounded-tl-md bg-muted px-3.5 py-2 text-sm whitespace-pre-wrap break-words">
                       {m.content}
                     </div>
                   </div>
                 ) : (
-                  <div key={m.id} style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                  <div key={m.id} className="mb-3 flex gap-3">
                     <div
                       aria-hidden
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: '50%',
-                        background: '#7c3aed',
-                        color: '#fff',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 12,
-                        flexShrink: 0,
-                      }}
+                      className="flex size-7 shrink-0 items-center justify-center rounded-full bg-method-ai text-xs text-primary-foreground"
                     >
-                      ✨
+                      <Sparkles className="size-3.5" />
                     </div>
-                    <div
-                      style={{
-                        fontSize: 13,
-                        lineHeight: 1.6,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        flex: 1,
-                      }}
-                    >
+                    <div className="flex-1 text-sm leading-relaxed whitespace-pre-wrap break-words">
                       {m.content}
                       {m.latencyMs ? (
-                        <div
-                          style={{
-                            marginTop: 6,
-                            fontSize: 11,
-                            color: '#94a3b8',
-                            display: 'flex',
-                            gap: 8,
-                          }}
-                        >
-                          <span>{m.latencyMs < 1000 ? `${m.latencyMs}ms` : `${(m.latencyMs / 1000).toFixed(1)}s`}</span>
+                        <div className="mt-1.5 text-[11px] text-muted-foreground">
+                          {m.latencyMs < 1000
+                            ? `${m.latencyMs}ms`
+                            : `${(m.latencyMs / 1000).toFixed(1)}s`}
                         </div>
                       ) : null}
                     </div>
@@ -476,44 +340,16 @@ export function AskAiDrawer({
               )}
 
               {sending ? (
-                <div style={{ display: 'flex', gap: 12, marginBottom: 12 }} aria-live="polite">
+                <div className="mb-3 flex gap-3" aria-live="polite">
                   <div
                     aria-hidden
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: '50%',
-                      background: '#7c3aed',
-                      color: '#fff',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 12,
-                      flexShrink: 0,
-                    }}
+                    className="flex size-7 shrink-0 items-center justify-center rounded-full bg-method-ai text-xs text-primary-foreground"
                   >
-                    ✨
+                    <Sparkles className="size-3.5" />
                   </div>
-                  <div style={{ fontSize: 13, color: '#64748b' }}>
+                  <div className="text-sm text-muted-foreground">
                     AI 正在思考<span className="typing-cursor">▍</span>
                   </div>
-                </div>
-              ) : null}
-
-              {summaryInterpretation && session && session.messages.length === 0 ? (
-                <div
-                  style={{
-                    marginTop: 8,
-                    padding: 10,
-                    background: '#f8fafc',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: 4,
-                    fontSize: 12,
-                    color: '#475569',
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {summaryInterpretation}
                 </div>
               ) : null}
             </>
@@ -521,29 +357,8 @@ export function AskAiDrawer({
         </div>
 
         {/* Input */}
-        <div
-          style={{
-            borderTop: '1px solid #e2e8f0',
-            padding: '12px 16px',
-            background: '#fff',
-          }}
-        >
-          <div
-            style={{
-              border: '1px solid #e2e8f0',
-              borderRadius: 8,
-              padding: '8px',
-              transition: 'border-color 0.15s',
-            }}
-            onFocus={(e) => {
-              const inner = e.currentTarget;
-              inner.style.borderColor = '#7c3aed';
-            }}
-            onBlur={(e) => {
-              const inner = e.currentTarget;
-              inner.style.borderColor = '#e2e8f0';
-            }}
-          >
+        <div className="border-t border-border bg-card p-3">
+          <div className="rounded-md border border-input focus-within:border-method-ai focus-within:ring-1 focus-within:ring-method-ai/40">
             <textarea
               ref={textareaRef}
               value={input}
@@ -552,77 +367,46 @@ export function AskAiDrawer({
               placeholder="提问… (⌘+Enter 发送)"
               rows={2}
               disabled={!session || sending}
-              style={{
-                width: '100%',
-                fontSize: 13,
-                border: 'none',
-                outline: 'none',
-                resize: 'none',
-                fontFamily: 'inherit',
-                background: 'transparent',
-                color: '#0f172a',
-                boxSizing: 'border-box',
-              }}
+              className="w-full resize-none border-0 bg-transparent p-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginTop: 4,
-              }}
-            >
-              <div style={{ display: 'flex', gap: 4, fontSize: 12, color: '#64748b' }}>
-                <button
+            <div className="flex items-center justify-between px-1 pb-1">
+              <div className="flex gap-1 text-xs text-muted-foreground">
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-sm"
                   aria-label="附加文件（未启用）"
                   disabled
-                  style={{
-                    padding: '2px 6px',
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'not-allowed',
-                    color: '#94a3b8',
-                  }}
+                  className="text-muted-foreground"
                 >
-                  📎
-                </button>
-                <button
+                  <Paperclip className="size-3.5" />
+                </Button>
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   aria-label="引用（未启用）"
                   disabled
-                  style={{
-                    padding: '2px 6px',
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: 'not-allowed',
-                    color: '#94a3b8',
-                  }}
+                  className="text-muted-foreground"
                 >
-                  🔗 引用
-                </button>
+                  <Link2 className="size-3" />
+                  引用
+                </Button>
               </div>
-              <button
+              <Button
                 type="button"
-                onClick={() => void sendMessage(input)}
+                size="xs"
                 disabled={!input.trim() || !session || sending}
-                style={{
-                  fontSize: 12,
-                  padding: '4px 12px',
-                  background: !input.trim() || !session || sending ? '#94a3b8' : '#7c3aed',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: !input.trim() || !session || sending ? 'not-allowed' : 'pointer',
-                }}
+                onClick={() => void sendMessage(input)}
               >
-                发送 ✨
-              </button>
+                <Send className="size-3.5" />
+                发送
+              </Button>
             </div>
           </div>
         </div>
-      </aside>
-    </>
+      </SheetContent>
+    </Sheet>
   );
 }
 

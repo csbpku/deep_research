@@ -10,6 +10,7 @@ import pytest
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
 from ai_engine.radar.github import fetch_github
+from ai_engine.radar.github_tracked import fetch_github_tracked
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
@@ -172,6 +173,192 @@ async def test_github_release_candidates() -> None:
     assert items[0].tags == ("github", "release")
 
 
+def _github_pr(updated_at: str = "2026-07-30T00:00:00Z") -> dict[str, Any]:
+    return {
+        "title": "PR title",
+        "html_url": "https://github.com/acme/agent/pull/1",
+        "body": "PR body",
+        "updated_at": updated_at,
+        "state": "open",
+        "user": {"login": "alice"},
+    }
+
+
+def _github_issue(number: int, updated_at: str) -> dict[str, Any]:
+    return {
+        "number": number,
+        "title": f"issue-{number}",
+        "html_url": f"https://github.com/acme/agent/issues/{number}",
+        "body": "Issue body",
+        "updated_at": updated_at,
+        "state": "open",
+        "user": {"login": "alice"},
+    }
+
+
+def _github_release(tag: str, published_at: str) -> dict[str, Any]:
+    return {
+        "tag_name": tag,
+        "name": tag,
+        "html_url": f"https://github.com/acme/agent/releases/tag/{tag}",
+        "body": "Release body",
+        "published_at": published_at,
+    }
+
+
+async def test_github_tracked_ordinary_repo_fetches_single_pull_page() -> None:
+    pull_requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls"):
+            pull_requests.append(request.url.params["page"])
+            return httpx.Response(200, json=[_github_pr()])
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/releases"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_github_tracked(
+            {
+                "repos": ["acme/agent"],
+                "lookback_days": 7,
+                "max_items_per_repo": 50,
+                "paginated_repos": [],
+            },
+            client=client,
+        )
+    assert pull_requests == ["1"]
+    assert len(items) == 1
+
+
+async def test_github_tracked_caps_total_per_repo_across_types() -> None:
+    issues = [_github_issue(i, "2026-07-30T12:00:00Z") for i in range(10)]
+    prs = [_github_pr("2026-07-29T12:00:00Z") for _ in range(10)]
+    releases = [_github_release(f"v1.{i}", "2026-07-28T12:00:00Z") for i in range(10)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(200, json=issues)
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=prs)
+        if request.url.path.endswith("/releases"):
+            return httpx.Response(200, json=releases)
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_github_tracked(
+            {
+                "repos": ["acme/agent"],
+                "lookback_days": 7,
+                "max_items_per_repo": 15,
+                "paginated_repos": [],
+            },
+            client=client,
+        )
+
+    # One repo digest candidate; inside the activity, issues come first,
+    # then PRs, and releases fall outside the per-repo cap.
+    assert len(items) == 1
+    activity = items[0].repo_activity
+    assert activity is not None
+    assert activity.item_count == 15
+    assert [it.title for it in activity.issues] == [f"issue-{i}" for i in range(10)]
+    assert [it.title for it in activity.prs] == ["PR title"] * 5
+    assert activity.releases == ()
+
+
+async def test_github_tracked_releases_respect_lookback() -> None:
+    releases = [
+        _github_release("v1.0", "2026-07-01T00:00:00Z"),
+        _github_release("v2.0", "2026-07-30T00:00:00Z"),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/releases"):
+            return httpx.Response(200, json=releases)
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_github_tracked(
+            {
+                "repos": ["acme/agent"],
+                "lookback_days": 7,
+                "max_items_per_repo": 50,
+                "paginated_repos": [],
+            },
+            client=client,
+        )
+
+    assert [it.title for it in items] == ["acme/agent 24h GitHub 动态"]
+    assert [it.number for it in items[0].repo_activity.releases] == ["v2.0"]
+
+
+async def test_github_tracked_paginated_repo_walks_up_to_five_pages() -> None:
+    pull_requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls"):
+            page = request.url.params["page"]
+            pull_requests.append(page)
+            return httpx.Response(200, json=[_github_pr() for _ in range(100)])
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/releases"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_github_tracked(
+            {
+                "repos": ["acme/agent"],
+                "lookback_days": 7,
+                "max_items_per_repo": 50,
+                "paginated_repos": ["ACME/Agent/"],
+            },
+            client=client,
+        )
+    assert pull_requests == ["1", "2", "3", "4", "5"]
+    assert len(items) == 1
+    assert len(items[0].repo_activity.prs) == 20
+
+
+async def test_github_tracked_paginated_repo_stops_at_stale_page() -> None:
+    pull_requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls"):
+            page = request.url.params["page"]
+            pull_requests.append(page)
+            if page == "2":
+                return httpx.Response(200, json=[_github_pr("2026-01-01T00:00:00Z")])
+            return httpx.Response(200, json=[_github_pr() for _ in range(100)])
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(200, json=[])
+        if request.url.path.endswith("/releases"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_github_tracked(
+            {
+                "repos": ["acme/agent"],
+                "lookback_days": 7,
+                "max_items_per_repo": 50,
+                "paginated_repos": ["acme/agent"],
+            },
+            client=client,
+        )
+    assert pull_requests == ["1", "2"]
+    assert len(items) == 1
+    assert len(items[0].repo_activity.prs) == 20
+
+
 async def test_github_rejects_invalid_repo_config() -> None:
     with pytest.raises(ValueError, match="owner/name"):
         await fetch_github({"repos": ["invalid"], "type": "stars"})
@@ -186,7 +373,7 @@ async def test_arxiv_fetcher_maps_existing_ingestion(monkeypatch: pytest.MonkeyP
             "title": "Paper",
             "url": "https://arxiv.org/abs/2607.12345",
             "snippet": "Abstract",
-            "published_at": "2026-07-22T00:00:00Z",
+            "published_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
             "tags": ["arxiv"],
         }]
 

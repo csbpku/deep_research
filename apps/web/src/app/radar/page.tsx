@@ -1,11 +1,33 @@
 'use client';
 
+// /radar —— 技术雷达列表（Searchable via PostgreSQL ILIKE + Array Substring）。
+//
+// 功能：
+//  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
+//  - 过滤器：sourceType（GitHub / arXiv / RSS）、status（候选 / 已发布 / 已忽略）
+//  - 分页（Pagination domain component）
+//  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
+
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { EmptyState } from '../../components/EmptyState';
-import { AskAiDrawer } from '../../components/radar/AskAiDrawer';
-import { RadarCandidateCard } from '../../components/radar/RadarCandidateCard';
-import type { RadarFeedbackCounts } from '../../components/radar/RadarFeedbackBar';
+import { Search } from 'lucide-react';
+
+import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
+import { FilterBar } from '@/components/domain/FilterBar';
+import { PageHeader } from '@/components/domain/PageHeader';
+import { Pagination } from '@/components/domain/Pagination';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/EmptyState';
+import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 
@@ -39,40 +61,49 @@ interface RadarListResponse {
   items: RadarCandidateListItem[];
 }
 
+// 雷达搜索：哨兵值是空串，对应 API 的 "全部"
+const ALL = '__all__';
+
 const SOURCE_TYPE_OPTIONS = [
-  { value: '', label: '全部来源' },
+  { value: ALL, label: '全部来源' },
   { value: 'github', label: 'GitHub' },
   { value: 'arxiv', label: 'arXiv' },
   { value: 'rss', label: 'RSS' },
+  { value: 'hackernews', label: 'Hacker News' },
+  { value: 'producthunt', label: 'Product Hunt' },
+  { value: 'reddit', label: 'Reddit' },
+  { value: 'devto', label: 'Dev.to' },
+  { value: 'vendor_news', label: '厂商新闻' },
+  { value: 'lobsters', label: 'Lobste.rs' },
 ];
 
 const STATUS_OPTIONS = [
-  { value: '', label: '全部状态' },
+  { value: ALL, label: '全部状态' },
   { value: 'candidate', label: '候选' },
   { value: 'published', label: '已发布' },
   { value: 'rejected', label: '已忽略' },
 ];
 
+const QUALITY_OPTIONS = [
+  { value: 'relevant', label: '相关内容' },
+  { value: 'all', label: '全部内容（含噪声）' },
+];
+
 export default function RadarPage() {
   const [q, setQ] = useState('');
-  const [sourceType, setSourceType] = useState('');
-  const [status, setStatus] = useState('');
+  const [sourceType, setSourceType] = useState(ALL);
+  const [status, setStatus] = useState(ALL);
+  const [quality, setQuality] = useState('relevant');
   const [page, setPage] = useState(1);
-  const [drawer, setDrawer] = useState({
-    open: false,
-    summaryId: '',
-    title: '',
-    url: '',
-    interpretation: null as string | null,
-  });
 
   const query = useQuery<RadarListResponse>({
-    queryKey: ['radar', q, sourceType, status, page],
+    queryKey: ['radar', q, sourceType, status, quality, page],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
-      if (sourceType) params.set('sourceType', sourceType);
-      if (status) params.set('status', status);
+      if (sourceType !== ALL) params.set('sourceType', sourceType);
+      if (status !== ALL) params.set('status', status);
+      params.set('quality', quality);
       params.set('page', String(page));
       params.set('per_page', '20');
       const r = await fetch(`/api/radar?${params.toString()}`, { cache: 'no-store' });
@@ -89,82 +120,96 @@ export default function RadarPage() {
   const totalPages = query.data?.totalPages ?? 1;
 
   return (
-    <div>
-      <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>技术雷达</h1>
-      <p style={{ color: '#475569', marginTop: 0 }}>
-        来自 GitHub / arXiv / RSS 的候选；AI 一句话解读 + 三维评分；点击标题进入详情。
-      </p>
+    <div className="mx-auto min-w-0 max-w-shell">
+      <PageHeader
+        title="技术雷达"
+        description="每个条目附带 AI 一句话解读与多维度评分；点击标题进入详情。"
+      />
 
-      <form
+      <FilterBar
         onSubmit={(e) => {
           e.preventDefault();
           setPage(1);
           void query.refetch();
         }}
-        style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          margin: '12px 0 16px',
-          padding: 12,
-          border: '1px solid #e2e8f0',
-          borderRadius: 8,
-          background: '#fff',
-        }}
+        trailing={query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : undefined}
       >
-        <input
+        <Input
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="搜索标题 / 解读 / 标签…"
-          style={{
-            padding: '6px 10px',
-            border: '1px solid #cbd5e1',
-            borderRadius: 4,
-            fontSize: 14,
-            minWidth: 220,
-          }}
+          aria-label="搜索雷达候选"
+          className="w-full sm:w-64"
         />
-        <select
-          value={sourceType}
-          onChange={(e) => { setSourceType(e.target.value); setPage(1); }}
-          style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 14 }}
-        >
-          {SOURCE_TYPE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <select
-          value={status}
-          onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-          style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 14 }}
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <button
-          type="submit"
-          style={{
-            padding: '6px 16px',
-            border: '1px solid #0f172a',
-            background: '#0f172a',
-            color: '#fff',
-            borderRadius: 4,
-            fontSize: 14,
-            cursor: 'pointer',
-          }}
-        >
+
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>来源</span>
+          <Select
+            value={sourceType}
+            onValueChange={(v) => { setSourceType(v); setPage(1); }}
+          >
+            <SelectTrigger className="w-32" aria-label="来源类型筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SOURCE_TYPE_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>状态</span>
+          <Select
+            value={status}
+            onValueChange={(v) => { setStatus(v); setPage(1); }}
+          >
+            <SelectTrigger className="w-32" aria-label="状态筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>质量</span>
+          <Select
+            value={quality}
+            onValueChange={(v) => { setQuality(v); setPage(1); }}
+          >
+            <SelectTrigger className="w-40" aria-label="质量筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {QUALITY_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <Button type="submit" size="sm">
+          <Search />
           搜索
-        </button>
-        <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: 13 }}>
-          {query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : ''}
-        </span>
-      </form>
+        </Button>
+      </FilterBar>
 
       {query.isLoading ? (
-        <p style={{ color: '#475569' }}>加载中…</p>
+        <div className="grid min-w-0 gap-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-4">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-3 w-full" />
+            </div>
+          ))}
+        </div>
       ) : query.isError ? (
         <EmptyState title="加载失败" description={String((query.error as Error).message)} />
       ) : items.length === 0 ? (
@@ -173,69 +218,19 @@ export default function RadarPage() {
           description="雷达同步尚未产出候选；稍后再来或联系 admin 触发手动同步。"
         />
       ) : (
-        <div style={{ display: 'grid', gap: 12 }}>
+        <div className="grid gap-3">
           {items.map((it) => (
-            <RadarCandidateCard
-              key={it.id}
-              candidate={it}
-              onAskAi={(summaryId, title, url, interpretation) => {
-                setDrawer({ open: true, summaryId, title, url, interpretation });
-              }}
-            />
+            <RadarCandidateCard key={it.id} candidate={it} />
           ))}
         </div>
       )}
 
-      {totalPages > 1 ? (
-        <nav
-          aria-label="分页"
-          style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: 8,
-            margin: '16px 0',
-          }}
-        >
-          <button
-            type="button"
-            disabled={page <= 1 || query.isFetching}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            style={paginationBtn}
-          >
-            ← 上一页
-          </button>
-          <span style={{ fontSize: 13, color: '#475569' }}>
-            第 {page} / {totalPages} 页
-          </span>
-          <button
-            type="button"
-            disabled={page >= totalPages || query.isFetching}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            style={paginationBtn}
-          >
-            下一页 →
-          </button>
-        </nav>
-      ) : null}
-
-      <AskAiDrawer
-        summaryId={drawer.summaryId}
-        summaryTitle={drawer.title}
-        summaryUrl={drawer.url}
-        summaryInterpretation={drawer.interpretation}
-        open={drawer.open}
-        onOpenChange={(open) => setDrawer((current) => ({ ...current, open }))}
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        disabled={query.isFetching}
       />
     </div>
   );
 }
-
-const paginationBtn: React.CSSProperties = {
-  padding: '4px 12px',
-  border: '1px solid #cbd5e1',
-  background: '#fff',
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontSize: 13,
-};

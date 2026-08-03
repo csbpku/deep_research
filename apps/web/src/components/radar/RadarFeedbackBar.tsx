@@ -1,14 +1,27 @@
-// RadarFeedbackBar —— 雷达候选卡 / 详情页共用的 5 种反馈按钮。
+// RadarFeedbackBar —— 雷达候选卡 / 详情页共用的反馈按钮。
 //
 // 行为：
 //   - 点击 POST /api/radar-feedback → 幂等；服务端约束保证
 //   - 再点同一类型 → DELETE 撤回
 //   - 当前用户已选类型高亮（按钮加 active 样式）
 //   - 显示总数 + 当前用户已选状态
+//
+// ⚠️ e2e 契约：role="group" aria-label="雷达候选反馈"
 
 'use client';
 
 import { useState } from 'react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Search,
+  Star,
+  ThumbsUp,
+  type LucideIcon,
+} from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export type RadarFeedbackType =
   | 'useful'
@@ -23,31 +36,27 @@ interface RadarFeedbackBarProps {
   summaryId: string;
   initialCounts: RadarFeedbackCounts;
   initialMine: RadarFeedbackType[];
-  /** 可选：suggest_research 触发跳转的目标 URL；缺省走 /researches/new */
-  suggestResearchHref?: string;
+  className?: string;
 }
 
-const FEEDBACK_LABELS: Record<RadarFeedbackType, { label: string; icon: string }> = {
-  useful: { label: '有用', icon: '👍' },
-  inaccurate: { label: '不准确', icon: '⚠️' },
-  used: { label: '我用过', icon: '✅' },
-  favorite: { label: '收藏', icon: '⭐' },
-  suggest_research: { label: '建议调研', icon: '🔍' },
+const FEEDBACK_LABELS: Record<RadarFeedbackType, { label: string; icon: LucideIcon }> = {
+  useful: { label: '有用', icon: ThumbsUp },
+  inaccurate: { label: '不准确', icon: AlertTriangle },
+  used: { label: '我用过', icon: CheckCircle2 },
+  favorite: { label: '收藏', icon: Star },
+  suggest_research: { label: '建议调研', icon: Search },
 };
 
 const ALL_TYPES: RadarFeedbackType[] = [
-  'useful',
-  'inaccurate',
-  'used',
   'favorite',
-  'suggest_research',
+  'inaccurate',
 ];
 
 export function RadarFeedbackBar({
   summaryId,
   initialCounts,
   initialMine,
-  suggestResearchHref,
+  className,
 }: RadarFeedbackBarProps) {
   const [counts, setCounts] = useState<RadarFeedbackCounts>(initialCounts);
   const [mine, setMine] = useState<RadarFeedbackType[]>(initialMine);
@@ -96,61 +105,38 @@ export function RadarFeedbackBar({
   }
 
   function handleClick(ft: RadarFeedbackType) {
-    // suggest_research 不发 API；只跳链接
-    if (ft === 'suggest_research') {
-      const href = suggestResearchHref
-        ?? `/researches/new?radarSummaryId=${encodeURIComponent(summaryId)}`;
-      if (typeof window !== 'undefined') window.location.href = href;
-      return;
-    }
     const isOn = mine.includes(ft);
     void callFeedback(ft, !isOn, isOn ? 'toggle-off' : 'toggle-on');
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8,
-        alignItems: 'center',
-        padding: '8px 0',
-      }}
-      role="group"
-      aria-label="雷达候选反馈"
-    >
+    <div className={cn('flex flex-nowrap items-center gap-2 py-1', className)} role="group" aria-label="雷达候选反馈">
       {ALL_TYPES.map((ft) => {
         const meta = FEEDBACK_LABELS[ft];
+        const Icon = meta.icon;
         const active = mine.includes(ft);
         const total = counts[ft] ?? 0;
         const isPending = pending === ft;
         return (
-          <button
+          <Button
             key={ft}
             type="button"
+            variant={active ? 'default' : 'outline'}
+            size="xs"
+            className="rounded-full"
             onClick={() => handleClick(ft)}
             disabled={isPending}
             aria-pressed={active}
             aria-label={`${meta.label}（${total}）`}
-            style={{
-              padding: '4px 10px',
-              border: `1px solid ${active ? '#0f172a' : '#cbd5e1'}`,
-              background: active ? '#0f172a' : '#fff',
-              color: active ? '#fff' : '#334155',
-              borderRadius: 16,
-              cursor: isPending ? 'default' : 'pointer',
-              fontSize: 13,
-              opacity: isPending ? 0.6 : 1,
-            }}
           >
-            <span style={{ marginRight: 4 }}>{meta.icon}</span>
+            <Icon className={cn('size-3.5', active && 'fill-current')} />
             {meta.label}
-            <span style={{ marginLeft: 6, fontSize: 12, opacity: 0.75 }}>{total}</span>
-          </button>
+            <span className="tabular-nums opacity-75">{total}</span>
+          </Button>
         );
       })}
       {err ? (
-        <span role="alert" style={{ color: '#b91c1c', fontSize: 12, marginLeft: 8 }}>
+        <span role="alert" className="ml-1 text-xs text-destructive">
           {err}
         </span>
       ) : null}

@@ -2,15 +2,33 @@
 //
 // 展示：来源图标 + 标题 + excerpt + 标签 + 评分 + AI 一句话解读 + 反馈条。
 // 列表上整卡可点击进入详情；admin 队列提供额外操作按钮（select/dismiss）。
+//
+// 评分理由的展示策略：
+//   - 列表卡片：truncate 到 ~30 字作为 chip，hover 用 Radix Tooltip 展示完整理由
+//   - 详情页：见 src/app/radar/[id]/page.tsx 的可折叠 disclosure
 
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
+import { MessageSquare, Sparkles } from 'lucide-react';
+
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { DistilledScorePanel } from './DistilledScorePanel';
+import { CommentSection } from '@/components/CommentSection';
+import { StatusBadge } from '@/components/domain/StatusBadge';
+import { TagChip, TagList } from '@/components/domain/TagChip';
+import { Button } from '@/components/ui/button';
+import { useCurrentUser } from '@/lib/auth/client';
 
 interface RadarCandidate {
   id: string;
@@ -38,49 +56,13 @@ interface RadarCandidateCardProps {
   candidate: RadarCandidate;
   /** Admin 操作按钮组（select/dismiss/retry）；不传则不展示 */
   adminActions?: React.ReactNode;
-  onAskAi?: (
-    summaryId: string,
-    title: string,
-    url: string,
-    interpretation: string | null,
-  ) => void;
-}
-
-function ScoreChip({ label, value }: { label: string; value: number | null }) {
-  if (value === null) return null;
-  return (
-    <span
-      title={`${label}: ${value.toFixed(2)}`}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        padding: '2px 8px',
-        background: '#f1f5f9',
-        color: '#334155',
-        borderRadius: 10,
-        fontSize: 12,
-      }}
-    >
-      <span style={{ fontWeight: 600 }}>{label}</span>
-      <span>{value.toFixed(2)}</span>
-    </span>
-  );
 }
 
 function SourceIcon({ sourceType }: { sourceType: string | null }) {
   const label = sourceType ?? 'unknown';
   return (
     <span
-      style={{
-        display: 'inline-block',
-        padding: '2px 8px',
-        border: '1px solid #cbd5e1',
-        borderRadius: 12,
-        fontSize: 11,
-        color: '#475569',
-        background: '#fff',
-      }}
+      className="rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
       aria-label={`来源类型 ${label}`}
     >
       {label}
@@ -88,197 +70,145 @@ function SourceIcon({ sourceType }: { sourceType: string | null }) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { color: string; bg: string; label: string }> = {
-    candidate: { color: '#0f172a', bg: '#fef9c3', label: '候选' },
-    published: { color: '#14532d', bg: '#dcfce7', label: '已发布' },
-    rejected: { color: '#7f1d1d', bg: '#fee2e2', label: '已忽略' },
-    archived: { color: '#475569', bg: '#e2e8f0', label: '已归档' },
-    pending_review: { color: '#92400e', bg: '#fef3c7', label: '待审核' },
-  };
-  const m = map[status] ?? { color: '#475569', bg: '#e2e8f0', label: status };
-  return (
-    <span
-      style={{
-        padding: '2px 8px',
-        background: m.bg,
-        color: m.color,
-        borderRadius: 12,
-        fontSize: 11,
-      }}
-    >
-      {m.label}
-    </span>
-  );
-}
+export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCardProps) {
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const me = useCurrentUser();
+  const interpretation = candidate.interpretation;
+  const showExcerpt = !interpretation
+    || !candidate.excerpt
+    || !(
+      candidate.excerpt.startsWith(interpretation)
+      || interpretation.startsWith(candidate.excerpt)
+    );
 
-export function RadarCandidateCard({ candidate, adminActions, onAskAi }: RadarCandidateCardProps) {
   return (
-    <article
-      style={{
-        border: '1px solid #e2e8f0',
-        borderRadius: 8,
-        background: '#fff',
-        padding: 16,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          flexWrap: 'wrap',
-        }}
-      >
+    <article className="flex min-w-0 max-w-full flex-col gap-2 rounded-lg border border-border bg-card p-4">
+      <header className="flex flex-wrap items-center gap-2">
         <SourceIcon sourceType={candidate.sourceType} />
-        <StatusBadge status={candidate.status} />
+        <StatusBadge kind="radar" value={candidate.status} />
         {candidate.sortOrder !== null ? (
-          <span style={{ fontSize: 11, color: '#64748b' }}>#{candidate.sortOrder}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">#{candidate.sortOrder}</span>
         ) : null}
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#94a3b8' }}>
+        <span className="ml-auto font-mono text-xs tabular-nums text-muted-foreground">
           {new Date(candidate.crawledAt).toISOString().slice(0, 10)}
         </span>
       </header>
 
       <Link
         href={`/radar/${candidate.id}`}
-        style={{
-          color: '#0f172a',
-          textDecoration: 'none',
-          fontSize: 16,
-          fontWeight: 600,
-          lineHeight: 1.4,
-        }}
+        className="text-base font-semibold leading-snug hover:text-primary hover:underline"
       >
         {candidate.title}
       </Link>
 
       {candidate.interpretation ? (
-        <p
-          style={{
-            margin: 0,
-            color: '#1e293b',
-            fontSize: 13,
-            lineHeight: 1.55,
-            padding: '8px 12px',
-            background: '#f8fafc',
-            borderRadius: 4,
-            borderLeft: '3px solid #0f172a',
-          }}
-        >
-          <span style={{ color: '#64748b', fontSize: 11 }}>AI 一句话解读：</span>
+        <blockquote className="rounded-r-md border-l-2 border-l-primary bg-muted/50 px-3 py-2 text-sm leading-relaxed">
+          <span className="mr-1.5 text-[11px] text-muted-foreground">AI 一句话解读：</span>
           {candidate.interpretation}
-        </p>
+        </blockquote>
       ) : null}
 
-      <p style={{ margin: 0, color: '#334155', fontSize: 14, lineHeight: 1.55 }}>
-        {candidate.excerpt}
-      </p>
+      {showExcerpt ? (
+        <p className="text-sm leading-relaxed text-muted-foreground">{candidate.excerpt}</p>
+      ) : null}
 
-      {candidate.tags.length > 0 ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {candidate.tags.map((t) => (
-            <span
-              key={t}
-              style={{
-                padding: '1px 8px',
-                background: '#f1f5f9',
-                color: '#475569',
-                borderRadius: 10,
-                fontSize: 11,
-              }}
+      {(() => {
+        const displayTags = candidate.tags.filter((t) => {
+          if (t === 'must_read' || t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
+          if (t === 'rss' || t === 'api' || t === 'web' || t === 'github' || t === 'tracked' || t === 'repo_digest' || t === 'pr_soft') return false;
+          return true;
+        });
+        if (displayTags.length === 0) return null;
+        return (
+          <TagList className="gap-1">
+            {displayTags.map((t) => (
+              <TagChip key={t}>#{t}</TagChip>
+            ))}
+          </TagList>
+        );
+      })()}
+
+      {!candidate.distilledScore && candidate.scoreReason ? (
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex max-w-full items-center gap-1 self-start rounded-full border border-status-partial-fg/30 bg-status-partial-bg px-2 py-0.5 text-left text-[11px] text-status-partial-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Sparkles className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">
+                  理由：
+                  {candidate.scoreReason.length > 30
+                    ? candidate.scoreReason.slice(0, 30) + '…'
+                    : candidate.scoreReason}
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              align="start"
+              className="max-w-sm whitespace-pre-wrap leading-relaxed"
             >
-              #{t}
-            </span>
-          ))}
-        </div>
+              <p className="mb-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Sparkles className="size-3" aria-hidden />
+                AI 评分理由
+              </p>
+              <p>{candidate.scoreReason}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       ) : null}
-
-      {candidate.distilledScore ? (
-        <DistilledScorePanel score={candidate.distilledScore} compact />
-      ) : (
-        <div>
-          <div style={{ marginBottom: 4, fontSize: 11, color: '#64748b' }}>启发式预筛分</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            <ScoreChip label="相关性" value={candidate.relevanceScore} />
-            <ScoreChip label="时效" value={candidate.timelinessScore} />
-            <ScoreChip label="来源质量" value={candidate.sourceQualityScore} />
-          </div>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {candidate.scoreReason ? (
-          <span
-            title={candidate.scoreReason}
-            style={{
-              padding: '2px 8px',
-              background: '#fff7ed',
-              color: '#9a3412',
-              borderRadius: 10,
-              fontSize: 11,
-              border: '1px solid #fed7aa',
-            }}
-          >
-            理由：{candidate.scoreReason.length > 30
-              ? candidate.scoreReason.slice(0, 30) + '…'
-              : candidate.scoreReason}
-          </span>
-        ) : null}
-      </div>
 
       {candidate.selectionReason ? (
-        <p style={{ margin: 0, color: '#166534', fontSize: 13 }}>
-          <strong style={{ color: '#14532d' }}>入选理由：</strong>
+        <p className="text-sm text-status-succeeded-fg">
+          <strong className="font-medium">入选理由：</strong>
           {candidate.selectionReason}
         </p>
       ) : null}
 
-      <RadarFeedbackBar
-        summaryId={candidate.id}
-        initialCounts={candidate.feedbackCounts}
-        initialMine={candidate.myFeedbacks}
-      />
+      <div className="flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto border-t border-border pt-2">
+        {candidate.distilledScore ? (
+          <DistilledScorePanel score={candidate.distilledScore} compact />
+        ) : null}
+        <span className="h-5 w-px shrink-0 bg-border" aria-hidden />
+        <RadarFeedbackBar
+          summaryId={candidate.id}
+          initialCounts={candidate.feedbackCounts}
+          initialMine={candidate.myFeedbacks}
+          className="shrink-0 gap-1 py-0"
+        />
+        <TooltipProvider delayDuration={120}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="h-7 w-7 shrink-0 px-0"
+                aria-label="讨论"
+                aria-expanded={commentsOpen}
+                onClick={() => setCommentsOpen((v) => !v)}
+              >
+                <MessageSquare />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>讨论</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
 
-      {onAskAi ? (
-        <button
-          type="button"
-          onClick={() => onAskAi(
-            candidate.id,
-            candidate.title,
-            candidate.url,
-            candidate.interpretation,
-          )}
-          style={{
-            alignSelf: 'flex-start',
-            padding: '4px 10px',
-            border: '1px solid #cbd5e1',
-            borderRadius: 4,
-            background: '#fff',
-            color: '#475569',
-            cursor: 'pointer',
-            fontSize: 12,
-          }}
-        >
-          💬 AI 讨论
-        </button>
+      {commentsOpen ? (
+        <CommentSection
+          targetType="summary"
+          targetId={candidate.id}
+          currentUserId={me.data?.id ?? null}
+          currentUserRole={me.data?.role ?? null}
+        />
       ) : null}
 
       {adminActions ? (
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            borderTop: '1px solid #e2e8f0',
-            paddingTop: 8,
-            flexWrap: 'wrap',
-          }}
-        >
-          {adminActions}
-        </div>
+        <div className="flex flex-wrap gap-2 border-t border-border pt-2">{adminActions}</div>
       ) : null}
     </article>
   );

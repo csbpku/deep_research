@@ -49,7 +49,9 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       createdAt: true,
       source: true,
       status: true,
+      canonicalUrl: true,
       interpretation: true,
+      digestMeta: true,
       sharedBy: { select: { id: true, name: true, email: true } },
     },
   });
@@ -75,6 +77,8 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     crawledAt: summary.createdAt.toISOString(),
     source: summary.source,
     interpretation: summary.interpretation,
+    isDigest: summary.canonicalUrl?.startsWith('digest://') ?? false,
+    digestMeta: summary.digestMeta,
     sharedBy: summary.sharedBy
       ? {
           id: summary.sharedBy.id,

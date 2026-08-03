@@ -21,9 +21,13 @@ const AI_ENGINE_TIMEOUT_MS = 5_000;
 interface UpstreamJobOut {
   job_id: string;
   status: string;
+  topic?: string | null;
   final_status?: string | null;
   current_step?: string | null;
   sources_count?: number;
+  partial_sources_count?: number;
+  failed_sources_count?: number;
+  error_stage?: string | null;
   token_input_total?: number;
   token_output_total?: number;
   cost_cents?: number;
@@ -31,6 +35,9 @@ interface UpstreamJobOut {
   error_code?: string | null;
   error_message?: string | null;
   request_id?: string | null;
+  started_at?: string | null;
+  created_at?: string | null;
+  completed_at?: string | null;
 }
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }> }]>(async (req, ctx) => {
@@ -120,14 +127,21 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   return NextResponse.json({
     jobId: up.job_id,
     status: up.status,
+    topic: up.topic ?? null,
     finalStatus: up.final_status ?? null,
     currentStep: up.current_step ?? null,
     sourcesCount: up.sources_count ?? 0,
+    partialSourcesCount: up.partial_sources_count ?? 0,
+    failedSourcesCount: up.failed_sources_count ?? 0,
+    errorStage: up.error_stage ?? null,
     tokenInputTotal: up.token_input_total ?? 0,
     tokenOutputTotal: up.token_output_total ?? 0,
     costCents: up.cost_cents ?? 0,
     draftResearchId: up.draft_research_id ?? null,
     errorCode: up.error_code ?? null,
     errorMessage: up.error_message ?? null,
+    startedAt: up.started_at ?? null,
+    createdAt: up.created_at ?? null,
+    completedAt: up.completed_at ?? null,
   });
 });

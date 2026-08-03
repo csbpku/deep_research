@@ -1,7 +1,7 @@
-// BFF handler: GET/POST /api/researches/[id]/comments —— 沉淀评论列表与创建。
+// BFF handler: GET/POST /api/researches/[id]/comments —— 调研库评论列表与创建。
 //
 // 与 /api/summaries/[id]/comments 对称。差异：
-//   - 校验沉淀存在 + status='published'
+//   - 校验调研库存在 + status='published'
 //   - 同时更新 Research.commentCount（schema 已包含该字段）
 
 import { NextResponse } from 'next/server';
@@ -53,7 +53,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   if (!research || research.status !== 'published') {
     return toApiErrorResponse({
       code: ERROR_CODES.NOT_FOUND,
-      message: '沉淀不存在或未发布',
+      message: '调研库不存在或未发布',
       requestId,
     });
   }
@@ -125,7 +125,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   if (!research || research.status !== 'published') {
     return toApiErrorResponse({
       code: ERROR_CODES.NOT_FOUND,
-      message: '沉淀不存在或未发布',
+      message: '调研库不存在或未发布',
       requestId,
     });
   }
@@ -163,7 +163,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         author: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
-    // 增加沉淀评论计数
+    // 增加调研库评论计数
     await tx.research.update({
       where: { id: idParsed.data.id },
       data: { commentCount: { increment: 1 } },

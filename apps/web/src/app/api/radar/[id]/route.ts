@@ -56,14 +56,14 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       sortOrder: true,
       syncRunId: true,
       source: true,
-      // Phase 2A deep-dive: original markdown + enrichment metadata.
-      // We expose originalMarkdown in full here for the chat drawer to
-      // pick up later; originalMeta is the GitHub tree payload. The
-      // radar detail page uses originalKind + originalMeta to decide
-      // which structured card to render.
+      // Deep-dive source content and enrichment payloads. originalKind
+      // selects the presentation; originalMarkdown remains available to chat.
       originalKind: true,
       originalMarkdown: true,
       originalMeta: true,
+      repoSummary: true,
+      highlights: true,
+      arxivAnalysis: true,
       // Phase 2B deep-dive: arxiv paper parsed structure.
       tldr: true,
       sections: true,

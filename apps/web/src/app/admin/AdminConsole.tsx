@@ -6,15 +6,37 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import type { RadarFeedbackCounts } from '../../components/radar/RadarFeedbackBar';
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  DollarSign,
+  ExternalLink,
+  Library,
+  Lightbulb,
+  Link2,
+  MessageSquare,
+  Radar as RadarIcon,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  X,
+} from 'lucide-react';
+
+import { StatCard } from '@/components/domain/StatCard';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
+import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 
 type Tab = 'dashboard' | 'radar' | 'shares' | 'comments';
 
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'dashboard', label: '📊 仪表板' },
-  { key: 'radar', label: '🛰️ 雷达候选' },
-  { key: 'shares', label: '🔗 用户分享' },
-  { key: 'comments', label: '💡 评论提名' },
+const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
+  { key: 'dashboard', label: '仪表板', icon: ShieldCheck },
+  { key: 'radar', label: '雷达候选', icon: RadarIcon },
+  { key: 'shares', label: '用户分享', icon: Link2 },
+  { key: 'comments', label: '评论提名', icon: Lightbulb },
 ];
 
 interface DashboardData {
@@ -104,41 +126,80 @@ interface CommentListResponse {
 export default function AdminConsole() {
   const [tab, setTab] = useState<Tab>('dashboard');
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto', padding: '24px 20px' }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 24, margin: '0 0 4px', color: '#dc2626' }}>🛡️ Admin 控制台</h1>
-        <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
+    <div className="mx-auto max-w-shell">
+      <header className="mb-4">
+        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+          <ShieldCheck className="size-5 text-destructive" />
+          Admin 控制台
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           管理内容质量、监控平台健康度。仅 admin 角色可见。
         </p>
       </header>
 
-      <nav style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e2e8f0', marginBottom: 16, overflowX: 'auto' }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            style={{
-              padding: '8px 14px',
-              fontSize: 13,
-              background: 'transparent',
-              border: 'none',
-              borderBottom: tab === t.key ? '2px solid #0f172a' : '2px solid transparent',
-              color: tab === t.key ? '#0f172a' : '#64748b',
-              cursor: 'pointer',
-              fontWeight: tab === t.key ? 600 : 400,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+        <TabsList className="w-full justify-start overflow-x-auto">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            return (
+              <TabsTrigger key={t.key} value={t.key}>
+                <Icon className="size-4" />
+                {t.label}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+      </Tabs>
 
-      {tab === 'dashboard' && <DashboardTab />}
-      {tab === 'radar' && <RadarTab />}
-      {tab === 'shares' && <SharesTab />}
-      {tab === 'comments' && <CommentsTab />}
+      <div className="mt-4">
+        {tab === 'dashboard' && <DashboardTab />}
+        {tab === 'radar' && <RadarTab />}
+        {tab === 'shares' && <SharesTab />}
+        {tab === 'comments' && <CommentsTab />}
+      </div>
+    </div>
+  );
+}
+
+/** 队列筛选胶囊组 —— 三个 tab 页共用。 */
+function FilterPills<T extends string>({
+  options,
+  value,
+  onChange,
+  trailing,
+}: {
+  options: ReadonlyArray<{ key: T; label: string }>;
+  value: T;
+  onChange: (next: T) => void;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1">
+      {options.map((o) => (
+        <Button
+          key={o.key}
+          type="button"
+          variant={value === o.key ? 'default' : 'outline'}
+          size="xs"
+          className="rounded-full"
+          onClick={() => onChange(o.key)}
+        >
+          {o.label}
+        </Button>
+      ))}
+      {trailing ? (
+        <div className="ml-auto text-xs text-muted-foreground">{trailing}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function QueueSkeleton() {
+  return (
+    <div className="grid gap-2">
+      {[0, 1, 2].map((i) => (
+        <Skeleton key={i} className="h-16 w-full" />
+      ))}
     </div>
   );
 }
@@ -158,112 +219,153 @@ function DashboardTab() {
     refetchInterval: 30_000,
   });
 
-  if (q.isLoading) return <p style={{ color: '#94a3b8' }}>加载中…</p>;
-  if (q.isError || !q.data) return <p style={{ color: '#dc2626' }}>{(q.error as Error)?.message ?? '加载失败'}</p>;
+  if (q.isLoading) {
+    return (
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-20 w-full" />
+        ))}
+      </div>
+    );
+  }
+  if (q.isError || !q.data) {
+    return <p className="text-sm text-destructive">{(q.error as Error)?.message ?? '加载失败'}</p>;
+  }
 
   const d = q.data;
-  const cardStyle: React.CSSProperties = {
-    background: '#fff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
-    padding: 16,
-  };
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="⏳ 待审核"
+          label={
+            <span className="inline-flex items-center gap-1">
+              <Timer className="size-3" />
+              待审核
+            </span>
+          }
           value={d.pendingReviews.total}
-          sub={`分享 ${d.pendingReviews.shares} · 候选 ${d.pendingReviews.radarCandidates} · 提名 ${d.pendingReviews.commentNominations}`}
-          color={d.pendingReviews.total > 0 ? '#dc2626' : '#0f172a'}
+          hint={`分享 ${d.pendingReviews.shares} · 候选 ${d.pendingReviews.radarCandidates} · 提名 ${d.pendingReviews.commentNominations}`}
+          tone={d.pendingReviews.total > 0 ? 'primary' : 'default'}
         />
         <StatCard
-          label="📚 本周新增"
+          label={
+            <span className="inline-flex items-center gap-1">
+              <Library className="size-3" />
+              本周新增
+            </span>
+          }
           value={d.content.newResearchesThisWeek}
-          sub="已发布沉淀"
+          hint="已发布调研库"
         />
         <StatCard
-          label="🤖 AI 调研"
+          label={
+            <span className="inline-flex items-center gap-1">
+              <Sparkles className="size-3" />
+              AI 调研
+            </span>
+          }
           value={`${d.jobs.submittedLast24h} / 24h`}
-          sub={`失败 ${d.jobs.failedLast24h} · 导入失败 ${d.jobs.failedImportJobs}`}
-          color={d.jobs.failedLast24h > 0 ? '#d97706' : '#0f172a'}
+          hint={`失败 ${d.jobs.failedLast24h} · 导入失败 ${d.jobs.failedImportJobs}`}
         />
         <StatCard
-          label="💰 本月成本"
+          label={
+            <span className="inline-flex items-center gap-1">
+              <DollarSign className="size-3" />
+              本月成本
+            </span>
+          }
           value={`$${d.cost.monthUsd}`}
-          sub="AI 调研"
-          color={Number(d.cost.monthUsd) > 50 ? '#d97706' : '#0f172a'}
+          hint="AI 调研"
         />
       </div>
 
-      <section style={cardStyle}>
-        <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 12px', color: '#0f172a' }}>🛰️ 雷达同步状态</h3>
+      <section className="rounded-lg border border-border bg-card p-4">
+        <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
+          <RadarIcon className="size-4 text-muted-foreground" />
+          雷达同步状态
+        </h2>
         {d.radar.lastSync ? (
-          <div style={{ fontSize: 13, color: '#475569' }}>
-            <p style={{ margin: '0 0 4px' }}>
+          <div className="space-y-1 text-sm text-muted-foreground">
+            <p>
               最近同步：
-              <strong style={{ color: '#0f172a' }}>{d.radar.lastSync.source?.name ?? '未知源'}</strong>
+              <strong className="font-medium text-foreground">
+                {d.radar.lastSync.source?.name ?? '未知源'}
+              </strong>
               （{d.radar.lastSync.source?.sourceType ?? '?'}）
             </p>
-            <p style={{ margin: '0 0 4px' }}>
+            <p className="flex flex-wrap items-center gap-1.5">
               状态：
               <SyncStatusBadge status={d.radar.lastSync.status} />
-              {' · '}
-              <span style={{ color: '#94a3b8' }}>
-                {new Date(d.radar.lastSync.completedAt ?? d.radar.lastSync.createdAt).toLocaleString('zh-CN')}
+              <span className="font-mono text-xs">
+                {new Date(
+                  d.radar.lastSync.completedAt ?? d.radar.lastSync.createdAt,
+                ).toLocaleString('zh-CN')}
               </span>
             </p>
             {d.radar.lastSync.errorCode && (
-              <p style={{ margin: '0 0 4px', color: '#dc2626' }}>错误码：{d.radar.lastSync.errorCode}</p>
+              <p className="text-destructive">错误码：{d.radar.lastSync.errorCode}</p>
             )}
-            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#94a3b8' }}>
-              过去 24h 失败同步次数：<strong style={{ color: d.radar.failedRunsLast24h > 0 ? '#dc2626' : '#0f172a' }}>{d.radar.failedRunsLast24h}</strong>
+            <p className="text-xs">
+              过去 24h 失败同步次数：
+              <strong
+                className={cn(
+                  'font-mono tabular-nums',
+                  d.radar.failedRunsLast24h > 0 ? 'text-destructive' : 'text-foreground',
+                )}
+              >
+                {d.radar.failedRunsLast24h}
+              </strong>
             </p>
           </div>
         ) : (
-          <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>暂无同步记录</p>
+          <p className="text-sm text-muted-foreground">暂无同步记录</p>
         )}
       </section>
 
-      <p style={{ marginTop: 16, fontSize: 11, color: '#94a3b8' }}>
+      <p className="mt-4 text-xs text-muted-foreground">
         数据生成时间：{new Date(d.generatedAt).toLocaleString('zh-CN')} · 每 30s 自动刷新
       </p>
     </div>
   );
 }
 
-function StatCard({ label, value, sub, color }: { label: string; value: number | string; sub?: string; color?: string }) {
+function SyncStatusBadge({ status }: { status: string }) {
+  const s = syncStatusStyle(status);
   return (
-    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: 16 }}>
-      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700, color: color ?? '#0f172a' }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{sub}</div>}
-    </div>
+    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', s.className)}>
+      {s.label}
+    </span>
   );
 }
 
-function SyncStatusBadge({ status }: { status: string }) {
-  return <span style={{ padding: '2px 8px', background: syncStatusStyle(status).bg, color: syncStatusStyle(status).fg, fontSize: 11, borderRadius: 4, fontWeight: 600, marginLeft: 4 }}>{syncStatusStyle(status).label}</span>;
-}
-
-/** Pure helper: returns label + colors for a radar sync status. Exposed for tests. */
-export function syncStatusStyle(status: string): { label: string; bg: string; fg: string } {
-  const map: Record<string, { label: string; bg: string; fg: string }> = {
-    running: { label: '运行中', bg: '#dbeafe', fg: '#1d4ed8' },
-    completed: { label: '完成', bg: '#dcfce7', fg: '#15803d' },
-    partial: { label: '部分', bg: '#fef3c7', fg: '#92400e' },
-    failed: { label: '失败', bg: '#fee2e2', fg: '#b91c1c' },
+/**
+ * Pure helper：雷达同步状态 → 中文 label + token 化配色 class。
+ * 导出供单测使用（项目未装 @testing-library/react，只测纯函数）。
+ */
+export function syncStatusStyle(status: string): { label: string; className: string } {
+  const map: Record<string, { label: string; className: string }> = {
+    running: { label: '运行中', className: 'bg-status-running-bg text-status-running-fg' },
+    completed: { label: '完成', className: 'bg-status-succeeded-bg text-status-succeeded-fg' },
+    partial: { label: '部分', className: 'bg-status-partial-bg text-status-partial-fg' },
+    failed: { label: '失败', className: 'bg-status-failed-bg text-status-failed-fg' },
   };
-  return map[status] ?? { label: status, bg: '#f1f5f9', fg: '#475569' };
+  return map[status] ?? { label: status, className: 'bg-muted text-muted-foreground' };
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // 雷达候选（简化版列表入口；详细操作仍走 /admin/radar）
 // ──────────────────────────────────────────────────────────────────────
 
+const RADAR_STATUS_OPTIONS = [
+  { key: 'candidate', label: '候选' },
+  { key: 'published', label: '已发布' },
+  { key: 'rejected', label: '已忽略' },
+  { key: 'archived', label: '已归档' },
+] as const;
+
 function RadarTab() {
-  const [status, setStatus] = useState('candidate');
+  const [status, setStatus] = useState<string>('candidate');
   const [page, setPage] = useState(1);
 
   const q = useQuery<RadarListResponse>({
@@ -281,37 +383,40 @@ function RadarTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {['candidate', 'published', 'rejected', 'archived'].map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => { setStatus(s); setPage(1); }}
-            style={{
-              padding: '4px 12px', fontSize: 12,
-              background: status === s ? '#0f172a' : '#fff',
-              color: status === s ? '#fff' : '#475569',
-              border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer',
-            }}
-          >
-            {s === 'candidate' ? '候选' : s === 'published' ? '已发布' : s === 'rejected' ? '已忽略' : '已归档'}
-          </button>
-        ))}
-        <div style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>
-          共 {q.data?.total ?? '?'} 条 · <Link href="/admin/radar" style={{ color: '#0ea5e9' }}>打开完整管理 →</Link>
-        </div>
-      </div>
+      <FilterPills
+        options={RADAR_STATUS_OPTIONS}
+        value={status}
+        onChange={(s) => {
+          setStatus(s);
+          setPage(1);
+        }}
+        trailing={
+          <span className="inline-flex items-center gap-2">
+            共 {q.data?.total ?? '?'} 条
+            <Link
+              href="/admin/radar"
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+            >
+              打开完整管理
+              <ExternalLink className="size-3" />
+            </Link>
+          </span>
+        }
+      />
 
-      {q.isLoading && <p style={{ color: '#94a3b8' }}>加载中…</p>}
-      {q.isError && <p style={{ color: '#dc2626' }}>{(q.error as Error).message}</p>}
+      {q.isLoading && <QueueSkeleton />}
+      {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
 
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}>
+      <ul className="grid list-none gap-2 p-0">
         {(q.data?.items ?? []).map((it) => (
-          <li key={it.id} style={{ padding: 12, border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff' }}>
-            <Link href={`/admin/radar/${it.id}`} style={{ display: 'block', color: '#0f172a', textDecoration: 'none', fontWeight: 500 }}>
+          <li key={it.id} className="rounded-lg border border-border bg-card p-3">
+            <Link
+              href={`/admin/radar/${it.id}`}
+              className="block text-sm font-medium hover:text-primary hover:underline"
+            >
               {it.title}
             </Link>
-            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+            <div className="mt-1 text-xs text-muted-foreground">
               {it.sourceType ?? '?'} · {new Date(it.crawledAt).toLocaleDateString('zh-CN')}
               {it.interpretation && ` · ${it.interpretation.slice(0, 60)}…`}
             </div>
@@ -320,24 +425,43 @@ function RadarTab() {
       </ul>
 
       {q.data && q.data.totalPages > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginTop: 16 }}>
-          <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)} style={pageBtnStyle}>‹</button>
-          <span style={{ padding: '4px 8px', fontSize: 13 }}>{page} / {q.data.totalPages}</span>
-          <button disabled={page >= q.data.totalPages} onClick={() => setPage((p) => p + 1)} style={pageBtnStyle}>›</button>
-        </div>
+        <nav aria-label="分页" className="mt-4 flex items-center justify-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            上一页
+          </Button>
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {page} / {q.data.totalPages}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={page >= q.data.totalPages}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            下一页
+          </Button>
+        </nav>
       )}
     </div>
   );
 }
 
-const pageBtnStyle: React.CSSProperties = {
-  padding: '4px 12px', background: '#fff', border: '1px solid #cbd5e1',
-  borderRadius: 4, cursor: 'pointer', fontSize: 13,
-};
-
 // ──────────────────────────────────────────────────────────────────────
 // 用户分享审核
 // ──────────────────────────────────────────────────────────────────────
+
+const SHARE_STATUS_OPTIONS = [
+  { key: 'pending', label: '待审核' },
+  { key: 'approved', label: '已批准' },
+  { key: 'rejected', label: '已拒绝' },
+] as const;
 
 function SharesTab() {
   const [status, setStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
@@ -375,84 +499,85 @@ function SharesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {(['pending', 'approved', 'rejected'] as const).map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => { setStatus(s); setPage(1); }}
-            style={{
-              padding: '4px 12px', fontSize: 12,
-              background: status === s ? '#0f172a' : '#fff',
-              color: status === s ? '#fff' : '#475569',
-              border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer',
-            }}
-          >
-            {s === 'pending' ? '待审核' : s === 'approved' ? '已批准' : '已拒绝'}
-          </button>
-        ))}
-        <div style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>
-          共 {q.data?.total ?? '?'} 条
-        </div>
-      </div>
+      <FilterPills
+        options={SHARE_STATUS_OPTIONS}
+        value={status}
+        onChange={(s) => {
+          setStatus(s);
+          setPage(1);
+        }}
+        trailing={`共 ${q.data?.total ?? '?'} 条`}
+      />
 
-      {q.isLoading && <p style={{ color: '#94a3b8' }}>加载中…</p>}
-      {q.isError && <p style={{ color: '#dc2626' }}>{(q.error as Error).message}</p>}
+      {q.isLoading && <QueueSkeleton />}
+      {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
 
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 10 }}>
+      <ul className="grid list-none gap-2.5 p-0">
         {(q.data?.items ?? []).map((it) => (
-          <li key={it.id} style={{ padding: 14, border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h4 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 600 }}>
-                  <a href={it.url} target="_blank" rel="noopener noreferrer" style={{ color: '#0f172a', textDecoration: 'none' }}>
+          <li key={it.id} className="rounded-lg border border-border bg-card p-3.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold">
+                  <a
+                    href={it.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-primary hover:underline"
+                  >
                     {it.fetchedTitle ?? it.url}
                   </a>
-                </h4>
-                <p style={{ margin: '0 0 4px', fontSize: 11, color: '#94a3b8' }}>
-                  分享人：{it.submitter.name} ({it.submitter.email}) · {new Date(it.createdAt).toLocaleString('zh-CN')}
+                </h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  分享人：{it.submitter.name}（{it.submitter.email}） ·{' '}
+                  {new Date(it.createdAt).toLocaleString('zh-CN')}
                 </p>
                 {it.userNote && (
-                  <p style={{ margin: '4px 0', fontSize: 12, color: '#475569', background: '#f8fafc', padding: '4px 8px', borderRadius: 4 }}>
-                    💬 {it.userNote}
+                  <p className="mt-1.5 flex items-start gap-1.5 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    <MessageSquare className="mt-0.5 size-3 shrink-0" />
+                    {it.userNote}
                   </p>
                 )}
                 {it.summaryText && (
-                  <details style={{ marginTop: 6 }}>
-                    <summary style={{ fontSize: 11, color: '#0ea5e9', cursor: 'pointer' }}>查看 AI 摘要</summary>
-                    <p style={{ fontSize: 12, color: '#475569', margin: '4px 0 0', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                  <details className="mt-1.5">
+                    <summary className="cursor-pointer text-xs text-primary">查看 AI 摘要</summary>
+                    <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
                       {it.summaryText.slice(0, 500)}
                       {it.summaryText.length > 500 && '…'}
                     </p>
                   </details>
                 )}
                 {it.fetchErrorCode && (
-                  <p style={{ fontSize: 11, color: '#dc2626', margin: '4px 0 0' }}>
-                    ⚠️ 抓取失败：{it.fetchErrorCode}
+                  <p className="mt-1 flex items-center gap-1 text-xs text-destructive">
+                    <AlertTriangle className="size-3" />
+                    抓取失败：{it.fetchErrorCode}
                   </p>
                 )}
               </div>
               {status === 'pending' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-                  <button
+                <div className="flex shrink-0 flex-col gap-1.5">
+                  <Button
                     type="button"
+                    size="xs"
                     disabled={reviewMut.isPending || !it.summaryText}
                     onClick={() => reviewMut.mutate({ id: it.id, action: 'approve' })}
-                    style={approveBtnStyle}
                   >
-                    ✓ 批准
-                  </button>
-                  <button
+                    <Check />
+                    批准
+                  </Button>
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="xs"
+                    className="text-destructive"
                     disabled={reviewMut.isPending}
                     onClick={() => {
                       const reason = prompt('拒绝原因：');
                       if (reason) reviewMut.mutate({ id: it.id, action: 'reject', reason });
                     }}
-                    style={rejectBtnStyle}
                   >
-                    ✗ 拒绝
-                  </button>
+                    <X />
+                    拒绝
+                  </Button>
                 </div>
               )}
             </div>
@@ -461,7 +586,7 @@ function SharesTab() {
       </ul>
 
       {reviewMut.isError && (
-        <p style={{ color: '#dc2626', fontSize: 12, marginTop: 8 }}>
+        <p className="mt-2 text-xs text-destructive">
           操作失败：{(reviewMut.error as Error).message}
         </p>
       )}
@@ -469,19 +594,16 @@ function SharesTab() {
   );
 }
 
-const approveBtnStyle: React.CSSProperties = {
-  padding: '4px 12px', background: '#15803d', color: '#fff',
-  border: 'none', borderRadius: 4, fontSize: 12, cursor: 'pointer',
-};
-
-const rejectBtnStyle: React.CSSProperties = {
-  padding: '4px 12px', background: '#fff', color: '#b91c1c',
-  border: '1px solid #fca5a5', borderRadius: 4, fontSize: 12, cursor: 'pointer',
-};
-
 // ──────────────────────────────────────────────────────────────────────
 // 评论提名
 // ──────────────────────────────────────────────────────────────────────
+
+const COMMENT_STATUS_OPTIONS = [
+  { key: 'pending', label: '待提炼' },
+  { key: 'approved', label: '已提炼' },
+  { key: 'rejected', label: '已拒绝' },
+  { key: 'all', label: '全部' },
+] as const;
 
 function CommentsTab() {
   const [status, setStatus] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
@@ -537,81 +659,90 @@ function CommentsTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {(['pending', 'approved', 'rejected', 'all'] as const).map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => setStatus(s)}
-            style={{
-              padding: '4px 12px', fontSize: 12,
-              background: status === s ? '#0f172a' : '#fff',
-              color: status === s ? '#fff' : '#475569',
-              border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer',
-            }}
-          >
-            {s === 'pending' ? '待提炼' : s === 'approved' ? '已提炼' : s === 'rejected' ? '已拒绝' : '全部'}
-          </button>
-        ))}
-        <div style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>
-          共 {q.data?.total ?? '?'} 条
-        </div>
-      </div>
+      <FilterPills
+        options={COMMENT_STATUS_OPTIONS}
+        value={status}
+        onChange={setStatus}
+        trailing={`共 ${q.data?.total ?? '?'} 条`}
+      />
 
-      {q.isLoading && <p style={{ color: '#94a3b8' }}>加载中…</p>}
-      {q.isError && <p style={{ color: '#dc2626' }}>{(q.error as Error).message}</p>}
+      {q.isLoading && <QueueSkeleton />}
+      {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
 
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 10 }}>
+      <ul className="grid list-none gap-2.5 p-0">
         {(q.data?.items ?? []).map((it) => (
-          <li key={it.id} style={{ padding: 14, border: '1px solid #e2e8f0', borderRadius: 6, background: '#fff' }}>
-            <p style={{ margin: '0 0 4px', fontSize: 11, color: '#94a3b8' }}>
-              <strong style={{ color: '#0f172a' }}>{it.author.name}</strong> ({it.author.email}) · {new Date(it.createdAt).toLocaleString('zh-CN')} · ⭐ {it.starCount}
+          <li key={it.id} className="rounded-lg border border-border bg-card p-3.5">
+            <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+              <strong className="font-medium text-foreground">{it.author.name}</strong>（
+              {it.author.email}） · {new Date(it.createdAt).toLocaleString('zh-CN')} ·
+              <span className="inline-flex items-center gap-0.5">
+                <Sparkles className="size-3" />
+                {it.starCount}
+              </span>
               {it.targetType === 'summary' && it.summary && (
-                <> · 来自摘要: <Link href={`/summaries/${it.summary.id}`} style={{ color: '#0ea5e9' }}>{it.summary.title}</Link></>
+                <>
+                  · 来自摘要:
+                  <Link href={`/summaries/${it.summary.id}`} className="text-primary hover:underline">
+                    {it.summary.title}
+                  </Link>
+                </>
               )}
               {it.targetType === 'research' && it.research && (
-                <> · 来自沉淀: <Link href={`/researches/${it.research.id}`} style={{ color: '#0ea5e9' }}>{it.research.title}</Link></>
+                <>
+                  · 来自调研库:
+                  <Link
+                    href={`/researches/${it.research.id}`}
+                    className="text-primary hover:underline"
+                  >
+                    {it.research.title}
+                  </Link>
+                </>
               )}
             </p>
-            <blockquote style={{
-              margin: '8px 0', padding: '8px 12px',
-              background: '#f8fafc', borderLeft: '3px solid #0f172a',
-              borderRadius: 4, fontSize: 13, color: '#1e293b', lineHeight: 1.6,
-            }}>
+
+            <blockquote className="my-2 rounded-r border-l-2 border-l-primary bg-muted/50 px-3 py-2 text-sm leading-relaxed">
               {it.body}
             </blockquote>
+
             {it.promoteStatus === 'nominated' && (
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
+              <div className="flex gap-2">
+                <Button
                   type="button"
+                  size="xs"
                   disabled={promoteMut.isPending || dismissMut.isPending}
                   onClick={() => {
                     const title = prompt('精华标题：', it.body.slice(0, 30));
                     if (!title) return;
                     promoteMut.mutate({ id: it.id, title, body: it.body, tags: [] });
                   }}
-                  style={approveBtnStyle}
                 >
-                  ✨ 提炼为精华
-                </button>
-                <button
+                  <Sparkles />
+                  提炼为精华
+                </Button>
+                <Button
                   type="button"
+                  variant="outline"
+                  size="xs"
+                  className="text-destructive"
                   disabled={dismissMut.isPending}
                   onClick={() => {
                     const reason = prompt('拒绝原因：');
                     if (reason) dismissMut.mutate({ id: it.id, reason });
                   }}
-                  style={rejectBtnStyle}
                 >
-                  ✗ 拒绝
-                </button>
+                  <X />
+                  拒绝
+                </Button>
               </div>
             )}
             {it.promoteStatus === 'approved' && (
-              <p style={{ fontSize: 12, color: '#15803d', margin: 0 }}>✅ 已提炼为精华</p>
+              <p className="flex items-center gap-1 text-xs text-status-succeeded-fg">
+                <CheckCircle2 className="size-3.5" />
+                已提炼为精华
+              </p>
             )}
             {it.promoteStatus === 'rejected' && (
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>已拒绝</p>
+              <p className="text-xs text-muted-foreground">已拒绝</p>
             )}
           </li>
         ))}

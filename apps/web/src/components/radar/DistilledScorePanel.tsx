@@ -1,20 +1,16 @@
 'use client';
 
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import { useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 
-const TIER_LABELS: Record<string, string> = {
-  deep_read: '深读',
-  skim: '速览',
-  collection: '收录',
-  noise: '噪音',
-};
-
-const TIER_COLORS: Record<string, string> = {
-  deep_read: '#15803d',
-  skim: '#0369a1',
-  collection: '#64748b',
-  noise: '#94a3b8',
-};
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { TIER_LABELS, tierClasses } from '@/components/domain/ScoreBar';
 
 const DIMENSION_LABELS: Record<string, string> = {
   informationGain: '信息增量',
@@ -32,114 +28,93 @@ interface Props {
 }
 
 export function DistilledScorePanel({ score, compact = false }: Props) {
-  const tierColor = TIER_COLORS[score.tier] ?? '#64748b';
+  const tierVisual = tierClasses(score.tier);
   const tierLabel = TIER_LABELS[score.tier] ?? score.tier;
 
   if (compact) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            border: `2px solid ${tierColor}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 13,
-            fontWeight: 700,
-            color: tierColor,
-            flexShrink: 0,
-          }}
-        >
-          {score.total}
-        </div>
-        <div>
-          <span style={{ fontSize: 12, fontWeight: 600, color: tierColor }}>
-            {tierLabel}
-            {score.mustRead ? ' · 必读' : ''}
-          </span>
-          {score.weakPoint ? (
-            <div style={{ fontSize: 11, color: '#64748b' }}>{score.weakPoint}</div>
-          ) : null}
-        </div>
-      </div>
+      <TooltipProvider delayDuration={120}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tierVisual.border} ${tierVisual.text}`}
+              aria-label={`Distilled 评分 ${score.total}，悬停查看详情`}
+            >
+              <span className="font-sans text-[11px] font-medium">Distilled</span>
+              {score.total}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="start" className="w-72 max-w-[calc(100vw-2rem)] p-3">
+            <ScoreDetails score={score} tierVisual={tierVisual} tierLabel={tierLabel} />
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   }
 
-  return (
-    <div
-      style={{
-        border: '1px solid #e2e8f0',
-        borderRadius: 8,
-        padding: 16,
-        background: '#f8fafc',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: '50%',
-            border: `3px solid ${tierColor}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 18,
-            fontWeight: 700,
-            color: tierColor,
-          }}
-        >
-          {score.total}
-        </div>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: tierColor }}>
-            {tierLabel}
-            {score.mustRead ? ' · 必读' : ''}
-          </div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>
-            {score.profile}
-            {score.isDefault ? ' · 默认评分' : ''}
-          </div>
-        </div>
-      </div>
+  return <ExpandedScorePanel score={score} tierVisual={tierVisual} tierLabel={tierLabel} />;
+}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 8 }}>
+function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: DistilledScore; tierVisual: ReturnType<typeof tierClasses>; tierLabel: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="border-y border-border">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 bg-transparent py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <span
+          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums ${tierVisual.border} ${tierVisual.text}`}
+        >
+          <span className="font-sans text-[11px] font-medium">Distilled</span>
+          {score.total}
+        </span>
+        <span className="text-xs text-muted-foreground">查看评分详情</span>
+        <ChevronDown className={`ml-auto size-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="border-t border-border py-3">
+          <ScoreDetails score={score} tierVisual={tierVisual} tierLabel={tierLabel} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScoreDetails({ score, tierVisual, tierLabel }: { score: DistilledScore; tierVisual: ReturnType<typeof tierClasses>; tierLabel: string }) {
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex items-center justify-between border-b border-border pb-2">
+        <span className={`font-medium ${tierVisual.text}`}>{tierLabel}{score.mustRead ? ' · 必读' : ''}</span>
+        <span className="text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
+      </div>
+      <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2">
         {Object.entries(score.dimensions).map(([key, val]) => (
-          <div key={key} style={{ fontSize: 12 }}>
-            <div style={{ color: '#475569', marginBottom: 2 }}>
+          <div key={key} className="flex min-w-0 items-center gap-2">
+            <span className="w-16 shrink-0 truncate text-muted-foreground">
               {DIMENSION_LABELS[key] ?? key}
-            </div>
-            <div style={{ display: 'flex', gap: 2 }}>
-              {[0, 1, 2, 3].map((i) => (
-                <div
-                  key={i}
-                  style={{
-                    width: 16,
-                    height: 4,
-                    borderRadius: 2,
-                    background: i <= val ? tierColor : '#e2e8f0',
-                  }}
+            </span>
+            <span className="flex w-10 shrink-0 gap-0.5" aria-hidden>
+              {[0, 1, 2].map((segment) => (
+                <span
+                  key={segment}
+                  className={`h-1.5 flex-1 rounded-sm ${segment < val ? tierVisual.fill : 'bg-muted'}`}
                 />
               ))}
-            </div>
+            </span>
+            <span className="w-6 shrink-0 font-mono text-right tabular-nums text-muted-foreground">
+              {val}/3
+            </span>
           </div>
         ))}
       </div>
-
-      {score.weakPoint ? (
-        <p style={{ fontSize: 12, color: '#64748b', marginTop: 12, marginBottom: 0 }}>
-          短板：{score.weakPoint}
-        </p>
-      ) : null}
-
-      {score.veto ? (
-        <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 4, marginBottom: 0 }}>
-          一票否决：{score.veto}
-        </p>
-      ) : null}
+      {score.weakPoint ? <p className="border-t border-border pt-2 text-muted-foreground"><span className="font-medium text-foreground">弱点：</span>{score.weakPoint}</p> : null}
+      {score.veto ? <p className="text-destructive"><span className="font-medium">否决项：</span>{score.veto}</p> : null}
     </div>
   );
 }

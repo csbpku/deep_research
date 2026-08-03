@@ -37,7 +37,7 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 import { POST as importPost } from '../imports/route';
-import { POST as researchPost } from '../researches/route';
+import { POST as researchPost, researchListWhere } from '../researches/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
 import { CreateResearchInput } from '../../../lib/schemas';
 
@@ -183,5 +183,28 @@ describe('research provenance input', () => {
       expect((await response.json()).aiAssisted).toBe(expectedAiAssisted);
       expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(expectedAiAssisted);
     }
+  });
+});
+
+describe('GET /api/researches scope', () => {
+  it('published scope never includes drafts', () => {
+    expect(researchListWhere('published', 'me')).toEqual({
+      AND: [{ status: { equals: 'published' } }],
+    });
+  });
+
+  it('draft scope is owner-only', () => {
+    expect(researchListWhere('draft', 'me')).toEqual({
+      AND: [{ authorId: 'me', status: { equals: 'draft' } }],
+    });
+  });
+
+  it('keeps the type filter alongside the scope', () => {
+    expect(researchListWhere('published', 'me', 'knowledge')).toEqual({
+      AND: [
+        { type: { equals: 'knowledge' } },
+        { status: { equals: 'published' } },
+      ],
+    });
   });
 });

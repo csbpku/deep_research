@@ -71,7 +71,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   if (!research) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
-      message: '沉淀不存在',
+      message: '调研库不存在',
       requestId,
     });
   }
@@ -81,7 +81,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     // 返回 404，不泄露草稿存在性
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
-      message: '沉淀不存在',
+      message: '调研库不存在',
       requestId,
     });
   }
@@ -224,7 +224,7 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   if (!existing) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
-      message: '沉淀不存在',
+      message: '调研库不存在',
       requestId,
     });
   }
@@ -233,7 +233,7 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   if (existing.authorId !== u.id) {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
-      message: '只能编辑自己的沉淀',
+      message: '只能编辑自己的调研库',
       requestId,
     });
   }

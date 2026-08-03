@@ -55,7 +55,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   if (!existing) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
-      message: '沉淀不存在',
+      message: '调研库不存在',
       requestId,
     });
   }
@@ -64,7 +64,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   if (existing.authorId !== u.id) {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
-      message: '只能发布自己的沉淀',
+      message: '只能发布自己的调研库',
       requestId,
     });
   }

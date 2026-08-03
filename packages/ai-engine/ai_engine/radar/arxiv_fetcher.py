@@ -1,9 +1,9 @@
-"""arXiv radar source fetcher with institution-based filtering."""
+"""arXiv radar source fetcher, aligned with agents-radar quotas."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ai_engine.ingestion.sources import fetch_arxiv
@@ -16,41 +16,62 @@ async def fetch_arxiv_candidates(config: Mapping[str, Any]) -> list[RadarCandida
 
     Config keys:
       - categories (list[str], optional): ArXiv categories to query.
-        Default: ["cs.AI", "cs.CL"].
-      - maxResults (int, optional, default 100): how many papers to fetch
-        from API **before** filtering. Higher values give the institution
-        filter more candidates to work with.
-      - maxCandidates (int, optional, default 20): max papers to return
-        **after** institution filtering.
+        Default: ["cs.AI", "cs.CL", "cs.LG"] (matches agents-radar).
+      - maxResults (int, optional, default 50): how many papers to fetch
+        from the API.
+      - maxCandidates (int, optional, default 50): max papers to return.
       - keepTier (int, optional, default 3): institution tier threshold.
         1=top uni, 2=strong uni, 3=company, 4=all labs.
-      - institutionFilter (bool, optional, default True): enable filtering.
+      - institutionFilter (bool, optional, default False): enable the
+        legacy institution allowlist (agents-radar does not use it).
     """
 
-    raw_categories = config.get("categories", ["cs.AI", "cs.CL"])
+    raw_categories = config.get("categories", ["cs.AI", "cs.CL", "cs.LG"])
     categories = [str(item).strip() for item in raw_categories if str(item).strip()]
     if not categories:
         raise ValueError("arXiv source requires at least one category")
 
-    raw_max = config.get("maxResults", 100)
+    raw_max = config.get("maxResults", 50)
     if isinstance(raw_max, bool):
         raise ValueError("arXiv maxResults must be an integer")
     max_results = int(raw_max)
     if max_results < 1 or max_results > 200:
         raise ValueError("arXiv maxResults must be between 1 and 200")
 
-    max_candidates = int(config.get("maxCandidates", 20))
+    max_candidates = int(config.get("maxCandidates", 50))
     keep_tier = int(config.get("keepTier", 3))
-    enable_filter = bool(config.get("institutionFilter", True))
+    enable_filter = bool(config.get("institutionFilter", False))
 
     items = await fetch_arxiv(max_results=max_results, categories=categories)
 
+    # agents-radar keeps only papers published in the last 48h (arXiv has a
+    # ~1-day publishing delay, so 24h would miss today's batch).
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    recent: list[dict[str, Any]] = []
+    for item in items:
+        raw_published = item.get("published_at") or item.get("published")
+        if isinstance(raw_published, str) and raw_published:
+            try:
+                published = datetime.fromisoformat(raw_published.replace("Z", "+00:00"))
+                if published >= cutoff:
+                    recent.append(item)
+                continue
+            except ValueError:
+                pass
+        recent.append(item)
+
     if enable_filter and categories:
-        # Extend categories with cs.SE, cs.IR, cs.MA for broader coverage
-        items = filter_papers_by_institution(items, keep_tier=keep_tier)
+        items = filter_papers_by_institution(recent, keep_tier=keep_tier)
+    else:
+        items = recent
 
     candidates: list[RadarCandidate] = []
-    for item in items[:max_candidates]:
+    items_sorted = sorted(
+        items,
+        key=lambda item: _parse_published(item) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    for item in items_sorted[:max_candidates]:
         published_at = None
         raw_published = item.get("published_at") or item.get("published")
         if isinstance(raw_published, str) and raw_published:
@@ -84,6 +105,16 @@ async def fetch_arxiv_candidates(config: Mapping[str, Any]) -> list[RadarCandida
             )
         )
     return candidates
+
+
+def _parse_published(item: Mapping[str, Any]) -> datetime | None:
+    raw = item.get("published_at") or item.get("published")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 __all__ = ["fetch_arxiv_candidates"]

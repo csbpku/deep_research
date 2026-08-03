@@ -1,62 +1,47 @@
 'use client';
 
-// /summaries — 每日摘要（按日期分组的列表视图）。
+// /summaries — AI 雷达日报列表。
 //
-// 改造点（W5）：
-//   - 从「单日查询」改为「按日期分组；每日期最多 4 条 published」；
-//     不足 4 条显示真实数量 + 同步失败说明。
-//   - 每条卡显示入选理由、评分、标签、来源链接。
-//   - 点击日期进入 /summaries/[date] 单日详情。
+// 新模式：每天一条 digest://YYYY-MM-DD 的 published summary，内容为跨来源
+// 总结文章；列表只展示日报入口，不再按日期铺开 4 条手工精选。
+//
+// ⚠️ e2e 断言正文含 /雷达日报|日报/，勿改标题文案。
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState } from 'react';
-import { EmptyState } from '../../components/EmptyState';
+import { AlertTriangle, ArrowRight } from 'lucide-react';
 
-interface SummaryListItem {
-  id: string;
+import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/domain/PageHeader';
+import { Skeleton } from '@/components/ui/skeleton';
+
+interface DigestRankedItem {
+  summaryId: string | null;
   title: string;
-  excerpt: string;
   url: string;
-  tags: string[];
-  contentOrigin: string;
-  summaryDate: string;
+  radarUrl: string | null;
+  oneLineReason: string;
+}
+
+interface DigestListArticle {
+  summaryId: string;
+  date: string;
+  title: string;
   publishedAt: string | null;
-  crawledAt: string;
-  source: string;
-  selectionReason: string | null;
-  sortOrder: number | null;
-  relevanceScore: number | null;
-  timelinessScore: number | null;
-  sourceQualityScore: number | null;
+  tldr: string;
+  sections: Array<{ title: string; body: string }>;
+  highlights: string[];
+  ranked: DigestRankedItem[];
+  sourcesUsed: string[];
+  candidateCount: number;
+  narrativeDegraded: boolean;
+  model: string | null;
+  generatedAt: string | null;
 }
 
-interface SummariesByDateResponse {
-  page: number;
-  perPage: number;
-  totalDates: number;
-  totalSummaries: number;
-  dates: Array<{
-    date: string;
-    count: number;
-    isComplete: boolean; // true 表示 =4 条
-    syncError: string | null;
-    items: SummaryListItem[];
-  }>;
-}
-
-function isoDate(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
-
-function shiftDate(yyyyMmDd: string, days: number): string {
-  const [y, m, d] = yyyyMmDd.split('-').map((s) => Number(s));
-  const t = new Date(Date.UTC(y, m - 1, d));
-  t.setUTCDate(t.getUTCDate() + days);
-  return isoDate(t);
+interface DigestListResponse {
+  dates: DigestListArticle[];
+  total: number;
 }
 
 function formatTime(iso: string | null): string {
@@ -65,267 +50,71 @@ function formatTime(iso: string | null): string {
 }
 
 export default function SummariesPage() {
-  const today = isoDate(new Date());
-  // 默认查询最近 30 天；通过 ?date= 单日过滤时退化为单日视图
-  const [filterDate, setFilterDate] = useState<string | null>(null);
-
-  const q = useQuery<SummariesByDateResponse>({
-    queryKey: ['summaries-by-date', filterDate],
+  const q = useQuery<DigestListResponse>({
+    queryKey: ['digests'],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (filterDate) params.set('date', filterDate);
-      params.set('per_page', '4');
-      params.set('page', '1');
-      const r = await fetch(`/api/summaries?${params.toString()}`, { cache: 'no-store' });
+      const r = await fetch('/api/summaries?limit=30', { cache: 'no-store' });
       if (!r.ok) {
         const err = await r.json().catch(() => ({ message: '加载失败' }));
         throw new Error(err.message ?? '加载失败');
       }
-      // BFF 返回 { date, count, items }；我们再翻译为分组结构
-      const body = await r.json();
-      if (filterDate) {
-        return {
-          page: 1,
-          perPage: 4,
-          totalDates: body.count > 0 ? 1 : 0,
-          totalSummaries: body.count,
-          dates: body.count > 0
-            ? [{
-                date: filterDate,
-                count: body.count,
-                isComplete: body.count >= 4,
-                syncError: null,
-                items: body.items,
-              }]
-            : [],
-        } satisfies SummariesByDateResponse;
-      }
-      // 不带 date：服务端只返回「当天」；我们再做「最近 7 天」窗口查询
-      // —— P0 简化：只展示当前查询结果对应的日期；如需更多日期，调 BFF per_page
-      return {
-        page: 1,
-        perPage: 4,
-        totalDates: body.count > 0 ? 1 : 0,
-        totalSummaries: body.count,
-        dates: body.count > 0
-          ? [{
-              date: body.date,
-              count: body.count,
-              isComplete: body.count >= 4,
-              syncError: null,
-              items: body.items,
-            }]
-          : [],
-      } satisfies SummariesByDateResponse;
+      return (await r.json()) as DigestListResponse;
     },
   });
 
-  const dates = q.data?.dates ?? [];
-
   return (
-    <div>
-      <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>每日摘要</h1>
-      <p style={{ color: '#475569', marginTop: 0 }}>
-        按日期分组，每日期最多 4 条 published；不足时显示实际数量。
-      </p>
-
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          margin: '12px 0 16px',
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setFilterDate((d) => (d ? shiftDate(d, -1) : shiftDate(today, -1)))}
-          style={dateBtnStyle}
-          aria-label="前一天"
-        >
-          ← 前一天
-        </button>
-        <input
-          type="date"
-          value={filterDate ?? today}
-          max={today}
-          onChange={(e) => setFilterDate(e.target.value)}
-          style={{
-            padding: '4px 8px',
-            border: '1px solid #cbd5e1',
-            borderRadius: 4,
-            fontSize: 14,
-          }}
-        />
-        <button
-          type="button"
-          onClick={() => setFilterDate((d) => (d ? shiftDate(d, +1) : shiftDate(today, +1)))}
-          disabled={(filterDate ?? today) >= today}
-          style={{ ...dateBtnStyle, opacity: (filterDate ?? today) >= today ? 0.5 : 1 }}
-          aria-label="后一天"
-        >
-          后一天 →
-        </button>
-        <button
-          type="button"
-          onClick={() => setFilterDate(null)}
-          disabled={!filterDate}
-          style={{ ...dateBtnStyle, opacity: !filterDate ? 0.5 : 1 }}
-        >
-          清除日期
-        </button>
-        <span style={{ marginLeft: 'auto', color: '#475569', fontSize: 13 }}>
-          {q.isFetching ? '加载中…' : q.data ? `共 ${q.data.totalSummaries} 条 / ${q.data.totalDates} 个日期` : ''}
-        </span>
-      </div>
+    <div className="mx-auto max-w-shell">
+      <PageHeader
+        title="AI 雷达日报"
+        description="每天一篇跨来源总结：今日看点、分类综述与信号榜单。"
+      />
 
       {q.isLoading ? (
-        <p style={{ color: '#475569' }}>加载中…</p>
+        <div className="grid gap-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-4">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-3 w-full" />
+            </div>
+          ))}
+        </div>
       ) : q.isError ? (
         <EmptyState title="加载失败" description={String((q.error as Error).message)} />
-      ) : dates.length === 0 ? (
-        <EmptyState
-          title="暂无精选摘要"
-          description={`${filterDate ?? today} 没有 published 状态的摘要。`}
-        />
+      ) : (q.data?.dates.length ?? 0) === 0 ? (
+        <EmptyState title="暂无日报" description="完成雷达同步后会自动生成每日总结文章。" />
       ) : (
-        <div style={{ display: 'grid', gap: 20 }}>
-          {dates.map((d) => (
-            <section key={d.date}>
-              <header
-                style={{
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 12,
-                  marginBottom: 8,
-                  borderBottom: '1px solid #e2e8f0',
-                  paddingBottom: 6,
-                }}
-              >
-                <h2 style={{ margin: 0, fontSize: 16, color: '#0f172a' }}>
-                  <Link
-                    href={`/summaries/${d.date}`}
-                    style={{ color: '#0f172a', textDecoration: 'none' }}
-                  >
-                    {d.date}
-                  </Link>
-                </h2>
-                <span style={{ color: '#64748b', fontSize: 13 }}>
-                  {d.count} 条
-                  {d.isComplete ? ' · 已满 4 条' : ' · 不足 4 条'}
-                </span>
-                {d.syncError ? (
-                  <span style={{ color: '#b91c1c', fontSize: 12 }}>
-                    同步异常：{d.syncError}
+        <div className="grid gap-3">
+          {q.data!.dates.map((d) => (
+            <Link
+              key={d.summaryId}
+              href={`/summaries/${d.date}`}
+              className="group block rounded-lg border border-border bg-card p-4 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="flex flex-wrap items-baseline gap-2.5">
+                <h2 className="font-mono text-base font-semibold tabular-nums">{d.date}</h2>
+                <span className="text-xs text-muted-foreground">{formatTime(d.publishedAt)}</span>
+                {d.narrativeDegraded ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-xs text-status-partial-fg">
+                    <AlertTriangle className="size-3" />
+                    降级生成
                   </span>
                 ) : null}
-              </header>
-              <ul
-                style={{
-                  listStyle: 'none',
-                  padding: 0,
-                  margin: 0,
-                  display: 'grid',
-                  gap: 12,
-                }}
-              >
-                {d.items.map((it) => (
-                  <li key={it.id}>
-                    <Link
-                      href={`/summaries/${it.id}`}
-                      style={{
-                        display: 'block',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: 8,
-                        background: '#fff',
-                        padding: 16,
-                        textDecoration: 'none',
-                        color: 'inherit',
-                      }}
-                    >
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                        {it.sortOrder !== null ? (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              width: 22,
-                              height: 22,
-                              borderRadius: 11,
-                              background: '#0f172a',
-                              color: '#fff',
-                              fontSize: 12,
-                              textAlign: 'center',
-                              lineHeight: '22px',
-                            }}
-                          >
-                            {it.sortOrder}
-                          </span>
-                        ) : null}
-                        <h3 style={{ margin: 0, fontSize: 16, color: '#0f172a' }}>
-                          {it.title}
-                        </h3>
-                      </div>
-                      <p style={{ margin: '6px 0 8px', color: '#334155', fontSize: 14, lineHeight: 1.55 }}>
-                        {it.excerpt}
-                      </p>
-                      {it.selectionReason ? (
-                        <p
-                          style={{
-                            margin: '0 0 8px',
-                            padding: '6px 10px',
-                            background: '#f0fdf4',
-                            borderLeft: '3px solid #22c55e',
-                            color: '#166534',
-                            fontSize: 13,
-                          }}
-                        >
-                          <strong>入选理由：</strong>{it.selectionReason}
-                        </p>
-                      ) : null}
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          gap: 6,
-                          alignItems: 'center',
-                          fontSize: 12,
-                          color: '#64748b',
-                        }}
-                      >
-                        {it.tags.map((t) => (
-                          <span
-                            key={t}
-                            style={{
-                              padding: '2px 8px',
-                              borderRadius: 12,
-                              background: '#f1f5f9',
-                              color: '#334155',
-                            }}
-                          >
-                            #{t}
-                          </span>
-                        ))}
-                        <span style={{ marginLeft: 'auto' }}>
-                          来源 {it.contentOrigin} · 抓取 {formatTime(it.crawledAt)}
-                        </span>
-                      </div>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
+                <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-primary" />
+              </div>
+
+              <h3 className="mt-2 text-sm font-medium leading-snug">{d.title}</h3>
+
+              {d.tldr ? (
+                <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
+                  {d.tldr}
+                </p>
+              ) : null}
+
+            </Link>
           ))}
         </div>
       )}
     </div>
   );
 }
-
-const dateBtnStyle: React.CSSProperties = {
-  padding: '4px 10px',
-  border: '1px solid #cbd5e1',
-  background: '#fff',
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontSize: 13,
-};

@@ -1,0 +1,81 @@
+# Curated GitHub repo list for radar/github_tracked fetcher.
+#
+# Mirrors duanyytop/agents-radar/config.yml, with a tighter ingest quota:
+# scripts/seed_tracked_repos.py seeds lookback_days=1 (24h) and
+# max_items_per_repo=20 (TOTAL per repo across issues/PRs/releases).
+# Each entry is `owner/repo`.
+# Categories:
+#   - cli_repos: coding-agent CLIs (Claude Code, Codex, Aider, OpenHands, ...)
+#   - agents_peers: agent frameworks and orchestrators
+#   - infra_repos: inference / serving / orchestration infra
+#   - foundation_models: open-weight foundation models
+#
+# To add a repo: append `  - id: slug` + `    repo: owner/name` under a category.
+# To remove: delete the lines and re-run `scripts/seed_tracked_repos.py`.
+
+cli_repos:
+  - id: claude-code
+    repo: anthropics/claude-code
+  - id: codex
+    repo: openai/codex
+  - id: gemini-cli
+    repo: google-gemini/gemini-cli
+  - id: aider
+    repo: Aider-AI/aider
+  - id: openhands
+    repo: All-Hands-AI/OpenHands
+  - id: cline
+    repo: cline/cline
+  - id: goose
+    repo: block/goose
+  - id: continue
+    repo: continuedev/continue
+
+agents_peers:
+  - id: langgraph
+    repo: langchain-ai/langgraph
+  - id: pocketflow
+    repo: The-Pocket/PocketFlow
+  - id: openwork
+    repo: different-ai/openwork
+  - id: autogen
+    repo: microsoft/autogen
+  - id: crewai
+    repo: crewAIInc/crewAI
+  - id: agentprotocol
+    repo: AI-Agent-Hackathon/agent-protocol
+
+infra_repos:
+  - id: vllm
+    repo: vllm-project/vllm
+    paginated: true
+  - id: litellm
+    repo: BerriAI/litellm
+    paginated: true
+  - id: ollama
+    repo: ollama/ollama
+    paginated: true
+  - id: transformers
+    repo: huggingface/transformers
+    paginated: true
+  - id: sglang
+    repo: sgl-project/sglang
+    paginated: true
+  - id: langchain
+    repo: langchain-ai/langchain
+    paginated: true
+  - id: llama_index
+    repo: run-llama/llama_index
+    paginated: true
+  - id: comfyui
+    repo: comfyanonymous/ComfyUI
+
+foundation_models:
+  - id: gpt-oss
+    repo: openai/gpt-oss
+  - id: llama-3
+    repo: meta-llama/llama3
+  - id: kimi-k3
+    repo: moonshotai/Kimi-K3
+  - id: qwen3
+    repo: QwenLM/Qwen3

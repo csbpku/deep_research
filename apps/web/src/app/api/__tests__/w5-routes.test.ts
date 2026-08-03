@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   summaryFindFirst: vi.fn(),
   summaryCount: vi.fn(),
   summaryUpdate: vi.fn(),
+  summaryQueryRaw: vi.fn(),
+  summaryGroupBy: vi.fn(),
   radarFeedbackCreate: vi.fn(),
   radarFeedbackDeleteMany: vi.fn(),
   radarFeedbackGroupBy: vi.fn(),
@@ -47,6 +49,8 @@ vi.mock('../../../lib/db.js', () => ({
       findFirst: mocks.summaryFindFirst,
       count: mocks.summaryCount,
       update: mocks.summaryUpdate,
+      $queryRaw: mocks.summaryQueryRaw,
+      groupBy: mocks.summaryGroupBy,
     },
     radarFeedback: {
       create: mocks.radarFeedbackCreate,
@@ -58,6 +62,7 @@ vi.mock('../../../lib/db.js', () => ({
     research: { create: mocks.researchCreate },
     researchSource: { create: mocks.researchSourceCreate },
     $transaction: mocks.transaction,
+    $queryRaw: mocks.summaryQueryRaw,
   },
 }));
 
@@ -104,9 +109,12 @@ beforeEach(() => {
   }));
   mocks.summaryUpdate.mockImplementation(({ data }) => Promise.resolve({
     id: SUM_ID, status: data.status, summaryDate: new Date('2026-07-21'),
-    sortOrder: data.sortOrder ?? null, selectionReason: data.selectionReason ?? null,
-    publishedAt: data.publishedAt ?? null, updatedAt: new Date(),
+    publishedAt: null,
+    sortOrder: 0,
+    syncRunId: 'r',
   }));
+  // 清除 findMany 的特殊 mock —— 每个 test 从 clean slate 开始
+  mocks.summaryFindMany.mockReset();
   mocks.adminActionCreate.mockResolvedValue({ id: 'action-1', requestId: 'req-1' });
   mocks.researchCreate.mockResolvedValue({
     id: 'research-1', type: 'research', status: 'draft',
@@ -194,22 +202,34 @@ describe('GET /api/radar', () => {
   });
 
   it('filters out non-matching q on app side (postgres OR gaps)', async () => {
-    mocks.summaryFindMany.mockResolvedValue([
-      { id: SUM_ID, title: 'A', body: 'a', url: 'u', tags: [], status: 'candidate',
-        summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
-        interpretation: null, scoreReason: null, scoreVersion: null,
-        relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
-        selectionReason: null, sortOrder: null, syncRunId: 'r',
-        sharedBy: null,
-        syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'X' } } },
-      { id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', title: 'B', body: 'b', url: 'u',
-        tags: [], status: 'candidate', summaryDate: new Date(), publishedAt: null,
-        createdAt: new Date(), interpretation: null, scoreReason: null,
-        scoreVersion: null, relevanceScore: null, timelinessScore: null,
-        sourceQualityScore: null, selectionReason: null, sortOrder: null,
-        syncRunId: 'r', sharedBy: null,
-        syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'X' } } },
-    ]);
+    // 搜索 q=A：原生 SQL 先命中 [SUM_ID]，主查询再 join。
+    mocks.summaryQueryRaw.mockResolvedValue([{ id: SUM_ID }]);
+    // 模拟 Postgres 的 id IN (...) 过滤 —— findMany 收到 where.id.in 之后只返回命中的。
+    mocks.summaryFindMany.mockImplementation(
+      ({ where }: { where?: { id?: { in?: string[] } } }) => {
+        if (where?.id?.in) {
+          const inSet = new Set(where.id.in);
+          const all = [
+            { id: SUM_ID, title: 'A', body: 'a', url: 'u', tags: [], status: 'candidate',
+              summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
+              interpretation: null, scoreReason: null, scoreVersion: null,
+              relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+              selectionReason: null, sortOrder: null, syncRunId: 'r',
+              sharedBy: null,
+              syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'X' } } },
+            { id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb', title: 'B', body: 'b', url: 'u',
+              tags: [], status: 'candidate', summaryDate: new Date(), publishedAt: null,
+              createdAt: new Date(), interpretation: null, scoreReason: null,
+              scoreVersion: null, relevanceScore: null, timelinessScore: null,
+              sourceQualityScore: null, selectionReason: null, sortOrder: null,
+              syncRunId: 'r', sharedBy: null,
+              syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'X' } } },
+          ];
+          return Promise.resolve(all.filter((r) => inSet.has(r.id)));
+        }
+        return Promise.resolve([]);
+      },
+    );
     mocks.summaryCount.mockResolvedValue(2);
     const r = await radarList(new Request('http://localhost/api/radar?q=A') as never);
     const body = await r.json();

@@ -33,9 +33,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Iterable, cast
 
 from ai_engine.adapters.base import (
     AdapterCancelOutcome,
@@ -116,10 +117,11 @@ try:  # pragma: no cover — import-time guard
             or os.environ.get("ANTHROPIC_API_KEY", "")
         )
         from langchain_openai import OpenAIEmbeddings
+        from pydantic import SecretStr
         self._embeddings = OpenAIEmbeddings(
             model=model,
-            openai_api_key=heavy_key or "custom",
-            openai_api_base=os.environ.get(
+            api_key=SecretStr(heavy_key or "custom"),
+            base_url=os.environ.get(
                 "ANTHROPIC_BASE_URL_HEAVY"
             ) or os.environ.get(
                 "ANTHROPIC_BASE_URL"
@@ -128,7 +130,7 @@ try:  # pragma: no cover — import-time guard
             **embedding_kwargs,
         )
 
-    _mem_mod.Memory.__init__ = _patched_memory_init  # type: ignore[assignment]
+    _mem_mod.Memory.__init__ = _patched_memory_init
 
     # Patch GenericLLMProvider.get_chat_response to flatten content blocks.
     from gpt_researcher.llm_provider.generic.base import GenericLLMProvider  # type: ignore[import-untyped]
@@ -208,6 +210,194 @@ class _StepCaptureWebSocket:
             step = self._STEP_MAP[content]
             async with self._job.lock:
                 self._job.current_step = cast("AiJobStep", step)
+
+
+def _collect_sources_from_research(
+    research_sources: list[dict[str, Any]],
+    visited_urls: Iterable[str],
+    topic: str,
+) -> list[AdapterSource]:
+    """Map gpt-researcher's captured sources into :class:`AdapterSource`.
+
+    gpt-researcher 0.15.x stores successfully scraped pages in
+    ``research_sources`` (``url`` / ``title`` / ``raw_content``); the public
+    ``visited_urls`` set is a fallback for versions or plugins that don't
+    populate ``research_sources``.  Dedup by canonical URL.
+    """
+    seen: set[str] = set()
+    out: list[AdapterSource] = []
+
+    def append(url: str, title: object, snippet: str | None) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        clean_title = title if isinstance(title, str) and title.strip() else topic
+        out.append(
+            AdapterSource(
+                source_ref={"type": "url", "value": url},
+                canonical_key=url,
+                title=clean_title,
+                snippet=snippet,
+                score=0.9,
+                step_captured=cast("AiJobStep", AI_JOB_STEP["SEARCH"]),
+                is_accessible=True,
+            )
+        )
+
+    for item in research_sources:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url")
+        if not isinstance(url, str) or not url.strip():
+            continue
+        raw = item.get("raw_content")
+        snippet = None
+        if isinstance(raw, str) and raw.strip():
+            snippet = " ".join(raw.split())[:240]
+        append(url.strip(), item.get("title"), snippet)
+
+    for url in visited_urls:
+        if isinstance(url, str) and url.strip():
+            append(url.strip(), topic, None)
+
+    return out
+
+
+_REFERENCE_HEADING_RE = re.compile(
+    r"(?im)^#{1,6}\s*(?:参考文献|参考资料|参考来源|References?|Sources?)\s*[:：]?\s*$"
+)
+
+_CONTINUATION_SYSTEM = (
+    "你是专业的调研报告写手。只输出续写内容，不要复述已有报告，"
+    "不要添加任何解释，不要虚构来源。"
+)
+
+
+def _report_has_references(report: str) -> bool:
+    return bool(_REFERENCE_HEADING_RE.search(report))
+
+
+def _report_needs_completion(report: str, sources: list[AdapterSource]) -> bool:
+    """True when the report has no reference section or ends mid-sentence."""
+    if _report_has_references(report):
+        return False
+    if not sources:
+        return False
+    lines = report.strip().splitlines()
+    if not lines:
+        return True
+    last = lines[-1].strip()
+    if not last:
+        return True
+    if re.match(r"^#{1,6}\s+", last):
+        return True
+    return not bool(re.search(r"[。！？.!?）)」』\"']\s*$", last))
+
+
+def _format_source_lines(sources: list[AdapterSource]) -> str:
+    lines: list[str] = []
+    for index, source in enumerate(sources, start=1):
+        title = (source.title or source.canonical_key or "来源").strip()
+        ref = source.source_ref if isinstance(source.source_ref, dict) else {}
+        url = ref.get("value")
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            lines.append(f"{index}. [{title}]({url})")
+        elif isinstance(url, str):
+            lines.append(f"{index}. {title} ({url})")
+        else:
+            lines.append(f"{index}. {title}")
+    return "\n".join(lines)
+
+
+def _append_references(report: str, sources: list[AdapterSource]) -> str:
+    if not sources:
+        return report
+    return f"{report.rstrip()}\n\n## 参考文献\n\n{_format_source_lines(sources)}"
+
+
+def _strip_overlap(previous: str, chunk: str) -> str:
+    """Drop the tail sentence when the model repeated it in its continuation."""
+    previous_lines = [line.strip() for line in previous.strip().splitlines() if line.strip()]
+    if not previous_lines:
+        return chunk
+    marker = previous_lines[-1]
+    cleaned = chunk.strip()
+    if cleaned.startswith(marker):
+        cleaned = cleaned[len(marker):].lstrip("\n ")
+    return cleaned
+
+
+async def _request_report_continuation(
+    researcher: Any,
+    report: str,
+    sources: list[AdapterSource],
+) -> str:
+    """Ask the same smart LLM to finish a truncated report."""
+    try:
+        from gpt_researcher.utils.llm import create_chat_completion
+    except ImportError:
+        return ""
+    cfg = researcher.cfg
+    topic = researcher.query
+    source_lines = _format_source_lines(sources)
+    user_content = (
+        f"以下是关于「{topic}」的调研报告。它可能因为输出长度限制在中间被截断。\n\n"
+        "请从最后一个句子处继续，先补齐被截断的内容，再完成剩余章节，"
+        "最后必须包含一个 `## 结论` 小节和一个 `## 参考文献` 小节。\n\n"
+        "如果已有报告已经完整，并且已经包含结论和参考文献，只回复 DONE。\n\n"
+        "已有报告末尾（用于衔接，不要重复）：\n"
+        f"{report[-2500:]}\n\n"
+        "真实来源（只能引用这些）：\n"
+        f"{source_lines}\n\n"
+        "请直接输出续写内容："
+    )
+    try:
+        return _to_str(
+            await create_chat_completion(
+                messages=[
+                    {"role": "system", "content": _CONTINUATION_SYSTEM},
+                    {"role": "user", "content": user_content},
+                ],
+                model=cfg.smart_llm_model,
+                temperature=0.35,
+                max_tokens=8000,
+                llm_provider=cfg.smart_llm_provider,
+                stream=False,
+                websocket=None,
+                llm_kwargs=cfg.llm_kwargs or None,
+                cost_callback=None,
+            )
+        )
+    except Exception:
+        return ""
+
+
+async def _ensure_complete_report(
+    researcher: Any,
+    report: str,
+    sources: list[AdapterSource],
+    *,
+    max_rounds: int = 2,
+) -> str:
+    """Continue a truncated report and always attach grounded references."""
+    parts = [report]
+    for _ in range(max_rounds):
+        current = "\n\n".join(parts)
+        if not _report_needs_completion(current, sources):
+            break
+        chunk = await _request_report_continuation(researcher, current, sources)
+        if not chunk.strip():
+            break
+        if chunk.strip().upper() == "DONE":
+            break
+        chunk = _strip_overlap(current, chunk)
+        if not chunk.strip():
+            break
+        parts.append(chunk.strip())
+    current = "\n\n".join(parts)
+    if not _report_has_references(current) and sources:
+        current = _append_references(current, sources)
+    return current.strip()
 
 
 # ── Job state ──────────────────────────────────────────────────────
@@ -445,31 +635,40 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
             report = await researcher.write_report()
             cost_usd = researcher.get_costs()
+            captured = (
+                list(researcher.get_research_sources())
+                if hasattr(researcher, "get_research_sources")
+                else []
+            )
             visited = (
                 list(researcher.visited_urls)
                 if hasattr(researcher, "visited_urls")
                 else []
             )
+            sources = _collect_sources_from_research(
+                captured,
+                visited,
+                job.request.topic,
+            )
+            report = await _ensure_complete_report(researcher, report, sources)
 
             async with job.lock:
                 job.body = report
                 job.cost_usd = cost_usd
-                job.search_count = len(visited)
-                job.sources = [
-                    AdapterSource(
-                        source_ref={"type": "url", "value": url},
-                        canonical_key=url,
-                        title=job.request.topic,
-                        snippet=None,
-                        score=0.9,
-                        step_captured=cast("AiJobStep", AI_JOB_STEP["SEARCH"]),
-                        is_accessible=True,
-                    )
-                    for url in visited
-                ]
-                if not job.sources:
-                    job.inferred = True
+                job.search_count = len(sources)
+                job.sources = sources
                 job.current_step = cast("AiJobStep", AI_JOB_STEP["WRITE"])
+
+            if not sources:
+                # DB CHECK ai_jobs_partial_sources_valid requires succeeded
+                # jobs to carry at least one source; fail loudly instead of
+                # letting the worker retry into WORKER_RETRY_EXHAUSTED.
+                await self._mark_failed(
+                    job,
+                    "NO_SOURCES_FOUND",
+                    "调研未收集到任何可访问来源，已中止生成草稿",
+                )
+                return
 
             if job.cancel_event.is_set():
                 return
@@ -522,7 +721,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         ) if job.sources else ""
 
         user_content = (
-            f"请用中文为以下内容写一段 3-4 句的简要摘要，保留关键事实，不要虚构。\n\n"
+            f"请用中文为以下内容写一段简洁的摘要，保留关键事实，不要虚构。必须输出完整的句子，不能在半截处结束。\n\n"
             f"标题: {topic}\n"
         )
         if context:

@@ -10,9 +10,17 @@
 //   - top-level 评论按 createdAt desc 排序；嵌套 1 层（避免无限线程）
 //   - 一人一票（CommentStar @@unique）
 //   - 作者可删除自己；admin 可删除任意评论
+//
+// ⚠️ e2e 契约：data-testid="comment-section"、data-testid={`star-button-${id}`}
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { MessageSquare, Sparkles, Star } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 
 interface CommentAuthor {
   id: string;
@@ -143,8 +151,14 @@ export function CommentSection({
   });
 
   return (
-    <div style={sectionStyle} data-testid="comment-section">
-      <h2 style={headerStyle}>💬 讨论 ({listQuery.data?.total ?? 0})</h2>
+    <section
+      className="mt-4 rounded-lg border border-border bg-card p-4"
+      data-testid="comment-section"
+    >
+      <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
+        <MessageSquare className="size-4 text-muted-foreground" />
+        讨论 ({listQuery.data?.total ?? 0})
+      </h2>
 
       <CommentInput
         placeholder={currentUserId ? '写下你的看法…' : '请先登录后参与讨论'}
@@ -155,18 +169,28 @@ export function CommentSection({
       />
 
       {createMut.isError && (
-        <p style={{ color: '#dc2626', fontSize: 12, marginTop: 8 }}>
-          {(createMut.error as Error).message}
-        </p>
+        <p className="mt-2 text-xs text-destructive">{(createMut.error as Error).message}</p>
       )}
 
-      {listQuery.isLoading && <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 16 }}>加载中…</p>}
+      {listQuery.isLoading && (
+        <div className="mt-4 space-y-3">
+          {[0, 1].map((i) => (
+            <div key={i} className="flex gap-2.5">
+              <Skeleton className="size-8 shrink-0 rounded-full" />
+              <div className="flex-1 space-y-1.5">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {listQuery.isError && (
-        <p style={{ color: '#dc2626', fontSize: 13, marginTop: 16 }}>{(listQuery.error as Error).message}</p>
+        <p className="mt-4 text-sm text-destructive">{(listQuery.error as Error).message}</p>
       )}
 
-      <div style={{ marginTop: 16 }}>
+      <div className="mt-4">
         {(listQuery.data?.items ?? []).map((c) => (
           <CommentRow
             key={c.id}
@@ -183,10 +207,10 @@ export function CommentSection({
           />
         ))}
         {listQuery.data && listQuery.data.items.length === 0 && (
-          <p style={{ color: '#94a3b8', fontSize: 13, padding: '16px 0' }}>还没有评论，来抢沙发吧。</p>
+          <p className="py-4 text-sm text-muted-foreground">还没有评论，来抢沙发吧。</p>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -218,105 +242,76 @@ function CommentRow({
   const canDelete = isAuthor || isAdmin;
 
   return (
-    <div
-      style={{
-        padding: '12px 0',
-        borderBottom: '1px solid #f1f5f9',
-      }}
-    >
-      <div style={{ display: 'flex', gap: 10 }}>
+    // group/comment 让 hover 才浮现操作按钮 —— 默认页面更安静
+    <article className="group/comment border-b border-border py-3 last:border-b-0">
+      <div className="flex gap-2.5">
         <Avatar user={comment.author} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{comment.author.name}</span>
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatRelative(comment.createdAt)}</span>
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold">{comment.author.name}</span>
+            <span className="text-xs text-muted-foreground">
+              {formatRelative(comment.createdAt)}
+            </span>
             {comment.promoteStatus === 'approved' && (
-              <span
-                style={{
-                  fontSize: 10,
-                  padding: '1px 6px',
-                  background: '#dcfce7',
-                  color: '#15803d',
-                  borderRadius: 3,
-                }}
-              >
-                ✨ 已提炼为精华
+              <span className="inline-flex items-center gap-1 rounded bg-radar-published-bg px-1.5 py-0.5 text-[10px] text-radar-published-fg">
+                <Sparkles className="size-3" />
+                已提炼为精华
               </span>
             )}
             {comment.promoteStatus === 'rejected' && (
-              <span
-                style={{
-                  fontSize: 10,
-                  padding: '1px 6px',
-                  background: '#fee2e2',
-                  color: '#b91c1c',
-                  borderRadius: 3,
-                }}
-              >
+              <span className="rounded bg-radar-rejected-bg px-1.5 py-0.5 text-[10px] text-radar-rejected-fg">
                 已拒绝提名
               </span>
             )}
           </div>
-          <p
-            style={{
-              fontSize: 14,
-              color: '#1e293b',
-              margin: 0,
-              lineHeight: 1.7,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-            }}
-          >
-            {comment.body}
-          </p>
 
-          <div style={{ display: 'flex', gap: 12, marginTop: 6, fontSize: 12, color: '#64748b', alignItems: 'center' }}>
-            <button
+          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{comment.body}</p>
+
+          {/* 操作按钮 hover 才出现（mockup 风格） */}
+          <div className="mt-1.5 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/comment:opacity-100 focus-within:opacity-100">
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
               onClick={() => onStar(starred ? 'unstar' : 'star')}
               disabled={!currentUserId}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                cursor: currentUserId ? 'pointer' : 'default',
-                padding: 0,
-                color: starred ? '#d97706' : '#64748b',
-                fontSize: 12,
-              }}
+              className={cn(
+                starred
+                  ? 'text-amber-600 hover:text-amber-600'
+                  : 'text-muted-foreground hover:text-amber-600',
+              )}
               data-testid={`star-button-${comment.id}`}
             >
-              {starred ? '⭐' : '☆'} {comment.starCount > 0 ? comment.starCount : '重要'}
-            </button>
+              <Star className={cn('size-3.5', starred && 'fill-current')} />
+              {comment.starCount > 0 ? comment.starCount : '重要'}
+            </Button>
             {currentUserId && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground"
                 onClick={() => setReplyOpen((v) => !v)}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: '#64748b', fontSize: 12 }}
               >
                 回复
-              </button>
+              </Button>
             )}
             {canDelete && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="xs"
+                className="text-destructive hover:text-destructive"
                 onClick={onDelete}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                  color: '#dc2626',
-                  fontSize: 12,
-                }}
               >
                 删除
-              </button>
+              </Button>
             )}
           </div>
 
           {/* 回复输入框 */}
           {replyOpen && (
-            <div style={{ marginTop: 8 }}>
+            <div className="mt-2">
               <CommentInput
                 placeholder={`回复 ${comment.author.name}…`}
                 small
@@ -329,34 +324,38 @@ function CommentRow({
             </div>
           )}
 
-          {/* 嵌套回复 */}
+          {/* 嵌套回复（仅 1 层） */}
           {comment.children.length > 0 && (
-            <div style={{ marginTop: 8, marginLeft: 8, paddingLeft: 12, borderLeft: '2px solid #e2e8f0' }}>
+            <div className="ml-2 mt-2 border-l-2 border-border pl-3">
               {comment.children.slice(0, repliesExpanded ? undefined : 2).map((r) => (
-                <div key={r.id} style={{ padding: '6px 0' }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 2 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: '#0f172a' }}>{r.author.name}</span>
-                    <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatRelative(r.createdAt)}</span>
+                <div key={r.id} className="py-1.5">
+                  <div className="mb-0.5 flex items-center gap-2">
+                    <span className="text-xs font-semibold">{r.author.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatRelative(r.createdAt)}
+                    </span>
                   </div>
-                  <p style={{ fontSize: 13, color: '#334155', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-muted-foreground">
                     {r.body}
                   </p>
                 </div>
               ))}
               {!repliesExpanded && comment.childCount > comment.children.length && (
-                <button
+                <Button
                   type="button"
+                  variant="link"
+                  size="xs"
+                  className="mt-1 h-auto p-0"
                   onClick={() => setRepliesExpanded(true)}
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#0ea5e9', fontSize: 12, marginTop: 4 }}
                 >
-                  查看全部 {comment.childCount} 条回复 →
-                </button>
+                  查看全部 {comment.childCount} 条回复
+                </Button>
               )}
             </div>
           )}
         </div>
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -398,7 +397,7 @@ function CommentInput({
 
   return (
     <div>
-      <textarea
+      <Textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={(e) => {
@@ -410,47 +409,23 @@ function CommentInput({
         placeholder={placeholder}
         disabled={disabled}
         rows={small ? 2 : 3}
-        style={{
-          width: '100%',
-          fontSize: small ? 13 : 14,
-          padding: small ? '6px 10px' : '8px 12px',
-          border: '1px solid #e2e8f0',
-          borderRadius: 6,
-          resize: 'vertical',
-          background: disabled ? '#f8fafc' : '#fff',
-          color: '#1e293b',
-          outline: 'none',
-          fontFamily: 'inherit',
-        }}
+        className={cn('resize-y', small ? 'min-h-[56px] text-[13px]' : 'min-h-[72px]')}
       />
-      {error && <p style={{ color: '#dc2626', fontSize: 12, margin: '4px 0' }}>{error}</p>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+      {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+      <div className="mt-1.5 flex justify-end gap-2">
         {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            style={{ padding: '4px 12px', fontSize: 12, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 4, color: '#64748b', cursor: 'pointer' }}
-          >
+          <Button type="button" variant="outline" size="xs" onClick={onCancel}>
             取消
-          </button>
+          </Button>
         )}
-        <button
+        <Button
           type="button"
+          size="xs"
           onClick={submit}
           disabled={disabled || submitting || !body.trim()}
-          style={{
-            padding: '4px 14px',
-            fontSize: 12,
-            background: '#0f172a',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 4,
-            cursor: disabled || submitting || !body.trim() ? 'not-allowed' : 'pointer',
-            opacity: disabled || submitting || !body.trim() ? 0.5 : 1,
-          }}
         >
           {submitting ? '发送中…' : '发送 (⌘+Enter)'}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -463,25 +438,21 @@ function CommentInput({
 function Avatar({ user }: { user: CommentAuthor }) {
   if (user.avatarUrl) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={user.avatarUrl} alt={user.name} style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />;
+    return (
+      <img
+        src={user.avatarUrl}
+        alt={user.name}
+        className="size-8 shrink-0 rounded-full object-cover"
+      />
+    );
   }
   const initial = user.name?.[0] ?? '?';
   const hue = hashHue(user.id);
   return (
     <div
-      style={{
-        width: 32,
-        height: 32,
-        borderRadius: '50%',
-        background: `hsl(${hue} 70% 55%)`,
-        color: '#fff',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: 13,
-        fontWeight: 600,
-        flexShrink: 0,
-      }}
+      className="flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white"
+      // ⚠️ 全站唯一允许的内联颜色：色相由 user.id 运行时算出，无法 token 化。
+      style={{ background: `hsl(${hue} 70% 45%)` }}
     >
       {initial}
     </div>
@@ -506,18 +477,3 @@ function formatRelative(iso: string): string {
 
 /** 暴露用于单测；组件外部不直接使用。 */
 export const __testing__ = { hashHue, formatRelative };
-
-const sectionStyle: React.CSSProperties = {
-  border: '1px solid #e2e8f0',
-  borderRadius: 8,
-  padding: 20,
-  marginTop: 16,
-  background: '#fff',
-};
-
-const headerStyle: React.CSSProperties = {
-  fontSize: 16,
-  fontWeight: 600,
-  color: '#0f172a',
-  margin: '0 0 12px',
-};

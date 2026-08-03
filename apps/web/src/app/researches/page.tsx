@@ -1,16 +1,49 @@
 'use client';
 
-// 沉淀列表页：research / knowledge tab 切换。
+// 调研库列表页：research / knowledge tab 切换。
 //
 // 功能：
-//   - 长文 (research) / 精华 (knowledge) tab
+//   - 长文 (research) / 精华 (knowledge) / 我的草稿 tab
 //   - 卡片：标题、标签、creationMethod 徽标、draft 标签、作者、状态
+//   - 搜索：按标题 + 标签子串过滤（客户端；limit=20 时只过滤当前页）
+//   - 排序：最新发布 / 最近编辑 / 标题
 //   - 新建按钮 → 跳转编辑页
 //   - 分页
+//
+// ⚠️ e2e 断言正文含 /调研库|researches/，勿改标题文案。
+//
+// 性能说明：搜索/排序目前是 client-side（瞬时反馈，零 API 改动）。
+// 当已发布条目超过 ~500 条时，应迁移到 server-side：API 加 ?q= ?sort= 参数，
+// 这一层的 filter/sort 逻辑迁移到 Prisma orderBy/where。
 
-import { useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { ArrowDownNarrowWide, ArrowUpDown, Plus, Search as SearchIcon, Wand2 } from 'lucide-react';
+
+import { PageHeader } from '@/components/domain/PageHeader';
+import { Pagination } from '@/components/domain/Pagination';
+import { StatusBadge } from '@/components/domain/StatusBadge';
+import { TagChip, TagList } from '@/components/domain/TagChip';
+import { EmptyState } from '@/components/EmptyState';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
+import {
+  parseResearchTab,
+  researchTabHref,
+  type ResearchTab,
+} from '@/lib/research-tabs';
 
 interface ResearchItem {
   id: string;
@@ -35,227 +68,234 @@ interface ListResponse {
   totalPages: number;
 }
 
-function methodLabel(method: string): string {
-  switch (method) {
-    case 'manual': return '手写';
-    case 'ai_research': return 'AI 调研';
-    case 'file_import': return '文件导入';
-    case 'confluence_import': return 'Confluence';
-    default: return method;
-  }
-}
+const TABS: Array<{ value: ResearchTab; label: string }> = [
+  { value: 'research', label: '长文' },
+  { value: 'knowledge', label: '精华' },
+  { value: 'draft', label: '我的草稿' },
+];
 
-function methodColor(method: string): string {
-  switch (method) {
-    case 'manual': return '#475569';
-    case 'ai_research': return '#7c3aed';
-    case 'file_import': return '#0ea5e9';
-    case 'confluence_import': return '#059669';
-    default: return '#94a3b8';
-  }
-}
+const SORTS = [
+  { key: 'newest', label: '最新发布' },
+  { key: 'updated', label: '最近编辑' },
+  { key: 'title', label: '按标题' },
+] as const;
+type SortKey = (typeof SORTS)[number]['key'];
 
 export default function ResearchesPage() {
-  const [tab, setTab] = useState<'research' | 'knowledge'>('research');
-  const [page, setPage] = useState(1);
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-shell space-y-3">
+          <Skeleton className="h-8 w-40" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+      }
+    >
+      <ResearchesContent />
+    </Suspense>
+  );
+}
 
-  const { data, isLoading, isError } = useQuery<ListResponse>({
+function ResearchesContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const tab = parseResearchTab(searchParams.get('tab'));
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState('');
+  const [sort, setSort] = useState<SortKey>('newest');
+
+  const { data, isLoading, isError, isFetching } = useQuery<ListResponse>({
     queryKey: ['researches', tab, page],
     queryFn: async () => {
-      const params = new URLSearchParams({ type: tab, page: String(page), limit: '20' });
+      const params = new URLSearchParams({
+        scope: tab === 'draft' ? 'draft' : 'published',
+        page: String(page),
+        limit: '20',
+      });
+      if (tab !== 'draft') params.set('type', tab);
       const res = await fetch(`/api/researches?${params}`);
       if (!res.ok) throw new Error('Failed to fetch');
       return res.json();
     },
   });
 
+  // 客户端过滤 + 排序。
+  // 注意：搜索 `q` 在 reset page 时回到 1；切 tab 时已经重置过 page。
+  const visible = useMemo(() => {
+    if (!data) return [] as ResearchItem[];
+    const needle = q.trim().toLowerCase();
+    const filtered = needle
+      ? data.items.filter((it) =>
+          it.title.toLowerCase().includes(needle) ||
+          it.tags.some((t) => t.toLowerCase().includes(needle)),
+        )
+      : data.items;
+    const sorted = [...filtered];
+    if (sort === 'newest') {
+      sorted.sort((a, b) => {
+        const ta = a.publishedAt ?? a.createdAt;
+        const tb = b.publishedAt ?? b.createdAt;
+        return tb.localeCompare(ta);
+      });
+    } else if (sort === 'updated') {
+      sorted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    } else {
+      sorted.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans'));
+    }
+    return sorted;
+  }, [data, q, sort]);
+
+  // 过滤掉所有条目时，给用户更明确的反馈
+  const filteredOut = !!data && visible.length === 0 && data.items.length > 0;
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, margin: 0 }}>沉淀</h1>
-        <Link
-          href="/researches/new"
-          style={{
-            border: '1px solid #0f172a',
-            background: '#0f172a',
-            color: '#fff',
-            padding: '6px 14px',
-            borderRadius: 6,
-            fontSize: 13,
-            textDecoration: 'none',
-          }}
-        >
-          + 新建
-        </Link>
-      </div>
+    <div className="mx-auto max-w-shell">
+      <PageHeader
+        title="调研库"
+        description="调研长文与讨论精华的长期归档。"
+        actions={
+          <Button asChild size="sm">
+            <Link href="/researches/new">
+              <Plus />
+              新建
+            </Link>
+          </Button>
+        }
+      />
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 2, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
-        <button
-          onClick={() => { setTab('research'); setPage(1); }}
-          style={{
-            padding: '8px 16px',
-            border: 'none',
-            background: 'transparent',
-            borderBottom: tab === 'research' ? '2px solid #0f172a' : '2px solid transparent',
-            fontWeight: tab === 'research' ? 600 : 400,
-            cursor: 'pointer',
-            color: '#0f172a',
-            fontSize: 14,
-          }}
-        >
-          长文
-        </button>
-        <button
-          onClick={() => { setTab('knowledge'); setPage(1); }}
-          style={{
-            padding: '8px 16px',
-            border: 'none',
-            background: 'transparent',
-            borderBottom: tab === 'knowledge' ? '2px solid #0f172a' : '2px solid transparent',
-            fontWeight: tab === 'knowledge' ? 600 : 400,
-            cursor: 'pointer',
-            color: '#0f172a',
-            fontSize: 14,
-          }}
-        >
-          精华
-        </button>
-      </div>
+      <Tabs
+        value={tab}
+        onValueChange={(v) => {
+          router.replace(researchTabHref(v as ResearchTab), { scroll: false });
+          setPage(1);
+          setQ('');
+        }}
+      >
+        <TabsList className="w-full justify-start">
+          {TABS.map((t) => (
+            <TabsTrigger key={t.value} value={t.value}>
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
-      {isLoading && <p style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>加载中...</p>}
-      {isError && <p style={{ color: '#ef4444', textAlign: 'center', padding: 40 }}>加载失败，请稍后重试</p>}
-
-      {data && data.items.length === 0 && (
-        <p style={{ color: '#94a3b8', textAlign: 'center', padding: 40 }}>
-          暂无{tab === 'research' ? '长文' : '精华'}
-        </p>
-      )}
-
-      {data && data.items.map((item) => (
-        <Link
-          key={item.id}
-          href={`/researches/${item.id}`}
-          style={{
-            display: 'block',
-            border: '1px solid #e2e8f0',
-            borderRadius: 8,
-            background: '#fff',
-            padding: 16,
-            marginBottom: 12,
-            textDecoration: 'none',
-            color: 'inherit',
-            position: 'relative',
-          }}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 600,
-                background: `${methodColor(item.creationMethod)}15`,
-                color: methodColor(item.creationMethod),
-                border: `1px solid ${methodColor(item.creationMethod)}30`,
-              }}
-            >
-              {methodLabel(item.creationMethod)}
+      {/* 过滤条 —— 仅在 published tab 显示（草稿通常不需要按标题搜） */}
+      {tab !== 'draft' && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px] sm:max-w-md">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索标题或标签…"
+              aria-label="搜索调研库"
+              className="pl-9"
+            />
+          </div>
+          <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+            <SelectTrigger className="w-36" aria-label="排序方式">
+              <ArrowUpDown className="size-3" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORTS.map((s) => (
+                <SelectItem key={s.key} value={s.key}>
+                  {s.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(q || sort !== 'newest') && (
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              <ArrowDownNarrowWide className="mr-1 inline size-3 align-text-bottom" />
+              {visible.length} / {data?.items.length ?? 0}
             </span>
-            {item.aiAssisted && (
-              <span style={{
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontSize: 11,
-                background: '#ede9fe',
-                color: '#7c3aed',
-                border: '1px solid #c4b5fd',
-              }}>
-                AI 协助
-              </span>
-            )}
-            {item.status === 'draft' && (
-              <span style={{
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontSize: 11,
-                background: '#fef3c7',
-                color: '#92400e',
-                border: '1px solid #fcd34d',
-              }}>
-                草稿
-              </span>
-            )}
-          </div>
-
-          <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 600 }}>
-            {item.title}
-          </h3>
-
-          <p style={{ margin: '0 0 8px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
-            {excerpt(item.body, 200)}
-          </p>
-
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-            {item.tags.map((t) => (
-              <span key={t} style={{
-                padding: '1px 6px',
-                borderRadius: 4,
-                fontSize: 11,
-                background: '#f1f5f9',
-                color: '#475569',
-              }}>
-                {t}
-              </span>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, fontSize: 12, color: '#94a3b8' }}>
-            <span>{item.author.name}</span>
-            <span>{item.publishedAt ? new Date(item.publishedAt).toLocaleDateString('zh-CN') : new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>
-          </div>
-        </Link>
-      ))}
-
-      {/* Pagination */}
-      {data && data.totalPages > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 16 }}>
-          <button
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            style={{
-              padding: '4px 12px',
-              border: '1px solid #e2e8f0',
-              borderRadius: 4,
-              background: '#fff',
-              cursor: page <= 1 ? 'default' : 'pointer',
-              opacity: page <= 1 ? 0.4 : 1,
-            }}
-          >
-            上一页
-          </button>
-          <span style={{ padding: '4px 8px', fontSize: 13, color: '#475569' }}>
-            {page} / {data.totalPages}
-          </span>
-          <button
-            disabled={page >= data.totalPages}
-            onClick={() => setPage((p) => Math.min(data.totalPages, p + 1))}
-            style={{
-              padding: '4px 12px',
-              border: '1px solid #e2e8f0',
-              borderRadius: 4,
-              background: '#fff',
-              cursor: page >= data.totalPages ? 'default' : 'pointer',
-              opacity: page >= data.totalPages ? 0.4 : 1,
-            }}
-          >
-            下一页
-          </button>
+          )}
         </div>
       )}
+
+      <div className="mt-4">
+        {isLoading && (
+          <div className="grid gap-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-4">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-3 w-full" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {isError && <EmptyState title="加载失败" description="请稍后重试。" />}
+
+        {data && data.items.length === 0 && (
+          <EmptyState
+            title={tab === 'draft' ? '暂无草稿' : `暂无${tab === 'research' ? '长文' : '精华'}`}
+            description={
+              tab === 'draft' ? '新建或由 AI 调研产出的草稿会出现在这里。' : '发布后的内容会出现在这里。'
+            }
+          />
+        )}
+
+        {filteredOut && (
+          <EmptyState
+            title="没有匹配项"
+            description={q ? `没有标题或标签包含「${q}」的调研。试试别的关键词，或清空搜索。` : '当前排序下没有内容。'}
+          />
+        )}
+
+        <div className={cn('grid gap-3', filteredOut && 'hidden')}>
+          {visible.map((item) => (
+            <Link
+              key={item.id}
+              href={`/researches/${item.id}`}
+              className="block rounded-lg border border-border bg-card p-4 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                <StatusBadge kind="method" value={item.creationMethod} />
+                {item.aiAssisted && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-method-ai/40 px-2 py-0.5 text-xs text-method-ai">
+                    <Wand2 className="size-3" />
+                    AI 协助
+                  </span>
+                )}
+                {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
+              </div>
+
+              <h2 className="text-sm font-semibold leading-snug">{item.title}</h2>
+
+              <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                {excerpt(item.body, 200)}
+              </p>
+
+              {item.tags.length > 0 && (
+                <TagList className="mt-2.5">
+                  {item.tags.map((t) => (
+                    <TagChip key={t}>{t}</TagChip>
+                  ))}
+                </TagList>
+              )}
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                <span>{item.author.name}</span>
+                <span className="font-mono tabular-nums">
+                  {new Date(item.publishedAt ?? item.createdAt).toLocaleDateString('zh-CN')}
+                </span>
+              </div>
+            </Link>
+          ))}
+        </div>
+
+        <Pagination
+          page={page}
+          totalPages={data?.totalPages ?? 1}
+          onPageChange={setPage}
+          disabled={isFetching}
+        />
+      </div>
     </div>
   );
 }

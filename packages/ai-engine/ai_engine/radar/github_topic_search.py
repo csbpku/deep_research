@@ -39,7 +39,7 @@ async def fetch_github_topic_search(
 ) -> list[RadarCandidate]:
     topics = list(config.get("topics", _AI_TOPICS))
     max_per_topic = max(1, min(15, int(config.get("max_per_topic", 15))))
-    max_results = max(1, min(50, int(config.get("max_results", 20))))
+    max_results = max(1, min(90, int(config.get("max_results", 90))))
 
     owns_client = client is None
     token = os.getenv("GH_TOKEN")
