@@ -1,7 +1,7 @@
 // BFF handler: GET /api/radar — 雷达候选列表（member/admin 可见）。
 //
 // 契约源：
-//   - apps/web/prisma/schema.prisma: Summary（source='daily' 且 syncRunId 非空）
+//   - apps/web/prisma/schema.prisma: 自动雷达 Summary + 已审核用户分享
 //   - docs/contracts/state-machines.md §4: SummaryStatus
 //
 // 入参: ?q=&sourceType=&status=&page=1&per_page=20
@@ -49,25 +49,41 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   const { q, sourceType, status, quality, page, per_page: perPage } = parsed.data;
 
-  // 雷达候选 = source='daily' 且 syncRunId 非空（架构 §五 + §七）
+  // 雷达候选 = 自动雷达条目，或已由 Admin 批准的用户分享。
+  // 未审核分享只能停留在 share_submissions，不能出现在公开候选池。
   // 默认排除 archived，让 published/rejected 也可检索（admin 队列场景）。
   const where: Prisma.SummaryWhereInput = {
-    source: 'daily',
-    syncRunId: { not: null },
     ...(status ? { status } : {}),
-    ...(sourceType
-      ? {
-          syncRun: {
-            source: {
-              sourceType:
-                sourceType === 'github'
-                  ? { startsWith: 'github' }
-                  : sourceType,
-            },
-          },
-        }
-      : {}),
     AND: [
+      {
+        OR: [
+          { source: 'daily', syncRunId: { not: null } },
+          { source: 'user', shareSource: { is: { status: 'approved' } } },
+        ],
+      },
+      ...(sourceType
+        ? [{
+            OR: [
+              {
+                syncRun: {
+                  source: {
+                    sourceType:
+                      sourceType === 'github'
+                        ? { startsWith: 'github' }
+                        : sourceType === 'articles'
+                          ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
+                          : sourceType === 'community'
+                            ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
+                            : sourceType,
+                  },
+                },
+              },
+              ...(sourceType === 'articles' || sourceType === 'web_share'
+                ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+                : []),
+            ],
+          }]
+        : []),
       ...(quality === 'relevant'
         ? [{ OR: [{ distilledTier: { not: 'noise' } }, { distilledTier: null }] }]
         : []),
@@ -117,6 +133,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         selectionReason: true,
         sortOrder: true,
         syncRunId: true,
+        source: true,
         sharedBy: { select: { id: true, name: true } },
         syncRun: {
           select: {

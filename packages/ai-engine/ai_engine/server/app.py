@@ -91,26 +91,56 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     from ai_engine.job_runner.db_store import DbJobStore
     share_worker_task: asyncio.Task[None] | None = None
     ai_job_worker_task: asyncio.Task[None] | None = None
+    import_worker_task: asyncio.Task[None] | None = None
     radar_daily_task: asyncio.Task[None] | None = None
+    submission_task: asyncio.Task[None] | None = None
+    topic_agg_task: asyncio.Task[None] | None = None
+    topic_synth_task: asyncio.Task[None] | None = None
+    # asyncio tasks can start immediately, so publish the adapter before any
+    # worker reads app.state.adapter.
+    app_instance.state.adapter = build_adapter()
     if isinstance(store, DbJobStore):
         await store.open()
         app_instance.state.db_pool = store.pool
         app_instance.state.radar_sync_lock = asyncio.Lock()
         await store.start_reaper()
-        share_worker_task = asyncio.create_task(
-            _share_submission_worker_loop(app_instance),
-            name="share-submission-worker",
-        )
-        ai_job_worker_task = asyncio.create_task(
-            _ai_job_worker_loop(app_instance),
-            name="ai-job-worker",
-        )
+        if os.environ.get("SHARE_WORKER_ENABLED", "1") == "1":
+            share_worker_task = asyncio.create_task(
+                _share_submission_worker_loop(app_instance),
+                name="share-submission-worker",
+            )
+        if os.environ.get("AI_JOB_WORKER_ENABLED", "1") == "1":
+            ai_job_worker_task = asyncio.create_task(
+                _ai_job_worker_loop(app_instance),
+                name="ai-job-worker",
+            )
+        if os.environ.get("IMPORT_WORKER_ENABLED", "1") == "1":
+            import_worker_task = asyncio.create_task(
+                _import_worker_loop(),
+                name="content-import-worker",
+            )
         if os.environ.get("RADAR_DAILY_CRON_ENABLED", "1") == "1":
             radar_daily_task = asyncio.create_task(
                 _radar_daily_loop(app_instance),
                 name="radar-daily-cron",
             )
-    app_instance.state.adapter = build_adapter()
+        # P1-B: submission worker
+        if os.environ.get("SUBMISSION_WORKER_ENABLED", "1") == "1":
+            submission_task = asyncio.create_task(
+                _submission_worker_loop(app_instance),
+                name="radar-submission-worker",
+            )
+        # P1-D: topic aggregation (cron @ 02:00 Asia/Shanghai) + topic synthesis (every 5 min)
+        if os.environ.get("TOPIC_AGGREGATION_ENABLED", "1") == "1":
+            topic_agg_task = asyncio.create_task(
+                _topic_aggregation_loop(app_instance),
+                name="radar-topic-aggregator",
+            )
+        if os.environ.get("TOPIC_SYNTHESIS_ENABLED", "1") == "1":
+            topic_synth_task = asyncio.create_task(
+                _topic_synthesis_loop(app_instance),
+                name="radar-topic-synthesis",
+            )
     try:
         yield
     finally:
@@ -122,10 +152,26 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             ai_job_worker_task.cancel()
             with suppress(asyncio.CancelledError):
                 await ai_job_worker_task
+        if import_worker_task is not None:
+            import_worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await import_worker_task
         if radar_daily_task is not None:
             radar_daily_task.cancel()
             with suppress(asyncio.CancelledError):
                 await radar_daily_task
+        if submission_task is not None:
+            submission_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await submission_task
+        if topic_agg_task is not None:
+            topic_agg_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await topic_agg_task
+        if topic_synth_task is not None:
+            topic_synth_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await topic_synth_task
         if isinstance(store, DbJobStore):
             await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
@@ -192,6 +238,36 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(1.0)
 
 
+async def _import_worker_loop() -> None:
+    """Continuously consume content_import_jobs with a dedicated DB store."""
+    from ai_engine.import_worker import run_one_import_job
+    from ai_engine.job_runner.db_store import IMPORT_TABLE, DbJobStore
+
+    log = structlog.get_logger("ai_engine.import_worker")
+    poll_seconds = float(os.environ.get("IMPORT_WORKER_POLL_SECONDS", "1"))
+    store = DbJobStore(table_name=IMPORT_TABLE)
+    try:
+        await store.open()
+        await store.start_reaper()
+        while True:
+            try:
+                job_id = await run_one_import_job(
+                    store,
+                    worker_id=f"import-{os.getpid()}",
+                )
+                if job_id is None:
+                    await asyncio.sleep(poll_seconds)
+                else:
+                    log.info("ai-engine.import_worker.done", job_id=job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.warning("ai-engine.import_worker.loop_failed", exc_info=True)
+                await asyncio.sleep(poll_seconds)
+    finally:
+        await store.close()
+
+
 def _seconds_until_next_radar_window(
     schedule: str,
     tz: ZoneInfo,
@@ -255,6 +331,92 @@ async def _radar_daily_loop(app_instance: FastAPI) -> None:
             )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# P1-B / P1-D 进程内 worker loop
+# ──────────────────────────────────────────────────────────────────────
+
+
+async def _submission_worker_loop(app_instance: FastAPI) -> None:
+    """P1-B: 持续消费 radar_submissions 行的状态推进。
+    失败隔离：worker 抛任何异常都不会让 loop 退出。
+    """
+    from ai_engine.radar.submission_worker import run_submission_worker
+
+    log = structlog.get_logger("ai_engine.radar.submission")
+    poll_seconds = float(os.environ.get("SUBMISSION_WORKER_POLL_SECONDS", "2"))
+    while True:
+        try:
+            processed = await run_submission_worker(
+                app_instance.state.db_pool,
+                max_iterations=int(os.environ.get("SUBMISSION_WORKER_ITERATIONS", "1")),
+            )
+            if processed == 0:
+                await asyncio.sleep(poll_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.submission.loop_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(poll_seconds)
+
+
+def _seconds_until_next_topic_window(schedule: str, tz: ZoneInfo) -> float:
+    """Topic 聚合窗口：默认 02:00 Asia/Shanghai。复用 radar daily 风格。"""
+    return _seconds_until_next_radar_window(schedule, tz)
+
+
+async def _topic_aggregation_loop(app_instance: FastAPI) -> None:
+    """P1-D: 每日一次主题聚合（默认 02:00 Asia/Shanghai）。"""
+    from ai_engine.radar.topic_aggregation_worker import run_topic_aggregation
+
+    log = structlog.get_logger("ai_engine.radar.topic_agg")
+    schedule = os.environ.get("TOPIC_AGGREGATION_CRON_TIME", "02:00")
+    tz = ZoneInfo("Asia/Shanghai")
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_next_topic_window(schedule, tz))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.topic_agg.schedule_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(3600.0)
+            continue
+        try:
+            await run_topic_aggregation(app_instance.state.db_pool)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.topic_agg.run_failed",
+                error_type=type(exc).__name__,
+            )
+
+
+async def _topic_synthesis_loop(app_instance: FastAPI) -> None:
+    """P1-D: 每 5 分钟跑一次主题 AI 综述（默认）。"""
+    from ai_engine.radar.topic_synthesis_worker import run_topic_synthesis
+
+    log = structlog.get_logger("ai_engine.radar.topic_synth")
+    interval = float(os.environ.get("TOPIC_SYNTHESIS_INTERVAL_SECONDS", "300"))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await run_topic_synthesis(app_instance.state.db_pool)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.topic_synth.loop_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(interval)
+
+
 app = FastAPI(
     title="Deep Research AI Engine",
     version="0.1.0",
@@ -262,9 +424,11 @@ app = FastAPI(
 )
 
 from ai_engine.radar.sync_endpoint import router as radar_router  # noqa: E402
+from ai_engine.radar.topic_endpoint import router as topic_router  # noqa: E402
 from ai_engine.server.chat import router as chat_router  # noqa: E402
 
 app.include_router(radar_router)
+app.include_router(topic_router)
 app.include_router(chat_router)
 
 
@@ -440,6 +604,8 @@ class SubmitAiJobResponse(BaseModel):
     failed_sources_count: int = 0
     error_stage: str | None = None
     draft_research_id: str | None = None
+    report_type: str | None = None
+    output_text: str | None = None
     token_input_total: int = 0
     token_output_total: int = 0
     cost_cents: int = 0
@@ -552,6 +718,17 @@ async def submit_ai_job(
             "only_user_sources requires at least one source_ref",
         )
 
+    resolved_source_refs: tuple[dict[str, str | bool], ...] = tuple(body.source_refs)
+    from ai_engine.job_runner.db_store import DbJobStore
+    if isinstance(store, DbJobStore):
+        try:
+            resolved_source_refs = await store.resolve_internal_source_refs(
+                body.source_refs,
+                requester_id=body.requester_id,
+            )
+        except AdapterError as exc:
+            raise _http_error(exc.code, exc.message) from exc
+
     # W6: Idempotency replay — same (requester_id, idempotency_key) returns the
     # original job without enqueueing a new one. Status 200 instead of 202 so
     # clients can distinguish replay from fresh submit.
@@ -615,7 +792,7 @@ async def submit_ai_job(
         current_step=snapshot.current_step,
         attempts=snapshot.attempts,
         idempotency_key=body.idempotency_key,
-        source_refs=tuple(body.source_refs),
+        source_refs=resolved_source_refs,
     )
     await store.enqueue(snapshot)
 
@@ -725,16 +902,18 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             snapshot: JobSnapshot, sources: tuple[AdapterSource, ...], output_text: str
         ) -> str | None:
             assert isinstance(store, _Db)
-            # W2 review 修正:真 INSERT research row;不让 Runner 自造 UUID。
-            # 这里用 store._pool.connection() 直接写。
-            new_id = str(uuid.uuid4())
+            # The runner may be retried after the draft INSERT committed but
+            # before mark_terminal committed. Derive the draft id from the job
+            # id so replaying the same job cannot create duplicate drafts.
+            new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"deep-research:ai-job:{snapshot.job_id}"))
             body = output_text.strip()
             origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
             sql = (
                 'INSERT INTO "researches" '
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
                 ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', false, %s, now(), now())"
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', true, %s, now(), now()) "
+                'ON CONFLICT ("id") DO NOTHING'
             )
             async with store.pool.connection() as conn:
                 async with conn.transaction():
@@ -758,7 +937,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
         # InMemory 测试路径:用全局 dict 记录 fake draft id。
         # 让 _background_run 测试 / FakeAdapter 测试可走 succeeded。
         from ai_engine.job_runner.db_store import _drafts_for_tests
-        new_id = str(uuid.uuid4())
+        new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"deep-research:ai-job:{snapshot.job_id}"))
         _drafts_for_tests[new_id] = {
             "topic": snapshot.topic,
             "requester_id": snapshot.requester_id,
@@ -898,6 +1077,8 @@ async def get_ai_job(
         failed_sources_count=len(last_failed_sources),
         error_stage=error_stage,
         draft_research_id=getattr(row, "draft_research_id", None),
+        report_type=snap.report_type,
+        output_text=getattr(row, "output_text", None),
         token_input_total=getattr(row, "last_token_in", 0),
         token_output_total=getattr(row, "last_token_out", 0),
         cost_cents=getattr(row, "last_cost_cents", 0),
@@ -925,15 +1106,39 @@ async def cancel_ai_job(
     job_id: Annotated[str, Path(min_length=1)],
     store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> CancelAiJobResponse:
+    row = await _store_get_row(store, job_id)
+    if row is None:
+        raise _http_error("AI_JOB_NOT_FOUND", f"job {job_id} not found")
+    current_status = row.snapshot.status
+    if current_status not in {"queued", "running"}:
+        raise _http_error(
+            "AI_JOB_NOT_CANCELLABLE",
+            f"job {job_id} is already {current_status}",
+        )
+
+    previous_status = await store.cancel_job(job_id)
+    if previous_status is None:
+        raise _http_error(
+            "AI_JOB_NOT_CANCELLABLE",
+            f"job {job_id} changed state before cancellation",
+        )
+
+    # The DB queue is authoritative. Adapter cancellation is best-effort: a
+    # process restart legitimately leaves no matching in-memory adapter job.
     adapter = _adapter_singleton()
-    try:
-        outcome = await adapter.cancel(job_id)
-    except AdapterError as exc:
-        raise _http_error(exc.code, exc.message) from exc
+    if previous_status == "running":
+        try:
+            await adapter.cancel(job_id)
+        except AdapterError as exc:
+            structlog.get_logger("ai_engine.cancel").warning(
+                "ai-engine.cancel.adapter_missed",
+                job_id=job_id,
+                error_code=exc.code,
+            )
     return CancelAiJobResponse(
-        job_id=outcome.job_id,
-        was_queued=outcome.was_queued,
-        was_running=outcome.was_running,
+        job_id=job_id,
+        was_queued=previous_status == "queued",
+        was_running=previous_status == "running",
     )
 
 

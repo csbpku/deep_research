@@ -53,6 +53,12 @@ const webEnvSchema = z
 
     MAX_UPLOAD_SIZE_MB: positiveInt.default('5'),
     TIME_VALUE_USD_PER_HOUR: positiveNumber.default('50'),
+
+    // P1-A2: shared service token used by Web BFF when calling ai-engine.
+    // Required in production; in development/test we fall back to a stub so
+    // local mocks don't need a real secret. Production deployments MUST set
+    // this — see docs/P1_PLAN.md §"P1-A2" and infra/.env.example.
+    INTERNAL_SERVICE_TOKEN: z.string().default(''),
   })
   .passthrough(); // Next.js 注入大量内部 env keys；只校验已知变量，放过未知 key
 

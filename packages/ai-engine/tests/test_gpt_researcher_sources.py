@@ -11,6 +11,7 @@ from ai_engine.adapters.gpt_researcher import _collect_sources_from_research
 from ai_engine.adapters.gpt_researcher import (
     _append_references,
     _report_needs_completion,
+    _resolved_internal_sources,
     _strip_overlap,
 )
 from ai_engine.adapters.base import AdapterSource
@@ -60,6 +61,25 @@ def test_dedupes_and_uses_visited_urls_as_fallback() -> None:
 
 def test_empty_inputs_return_empty_list() -> None:
     assert _collect_sources_from_research([], [], "topic") == []
+
+
+def test_maps_hydrated_internal_ref_into_grounded_adapter_source() -> None:
+    sources = _resolved_internal_sources(({
+        "type": "summary",
+        "value": "2a3b9c83-d021-4f45-8cdd-f9f4668ff809",
+        "required": True,
+        "resolvedTitle": "Voice Agent evaluation",
+        "resolvedSnippet": "Evaluate execution, outcomes, and conversation experience.",
+    },))
+
+    assert len(sources) == 1
+    assert sources[0].title == "Voice Agent evaluation"
+    assert sources[0].snippet == "Evaluate execution, outcomes, and conversation experience."
+    assert sources[0].source_ref == {
+        "type": "summary",
+        "value": "2a3b9c83-d021-4f45-8cdd-f9f4668ff809",
+        "required": True,
+    }
 
 
 def _source(url: str, title: str) -> AdapterSource:

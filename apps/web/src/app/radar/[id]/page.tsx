@@ -28,6 +28,8 @@ import type { DistilledScore } from '@deep-research/shared/schemas';
 import { formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
 import { Button } from '../../../components/ui/button';
+import { toApiHttpError } from '../../../lib/errors/api-error';
+import { retryOnceAi } from '../../../lib/errors/friendly';
 import {
   Tooltip,
   TooltipContent,
@@ -106,11 +108,11 @@ export default function RadarDetailPage() {
     queryFn: async () => {
       const r = await fetch(`/api/radar/${params.id}`, { cache: 'no-store' });
       if (!r.ok) {
-        const err = await r.json().catch(() => ({ message: '加载失败' }));
-        throw new Error(err.message ?? '加载失败');
+        throw await toApiHttpError(r, '加载失败');
       }
       return (await r.json()) as RadarDetail;
     },
+    retry: retryOnceAi,
   });
 
   if (q.isLoading) {

@@ -2,8 +2,8 @@
 
 The digest replaces the old "4 hand-picked summaries per day" flow:
 
-- Only high-scoring radar candidates participate (``distilledTier`` in
-  ``collection`` / ``deep_read``).
+- Relevant candidates participate, capped at five per source category so a
+  large arXiv batch cannot crowd out GitHub and engineering signals.
 - The composed article is stored as a published ``summaries`` row whose
   ``canonicalUrl`` is ``digest://YYYY-MM-DD``. Comments therefore work through
   the existing summary comment API without a schema-level target change.
@@ -30,8 +30,8 @@ from psycopg.rows import dict_row
 
 logger = logging.getLogger("ai_engine.radar.daily_digest")
 
-# Only these distilled tiers are considered "high-score" enough for the digest.
-ELIGIBLE_TIERS = ("collection", "deep_read")
+# Noise is excluded; category quotas provide the second-stage quality gate.
+ELIGIBLE_TIERS = ("collection", "deep_read", "skim")
 
 DIGEST_CANONICAL_PREFIX = "digest://"
 
@@ -61,30 +61,60 @@ async def query_digest_candidates(
         rows = await (
             await conn.execute(
                 """
-                SELECT
-                    s.id,
-                    s.title,
-                    s.url,
-                    s."canonicalUrl",
-                    s."distilledScore",
-                    s."distilledTotal",
-                    s."distilledTier",
-                    s."distilledMustRead",
-                    s.interpretation,
-                    s.body,
-                    s.tags,
-                    COALESCE(rs."sourceType", 'unknown') AS "sourceType"
-                FROM summaries s
-                LEFT JOIN "radar_sync_runs" rsr ON s."syncRunId" = rsr.id
-                LEFT JOIN "radar_sources" rs ON rsr."sourceId" = rs.id
-                WHERE s."summaryDate" = %s::date
-                  AND s."syncRunId" IS NOT NULL
-                  AND s."distilledScore" IS NOT NULL
-                  AND s."distilledTier" = ANY(%s)
+                WITH ranked AS (
+                    SELECT
+                        s.id,
+                        s.title,
+                        s.url,
+                        s."canonicalUrl",
+                        s."distilledScore",
+                        s."distilledTotal",
+                        s."distilledTier",
+                        s."distilledMustRead",
+                        s.interpretation,
+                        s.body,
+                        s.tags,
+                        COALESCE(rs."sourceType", 'unknown') AS "sourceType",
+                        CASE
+                            WHEN rs."sourceType" LIKE 'github%%' THEN 'github'
+                            WHEN rs."sourceType" = 'arxiv' THEN 'arxiv'
+                            WHEN rs."sourceType" IN ('hackernews', 'producthunt', 'reddit', 'lobsters') THEN 'community'
+                            WHEN rs."sourceType" IN ('rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch') THEN 'articles'
+                            ELSE 'other'
+                        END AS "sourceCategory",
+                        ROW_NUMBER() OVER (
+                            PARTITION BY CASE
+                                WHEN rs."sourceType" LIKE 'github%%' THEN 'github'
+                                WHEN rs."sourceType" = 'arxiv' THEN 'arxiv'
+                                WHEN rs."sourceType" IN ('hackernews', 'producthunt', 'reddit', 'lobsters') THEN 'community'
+                                WHEN rs."sourceType" IN ('rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch') THEN 'articles'
+                                ELSE 'other'
+                            END
+                            ORDER BY
+                                COALESCE(s."distilledMustRead", FALSE) DESC,
+                                COALESCE(s."distilledTotal", 0) DESC,
+                                s."createdAt" DESC
+                        ) AS "categoryRank"
+                    FROM summaries s
+                    LEFT JOIN "radar_sync_runs" rsr ON s."syncRunId" = rsr.id
+                    LEFT JOIN "radar_sources" rs ON rsr."sourceId" = rs.id
+                    WHERE s."summaryDate" = %s::date
+                      AND s."syncRunId" IS NOT NULL
+                      AND s."distilledScore" IS NOT NULL
+                      AND s."distilledTier" = ANY(%s)
+                )
+                SELECT * FROM ranked
+                WHERE "categoryRank" <= 5
                 ORDER BY
-                    COALESCE(s."distilledMustRead", FALSE) DESC,
-                    COALESCE(s."distilledTotal", 0) DESC,
-                    s."createdAt" DESC
+                    CASE "sourceCategory"
+                        WHEN 'github' THEN 0
+                        WHEN 'articles' THEN 1
+                        WHEN 'community' THEN 2
+                        WHEN 'arxiv' THEN 3
+                        ELSE 4
+                    END,
+                    COALESCE("distilledMustRead", FALSE) DESC,
+                    COALESCE("distilledTotal", 0) DESC
                 LIMIT %s
                 """,
                 (target_date, list(ELIGIBLE_TIERS), limit),
@@ -176,6 +206,8 @@ DIGEST_USER_PROMPT_TEMPLATE = """\
 - sections: 3-5 个分类
 - highlights: 4-8 条
 - ranked: 5-15 条，按重要度从高到低排序
+- GitHub 仓库更新、Release 和可直接采用的工程工具优先于泛研究论文
+- 不得让单一来源占 ranked 的一半以上；同等价值时优先 GitHub 与工程实践
 - 如果信号数量 < 5，sections 返回空数组 []，highlights ≤ 2
 - 信息来源使用每个信号给出的 "来源类型" 字段值
 - 不要修改或编造链接；链接必须来自信号列表
@@ -218,54 +250,27 @@ def build_prompt(candidates: list[dict[str, Any]]) -> str:
 
 async def _call_digest_llm(system_prompt: str, user_prompt: str) -> str | None:
     """Call BRIEF_LLM for cross-source digest generation."""
-    try:
-        from anthropic import AsyncAnthropic
-    except ImportError:
-        logger.error("anthropic not installed")
-        return None
+    from ai_engine.llm.client import generate_text
 
     llm_spec = (
         os.environ.get("BRIEF_LLM")
         or os.environ.get("SMART_LLM")
         or "anthropic:claude-haiku-4-5"
     )
-    _, _, model_name = llm_spec.partition(":")
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get(
-        "ANTHROPIC_API_KEY_HEAVY", ""
-    )
-    base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get(
-        "ANTHROPIC_BASE_URL_HEAVY"
-    )
-
-    # cc-switch and similar local proxies do not validate keys, but the SDK
-    # rejects placeholder-shaped values before sending.
-    if not api_key or api_key.startswith("local-"):
-        api_key = "sk-placeholder-for-cc-switch"
-
-    client = AsyncAnthropic(api_key=api_key, base_url=base_url)
-
     try:
-        # Disable extended thinking: this is a structured JSON generation task,
-        # and thinking can exhaust the token budget before text is emitted.
-        message = await client.messages.create(
-            model=model_name,
+        result = await generate_text(
+            llm_spec=llm_spec,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
             timeout=90.0,
-            thinking={"type": "disabled"},
+            disable_thinking=True,
         )
     except Exception as exc:
         logger.error("LLM call failed: %s: %s", type(exc).__name__, exc)
         return None
 
-    body_parts = [
-        block.text
-        for block in message.content
-        if getattr(block, "type", None) == "text" and hasattr(block, "text")
-    ]
-    text = "".join(body_parts).strip()
+    text = result.text
     if not text:
         logger.error("LLM returned empty response")
         return None

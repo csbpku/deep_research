@@ -44,10 +44,6 @@ class _Connection:
             })
         if 'SELECT "attempts" FROM "share_submissions"' in sql:
             return _Cursor({"attempts": 1})
-        if 'INSERT INTO "summaries"' in sql:
-            return _Cursor(None if self.duplicate else {"id": str(params[0])})
-        if 'SELECT "id" FROM "summaries" WHERE "canonicalUrl"' in sql:
-            return _Cursor({"id": "existing-summary"})
         if 'UPDATE "share_submissions" SET "canonicalUrl"' in sql:
             return _Cursor({"id": "submission-1"})
         if 'UPDATE "share_submissions" SET "fetchErrorCode"' in sql:
@@ -82,7 +78,7 @@ def _document() -> FetchedDocument:
     )
 
 
-async def test_share_pending_becomes_user_candidate() -> None:
+async def test_share_pending_is_fetched_but_not_published_before_review() -> None:
     pool = _Pool()
 
     async def fetcher(url: str, **kwargs: Any) -> FetchedDocument:
@@ -95,32 +91,15 @@ async def test_share_pending_becomes_user_candidate() -> None:
         fetcher=fetcher,
     )
     assert result is not None
-    assert result.created_candidate is True
-    inserts = [item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0]]
-    assert len(inserts) == 1
-    sql, params = inserts[0]
-    assert "'user'" in sql
-    assert "'web'" in sql
-    assert "'candidate'" in sql
-    assert params[4] == "https://example.com/article"
-    assert any("scoreVersion" in str(p) or "1.0" in str(p) for p in params)  # scoreVersion in DTO
-
-
-async def test_share_duplicate_global_canonical_reuses_summary() -> None:
-    pool = _Pool(duplicate=True)
-
-    async def fetcher(url: str, **kwargs: Any) -> FetchedDocument:
-        return _document()
-
-    result = await run_one_share_submission(
-        pool,
-        FakeAdapter(),
-        worker_id="share-1",
-        fetcher=fetcher,
-    )
-    assert result is not None
     assert result.created_candidate is False
-    assert result.summary_id == "existing-summary"
+    assert result.summary_id is None
+    inserts = [item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0]]
+    assert inserts == []
+    update = next(
+        item for item in pool.connection_value.executions
+        if 'UPDATE "share_submissions" SET "canonicalUrl"' in item[0]
+    )
+    assert update[1][0] == "https://example.com/article"
 
 
 async def test_safe_fetch_failure_keeps_share_pending() -> None:

@@ -14,6 +14,11 @@ export const DistilledDimensionScoresSchema = z.object({
 }).strict();
 export const DistilledScoreSchema = z.object({
   total: z.number().min(0).max(100),
+  effectiveTotal: z.number().min(0).max(100).optional(),
+  qualityScore: z.number().min(0).max(100).optional(),
+  teamValueScore: z.number().min(0).max(100).optional(),
+  rankingScore: z.number().min(0).max(100).optional(),
+  sourceBonus: z.number().min(0).max(20).optional(),
   tier: DistilledTierSchema,
   mustRead: z.boolean(),
   dimensions: DistilledDimensionScoresSchema,
@@ -24,6 +29,8 @@ export const DistilledScoreSchema = z.object({
   profileFallback: z.boolean().optional(),
   isDefault: z.boolean(),
   version: z.string().min(1).max(16),
+  directRelevance: z.number().int().min(0).max(3).optional(),
+  relevanceEvidence: z.string().max(240).optional(),
 }).strict();
 export type DistilledScore = z.infer<typeof DistilledScoreSchema>;
 

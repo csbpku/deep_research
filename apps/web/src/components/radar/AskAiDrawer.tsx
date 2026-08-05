@@ -16,8 +16,6 @@ import {
   ExternalLink,
   FileText,
   Lightbulb,
-  Link2,
-  Paperclip,
   Send,
   Sparkles,
   X,
@@ -369,30 +367,7 @@ export function AskAiDrawer({
               disabled={!session || sending}
               className="w-full resize-none border-0 bg-transparent p-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <div className="flex items-center justify-between px-1 pb-1">
-              <div className="flex gap-1 text-xs text-muted-foreground">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="附加文件（未启用）"
-                  disabled
-                  className="text-muted-foreground"
-                >
-                  <Paperclip className="size-3.5" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  aria-label="引用（未启用）"
-                  disabled
-                  className="text-muted-foreground"
-                >
-                  <Link2 className="size-3" />
-                  引用
-                </Button>
-              </div>
+            <div className="flex justify-end px-1 pb-1">
               <Button
                 type="button"
                 size="xs"

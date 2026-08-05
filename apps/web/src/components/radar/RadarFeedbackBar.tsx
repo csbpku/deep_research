@@ -36,6 +36,8 @@ interface RadarFeedbackBarProps {
   summaryId: string;
   initialCounts: RadarFeedbackCounts;
   initialMine: RadarFeedbackType[];
+  /** 列表页只需要收藏；详情页保留完整的公共反馈集合。 */
+  types?: readonly RadarFeedbackType[];
   className?: string;
 }
 
@@ -56,6 +58,7 @@ export function RadarFeedbackBar({
   summaryId,
   initialCounts,
   initialMine,
+  types = ALL_TYPES,
   className,
 }: RadarFeedbackBarProps) {
   const [counts, setCounts] = useState<RadarFeedbackCounts>(initialCounts);
@@ -111,7 +114,7 @@ export function RadarFeedbackBar({
 
   return (
     <div className={cn('flex flex-nowrap items-center gap-2 py-1', className)} role="group" aria-label="雷达候选反馈">
-      {ALL_TYPES.map((ft) => {
+      {types.map((ft) => {
         const meta = FEEDBACK_LABELS[ft];
         const Icon = meta.icon;
         const active = mine.includes(ft);

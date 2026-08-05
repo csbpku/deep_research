@@ -46,12 +46,6 @@ import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi } from '@/lib/errors/friendly';
 
-interface ApiError {
-  code: string;
-  message: string;
-  requestId?: string;
-}
-
 interface RadarSeed {
   id: string;
   title: string;
@@ -138,6 +132,38 @@ function AiResearchForm() {
   const [sources, setSources] = useState<SourceRefInput[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/me/preferences', { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return await response.json() as {
+          preferences?: {
+            defaultReportType?: 'research_report' | 'summary_brief';
+            defaultSourcePolicy?: 'prefer_user_sources' | 'only_user_sources' | 'web_only';
+          };
+        };
+      })
+      .then((data) => {
+        if (cancelled || !data?.preferences) return;
+        if (data.preferences.defaultReportType) {
+          setReportType(data.preferences.defaultReportType);
+        }
+        if (
+          data.preferences.defaultSourcePolicy === 'prefer_user_sources'
+          || data.preferences.defaultSourcePolicy === 'only_user_sources'
+        ) {
+          setSourcePolicy(data.preferences.defaultSourcePolicy);
+        }
+      })
+      .catch(() => {
+        // 偏好加载失败不阻断主流程，继续使用表单默认值。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!seedId) return;
 
     let cancelled = false;
@@ -183,7 +209,7 @@ function AiResearchForm() {
       return;
     }
     if (sourcePolicy === 'only_user_sources' && !sources.some((source) => source.value.trim())) {
-      setErr('only 模式至少需要一条指定资料');
+      setErr('“仅使用指定资料”时，至少需要添加一条资料。');
       return;
     }
     setSubmitting(true);
@@ -204,8 +230,7 @@ function AiResearchForm() {
         }),
       });
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({ message: '提交失败' }))) as ApiError;
-        setErr(`${body.code}: ${body.message}`);
+        setErr(friendlyMessage(await toApiHttpError(r, '提交失败'), '提交失败，请稍后重试。'));
         return;
       }
       const body = (await r.json()) as { jobId: string };
@@ -344,7 +369,7 @@ function AiResearchForm() {
           </Button>
         </FormSection>
 
-        <FormSection legend="资料优先级">
+        <FormSection legend="资料优先级" defaultOpen={false}>
           <div className="space-y-1.5">
             <label className="flex cursor-pointer items-center gap-2 text-sm">
               <input
@@ -354,7 +379,7 @@ function AiResearchForm() {
                 checked={sourcePolicy === 'prefer_user_sources'}
                 onChange={() => setSourcePolicy('prefer_user_sources')}
               />
-              优先使用指定资料，可补充外部搜索（prefer）
+              优先使用指定资料，可补充外部搜索
             </label>
             <label className="flex cursor-pointer items-center gap-2 text-sm">
               <input
@@ -364,12 +389,12 @@ function AiResearchForm() {
                 checked={sourcePolicy === 'only_user_sources'}
                 onChange={() => setSourcePolicy('only_user_sources')}
               />
-              仅使用指定资料（only）
+              仅使用指定资料
             </label>
           </div>
         </FormSection>
 
-        <FormSection legend="报告类型">
+        <FormSection legend="报告类型" defaultOpen={false}>
           <div className="space-y-2">
             {REPORT_TYPES.map((rt) => (
               <label key={rt.value} className="flex cursor-pointer items-start gap-2">

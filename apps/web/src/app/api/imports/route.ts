@@ -149,7 +149,9 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const sha256 = createHash('sha256').update(contentStr, 'utf-8').digest('hex');
 
   // 保存文件到临时目录(tempObjectKey 记录路径),worker 拿到真文件。
-  const tempDir = path.join(process.cwd(), 'data', 'import-tmp');
+  const tempDir = path.resolve(
+    process.env.IMPORT_TEMP_DIR ?? path.join(process.cwd(), 'data', 'import-tmp'),
+  );
   await fs.mkdir(tempDir, { recursive: true });
   const tempKey = `${randomUUID()}${ext}`;
   const tempPath = path.join(tempDir, tempKey);

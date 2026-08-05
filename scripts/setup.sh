@@ -154,6 +154,28 @@ run_interactive_prompts() {
   prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
   validate_non_empty "$EMAIL_DOMAINS" "ALLOWED_EMAIL_DOMAINS"
 
+  # P1-A1: collect initial Admin email (must belong to allowlist).
+  local default_bootstrap="admin@${EMAIL_DOMAINS%%,*}"
+  prompt "Initial Admin email (P1-A1 bootstrap; blank to skip)" "$default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
+  BOOTSTRAP_ADMIN_EMAIL=""
+  if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
+    BOOTSTRAP_ADMIN_EMAIL="$(printf '%s' "$BOOTSTRAP_ADMIN_EMAIL_INPUT" | tr '[:upper:]' '[:lower:]')"
+    local bootstrap_domain="${BOOTSTRAP_ADMIN_EMAIL##*@}"
+    local matched=false
+    IFS=',' read -r -a _allow <<< "$EMAIL_DOMAINS"
+    for d in "${_allow[@]}"; do
+      d="$(echo "$d" | tr '[:upper:]' '[:lower:]' | xargs)"
+      if [[ "$d" == "$bootstrap_domain" ]]; then
+        matched=true
+        break
+      fi
+    done
+    if [[ "$matched" != "true" ]]; then
+      warn "Initial Admin 域名 $bootstrap_domain 不在 ALLOWED_EMAIL_DOMAINS 内；将留空，需在 Admin 控制台手动设置"
+      BOOTSTRAP_ADMIN_EMAIL=""
+    fi
+  fi
+
   prompt_choice "Choose LLM provider:" LLM_CHOICE \
     "Anthropic (direct API — needs key)" \
     "OpenAI-compatible proxy (custom base URL)" \
@@ -260,6 +282,9 @@ GOOGLE_CLIENT_SECRET=${GOOGLE_SECRET}
 # Optional radar tokens
 GH_TOKEN=${GH_TOKEN_VAL}
 PRODUCTHUNT_API_TOKEN=${PH_TOKEN_VAL}
+
+# P1-A1: initial Admin bootstrap (empty => skip)
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
 ENVFILE
 }
 
@@ -567,6 +592,28 @@ if [[ "$MODE" != "quick" ]]; then
 
   prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
 
+  # P1-A1: initial Admin
+  local_default_bootstrap="admin@${EMAIL_DOMAINS%%,*}"
+  prompt "Initial Admin email (P1-A1 bootstrap; blank to skip)" "$local_default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
+  BOOTSTRAP_ADMIN_EMAIL=""
+  if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
+    BOOTSTRAP_ADMIN_EMAIL="$(printf '%s' "$BOOTSTRAP_ADMIN_EMAIL_INPUT" | tr '[:upper:]' '[:lower:]')"
+    local bootstrap_domain="${BOOTSTRAP_ADMIN_EMAIL##*@}"
+    local matched=false
+    IFS=',' read -r -a _allow <<< "$EMAIL_DOMAINS"
+    for d in "${_allow[@]}"; do
+      d="$(echo "$d" | tr '[:upper:]' '[:lower:]' | xargs)"
+      if [[ "$d" == "$bootstrap_domain" ]]; then
+        matched=true
+        break
+      fi
+    done
+    if [[ "$matched" != "true" ]]; then
+      warn "Initial Admin 域名 $bootstrap_domain 不在 ALLOWED_EMAIL_DOMAINS 内；将留空"
+      BOOTSTRAP_ADMIN_EMAIL=""
+    fi
+  fi
+
   prompt_choice "Choose LLM provider:" LLM_CHOICE \
     "Anthropic (direct API — needs key)" \
     "OpenAI-compatible proxy (custom base URL)" \
@@ -654,6 +701,8 @@ GOOGLE_CLIENT_SECRET=${GOOGLE_SECRET}
 ALLOWED_EMAIL_DOMAINS=${EMAIL_DOMAINS}
 MAX_UPLOAD_SIZE_MB=5
 TIME_VALUE_USD_PER_HOUR=50
+# P1-A1: initial Admin bootstrap (blank => skip; assign via Admin console)
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
 WEBENV
 info "apps/web/.env created"
 

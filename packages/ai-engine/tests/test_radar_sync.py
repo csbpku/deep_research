@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -17,6 +18,9 @@ from ai_engine.radar.sync_runner import (
     _clean_content,
     _generate_brief_with_retry,
     _is_low_quality_content,
+    RadarSyncResult,
+    SourceRunResult,
+    run_radar_pipeline,
     run_radar_sync,
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -47,6 +51,8 @@ class _Connection:
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
         self.executions.append((sql, params))
         if 'FROM "radar_sources" WHERE "enabled"' in sql:
+            return _Cursor(rows=self.sources)
+        if 'SELECT "id", "sourceType" FROM "radar_sources"' in sql:
             return _Cursor(rows=self.sources)
         if 'SELECT "id" FROM "summaries"' in sql:
             canonical = str(params[0])
@@ -288,6 +294,124 @@ async def test_run_radar_sync_limits_source_concurrency() -> None:
     )
     assert max_active <= 2
     assert all(run.total_new == 1 for run in result.runs)
+
+
+async def test_run_radar_sync_limits_candidate_concurrency() -> None:
+    pool = _Pool([_source()])
+    active = 0
+    max_active = 0
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            _candidate(f"https://example.com/item-{index}")
+            for index in range(6)
+        ]
+
+    async def slow_generate(
+        adapter: Any,
+        item: dict[str, Any],
+        canonical: str,
+        **kwargs: Any,
+    ) -> Any:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.05)
+        active -= 1
+        from ai_engine.ingestion.pipeline import _generate_brief
+
+        return await _generate_brief(adapter, item, canonical, **kwargs)
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=slow_generate,
+        candidate_concurrency=2,
+    )
+
+    assert max_active == 2
+    assert result.runs[0].total_new == 6
+
+
+async def test_run_radar_pipeline_enriches_only_current_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import daily_digest, enrichment_worker, sync_runner
+    from ai_engine.radar import tracked_repo_manager
+
+    pool = _Pool([_source("source-1", "rss")])
+    sync_result = RadarSyncResult(
+        batch_id="batch-1",
+        runs=(
+            SourceRunResult(
+                run_id="run-1",
+                source_id="source-1",
+                status="completed",
+                total_fetched=2,
+                total_new=2,
+                total_skipped=0,
+                total_failed=0,
+                token_input_total=0,
+                token_output_total=0,
+                cost_usd=0,
+            ),
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_sync(pool: Any, **kwargs: Any) -> RadarSyncResult:
+        return sync_result
+
+    async def fake_tracked(
+        pool: Any,
+        recent_run_ids: dict[str, str],
+        *,
+        fallback_to_latest: bool,
+    ) -> dict[str, int]:
+        captured["tracked_ids"] = recent_run_ids
+        captured["fallback"] = fallback_to_latest
+        return {"signals": 0}
+
+    async def fake_enrichment(pool: Any, **kwargs: Any) -> int:
+        captured["enrichment"] = kwargs
+        return 2
+
+    async def fake_digest(pool: Any, *, target_date: Any) -> Any:
+        captured["digest_date"] = target_date
+        return SimpleNamespace(
+            summary_id="digest-1",
+            candidate_count=2,
+            narrative_degraded=False,
+        )
+
+    monkeypatch.setattr(sync_runner, "run_radar_sync", fake_sync)
+    monkeypatch.setattr(
+        tracked_repo_manager,
+        "run_tracked_repo_postprocessing",
+        fake_tracked,
+    )
+    monkeypatch.setattr(
+        enrichment_worker,
+        "run_enrichment_for_pending",
+        fake_enrichment,
+    )
+    monkeypatch.setattr(daily_digest, "generate_daily_digest", fake_digest)
+
+    result = await run_radar_pipeline(pool, triggered_by="admin")
+
+    assert result.enriched_count == 2
+    assert result.digest_summary_id == "digest-1"
+    assert result.digest_candidate_count == 2
+    assert result.digest_error is None
+    assert captured["tracked_ids"] == {"rss": "run-1"}
+    assert captured["fallback"] is False
+    assert captured["enrichment"] == {
+        "limit": 2,
+        "sync_run_ids": ("run-1",),
+    }
 
 
 async def test_source_failure_does_not_block_other_source() -> None:

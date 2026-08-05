@@ -48,6 +48,7 @@ class _Row:
     last_error_code: str | None = None
     last_error_message: str | None = None
     draft_research_id: str | None = None
+    output_text: str | None = None
 
 
 class JobStore:
@@ -96,10 +97,19 @@ class JobStore:
         error_code: str | None,
         error_message: str | None,
         draft_research_id: str | None,
+        output_text: str | None = None,
     ) -> None:
         return None
 
     async def release_lease(self, lease: JobLease) -> None:
+        return None
+
+    async def cancel_job(self, job_id: str) -> AiJobStatus | None:
+        """Persist cancellation and return the status that was cancelled.
+
+        ``None`` means the row was missing or already terminal. The caller
+        performs a read first when it needs to distinguish those cases.
+        """
         return None
 
     async def get_row(self, job_id: str) -> "object | None":
@@ -322,8 +332,18 @@ class InMemoryJobStore(JobStore):
         error_code: str | None,
         error_message: str | None,
         draft_research_id: str | None,
+        output_text: str | None = None,
     ) -> None:
         row = self._require_lease(lease)
+        if status == "succeeded" and bool(draft_research_id) == bool(output_text):
+            raise ValueError(
+                "mark_terminal: succeeded requires exactly one of "
+                "draft_research_id or output_text"
+            )
+        if status != "succeeded" and (
+            draft_research_id is not None or output_text is not None
+        ):
+            raise ValueError(f"mark_terminal: status={status} cannot persist output")
         async with self._row_lock(lease.job_id):
             row.snapshot = JobSnapshot(
                 job_id=row.snapshot.job_id,
@@ -344,6 +364,7 @@ class InMemoryJobStore(JobStore):
             row.last_error_code = error_code
             row.last_error_message = error_message
             row.draft_research_id = draft_research_id
+            row.output_text = output_text
         # Caller is responsible for downstream side-effects (e.g. draft
         # research row) — see Week 5 worker.
 
@@ -355,6 +376,32 @@ class InMemoryJobStore(JobStore):
             row.locked_by = None
             row.lease_expires_at = None
             row.heartbeat_at = None
+
+    async def cancel_job(self, job_id: str) -> AiJobStatus | None:
+        row = self._rows.get(job_id)
+        if row is None:
+            return None
+        async with self._row_lock(job_id):
+            previous = row.snapshot.status
+            if previous not in {"queued", "running"}:
+                return None
+            row.snapshot = JobSnapshot(
+                job_id=row.snapshot.job_id,
+                requester_id=row.snapshot.requester_id,
+                topic=row.snapshot.topic,
+                context=row.snapshot.context,
+                report_type=row.snapshot.report_type,
+                source_policy=row.snapshot.source_policy,
+                status="cancelled",
+                current_step=row.snapshot.current_step,
+                attempts=row.snapshot.attempts,
+                idempotency_key=row.snapshot.idempotency_key,
+                source_refs=row.snapshot.source_refs,
+            )
+            row.locked_by = None
+            row.lease_expires_at = None
+            row.heartbeat_at = None
+            return previous
 
     # ──────────────── test helpers ────────────────
 

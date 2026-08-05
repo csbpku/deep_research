@@ -91,7 +91,7 @@ export function RecentActivityStrip() {
   const radarQ = useQuery<RadarListResponse>({
     queryKey: ['home', 'radar'],
     queryFn: async () => {
-      const r = await fetch('/api/radar?per_page=3', { cache: 'no-store' });
+      const r = await fetch('/api/radar?quality=relevant&per_page=3', { cache: 'no-store' });
       if (!r.ok) return { items: [], total: 0 };
       return r.json();
     },
@@ -122,7 +122,7 @@ export function RecentActivityStrip() {
   return (
     <section
       aria-label="最近活动"
-      className="mt-5 grid gap-3 rounded-lg border border-border bg-card p-4"
+      className="mt-5 grid min-w-0 gap-3 overflow-hidden rounded-lg border border-border bg-card p-4"
     >
       {loading ? (
         <div className="grid gap-2 sm:grid-cols-2">
@@ -130,12 +130,12 @@ export function RecentActivityStrip() {
           <Skeleton className="h-12 w-full" />
         </div>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr_1fr]">
+        <div className="grid min-w-0 gap-3 lg:grid-cols-[1.4fr_1fr_1fr]">
           {/* 主条：最新日报 */}
           {latestDigest && (
             <Link
               href={`/summaries/${latestDigest.date}`}
-              className="group flex flex-col rounded-md border border-border bg-muted/30 p-3 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="group flex min-w-0 flex-col rounded-md border border-border bg-muted/30 p-3 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-primary">
                 <Newspaper className="size-3" />
@@ -154,7 +154,7 @@ export function RecentActivityStrip() {
 
           {/* 次条：3 条最新雷达 */}
           {latestRadar.length > 0 && (
-            <div className="rounded-md border border-border bg-card p-3">
+            <div className="min-w-0 rounded-md border border-border bg-card p-3">
               <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 <RadarIcon className="size-3" />
                 雷达最新 ({latestRadar.length})
@@ -182,7 +182,7 @@ export function RecentActivityStrip() {
           {inFlight && (
             <Link
               href={`/ai-research/${inFlight.jobId}`}
-              className="group flex flex-col rounded-md border border-status-running-fg/30 bg-status-running-bg/30 p-3 transition-colors duration-200 hover:border-status-running-fg/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="group flex min-w-0 flex-col rounded-md border border-status-running-fg/30 bg-status-running-bg/30 p-3 transition-colors duration-200 hover:border-status-running-fg/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-status-running-fg">
                 <Loader2 className="size-3 animate-spin" />

@@ -26,8 +26,10 @@ Usage (from repo root):
     # or, from packages/ai-engine:
     uv run python ../../scripts/radar_source_smoke.py
 
-Per-source timeout: 30s. All sources run concurrently to keep wall time
-under ~30s + LLM-independent fetch latency.
+Per-source timeout: 45s. This is deliberately longer than the fetchers'
+own 30s transport timeout so the report preserves their typed root cause
+instead of replacing it with a harness-level timeout. All sources run
+concurrently to keep wall time bounded.
 """
 # ruff: noqa: E402
 from __future__ import annotations
@@ -67,7 +69,7 @@ from ai_engine.radar.source_manager import _HANDLERS, fetch_source  # noqa: E402
 _KNOWN = set(_HANDLERS.keys()) | {"github"}  # github dispatches by mode
 
 # Bound per-source work so one stuck fetcher can't hang the whole test.
-_PER_SOURCE_TIMEOUT_S = 30.0
+_PER_SOURCE_TIMEOUT_S = 45.0
 
 # Bound per-LLM-call work so one stuck chat call can't hang a source.
 # Keep this well above worst-case queueing (66 calls, 5-way concurrency,

@@ -4,7 +4,7 @@
 //   - apps/web/prisma/schema.prisma: Summary（含 9 个雷达字段）
 //   - docs/contracts/state-machines.md §4: SummaryStatus
 //
-// 入参: URL 段为 summary uuid（必须 syncRunId 非空 = 来自雷达）。
+// 入参: URL 段为自动雷达 summary，或已审核用户分享生成的 summary。
 // 出参: 完整候选 + 反馈汇总 + 当前用户已选反馈 + canManage（admin 操作权限）。
 
 import { NextResponse } from 'next/server';
@@ -56,6 +56,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       sortOrder: true,
       syncRunId: true,
       source: true,
+      shareSource: { select: { status: true } },
       // Deep-dive source content and enrichment payloads. originalKind
       // selects the presentation; originalMarkdown remains available to chat.
       originalKind: true,
@@ -80,7 +81,9 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     },
   });
 
-  if (!summary || summary.syncRunId === null || summary.source !== 'daily') {
+  const isAutomaticRadar = summary?.source === 'daily' && summary.syncRunId !== null;
+  const isApprovedShare = summary?.source === 'user' && summary.shareSource?.status === 'approved';
+  if (!summary || (!isAutomaticRadar && !isApprovedShare)) {
     // 非雷达来源的 summary 不走详情页；返回 404 隐藏存在性
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,

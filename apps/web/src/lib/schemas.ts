@@ -18,9 +18,9 @@ export const CreateResearchInput = z.object({
   title: z.string().min(1).max(300),
   body: z.string().min(1).max(50000),
   type: z.enum([RESEARCH_TYPE.RESEARCH, RESEARCH_TYPE.KNOWLEDGE]).default(RESEARCH_TYPE.RESEARCH),
-  background: z.string().max(2000).optional(),
-  conclusion: z.string().max(2000).optional(),
-  risks: z.string().max(2000).optional(),
+  background: z.string().max(2000).nullable().optional(),
+  conclusion: z.string().max(2000).nullable().optional(),
+  risks: z.string().max(2000).nullable().optional(),
   tags: z.array(z.string().min(1).max(40)).max(10).default([]),
 }).strict(); // 拒绝客户端传 creationMethod（服务端写死 'manual'）
 export type CreateResearchInput = z.infer<typeof CreateResearchInput>;

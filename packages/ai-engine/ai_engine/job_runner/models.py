@@ -175,4 +175,5 @@ class RunOutcome:
     error_code: str | None = None
     error_message: str | None = None
     draft_research_id: str | None = None  # only set when final_status=succeeded
+    output_text: str | None = None  # summary_brief only; never paired with a draft
     field_metadata: dict[str, str] = field(default_factory=dict)

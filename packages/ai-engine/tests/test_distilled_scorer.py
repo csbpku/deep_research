@@ -148,6 +148,8 @@ def test_each_dimension_has_4_level_rubric() -> None:
 def test_system_prompt_is_strict() -> None:
     assert "严苛" in SYSTEM_PROMPT
     assert "标准太松" in SYSTEM_PROMPT
+    assert "direct_relevance" in SYSTEM_PROMPT
+    assert "没有明确电商上下文" in SYSTEM_PROMPT
 
 
 def test_user_prompt_contains_rubric_and_meta() -> None:
@@ -194,8 +196,8 @@ def test_user_prompt_meta_includes_domain_published_current() -> None:
     assert "2026-07-30" in prompt
 
 
-def test_version_string_is_v2() -> None:
-    assert DISTILLED_VERSION == "2.0"
+def test_version_string_is_v3() -> None:
+    assert DISTILLED_VERSION == "3.0"
 
 
 # ── Serialization keys ────────────────────────────────────────────
@@ -238,6 +240,95 @@ def test_compute_score_all_max_engineering() -> None:
     assert result.tier == TIER_COLLECTION
     assert result.must_read is True
     assert result.profile_id == PROFILE_ENGINEERING
+
+
+def test_direct_relevance_zero_caps_high_quality_article() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 0
+    result = compute_score(parsed)
+    assert result.total == 100.0
+    assert result.direct_relevance == 0
+    assert result.tier == TIER_NOISE
+    assert result.must_read is False
+
+
+def test_direct_relevance_one_caps_high_quality_article() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 1
+    result = compute_score(parsed)
+    assert result.total == 100.0
+    assert result.ranking_score == 49.0
+    assert result.tier == TIER_NOISE
+    assert result.must_read is False
+
+
+def test_direct_relevance_two_cannot_reach_collection() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 2
+    result = compute_score(parsed)
+    assert result.total == 100.0
+    assert result.ranking_score == 78.0
+    assert result.tier == TIER_DEEP_READ
+    assert result.must_read is False
+
+
+def test_direct_relevance_three_preserves_normal_tier() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["relevance_evidence"] = "文章明确讨论搜索排序中的线上评测决策"
+    result = compute_score(parsed)
+    assert result.tier == TIER_COLLECTION
+    assert result.must_read is True
+    assert result.effective_total == 100.0
+
+
+def test_direct_relevance_three_without_evidence_downgrades_to_indirect() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    result = compute_score(parsed)
+    assert result.direct_relevance == 2
+    assert result.effective_total == 78.0
+    assert result.tier == TIER_DEEP_READ
+    assert result.must_read is False
+
+
+def test_v3_separates_content_quality_from_team_value() -> None:
+    parsed = _all_zero_parsed(
+        **{
+            "信息增量": 3,
+            "分析深度": 3,
+            "可行动性": 0,
+            "事实可信度": 3,
+            "时效性": 2,
+            "表达质量": 3,
+            "综合信号": 0,
+            "direct_relevance": 0,
+        }
+    )
+    result = compute_score(parsed, source_type="arxiv", profile=PAPER_PROFILE)
+    assert result.quality_score is not None and result.quality_score > 80
+    assert result.team_value_score is not None and result.team_value_score < 10
+    assert result.ranking_score is not None and result.ranking_score < 35
+    assert result.tier == TIER_NOISE
+
+
+def test_github_bonus_breaks_close_cross_source_tie() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 2
+    github = compute_score(parsed, source_type="github_tracked")
+    article = compute_score(parsed, source_type="rss")
+    assert github.source_bonus == 12.0
+    assert article.source_bonus == 2.0
+    assert github.ranking_score is not None
+    assert article.ranking_score is not None
+    assert github.ranking_score > article.ranking_score
+    assert github.ranking_score <= 82.0
+
+
+def test_legacy_result_without_direct_relevance_remains_compatible() -> None:
+    result = compute_score(_all_max_parsed())
+    assert result.direct_relevance is None
+    assert "directRelevance" not in result.to_dict()
 
 
 def test_compute_score_all_max_paper() -> None:
@@ -306,13 +397,12 @@ def test_must_read_with_two_core_at_2_engineering() -> None:
 
 
 def test_must_read_paper_lower_threshold() -> None:
-    """paper profile: must_read_total=85, core_count=2.
+    """paper profile requires the calibrated 92-point threshold.
 
-    A paper-profile score of 85 with 2 core dims ≥ 2 must be must_read.
-    Build a parsed that hits ~85 under paper weights.
+    A merely good paper should remain deep_read rather than must_read.
     """
-    # paper: 信息增量=30, 分析深度=30, 可行动性=10, 事实可信度=15,
-    #        时效性=5, 表达质量=5, 综合信号=5
+    # Calibrated paper weights: info=25, depth=25, actionability=20,
+    # credibility=10, timeliness=5, expression=5, audience=10.
     parsed = _all_zero_parsed(
         **{
             "信息增量": 3, "分析深度": 2, "可行动性": 1,
@@ -320,21 +410,35 @@ def test_must_read_paper_lower_threshold() -> None:
             "weak_point": "",
         }
     )
-    # 3*30/3 + 2*30/3 + 1*10/3 + 3*15/3 + 3*5/3 + 2*5/3 + 2*5/3
-    # = 30 + 20 + 3.33 + 15 + 5 + 3.33 + 3.33 = 80.0
+    # The first pass is intentionally below the calibrated must_read floor.
     result = compute_score(parsed, profile=PAPER_PROFILE)
-    # Need total ≥ 85 → not yet. Bump 可行动性 to 2 to reach 83.33.
+    # Bump 可行动性 to 2; this reaches 83.33, below the new 92 threshold.
     parsed["可行动性"] = 2
     result = compute_score(parsed, profile=PAPER_PROFILE)
-    # 30 + 20 + 6.67 + 15 + 5 + 3.33 + 3.33 = 83.33 — still < 85.
-    # Add one more to 时效性 (5/3 = 1.67) → 85.0 → must_read.
     parsed["时效性"] = 3
-    # Actually 3*5/3 = 5 — already at 3. Let's raise 综合信号 to 3.
     parsed["综合信号"] = 3
     result = compute_score(parsed, profile=PAPER_PROFILE)
-    # 30 + 20 + 6.67 + 15 + 5 + 3.33 + 5 = 85.0
-    assert result.total >= 85
-    assert result.must_read is True
+    assert result.total < 92
+    assert result.must_read is False
+
+
+def test_paper_low_actionability_cannot_be_collection() -> None:
+    """Theoretical depth alone must not produce a top-tier paper signal."""
+    parsed = _all_zero_parsed(
+        **{
+            "信息增量": 3,
+            "分析深度": 3,
+            "可行动性": 1,
+            "事实可信度": 3,
+            "时效性": 3,
+            "表达质量": 3,
+            "综合信号": 3,
+        }
+    )
+    result = compute_score(parsed, profile=PAPER_PROFILE)
+    assert result.total == 86.67
+    assert result.tier == TIER_SKIM
+    assert result.must_read is False
 
 
 def test_must_read_news_requires_only_one_core() -> None:
@@ -601,7 +705,7 @@ async def test_anthropic_scorer_substitutes_placeholder_for_empty_key(
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:15721")
 
     raw = await anthropic_scorer("title", "content")
-    assert captured["api_key"] == "sk-placeholder-for-cc-switch"
+    assert captured["api_key"] == "sk-placeholder-for-anthropic-compatible-proxy"
     assert captured["base_url"] == "http://127.0.0.1:15721"
     assert '"信息增量": 2' in raw
 

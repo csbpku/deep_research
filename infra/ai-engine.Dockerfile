@@ -32,7 +32,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY packages/ai-engine /app
 
-RUN useradd -m -u 1001 aiuser && chown -R aiuser /app
+RUN useradd -m -u 1001 aiuser \
+    && mkdir -p /data/import-tmp \
+    && chown -R aiuser /app /data
 USER aiuser
 
 EXPOSE 4000

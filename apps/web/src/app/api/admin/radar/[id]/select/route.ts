@@ -53,9 +53,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       status: true,
       summaryDate: true,
       sortOrder: true,
+      shareSource: { select: { status: true } },
     },
   });
-  if (!existing || existing.source !== 'daily' || existing.syncRunId === null) {
+  const isAutomaticRadar = existing?.source === 'daily' && existing.syncRunId !== null;
+  const isApprovedShare = existing?.source === 'user' && existing.shareSource?.status === 'approved';
+  if (!existing || (!isAutomaticRadar && !isApprovedShare)) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',

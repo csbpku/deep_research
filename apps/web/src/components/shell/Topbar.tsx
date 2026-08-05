@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { FilePenLine, Loader2, Menu, Search as SearchIcon, Telescope } from 'lucide-react';
 
@@ -122,6 +122,21 @@ function GlobalSearchBox() {
   );
 }
 
+function PageContext({ navItems }: { navItems: NavItem[] }) {
+  const pathname = usePathname();
+  const current = navItems.find((item) => (
+    item.href === '/'
+      ? pathname === '/'
+      : pathname === item.href || pathname.startsWith(`${item.href}/`)
+  ));
+  if (!current) return null;
+  return (
+    <span className="hidden shrink-0 border-r border-border pr-3 text-sm font-medium text-foreground lg:inline">
+      {current.label}
+    </span>
+  );
+}
+
 export function Topbar({
   navItems,
   user,
@@ -157,6 +172,7 @@ export function Topbar({
         <span className="text-sm font-semibold tracking-tight">技术调研</span>
       </Link>
 
+      <PageContext navItems={navItems} />
       <GlobalSearchBox />
 
       <div className="ml-auto flex shrink-0 items-center gap-1">

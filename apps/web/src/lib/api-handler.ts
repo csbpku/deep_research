@@ -25,7 +25,7 @@ export async function parseBody<S extends ZodSchema>(
     // body 不是 JSON
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: 'request body must be valid JSON',
+      message: '请求内容不是有效的 JSON',
       requestId,
       details: { reason: 'json_parse_failed' },
     });
@@ -34,7 +34,7 @@ export async function parseBody<S extends ZodSchema>(
   if (!result.success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: 'request body invalid',
+      message: '请检查必填项和输入格式',
       requestId,
       details: result.error.flatten(),
     });

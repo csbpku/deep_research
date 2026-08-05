@@ -22,6 +22,21 @@ RSS_XML = b"""<?xml version="1.0"?><rss><channel><item>
 <description>LLM agent update</description><pubDate>Wed, 22 Jul 2026 12:00:00 GMT</pubDate>
 </item></channel></rss>"""
 
+WEWE_RSS_XML = """<?xml version="1.0"?><rss><channel><item>
+<title><![CDATA[中文 AI 工程实践]]></title><link>https://mp.weixin.qq.com/s/example</link>
+<content:encoded><![CDATA[<p>这是一篇公众号全文内容，包含 RAG 和 Agent 工程实践。</p>]]></content:encoded>
+<pubDate>Wed, 22 Jul 2026 12:00:00 GMT</pubDate>
+</item></channel></rss>""".encode()
+
+BLOGGER_ATOM_XML = b"""<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'>
+<entry gd:etag='x'>
+<title>Fresh AI article</title>
+<link rel='replies' type='application/atom+xml' href='http://blog.example/feeds/123/comments/default'/>
+<link href='https://blog.example/fresh-ai-article' type='text/html' rel='alternate'/>
+<content type='html'>&lt;p&gt;LLM agent engineering update&lt;/p&gt;</content>
+<published>2026-07-22T12:00:00Z</published>
+</entry></feed>"""
+
 
 def _doc(content: bytes = RSS_XML, *, url: str = "https://feed.example/rss") -> FetchedDocument:
     return FetchedDocument(
@@ -101,6 +116,44 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     # fetch_rss_candidates returns parsed items; just verify kwargs were passed
     assert items[0].title == "Agent release"
     assert items[0].content_origin == "rss"
+
+
+async def test_rss_fetcher_reads_wewe_content_encoded() -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(WEWE_RSS_XML)
+
+    items = await fetch_rss_candidates(
+        {"feedUrl": "http://feed.example/rss", "maxResults": 10, "applyAiFilter": False},
+        fetcher=fake_fetch,
+    )
+    assert len(items) == 1
+    assert "公众号全文内容" in items[0].snippet
+
+
+async def test_rss_fetcher_prefers_atom_article_link_over_comments_feed() -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(BLOGGER_ATOM_XML)
+
+    items = await fetch_rss_candidates(
+        {"feedUrl": "https://blog.example/feed", "maxResults": 10, "applyAiFilter": False,
+         "maxAgeHours": 8760},
+        fetcher=fake_fetch,
+    )
+    assert len(items) == 1
+    assert items[0].url == "https://blog.example/fresh-ai-article"
+
+
+async def test_rss_fetcher_default_age_gate_drops_archive_items() -> None:
+    old = RSS_XML.replace(b"Wed, 22 Jul 2026 12:00:00 GMT", b"Wed, 22 Jul 2020 12:00:00 GMT")
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(old)
+
+    items = await fetch_rss_candidates(
+        {"feedUrl": "https://feed.example/rss", "maxResults": 10},
+        fetcher=fake_fetch,
+    )
+    assert items == []
 
 
 async def test_rss_fetcher_propagates_safe_fetch_rejection() -> None:

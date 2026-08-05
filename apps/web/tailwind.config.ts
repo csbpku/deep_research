@@ -103,9 +103,8 @@ const config: Config = {
       },
 
       fontFamily: {
-        // IBM Plex Sans 无中文字形 —— 中文必须走系统回退链。
+        // 使用系统字体，确保离线构建与中英文渲染都不依赖外部字体 CDN。
         sans: [
-          'var(--font-sans)',
           'ui-sans-serif',
           'system-ui',
           'PingFang SC',
@@ -115,7 +114,6 @@ const config: Config = {
           'sans-serif',
         ],
         mono: [
-          'var(--font-mono)',
           'ui-monospace',
           'SFMono-Regular',
           'Menlo',
@@ -132,8 +130,10 @@ const config: Config = {
       maxWidth: {
         // 列表/控制台页用 shell
         shell: '1280px',
-        // 中文长文阅读：35–45 字/行，行高 1.8。760 太宽；640 是舒适上限
-        measure: '640px',
+        // 中文长文阅读：35–45 字/行，行高 1.7。760 是舒适上限 (v6.4 fix: 原 640px 是真 bug)
+        measure: '760px',
+        // 列表类路由 (雷达/日报/搜索) - 可选
+        'content-list': 'var(--content-list)',
       },
 
       keyframes: {

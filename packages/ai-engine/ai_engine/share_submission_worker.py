@@ -1,4 +1,4 @@
-"""Worker for frozen ``share_submissions`` → shared radar candidate flow."""
+"""Fetch and summarize pending shares; Admin approval creates radar candidates."""
 
 from __future__ import annotations
 
@@ -6,20 +6,17 @@ import asyncio
 import hashlib
 import logging
 import os
-import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
+from ai_engine.adapters.base import ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError, safe_fetch
 from ai_engine.ingestion.pipeline import _generate_brief, canonicalize_url
-from ai_engine.radar.models import RadarCandidate
-from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.server.share import _infer_title, html_to_markdown
 
 logger = logging.getLogger("ai_engine.share_submission_worker")
@@ -170,69 +167,13 @@ async def _persist_success(
     markdown: str,
     title: str,
     interpretation: str,
-    cost: CostMetrics,
 ) -> tuple[str | None, bool]:
     canonical = canonicalize_url(str(record["url"])) or canonicalize_url(str(record["canonicalUrl"]))
     if not canonical:
         raise ValueError("share submission canonical URL is invalid")
-    candidate = normalize_candidate(
-        RadarCandidate(
-            title=title,
-            url=str(record["url"]),
-            snippet=markdown[:2000],
-            published_at=_now(),
-            content_origin="web",
-            tags=("user-share",),
-            source_quality_hint=0.6,
-        )
-    )
-    score = score_candidate(candidate, source_type="rss")
-    summary_id = str(uuid.uuid4())
     content_sha = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     async with pool.connection() as conn:
         async with conn.transaction():
-            inserted = await (
-                await conn.execute(
-                    'INSERT INTO "summaries" '
-                    '("id", "title", "body", "url", "canonicalUrl", "source", '
-                    '"contentOrigin", "userNote", "sharedByUserId", "summaryDate", '
-                    '"contentSha256", "ingestionTokenCount", "tags", "status", '
-                    '"relevanceScore", "timelinessScore", "sourceQualityScore", '
-                    '"scoreVersion", "scoreReason", "interpretation", "createdAt", "updatedAt") '
-                    "VALUES (%s, %s, %s, %s, %s, 'user', 'web', %s, %s, %s, %s, %s, %s::text[], "
-                    "'candidate', %s, %s, %s, %s, %s, %s, now(), now()) "
-                    'ON CONFLICT ("canonicalUrl") DO NOTHING RETURNING "id"',
-                    (
-                        summary_id,
-                        title[:300],
-                        markdown[:2000] or interpretation[:2000],
-                        str(record["url"])[:2048],
-                        canonical[:2048],
-                        record.get("userNote"),
-                        str(record["submitterId"]),
-                        date.today(),
-                        content_sha,
-                        cost.token_input_total + cost.token_output_total,
-                        ["user-share"],
-                        score.relevance,
-                        score.timeliness,
-                        score.source_quality,
-                        score.version,
-                        score.reason,
-                        interpretation[:2000],
-                    ),
-                )
-            ).fetchone()
-            if inserted is None:
-                existing = await (
-                    await conn.execute(
-                        'SELECT "id" FROM "summaries" WHERE "canonicalUrl" = %s LIMIT 1',
-                        (canonical[:2048],),
-                    )
-                ).fetchone()
-                effective_id = str(cast(dict[str, Any], existing)["id"]) if existing else None
-            else:
-                effective_id = summary_id
             updated = await (
                 await conn.execute(
                     'UPDATE "share_submissions" SET "canonicalUrl" = %s, "fetchedTitle" = %s, '
@@ -256,7 +197,9 @@ async def _persist_success(
             ).fetchone()
             if updated is None:
                 raise RuntimeError("share submission lease lost before commit")
-    return effective_id, inserted is not None
+    # The worker deliberately does not insert into summaries. Unreviewed user
+    # content must not become a public radar candidate before Admin approval.
+    return None, False
 
 
 async def run_one_share_submission(
@@ -297,7 +240,6 @@ async def run_one_share_submission(
             markdown=markdown,
             title=title,
             interpretation=brief.output_text.strip(),
-            cost=brief.cost,
         )
         logger.info(
             "ai-engine.share_submission.completed",

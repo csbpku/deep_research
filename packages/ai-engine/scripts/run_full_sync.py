@@ -8,12 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
-# Override daily budget so brief calls are not throttled during testing.
-os.environ["BUDGET_TEAM_DAILY"] = "500"
 
 from ai_engine.adapters.base import build_adapter
 from ai_engine.job_runner.db_store import DbJobStore
-from ai_engine.radar.sync_runner import run_radar_sync
+from ai_engine.radar.sync_runner import run_radar_pipeline
 from ai_engine.radar.distilled_scorer import ScoringMonitor, score_with_llm
 from datetime import datetime, timezone
 
@@ -41,7 +39,7 @@ async def main() -> int:
     print()
 
     monitor = ScoringMonitor()
-    result = await run_radar_sync(
+    pipeline_result = await run_radar_pipeline(
         store.pool,
         triggered_by="admin",
         adapter=adapter,
@@ -50,12 +48,12 @@ async def main() -> int:
         monitor=monitor,
         source_ids=source_ids,
     )
+    result = pipeline_result.sync
 
     total_new = sum(r.total_new for r in result.runs)
     total_fetched = sum(r.total_fetched for r in result.runs)
     total_skipped = sum(r.total_skipped for r in result.runs)
     total_failed = sum(r.total_failed for r in result.runs)
-
     async with store.pool.connection() as conn:
         rows = await (await conn.execute('SELECT "id", "name" FROM "radar_sources"')).fetchall()
     source_names = {str(row["id"]): str(row["name"]) for row in rows}
@@ -79,6 +77,26 @@ async def main() -> int:
     print(f"{'─'*60}")
     print(f"  {'TOTAL':<25} {'':>8}  {total_fetched:>7}  {total_new:>5}  {total_skipped:>5}  {total_failed:>5}  {sum(r.fallback_count for r in result.runs):>8}")
     print(f"  Distilled scored: {monitor.total_count - monitor.default_count}  default: {monitor.default_count}  must-read: {monitor.must_read_count}")
+    print(
+        f"  Enriched: {pipeline_result.enriched_count}  "
+        f"elapsed: {pipeline_result.enrichment_elapsed_ms / 1000:.1f}s"
+    )
+    if pipeline_result.tracked_repo_result:
+        tracked = ", ".join(
+            f"{key}={value}"
+            for key, value in sorted(pipeline_result.tracked_repo_result.items())
+        )
+        print(f"  Tracked repos: {tracked}")
+    if pipeline_result.enrichment_error:
+        print(f"  Enrichment error: {pipeline_result.enrichment_error}")
+    print(
+        f"  Digest: {pipeline_result.digest_summary_id or 'none'}  "
+        f"candidates: {pipeline_result.digest_candidate_count}  "
+        f"degraded: {pipeline_result.digest_narrative_degraded}  "
+        f"elapsed: {pipeline_result.digest_elapsed_ms / 1000:.1f}s"
+    )
+    if pipeline_result.digest_error:
+        print(f"  Digest error: {pipeline_result.digest_error}")
     skip_existing = sum(r.skipped_existing for r in result.runs)
     skip_rule = sum(r.skipped_rule_noise for r in result.runs)
     skip_distilled = sum(r.skipped_distilled_noise for r in result.runs)
@@ -87,7 +105,7 @@ async def main() -> int:
     print()
 
     await store.close()
-    return 0 if total_failed < total_new else 1
+    return 0 if total_failed == 0 else 1
 
 if __name__ == "__main__":
     exit(asyncio.run(main()))

@@ -30,6 +30,37 @@ const CreateShareInput = z.object({
   userNote: z.string().max(500).optional(),
 });
 
+export const GET = apiHandler<[NextRequest]>(async (req) => {
+  const requestId = withRequestId(req.headers);
+  const user = await requireUser(req);
+  if (user instanceof NextResponse) return user;
+
+  const items = await prisma.shareSubmission.findMany({
+    where: { submitterId: user.id },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    select: {
+      id: true,
+      url: true,
+      fetchedTitle: true,
+      status: true,
+      fetchErrorCode: true,
+      fetchErrorMessage: true,
+      publishedSummaryId: true,
+      createdAt: true,
+      reviewedAt: true,
+    },
+  });
+  return NextResponse.json({
+    items: items.map((item) => ({
+      ...item,
+      createdAt: item.createdAt.toISOString(),
+      reviewedAt: item.reviewedAt?.toISOString() ?? null,
+    })),
+    requestId,
+  });
+});
+
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
@@ -42,7 +73,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const canonicalUrl = stripTracking(body.url);
 
   // 幂等：同 (user, canonical URL) 已 pending → 409 + 返回已有 job
-  const existing = await (prisma as any).shareSubmission.findFirst({
+  const existing = await prisma.shareSubmission.findFirst({
     where: {
       submitterId: u.id,
       canonicalUrl,
@@ -70,7 +101,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   }
 
   // 写 share_submissions 行；worker 后续 acquire 并填充 fetchedMarkdown / summaryText
-  const submission = await (prisma as any).shareSubmission.create({
+  const submission = await prisma.shareSubmission.create({
     data: {
       submitterId: u.id,
       url: body.url,

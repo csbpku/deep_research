@@ -169,6 +169,9 @@ model User {
   avatarUrl  String?   @db.VarChar(2048)
   role       UserRole  @default(member)
   disabledAt DateTime? @db.Timestamptz(3)
+  // P1-C: per-user preferences (JsonB). Empty object by default; 应用层
+  // zod 校验具体 keys（defaultReportType / defaultSourcePolicy / timezone / notifyPrefs）。
+  preferences Json     @default("{}") @db.JsonB
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
@@ -186,6 +189,10 @@ model User {
   sharesReviewed   ShareSubmission[]  @relation("share_reviewer")
   radarFeedback    RadarFeedback[]
   chatSessions     AiChatSession[]
+  radarSubmissions RadarSubmission[] @relation("radar_submission_submitter")
+  bookmarks        UserBookmark[]
+  researchTemplates ResearchTemplate[]
+  topicFollows     TopicFollow[]
 
   @@index([role, disabledAt])
   @@map("users")
@@ -276,6 +283,8 @@ model Summary {
   syncRun          RadarSyncRun?    @relation("sync_to_candidates", fields: [syncRunId], references: [id], onDelete: SetNull)
   feedbacks        RadarFeedback[]
   seedChatSessions AiChatSession[]  @relation("summary_seed_chat")
+  radarSubmission  RadarSubmission? @relation("radar_submission_to_summary")
+  topicLinks       TopicCandidate[] @relation("topic_candidate_summary")
 
   @@index([source, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -388,6 +397,8 @@ model AiResearchJob {
   idempotencyKey   String?   @db.Uuid
   errorCode        String?   @db.VarChar(64)
   errorMessage     String?   @db.VarChar(500)
+  // summary_brief 的终态输出；轻量摘要不创建 Research 草稿
+  outputText        String?   @db.Text
   // 生成的研究草稿 id
   draftResearchId  String?   @unique @db.Uuid
   createdAt        DateTime  @default(now()) @db.Timestamptz(3)
@@ -811,6 +822,201 @@ enum RadarTrackedRepoStatus {
   pinned
   archived
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// P1-B: 雷达主动输入（ADR 0007）
+//   URL / 文件入口统一进 radar_submissions，状态机：
+//   received → type_detected → extracting → scoring → enriching → completed | duplicate | failed
+//   partial unique 索引由 SQL migration 加（Prisma 5.x 不支持）。
+// ─────────────────────────────────────────────────────────────────────
+
+enum RadarSubmissionStatus {
+  received
+  type_detected
+  extracting
+  scoring
+  enriching
+  completed
+  duplicate
+  failed
+}
+
+enum RadarSubmissionKind {
+  github_repo
+  github_issue
+  github_pr
+  github_release
+  arxiv
+  article
+  pdf
+  markdown
+  html
+  txt
+}
+
+model RadarSubmission {
+  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submitterId   String                @db.Uuid
+  kind          RadarSubmissionKind
+  rawInput      String                @db.VarChar(2048)
+  // URL 类提交：用户提交的 URL + canonical 形式（用于去重）
+  canonicalUrl  String?               @db.VarChar(2048)
+  // 文件类提交：内容 SHA-256（用于去重）
+  contentSha256 String?               @db.Char(64)
+  // 类型识别结果（可能与 kind 不同：用户标 arxiv 但实际是 github_repo）
+  detectedKind  RadarSubmissionKind?
+  status        RadarSubmissionStatus @default(received)
+  errorCode     String?               @db.VarChar(64)
+  errorMessage  String?               @db.VarChar(500)
+  // completed 时填：已生成的候选 summary id
+  summaryId     String?               @unique @db.Uuid
+  // worker 租约（与 content_import_jobs 同模式）
+  attempts      Int                   @default(0)
+  lockedBy      String?               @db.VarChar(64)
+  leaseExpiresAt DateTime?            @db.Timestamptz(3)
+  heartbeatAt    DateTime?            @db.Timestamptz(3)
+  nextRetryAt    DateTime?            @db.Timestamptz(3)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
+  completedAt    DateTime?            @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @db.Timestamptz(3)
+
+  submitter User     @relation("radar_submission_submitter", fields: [submitterId], references: [id], onDelete: Restrict)
+  summary   Summary? @relation("radar_submission_to_summary", fields: [summaryId], references: [id], onDelete: SetNull)
+
+  // 同一用户对同一 URL 在非终态唯一（partial unique 由 SQL migration 加）
+  @@index([status, createdAt(sort: Asc)])
+  @@index([submitterId, createdAt(sort: Desc)])
+  @@index([canonicalUrl])
+  @@index([contentSha256])
+  @@map("radar_submissions")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// P1-C: "我的"菜单 (ADR 0008)
+//   user_bookmarks: 统一收藏 (radar_candidate / summary / research / knowledge / daily_digest)
+//   research_templates: 调研模板（owner 用一次拷贝出 Research 草稿）
+//   User.preferences: per-user 设置 (JsonB)
+// ─────────────────────────────────────────────────────────────────────
+
+enum BookmarkTargetType {
+  radar_candidate
+  summary
+  research
+  knowledge
+  daily_digest
+}
+
+model UserBookmark {
+  id         String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String             @db.Uuid
+  targetType BookmarkTargetType
+  targetId   String             @db.Uuid
+  note       String?            @db.VarChar(500)
+  createdAt  DateTime           @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetType, targetId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("user_bookmarks")
+}
+
+model ResearchTemplate {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId      String   @db.Uuid
+  title        String   @db.VarChar(200)
+  topic        String   @db.VarChar(200)
+  background   String?  @db.VarChar(2000)
+  reportType   String   @default("research_report") @db.VarChar(40)
+  sourcePolicy String   @default("prefer_user_sources") @db.VarChar(40)
+  tags         String[] @default([])
+  useCount     Int      @default(0)
+  lastUsedAt   DateTime? @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, updatedAt(sort: Desc)])
+  @@map("research_templates")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// P1-D: 热点主题 V1 (ADR 0009)
+//   topics: 主题（slug 唯一，tier = hot / warming / emerging）
+//   topic_candidates: topic ↔ summary 多对多 + 相似度
+//   topic_follows: 用户关注
+// ─────────────────────────────────────────────────────────────────────
+
+enum TopicTier {
+  hot
+  warming
+  emerging
+}
+
+enum TopicCandidateReason {
+  auto
+  admin_manual
+}
+
+model Topic {
+  id                       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                     String    @unique @db.VarChar(120)
+  name                     String    @db.VarChar(200)
+  summary                  String?   @db.VarChar(2000)
+  tier                     TopicTier @default(emerging)
+  candidateCount           Int       @default(0)
+  sourceCount              Int       @default(0)
+  aggregationWindowStart   DateTime  @db.Timestamptz(3)
+  aggregationWindowEnd     DateTime  @db.Timestamptz(3)
+  lastSyncedAt             DateTime? @db.Timestamptz(3)
+  synthesisGeneratedAt     DateTime? @db.Timestamptz(3)
+  synthesisModel           String?   @db.VarChar(64)
+  synthesisVersion         String?   @db.VarChar(16)
+  synthesisPayload         Json?     @db.JsonB
+  synthesisErrorCode       String?   @db.VarChar(64)
+  synthesisErrorMessage    String?   @db.VarChar(500)
+  createdAt                DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime  @updatedAt @db.Timestamptz(3)
+
+  candidates TopicCandidate[]
+  followers  TopicFollow[]
+
+  @@index([tier, candidateCount(sort: Desc), updatedAt(sort: Desc)])
+  @@index([aggregationWindowEnd(sort: Desc)])
+  @@map("topics")
+}
+
+model TopicCandidate {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  topicId         String               @db.Uuid
+  summaryId       String               @db.Uuid
+  similarityScore Float?
+  addedAt         DateTime             @default(now()) @db.Timestamptz(3)
+  addedReason     TopicCandidateReason @default(auto)
+
+  topic   Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  summary Summary @relation("topic_candidate_summary", fields: [summaryId], references: [id], onDelete: Cascade)
+
+  @@unique([topicId, summaryId])
+  @@index([summaryId])
+  @@map("topic_candidates")
+}
+
+model TopicFollow {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  topicId   String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, topicId])
+  @@index([topicId, createdAt(sort: Desc)])
+  @@map("topic_follows")
+}
+
 
 model RadarTrackedRepo {
   id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid

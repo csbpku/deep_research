@@ -31,8 +31,10 @@ class _Connection:
         self.row = row
         self.rows = rows or []
         self.updates: list[tuple[str, tuple[Any, ...]]] = []
+        self.executions: list[tuple[str, tuple[Any, ...]]] = []
 
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
+        self.executions.append((sql, params))
         if "SELECT" in sql and "canonicalUrl" in sql:
             return _Cursor(rows=self.rows)
         if "SELECT" in sql and "originalMarkdown" in sql:
@@ -232,6 +234,41 @@ async def test_run_enrichment_for_pending_dispatches_all_default_kinds(
     succeeded = await ew.run_enrichment_for_pending(pool, limit=50)
     assert succeeded == 6
     assert set(calls) == set(kinds)
+
+
+async def test_run_enrichment_for_pending_filters_current_sync_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(rows=[
+        {
+            "id": "id-rss",
+            "canonicalUrl": "https://example.com/rss",
+            "originalKind": "rss",
+        },
+    ])
+
+    async def fake_enrich(
+        pool: Any,
+        *,
+        summary_id: str,
+        canonical_url: str,
+    ) -> dict[str, Any]:
+        return {"ok": True}
+
+    monkeypatch.setattr(ew, "enrich_web_candidate", fake_enrich)
+
+    succeeded = await ew.run_enrichment_for_pending(
+        pool,
+        limit=10,
+        source_kinds=("rss",),
+        sync_run_ids=("run-a", "run-b"),
+        concurrency=1,
+    )
+
+    assert succeeded == 1
+    sql, params = pool.connection_value.executions[0]
+    assert '"syncRunId" IN (%s,%s)' in sql
+    assert params == ("rss", "run-a", "run-b", 10)
 
 
 async def test_run_enrichment_for_pending_isolates_exceptions(

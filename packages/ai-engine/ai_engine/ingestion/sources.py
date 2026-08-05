@@ -277,11 +277,19 @@ def _parse_rss_xml_simple(text: str) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
 
     # RSS 2.0: <item>...</item>
-    for match in _re.finditer(r"<item>(.*?)</item>", text, _re.DOTALL):
+    for match in _re.finditer(r"<item\b[^>]*>(.*?)</item>", text, _re.DOTALL | _re.IGNORECASE):
         block = match.group(1)
         item: dict[str, str] = {}
         for field in ("title", "link", "description", "pubDate"):
             fm = _re.search(rf"<{field}[^>]*>(.*?)</{field}>", block, _re.DOTALL)
+            # WeWe RSS puts the full WeChat article in RSS 2.0's namespaced
+            # content:encoded field instead of description.
+            if fm is None and field == "description":
+                fm = _re.search(
+                    r"<content:encoded[^>]*>(.*?)</content:encoded>",
+                    block,
+                    _re.DOTALL,
+                )
             if fm:
                 value = fm.group(1).strip()
                 if value.startswith("<![CDATA[") and value.endswith("]]>"):
@@ -294,7 +302,7 @@ def _parse_rss_xml_simple(text: str) -> list[dict[str, str]]:
     # Atom: <entry>...</entry>
     # Atom uses <link href="..."/> and <published>/<updated> instead of
     # <link>...</link> and <pubDate>.
-    for match in _re.finditer(r"<entry>(.*?)</entry>", text, _re.DOTALL):
+    for match in _re.finditer(r"<entry\b[^>]*>(.*?)</entry>", text, _re.DOTALL | _re.IGNORECASE):
         block = match.group(1)
         atom_item: dict[str, str] = {}
         # title
@@ -306,11 +314,35 @@ def _parse_rss_xml_simple(text: str) -> list[dict[str, str]]:
             atom_item["title"] = _html.unescape(value)
         # link: prefer rel="alternate" (the actual article URL), not
         # rel="replies" or rel="self" which point to feed/comments.
-        lm = _re.search(r'<link[^>]*rel="alternate"[^>]*href="([^"]+)"', block)
-        if not lm:
-            lm = _re.search(r'<link[^>]*href="([^"]+)"', block)
-        if lm:
-            atom_item["link"] = lm.group(1).strip()
+        link_tags = _re.findall(r"<link\b[^>]*>", block, _re.IGNORECASE)
+        parsed_links: list[tuple[str, str, str]] = []
+        for tag in link_tags:
+            href_m = _re.search(r"\bhref\s*=\s*(['\"])(.*?)\1", tag, _re.IGNORECASE)
+            if not href_m:
+                continue
+            rel_m = _re.search(r"\brel\s*=\s*(['\"])(.*?)\1", tag, _re.IGNORECASE)
+            type_m = _re.search(r"\btype\s*=\s*(['\"])(.*?)\1", tag, _re.IGNORECASE)
+            parsed_links.append((
+                href_m.group(2).strip(),
+                rel_m.group(2).strip().lower() if rel_m else "",
+                type_m.group(2).strip().lower() if type_m else "",
+            ))
+        # Blogger and other Atom feeds often put replies/self links before the
+        # article link and may use single quotes or arbitrary attribute order.
+        # Prefer the HTML alternate; never fall back to a comments/feed URL.
+        safe_links = [
+            link for link in parsed_links
+            if "/comments/" not in link[0] and "/feeds/" not in link[0]
+        ]
+        preferred = next(
+            (link for link in safe_links if link[1] == "alternate" and "html" in link[2]),
+            None,
+        ) or next(
+            (link for link in safe_links if link[1] == "alternate"),
+            None,
+        ) or (safe_links[0] if safe_links else None)
+        if preferred:
+            atom_item["link"] = preferred[0]
         # summary/content
         sm = _re.search(r"<summary[^>]*>(.*?)</summary>", block, _re.DOTALL)
         if not sm:

@@ -125,6 +125,11 @@ describe('parseDistilledScore', () => {
   it('normalizes legacy snake_case v2 payloads', () => {
     const score = parseDistilledScore({
       total: 90,
+      effective_total: 72,
+      quality_score: 88,
+      team_value_score: 66,
+      ranking_score: 74,
+      source_bonus: 8,
       tier: 'collection',
       must_read: true,
       dimensions: {
@@ -142,9 +147,16 @@ describe('parseDistilledScore', () => {
       profile: 'engineering',
       is_default: false,
       version: '2.0',
+      direct_relevance: 2,
+      relevance_evidence: '可迁移到现有 RAG 管线',
     });
 
     expect(score?.total).toBe(90);
+    expect(score?.rankingScore).toBe(74);
+    expect(score?.qualityScore).toBe(88);
+    expect(score?.teamValueScore).toBe(66);
+    expect(score?.sourceBonus).toBe(8);
+    expect(score?.directRelevance).toBe(2);
     expect(score?.mustRead).toBe(true);
     expect(score?.dimensions.analysisDepth).toBe(2);
     expect(score?.dimensions.currentApplicability).toBe(3);

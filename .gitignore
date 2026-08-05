@@ -27,6 +27,7 @@ apps/web/prisma/migrations/dev.db*
 .env
 .env.local
 .env.*.local
+.env*.bak
 
 # IDE / OS
 .DS_Store
@@ -66,3 +67,6 @@ apps/web/playwright-report/
 /.limactl
 /.omo/
 .vendor_news_state.json
+
+# 本地生成的日报导出（正式内容通过数据库/应用管理）
+/digest-*.md

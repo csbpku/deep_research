@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -128,8 +129,8 @@ class DbJobStore(JobStore):
         table_name: str = AI_TABLE,
         lease_seconds: int | None = None,
         heartbeat_seconds: int | None = None,
-        min_size: int = 1,
-        max_size: int = 4,
+        min_size: int | None = None,
+        max_size: int | None = None,
     ) -> None:
         if table_name not in SHARED_TABLES:
             raise AdapterError(
@@ -150,6 +151,17 @@ class DbJobStore(JobStore):
             os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")
         )
         self._max_retries = int(os.environ.get("WORKER_MAX_RETRIES", "3"))
+        self._pool_min_size = min_size if min_size is not None else int(
+            os.environ.get("DB_POOL_MIN_SIZE", "2")
+        )
+        self._pool_max_size = max_size if max_size is not None else int(
+            os.environ.get("DB_POOL_MAX_SIZE", "10")
+        )
+        if self._pool_min_size < 1 or self._pool_max_size < self._pool_min_size:
+            raise AdapterError(
+                code="VALIDATION_FAILED",
+                message="DB pool sizes must satisfy 1 <= min_size <= max_size",
+            )
         self._pool: AsyncConnectionPool | None = None
         self._pool_open: bool = False
         self._reaper_task: asyncio.Task[None] | None = None
@@ -169,8 +181,8 @@ class DbJobStore(JobStore):
         if not self._pool_open:
             self._pool = AsyncConnectionPool(
                 conninfo=self._dsn,
-                min_size=1,
-                max_size=4,
+                min_size=self._pool_min_size,
+                max_size=self._pool_max_size,
                 kwargs={"row_factory": dict_row},
                 open=False,
             )
@@ -197,6 +209,66 @@ class DbJobStore(JobStore):
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.close()
+
+    async def resolve_internal_source_refs(
+        self,
+        source_refs: Sequence[dict[str, str | bool]],
+        *,
+        requester_id: str,
+    ) -> tuple[dict[str, str | bool], ...]:
+        """Hydrate visible summary/research ids for the adapter.
+
+        Clients only send stable ids. The DB boundary owns visibility checks
+        and adds bounded title/snippet metadata; adapters must never invent
+        content when an internal source was explicitly requested.
+        """
+        await self.open()
+        hydrated: list[dict[str, str | bool]] = []
+        async with self.pool.connection() as conn:
+            for ref in source_refs:
+                kind = ref.get("type")
+                value = ref.get("value")
+                if kind not in {"summary", "research"} or not isinstance(value, str):
+                    hydrated.append(dict(ref))
+                    continue
+                try:
+                    uuid.UUID(value)
+                except ValueError as exc:
+                    raise AdapterError(
+                        code="VALIDATION_FAILED",
+                        message=f"source ref {kind} must be a UUID",
+                    ) from exc
+
+                if kind == "summary":
+                    row = await conn.execute(
+                        'SELECT title, url, interpretation, body FROM summaries WHERE id = %s',
+                        (value,),
+                    )
+                else:
+                    row = await conn.execute(
+                        'SELECT title, NULL::text AS url, NULL::text AS interpretation, body '
+                        'FROM researches WHERE id = %s AND (status = \'published\' OR "authorId" = %s)',
+                        (value, requester_id),
+                    )
+                found = await row.fetchone()
+                if found is None:
+                    if ref.get("required") is True:
+                        raise AdapterError(
+                            code="AI_SOURCE_NOT_VISIBLE",
+                            message=f"required {kind} source is missing or not visible",
+                        )
+                    hydrated.append(dict(ref))
+                    continue
+                found_dict = cast(dict[str, Any], found)
+                resolved = dict(ref)
+                resolved["resolvedTitle"] = str(found_dict.get("title") or "")[:300]
+                resolved["resolvedSnippet"] = str(
+                    found_dict.get("interpretation") or found_dict.get("body") or ""
+                )[:4000]
+                if found_dict.get("url"):
+                    resolved["resolvedUrl"] = str(found_dict["url"])[:2000]
+                hydrated.append(resolved)
+        return tuple(hydrated)
 
     # ─────────────── JobStore Protocol ────────────────
 
@@ -474,6 +546,7 @@ class DbJobStore(JobStore):
         error_code: str | None,
         error_message: str | None,
         draft_research_id: str | None,
+        output_text: str | None = None,
     ) -> None:
         await self.open()
         t = f'"{self._table_name}"'
@@ -500,20 +573,18 @@ class DbJobStore(JobStore):
                 lease.worker_id,
             )
         else:
-            # W2 review 修正:schema CHECK ai_jobs_draft_matches_status 强制
-            # succeeded 时 draftResearchId NOT NULL + FK 指向 researches.id。
-            # 全零 UUID sentinel 100% 违反 FK;W2 不再自造 sentinel。
-            # 契约:caller 必须对 succeeded 传真 draft_id。
-            if status == "succeeded" and not draft_research_id:
+            # A succeeded research_report owns a draft; a succeeded
+            # summary_brief owns inline output. They are mutually exclusive.
+            if status == "succeeded" and bool(draft_research_id) == bool(output_text):
                 raise ValueError(
-                    "mark_terminal: succeeded requires draft_research_id; "
-                    "caller must INSERT a research row first and pass its id. "
-                    "(schema CHECK ai_jobs_draft_matches_status)"
+                    "mark_terminal: succeeded requires exactly one of "
+                    "draft_research_id or output_text"
                 )
-            if status != "succeeded" and draft_research_id is not None:
+            if status != "succeeded" and (
+                draft_research_id is not None or output_text is not None
+            ):
                 raise ValueError(
-                    f"mark_terminal: status={status} requires draft_research_id=None "
-                    f"(schema CHECK ai_jobs_draft_matches_status); got {draft_research_id}"
+                    f"mark_terminal: status={status} cannot persist output"
                 )
             # W2 review 修正:不再自造 sentinel 假 sources。schema CHECK
             # ai_jobs_partial_sources_valid 要求 succeeded >= 1 sources,
@@ -522,7 +593,7 @@ class DbJobStore(JobStore):
             sql = (
                 f"UPDATE {t} "
                 f'SET "status" = %s, "currentStep" = %s, "errorCode" = %s, "errorMessage" = %s, '
-                f'    "draftResearchId" = %s, "completedAt" = now(), '
+                f'    "draftResearchId" = %s, "outputText" = %s, "completedAt" = now(), '
                 f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
                 f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
                 f'RETURNING "id"'
@@ -533,6 +604,7 @@ class DbJobStore(JobStore):
                 error_code,
                 error_message,
                 draft_research_id,
+                output_text,
                 lease.job_id,
                 lease.worker_id,
             )
@@ -559,6 +631,31 @@ class DbJobStore(JobStore):
             async with conn.transaction():
                 await conn.execute(sql, (lease.job_id, lease.worker_id))
 
+    async def cancel_job(self, job_id: str) -> AiJobStatus | None:
+        """Atomically cancel a queued/running job in the durable queue."""
+        await self.open()
+        t = f'"{self._table_name}"'
+        sql = (
+            "WITH target AS ("
+            f"  SELECT \"id\", \"status\" FROM {t} "
+            '  WHERE "id" = %s AND "status" IN (\'queued\', \'running\') '
+            "  FOR UPDATE"
+            "), updated AS ("
+            f"  UPDATE {t} AS j SET "
+            '    "status" = \'cancelled\', "completedAt" = now(), '
+            '    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
+            '  FROM target WHERE j."id" = target."id" '
+            '  RETURNING target."status" AS previous_status'
+            ") SELECT previous_status FROM updated"
+        )
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                row = await (await conn.execute(sql, (job_id,))).fetchone()
+        if row is None:
+            return None
+        row_dict = cast(dict[str, object], row)
+        return cast(AiJobStatus, str(row_dict["previous_status"]))
+
     async def get_row(self, job_id: str) -> "DbJobView | None":
         """W2 review 修正:GET /api/ai/jobs/{id} 走 DB 路径,不能依赖 InMemoryJobStore。
         返回 DbJobView,HTTP 层逻辑统一用 .snapshot/.last_sources 等访问。
@@ -580,7 +677,7 @@ class DbJobStore(JobStore):
                 f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
                 f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
                 f'       "errorCode", "errorMessage", "startedAt", "createdAt", '
-                f'       "completedAt", "draftResearchId" '
+                f'       "completedAt", "draftResearchId", "outputText" '
                 f'FROM {t} WHERE "id" = %s'
             )
         async with self.pool.connection() as conn:
@@ -633,6 +730,11 @@ class DbJobStore(JobStore):
             last_error_code=row_dict.get("errorCode"),
             last_error_message=row_dict.get("errorMessage"),
             draft_research_id=view.draft_research_id,
+            output_text=(
+                str(row_dict["outputText"])
+                if row_dict.get("outputText") is not None
+                else None
+            ),
             started_at=row_dict.get("startedAt"),
             created_at=row_dict.get("createdAt"),
             completed_at=row_dict.get("completedAt"),
@@ -888,6 +990,7 @@ class DbJobView:
     last_error_message: str | None = None
     # 由 list_jobs 填充,get_row 路径留 None
     draft_research_id: str | None = None
+    output_text: str | None = None
     published_research_id: str | None = None
     started_at: datetime | None = None
     created_at: datetime | None = None

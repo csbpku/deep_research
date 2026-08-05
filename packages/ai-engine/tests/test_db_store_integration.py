@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from ai_engine.adapters.base import AdapterSource
+from ai_engine.contracts.states import ReportType
 from ai_engine.job_runner.db_store import AI_TABLE, DbJobStore
 from ai_engine.job_runner.models import JobSnapshot
 
@@ -105,13 +106,17 @@ async def _prepare_user(store: DbJobStore) -> str:
     return uid
 
 
-async def _snapshot(user_id: str, topic: str = "integration test") -> JobSnapshot:
+async def _snapshot(
+    user_id: str,
+    topic: str = "integration test",
+    report_type: ReportType = "research_report",
+) -> JobSnapshot:
     return JobSnapshot(
         job_id=str(uuid.uuid4()),
         requester_id=user_id,
         topic=topic,
         context=None,
-        report_type="research_report",
+        report_type=report_type,
         source_policy="prefer_user_sources",
         status="queued",
         current_step=None,
@@ -301,6 +306,39 @@ class TestDbJobStoreIntegration:
             assert row.snapshot.status == "succeeded"
             assert len(row.last_sources) >= 1
             assert row.draft_research_id == research_id
+        finally:
+            await store.close()
+
+    async def test_summary_brief_succeeds_without_sources_or_draft(self) -> None:
+        store = await _new_store()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(
+                user_id,
+                "summary brief path",
+                report_type="summary_brief",
+            )
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+
+            await store.mark_terminal(
+                lease,
+                "succeeded",
+                current_step="write",
+                error_code=None,
+                error_message=None,
+                draft_research_id=None,
+                output_text="# Brief\n\nInline result.",
+            )
+
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.status == "succeeded"
+            assert row.draft_research_id is None
+            assert row.output_text == "# Brief\n\nInline result."
+            assert row.last_sources == ()
         finally:
             await store.close()
 

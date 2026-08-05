@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  Flame,
   LayoutGrid,
   Library,
   Newspaper,
@@ -44,6 +45,8 @@ const ICONS: Record<NavItemIconKey, LucideIcon> = {
   // AI 调研用流程图：5 步流水线（plan → search → compress → analyze → write）
   aiResearch: Workflow,
   search: Search,
+  // 热点主题用 Flame：视觉上比 Radar 更"热度感"，便于和雷达区分
+  topic: Flame,
   admin: Settings,
 };
 

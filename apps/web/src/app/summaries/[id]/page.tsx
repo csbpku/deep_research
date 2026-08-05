@@ -13,6 +13,7 @@ import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCurrentUser } from '@/lib/auth/client';
+import { isHttpUrl } from '@/lib/external-url';
 
 interface SummaryDetail {
   id: string;
@@ -44,7 +45,9 @@ interface DigestArticleData {
   publishedAt: string | null;
   tldr: string;
   sections: Array<{ title: string; body: string }>;
-  highlights: string[];
+  // highlights 由后端生成时填充，但前端不再渲染（与 ranked + sections 内容重叠）。
+  // 类型保留以便 query 类型推断不报错；前端代码不应再读此字段。
+  highlights: Array<{ url: string; title: string; summary: string }>;
   ranked: DigestRankedItem[];
   sourcesUsed: string[];
   candidateCount: number;
@@ -177,17 +180,6 @@ function DigestArticle({ data }: { data: DigestArticleData }) {
         </blockquote>
       ) : null}
 
-      {data.highlights.length > 0 ? (
-        <section className="mb-5">
-          <h2 className="mb-2 text-base font-semibold">今日看点</h2>
-          <ul className="list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed">
-            {data.highlights.map((h) => (
-              <li key={h}>{h}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
       {data.sections.length > 0 ? (
         <section className="mb-5">
           <h2 className="mb-2 text-base font-semibold">分类综述</h2>
@@ -206,8 +198,8 @@ function DigestArticle({ data }: { data: DigestArticleData }) {
         <section className="mb-6">
           <h2 className="mb-2 text-base font-semibold">今日榜单</h2>
           <ol className="list-decimal space-y-2.5 pl-5">
-            {data.ranked.map((item) => (
-              <li key={`${item.summaryId ?? item.title}`}>
+            {data.ranked.map((item, index) => (
+              <li key={`${item.url}-${index}`}>
                 {item.radarUrl ? (
                   <Link href={item.radarUrl} className="font-medium text-primary hover:underline">
                     {item.title}
@@ -284,12 +276,14 @@ function DetailBody({ data }: { data: SummaryDetail }) {
         <div className="my-4 whitespace-pre-wrap text-[15px] leading-relaxed">{data.body}</div>
       ) : null}
 
-      <Button asChild size="sm">
-        <a href={data.url} target="_blank" rel="noopener noreferrer">
-          打开原文
-          <ExternalLink />
-        </a>
-      </Button>
+      {isHttpUrl(data.url) ? (
+        <Button asChild size="sm">
+          <a href={data.url} target="_blank" rel="noopener noreferrer">
+            打开原文
+            <ExternalLink />
+          </a>
+        </Button>
+      ) : null}
 
       {/* W8 评论区 */}
       <CommentSectionWrapper

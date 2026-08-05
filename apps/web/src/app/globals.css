@@ -22,35 +22,46 @@
     color-scheme: light;
 
     /* ---- 表面：暖白系（Notion 风）—— 区别于 v1 的冷蓝灰 ---- */
-    --background: 40 30% 98%; /* #FAF9F5 —— Notion sidebar 近邻 */
-    --foreground: 30 7% 22%; /* #37352F —— Notion text 近邻 */
-    --card: 40 20% 99%; /* #FCFBF8 */
-    --card-foreground: 30 7% 22%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 30 7% 22%;
+    --background: 36 14% 96%; /* #F1F0EB 中性微冷(原 #FAF9F5 暖米) */
+    --foreground: 24 12% 14%; /* #21201D 近黑(原 #37352F 暖黑) */
+    --card: 0 0% 100%; /* #FFFFFF 纯白卡片(原 #FCFBF8) */
+    --card-foreground: 24 12% 14%;
 
     /* ---- 强调色：蓝（非 v1 的靛蓝）—— 更接近 mockup 的 #2383E2 ---- */
-    --primary: 212 80% 47%; /* #2383E2 */
+    --primary: 217 85% 51%; /* #2A6BF2 (原 #2383E2, 略深现代感) */
     --primary-foreground: 0 0% 100%;
 
     /* ---- 中性：暖灰系 ---- */
-    --secondary: 40 16% 94%; /* #F1F1EE */
-    --secondary-foreground: 30 6% 30%;
-    --muted: 40 16% 94%;
-    --muted-foreground: 30 5% 47%; /* #787774 —— Notion text2 */
-    --accent: 212 95% 96%; /* 蓝底 hover */
-    --accent-foreground: 212 80% 38%;
+    --secondary: 36 14% 92%; /* #ECEAE3 中性(原 #F1F1EE 暖灰) */
+    --secondary-foreground: 24 12% 14%;
+    --muted: 36 14% 92%;
+    --muted-foreground: 24 6% 38%; /* #5A5D63 对比度更高(原 #787774) */
+    --accent: 217 95% 96%; /* 蓝底 hover */
+    --accent-foreground: 217 85% 38%;
 
     /* ---- 破坏性 ---- */
-    --destructive: 0 72% 51%; /* #DC2626 */
+    --destructive: 12 62% 38%; /* #94402E 锈红(原 #DC2626 纯红,与状态色协调) */
     --destructive-foreground: 0 0% 100%;
 
+    /* 弹层（Popover 跟随 Card）*/
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 12% 14%;
+
     /* ---- 线条与焦点 ---- */
-    --border: 36 14% 90%; /* #E9E9E7 —— Notion border */
-    --input: 36 14% 90%;
-    --ring: 212 80% 47%;
+    --border: 36 12% 86%; /* #DAD7CC 略深(原 #E9E9E7) */
+    --input: 36 12% 86%;
+    --ring: 217 85% 51%;
 
     --radius: 0.5rem;
+
+    /* ---- v6.4 新增：中文正文三档 token ---- */
+    --fs-body: 14px;        /* 默认 (text-sm) */
+    --fs-body-cn: 14.5px;   /* 中文长文 (.prose) */
+    --fs-body-dense: 13.5px;/* 紧凑 (.prose-compact / 编辑器) */
+    /* ---- v6.4 新增：列表容器 + 行距 ---- */
+    --content-list: 880px;  /* 雷达/日报/搜索 列表 */
+    --leading-body: 1.7;    /* body 行距 */
+    --p-card: 20px;         /* 业务组件可选 */
 
     /* ---- 领域语义：AI 调研 job 状态 ---- */
     --status-queued-bg: 48 96% 89%;
@@ -114,7 +125,7 @@
     --secondary: 217 25% 22%; /* #272F42 */
     --secondary-foreground: 214 25% 84%;
     --muted: 217 25% 22%;
-    --muted-foreground: 215 20% 70%;
+    --muted-foreground: 24 6% 65%; /* #A3A09B 与 light 主题色相族对齐(原 #9CA3AF 冷蓝) */
     --accent: 212 50% 25%;
     --accent-foreground: 212 95% 85%;
 
@@ -179,6 +190,7 @@
     font-feature-settings:
       'liga' 1,
       'calt' 1;
+    line-height: var(--leading-body, 1.7); /* v6.4: 中文行距更舒展（修复审视发现 #2） */
   }
 
   /* 焦点可见性 —— 不允许任何地方 outline:none 而无替代 */
@@ -213,7 +225,7 @@
 
     /* 中文长文阅读：字号 14.5px、行高 1.65 —— Swiss-data-dense 排版，
        缩短屏读时间但不挤；token 化的紧凑档见 .prose-compact (13.5px)。 */
-    font-size: 0.90625rem; /* 14.5px */
+    font-size: var(--fs-body-cn); /* 14.5px v6.4: token 化 */
     line-height: 1.65;
   }
 
@@ -247,7 +259,7 @@
   /* AI 草稿与编辑器预览：紧凑排版 —— 13.5px / 1.6。
      与默认 .prose 共享颜色 + 链接 + 表格 token；仅调字号/行距。 */
   .prose.prose-compact {
-    font-size: 0.84375rem; /* 13.5px */
+    font-size: var(--fs-body-dense); /* 13.5px v6.4: token 化 */
     line-height: 1.6;
   }
 

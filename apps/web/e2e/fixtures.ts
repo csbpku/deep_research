@@ -1,45 +1,68 @@
-// Playwright fixtures —— 通用 helpers。
-//
-// 范围（Week 9 起步）：
-//   - mockNextAuthSession：通过注入 NextAuth session cookie 模拟登录
-//   - 公共清理：测试间不共享状态；每个 spec 自带 beforeAll/afterAll
-//
-// 注意：fixture 暂时只 mock session；不要直接调 prisma 客户端（要保持
-// E2E 关注真实链路）。需要 seed 数据时通过测试专用的 API 路由做。
+// Playwright fixtures for specs that require an authenticated admin session.
+// Authentication goes through the real Auth.js Credentials provider, which is
+// only registered while the web server runs with E2E=1.
 
-import type { APIRequestContext, Page } from '@playwright/test';
+import {
+  expect,
+  test as base,
+  type APIRequestContext,
+  type Page,
+} from '@playwright/test';
 
-export const SESSION_COOKIE_NAME = 'authjs.session-token';
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? 'codex-e2e-admin@shopee.com';
 
-/** 通过设置 NextAuth session cookie 模拟登录。 */
-export async function mockLogin(
+export { expect };
+
+export const test = base.extend({
+  page: async ({ page, context }, use) => {
+    await loginWithCredentials(context.request, {
+      email: ADMIN_EMAIL,
+      role: 'admin',
+    });
+    await use(page);
+  },
+});
+
+/** Sign in through Auth.js and keep the resulting cookie in this context. */
+export async function loginWithCredentials(
   request: APIRequestContext,
-  context: { addCookies: (cookies: { name: string; value: string; domain: string; path: string }[]) => Promise<void> },
-  user: { id: string; email: string; name: string; role: 'member' | 'admin' },
+  user: { email: string; role: 'member' | 'admin' },
 ): Promise<void> {
-  // 真实 E2E 应该通过 NextAuth OAuth 回调完成登录，但起步阶段可以
-  // 通过测试用的 dev-only 路由直接设 cookie（参见 e2e/api-helper.spec.ts）。
-  // 这里预留：调用 dev-only 路由 /api/test/login 拿 session cookie。
-  const res = await request.post(`${process.env.E2E_BASE_URL ?? 'http://localhost:3000'}/api/test/login`, {
-    data: user,
-    headers: { 'content-type': 'application/json' },
-  });
-  if (!res.ok()) {
-    throw new Error(`mockLogin failed: ${res.status()} ${await res.text()}`);
+  const csrfResponse = await request.get(`${BASE_URL}/api/auth/csrf`);
+  if (!csrfResponse.ok()) {
+    throw new Error(`E2E login: CSRF endpoint returned ${csrfResponse.status()}`);
   }
-  const setCookie = res.headers()['set-cookie'];
-  if (!setCookie) {
-    throw new Error('mockLogin: no Set-Cookie header returned');
+  const csrf = await csrfResponse.json() as { csrfToken?: string };
+  if (!csrf.csrfToken) throw new Error('E2E login: CSRF token missing');
+
+  const callback = await request.post(
+    `${BASE_URL}/api/auth/callback/e2e-credentials`,
+    {
+      form: {
+        csrfToken: csrf.csrfToken,
+        email: user.email,
+        role: user.role,
+        callbackUrl: `${BASE_URL}/`,
+      },
+    },
+  );
+  if (!callback.ok()) {
+    throw new Error(
+      `E2E login failed: ${callback.status()} ${await callback.text()}`,
+    );
   }
-  // Set-Cookie 是字符串，提取 name=value
-  const cookieValue = setCookie.split(';')[0];
-  const [name, value] = cookieValue.split('=');
-  await context.addCookies([
-    { name: name.trim(), value: value.trim(), domain: 'localhost', path: '/' },
-  ]);
+
+  const sessionResponse = await request.get(`${BASE_URL}/api/auth/session`);
+  const session = await sessionResponse.json() as {
+    user?: { email?: string; role?: string };
+  };
+  if (session.user?.email !== user.email || session.user.role !== user.role) {
+    throw new Error('E2E login failed: authenticated session was not established');
+  }
 }
 
-/** 清空页面（不依赖真实网络） */
+/** Wait for React hydration after a full navigation. */
 export async function waitForHydration(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle');
 }

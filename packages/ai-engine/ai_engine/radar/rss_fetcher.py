@@ -12,6 +12,7 @@ from ai_engine.radar.community_fetcher import _is_ai_related
 from ai_engine.radar.models import RadarCandidate
 
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
+DEFAULT_MAX_AGE_HOURS = 24 * 30
 
 
 def _published_at(raw: str) -> datetime | None:
@@ -39,10 +40,12 @@ async def fetch_rss_candidates(
     Config keys:
       - ``feedUrl`` (required)
       - ``maxResults`` (default 50, range 1-100)
-      - ``maxAgeHours`` (default None = no filter): drop items whose
+      - ``maxAgeHours`` (default 720 / 30 days): drop items whose
         ``published_at`` is older than ``now - maxAgeHours``. Items with
         no parseable ``published_at`` are kept (matches kaiye's behavior
-        of returning them when cutoff cannot be evaluated).
+        of returning them when cutoff cannot be evaluated). Zero or a
+        negative value falls back to the safe 30-day default; a technical
+        radar must not silently republish an archive as today's signal.
     """
 
     feed_url = str(config.get("feedUrl") or "").strip()
@@ -55,17 +58,15 @@ async def fetch_rss_candidates(
     if max_results < 1 or max_results > 100:
         raise ValueError("RSS maxResults must be between 1 and 100")
 
-    raw_max_age = config.get("maxAgeHours")
-    cutoff = None
-    if raw_max_age is not None:
-        if isinstance(raw_max_age, bool):
-            raise ValueError("RSS maxAgeHours must be a number")
-        hours = float(raw_max_age)
-        if hours > 0:
-            if hours > 24 * 365:
-                raise ValueError("RSS maxAgeHours must be between 0 and 8760")
-            cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
-        # hours == 0 means no age filter
+    raw_max_age = config.get("maxAgeHours", DEFAULT_MAX_AGE_HOURS)
+    if isinstance(raw_max_age, bool):
+        raise ValueError("RSS maxAgeHours must be a number")
+    hours = float(raw_max_age)
+    if hours <= 0:
+        hours = DEFAULT_MAX_AGE_HOURS
+    if hours > 24 * 365:
+        raise ValueError("RSS maxAgeHours must be between 1 and 8760")
+    cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
 
     # allow_localhost can be set via kwarg or config dict
     allow_local = allow_localhost or bool(config.get("allowLocalhost", False))

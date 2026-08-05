@@ -86,23 +86,24 @@ _CORE_DIMENSIONS: tuple[str, ...] = (
 PAPER_PROFILE = ScoringProfile(
     id=PROFILE_PAPER,
     description=(
-        "Peer-reviewed AI/ML research (arxiv papers, conference proceedings). "
-        "Audience: researchers, graduate students. Reward depth and novelty; "
-        "relax timeliness and broad audience appeal."
+        "AI/ML research papers (arxiv papers, conference proceedings). "
+        "Audience: AI application and platform engineers who need to decide "
+        "what is worth reading or applying. Reward genuine novelty and depth, "
+        "but require evidence of relevance and practical transfer."
     ),
     weights={
-        _DIM_INFO_INCREMENT: 30,
-        _DIM_ANALYSIS_DEPTH: 30,
-        _DIM_ACTIONABILITY: 10,
-        _DIM_FACT_CREDIBILITY: 15,
+        _DIM_INFO_INCREMENT: 25,
+        _DIM_ANALYSIS_DEPTH: 25,
+        _DIM_ACTIONABILITY: 20,
+        _DIM_FACT_CREDIBILITY: 10,
         _DIM_TIMELINESS: 5,
         _DIM_EXPRESSION: 5,
-        _DIM_AUDIENCE_FIT: 5,
+        _DIM_AUDIENCE_FIT: 10,
     },
-    tier_collection=82,
-    tier_deep_read=68,
-    tier_skim=52,
-    must_read_total=85,
+    tier_collection=88,
+    tier_deep_read=76,
+    tier_skim=55,
+    must_read_total=92,
     must_read_core_count=2,
 )
 
@@ -128,7 +129,7 @@ ENGINEERING_PROFILE = ScoringProfile(
     },
     tier_collection=85,
     tier_deep_read=70,
-    tier_skim=55,
+    tier_skim=50,
     must_read_total=88,
     must_read_core_count=2,
 )
@@ -155,7 +156,7 @@ NEWS_PROFILE = ScoringProfile(
     },
     tier_collection=82,
     tier_deep_read=68,
-    tier_skim=55,
+    tier_skim=50,
     must_read_total=85,
     must_read_core_count=1,
 )

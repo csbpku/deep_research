@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { MarkdownPreview } from '@/components/MarkdownPreview';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi } from '@/lib/errors/friendly';
@@ -40,6 +41,8 @@ interface AiJobStatus {
   tokenOutputTotal: number;
   costCents: number;
   draftResearchId: string | null;
+  reportType: string | null;
+  outputText: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   startedAt: string | null;
@@ -74,6 +77,7 @@ export default function AiJobStatusPage() {
     },
     retry: retryOnceAi,
     refetchInterval: (data) => {
+      if (data.state.status === 'error') return false;
       const s = data?.state.data;
       if (!s) return 5_000;
       // 终态停止轮询
@@ -94,7 +98,11 @@ export default function AiJobStatusPage() {
       </Button>
 
       <h1 className="text-xl font-semibold tracking-tight">
-        {q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
+        {q.isError
+          ? '无法加载调研'
+          : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus)
+            ? '调研结果'
+            : '调研进行中'}
       </h1>
       <p className="mt-1 text-xs text-muted-foreground">
         {q.data?.topic ?? '本次调研'}
@@ -120,6 +128,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
   const elapsed = formatElapsed(s);
   const statusLabel = finalStatus ?? s.status;
   const activeIdx = stepIndex(s.currentStep ?? s.errorStage);
+  const isBrief = s.reportType === 'summary_brief';
 
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -135,7 +144,9 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               </span>
             ) : null}
             <span>已耗时 {elapsed}</span>
-            {!isTerminal ? <span>完成后会自动跳到草稿</span> : null}
+            {!isTerminal ? (
+              <span>{isBrief ? '完成后在本页显示摘要' : '完成后可打开私有草稿'}</span>
+            ) : null}
           </div>
         </div>
         <div className="shrink-0 text-right">
@@ -187,9 +198,18 @@ function StatusBody({ s }: { s: AiJobStatus }) {
         </div>
       ) : null}
 
+      {finalStatus === 'succeeded' && isBrief && s.outputText ? (
+        <section className="border-t border-border p-4" aria-label="轻量摘要结果">
+          <h3 className="mb-3 text-sm font-semibold">轻量摘要</h3>
+          <MarkdownPreview source={s.outputText} />
+        </section>
+      ) : null}
+
       {!isTerminal ? (
         <p className="border-t border-border p-4 text-sm text-muted-foreground">
-          完成后草稿只会出现在「我的草稿」，不会直接进入调研库。
+          {isBrief
+            ? '轻量摘要不会创建调研草稿。'
+            : '完成后草稿只会出现在「我的草稿」，不会直接进入调研库。'}
         </p>
       ) : null}
 
@@ -197,11 +217,11 @@ function StatusBody({ s }: { s: AiJobStatus }) {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-4">
           <div className="text-sm">
             {finalStatus === 'succeeded' ? (
-              <span className="text-status-succeeded-fg">调研完成，私有草稿仅你本人可见。</span>
-            ) : finalStatus === 'partial' ? (
-              <span className="text-status-partial-fg">
-                任务以 partial 终态结束，已保留抓取资料但未生成草稿。
+              <span className="text-status-succeeded-fg">
+                {isBrief ? '轻量摘要已生成，未创建调研草稿。' : '调研完成，私有草稿仅你本人可见。'}
               </span>
+            ) : finalStatus === 'partial' ? (
+              <span className="text-status-partial-fg">任务已部分完成，已保留抓取资料但未生成草稿。</span>
             ) : finalStatus === 'failed' ? (
               <span className="text-status-failed-fg">任务失败，可以回到提交页重新发起。</span>
             ) : (
@@ -231,6 +251,11 @@ function stepIndex(step: string | null | undefined): number {
   if (!step) return -1;
   const idx = STEPS.findIndex((s) => s.key === step);
   return idx;
+}
+
+function stepLabel(step: string | null | undefined): string {
+  if (!step) return '—';
+  return STEPS.find((item) => item.key === step)?.label ?? '处理中';
 }
 
 function progressPct(s: AiJobStatus): number {
@@ -268,7 +293,7 @@ function countForStep(s: AiJobStatus, stepKey: string): string | null {
     return `${s.partialSourcesCount} 条资料`;
   }
   if (stepKey === 'write' && s.finalStatus === 'succeeded') {
-    return '已生成草稿';
+    return s.reportType === 'summary_brief' ? '已生成摘要' : '已生成草稿';
   }
   if (s.errorStage === stepKey && s.errorCode) {
     return s.errorCode;
@@ -348,7 +373,7 @@ function JobStatusDisclosure({
   const summary =
     `${elapsed} · 费用 $${(s.costCents / 100).toFixed(2)}` +
     ` · 令牌 ${s.tokenInputTotal} / ${s.tokenOutputTotal}` +
-    (s.currentStep ? ` · 当前 ${s.currentStep}` : '');
+    (s.currentStep ? ` · 当前 ${stepLabel(s.currentStep)}` : '');
 
   return (
     <div className="border-t border-border">
@@ -370,10 +395,10 @@ function JobStatusDisclosure({
       </button>
       {open && (
         <div className="grid gap-x-4 gap-y-2 border-t border-border bg-muted/40 px-4 py-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
-          <DetailRow label="正在处理" value={s.currentStep ?? '—'} mono />
+          <DetailRow label="正在处理" value={stepLabel(s.currentStep)} />
           <DetailRow label="已抓取" value={String(s.partialSourcesCount)} mono />
           <DetailRow label="抓取失败" value={String(s.failedSourcesCount)} mono />
-          <DetailRow label="出错于" value={s.errorStage ?? '—'} mono />
+          <DetailRow label="出错于" value={stepLabel(s.errorStage)} />
           <DetailRow label="耗时" value={elapsed} mono />
           <DetailRow label="费用" value={`$${(s.costCents / 100).toFixed(2)}`} mono />
           <DetailRow label="令牌 输入/输出" value={`${s.tokenInputTotal} / ${s.tokenOutputTotal}`} mono />

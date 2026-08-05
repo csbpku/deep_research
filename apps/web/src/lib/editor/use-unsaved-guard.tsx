@@ -5,7 +5,7 @@
 // 拦截三种离开场景：
 //   1. 浏览器关闭 / 刷新 / 关闭标签页 → beforeunload
 //   2. 任意 <a> 标签触发的同窗口导航（Next.js <Link>、普通 a.href）
-//   3. 编程式 router.push / router.replace / router.back（通过 guardedRouter）
+//   3. 浏览器后退，以及编辑器内编程式 router.push / router.replace / router.back
 //
 // 用法：
 //   const { guardedRouter, allowNext, confirmDialog } = useUnsavedGuard(isDirty);
@@ -16,8 +16,8 @@
 // 实现要点：
 //   - click 拦截走 document.addEventListener('click', capture)，用 closest('a[href]')
 //     找到触发的链接，再决定是否拦截；
-//   - history.pushState/replaceState monkey-patch 拦截 router.replace（保存后跳转）。
-//   - 「放弃修改并离开」会直接修改 location；「留在页面」关闭 dialog。
+//   - popstate 先把浏览器后退恢复到当前页，再由确认框决定是否真正离开；
+//   - 不改写 history.pushState/replaceState，避免影响 Next.js 的其它页面导航。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -56,6 +56,7 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
     | null
   >(null);
   const allowNextRef = useRef(false);
+  const allowPopRef = useRef(false);
 
   // 浏览器关闭 / 刷新 —— 标准 beforeunload 协议。
   useEffect(() => {
@@ -111,36 +112,20 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
     return () => document.removeEventListener('click', onClick, { capture: true });
   }, [isDirty]);
 
-  // 拦截编程式 router 跳转：monkey-patch history.pushState/replaceState。
-  // 编辑器主要在「保存成功后 router.replace 跳详情页」时使用这些接口。
-  // dirty 状态下我们先拦下，弹 dialog 询问。
-  // allowNext 给「先保存再走」的开一道临时门（调用一次即消费）。
+  // 浏览器原生后退不会触发 Link 点击。先同步回到当前 history entry，
+  // 保留编辑器，再让用户在确认框中决定是否回退。
   useEffect(() => {
     if (!isDirty) return;
-    const originalPush = window.history.pushState.bind(window.history);
-    const originalReplace = window.history.replaceState.bind(window.history);
-
-    function patched(this: History, ..._args: Parameters<typeof originalPush>) {
-      if (allowNextRef.current) {
-        allowNextRef.current = false;
-        return originalPush.apply(this, _args);
+    function onPopState() {
+      if (allowPopRef.current) {
+        allowPopRef.current = false;
+        return;
       }
       setPending({ kind: 'back' });
-      // 拦截：什么都不做，等用户从 dialog 选「放弃并离开」再补一次跳转。
+      window.history.go(1);
     }
-    function patchedReplace(this: History, ..._args: Parameters<typeof originalReplace>) {
-      if (allowNextRef.current) {
-        allowNextRef.current = false;
-        return originalReplace.apply(this, _args);
-      }
-      setPending({ kind: 'back' });
-    }
-    window.history.pushState = patched as typeof window.history.pushState;
-    window.history.replaceState = patchedReplace as typeof window.history.replaceState;
-    return () => {
-      window.history.pushState = originalPush;
-      window.history.replaceState = originalReplace;
-    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, [isDirty]);
 
   const guardedBack = useCallback(() => {
@@ -153,7 +138,8 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
 
   const guardedPush = useCallback(
     (href: string) => {
-      if (!isDirty) {
+      if (!isDirty || allowNextRef.current) {
+        allowNextRef.current = false;
         router.push(href);
         return;
       }
@@ -164,7 +150,8 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
 
   const guardedReplace = useCallback(
     (href: string) => {
-      if (!isDirty) {
+      if (!isDirty || allowNextRef.current) {
+        allowNextRef.current = false;
         router.replace(href);
         return;
       }
@@ -184,6 +171,7 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
     if (pending.kind === 'href') {
       window.location.href = pending.href;
     } else {
+      allowPopRef.current = true;
       window.history.go(-1);
     }
     setPending(null);

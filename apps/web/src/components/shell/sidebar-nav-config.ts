@@ -16,6 +16,7 @@ export type NavItemIconKey =
   | 'research'
   | 'aiResearch'
   | 'search'
+  | 'topic'
   | 'admin';
 
 export interface NavItem {
@@ -28,6 +29,7 @@ export const PRIMARY_NAV: NavItem[] = [
   { href: '/', label: '总览', icon: 'home' },
   { href: '/summaries', label: 'AI 雷达日报', icon: 'digest' },
   { href: '/radar', label: '技术雷达', icon: 'radar' },
+  { href: '/topics', label: '热点主题', icon: 'topic' },
   { href: '/researches', label: '调研库', icon: 'research' },
   { href: '/ai-research', label: 'AI 调研', icon: 'aiResearch' },
   { href: '/search', label: '搜索', icon: 'search' },

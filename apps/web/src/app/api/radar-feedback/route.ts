@@ -45,23 +45,63 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  // 幂等 upsert；冲突（P2002）视为已存在，返回 200 done=false
+  // favorite is mirrored transactionally into user_bookmarks so the Radar
+  // button and "我的收藏" cannot diverge. Other feedback types stay in
+  // radar_feedback only.
   let created = false;
-  try {
-    await prisma.radarFeedback.create({
-      data: {
-        summaryId: body.summaryId,
-        userId: u.id,
-        feedbackType: body.feedbackType,
+  if (body.feedbackType === 'favorite') {
+    const existing = await prisma.radarFeedback.findUnique({
+      where: {
+        summaryId_userId_feedbackType: {
+          summaryId: body.summaryId,
+          userId: u.id,
+          feedbackType: 'favorite',
+        },
       },
       select: { id: true },
     });
-    created = true;
-  } catch (err: unknown) {
-    if ((err as { code?: string })?.code === 'P2002') {
-      created = false;
-    } else {
-      throw err;
+    await prisma.$transaction(async (tx) => {
+      await tx.radarFeedback.upsert({
+        where: {
+          summaryId_userId_feedbackType: {
+            summaryId: body.summaryId,
+            userId: u.id,
+            feedbackType: 'favorite',
+          },
+        },
+        create: { summaryId: body.summaryId, userId: u.id, feedbackType: 'favorite' },
+        update: {},
+      });
+      await tx.userBookmark.upsert({
+        where: {
+          userId_targetType_targetId: {
+            userId: u.id,
+            targetType: 'radar_candidate',
+            targetId: body.summaryId,
+          },
+        },
+        create: { userId: u.id, targetType: 'radar_candidate', targetId: body.summaryId },
+        update: {},
+      });
+    });
+    created = existing === null;
+  } else {
+    try {
+      await prisma.radarFeedback.create({
+        data: {
+          summaryId: body.summaryId,
+          userId: u.id,
+          feedbackType: body.feedbackType,
+        },
+        select: { id: true },
+      });
+      created = true;
+    } catch (err: unknown) {
+      if ((err as { code?: string })?.code === 'P2002') {
+        created = false;
+      } else {
+        throw err;
+      }
     }
   }
 
@@ -122,13 +162,31 @@ export const DELETE = apiHandler<[NextRequest]>(async (req) => {
   }
 
   // 不存在则不报错（toggle 语义：用户可能点击两次）
-  const result = await prisma.radarFeedback.deleteMany({
-    where: {
-      summaryId: parsed.data.summaryId,
-      userId: u.id,
-      feedbackType: parsed.data.feedbackType,
-    },
-  });
+  const result = parsed.data.feedbackType === 'favorite'
+    ? await prisma.$transaction(async (tx) => {
+        const removed = await tx.radarFeedback.deleteMany({
+          where: {
+            summaryId: parsed.data.summaryId,
+            userId: u.id,
+            feedbackType: 'favorite',
+          },
+        });
+        await tx.userBookmark.deleteMany({
+          where: {
+            userId: u.id,
+            targetType: 'radar_candidate',
+            targetId: parsed.data.summaryId,
+          },
+        });
+        return removed;
+      })
+    : await prisma.radarFeedback.deleteMany({
+        where: {
+          summaryId: parsed.data.summaryId,
+          userId: u.id,
+          feedbackType: parsed.data.feedbackType,
+        },
+      });
 
   log.info('radar.feedback.delete', 'feedback removed', {
     requestId,

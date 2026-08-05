@@ -31,6 +31,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     monthAiCostCents,
     lastRadarSync,
     failedRadarSyncsLast24h,
+    recentFailedRadarSyncs,
   ] = await Promise.all([
     prisma.shareSubmission.count({ where: { status: 'pending' } }),
     prisma.summary.count({
@@ -68,6 +69,21 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       where: {
         status: 'failed',
         createdAt: { gte: oneDayAgo },
+      },
+    }),
+    prisma.radarSyncRun.findMany({
+      where: {
+        status: 'failed',
+        createdAt: { gte: oneDayAgo },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: {
+        id: true,
+        createdAt: true,
+        errorCode: true,
+        errorMessage: true,
+        source: { select: { name: true, sourceType: true } },
       },
     }),
   ]);
@@ -109,6 +125,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           }
         : null,
       failedRunsLast24h: failedRadarSyncsLast24h,
+      recentFailures: recentFailedRadarSyncs.map((run) => ({
+        id: run.id,
+        source: run.source,
+        errorCode: run.errorCode,
+        errorMessage: run.errorMessage,
+        createdAt: run.createdAt.toISOString(),
+      })),
     },
     generatedAt: now.toISOString(),
   });

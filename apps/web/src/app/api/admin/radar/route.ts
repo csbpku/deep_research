@@ -49,18 +49,44 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   // Admin 默认 status 过滤为 candidate；不传则全部
   const where: Prisma.SummaryWhereInput = {
-    source: 'daily',
-    syncRunId: { not: null },
     ...(status ? { status } : {}),
-    ...(q && q.length > 0
-      ? {
-          OR: [
-            { title: { contains: q, mode: 'insensitive' } },
-            { interpretation: { contains: q, mode: 'insensitive' } },
-            { tags: { has: q } },
-          ],
-        }
-      : {}),
+    AND: [
+      {
+        OR: [
+          { source: 'daily', syncRunId: { not: null } },
+          { source: 'user', shareSource: { is: { status: 'approved' } } },
+        ],
+      },
+      ...(sourceType
+        ? [{
+            OR: sourceType === 'web_share'
+              ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+              : [{
+                  syncRun: {
+                    source: {
+                      sourceType:
+                        sourceType === 'github'
+                          ? { startsWith: 'github' }
+                          : sourceType === 'articles'
+                            ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
+                            : sourceType === 'community'
+                              ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
+                              : sourceType,
+                    },
+                  },
+                }],
+          }]
+        : []),
+      ...(q && q.length > 0
+        ? [{
+            OR: [
+              { title: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+              { interpretation: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+              { tags: { has: q } },
+            ],
+          }]
+        : []),
+    ],
   };
 
   const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
@@ -95,6 +121,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         selectionReason: true,
         sortOrder: true,
         syncRunId: true,
+        source: true,
         sharedBy: { select: { id: true, name: true } },
         syncRun: {
           select: {
@@ -108,11 +135,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     prisma.summary.count({ where }),
   ]);
 
-  const itemsAfterSourceType = sourceType
-    ? rawItems.filter((it) => it.syncRun?.source?.sourceType === sourceType)
-    : rawItems;
-
-  const finalItems = itemsAfterSourceType.filter((it) =>
+  const finalItems = rawItems.filter((it) =>
     matchesQuery({
       query: q && q.length > 0 ? q : undefined,
       title: it.title,

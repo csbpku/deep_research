@@ -51,6 +51,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       fetchedTitle: true,
       summaryText: true,
       submitterId: true,
+      contentSha256: true,
     },
   });
   if (!share) {
@@ -93,7 +94,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           sharedByUserId: share.submitterId,
           status: SUMMARY_STATUS.CANDIDATE,
           tags: [],
-          contentSha256: share.canonicalUrl,
+          // Summary.contentSha256 是 Char(64)；ShareSubmission 已经在 safe_fetch 时算过
+          // contentSha256（同样 Char(64)），这里直接复用。如果 share 还没生成（老数据），置 null。
+          contentSha256: share.contentSha256 ?? null,
           summaryDate: new Date(),
         },
         select: { id: true },

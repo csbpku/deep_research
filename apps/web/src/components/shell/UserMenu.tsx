@@ -86,7 +86,7 @@ export function UserMenu({
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/me/favorites">
+          <Link href="/me?tab=bookmarks">
             <Bookmark />
             我的收藏
           </Link>
@@ -98,7 +98,7 @@ export function UserMenu({
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/me/settings">
+          <Link href="/me?tab=preferences">
             <SettingsIcon />
             个人设置
           </Link>

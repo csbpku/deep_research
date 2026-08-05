@@ -118,6 +118,17 @@ describe('POST /api/imports', () => {
 });
 
 describe('research provenance input', () => {
+  it('accepts null for optional structured fields sent by the create form', () => {
+    const parsed = CreateResearchInput.safeParse({
+      title: 'Manual draft',
+      body: 'Body',
+      background: null,
+      conclusion: null,
+      risks: null,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it('does not accept a client-controlled creationMethod', () => {
     const parsed = CreateResearchInput.safeParse({
       title: 'Manual draft',

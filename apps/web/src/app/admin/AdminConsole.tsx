@@ -16,7 +16,8 @@ import {
   Lightbulb,
   Link2,
   MessageSquare,
-  Settings as SettingsIcon,
+  Newspaper,
+  RefreshCw,
   User,
   Radar as RadarIcon,
   ShieldCheck,
@@ -34,12 +35,11 @@ import { AdminActionDialog, type AdminActionValues } from '@/components/admin/Ad
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 
-type Tab = 'dashboard' | 'radar' | 'shares' | 'comments' | 'users' | 'settings';
+type Tab = 'dashboard' | 'radar' | 'shares' | 'comments' | 'users';
 
 const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'dashboard', label: '仪表板', icon: ShieldCheck },
@@ -47,7 +47,6 @@ const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'shares', label: '用户分享', icon: Link2 },
   { key: 'comments', label: '评论提名', icon: Lightbulb },
   { key: 'users', label: '成员', icon: User },
-  { key: 'settings', label: '设置', icon: SettingsIcon },
 ];
 
 interface DashboardData {
@@ -65,6 +64,13 @@ interface DashboardData {
       errorCode: string | null;
     };
     failedRunsLast24h: number;
+    recentFailures: Array<{
+      id: string;
+      source: { name: string; sourceType: string } | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      createdAt: string;
+    }>;
   };
   generatedAt: string;
 }
@@ -168,7 +174,6 @@ export default function AdminConsole() {
         {tab === 'shares' && <SharesTab />}
         {tab === 'comments' && <CommentsTab />}
         {tab === 'users' && <UsersTab />}
-        {tab === 'settings' && <SettingsTab />}
       </div>
     </div>
   );
@@ -222,6 +227,8 @@ function QueueSkeleton() {
 // ──────────────────────────────────────────────────────────────────────
 
 function DashboardTab() {
+  const queryClient = useQueryClient();
+  const [radarActionMessage, setRadarActionMessage] = useState('');
   const q = useQuery<DashboardData>({
     queryKey: ['admin-dashboard'],
     queryFn: async () => {
@@ -231,6 +238,42 @@ function DashboardTab() {
     },
     refetchInterval: 30_000,
   });
+  const syncMut = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/admin/radar/sync', { method: 'POST' });
+      if (response.status === 409) {
+        throw new Error('已有同步任务进行中，请等待完成后再试');
+      }
+      if (!response.ok) throw new Error('同步任务提交失败');
+      return response.json();
+    },
+    onSuccess: () => {
+      setRadarActionMessage('雷达同步已提交，完成后将自动生成日报');
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
+    onError: (error) => {
+      setRadarActionMessage((error as Error).message);
+    },
+  });
+  const digestMut = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/admin/radar/digest', { method: 'POST' });
+      if (response.status === 409) {
+        throw new Error('已有同步任务进行中，请等待完成后再试');
+      }
+      if (!response.ok) throw new Error('日报任务提交失败');
+      return response.json();
+    },
+    onSuccess: () => {
+      setRadarActionMessage('今日日报重新生成任务已提交');
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
+    onError: (error) => {
+      setRadarActionMessage((error as Error).message);
+    },
+  });
+
+  const syncInFlight = q.data?.radar.lastSync?.status === 'running';
 
   if (q.isLoading) {
     return (
@@ -294,10 +337,34 @@ function DashboardTab() {
       </div>
 
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
-          <RadarIcon className="size-4 text-muted-foreground" />
-          雷达同步状态
-        </h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+            <RadarIcon className="size-4 text-muted-foreground" />
+            雷达同步状态
+          </h2>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={syncMut.isPending || digestMut.isPending || syncInFlight}
+              onClick={() => syncMut.mutate()}
+            >
+              <RefreshCw className={cn('size-4', syncMut.isPending && 'animate-spin')} />
+              重新同步
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={syncMut.isPending || digestMut.isPending || syncInFlight}
+              onClick={() => digestMut.mutate()}
+            >
+              <Newspaper className={cn('size-4', digestMut.isPending && 'animate-pulse')} />
+              重新生成日报
+            </Button>
+          </div>
+        </div>
         {d.radar.lastSync ? (
           <div className="space-y-1 text-sm text-muted-foreground">
             <p>
@@ -330,10 +397,44 @@ function DashboardTab() {
                 {d.radar.failedRunsLast24h}
               </strong>
             </p>
+            {d.radar.recentFailures.length > 0 ? (
+              <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                <p className="font-medium text-foreground">最近失败来源</p>
+                <ul className="mt-2 grid list-none gap-2 p-0 text-xs">
+                  {d.radar.recentFailures.map((failure) => (
+                    <li key={failure.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <strong className="font-medium text-foreground">
+                        {failure.source?.name ?? '未知源'}
+                      </strong>
+                      <span>{formatSourceType(failure.source?.sourceType).short}</span>
+                      <code className="rounded bg-muted px-1 py-0.5 text-destructive">
+                        {failure.errorCode ?? 'UNKNOWN'}
+                      </code>
+                      <time dateTime={failure.createdAt}>
+                        {new Date(failure.createdAt).toLocaleString('zh-CN')}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  连接、限流和配置问题需要分别处理；重新同步前先确认对应上游可用。
+                </p>
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">暂无同步记录</p>
         )}
+        {radarActionMessage ? (
+          <p className="mt-3 text-xs text-muted-foreground" aria-live="polite">
+            {radarActionMessage}
+          </p>
+        ) : null}
+        {syncInFlight ? (
+          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300" aria-live="polite">
+            ⏳ 当前有同步任务进行中，按钮已禁用；dashboard 每 30s 自动刷新。
+          </p>
+        ) : null}
       </section>
 
       <p className="mt-4 text-xs text-muted-foreground">
@@ -426,7 +527,7 @@ function RadarTab() {
             <Card className="transition-colors duration-200 hover:border-primary/40">
               <CardContent className="p-3">
                 <Link
-                  href={`/admin/radar/${it.id}`}
+                  href={`/radar/${it.id}`}
                   className="block text-sm font-medium hover:text-primary hover:underline"
                 >
                   {it.title}
@@ -829,9 +930,20 @@ function CommentsTab() {
 // 成员
 // ──────────────────────────────────────────────────────────────────────
 
-interface UserListResponse { items: Array<{ id: string; email: string; name: string; role: 'admin' | 'member'; createdAt: string; disabledAt: string | null }> }
+interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'admin' | 'member';
+  createdAt: string;
+  disabledAt: string | null;
+}
+
+interface UserListResponse { items: AdminUser[] }
 
 function UsersTab() {
+  const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<string | null>(null);
   const q = useQuery<UserListResponse>({
     queryKey: ['admin-users'],
     queryFn: async () => {
@@ -840,71 +952,120 @@ function UsersTab() {
       return r.json();
     },
   });
+
+  const updateMut = useMutation({
+    mutationFn: async (input: { id: string; body: { role?: 'admin' | 'member'; disabled?: boolean } }) => {
+      const r = await fetch(`/api/admin/users/${input.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input.body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const code = (data as { code?: string }).code;
+        const msg = (data as { message?: string }).message ?? '操作失败';
+        throw new Error(code ? `${code}: ${msg}` : msg);
+      }
+      return data as { ok: boolean; action?: string; noop?: boolean };
+    },
+    onSuccess: (res) => {
+      setActionError(null);
+      if (!res.noop) {
+        queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+        queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+      }
+    },
+    onError: (err) => setActionError((err as Error).message),
+  });
+
   if (q.isLoading) return <QueueSkeleton />;
   if (q.isError) return <p className="text-sm text-destructive">{(q.error as Error).message}</p>;
   const items = q.data?.items ?? [];
   if (items.length === 0) return <EmptyState title="还没有成员" description="成员由 SSO / 邀请注册后自动加入。" />;
   return (
-    <Card>
-      <CardContent className="p-0">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="px-4 py-2.5 font-medium">姓名</th>
-              <th className="px-4 py-2.5 font-medium">邮箱</th>
-              <th className="px-4 py-2.5 font-medium">角色</th>
-              <th className="px-4 py-2.5 font-medium">状态</th>
-              <th className="px-4 py-2.5 font-medium">加入时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((u) => (
-              <tr key={u.id} className="border-t border-border transition-colors hover:bg-muted/30">
-                <td className="px-4 py-2.5">{u.name || '—'}</td>
-                <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{u.email}</td>
-                <td className="px-4 py-2.5"><Badge variant={u.role === 'admin' ? 'destructive' : 'secondary'}>{u.role === 'admin' ? '管理员' : '成员'}</Badge></td>
-                <td className="px-4 py-2.5 text-xs text-muted-foreground">{u.disabledAt ? '已禁用' : '正常'}</td>
-                <td className="px-4 py-2.5 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString('zh-CN')}</td>
+    <div>
+      {actionError ? (
+        <p className="mb-2 text-xs text-destructive" role="alert">操作失败：{actionError}</p>
+      ) : null}
+      <Card>
+        <CardContent className="p-0">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="px-4 py-2.5 font-medium">姓名</th>
+                <th className="px-4 py-2.5 font-medium">邮箱</th>
+                <th className="px-4 py-2.5 font-medium">角色</th>
+                <th className="px-4 py-2.5 font-medium">状态</th>
+                <th className="px-4 py-2.5 font-medium">加入时间</th>
+                <th className="px-4 py-2.5 font-medium text-right">操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// 设置（占位，Phase 1 暂不开放编辑）
-// ──────────────────────────────────────────────────────────────────────
-
-const SETTINGS_FIELDS = [
-  { id: 'share_daily_cap', label: '分享每日上限', desc: '每位成员每 24h 可提交分享的最大数量。', default: 5, suffix: '次/日' },
-  { id: 'ai_budget', label: 'AI 调研预算', desc: '单个 AI 调研任务的硬性成本上限。', default: 200, suffix: '美分' },
-  { id: 'score_threshold', label: '雷达打分阈值', desc: '候选进入精选池所需的最低分。', default: 60, suffix: '分' },
-] as const;
-
-function SettingsTab() {
-  const [values, setValues] = useState<Record<string, number>>(() => Object.fromEntries(SETTINGS_FIELDS.map((f) => [f.id, f.default])));
-  return (
-    <div className="grid gap-3">
-      <div className="rounded-md border border-amber-300/40 bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-        Phase 1 阶段设置项仅展示，不可保存；待 P2 阶段开放编辑。
-      </div>
-      {SETTINGS_FIELDS.map((f) => (
-        <Card key={f.id}>
-          <CardContent className="grid gap-2 p-4 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-            <div>
-              <p className="text-sm font-medium">{f.label}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">{f.desc}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Input type="number" value={values[f.id]} disabled onChange={() => undefined} className="w-24 text-right" />
-              <span className="text-xs text-muted-foreground">{f.suffix}</span>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+            </thead>
+            <tbody>
+              {items.map((u) => {
+                const isAdmin = u.role === 'admin';
+                const isDisabled = !!u.disabledAt;
+                return (
+                  <tr key={u.id} className="border-t border-border transition-colors hover:bg-muted/30">
+                    <td className="px-4 py-2.5">{u.name || '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{u.email}</td>
+                    <td className="px-4 py-2.5"><Badge variant={isAdmin ? 'destructive' : 'secondary'}>{isAdmin ? '管理员' : '成员'}</Badge></td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{isDisabled ? '已禁用' : '正常'}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString('zh-CN')}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex justify-end gap-1.5">
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={updateMut.isPending || (isAdmin && !isDisabled)}
+                          onClick={() => updateMut.mutate({ id: u.id, body: { role: 'admin' } })}
+                        >
+                          <ShieldCheck className="size-3" />
+                          设为管理员
+                        </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={updateMut.isPending || (!isAdmin && !isDisabled)}
+                          onClick={() => updateMut.mutate({ id: u.id, body: { role: 'member' } })}
+                        >
+                          降为成员
+                        </Button>
+                        {isDisabled ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            disabled={updateMut.isPending}
+                            onClick={() => updateMut.mutate({ id: u.id, body: { disabled: false } })}
+                          >
+                            恢复
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            className="text-destructive"
+                            disabled={updateMut.isPending}
+                            onClick={() => updateMut.mutate({ id: u.id, body: { disabled: true } })}
+                          >
+                            禁用
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+      <p className="mt-2 text-xs text-muted-foreground">
+        所有变更落 admin_actions 审计日志；最后一个 active admin 不能降级或禁用。
+      </p>
     </div>
   );
 }

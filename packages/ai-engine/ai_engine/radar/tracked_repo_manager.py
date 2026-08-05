@@ -149,13 +149,21 @@ async def _latest_run_id_for_source(pool: Any, source_type: str) -> str | None:
 async def run_tracked_repo_postprocessing(
     pool: Any,
     recent_run_ids: dict[str, str] | None = None,
+    *,
+    fallback_to_latest: bool = True,
 ) -> dict[str, int]:
     result: dict[str, int] = {}
-    trending_run_id = (recent_run_ids or {}).get("github_trending") or \
-        await _latest_run_id_for_source(pool, "github_trending")
+    trending_run_id = (recent_run_ids or {}).get("github_trending")
+    if trending_run_id is None and fallback_to_latest:
+        trending_run_id = await _latest_run_id_for_source(
+            pool, "github_trending"
+        )
     result["signals"] = await _record_signals_from_run(pool, trending_run_id) if trending_run_id else 0
-    tracked_run_id = (recent_run_ids or {}).get("github_tracked") or \
-        await _latest_run_id_for_source(pool, "github_tracked")
+    tracked_run_id = (recent_run_ids or {}).get("github_tracked")
+    if tracked_run_id is None and fallback_to_latest:
+        tracked_run_id = await _latest_run_id_for_source(
+            pool, "github_tracked"
+        )
     result["activity_updated"] = await _update_activity_from_run(pool, tracked_run_id) if tracked_run_id else 0
     result["archived"] = await auto_archive_inactive(pool)
     result["promoted"] = await auto_promote_from_signals(pool)

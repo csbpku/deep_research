@@ -194,6 +194,26 @@ async def test_run_one_available_job_picks_and_completes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summary_brief_persists_inline_output_without_draft() -> None:
+    store = InMemoryJobStore()
+    adapter = FakeAdapter(default_mode="success", sources_per_job=0)
+    snap = make_job_snapshot(report_type="summary_brief")
+    await store.enqueue(snap)
+
+    outcome = await run_one_available_job(store=store, adapter=adapter)
+
+    assert outcome is not None
+    assert outcome.final_status == AI_JOB_STATUS["SUCCEEDED"]
+    assert outcome.draft_research_id is None
+    assert outcome.output_text
+    row = store.get_row(snap.job_id)
+    assert row is not None
+    assert row.snapshot.status == AI_JOB_STATUS["SUCCEEDED"]
+    assert row.draft_research_id is None
+    assert row.output_text == outcome.output_text
+
+
+@pytest.mark.asyncio
 async def test_run_one_available_job_returns_none_on_empty_queue() -> None:
     store = InMemoryJobStore()
     adapter = FakeAdapter()

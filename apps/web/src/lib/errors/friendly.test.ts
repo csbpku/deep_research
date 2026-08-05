@@ -34,6 +34,9 @@ describe('friendlyError', () => {
     expect(
       friendlyMessage({ code: ERROR_CODES.IMPORT_FILE_TOO_LARGE })
     ).toMatch(/文件过大/);
+    expect(
+      friendlyMessage({ code: ERROR_CODES.UPSTREAM_RATE_LIMITED })
+    ).toMatch(/上游服务限流/);
   });
 });
 

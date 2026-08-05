@@ -22,6 +22,7 @@ Design points:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import hashlib
 import logging
@@ -35,6 +36,7 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 
 from ai_engine.fetcher.safe_fetch import safe_fetch
+from ai_engine.llm.client import generate_text
 
 logger = logging.getLogger("ai_engine.radar.enrichment_worker")
 
@@ -974,7 +976,12 @@ def _parse_arxiv_pdf(
                     authors.append(clean)
         # De-duplicate while preserving order (some PDFs repeat author list in footnote)
         seen: set[str] = set()
-        authors = [a for a in authors if not (a in seen or seen.add(a))]
+        unique_authors: list[str] = []
+        for author in authors:
+            if author not in seen:
+                seen.add(author)
+                unique_authors.append(author)
+        authors = unique_authors
 
     # ── Figures: walk pages, collect image refs + nearby captions ──
     for page_idx, page in enumerate(doc):
@@ -994,8 +1001,9 @@ def _parse_arxiv_pdf(
             m = _re.match(r"^(Figure\s+\d+)\b", text, flags=_re.IGNORECASE)
             if m:
                 # Use block_no as a crude key; just keep first caption per figure number
-                fig_num = _re.search(r"\d+", m.group(1)).group(0)
-                figure_captions.setdefault(int(fig_num), text[:200])
+                number_match = _re.search(r"\d+", m.group(1))
+                if number_match:
+                    figure_captions.setdefault(int(number_match.group(0)), text[:200])
         for img_idx in range(len(images)):
             fig_num = img_idx + 1
             figures.append({
@@ -1012,15 +1020,15 @@ def _parse_arxiv_pdf(
         blocks = page.get_text("dict")["blocks"]
         for b in blocks:
             for line in b.get("lines", []):
-                text_parts: list[str] = []
+                page_text_parts: list[str] = []
                 line_size = 0.0
                 for span in line.get("spans", []):
                     s = span.get("text", "")
                     if not s.strip():
                         continue
-                    text_parts.append(s)
+                    page_text_parts.append(s)
                     line_size = max(line_size, span.get("size", 0))
-                line_text = "".join(text_parts).strip()
+                line_text = "".join(page_text_parts).strip()
                 if not line_text:
                     continue
                 clean = _strip_latex_commands(line_text)
@@ -1068,28 +1076,10 @@ async def _generate_arxiv_analysis(
 
     Returns None on failure; caller falls back to existing interpretation.
     """
-    try:
-        from anthropic import AsyncAnthropic
-        import json as _json
-    except ImportError as exc:
-        logger.warning(
-            "ai-engine.radar.enrichment.arxiv_analysis_import_error",
-            extra={"error": str(exc)[:200]},
-        )
-        return None
+    import json as _json
 
     # Resolve brief LLM model from env (same as _run_brief).
     llm_spec = os.environ.get("BRIEF_LLM") or os.environ.get("SMART_LLM") or "anthropic:claude-haiku-4-5"
-    _, _, model_name = llm_spec.partition(":")
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY_HEAVY", "")
-    base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL_HEAVY")
-
-    # The Anthropic SDK rejects placeholder API keys (e.g. "local-cc-switch")
-    # at the SDK layer before sending. cc-switch does NOT validate the key,
-    # so we substitute a non-empty string when the configured value is a
-    # known placeholder. Mirrors the workaround in scripts/radar_source_smoke.py.
-    if api_key.startswith("local-"):
-        api_key = "sk-placeholder-for-cc-switch"
 
     # System + user prompt borrowed from daily-arXiv-ai-enhanced's
     # `ai/system.txt` ("professional paper analyst, concise, terminology")
@@ -1116,22 +1106,14 @@ async def _generate_arxiv_analysis(
     )
 
     try:
-        client = AsyncAnthropic(api_key=api_key, base_url=base_url)
-        # cc-switch proxies MiniMax-M2.7 which uses extended thinking by
-        # default; budget must be high enough that the model can finish
-        # thinking AND emit a text block. 4096 covers 5 short fields.
-        message = await client.messages.create(
-            model=model_name,
+        result = await generate_text(
+            llm_spec=llm_spec,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            disable_thinking=True,
         )
-        body_parts = [
-            block.text
-            for block in message.content
-            if getattr(block, "type", None) == "text" and hasattr(block, "text")
-        ]
-        text = "".join(body_parts).strip()
+        text = result.text
         if not text:
             logger.warning(
                 "ai-engine.radar.enrichment.arxiv_analysis_empty",
@@ -1198,17 +1180,7 @@ async def _generate_repo_summary(
     Returns a single paragraph of ~500 chars (Chinese), or None on
     failure.
     """
-    try:
-        from anthropic import AsyncAnthropic
-    except ImportError:
-        return None
-
     llm_spec = os.environ.get("BRIEF_LLM") or os.environ.get("SMART_LLM") or "anthropic:claude-haiku-4-5"
-    _, _, model_name = llm_spec.partition(":")
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY_HEAVY", "")
-    base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL_HEAVY")
-    if api_key.startswith("local-"):
-        api_key = "sk-placeholder-for-cc-switch"
 
     key_files = key_files or {}
     src_fragments: list[str] = []
@@ -1236,30 +1208,19 @@ async def _generate_repo_summary(
     )
 
     try:
-        client = AsyncAnthropic(api_key=api_key, base_url=base_url)
-        message = await client.messages.create(
-            model=model_name,
+        result = await generate_text(
+            llm_spec=llm_spec,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            disable_thinking=True,
         )
-        body_parts = [
-            block.text
-            for block in message.content
-            if getattr(block, "type", None) == "text" and hasattr(block, "text")
-        ]
-        text = "".join(body_parts).strip()
+        text = result.text
         if not text:
             return None
         return text[:2000]
     except Exception:
         return None
-
-
-async def _unused_old_generate_repo_modules(*args, **kwargs):  # noqa: ARG001
-    pass
-
-
 
 async def enrich_arxiv_candidate(
     pool: Any,
@@ -1397,6 +1358,8 @@ async def run_enrichment_for_pending(
     *,
     limit: int = 50,
     source_kinds: tuple[str, ...] = DEFAULT_ENRICHMENT_KINDS,
+    sync_run_ids: tuple[str, ...] | None = None,
+    concurrency: int | None = None,
 ) -> int:
     """Find candidates that need enrichment and process them.
 
@@ -1411,6 +1374,12 @@ async def run_enrichment_for_pending(
     Returns count of successfully enriched rows.
     """
     placeholders = ",".join(["%s"] * len(source_kinds))
+    run_filter = ""
+    params: tuple[Any, ...] = (*source_kinds,)
+    if sync_run_ids:
+        run_placeholders = ",".join(["%s"] * len(sync_run_ids))
+        run_filter = f'AND "syncRunId" IN ({run_placeholders}) '
+        params = (*params, *sync_run_ids)
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
@@ -1418,8 +1387,9 @@ async def run_enrichment_for_pending(
                 f'WHERE "originalKind" IN ({placeholders}) '
                 'AND "originalMeta" IS NULL '
                 'AND "syncRunId" IS NOT NULL '
+                f"{run_filter}"
                 'ORDER BY "createdAt" DESC LIMIT %s',
-                (*source_kinds, limit),
+                (*params, limit),
             )
         ).fetchall()
     candidates = [
@@ -1429,39 +1399,50 @@ async def run_enrichment_for_pending(
     if not candidates:
         return 0
 
-    succeeded = 0
-    for summary_id, url, kind in candidates:
-        try:
-            payload: dict[str, Any] | None = None
-            if kind == "github_repo":
-                payload = await enrich_github_candidate(
-                    pool, summary_id=summary_id, canonical_url=url,
+    enrichment_concurrency = max(
+        1,
+        concurrency
+        or int(os.environ.get("RADAR_ENRICHMENT_CONCURRENCY", "2")),
+    )
+    semaphore = asyncio.Semaphore(enrichment_concurrency)
+
+    async def _enrich_one(summary_id: str, url: str, kind: str) -> bool:
+        async with semaphore:
+            try:
+                payload: dict[str, Any] | None = None
+                if kind == "github_repo":
+                    payload = await enrich_github_candidate(
+                        pool, summary_id=summary_id, canonical_url=url,
+                    )
+                elif kind == "arxiv":
+                    payload = await enrich_arxiv_candidate(
+                        pool, summary_id=summary_id, canonical_url=url,
+                    )
+                elif kind in ("github_other", "github_release"):
+                    payload = await enrich_github_item_candidate(
+                        pool, summary_id=summary_id, canonical_url=url,
+                    )
+                elif kind in ("rss", "web_share"):
+                    payload = await enrich_web_candidate(
+                        pool, summary_id=summary_id, canonical_url=url,
+                    )
+                return bool(payload)
+            except Exception as exc:
+                logger.warning(
+                    "ai-engine.radar.enrichment.candidate_exception",
+                    extra={
+                        "summary_id": summary_id,
+                        "url": url,
+                        "kind": kind,
+                        "error": type(exc).__name__,
+                    },
                 )
-            elif kind == "arxiv":
-                payload = await enrich_arxiv_candidate(
-                    pool, summary_id=summary_id, canonical_url=url,
-                )
-            elif kind in ("github_other", "github_release"):
-                payload = await enrich_github_item_candidate(
-                    pool, summary_id=summary_id, canonical_url=url,
-                )
-            elif kind in ("rss", "web_share"):
-                payload = await enrich_web_candidate(
-                    pool, summary_id=summary_id, canonical_url=url,
-                )
-            if payload:
-                succeeded += 1
-        except Exception as exc:
-            logger.warning(
-                "ai-engine.radar.enrichment.candidate_exception",
-                extra={
-                    "summary_id": summary_id,
-                    "url": url,
-                    "kind": kind,
-                    "error": type(exc).__name__,
-                },
-            )
-    return succeeded
+                return False
+
+    outcomes = await asyncio.gather(
+        *(_enrich_one(summary_id, url, kind) for summary_id, url, kind in candidates)
+    )
+    return sum(outcomes)
 
 
 async def _generate_web_highlights(
@@ -1476,19 +1457,23 @@ async def _generate_web_highlights(
 
     Returns None on failure; caller silently falls back.
     """
-    try:
-        from anthropic import AsyncAnthropic
-        import json as _json
-    except ImportError:
-        return None
+    import json as _json
+
+    def _clip(value: Any, limit: int, *, sentence: bool = False) -> str:
+        """Keep generated text readable when the model exceeds its limit."""
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        clipped = text[:limit]
+        if sentence:
+            boundaries = [clipped.rfind(mark) for mark in (".", "!", "?", "。", "！", "？")]
+            boundary = max(boundaries)
+            if boundary >= max(40, limit // 2):
+                return clipped[: boundary + 1].strip()
+        boundary = clipped.rfind(" ")
+        return clipped[:boundary if boundary >= limit // 2 else limit].rstrip(" ,;:-")
 
     llm_spec = os.environ.get("BRIEF_LLM") or os.environ.get("SMART_LLM") or "anthropic:claude-haiku-4-5"
-    _, _, model_name = llm_spec.partition(":")
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY_HEAVY", "")
-    base_url = os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL_HEAVY")
-
-    if api_key.startswith("local-"):
-        api_key = "sk-placeholder-for-cc-switch"
 
     system_prompt = (
         "You are a professional article analyst. "
@@ -1508,19 +1493,14 @@ async def _generate_web_highlights(
     )
 
     try:
-        client = AsyncAnthropic(api_key=api_key, base_url=base_url)
-        message = await client.messages.create(
-            model=model_name,
+        result = await generate_text(
+            llm_spec=llm_spec,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            disable_thinking=True,
         )
-        body_parts = [
-            block.text
-            for block in message.content
-            if getattr(block, "type", None) == "text" and hasattr(block, "text")
-        ]
-        body = "".join(body_parts).strip()
+        body = result.text
         # Extract JSON from response (handle potential markdown fences)
         if "```json" in body:
             body = body.split("```json", 1)[1]
@@ -1534,9 +1514,9 @@ async def _generate_web_highlights(
         if not isinstance(parsed, dict):
             return None
         return {
-            "summary": str(parsed.get("summary", ""))[:300],
-            "highlights": [str(h)[:150] for h in (parsed.get("highlights") or [])][:5],
-            "key_quote": str(parsed.get("key_quote") or "")[:300] or None,
+            "summary": _clip(parsed.get("summary", ""), 300, sentence=True),
+            "highlights": [_clip(h, 150, sentence=True) for h in (parsed.get("highlights") or [])][:5],
+            "key_quote": _clip(parsed.get("key_quote"), 300, sentence=True) or None,
         }
     except Exception as exc:
         logger.debug(

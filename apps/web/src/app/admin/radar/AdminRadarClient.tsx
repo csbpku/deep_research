@@ -6,10 +6,11 @@
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { RefreshCw, Workflow, X } from 'lucide-react';
+import { Workflow, X } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
+import { AddRadarCandidateDialog } from '@/components/radar/AddRadarCandidateDialog';
 import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 import { FilterBar } from '@/components/domain/FilterBar';
 import { PageHeader } from '@/components/domain/PageHeader';
@@ -120,24 +121,6 @@ export default function AdminRadarClient() {
     },
   });
 
-  const retryMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const r = await fetch(`/api/admin/radar/${id}/retry-interpretation`, { method: 'POST' });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error((body as { message?: string }).message ?? '重试失败');
-      }
-      return r.json();
-    },
-    onSuccess: () => {
-      setActionErr(null);
-      void queryClient.invalidateQueries({ queryKey: ['adminRadar'] });
-    },
-    onError: (e) => {
-      setActionErr(e instanceof Error ? e.message : '重试失败');
-    },
-  });
-
   const createResearchMutation = useMutation({
     mutationFn: async (id: string) => {
       const r = await fetch(`/api/admin/radar/${id}/create-research`, { method: 'POST' });
@@ -164,7 +147,8 @@ export default function AdminRadarClient() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="Admin · 雷达队列"
-        description="候选状态切换：创建 AI 调研 / 忽略 / 重试解读。所有操作会写入 admin_actions 审计。"
+        description="审核候选并创建 AI 调研或忽略；所有操作会写入 admin_actions 审计。"
+        actions={<AddRadarCandidateDialog />}
       />
 
       <FilterBar
@@ -258,16 +242,6 @@ export default function AdminRadarClient() {
                       忽略
                     </Button>
                   ) : null}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    onClick={() => retryMutation.mutate(it.id)}
-                    disabled={retryMutation.isPending}
-                  >
-                    <RefreshCw />
-                    重试解读
-                  </Button>
                 </div>
               }
             />

@@ -37,9 +37,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
   const existing = await prisma.summary.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, source: true, syncRunId: true, status: true },
+    select: {
+      id: true,
+      source: true,
+      syncRunId: true,
+      status: true,
+      shareSource: { select: { status: true } },
+    },
   });
-  if (!existing || existing.source !== 'daily' || existing.syncRunId === null) {
+  const isAutomaticRadar = existing?.source === 'daily' && existing.syncRunId !== null;
+  const isApprovedShare = existing?.source === 'user' && existing.shareSource?.status === 'approved';
+  if (!existing || (!isAutomaticRadar && !isApprovedShare)) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',

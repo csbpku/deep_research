@@ -39,6 +39,14 @@ import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useUnsavedGuard } from '@/lib/editor/use-unsaved-guard';
 import { useAutoSave } from '@/lib/editor/use-auto-save';
 
@@ -86,6 +94,7 @@ export default function EditorPage() {
   const [tagsInput, setTagsInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState(() =>
     draftSnapshot({ title: '', body: '', background: '', conclusion: '', risks: '', tagsInput: '' }),
   );
@@ -271,9 +280,14 @@ export default function EditorPage() {
       }
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['researches'] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['researches'] }),
+        queryClient.invalidateQueries({ queryKey: ['research', existing?.id] }),
+      ]);
+      allowNext();
       router.push(`/researches/${existing?.id}`);
+      router.refresh();
     },
     onError: (e: Error) => {
       setError(e.message);
@@ -330,7 +344,7 @@ export default function EditorPage() {
             {saving ? '保存中…' : '保存草稿'}
           </Button>
           {existing && existing.status === 'draft' && (
-            <Button type="button" size="sm" onClick={handlePublish} disabled={publishDisabled}>
+            <Button type="button" size="sm" onClick={() => setPublishConfirmOpen(true)} disabled={publishDisabled}>
               <Send />
               {existing.creationMethod === 'ai_research' && !hasAiDraftChanges
                 ? '修改后发布'
@@ -500,6 +514,31 @@ export default function EditorPage() {
           </div>
         </aside>
       </div>
+      <Dialog open={publishConfirmOpen} onOpenChange={setPublishConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认发布调研？</DialogTitle>
+            <DialogDescription>
+              发布后团队成员可以阅读和评论。请确认结论、证据和风险已核对。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPublishConfirmOpen(false)}>
+              继续编辑
+            </Button>
+            <Button
+              type="button"
+              disabled={publishMutation.isPending}
+              onClick={async () => {
+                await handlePublish();
+                setPublishConfirmOpen(false);
+              }}
+            >
+              <Send />{publishMutation.isPending ? '发布中…' : '确认发布'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {confirmDialog}
     </div>
   );

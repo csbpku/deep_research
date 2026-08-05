@@ -63,10 +63,8 @@ def test_safe_error_code_maps_arxiv_timeout_to_worker_timeout() -> None:
     assert _safe_error_code(RuntimeError("arxiv_timeout:ConnectTimeout")) == "WORKER_TIMEOUT"
 
 
-def test_safe_error_code_maps_arxiv_rate_limited_to_too_large() -> None:
-    # 429 from arxiv → we use URL_FETCH_TOO_LARGE as the closest
-    # pre-existing rate-limit-style code. Pinning this prevents drift.
-    assert _safe_error_code(RuntimeError("arxiv_rate_limited:429")) == "URL_FETCH_TOO_LARGE"
+def test_safe_error_code_maps_arxiv_rate_limited() -> None:
+    assert _safe_error_code(RuntimeError("arxiv_rate_limited:429")) == "UPSTREAM_RATE_LIMITED"
 
 
 def test_safe_error_code_maps_arxiv_network_to_blocked() -> None:

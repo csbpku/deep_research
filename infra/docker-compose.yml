@@ -60,13 +60,17 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/deep_research
       AI_ENGINE_URL: http://ai-engine:4000
+      IMPORT_TEMP_DIR: /data/import-tmp
       NODE_ENV: production
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set in .env}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:?set in .env}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?set in .env}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,10 +94,11 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/deep_research
       JOB_RUNNER_BACKEND: db
-      AI_ENGINE_ADAPTER: gpt_researcher
-      SMART_LLM: ${SMART_LLM:-anthropic:claude-haiku-4-5@20251001}
+      AI_ENGINE_ADAPTER: ${AI_ENGINE_ADAPTER:-gpt_researcher}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?set in .env}
+      SMART_LLM: ${SMART_LLM:-anthropic:deepseek-v4-pro}
       FAST_LLM: ${FAST_LLM:-anthropic:deepseek-v4-flash}
-      STRATEGIC_LLM: ${STRATEGIC_LLM:-anthropic:claude-haiku-4-5@20251001}
+      STRATEGIC_LLM: ${STRATEGIC_LLM:-anthropic:deepseek-v4-pro}
       BRIEF_LLM: ${BRIEF_LLM:-anthropic:deepseek-v4-flash}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       RETRIEVER: ${RETRIEVER:-tavily}
@@ -102,6 +107,10 @@ services:
       # Heavy tier (Shopee compass gateway) — optional, falls back to light.
       ANTHROPIC_API_KEY_HEAVY: ${ANTHROPIC_API_KEY_HEAVY:-}
       ANTHROPIC_BASE_URL_HEAVY: ${ANTHROPIC_BASE_URL_HEAVY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY_HEAVY: ${OPENAI_API_KEY_HEAVY:-}
+      OPENAI_BASE_URL_HEAVY: ${OPENAI_BASE_URL_HEAVY:-}
       # Radar 源 token（缺失时对应源快速失败，不影响其他源）
       GH_TOKEN: ${GH_TOKEN:-}
       PRODUCTHUNT_API_TOKEN: ${PRODUCTHUNT_API_TOKEN:-}
@@ -113,16 +122,26 @@ services:
       WORKER_HEARTBEAT_SECONDS: "15"
       WORKER_MAX_RETRIES: "3"
       WORKER_REAPER_INTERVAL_SECONDS: "30"
+      DB_POOL_MIN_SIZE: ${DB_POOL_MIN_SIZE:-2}
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
+      RADAR_SOURCE_CONCURRENCY: ${RADAR_SOURCE_CONCURRENCY:-5}
+      RADAR_CANDIDATE_CONCURRENCY: ${RADAR_CANDIDATE_CONCURRENCY:-3}
+      RADAR_LLM_CONCURRENCY: ${RADAR_LLM_CONCURRENCY:-8}
+      RADAR_SCORING_CONCURRENCY: ${RADAR_SCORING_CONCURRENCY:-8}
+      RADAR_ENRICHMENT_CONCURRENCY: ${RADAR_ENRICHMENT_CONCURRENCY:-2}
       URL_FETCH_MAX_BYTES: "2097152"
       URL_FETCH_TIMEOUT_SECONDS: "10"
       URL_FETCH_MAX_REDIRECTS: "3"
+      IMPORT_TEMP_DIR: /data/import-tmp
+      IMPORT_WORKER_ENABLED: "1"
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./logs/ai-engine:/var/log/ai-engine
+      - import-tmp:/data/import-tmp
     # HEALTHCHECK 已写在 Dockerfile 内
 
   nginx:

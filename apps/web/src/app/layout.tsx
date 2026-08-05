@@ -1,31 +1,8 @@
 import type { ReactNode } from 'react';
-import { IBM_Plex_Sans, JetBrains_Mono } from 'next/font/google';
 
 import { Providers } from './providers';
 import { AppShell } from '@/components/shell/AppShell';
 import './globals.css';
-
-/**
- * 字体："Developer Mono" 配对 —— IBM Plex Sans（UI/正文）+ JetBrains Mono（ID/指标/代码）。
- *
- * ⚠️ Plex 没有中文字形，中文必须走 tailwind.config.ts fontFamily 里的系统回退链
- * （PingFang SC / Noto Sans SC / Microsoft YaHei）。
- * ⚠️ next/font/google 在 `next build` 时联网下载并自托管。若内网构建环境无外网，
- * 改用 next/font/local + 把 woff2 放进 src/assets/fonts/。
- */
-const plexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-sans',
-  display: 'swap',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-mono',
-  display: 'swap',
-});
 
 export const metadata = {
   title: '技术调研平台',
@@ -55,11 +32,7 @@ const themeScript = `
  */
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html
-      lang="zh-CN"
-      className={`${plexSans.variable} ${jetbrainsMono.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="zh-CN" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>

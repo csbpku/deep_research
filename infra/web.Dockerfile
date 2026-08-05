@@ -52,6 +52,7 @@ ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
+RUN mkdir -p /data/import-tmp && chown -R nextjs:nodejs /data
 
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next apps/web/.next
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public apps/web/public

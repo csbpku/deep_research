@@ -86,7 +86,11 @@ function QuickAction({
         <Icon className="size-4 shrink-0" />
         <span className="flex flex-col items-start text-left">
           <span className="text-sm font-medium leading-tight">{label}</span>
-          <span className="text-[11px] font-normal leading-tight text-muted-foreground">
+          <span
+            className={`text-[11px] font-normal leading-tight ${
+              primary ? 'text-primary-foreground/80' : 'text-muted-foreground'
+            }`}
+          >
             {desc}
           </span>
         </span>

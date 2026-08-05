@@ -29,12 +29,19 @@ export default defineConfig({
 
   // 串行启动 web（ai-engine 由 dev:ai 单独起；详见 docs/E2E_TESTING.md）
   webServer: {
-    command: 'E2E=1 pnpm dev',
+    command: 'pnpm dev',
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     stdout: 'pipe',
     stderr: 'pipe',
+    env: {
+      E2E: '1',
+      // Auth.js builds callback redirects from NEXTAUTH_URL. Keep it aligned
+      // with Playwright's target so custom/CI ports never redirect into a
+      // different local service.
+      NEXTAUTH_URL: BASE_URL,
+    },
   },
 
   use: {

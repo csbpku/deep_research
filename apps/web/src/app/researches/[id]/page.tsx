@@ -202,7 +202,7 @@ export default function ResearchDetailPage() {
         </TagList>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-5">
         {/* ── 长文布局：background → body → conclusion → risks → research_sources ── */}
         {isLongResearch && (
           <>
@@ -212,9 +212,9 @@ export default function ResearchDetailPage() {
               </SectionCard>
             )}
 
-            <SectionCard title="正文">
+            <article className="py-2 sm:py-3" aria-label="正文">
               <MarkdownContent content={data.body} compact={data.aiAssisted} />
-            </SectionCard>
+            </article>
 
             {data.conclusion && (
               <SectionCard title="结论" tone="success" icon={CheckCircle2}>

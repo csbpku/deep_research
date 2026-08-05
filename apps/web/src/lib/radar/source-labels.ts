@@ -20,6 +20,8 @@ const SOURCE_LABEL_MAP: Record<string, SourceLabel> = {
   github_release: { short: 'GitHub Release', full: 'GitHub Release Notes' },
   github_topic_search: { short: 'GitHub 话题', full: 'GitHub 话题搜索' },
   github_other: { short: 'GitHub 其他', full: 'GitHub 其他来源' },
+  articles: { short: '技术文章', full: 'RSS、工程博客与厂商文章' },
+  community: { short: '社区动态', full: 'Hacker News、Product Hunt 与社区讨论' },
   arxiv: { short: 'arXiv', full: 'arXiv 论文' },
   rss: { short: 'RSS', full: 'RSS / 博客订阅' },
   hackernews: { short: 'Hacker News', full: 'Hacker News 讨论' },
@@ -42,6 +44,8 @@ export function formatSourceType(type: string | null | undefined): SourceLabel {
 /** 给筛选下拉框用：值是后端枚举，label 是中文。 */
 export const SOURCE_TYPE_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'github', label: 'GitHub' },
+  { value: 'articles', label: '技术文章' },
+  { value: 'community', label: '社区动态' },
   { value: 'arxiv', label: 'arXiv' },
   { value: 'rss', label: 'RSS' },
   { value: 'hackernews', label: 'Hacker News' },
@@ -50,4 +54,5 @@ export const SOURCE_TYPE_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: s
   { value: 'devto', label: 'Dev.to' },
   { value: 'vendor_news', label: '厂商新闻' },
   { value: 'lobsters', label: 'Lobste.rs' },
+  { value: 'web_share', label: '用户分享' },
 ];

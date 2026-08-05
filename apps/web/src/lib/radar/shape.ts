@@ -1,6 +1,6 @@
 // 雷达共享 helper —— 把 summary 行为规整到 列表 / 详情 响应。
 //
-// 雷达候选实际存储在 summaries 表（source='daily' 且 syncRunId 非空）。
+// 雷达候选存储在 summaries 表：自动雷达条目 + 已审核用户分享。
 // 这里的 helper 负责：
 //   1. 从 Prisma 行抽取雷达字段
 //   2. 规范化日期格式
@@ -101,6 +101,7 @@ export function shapeCandidate(input: {
     selectionReason: string | null;
     sortOrder: number | null;
     syncRunId: string | null;
+    source?: string;
     originalKind?: string | null;
     originalMarkdown?: string | null;
     originalMeta?: unknown;
@@ -135,7 +136,7 @@ export function shapeCandidate(input: {
     excerpt: excerptOf(s.body, 280),
     body: input.includeBody === false ? null : s.body,
     url: s.url,
-    sourceType: s.syncRun?.source?.sourceType ?? null,
+    sourceType: s.syncRun?.source?.sourceType ?? (s.source === 'user' ? 'web_share' : null),
     syncRunId: s.syncRunId,
     syncDate: s.syncRun?.completedAt
       ? s.syncRun.completedAt.toISOString()
@@ -279,6 +280,11 @@ export function parseDistilledScore(value: unknown): DistilledScore | null {
   const dims = dimensions as Record<string, unknown>;
   const normalized = {
     total: raw.total,
+    effectiveTotal: raw.effectiveTotal ?? raw.effective_total,
+    qualityScore: raw.qualityScore ?? raw.quality_score,
+    teamValueScore: raw.teamValueScore ?? raw.team_value_score,
+    rankingScore: raw.rankingScore ?? raw.ranking_score,
+    sourceBonus: raw.sourceBonus ?? raw.source_bonus,
     tier: raw.tier,
     mustRead: raw.mustRead ?? raw.must_read,
     dimensions: {
@@ -297,6 +303,8 @@ export function parseDistilledScore(value: unknown): DistilledScore | null {
     profileFallback: raw.profileFallback ?? raw.profile_fallback,
     isDefault: raw.isDefault ?? raw.is_default,
     version: raw.version,
+    directRelevance: raw.directRelevance ?? raw.direct_relevance,
+    relevanceEvidence: raw.relevanceEvidence ?? raw.relevance_evidence,
   };
   const legacy = DistilledScoreSchema.safeParse(normalized);
   return legacy.success ? legacy.data : null;

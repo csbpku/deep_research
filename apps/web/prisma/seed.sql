@@ -18,6 +18,10 @@ VALUES
   -- Hacker News via hnrss（纯公开，无需 key）
   ('a0000000-0000-0000-0000-000000000003', 'Hacker News Frontpage', 'rss',
    '{"feedUrl": "https://hnrss.org/frontpage", "maxResults": 20}'::jsonb,
+   true, now()),
+  -- WeWe RSS 微信公众号源（需外部 WeWe RSS 服务监听 localhost:4001）
+  ('a0000000-0000-0000-0000-000000000004', 'WeWe RSS 微信公众号', 'rss',
+   '{"feedUrl": "http://localhost:4001/feeds/all.rss?limit=5", "localPort": 4001, "maxResults": 5, "maxAgeHours": 720, "allowLocalhost": true, "applyAiFilter": false}'::jsonb,
    true, now())
 ON CONFLICT DO NOTHING;
 

@@ -219,16 +219,16 @@ async def run_once(
 
     final_status: AiJobStatus = terminal.status
     draft_id: str | None = None
+    output_text: str | None = None
     sources_tuple: tuple[AdapterSource, ...] = terminal.sources
     if final_status == AI_JOB_STATUS["SUCCEEDED"]:
-        # W2 review 修正:schema CHECK 强制 succeeded 时 draftResearchId NOT NULL
-        # + FK 指向 researches.id。Runner 不再自造 UUID sentinel;改为调
-        # draft_factory 由 caller(adapter / worker / HTTP layer)负责真
-        # INSERT 一条 research row 拿真 id。
-        # 默认 fallback:写 _drafts_for_tests dict 拿 uuid,允许 InMemory 测试路径。
-        # 生产部署必须显式传 draft_factory 直连 DB;这由 caller(server app)在
-        # lifespan 里决定。
-        if draft_factory is None:
+        # research_report persists a private draft; summary_brief persists
+        # inline output on the job and never invokes the draft factory.
+        if not terminal.output_text or not terminal.output_text.strip():
+            raise ValueError("succeeded adapter result has no output_text")
+        if snapshot.report_type == "summary_brief":
+            output_text = terminal.output_text.strip()
+        elif draft_factory is None:
             from ai_engine.job_runner.db_store import _drafts_for_tests
             import uuid as _uuid
             draft_id = str(_uuid.uuid4())
@@ -239,8 +239,6 @@ async def run_once(
                 "via": "default_factory",
             }
         else:
-            if not terminal.output_text:
-                raise ValueError("succeeded adapter result has no output_text")
             draft_id = await draft_factory(snapshot, sources_tuple, terminal.output_text)
             if not draft_id:
                 raise ValueError(
@@ -255,6 +253,7 @@ async def run_once(
         error_code=terminal.error_code,
         error_message=terminal.error_message,
         draft_research_id=draft_id,
+        output_text=output_text,
     )
     hooks.on_terminal(
         lease,
@@ -273,6 +272,7 @@ async def run_once(
         error_code=terminal.error_code,
         error_message=terminal.error_message,
         draft_research_id=draft_id,
+        output_text=output_text,
         field_metadata={
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "search_count": str(terminal.cost.search_count),

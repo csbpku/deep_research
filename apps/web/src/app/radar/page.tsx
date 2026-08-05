@@ -8,11 +8,12 @@
 //  - 分页（Pagination domain component）
 //  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
 
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Search } from 'lucide-react';
+import { LayoutGrid, List, Search } from 'lucide-react';
 
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
+import { ShareUrlDialog } from '@/components/radar/ShareUrlDialog';
 import { FilterBar } from '@/components/domain/FilterBar';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
@@ -82,12 +83,49 @@ const QUALITY_OPTIONS = [
   { value: 'all', label: '全部内容（含噪声）' },
 ];
 
+const RADAR_GROUPS = [
+  {
+    id: 'github',
+    sourceType: 'github',
+    title: 'GitHub 更新',
+    description: '仓库动态、Release 与工程工具',
+  },
+  {
+    id: 'articles',
+    sourceType: 'articles',
+    title: '技术文章',
+    description: '工程实践、厂商博客与深度解读',
+  },
+  {
+    id: 'community',
+    sourceType: 'community',
+    title: '社区动态',
+    description: 'Hacker News、Product Hunt 与社区讨论',
+  },
+  {
+    id: 'arxiv',
+    sourceType: 'arxiv',
+    title: '研究论文',
+    description: '与当前工程方向相关的 arXiv 研究',
+  },
+] as const;
+
+async function fetchRadar(params: URLSearchParams): Promise<RadarListResponse> {
+  const r = await fetch(`/api/radar?${params.toString()}`, { cache: 'no-store' });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ message: '加载失败' }));
+    throw new Error(err.message ?? '加载失败');
+  }
+  return (await r.json()) as RadarListResponse;
+}
+
 export default function RadarPage() {
   const [q, setQ] = useState('');
   const [sourceType, setSourceType] = useState(ALL);
   const [status, setStatus] = useState(ALL);
   const [quality, setQuality] = useState('relevant');
   const [page, setPage] = useState(1);
+  const [view, setView] = useState<'grouped' | 'list'>('grouped');
 
   const query = useQuery<RadarListResponse>({
     queryKey: ['radar', q, sourceType, status, quality, page],
@@ -99,14 +137,28 @@ export default function RadarPage() {
       params.set('quality', quality);
       params.set('page', String(page));
       params.set('per_page', '20');
-      const r = await fetch(`/api/radar?${params.toString()}`, { cache: 'no-store' });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ message: '加载失败' }));
-        throw new Error(err.message ?? '加载失败');
-      }
-      return (await r.json()) as RadarListResponse;
+      return fetchRadar(params);
     },
     placeholderData: (prev) => prev,
+    enabled: view === 'list',
+  });
+
+  const groupedQueries = useQueries({
+    queries: RADAR_GROUPS.map((group) => ({
+      queryKey: ['radar-group', group.id, q, status, quality],
+      queryFn: () => {
+        const params = new URLSearchParams({
+          sourceType: group.sourceType,
+          quality,
+          page: '1',
+          per_page: '5',
+        });
+        if (q) params.set('q', q);
+        if (status !== ALL) params.set('status', status);
+        return fetchRadar(params);
+      },
+      enabled: view === 'grouped',
+    })),
   });
 
   const items = query.data?.items ?? [];
@@ -117,6 +169,33 @@ export default function RadarPage() {
       <PageHeader
         title="技术雷达"
         description="每个条目附带 AI 一句话解读与多维度评分；点击标题进入详情。"
+        actions={(
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-md border border-border p-0.5" aria-label="雷达展示方式">
+              <Button
+                type="button"
+                variant={view === 'grouped' ? 'secondary' : 'ghost'}
+                size="icon-sm"
+                title="分类视图"
+                aria-label="分类视图"
+                onClick={() => setView('grouped')}
+              >
+                <LayoutGrid />
+              </Button>
+              <Button
+                type="button"
+                variant={view === 'list' ? 'secondary' : 'ghost'}
+                size="icon-sm"
+                title="列表视图"
+                aria-label="列表视图"
+                onClick={() => setView('list')}
+              >
+                <List />
+              </Button>
+            </div>
+            <ShareUrlDialog />
+          </div>
+        )}
       />
 
       <FilterBar
@@ -140,7 +219,7 @@ export default function RadarPage() {
           <span>来源</span>
           <Select
             value={sourceType}
-            onValueChange={(v) => { setSourceType(v); setPage(1); }}
+            onValueChange={(v) => { setSourceType(v); setPage(1); setView('list'); }}
           >
             <SelectTrigger className="w-32" aria-label="来源类型筛选">
               <SelectValue />
@@ -193,7 +272,44 @@ export default function RadarPage() {
         </Button>
       </FilterBar>
 
-      {query.isLoading ? (
+      {view === 'grouped' ? (
+        <div className="grid min-w-0 gap-x-6 gap-y-8 xl:grid-cols-2">
+          {RADAR_GROUPS.map((group, index) => {
+            const groupQuery = groupedQueries[index];
+            const groupItems = groupQuery.data?.items ?? [];
+            return (
+              <section key={group.id} className="min-w-0" aria-labelledby={`radar-group-${group.id}`}>
+                <div className="mb-3 flex min-w-0 items-end justify-between gap-3 border-b border-border pb-2">
+                  <div className="min-w-0">
+                    <h2 id={`radar-group-${group.id}`} className="text-base font-semibold">{group.title}</h2>
+                    <p className="truncate text-xs text-muted-foreground">{group.description}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-primary hover:underline"
+                    onClick={() => { setSourceType(group.sourceType); setPage(1); setView('list'); }}
+                  >
+                    查看全部 {groupQuery.data?.total ?? 0}
+                  </button>
+                </div>
+                {groupQuery.isLoading ? (
+                  <div className="grid gap-3">
+                    {[0, 1].map((i) => <Skeleton key={i} className="h-36 w-full" />)}
+                  </div>
+                ) : groupQuery.isError ? (
+                  <p className="py-8 text-sm text-destructive">加载失败</p>
+                ) : groupItems.length === 0 ? (
+                  <p className="py-8 text-sm text-muted-foreground">暂无相关内容</p>
+                ) : (
+                  <div className="grid gap-3">
+                    {groupItems.map((it) => <RadarCandidateCard key={it.id} candidate={it} />)}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      ) : query.isLoading ? (
         <div className="grid min-w-0 gap-3">
           {[0, 1, 2].map((i) => (
             <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-4">
@@ -218,12 +334,14 @@ export default function RadarPage() {
         </div>
       )}
 
-      <Pagination
-        page={page}
-        totalPages={totalPages}
-        onPageChange={setPage}
-        disabled={query.isFetching}
-      />
+      {view === 'list' ? (
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          disabled={query.isFetching}
+        />
+      ) : null}
     </div>
   );
 }

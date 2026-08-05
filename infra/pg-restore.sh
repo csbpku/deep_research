@@ -6,7 +6,7 @@
 #   - 校验传入文件存在且非空
 #   - 解压为临时文件，gunzip 后交给 psql
 #   - 默认恢复到 deep_research，可指定 target_db
-#   - 恢复后逐表打印行数，便于演练时人眼对照
+#   - 恢复后逐表执行 COUNT(*)，便于与源库精确对照
 #   - psql 失败 → 退出码非零，临时文件清理
 #
 # Week 9 收尾补全：
@@ -55,19 +55,30 @@ PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql \
 
 echo "[pg-restore] restore OK. Verifying row counts per table..."
 
-# 行数校验：列出 schema 'public' 下的基表行数（演练用，人眼对照源库）
-PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql \
+# 行数校验：pg_class.reltuples 在刚恢复后常为 -1，只是规划器估算，不能作为
+# 恢复证据。这里先生成每张表的安全引用 COUNT(*) SQL，再在目标库执行。
+COUNT_SQL="$(PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql \
     -h "${POSTGRES_HOST:-localhost}" \
     -p "${POSTGRES_PORT:-5432}" \
     -U "${POSTGRES_USER:-postgres}" \
     -d "$TARGET_DB" \
     -A -t -c "
-        SELECT n.nspname || '.' || c.relname || ': ' || c.reltuples::bigint
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind = 'r'
-          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-        ORDER BY n.nspname, c.relname;
-    "
+        SELECT format(
+          'SELECT %L || '': '' || count(*) FROM %I.%I;',
+          schemaname || '.' || tablename,
+          schemaname,
+          tablename
+        )
+        FROM pg_tables
+        WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+        ORDER BY schemaname, tablename;
+    ")"
+
+PGPASSWORD="${POSTGRES_PASSWORD:-postgres}" psql \
+    -h "${POSTGRES_HOST:-localhost}" \
+    -p "${POSTGRES_PORT:-5432}" \
+    -U "${POSTGRES_USER:-postgres}" \
+    -d "$TARGET_DB" \
+    -A -t -v ON_ERROR_STOP=1 -c "$COUNT_SQL"
 
 echo "[pg-restore] done."

@@ -113,19 +113,24 @@ try:  # pragma: no cover — import-time guard
         **embedding_kwargs: Any,
     ) -> None:
         heavy_key = (
-            os.environ.get("ANTHROPIC_API_KEY_HEAVY")
+            os.environ.get("OPENAI_API_KEY_HEAVY")
+            or os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY_HEAVY")
             or os.environ.get("ANTHROPIC_API_KEY", "")
+        )
+        heavy_base_url = (
+            os.environ.get("OPENAI_BASE_URL_HEAVY")
+            or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("ANTHROPIC_BASE_URL_HEAVY")
+            or os.environ.get("ANTHROPIC_BASE_URL")
+            or "http://localhost:1234/v1"
         )
         from langchain_openai import OpenAIEmbeddings
         from pydantic import SecretStr
         self._embeddings = OpenAIEmbeddings(
             model=model,
             api_key=SecretStr(heavy_key or "custom"),
-            base_url=os.environ.get(
-                "ANTHROPIC_BASE_URL_HEAVY"
-            ) or os.environ.get(
-                "ANTHROPIC_BASE_URL"
-            ) or "http://localhost:1234/v1",
+            base_url=heavy_base_url,
             check_embedding_ctx_length=False,
             **embedding_kwargs,
         )
@@ -422,6 +427,35 @@ class _Job:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+def _resolved_internal_sources(
+    source_refs: tuple[dict[str, str | bool], ...],
+) -> list[AdapterSource]:
+    sources: list[AdapterSource] = []
+    for ref in source_refs:
+        kind = ref.get("type")
+        value = ref.get("value")
+        snippet = ref.get("resolvedSnippet")
+        if kind not in {"summary", "research"} or not isinstance(value, str):
+            continue
+        if not isinstance(snippet, str) or not snippet.strip():
+            continue
+        source_ref: dict[str, str | bool] = {"type": kind, "value": value}
+        if isinstance(ref.get("required"), bool):
+            source_ref["required"] = ref["required"]
+        sources.append(
+            AdapterSource(
+                source_ref=source_ref,
+                canonical_key=value,
+                title=str(ref.get("resolvedTitle") or value),
+                snippet=snippet,
+                score=1.0,
+                step_captured=cast("AiJobStep", AI_JOB_STEP["SEARCH"]),
+                is_accessible=True,
+            )
+        )
+    return sources
+
+
 # ── Adapter ────────────────────────────────────────────────────────
 
 class GptResearcherAdapter(ResearchEngineAdapter):
@@ -477,13 +511,6 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         self._strategic_llm = os.environ.get(
             "STRATEGIC_LLM", self._llm_spec
         )
-        # Heavy credentials — fall back to light when unset (dev/CI).
-        self._heavy_api_key = os.environ.get(
-            "ANTHROPIC_API_KEY_HEAVY"
-        ) or os.environ.get("ANTHROPIC_API_KEY", "")
-        self._heavy_base_url = os.environ.get(
-            "ANTHROPIC_BASE_URL_HEAVY"
-        ) or os.environ.get("ANTHROPIC_BASE_URL")
         self._jobs: dict[str, _Job] = {}
         self._global_lock = asyncio.Lock()
 
@@ -493,7 +520,10 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         async with self._global_lock:
             if request.job_id in self._jobs:
                 return request.job_id
-            job = _Job(request=request)
+            job = _Job(
+                request=request,
+                sources=_resolved_internal_sources(request.source_refs),
+            )
             self._jobs[request.job_id] = job
         asyncio.create_task(self._run(job))
         return request.job_id
@@ -581,6 +611,8 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         _saved_env = {
             "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
             "ANTHROPIC_BASE_URL": os.environ.get("ANTHROPIC_BASE_URL"),
+            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
+            "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL"),
             "SMART_LLM": os.environ.get("SMART_LLM"),
             "FAST_LLM": os.environ.get("FAST_LLM"),
             "STRATEGIC_LLM": os.environ.get("STRATEGIC_LLM"),
@@ -592,9 +624,13 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             os.environ["SMART_LLM"] = self._llm_spec
             os.environ["FAST_LLM"] = self._fast_llm
             os.environ["STRATEGIC_LLM"] = self._strategic_llm
-            os.environ["ANTHROPIC_API_KEY"] = self._heavy_api_key
-            if self._heavy_base_url:
-                os.environ["ANTHROPIC_BASE_URL"] = self._heavy_base_url
+            for provider in {"ANTHROPIC", "OPENAI"}:
+                heavy_key = os.environ.get(f"{provider}_API_KEY_HEAVY")
+                heavy_url = os.environ.get(f"{provider}_BASE_URL_HEAVY")
+                if heavy_key:
+                    os.environ[f"{provider}_API_KEY"] = heavy_key
+                if heavy_url:
+                    os.environ[f"{provider}_BASE_URL"] = heavy_url
             os.environ.setdefault("RETRIEVER", "tavily")
             os.environ.setdefault("LANGUAGE", "chinese")
             os.environ.setdefault("TOTAL_WORDS", "800")
@@ -695,21 +731,38 @@ class GptResearcherAdapter(ResearchEngineAdapter):
     async def _run_brief(self, job: _Job) -> None:
         """Lightweight summary generation — single LLM call, no gpt-researcher.
 
-        Used by radar sync (``summary_brief``) and chat.  Calls the LLM
-        directly via the ``anthropic`` SDK (cc-switch proxy), bypassing
-        gpt-researcher's heavy planner-executor-publisher pipeline.
+        Used by radar sync (``summary_brief``) and chat. Calls the shared
+        provider-neutral client, bypassing gpt-researcher's heavy
+        planner-executor-publisher pipeline.
         """
-        try:
-            from anthropic import AsyncAnthropic
-        except ImportError as exc:
-            await self._mark_failed(job, "NOT_IMPLEMENTED", str(exc)[:200])
-            return
+        from ai_engine.llm.client import generate_text, sanitize_llm_error
+        from ai_engine.fetcher.ai_source_urls import _fetch_user_url
 
-        provider, _, model_name = self._brief_llm.partition(":")
-        if provider != "anthropic":
+        for ref in job.request.source_refs:
+            if ref.get("type") != "url":
+                continue
+            try:
+                fetched = await _fetch_user_url(ref, request_id=job.request.request_id)
+            except AdapterError as exc:
+                if ref.get("required") is True:
+                    await self._mark_failed(job, exc.code, exc.message)
+                    return
+                continue
+            if fetched.is_accessible:
+                job.sources.append(fetched.adapter_source)
+            elif ref.get("required") is True:
+                await self._mark_failed(
+                    job,
+                    fetched.error_code or "NO_SOURCES_FOUND",
+                    "required URL source is not accessible",
+                )
+                return
+
+        if job.request.source_policy == "only_user_sources" and not job.sources:
             await self._mark_failed(
-                job, "VALIDATION_FAILED",
-                f"brief path only supports anthropic provider, got: {provider}",
+                job,
+                "NO_SOURCES_FOUND",
+                "指定资料不存在、不可见或没有可摘要内容",
             )
             return
 
@@ -731,36 +784,24 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         user_content += "\n摘要:"
 
         try:
-            # Light credentials by default; fall back to heavy when light
-            # is unset (e.g. single-key deployment using compass only).
-            light_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            light_url = os.environ.get("ANTHROPIC_BASE_URL")
-            api_key = light_key or self._heavy_api_key
-            base_url = light_url or self._heavy_base_url
-            client = AsyncAnthropic(
-                api_key=api_key,
-                base_url=base_url,
+            result = await generate_text(
+                llm_spec=self._brief_llm,
+                user_prompt=user_content,
+                max_tokens=1024,
+                timeout=60.0,
+                disable_thinking=True,
             )
-            message = await client.messages.create(
-                model=model_name,
-                max_tokens=512,
-                messages=[{"role": "user", "content": user_content}],
-            )
-            # Extract text blocks only (skip thinking blocks).
-            body_parts = [
-                block.text
-                for block in message.content
-                if getattr(block, "type", None) == "text" and hasattr(block, "text")
-            ]
-            body = "".join(body_parts).strip()
-            usage = getattr(message, "usage", None)
-            token_in = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-            token_out = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+            body = result.text
+            if not body:
+                raise RuntimeError(
+                    "LLM returned no text "
+                    f"(requested={result.requested_model}, actual={result.actual_model})"
+                )
 
             async with job.lock:
                 job.body = body
-                job.token_in = token_in
-                job.token_out = token_out
+                job.token_in = result.input_tokens
+                job.token_out = result.output_tokens
                 job.current_step = cast("AiJobStep", AI_JOB_STEP["WRITE"])
                 job.cost_usd = 0.0
                 if not job.sources:
@@ -770,7 +811,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         except Exception as exc:
             await self._mark_failed(
                 job, "AI_ENGINE_UNAVAILABLE",
-                f"brief LLM call failed: {type(exc).__name__}",
+                f"brief LLM call failed: {sanitize_llm_error(exc)}",
             )
 
     async def _mark_failed(self, job: _Job, code: str, message: str) -> None:

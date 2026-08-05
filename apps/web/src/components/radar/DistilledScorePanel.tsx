@@ -30,6 +30,7 @@ interface Props {
 export function DistilledScorePanel({ score, compact = false }: Props) {
   const tierVisual = tierClasses(score.tier);
   const tierLabel = TIER_LABELS[score.tier] ?? score.tier;
+  const displayScore = score.rankingScore ?? score.effectiveTotal ?? score.total;
 
   if (compact) {
     return (
@@ -39,10 +40,10 @@ export function DistilledScorePanel({ score, compact = false }: Props) {
             <button
               type="button"
               className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tierVisual.border} ${tierVisual.text}`}
-              aria-label={`Distilled 评分 ${score.total}，悬停查看详情`}
+              aria-label={`Distilled 评分 ${displayScore}，悬停查看详情`}
             >
               <span className="font-sans text-[11px] font-medium">Distilled</span>
-              {score.total}
+              {displayScore}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="start" className="w-72 max-w-[calc(100vw-2rem)] p-3">
@@ -58,6 +59,7 @@ export function DistilledScorePanel({ score, compact = false }: Props) {
 
 function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: DistilledScore; tierVisual: ReturnType<typeof tierClasses>; tierLabel: string }) {
   const [open, setOpen] = useState(false);
+  const displayScore = score.rankingScore ?? score.effectiveTotal ?? score.total;
 
   return (
     <div className="border-y border-border">
@@ -71,7 +73,7 @@ function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: Distilled
           className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums ${tierVisual.border} ${tierVisual.text}`}
         >
           <span className="font-sans text-[11px] font-medium">Distilled</span>
-          {score.total}
+          {displayScore}
         </span>
         <span className="text-xs text-muted-foreground">查看评分详情</span>
         <ChevronDown className={`ml-auto size-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -93,6 +95,22 @@ function ScoreDetails({ score, tierVisual, tierLabel }: { score: DistilledScore;
         <span className={`font-medium ${tierVisual.text}`}>{tierLabel}{score.mustRead ? ' · 必读' : ''}</span>
         <span className="text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
       </div>
+      {score.rankingScore !== undefined ? (
+        <div className="grid grid-cols-3 gap-2 border-b border-border pb-2 text-center">
+          <div>
+            <div className="font-mono text-sm font-semibold tabular-nums">{score.rankingScore}</div>
+            <div className="text-[11px] text-muted-foreground">排序分</div>
+          </div>
+          <div>
+            <div className="font-mono text-sm font-semibold tabular-nums">{score.teamValueScore ?? '-'}</div>
+            <div className="text-[11px] text-muted-foreground">团队价值</div>
+          </div>
+          <div>
+            <div className="font-mono text-sm font-semibold tabular-nums">{score.qualityScore ?? score.total}</div>
+            <div className="text-[11px] text-muted-foreground">内容质量</div>
+          </div>
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2">
         {Object.entries(score.dimensions).map(([key, val]) => (
           <div key={key} className="flex min-w-0 items-center gap-2">

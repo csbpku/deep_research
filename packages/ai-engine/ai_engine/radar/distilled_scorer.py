@@ -54,7 +54,7 @@ from ai_engine.scoring.scoring_profiles import (
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
 
-DISTILLED_VERSION = "2.0"
+DISTILLED_VERSION = "3.0"
 
 # ── 7 Dimensions (fixed; only weights vary per profile) ───────────
 #
@@ -225,6 +225,13 @@ class DistilledScore:
     has_risk_signal: bool                 # True if any risk_flag is set
     profile_id: str                       # id of the active profile
     is_default: bool                      # True if LLM scoring was skipped/fallback
+    direct_relevance: int | None = None   # explicit e-commerce engineering fit
+    relevance_evidence: str | None = None # evidence supporting direct relevance
+    effective_total: float | None = None  # relevance-adjusted display/ranking score
+    quality_score: float | None = None    # source-neutral content quality
+    team_value_score: float | None = None # expected usefulness to the target team
+    ranking_score: float | None = None    # final cross-source ordering score
+    source_bonus: float = 0.0             # small, explicit product-priority adjustment
     version: str = DISTILLED_VERSION
 
     @property
@@ -241,7 +248,7 @@ class DistilledScore:
         return self.profile_id
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "total": self.total,
             "tier": self.tier,
             "mustRead": self.must_read,
@@ -256,6 +263,21 @@ class DistilledScore:
             "isDefault": self.is_default,
             "version": self.version,
         }
+        if self.direct_relevance is not None:
+            result["directRelevance"] = self.direct_relevance
+        if self.relevance_evidence:
+            result["relevanceEvidence"] = self.relevance_evidence
+        if self.effective_total is not None:
+            result["effectiveTotal"] = self.effective_total
+        if self.quality_score is not None:
+            result["qualityScore"] = self.quality_score
+        if self.team_value_score is not None:
+            result["teamValueScore"] = self.team_value_score
+        if self.ranking_score is not None:
+            result["rankingScore"] = self.ranking_score
+        if self.source_bonus:
+            result["sourceBonus"] = self.source_bonus
+        return result
 
 
 # ── Stable English serialization keys ─────────────────────────────
@@ -286,6 +308,16 @@ SYSTEM_PROMPT = """你是一名严苛的评审员，为一个电商公司的软�
 - 直接相关：AI 框架/模型部署、Agent 设计模式、RAG 管线、电商场景 AI 应用、LLM 工具链
 - 不需要：纯商业新闻、非 AI 学科（地理/金融/体育/医疗）、纯营销稿、复古/玩具/业余项目
 - 如果文章与电商软件工程师的实际工作无关，即便有趣也不得给高分
+
+额外的硬相关性判断（必须单独输出 direct_relevance，0–3 分）：
+- 3 分：明确服务电商 AI 工程，例如搜索/推荐/排序、广告/定价、风控/反欺诈、客服、商品理解、电商 Agent，并包含具体工程决策或实践证据
+- 2 分：通用 AI 工程（RAG/LLM 平台、模型服务、Agent、评测等），存在合理的间接迁移价值，但没有明确电商场景
+- 1 分：泛 AI 兴趣、通用模型新闻、个人/设备项目、视频理解、与业务无关的应用等
+- 0 分：非 AI 工程、纯数学/理论、医疗/生物/物理应用、纯营销/商业内容
+- “用了 LLM”或“模型很强/很新”不等于直接相关；没有明确电商上下文或可迁移的工程决策时，direct_relevance 最高只能给 1
+- direct_relevance 是硬门槛，优先级高于文章的新颖性、深度和热度
+- direct_relevance=3 必须在 relevance_evidence 中写出正文支持的具体证据，或明确的电商工程决策；只写“可迁移”“对 AI 有用”不算证据
+- 如果没有这类证据，direct_relevance 最高只能给 2；relevance_evidence 填空字符串
 
 前置过滤规则（优先级最高）：
 1. 文章是否与 AI/LLM/Agent 工程实践直接相关？如果答案是"否"，受众匹配度必须为 0-1 分
@@ -407,6 +439,12 @@ def build_user_prompt(
 - 不要解释高分，只解释最低分
 - "综合信号" 这一维度的评判基准是上面评分画像的目标读者，而不是泛化的"信号"
 
+## 论文源校准（仅 profile=paper）
+- 论文形式、摘要完整、实验数字或数学推导本身，不等于高信息增量或高综合信号
+- 没有明确的新方法、可靠对比、可复现实验或对工程实践的启发时，信息增量和综合信号通常给 0-1 分
+- 只有理论证明、综述或与当前 AI 工程无直接关系的论文，可在分析深度较高时保留深度分，但可行动性和综合信号仍应低分
+- 不确定时给低分，不要用 2 分作为默认值；3 分必须有正文中的具体证据支撑
+
 {_build_veto_text()}
 
 ## 文章内容
@@ -424,6 +462,8 @@ def build_user_prompt(
   "时效性": 0,
   "表达质量": 0,
   "综合信号": 0,
+  "direct_relevance": 0,
+  "relevance_evidence": "支持相关性判断的原文证据或具体迁移决策；不相关时填空字符串",
   "weak_point": "最低维度扣分原因",
   "veto": null,
   "risk_flag": null,
@@ -458,57 +498,34 @@ async def anthropic_scorer(
     url: str | None = None,
     published_at: datetime | None = None,
 ) -> str:
-    """Call Anthropic API to score article dimensions. Returns raw JSON string.
+    """Call the configured light LLM to score article dimensions.
 
     Passes profile / source_type / url / published_at to the prompt so
     the LLM has temporal and source context for accurate scoring.
     """
-    from anthropic import AsyncAnthropic
+    from ai_engine.llm.client import generate_text
 
-    light_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    light_url = os.environ.get("ANTHROPIC_BASE_URL")
-    api_key = light_key or os.environ.get("ANTHROPIC_API_KEY_HEAVY", "")
-    base_url = light_url or os.environ.get("ANTHROPIC_BASE_URL_HEAVY")
-    # cc-switch and similar local Anthropic-compatible proxies do not
-    # validate the key, but the SDK rejects placeholder-shaped values
-    # (e.g. "local-cc-switch") before sending. Substitute a non-empty
-    # placeholder so local-proxy scoring works even when .env leaves
-    # ANTHROPIC_API_KEY empty.
-    if not api_key or api_key.startswith("local-"):
-        api_key = "sk-placeholder-for-cc-switch"
-    client = AsyncAnthropic(
-        api_key=api_key,
-        base_url=base_url,
-    )
     llm_spec = (
         os.environ.get("BRIEF_LLM")
         or os.environ.get("SMART_LLM")
         or "anthropic:claude-haiku-4-5"
     )
-    _, _, model_name = llm_spec.partition(":")
-
-    message = await client.messages.create(
-        model=model_name,
-        # Local proxies route through a thinking-capable model; 1024 tokens
-        # can be consumed entirely by the thinking block, leaving no text
-        # block for the JSON scorer and forcing a default-score fallback.
-        max_tokens=_LLM_SCORING_MAX_TOKENS,
-        timeout=60.0,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_user_prompt(
-            title, content,
+    result = await generate_text(
+        llm_spec=llm_spec,
+        system_prompt=SYSTEM_PROMPT,
+        user_prompt=build_user_prompt(
+            title,
+            content,
             profile=profile,
             source_type=source_type,
             url=url,
             published_at=published_at,
-        )}],
+        ),
+        max_tokens=_LLM_SCORING_MAX_TOKENS,
+        timeout=60.0,
+        disable_thinking=True,
     )
-    parts = [
-        block.text
-        for block in message.content
-        if getattr(block, "type", None) == "text" and hasattr(block, "text")
-    ]
-    return "".join(parts)
+    return result.text
 
 
 # ── Default (no-LLM) scorer ────────────────────────────────────────
@@ -627,10 +644,72 @@ def _normalize_hard_veto(parsed: dict[str, Any]) -> str | None:
     return None
 
 
+def _normalize_direct_relevance(parsed: dict[str, Any]) -> int | None:
+    """Read the explicit relevance gate while keeping old JSON compatible."""
+    raw = parsed.get("direct_relevance", parsed.get("directRelevance"))
+    if raw is None:
+        raw = parsed.get("direct_relevance_score")
+    if raw is None:
+        return None
+    try:
+        return max(0, min(MAX_DIM_SCORE, int(raw)))
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_relevance_evidence(parsed: dict[str, Any]) -> str | None:
+    """Return concise evidence required to trust a relevance score of 3."""
+    raw = parsed.get("relevance_evidence", parsed.get("relevanceEvidence"))
+    if raw is None:
+        raw = parsed.get("transfer_evidence")
+    if not isinstance(raw, str):
+        return None
+    evidence = " ".join(raw.split())[:240]
+    return evidence or None
+
+
+_QUALITY_WEIGHTS: dict[str, int] = {
+    "信息增量": 30,
+    "分析深度": 20,
+    "事实可信度": 25,
+    "时效性": 10,
+    "表达质量": 15,
+}
+
+
+def _weighted_dimension_score(
+    scores: dict[str, int],
+    weights: dict[str, int],
+) -> float:
+    return round(
+        sum(scores[name] * weight / MAX_DIM_SCORE for name, weight in weights.items()),
+        2,
+    )
+
+
+def _source_priority_bonus(source_type: str | None) -> float:
+    """Return a deliberately small, auditable product-priority bonus.
+
+    GitHub activity is the radar's primary engineering signal. The bonus is
+    strong enough to break close cross-source comparisons, but cannot rescue
+    irrelevant content because relevance caps are applied afterwards.
+    """
+    normalized = (source_type or "").strip().lower()
+    if normalized == "github_tracked":
+        return 12.0
+    if normalized.startswith("github"):
+        return 8.0
+    if normalized in {"rss", "devto", "vendor_news"}:
+        return 2.0
+    return 0.0
+
+
 def compute_score(
     parsed: dict[str, Any],
     *,
     profile: ScoringProfile | None = None,
+    source_type: str | None = None,
+    evidence_text: str | None = None,
 ) -> DistilledScore:
     """Compute weighted score from parsed LLM dimension scores.
 
@@ -649,6 +728,13 @@ def compute_score(
     risk_flag = _normalize_risk_flag(parsed)
     repost_flag = _normalize_repost_flag(parsed)
     hard_veto = _normalize_hard_veto(parsed)
+    direct_relevance = _normalize_direct_relevance(parsed)
+    relevance_evidence = _normalize_relevance_evidence(parsed)
+    # A score of 3 is reserved for explicit e-commerce fit. If the model
+    # cannot cite evidence or a concrete transferable decision, downgrade it
+    # to the indirect-fit bucket before computing the visible score.
+    if direct_relevance == 3 and not relevance_evidence:
+        direct_relevance = 2
 
     if hard_veto is not None:
         veto_scores: dict[str, int] = {d.name: 0 for d in DIMENSIONS}
@@ -657,6 +743,12 @@ def compute_score(
             tier=TIER_NOISE,
             must_read=False,
             dimension_scores=veto_scores,
+            direct_relevance=direct_relevance,
+            relevance_evidence=relevance_evidence,
+            effective_total=0.0,
+            quality_score=0.0,
+            team_value_score=0.0,
+            ranking_score=0.0,
             weak_point=str(hard_veto),
             veto=str(hard_veto),
             risk_flag=None,
@@ -700,16 +792,53 @@ def compute_score(
         and risk_flag is None
     )
 
-    # ── Audience-fit safety net ─────────────────────────────────────
-    # If the LLM rates an article highly on other dimensions but gave
-    # it a low audience-fit score (≤ 1), the content is off-topic for
-    # this platform. We cap the tier (no collection / deep_read) and
-    # suppress must_read so these articles don't crowd out on-topic
-    # candidates. The raw total is preserved for audit.
+    # Two-layer scoring keeps editorial quality separate from usefulness to
+    # this team. The seven dimensions remain available as audit evidence, but
+    # no longer directly determine cross-source ordering.
     audience_fit = dim_scores.get("综合信号", 0)
-    capped_by_audience = audience_fit <= 1
-    effective_total = total if not capped_by_audience else min(total, 60.0)
-    effective_must_read = must_read and not capped_by_audience
+    quality_score = _weighted_dimension_score(dim_scores, _QUALITY_WEIGHTS)
+    team_relevance = direct_relevance if direct_relevance is not None else audience_fit
+    team_value_score = round(
+        team_relevance * 45 / MAX_DIM_SCORE
+        + dim_scores["可行动性"] * 25 / MAX_DIM_SCORE
+        + audience_fit * 20 / MAX_DIM_SCORE
+        + dim_scores["时效性"] * 10 / MAX_DIM_SCORE,
+        2,
+    )
+    source_bonus = _source_priority_bonus(source_type)
+    github_priority = (source_type or "").strip().lower().startswith("github")
+    ranking_score = round(
+        min(100.0, team_value_score * 0.75 + quality_score * 0.25 + source_bonus),
+        2,
+    )
+
+    # Old stored scores did not include direct relevance. Preserve their
+    # behavior until they are explicitly recalibrated instead of silently
+    # changing historical ordering.
+    if direct_relevance is not None:
+        effective_fit = min(audience_fit, direct_relevance)
+        relevance_cap = {0: 35.0, 1: 49.0, 2: 82.0 if github_priority else 78.0}
+        ranking_score = min(ranking_score, relevance_cap.get(effective_fit, 100.0))
+    else:
+        ranking_score = total
+
+    effective_must_read = must_read and (
+        direct_relevance is None
+        or (
+            direct_relevance == 3
+            and audience_fit == 3
+            and ranking_score >= profile.must_read_total
+        )
+    )
+
+    # A paper without an actionable transfer path can still be a good paper,
+    # but it is only a skim item for this engineering radar.
+    paper_low_actionability = (
+        profile.id == "paper" and dim_scores["可行动性"] <= 1
+    )
+    if paper_low_actionability:
+        ranking_score = min(ranking_score, 64.0)
+        effective_must_read = False
 
     weak_point = str(parsed.get("weak_point", ""))[:100]
     if not weak_point:
@@ -718,9 +847,16 @@ def compute_score(
 
     return DistilledScore(
         total=total,
-        tier=_tier_for_score(effective_total, profile),
+        tier=_tier_for_score(ranking_score, profile),
         must_read=effective_must_read,
         dimension_scores=dim_scores,
+        direct_relevance=direct_relevance,
+        relevance_evidence=relevance_evidence,
+        effective_total=round(ranking_score, 2),
+        quality_score=quality_score,
+        team_value_score=team_value_score,
+        ranking_score=round(ranking_score, 2),
+        source_bonus=source_bonus,
         weak_point=weak_point,
         veto=None,
         risk_flag=risk_flag,
@@ -739,6 +875,11 @@ def default_score(profile: ScoringProfile | None = None) -> DistilledScore:
         tier=TIER_NOISE,
         must_read=False,
         dimension_scores={d.name: 0 for d in DIMENSIONS},
+        direct_relevance=None,
+        effective_total=0.0,
+        quality_score=0.0,
+        team_value_score=0.0,
+        ranking_score=0.0,
         weak_point="default fallback (no LLM)",
         veto=None,
         risk_flag=None,
@@ -758,7 +899,7 @@ _LLM_RATE_LIMIT_MAX_RETRIES = 3
 _LLM_RATE_LIMIT_DELAY = 5.0
 # Cap in-flight scoring calls so a full radar sync cannot saturate the
 # local LLM proxy (mirrors agents-radar's LLM_CONCURRENCY=5).
-_LLM_SCORING_CONCURRENCY = int(os.environ.get("RADAR_SCORING_CONCURRENCY", "5"))
+_LLM_SCORING_CONCURRENCY = int(os.environ.get("RADAR_SCORING_CONCURRENCY", "8"))
 _LLM_SCORING_MAX_TOKENS = int(os.environ.get("RADAR_SCORING_MAX_TOKENS", "4096"))
 _loop_score_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 
@@ -810,14 +951,15 @@ async def score_with_llm(
     """
     profile = profile or active_profile()
     if scorer is None:
-        key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get(
-            "ANTHROPIC_API_KEY_HEAVY", ""
+        from ai_engine.llm.client import llm_is_configured
+
+        llm_spec = (
+            os.environ.get("BRIEF_LLM")
+            or os.environ.get("SMART_LLM")
+            or "anthropic:claude-haiku-4-5"
         )
-        base_url = os.environ.get("ANTHROPIC_BASE_URL", "") or os.environ.get(
-            "ANTHROPIC_BASE_URL_HEAVY", ""
-        )
-        if not key and not base_url:
-            logger.debug("distilled_scorer.fallback: no ANTHROPIC_API_KEY")
+        if not llm_is_configured(llm_spec):
+            logger.debug("distilled_scorer.fallback: selected LLM is not configured")
             return default_score(profile)
         # Use anthropic_scorer with full context
         async def _contextual_scorer(t: str, c: str) -> str:
@@ -838,7 +980,12 @@ async def score_with_llm(
             async with _score_semaphore():
                 raw = await active_scorer(title, content)
             parsed = _parse_llm_response(raw)
-            return compute_score(parsed, profile=profile)
+            return compute_score(
+                parsed,
+                profile=profile,
+                source_type=source_type,
+                evidence_text=f"{title}\n{content}",
+            )
         except Exception as exc:
             rate_limited = _is_rate_limit_error(exc)
             max_retries = (

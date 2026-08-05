@@ -21,8 +21,9 @@ import pytest
 from httpx import ASGITransport
 
 from ai_engine.adapters.fake import FakeAdapter
-from ai_engine.server.app import app, _store_singleton
-from ai_engine.job_runner.store import InMemoryJobStore
+from ai_engine.server.app import app, _make_draft_factory, _store_singleton
+from ai_engine.job_runner.db_store import _drafts_for_tests
+from ai_engine.job_runner.store import InMemoryJobStore, make_job_snapshot
 
 
 # 轮询窗口:5s;fake adapter 正常 51ms 跑完,留余量
@@ -389,6 +390,24 @@ async def test_get_job_returns_stored_snapshot(
         assert field in final
 
 
+async def test_summary_brief_status_returns_inline_output_not_draft(
+    client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    client, _store, _adapter = client_with_store
+    submit = await client.post(
+        "/api/ai/jobs",
+        json={"topic": "lightweight summary", "report_type": "summary_brief"},
+    )
+    assert submit.status_code == 202
+
+    final = await _wait_final_status(client, submit.json()["job_id"])
+
+    assert final["final_status"] == "succeeded"
+    assert final["report_type"] == "summary_brief"
+    assert final["draft_research_id"] is None
+    assert final["output_text"]
+
+
 async def test_get_job_returns_404_when_unknown(
     client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
 ) -> None:
@@ -407,6 +426,39 @@ async def test_cancel_unknown_job_returns_not_cancellable(
     # fake adapter has no record of this job, so it returns NOT_FOUND
     # which we surface as 404 via HTTP_STATUS map.
     assert resp.status_code in (404, 409)
+
+
+async def test_cancel_queued_job_updates_store_without_adapter_job(
+    client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    client, store, _adapter = client_with_store
+    snapshot = make_job_snapshot(topic="cancel before adapter submit")
+    await store.enqueue(snapshot)
+
+    resp = await client.post(f"/api/ai/jobs/{snapshot.job_id}/cancel")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "job_id": snapshot.job_id,
+        "was_queued": True,
+        "was_running": False,
+    }
+    row = store.get_row(snapshot.job_id)
+    assert row is not None
+    assert row.snapshot.status == "cancelled"
+
+
+async def test_in_memory_draft_factory_is_idempotent_per_job() -> None:
+    store = InMemoryJobStore()
+    snapshot = make_job_snapshot(topic="idempotent draft")
+    factory = _make_draft_factory(store)
+
+    first = await factory(snapshot, (), "draft body")
+    second = await factory(snapshot, (), "draft body")
+
+    assert first == second
+    assert first is not None
+    assert _drafts_for_tests[first]["body"] == "draft body"
 
 
 async def test_logs_do_not_contain_secrets(

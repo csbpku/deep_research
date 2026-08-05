@@ -170,6 +170,8 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
       return { message: '抓取内容过大' };
     case ERROR_CODES.URL_REDIRECT_LIMIT:
       return { message: '抓取重定向次数超限' };
+    case ERROR_CODES.UPSTREAM_RATE_LIMITED:
+      return { message: '上游服务限流', hint: '请稍后重试。' };
 
     // 通用
     case ERROR_CODES.VALIDATION_FAILED:
