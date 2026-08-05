@@ -40,6 +40,7 @@ export type UpdateResearchInput = z.infer<typeof UpdateResearchInput>;
 export const ResearchListQuery = z.object({
   type: z.enum([RESEARCH_TYPE.RESEARCH, RESEARCH_TYPE.KNOWLEDGE]).optional(),
   scope: z.enum(['published', 'draft']).default('published'),
+  q: z.string().trim().max(200).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
@@ -239,3 +240,15 @@ export type AdminCommentListQuery = z.infer<typeof AdminCommentListQuery>;
 /** GET /api/admin/dashboard —— Admin 首页统计 */
 export const AdminDashboardQuery = z.object({});
 export type AdminDashboardQuery = z.infer<typeof AdminDashboardQuery>;
+
+/** POST /api/admin/topic-proposals/[id]/review */
+export const AdminTopicProposalReviewInput = z
+  .object({
+    action: z.enum(['approve', 'reject']),
+    name: z.string().trim().min(2).max(200).optional(),
+    proposition: z.string().trim().min(10).max(1000).optional(),
+    includedSummaryIds: z.array(z.string().uuid()).min(3).max(50).optional(),
+    reason: z.string().trim().min(2).max(500).optional(),
+  })
+  .strict();
+export type AdminTopicProposalReviewInput = z.infer<typeof AdminTopicProposalReviewInput>;

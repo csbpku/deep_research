@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ai_engine.radar.topic_aggregation_worker import _is_metadata_tag
+from ai_engine.radar.topic_aggregation_worker import _is_metadata_tag, _topic_slug
+from ai_engine.radar.topic_proposal_worker import _clean_json, _source_key
 from ai_engine.radar.topic_synthesis_worker import _parse_payload
 
 
@@ -18,6 +19,10 @@ from ai_engine.radar.topic_synthesis_worker import _parse_payload
         "tier_deep_read", "tier_skim", "tier_collection",
         "github", "arxiv", "huggingface", "devto", "hackernews",
         "trending", "must_read", "topic_search",
+        "lobsters", "producthunt", "rss", "news",
+        "ai", "AI", "llm", "large-language-model", "machinelearning",
+        "programming", "opensource", "python", "typescript", "javascript",
+        "rust", "golang", "nodejs",
     ],
 )
 def test_is_metadata_tag_filters_sync_metadata(tag: str) -> None:
@@ -27,13 +32,27 @@ def test_is_metadata_tag_filters_sync_metadata(tag: str) -> None:
 @pytest.mark.parametrize(
     "tag",
     [
-        "ai", "llm", "rag", "huggingface-trending", "ai-agent",
-        "large-language-model", "python", "typescript",
+        "rag", "huggingface-trending", "ai-agent", "mcp",
+        "agent-evaluation", "vector-database",
         "深度学习", "扩散模型",
     ],
 )
 def test_is_metadata_tag_keeps_real_topic_tags(tag: str) -> None:
     assert _is_metadata_tag(tag) is False
+
+
+def test_topic_slug_canonicalizes_case_and_separators() -> None:
+    assert _topic_slug(" Agent Evaluation ") == "agent-evaluation"
+    assert _topic_slug("MCP / Security") == "mcp-security"
+
+
+def test_topic_proposal_source_key_uses_publisher_not_content_kind() -> None:
+    assert _source_key("https://github.com/acme/tool", "github_repo") == "github:acme"
+    assert _source_key("https://example.com/a", "rss") == "example.com"
+
+
+def test_topic_proposal_payload_accepts_json_fence() -> None:
+    assert _clean_json('```json\n{"proposals": []}\n```') == {"proposals": []}
 
 
 # ── topic_synthesis payload 解析 ─────────────────────────────────

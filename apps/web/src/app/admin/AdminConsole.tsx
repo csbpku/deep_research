@@ -3,7 +3,7 @@
 // Admin 控制台客户端组件 —— Week 8：仪表板 + 3 个审核队列。
 // 由 app/admin/page.tsx（Server Component）做鉴权拦截后渲染。
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -38,12 +38,15 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
+import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
+import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 
-type Tab = 'dashboard' | 'radar' | 'shares' | 'comments' | 'users';
+type Tab = 'dashboard' | 'radar' | 'topics' | 'shares' | 'comments' | 'users';
 
 const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'dashboard', label: '仪表板', icon: ShieldCheck },
   { key: 'radar', label: '雷达候选', icon: RadarIcon },
+  { key: 'topics', label: '主题提议', icon: Sparkles },
   { key: 'shares', label: '用户分享', icon: Link2 },
   { key: 'comments', label: '评论提名', icon: Lightbulb },
   { key: 'users', label: '成员', icon: User },
@@ -73,6 +76,28 @@ interface DashboardData {
     }>;
   };
   generatedAt: string;
+}
+
+interface RadarRunStatus {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  sourceType: string;
+  triggeredBy: 'cron' | 'admin' | string;
+  status: string;
+  totalFetched: number;
+  totalNew: number;
+  totalSkipped: number;
+  totalFailed: number;
+  candidateCount: number;
+  scoredCount: number;
+  pendingScoreCount: number;
+  enrichedCount: number;
+  pendingEnrichmentCount: number;
+  elapsedMs: number | null;
+  errorCode: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 interface RadarItem {
@@ -171,6 +196,20 @@ export default function AdminConsole() {
       <div className="mt-4">
         {tab === 'dashboard' && <DashboardTab />}
         {tab === 'radar' && <RadarTab />}
+        {tab === 'topics' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border bg-card p-4">
+              <div>
+                <h2 className="text-sm font-semibold">主题运营</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  手动聚合最近信号、生成主题提议和 AI 综述；这些操作会写入审核队列或更新主题内容。
+                </p>
+              </div>
+              <AdminTopicActions />
+            </div>
+            <TopicProposalsTab />
+          </div>
+        )}
         {tab === 'shares' && <SharesTab />}
         {tab === 'comments' && <CommentsTab />}
         {tab === 'users' && <UsersTab />}
@@ -238,6 +277,15 @@ function DashboardTab() {
     },
     refetchInterval: 30_000,
   });
+  const runsQ = useQuery<RadarRunStatus[]>({
+    queryKey: ['admin-radar-runs'],
+    queryFn: async () => {
+      const r = await fetch('/api/admin/radar/runs?limit=100', { cache: 'no-store' });
+      if (!r.ok) throw new Error('加载逐源同步状态失败');
+      return r.json();
+    },
+    refetchInterval: 30_000,
+  });
   const syncMut = useMutation({
     mutationFn: async () => {
       const response = await fetch('/api/admin/radar/sync', { method: 'POST' });
@@ -274,6 +322,13 @@ function DashboardTab() {
   });
 
   const syncInFlight = q.data?.radar.lastSync?.status === 'running';
+  const latestRuns = useMemo(() => {
+    const latest = new Map<string, RadarRunStatus>();
+    for (const run of runsQ.data ?? []) {
+      if (!latest.has(run.sourceId)) latest.set(run.sourceId, run);
+    }
+    return [...latest.values()];
+  }, [runsQ.data]);
 
   if (q.isLoading) {
     return (
@@ -336,7 +391,7 @@ function DashboardTab() {
         />
       </div>
 
-      <section className="rounded-lg border border-border bg-card p-4">
+      <section className="rounded-md border border-border bg-card p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="flex items-center gap-1.5 text-sm font-semibold">
             <RadarIcon className="size-4 text-muted-foreground" />
@@ -437,11 +492,93 @@ function DashboardTab() {
         ) : null}
       </section>
 
+      <section className="mt-4 rounded-md border border-border bg-card p-4">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <RadarIcon className="size-4 text-muted-foreground" />
+              逐源同步明细
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              每个源展示最近一次运行；评分和 Enrichment 按本次同步产生的候选统计。
+            </p>
+          </div>
+          {runsQ.data ? (
+            <span className="text-xs text-muted-foreground">{latestRuns.length} 个源</span>
+          ) : null}
+        </div>
+        {runsQ.isLoading ? (
+          <div className="grid gap-2">
+            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        ) : runsQ.isError ? (
+          <p className="text-sm text-destructive">{(runsQ.error as Error).message}</p>
+        ) : latestRuns.length === 0 ? (
+          <p className="text-sm text-muted-foreground">暂无逐源运行记录</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-left text-xs">
+              <thead className="border-b border-border text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-2 font-medium">信息源</th>
+                  <th className="px-2 py-2 font-medium">触发</th>
+                  <th className="px-2 py-2 font-medium">状态 / 时间</th>
+                  <th className="px-2 py-2 font-medium">抓取</th>
+                  <th className="px-2 py-2 font-medium">评分</th>
+                  <th className="px-2 py-2 font-medium">Enrichment</th>
+                  <th className="px-2 py-2 font-medium">耗时 / 错误</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {latestRuns.map((run) => (
+                  <tr key={run.sourceId} className="align-top">
+                    <td className="px-2 py-2">
+                      <div className="font-medium text-foreground">{run.sourceName}</div>
+                      <div className="text-muted-foreground">{formatSourceType(run.sourceType).short}</div>
+                    </td>
+                    <td className="px-2 py-2 text-muted-foreground">{run.triggeredBy === 'cron' ? '定时' : '手动'}</td>
+                    <td className="px-2 py-2">
+                      <SyncStatusBadge status={run.status} />
+                      <div className="mt-1 whitespace-nowrap text-muted-foreground">
+                        {new Date(run.completedAt ?? run.createdAt).toLocaleString('zh-CN')}
+                      </div>
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <span className="font-mono tabular-nums">{run.totalFetched}</span> 抓取
+                      <span className="ml-1 text-emerald-700 dark:text-emerald-300">+{run.totalNew}</span>
+                      {run.totalFailed > 0 ? <span className="ml-1 text-destructive">失败 {run.totalFailed}</span> : null}
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <span className="font-mono tabular-nums">{run.scoredCount}/{run.candidateCount}</span> 已评分
+                      {run.pendingScoreCount > 0 ? <div className="text-amber-700 dark:text-amber-300">待处理 {run.pendingScoreCount}</div> : null}
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <span className="font-mono tabular-nums">{run.enrichedCount}/{run.candidateCount}</span> 已补全
+                      {run.pendingEnrichmentCount > 0 ? <div className="text-amber-700 dark:text-amber-300">待处理 {run.pendingEnrichmentCount}</div> : null}
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap text-muted-foreground">
+                      {formatElapsed(run.elapsedMs)}
+                      {run.errorCode ? <div className="text-destructive">{run.errorCode}</div> : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       <p className="mt-4 text-xs text-muted-foreground">
         数据生成时间：{new Date(d.generatedAt).toLocaleString('zh-CN')} · 每 30s 自动刷新
       </p>
     </div>
   );
+}
+
+function formatElapsed(elapsedMs: number | null): string {
+  if (elapsedMs == null) return '进行中';
+  if (elapsedMs < 1000) return `${elapsedMs}ms`;
+  return `${(elapsedMs / 1000).toFixed(1)}s`;
 }
 
 function SyncStatusBadge({ status }: { status: string }) {
@@ -855,7 +992,7 @@ function CommentsTab() {
                   onClick={() => setPromotingComment({ id: it.id, defaultTitle: it.body.slice(0, 30), body: it.body })}
                 >
                   <Sparkles />
-                  提炼为精华
+                  提炼为知识卡片
                 </Button>
                 <Button
                   type="button"
@@ -873,7 +1010,7 @@ function CommentsTab() {
             {it.promoteStatus === 'approved' && (
               <p className="flex items-center gap-1 text-xs text-status-succeeded-fg">
                 <CheckCircle2 className="size-3.5" />
-                已提炼为精华
+                已提炼为知识卡片
               </p>
             )}
             {it.promoteStatus === 'rejected' && (
@@ -888,11 +1025,11 @@ function CommentsTab() {
       <AdminActionDialog
         open={!!promotingComment}
         onOpenChange={(o) => !o && setPromotingComment(null)}
-        title="提炼为精华"
-        description="系统会基于评论原文生成精华条目，标题可自定义。"
+        title="提炼为知识卡片"
+        description="系统会基于评论原文生成知识卡片，标题可自定义。"
         fields={[
-          { kind: 'text', id: 'title', label: '精华标题', required: true, maxLength: 80, defaultValue: promotingComment?.defaultTitle },
-          { kind: 'markdown', id: 'body', label: '精华正文', required: true, defaultValue: promotingComment?.body, maxLength: 50000, rows: 10 },
+          { kind: 'text', id: 'title', label: '知识卡片标题', required: true, maxLength: 80, defaultValue: promotingComment?.defaultTitle },
+          { kind: 'markdown', id: 'body', label: '知识卡片正文', required: true, defaultValue: promotingComment?.body, maxLength: 50000, rows: 10 },
           { kind: 'tags', id: 'tags', label: '标签', defaultValue: [], maxTagLength: 40, maxTags: 10 },
           { kind: 'textarea', id: 'conclusion', label: '结论（可选）', rows: 3, maxLength: 2000 },
         ]}

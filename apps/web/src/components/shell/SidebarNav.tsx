@@ -79,7 +79,7 @@ export function SidebarNav({
             aria-current={active ? 'page' : undefined}
             className={cn(
               // 左侧 2px 高亮条：给 active 状态更强的视觉权重
-              'group relative flex items-center gap-2.5 rounded-md py-1.5 pl-3.5 pr-2.5 text-sm transition-colors duration-150',
+              'group relative flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-[13px] transition-colors duration-150',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors before:duration-150',
               active

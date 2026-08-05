@@ -46,7 +46,7 @@ export function SectionCard({
   return (
     <section
       className={cn(
-        'rounded-lg border',
+        'rounded-md border',
         tone === 'default' && 'border-border bg-card',
         tone === 'muted' && 'border-border bg-muted/40',
         tone === 'accent' && 'border-l-2 border-l-primary border-border bg-accent/40',
@@ -58,8 +58,8 @@ export function SectionCard({
       )}
     >
       {title || actions ? (
-        <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-          <h2 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <h2 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground">
             {ToneIcon && (
               <ToneIcon
                 aria-hidden

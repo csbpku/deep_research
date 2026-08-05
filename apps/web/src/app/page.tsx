@@ -2,7 +2,6 @@ import Link from 'next/link';
 import {
   FilePlus2,
   Rocket,
-  Upload,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -16,7 +15,8 @@ import { Button } from '@/components/ui/button';
  * UI 重设计第三轮：
  *   1. 顶部 PageHeader 保留稳定的产品标题，描述改为每日工作语境
  *   2. RecentActivityStrip：最新日报 + 按 Distilled 分数排序的今日高信号
- *   3. "开始研究"一行：3 个创作动作（AI 调研 / 新建 / 导入）；
+ *   3. "开始研究"一行：2 个创作动作（AI 调研 / 新建调研）；
+ *      新建调研页内再选择空白创建或文件导入；
  *      搜索和雷达浏览已有全局/侧栏入口，不在首页重复
  *   4. Admin 入口由 AppShell 侧栏控制（前端显隐）；直链 /admin 仍被服务端拦截
  */
@@ -24,8 +24,8 @@ export default function HomePage() {
   return (
     <div className="mx-auto max-w-shell">
       <PageHeader
-        title="技术调研平台"
-        description="从今天的高信号开始，继续未完成的研究，把值得复用的结论沉淀下来。"
+        title="AI技术调研平台"
+        description="从今天的高信号开始，把值得复用的结论沉淀下来。"
       />
 
       <RecentActivityStrip />
@@ -37,25 +37,21 @@ export default function HomePage() {
         <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:shrink-0">
           开始研究
         </p>
-        <QuickAction
-          href="/ai-research"
-          icon={Rocket}
-          label="提交 AI 调研"
-          desc="主题 → 抓取 → 写作，端到端"
-          primary
-        />
-        <QuickAction
-          href="/researches/new"
-          icon={FilePlus2}
-          label="新建调研"
-          desc="从问题开始整理结论"
-        />
-        <QuickAction
-          href="/researches/import"
-          icon={Upload}
-          label="导入资料"
-          desc="把已有文档带进研究库"
-        />
+        <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2">
+          <QuickAction
+            href="/ai-research"
+            icon={Rocket}
+            label="提交 AI 调研"
+            desc="主题 → 抓取 → 写作，端到端"
+            primary
+          />
+          <QuickAction
+            href="/researches/new"
+            icon={FilePlus2}
+            label="新建调研"
+            desc="空白创建或从文件导入"
+          />
+        </div>
       </section>
     </div>
   );
@@ -79,9 +75,9 @@ function QuickAction({
       asChild
       variant={primary ? 'default' : 'outline'}
       size="sm"
-      className="h-auto justify-start gap-2 px-3 py-2"
+      className="h-auto min-h-14 w-full justify-start gap-2 px-3 py-2"
     >
-      <Link href={href} className="flex items-center gap-2">
+      <Link href={href} className="flex w-full items-center gap-2">
         <Icon className="size-4 shrink-0" />
         <span className="flex flex-col items-start text-left">
           <span className="text-sm font-medium leading-tight">{label}</span>

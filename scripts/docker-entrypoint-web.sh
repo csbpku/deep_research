@@ -7,8 +7,21 @@
 # then assigned manually via the Admin console (P1-A3).
 set -e
 
-NEXT_BIN=$(find /repo/node_modules/.pnpm -path '*/next/dist/bin/next' 2>/dev/null | head -1)
-PRISMA_BIN=$(find /repo/node_modules/.pnpm -path '*/prisma/build/index.js' 2>/dev/null | head -1)
+NEXT_BIN="/repo/node_modules/next/dist/bin/next"
+PRISMA_BIN="/repo/node_modules/prisma/build/index.js"
+
+# Keep compatibility with isolated pnpm layouts used by older images.
+if [ ! -f "$NEXT_BIN" ]; then
+  NEXT_BIN=$(find /repo/node_modules/.pnpm -path '*/next/dist/bin/next' 2>/dev/null | head -1)
+fi
+if [ ! -f "$PRISMA_BIN" ]; then
+  PRISMA_BIN=$(find /repo/node_modules/.pnpm -path '*/prisma/build/index.js' 2>/dev/null | head -1)
+fi
+
+if [ -z "$NEXT_BIN" ] || [ ! -f "$NEXT_BIN" ]; then
+  echo "[entrypoint] Next.js runtime not found" >&2
+  exit 1
+fi
 
 echo "[entrypoint] Running Prisma migrations..."
 node "$PRISMA_BIN" migrate deploy --schema /repo/apps/web/prisma/schema.prisma 2>&1 || {

@@ -18,7 +18,7 @@ export function RadarRepoSummary({ summary, meta }: { summary: string; meta: Rep
     .filter(Boolean);
 
   return (
-    <section className="my-5 border-y border-border py-4" aria-labelledby="repo-summary-title">
+    <section className="my-5 rounded-lg bg-muted/30 px-4 py-4" aria-labelledby="repo-summary-title">
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
         <h2 id="repo-summary-title" className="flex items-center gap-1.5 text-sm font-semibold">
           <Github className="size-4 text-muted-foreground" aria-hidden />

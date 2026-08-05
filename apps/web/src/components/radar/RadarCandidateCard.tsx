@@ -11,7 +11,6 @@ import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { cn } from '@/lib/utils';
 
@@ -39,8 +38,12 @@ interface RadarCandidate {
 
 interface RadarCandidateCardProps {
   candidate: RadarCandidate;
+  /** 登录成员操作（例如从候选发起深入调研）；不传则不展示 */
+  memberActions?: React.ReactNode;
   /** Admin 操作按钮组（select/dismiss/retry）；不传则不展示 */
   adminActions?: React.ReactNode;
+  /** 统一排序流使用无卡片行，来源分组和 Admin 保留卡片容器。 */
+  compact?: boolean;
 }
 
 function formatDate(iso: string): string {
@@ -62,7 +65,12 @@ function SourcePill({ sourceType }: { sourceType: string | null }) {
   );
 }
 
-export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCardProps) {
+export function RadarCandidateCard({
+  candidate,
+  memberActions,
+  adminActions,
+  compact = false,
+}: RadarCandidateCardProps) {
   const interpretation = candidate.interpretation;
   const showExcerpt =
     !interpretation ||
@@ -98,7 +106,12 @@ export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCa
   );
 
   return (
-    <article className="flex min-w-0 max-w-full flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/30">
+    <article className={cn(
+      'flex min-w-0 max-w-full flex-col gap-2 transition-colors',
+      compact
+        ? 'border-b border-border px-4 py-4 last:border-b-0 hover:bg-accent/30'
+        : 'rounded-md border border-border bg-card p-4 hover:border-primary/30',
+    )}>
       <header className="flex flex-wrap items-center gap-2">
         <SourcePill sourceType={candidate.sourceType} />
         {isAdminQueue ? <StatusBadge kind="radar" value={candidate.status} /> : null}
@@ -118,7 +131,7 @@ export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCa
       </Link>
 
       {candidate.interpretation ? (
-        <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+        <p className="line-clamp-2 text-sm leading-7 text-muted-foreground">
           <span className="mr-1.5 text-[11px] text-foreground/70">AI 解读：</span>
           {candidate.interpretation}
         </p>
@@ -144,9 +157,13 @@ export function RadarCandidateCard({ candidate, adminActions }: RadarCandidateCa
           types={['favorite']}
           className="shrink-0 gap-1 py-0"
         />
-        <Button asChild type="button" variant="ghost" size="xs">
-          <Link href={`/radar/${candidate.id}`}>查看详情</Link>
-        </Button>
+        {memberActions}
+        <Link
+          href={`/radar/${candidate.id}`}
+          className="shrink-0 text-xs font-medium text-primary hover:underline"
+        >
+          查看详情 →
+        </Link>
       </div>
 
       {adminActions ? (

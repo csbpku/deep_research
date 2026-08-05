@@ -72,7 +72,7 @@ export default function NewResearchPage() {
 
   if (mode === 'pick') {
     return (
-      <div className="mx-auto max-w-measure">
+      <div className="mx-auto max-w-shell">
         <nav className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           <Link href="/researches" className="hover:text-foreground hover:underline">
             调研库
@@ -80,32 +80,38 @@ export default function NewResearchPage() {
           <span>/</span>
           <span>新建</span>
         </nav>
-        <h1 className="mb-4 text-xl font-semibold tracking-tight">新建调研</h1>
+        <div className="mb-6 flex items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">新建调研</h1>
+            <p className="mt-1 text-sm text-muted-foreground">从一个空白问题开始，或导入已有资料后再整理成团队可复用的研究。</p>
+          </div>
+          <div className="hidden text-right font-mono text-[11px] text-muted-foreground sm:block">预计 2–5 分钟<br />可随时保存草稿</div>
+        </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <button
             type="button"
             onClick={() => setMode('create')}
-            className="cursor-pointer rounded-lg border border-border bg-card p-5 text-left transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-accent/25 p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:to-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <div className="flex items-center gap-2">
               <FilePlus2 className="size-4 text-primary" />
-              <span className="text-sm font-semibold">从空白创建</span>
+              <span className="text-lg font-semibold tracking-tight">从空白创建</span>
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
               直接写标题 + 正文 + 背景 / 结论 / 风险 / 标签
             </p>
           </button>
 
           <Link
             href="/researches/import"
-            className="block rounded-lg border border-border bg-card p-5 transition-colors duration-200 hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-h-56 flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-muted/45 p-6 transition-colors duration-200 hover:border-primary/40 hover:to-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <div className="flex items-center gap-2">
               <Upload className="size-4 text-primary" />
-              <span className="text-sm font-semibold">从文件导入</span>
+              <span className="text-lg font-semibold tracking-tight">从文件导入</span>
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
               拖拽 .md / .txt / .html（≤ 5MB）→ 自动转 Markdown → 个人草稿
             </p>
           </Link>

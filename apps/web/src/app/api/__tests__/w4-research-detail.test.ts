@@ -11,6 +11,7 @@
 // 不连真实 DB；纯函数测试 + 类型契约。
 
 import { describe, expect, it } from 'vitest';
+import { resolveResearchSourceLink } from '../../../lib/research-source-link';
 import { RESEARCH_STATUS, RESEARCH_TYPE } from '@deep-research/shared/states';
 
 // ──────────────────────────────────────────────────────────────────────
@@ -142,31 +143,26 @@ describe('sourceComment handling', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('sourceRef → href resolution', () => {
-  function sourceHrefForRef(ref: { type?: string; value?: string }): string | null {
-    if (!ref.value) return null;
-    if (ref.type === 'url') return ref.value;
-    if (ref.type === 'doi') return `https://doi.org/${ref.value}`;
-    if (ref.type === 'arxiv') return `https://arxiv.org/abs/${ref.value}`;
-    return null;
-  }
-
   it('url → returns url as-is', () => {
-    expect(sourceHrefForRef({ type: 'url', value: 'https://example.com/a' })).toBe('https://example.com/a');
+    expect(resolveResearchSourceLink({ type: 'url', value: 'https://example.com/a' })?.href)
+      .toBe('https://example.com/a');
   });
 
   it('doi → doi.org link', () => {
-    expect(sourceHrefForRef({ type: 'doi', value: '10.1234/abc' })).toBe('https://doi.org/10.1234/abc');
+    expect(resolveResearchSourceLink({ type: 'doi', value: '10.1234/abc' })?.href)
+      .toBe('https://doi.org/10.1234/abc');
   });
 
   it('arxiv → arxiv.org/abs link', () => {
-    expect(sourceHrefForRef({ type: 'arxiv', value: '2501.12345' })).toBe('https://arxiv.org/abs/2501.12345');
+    expect(resolveResearchSourceLink({ type: 'arxiv', value: '2501.12345' })?.href)
+      .toBe('https://arxiv.org/abs/2501.12345');
   });
 
   it('unknown type → null', () => {
-    expect(sourceHrefForRef({ type: 'book', value: 'xxx' })).toBe(null);
+    expect(resolveResearchSourceLink({ type: 'book', value: 'xxx' })).toBe(null);
   });
 
   it('missing value → null', () => {
-    expect(sourceHrefForRef({ type: 'url' })).toBe(null);
+    expect(resolveResearchSourceLink({ type: 'url' })).toBe(null);
   });
 });

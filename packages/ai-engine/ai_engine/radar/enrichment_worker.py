@@ -373,18 +373,20 @@ async def enrich_web_candidate(
     if isinstance(existing_meta, dict) and existing_meta.get("provider") == "web":
         return dict(existing_meta)
 
+    doc = None
     try:
         doc = await safe_fetch(canonical_url, timeout=15.0)
     except Exception:
-        # Leave the row retryable: sync already stored whatever markdown it
-        # could, so a failed enrichment must not poison the candidate.
-        return None
+        if not existing_markdown or _is_low_quality_content(existing_markdown):
+            return None
 
-    html = doc.content.decode("utf-8", errors="replace")
-    fetched_markdown = _strip_nul(
-        _extract_article_content(html, canonical_url, "web")
-    )
-    fetched_markdown = fetched_markdown[: 64 * 1024]
+    fetched_markdown = ""
+    if doc is not None:
+        html = doc.content.decode("utf-8", errors="replace")
+        fetched_markdown = _strip_nul(
+            _extract_article_content(html, canonical_url, "web")
+        )
+        fetched_markdown = fetched_markdown[: 64 * 1024]
 
     new_markdown = existing_markdown
     if fetched_markdown and not _is_low_quality_content(fetched_markdown):
@@ -394,15 +396,17 @@ async def enrich_web_candidate(
         ):
             new_markdown = fetched_markdown
 
-    payload = {
+    payload: dict[str, Any] = {
         "provider": "web",
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "finalUrl": doc.url,
-        "finalIp": doc.final_ip,
-        "status": doc.status,
-        "contentType": doc.content_type,
+        "finalUrl": doc.url if doc is not None else canonical_url,
+        "finalIp": doc.final_ip if doc is not None else None,
+        "status": doc.status if doc is not None else None,
+        "contentType": doc.content_type if doc is not None else None,
         "title": str(current.get("title") or "")[:300],
     }
+    if doc is None:
+        payload.update({"degraded": True, "reason": "cached_source"})
     payload = _trim_to_budget(payload)
 
     tldr = str(current.get("tldr") or current.get("interpretation") or "")[:500]
@@ -441,7 +445,7 @@ async def enrich_web_candidate(
         "ai-engine.radar.enrichment.web_done",
         extra={
             "summary_id": summary_id,
-            "status": doc.status,
+            "status": doc.status if doc is not None else None,
             "markdown_bytes": len(markdown_bytes),
             "tldr": bool(tldr),
         },
@@ -1253,14 +1257,24 @@ async def enrich_arxiv_candidate(
             "ai-engine.radar.enrichment.arxiv_pdf_fetch_failed",
             extra={"summary_id": summary_id, "arxiv_id": arxiv_id, "error": type(exc).__name__},
         )
-        return None
+        return await _enrich_arxiv_from_cached_abstract(
+            pool,
+            summary_id=summary_id,
+            arxiv_id=arxiv_id,
+            reason="pdf_fetch_failed",
+        )
 
     if len(pdf_bytes) > 8 * 1024 * 1024:
         logger.warning(
             "ai-engine.radar.enrichment.arxiv_pdf_too_large",
             extra={"summary_id": summary_id, "arxiv_id": arxiv_id, "bytes": len(pdf_bytes)},
         )
-        return None
+        return await _enrich_arxiv_from_cached_abstract(
+            pool,
+            summary_id=summary_id,
+            arxiv_id=arxiv_id,
+            reason="pdf_too_large",
+        )
 
     markdown, sections, authors, figures = _parse_arxiv_pdf(pdf_bytes)
     if not markdown:
@@ -1353,6 +1367,64 @@ async def enrich_arxiv_candidate(
     }
 
 
+async def _enrich_arxiv_from_cached_abstract(
+    pool: Any,
+    *,
+    summary_id: str,
+    arxiv_id: str,
+    reason: str,
+) -> dict[str, Any] | None:
+    """Persist useful arXiv analysis when the full PDF cannot be processed."""
+    current = await _fetch_enrichment_row(pool, summary_id)
+    if not current:
+        return None
+    markdown = _strip_nul(str(current.get("originalMarkdown") or "")).strip()
+    if not markdown:
+        return None
+    title = str(current.get("title") or arxiv_id)
+    analysis = await _generate_arxiv_analysis(markdown, title)
+    tldr = (
+        str((analysis or {}).get("tldr") or "").strip()
+        or str(current.get("tldr") or current.get("interpretation") or "").strip()
+    )[:500]
+    meta_payload = {
+        "provider": "arxiv",
+        "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "arxivId": arxiv_id,
+        "sectionCount": 0,
+        "authorCount": 0,
+        "figureCount": 0,
+        "figures": [],
+        "degraded": True,
+        "reason": reason,
+    }
+    async with pool.connection() as conn:
+        await conn.execute(
+            'UPDATE "summaries" SET "originalMeta" = %s::jsonb, '
+            '"tldr" = COALESCE("tldr", %s), '
+            '"arxivAnalysis" = COALESCE("arxivAnalysis", %s::jsonb), '
+            '"originalBytes" = COALESCE("originalBytes", %s), '
+            '"originalFetchedAt" = COALESCE("originalFetchedAt", now()), '
+            '"updatedAt" = now() WHERE "id" = %s',
+            (
+                json.dumps(meta_payload, ensure_ascii=False),
+                tldr or None,
+                json.dumps(analysis, ensure_ascii=False) if analysis else None,
+                len(markdown.encode("utf-8")),
+                summary_id,
+            ),
+        )
+    return {
+        "markdown": markdown,
+        "sections": [],
+        "tldr": tldr or None,
+        "analysis": analysis,
+        "authors": [],
+        "figures": [],
+        "meta": meta_payload,
+    }
+
+
 async def run_enrichment_for_pending(
     pool: Any,
     *,
@@ -1366,7 +1438,7 @@ async def run_enrichment_for_pending(
     A candidate needs enrichment if:
     - ``originalKind`` matches one of ``source_kinds``
     - ``originalMeta`` is null (not yet enriched)
-    - ``syncRunId`` is not null (came from a real sync)
+    - it came from a real sync, or is an approved user candidate
 
     Dispatches by source kind to the right enricher (github → REST,
     arxiv → PDF parse + LLM TL;DR).
@@ -1378,7 +1450,12 @@ async def run_enrichment_for_pending(
     params: tuple[Any, ...] = (*source_kinds,)
     if sync_run_ids:
         run_placeholders = ",".join(["%s"] * len(sync_run_ids))
-        run_filter = f'AND "syncRunId" IN ({run_placeholders}) '
+        run_filter = (
+            f'AND ("syncRunId" IN ({run_placeholders}) OR EXISTS ('
+            'SELECT 1 FROM "share_submissions" sh '
+            'WHERE sh."publishedSummaryId" = "summaries"."id" '
+            'AND sh."status" = \'approved\')) '
+        )
         params = (*params, *sync_run_ids)
     async with pool.connection() as conn:
         rows = await (
@@ -1386,7 +1463,10 @@ async def run_enrichment_for_pending(
                 'SELECT "id", "canonicalUrl", "originalKind" FROM "summaries" '
                 f'WHERE "originalKind" IN ({placeholders}) '
                 'AND "originalMeta" IS NULL '
-                'AND "syncRunId" IS NOT NULL '
+                'AND ("syncRunId" IS NOT NULL OR EXISTS ('
+                'SELECT 1 FROM "share_submissions" sh '
+                'WHERE sh."publishedSummaryId" = "summaries"."id" '
+                'AND sh."status" = \'approved\')) '
                 f"{run_filter}"
                 'ORDER BY "createdAt" DESC LIMIT %s',
                 (*params, limit),

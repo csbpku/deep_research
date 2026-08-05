@@ -47,12 +47,44 @@ ALLOWED_TIERS = frozenset({"skim", "deep_read"})
 _METADATA_TAG_PREFIXES = ("profile_", "tier_")
 _METADATA_TAG_EXACT = frozenset({
     "github", "arxiv", "huggingface", "devto", "hackernews",
-    "trending", "must_read", "topic_search",
+    "lobsters", "producthunt", "rss", "news", "trending", "must_read",
+    "topic_search",
+})
+
+# “热点主题”必须表达一个近期可跟进的具体议题，而不是内容所属的大类或
+# 实现语言。原始来源的 tags 是采集/检索 metadata，并不是产品级 taxonomy；
+# 直接按 tag 分桶会把互不相关的内容聚成 `ai`，也会把 GitHub 的语言标签
+# (`python` / `typescript`) 错当成热点。
+#
+# V1 先做严格守门：宁可没有主题，也不展示没有共同命题的伪主题。具体议题
+#（例如 mcp、rag、agent-evaluation）仍可进入；后续语义聚类不能绕过此守门。
+_NON_TOPIC_TAGS = frozenset({
+    # 领域总类
+    "ai", "artificial-intelligence", "artificialintelligence",
+    "llm", "llms", "large-language-model", "large-language-models",
+    "machine-learning", "machinelearning", "deep-learning", "deeplearning",
+    "programming", "coding", "software-development", "webdev",
+    "opensource", "open-source",
+    # 编程语言 / 运行时
+    "python", "typescript", "javascript", "java", "kotlin", "scala",
+    "go", "golang", "rust", "ruby", "php", "swift", "c", "cpp",
+    "csharp", "c-sharp", "dotnet", "shell", "bash", "node", "nodejs",
 })
 
 
 def _is_metadata_tag(tag: str) -> bool:
-    return tag.startswith(_METADATA_TAG_PREFIXES) or tag in _METADATA_TAG_EXACT
+    raw = tag.strip().lower()
+    normalized = raw.replace("_", "-")
+    return (
+        raw.startswith(_METADATA_TAG_PREFIXES)
+        or raw in _METADATA_TAG_EXACT
+        or normalized in _NON_TOPIC_TAGS
+    )
+
+
+def _topic_slug(name: str) -> str:
+    """Return the stable canonical slug used for reconciliation and upsert."""
+    return re.sub(r"[^a-z0-9一-鿿]+", "-", name.lower()).strip("-")[:120]
 
 
 async def _fetch_candidate_clusters(pool: Any, since: datetime) -> list[dict[str, Any]]:
@@ -88,7 +120,7 @@ async def _fetch_candidate_clusters(pool: Any, since: datetime) -> list[dict[str
     # Step 2: Python 侧过滤 metadata + 按 tag 聚合
     by_tag: dict[str, dict[str, Any]] = {}
     for r in exploded:
-        tag = str(r["tag"])
+        tag = str(r["tag"]).strip().lower()
         if _is_metadata_tag(tag):
             continue
         c = by_tag.setdefault(
@@ -132,7 +164,7 @@ async def _upsert_topic(
     window_end: datetime,
 ) -> str:
     """根据 cluster name 生成 slug；upsert topic，返回 id。"""
-    slug = re.sub(r"[^a-z0-9一-鿿]+", "-", name.lower()).strip("-")[:120]
+    slug = _topic_slug(name)
     if not slug:
         slug = f"topic-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
@@ -225,55 +257,74 @@ async def _cleanup_stale_topic_candidates(pool: Any, cutoff: datetime) -> int:
     return len(rows)
 
 
+async def _retire_obsolete_auto_topics(pool: Any, active_slugs: set[str]) -> int:
+    """Delete derived topics no longer supported by the current aggregation.
+
+    Topics with admin-curated candidates are product data and stay. All other
+    topics are reproducible projections of the current window; retaining them
+    after their tag is rejected or expires would keep misleading topics visible.
+    """
+    async with pool.connection() as conn:
+        cursor = await conn.execute(
+            """
+            DELETE FROM "topics" t
+            WHERE NOT (t."slug" = ANY(%s))
+              AND NOT EXISTS (
+                SELECT 1 FROM "topic_candidates" tc
+                WHERE tc."topicId" = t."id"
+                  AND tc."addedReason" = 'admin_manual'
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM "topic_proposals" tp
+                WHERE tp."publishedTopicId" = t."id"
+                  AND tp."status" = 'approved'
+              )
+            RETURNING t."id"
+            """,
+            (list(active_slugs),),
+        )
+        rows = await cursor.fetchall()
+    return len(rows)
+
+
 async def run_topic_aggregation(
     pool: Any,
     *,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """执行一次聚合；返回 { topics_created, candidates_linked, stale_removed }。"""
+    """Generate review proposals and reconcile old auto-published topics.
+
+    Public topics are no longer written by this scheduled path. Approval is an
+    explicit Admin action handled by the web BFF.
+    """
     now = now or datetime.now(timezone.utc)
     window_start = now - timedelta(days=WINDOW_DAYS)
+    from ai_engine.radar.topic_proposal_worker import run_topic_proposal_generation
 
-    topics_created = 0
-    candidates_linked = 0
-    clusters = await _fetch_candidate_clusters(pool, window_start)
-
-    for cluster in clusters:
-        if len(cluster["summary_ids"]) < MIN_CANDIDATES:
-            continue
-        if len(cluster["kinds"]) < MIN_SOURCES:
-            continue
-        try:
-            topic_id = await _upsert_topic(
-                pool,
-                name=cluster["name"],
-                summary_count=len(cluster["summary_ids"]),
-                source_count=len(cluster["kinds"]),
-                window_start=window_start,
-                window_end=now,
-            )
-            await _link_candidates(pool, topic_id, cluster["summary_ids"])
-            candidates_linked += len(cluster["summary_ids"])
-            topics_created += 1
-        except Exception as exc:
-            logger.warning(
-                "ai-engine.radar.topic.cluster_failed",
-                extra={"name": cluster["name"][:80], "error": type(exc).__name__},
-            )
+    proposal_result = await run_topic_proposal_generation(pool, now=now)
+    active_slugs: set[str] = set()
 
     stale = await _cleanup_stale_topic_candidates(pool, window_start)
+    retired = await _retire_obsolete_auto_topics(pool, active_slugs)
     logger.info(
         "ai-engine.radar.topic.aggregation_done",
         extra={
-            "topics_created": topics_created,
-            "candidates_linked": candidates_linked,
+            "topics_created": 0,
+            "candidates_linked": 0,
+            "proposals_created": proposal_result["proposals_created"],
+            "proposal_candidates_linked": proposal_result["candidates_linked"],
             "stale_removed": stale,
+            "topics_retired": retired,
         },
     )
     return {
-        "topics_created": topics_created,
-        "candidates_linked": candidates_linked,
+        "topics_created": 0,
+        "candidates_linked": 0,
+        "proposals_created": proposal_result["proposals_created"],
+        "proposal_candidates_linked": proposal_result["candidates_linked"],
+        "proposal_failed": proposal_result["failed"],
         "stale_removed": stale,
+        "topics_retired": retired,
     }
 
 

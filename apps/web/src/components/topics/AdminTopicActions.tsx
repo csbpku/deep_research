@@ -2,7 +2,7 @@
 
 // P1-D: Admin 手动触发主题聚合 / 综述。
 // 挂在 /topics PageHeader 的 actions 槽。
-// - 聚合：对最近 14 天 summaries 跑聚类 + 写 topics / topic_candidates
+// - 提议：对最近 14 天 summaries 跑标题/enrichment 聚类，写入审核队列
 // - 综述：跑 LLM 写 topic.synthesisPayload
 // 两者都通过 /api/admin/topics/* BFF → ai-engine，需要 INTERNAL_SERVICE_TOKEN。
 
@@ -17,6 +17,10 @@ interface AggregateResp {
   topicsCreated: number;
   candidatesLinked: number;
   staleRemoved: number;
+  topicsRetired: number;
+  proposalsCreated: number;
+  proposalCandidatesLinked: number;
+  proposalFailed: number;
 }
 
 interface SynthesizeResp {
@@ -46,7 +50,7 @@ export function AdminTopicActions() {
     onSuccess: (res) => {
       setError(null);
       setMessage(
-        `聚合完成：新建 ${res.topicsCreated} 个主题 · 关联 ${res.candidatesLinked} 候选 · 清理 ${res.staleRemoved} 过期`,
+        `提议生成完成：${res.proposalsCreated} 个提议 · 关联 ${res.proposalCandidatesLinked} 条证据 · 下线 ${res.topicsRetired} 个旧主题${res.proposalFailed ? ` · 失败 ${res.proposalFailed}` : ''}`,
       );
       queryClient.invalidateQueries({ queryKey: ['topics'] });
       router.refresh();
@@ -93,14 +97,14 @@ export function AdminTopicActions() {
           variant="outline"
           disabled={busy}
           onClick={() => aggregateMut.mutate()}
-          aria-label="立即聚合主题"
+          aria-label="生成主题提议"
         >
           {aggregateMut.isPending ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
             <RefreshCw className="size-4" />
           )}
-          立即聚合
+          生成主题提议
         </Button>
         <Button
           type="button"

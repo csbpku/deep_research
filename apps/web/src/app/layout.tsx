@@ -5,8 +5,8 @@ import { AppShell } from '@/components/shell/AppShell';
 import './globals.css';
 
 export const metadata = {
-  title: '技术调研平台',
-  description: '个人深度研究 / 技术调研平台',
+  title: 'AI技术调研平台',
+  description: '从技术信号到可复用结论的共享研究空间',
 };
 
 /**

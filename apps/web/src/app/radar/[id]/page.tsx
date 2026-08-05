@@ -1,19 +1,12 @@
 'use client';
 
-/**
- * ⚠️ Sentinel page —— inline style 保留（用户在 Week 9 review 时要求保留，
- * 作为"工艺快照"与其它页面的 design-token 化形成对照）。其余页面统一走
- * globals.css + tailwind。如需迁移，先开 P1 + 设计评审，避免静默删改。
- */
-
 import { useParams } from 'next/navigation';
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
-import { ExternalLink, MessageSquare } from 'lucide-react';
+import { ExternalLink, MessageSquare, Users, Workflow } from 'lucide-react';
 import { EmptyState } from '../../../components/EmptyState';
-import { CommentSection } from '../../../components/CommentSection';
 import { useCurrentUser } from '../../../lib/auth/client';
 import { AskAiDrawer } from '../../../components/radar/AskAiDrawer';
 import { RadarFeedbackBar } from '../../../components/radar/RadarFeedbackBar';
@@ -27,15 +20,10 @@ import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
+import MarkdownContent from '../../../components/MarkdownContent';
 import { Button } from '../../../components/ui/button';
 import { toApiHttpError } from '../../../lib/errors/api-error';
 import { retryOnceAi } from '../../../lib/errors/friendly';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '../../../components/ui/tooltip';
 
 interface RadarDetail {
   id: string;
@@ -103,6 +91,8 @@ interface RepoMeta {
 export default function RadarDetailPage() {
   const params = useParams<{ id: string }>();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'team' | 'ai'>('ai');
+  const me = useCurrentUser();
   const q = useQuery<RadarDetail>({
     queryKey: ['radar', params.id],
     queryFn: async () => {
@@ -117,18 +107,24 @@ export default function RadarDetailPage() {
 
   if (q.isLoading) {
     return (
-      <div>
-        <Link href="/radar" style={{ fontSize: 13, color: '#475569' }}>← 返回候选列表</Link>
-        <p style={{ color: '#475569', marginTop: 16 }}>加载中…</p>
+      <div className="mx-auto max-w-measure">
+        <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回候选列表</Link>
+        <p className="mt-4 text-sm text-muted-foreground">加载中…</p>
       </div>
     );
   }
   if (q.isError) {
+    const errorMessage = String((q.error as Error).message);
+    const needsLogin = errorMessage.includes('登录') || errorMessage.includes('授权');
     return (
-      <div>
-        <Link href="/radar" style={{ fontSize: 13, color: '#475569' }}>← 返回候选列表</Link>
-        <div style={{ marginTop: 16 }}>
-          <EmptyState title="加载失败" description={String((q.error as Error).message)} />
+      <div className="mx-auto max-w-measure">
+        <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回候选列表</Link>
+        <div className="mt-4">
+          <EmptyState
+            title={needsLogin ? '需要登录' : '加载失败'}
+            description={needsLogin ? '登录后才能查看雷达详情、评分和讨论。' : errorMessage}
+            action={needsLogin ? <Button asChild size="sm"><Link href="/signin">去登录</Link></Button> : undefined}
+          />
         </div>
       </div>
     );
@@ -139,20 +135,14 @@ export default function RadarDetailPage() {
   const sourceLabel = formatSourceType(d.sourceType);
 
   return (
-    <div>
-      <Link href="/radar" style={{ fontSize: 13, color: '#475569' }}>← 返回候选列表</Link>
+    <div className="mx-auto max-w-5xl">
+      <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回候选列表</Link>
 
-      <article style={{ marginTop: 16, lineHeight: 1.65 }}>
-        <header style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div className="mt-5 grid gap-8 lg:grid-cols-[minmax(0,760px)_240px] lg:items-start">
+      <article className="min-w-0 space-y-4 leading-7">
+        <header className="flex flex-wrap items-center gap-2">
           <span
-            style={{
-              padding: '2px 8px',
-              border: '1px solid #cbd5e1',
-              borderRadius: 12,
-              fontSize: 11,
-              color: '#475569',
-              background: '#fff',
-            }}
+            className="rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
             aria-label={sourceLabel.full}
             title={sourceLabel.full}
           >
@@ -161,50 +151,35 @@ export default function RadarDetailPage() {
           {d.originalKind ? (
             <span
               data-testid="original-kind-badge"
-              style={{
-                padding: '2px 8px',
-                border: '1px solid #bfdbfe',
-                borderRadius: 12,
-                fontSize: 11,
-                color: '#1d4ed8',
-                background: '#eff6ff',
-              }}
+              className="rounded-full border border-primary/30 bg-accent px-2 py-0.5 text-[11px] text-accent-foreground"
             >
               内容类型 {d.originalKind === 'arxiv' ? 'arXiv 论文' : d.originalKind}
             </span>
           ) : null}
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>
+          <span className="font-mono text-[11px] text-muted-foreground">
             抓取 {new Date(d.crawledAt).toISOString().slice(0, 10)}
           </span>
         </header>
 
-        <h1 style={{ fontSize: 24, marginTop: 12, marginBottom: 8 }}>{d.title}</h1>
+        <h1 className="text-3xl font-semibold leading-tight tracking-tight">{d.title}</h1>
 
         {d.interpretation ? (
           <p
-            style={{
-              padding: '12px 16px',
-              background: '#f8fafc',
-              borderRadius: 6,
-              borderLeft: '3px solid #0f172a',
-              color: '#1e293b',
-              fontSize: 15,
-              margin: '8px 0 16px',
-            }}
+            className="rounded-md border-l-2 border-primary bg-accent/60 px-4 py-3 text-sm leading-7 text-foreground"
           >
-            <span style={{ color: '#64748b', fontSize: 12, marginRight: 6 }}>AI 一句话解读：</span>
+            <span className="mr-1.5 text-xs font-medium text-muted-foreground">AI 一句话解读：</span>
             {d.interpretation}
           </p>
         ) : null}
 
         {d.distilledScore ? (
-          <div style={{ margin: '12px 0' }}>
+          <div className="my-3">
             <DistilledScorePanel score={d.distilledScore} />
           </div>
         ) : null}
 
         {!d.distilledScore && d.scoreReason ? (
-          <p style={{ fontSize: 13, color: '#475569', margin: '4px 0 12px' }}>
+          <p className="mb-3 text-sm text-muted-foreground">
             <strong>评分理由：</strong>
             {d.scoreReason}
           </p>
@@ -212,15 +187,7 @@ export default function RadarDetailPage() {
 
         {d.selectionReason ? (
           <p
-            style={{
-              fontSize: 13,
-              color: '#166534',
-              background: '#f0fdf4',
-              padding: '8px 12px',
-              borderRadius: 6,
-              borderLeft: '3px solid #22c55e',
-              margin: '8px 0',
-            }}
+            className="my-2 rounded-md border-l-2 border-status-succeeded-fg bg-status-succeeded-bg px-3 py-2 text-sm text-status-succeeded-fg"
           >
             <strong>入选理由：</strong>
             {d.selectionReason}
@@ -250,20 +217,10 @@ export default function RadarDetailPage() {
         ) : null}
 
         {d.body && d.body !== d.interpretation ? (
-          <div
-            style={{
-              whiteSpace: 'pre-wrap',
-              color: '#1e293b',
-              fontSize: 15,
-              margin: '12px 0 24px',
-              padding: 16,
-              background: '#fff',
-              border: '1px solid #e2e8f0',
-              borderRadius: 6,
-            }}
-          >
-            {d.body}
-          </div>
+          <section className="my-8" aria-labelledby="radar-body-title">
+            <h2 id="radar-body-title" className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">正文</h2>
+            <MarkdownContent content={d.body} className="text-[15px] text-foreground" />
+          </section>
         ) : null}
 
         {(() => {
@@ -274,17 +231,11 @@ export default function RadarDetailPage() {
           });
           if (displayTags.length === 0) return null;
           return (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
+            <div className="my-2 flex flex-wrap gap-1.5">
               {displayTags.map((t) => (
                 <span
                   key={t}
-                  style={{
-                    padding: '2px 10px',
-                    background: '#f1f5f9',
-                    color: '#475569',
-                    borderRadius: 12,
-                    fontSize: 12,
-                  }}
+                  className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground"
                 >
                   #{t}
                 </span>
@@ -293,58 +244,21 @@ export default function RadarDetailPage() {
           );
         })()}
 
-        <div className="mt-4 flex flex-nowrap items-center gap-1 overflow-x-auto border-t border-border py-3">
+        <div className="mt-6 flex flex-nowrap items-center gap-1 overflow-x-auto py-3">
           <RadarFeedbackBar
             summaryId={d.id}
             initialCounts={d.feedbackCounts}
             initialMine={d.myFeedbacks}
+            types={['useful', 'inaccurate']}
             className="shrink-0 gap-1 py-0"
           />
-          <span className="h-5 w-px shrink-0 bg-border" aria-hidden />
-          <TooltipProvider delayDuration={120}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  onClick={() => setDrawerOpen(true)}
-                  variant="outline"
-                  size="xs"
-                  className="h-7 w-7 shrink-0 px-0"
-                  aria-label="与 AI 讨论"
-                >
-                  <MessageSquare />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>与 AI 讨论</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button asChild size="xs" className="h-7 w-7 shrink-0 px-0">
-                  <a href={d.url} target="_blank" rel="noopener noreferrer" aria-label="打开原文">
-                    <ExternalLink />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>打开原文</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Button asChild variant="outline" size="xs" className="ml-2 h-7 shrink-0 gap-1.5">
+            <Link href={`/ai-research?seed=${d.id}`} aria-label="深入调研">
+              <Workflow className="size-3.5" />
+              深入调研
+            </Link>
+          </Button>
         </div>
-
-        {d.canManage ? (
-          <div
-            style={{
-              marginTop: 16,
-              padding: 12,
-              background: '#f8fafc',
-              border: '1px dashed #cbd5e1',
-              borderRadius: 6,
-              color: '#475569',
-              fontSize: 13,
-            }}
-          >
-            Admin：前往 <Link href={`/admin/radar?focus=${d.id}`} style={{ color: '#0f172a' }}>/admin/radar</Link> 管理此候选。
-          </div>
-        ) : null}
 
         <AskAiDrawer
           summaryId={d.id}
@@ -352,37 +266,43 @@ export default function RadarDetailPage() {
           summaryUrl={d.url}
           open={drawerOpen}
           onOpenChange={setDrawerOpen}
+          initialTab={drawerTab}
+          teamStatus={d.status}
+          currentUserId={me.data?.id ?? null}
+          currentUserRole={me.data?.role ?? null}
+          contextExcerpt={d.originalMarkdown ?? d.body ?? d.highlights?.summary ?? d.interpretation ?? d.excerpt}
         />
       </article>
 
-      {/* W9 code review 修订：Week 8 计划 §十 要求「在雷达、摘要和沉淀详情
-          复用基础评论组件」，此前只接了摘要和沉淀两处，雷达这条腿一直缺。
-          雷达候选本身就是 summaries 行（/api/radar/[id] 走 prisma.summary），
-          所以 targetType 用 'summary' 即可，不需要动已冻结的 schema。
+      <aside className="hidden space-y-3 lg:sticky lg:top-[72px] lg:block">
+        <section className="rounded-lg border border-border bg-card p-4">
+          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">证据卡</h2>
+          <dl className="grid gap-3 text-xs">
+            <div><dt className="text-muted-foreground">来源</dt><dd className="mt-0.5 font-medium">{sourceLabel.full}</dd></div>
+            <div><dt className="text-muted-foreground">抓取时间</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(d.crawledAt).toISOString().slice(0, 10)}</dd></div>
+            <div><dt className="text-muted-foreground">阅读等级</dt><dd className="mt-0.5 font-medium">{d.distilledScore?.tier === 'deep_read' ? '深度阅读' : d.distilledScore?.tier === 'skim' ? '略读' : '待评估'}</dd></div>
+            <div><dt className="text-muted-foreground">团队价值</dt><dd className="mt-0.5 font-mono text-sm text-status-succeeded-fg">{d.distilledScore?.rankingScore ?? d.distilledScore?.effectiveTotal ?? '—'}</dd></div>
+          </dl>
+        </section>
+        <section className="rounded-lg border border-border bg-card p-4">
+          <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">讨论</h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">围绕当前证据继续团队协作，或让 AI 解释方法、风险和落地方式。</p>
+          <Button type="button" variant="outline" size="sm" className="mt-3 w-full" onClick={() => { setDrawerTab('team'); setDrawerOpen(true); }}>
+            <Users className="size-3.5" />
+            打开讨论
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={() => { setDrawerTab('ai'); setDrawerOpen(true); }}>
+            <MessageSquare className="size-3.5" />
+            与 AI 讨论
+          </Button>
+          <a href={d.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted">
+            <ExternalLink className="size-3.5" />
+            打开原文
+          </a>
+        </section>
+      </aside>
+      </div>
 
-          只在 published 时渲染：/api/summaries/[id]/comments 对非 published
-          目标一律返回 404（route.ts:57,132）。候选在 candidate /
-          pending_review 态挂评论区，只会得到一个必然报错的空壳。 */}
-      <RadarComments summaryId={d.id} status={d.status} />
     </div>
-  );
-}
-
-function RadarComments({ summaryId, status }: { summaryId: string; status: string }) {
-  const me = useCurrentUser();
-  if (status !== 'published') {
-    return (
-      <p style={{ marginTop: 32, fontSize: 13, color: '#94a3b8' }}>
-        该候选尚未选入每日摘要，选入发布后可在此讨论。
-      </p>
-    );
-  }
-  return (
-    <CommentSection
-      targetType="summary"
-      targetId={summaryId}
-      currentUserId={me.data?.id ?? null}
-      currentUserRole={me.data?.role ?? null}
-    />
   );
 }

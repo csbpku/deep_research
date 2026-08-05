@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   researchCreate: vi.fn(),
   researchFindUnique: vi.fn(),
   researchUpdate: vi.fn(),
+  researchDelete: vi.fn(),
+  aiJobDelete: vi.fn(),
   auditCreate: vi.fn(),
   eventCreate: vi.fn(),
 }));
@@ -28,7 +30,7 @@ vi.mock('../../../lib/db.js', () => ({
       create: mocks.create,
       findFirst: mocks.findFirst,
     },
-    research: { findUnique: mocks.researchFindUnique },
+    research: { findUnique: mocks.researchFindUnique, delete: mocks.researchDelete },
     $transaction: mocks.transaction,
   },
 }));
@@ -38,6 +40,7 @@ vi.mock('node:fs/promises', () => ({
 
 import { POST as importPost } from '../imports/route';
 import { POST as researchPost, researchListWhere } from '../researches/route';
+import { DELETE as researchDelete } from '../researches/[id]/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
 import { CreateResearchInput } from '../../../lib/schemas';
 
@@ -53,7 +56,8 @@ beforeEach(() => {
   mocks.writeFile.mockResolvedValue(undefined);
   mocks.unlink.mockResolvedValue(undefined);
   mocks.transaction.mockImplementation((callback) => callback({
-    research: { create: mocks.researchCreate, update: mocks.researchUpdate },
+    research: { create: mocks.researchCreate, update: mocks.researchUpdate, delete: mocks.researchDelete },
+    aiResearchJob: { delete: mocks.aiJobDelete },
     researchAudit: { create: mocks.auditCreate },
     productEvent: { create: mocks.eventCreate },
   }));
@@ -197,6 +201,86 @@ describe('research provenance input', () => {
   });
 });
 
+describe('DELETE /api/researches/[id]', () => {
+  const id = '22222222-2222-4222-8222-222222222222';
+
+  it('deletes an owned draft', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      authorId: '11111111-1111-1111-1111-111111111111',
+      status: 'draft',
+      sourceAiJob: null,
+    });
+    mocks.researchDelete.mockResolvedValue({ id });
+
+    const response = await researchDelete(
+      new Request(`http://localhost/api/researches/${id}`, { method: 'DELETE' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, id });
+    expect(mocks.researchDelete).toHaveBeenCalledWith({ where: { id } });
+    expect(mocks.aiJobDelete).not.toHaveBeenCalled();
+  });
+
+  it('hides another user draft as not found', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      authorId: '33333333-3333-4333-8333-333333333333',
+      status: 'draft',
+      sourceAiJob: null,
+    });
+
+    const response = await researchDelete(
+      new Request(`http://localhost/api/researches/${id}`, { method: 'DELETE' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(404);
+    expect((await response.json()).code).toBe('DRAFT_NOT_FOUND');
+    expect(mocks.researchDelete).not.toHaveBeenCalled();
+  });
+
+  it('does not permanently delete published research', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      authorId: '11111111-1111-1111-1111-111111111111',
+      status: 'published',
+      sourceAiJob: null,
+    });
+
+    const response = await researchDelete(
+      new Request(`http://localhost/api/researches/${id}`, { method: 'DELETE' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe('DRAFT_ALREADY_PUBLISHED');
+    expect(mocks.researchDelete).not.toHaveBeenCalled();
+  });
+
+  it('deletes the linked ai job before deleting an AI draft', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      authorId: '11111111-1111-1111-1111-111111111111',
+      status: 'draft',
+      sourceAiJob: { id: 'job-1' },
+    });
+    mocks.aiJobDelete.mockResolvedValue({ id: 'job-1' });
+    mocks.researchDelete.mockResolvedValue({ id });
+
+    const response = await researchDelete(
+      new Request(`http://localhost/api/researches/${id}`, { method: 'DELETE' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.aiJobDelete).toHaveBeenCalledWith({ where: { id: 'job-1' } });
+    expect(mocks.researchDelete).toHaveBeenCalledWith({ where: { id } });
+  });
+});
+
 describe('GET /api/researches scope', () => {
   it('published scope never includes drafts', () => {
     expect(researchListWhere('published', 'me')).toEqual({
@@ -215,6 +299,21 @@ describe('GET /api/researches scope', () => {
       AND: [
         { type: { equals: 'knowledge' } },
         { status: { equals: 'published' } },
+      ],
+    });
+  });
+
+  it('searches published research without weakening the scope filter', () => {
+    expect(researchListWhere('published', 'me', undefined, 'RAG')).toEqual({
+      AND: [
+        { status: { equals: 'published' } },
+        {
+          OR: [
+            { title: { contains: 'RAG', mode: 'insensitive' } },
+            { body: { contains: 'RAG', mode: 'insensitive' } },
+            { tags: { has: 'RAG' } },
+          ],
+        },
       ],
     });
   });

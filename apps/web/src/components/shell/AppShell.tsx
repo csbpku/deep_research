@@ -1,7 +1,7 @@
 import Link from 'next/link';
-import { Telescope } from 'lucide-react';
 
 import { getCurrentUser } from '@/lib/auth/session';
+import { BrandMark } from './BrandMark';
 import { Topbar } from './Topbar';
 import { SidebarNav } from './SidebarNav';
 // ⚠️ 必须从 server-safe 模块拿常量：从 './SidebarNav'（'use client'）拿会被 RSC
@@ -33,21 +33,22 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       {/* 桌面侧栏 */}
-      <aside className="sticky top-0 hidden h-screen w-sidebar shrink-0 flex-col border-r border-border bg-card md:flex">
+      <aside className="sticky top-0 hidden h-screen w-sidebar shrink-0 flex-col border-r border-border bg-background md:flex">
         <Link
           href="/"
           className="flex h-topbar shrink-0 items-center gap-2 border-b border-border px-4 transition-colors hover:bg-muted/50"
+          aria-label="AI技术调研平台首页"
         >
-          <Telescope className="size-4 shrink-0 text-primary" />
-          <span className="text-sm font-semibold tracking-tight">技术调研</span>
+          <BrandMark />
+          <span className="truncate text-sm font-semibold tracking-tight">AI技术调研平台</span>
         </Link>
 
         <div className="flex-1 overflow-y-auto p-2">
           <SidebarNav items={navItems} />
         </div>
 
-        <div className="shrink-0 border-t border-border px-4 py-2.5">
-          <p className="text-[11px] text-muted-foreground">研究工作台 · 内部预览版</p>
+        <div className="shrink-0 border-t border-border px-4 py-3">
+          <p className="text-[11px] text-muted-foreground">小型团队 · 共享研究空间</p>
         </div>
       </aside>
 

@@ -51,7 +51,7 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis }: Props) {
   const blocks = buildAnalysisBlocks(analysis);
 
   return (
-    <section data-testid="arxiv-paper-card" className="my-5 border-y border-border py-4">
+    <section data-testid="arxiv-paper-card" className="my-5 rounded-lg bg-muted/30 px-4 py-4">
       <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold">
           <FileText className="size-4 text-muted-foreground" aria-hidden />

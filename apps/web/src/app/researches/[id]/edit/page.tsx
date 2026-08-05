@@ -366,7 +366,7 @@ export default function EditorPage() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+        <section className="min-w-0 overflow-hidden rounded-md border border-border bg-card shadow-sm">
           <div className="border-b border-border px-5 py-3">
             <label htmlFor="edit-title" className="sr-only">标题</label>
             <Input
@@ -453,7 +453,7 @@ export default function EditorPage() {
         </section>
 
         <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
-          <details open className="rounded-lg border border-border bg-card p-3">
+          <details open className="rounded-md border border-border bg-card p-3">
           <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
             研究摘要
           </summary>
@@ -482,7 +482,7 @@ export default function EditorPage() {
           </div>
           </details>
 
-          <div className="rounded-lg border border-border bg-card p-3">
+          <div className="rounded-md border border-border bg-card p-3">
           <label htmlFor="edit-tags" className="text-sm font-medium">
             标签
           </label>

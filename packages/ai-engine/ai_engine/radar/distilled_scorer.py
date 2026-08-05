@@ -899,7 +899,7 @@ _LLM_RATE_LIMIT_MAX_RETRIES = 3
 _LLM_RATE_LIMIT_DELAY = 5.0
 # Cap in-flight scoring calls so a full radar sync cannot saturate the
 # local LLM proxy (mirrors agents-radar's LLM_CONCURRENCY=5).
-_LLM_SCORING_CONCURRENCY = int(os.environ.get("RADAR_SCORING_CONCURRENCY", "8"))
+_LLM_SCORING_CONCURRENCY = int(os.environ.get("RADAR_SCORING_CONCURRENCY", "5"))
 _LLM_SCORING_MAX_TOKENS = int(os.environ.get("RADAR_SCORING_MAX_TOKENS", "4096"))
 _loop_score_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 

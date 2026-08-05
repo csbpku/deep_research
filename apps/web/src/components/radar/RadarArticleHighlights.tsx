@@ -1,5 +1,3 @@
-import { Quote } from 'lucide-react';
-
 interface Props {
   summary: string;
   highlights: string[];
@@ -8,7 +6,7 @@ interface Props {
 
 export function RadarArticleHighlights({ summary, highlights, keyQuote }: Props) {
   return (
-    <section className="my-5 border-y border-border py-4" aria-labelledby="article-highlights-title">
+    <section className="my-5 rounded-lg bg-muted/30 px-4 py-4" aria-labelledby="article-highlights-title">
       <h2 id="article-highlights-title" className="mb-3 text-sm font-semibold">摘要与亮点</h2>
       {summary ? <p className="mb-3 text-sm leading-6 text-foreground/90">{summary}</p> : null}
       {highlights.length > 0 ? (
@@ -20,12 +18,6 @@ export function RadarArticleHighlights({ summary, highlights, keyQuote }: Props)
             </li>
           ))}
         </ul>
-      ) : null}
-      {keyQuote ? (
-        <blockquote className="mt-4 flex gap-2 border-l-2 border-border pl-3 text-sm italic leading-6 text-muted-foreground">
-          <Quote className="mt-1 size-3.5 shrink-0" aria-hidden />
-          <span>{keyQuote}</span>
-        </blockquote>
       ) : null}
     </section>
   );

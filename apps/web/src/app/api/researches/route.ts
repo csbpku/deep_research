@@ -97,6 +97,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const parsed = ResearchListQuery.safeParse({
     type: url.searchParams.get('type') ?? undefined,
     scope: url.searchParams.get('scope') ?? undefined,
+    q: url.searchParams.get('q') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     limit: url.searchParams.get('limit') ?? undefined,
   });
@@ -109,10 +110,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { type, scope, page, limit } = parsed.data;
+  const { type, scope, q, page, limit } = parsed.data;
 
   // 安全规则：published scope 所有人可见；draft scope 仅 owner 自己可见
-  const where = researchListWhere(scope, u.id, type);
+  const where = researchListWhere(scope, u.id, type, q);
 
   const [items, total] = await Promise.all([
     prisma.research.findMany({
@@ -173,6 +174,7 @@ export function researchListWhere(
   scope: 'published' | 'draft',
   userId: string,
   type?: 'research' | 'knowledge',
+  query?: string,
 ): Prisma.ResearchWhereInput {
   return {
     AND: [
@@ -180,6 +182,15 @@ export function researchListWhere(
       scope === 'draft'
         ? { authorId: userId, status: { equals: 'draft' as const } }
         : { status: { equals: RESEARCH_STATUS.PUBLISHED as Prisma.EnumResearchStatusFilter['equals'] } },
+      ...(query
+        ? [{
+            OR: [
+              { title: { contains: query, mode: 'insensitive' as Prisma.QueryMode } },
+              { body: { contains: query, mode: 'insensitive' as Prisma.QueryMode } },
+              { tags: { has: query } },
+            ],
+          }]
+        : []),
     ],
   };
 }

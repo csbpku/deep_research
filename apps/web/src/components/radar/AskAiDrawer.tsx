@@ -1,12 +1,14 @@
 'use client';
 
-// AI followup drawer — slide-in panel anchored to a radar candidate / summary.
+// AI followup discussion workspace — a wide reading + discussion surface
+// anchored to a radar candidate / summary. It uses the Sheet primitive for
+// focus management, but becomes a two-column reading workspace on desktop.
 // Posts to /api/chat/sessions + /api/chat/sessions/{id}/messages.
 //
 // Visual contract (mockup lines 485-606):
-// - 480px right drawer, slide-in
+// - Desktop: full article context on the left, discussion on the right
+// - Mobile: full-screen discussion layer with a compact context strip
 // - Header: title, ↗ 看原文, ×
-// - Context strip
 // - 4 suggestion chips
 // - Chat history (user/assistant bubbles)
 // - Footer textarea + send button (⌘+Enter)
@@ -16,6 +18,7 @@ import {
   ExternalLink,
   FileText,
   Lightbulb,
+  MessageSquare,
   Send,
   Sparkles,
   X,
@@ -27,6 +30,8 @@ import {
   SheetContent,
   SheetHeader,
 } from '@/components/ui/sheet';
+import { CommentSection } from '@/components/CommentSection';
+import MarkdownContent from '@/components/MarkdownContent';
 
 interface ChatMessage {
   id: string;
@@ -56,11 +61,17 @@ interface ChatSession {
 }
 
 const SUGGESTIONS = [
-  '这篇的核心观点是什么？',
-  '和我们项目有什么关联？',
-  '作者没提到什么？',
-  '用 50 人的话能落地吗？',
+  '这篇文章的核心结论是什么？',
+  '作者用哪些证据支持这个结论？',
+  '文中提到的限制和风险有哪些？',
+  '对我们团队可能有什么启发？请标注不确定性。',
 ];
+
+const THINKING_STEPS = [
+  '正在读取原文和摘要',
+  '正在整理相关证据',
+  '正在生成回答',
+] as const;
 
 interface Props {
   summaryId: string;
@@ -68,7 +79,14 @@ interface Props {
   summaryUrl: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialTab?: 'team' | 'ai';
+  teamStatus?: string;
+  currentUserId?: string | null;
+  currentUserRole?: 'member' | 'admin' | null;
+  contextExcerpt?: string | null;
 }
+
+const MAX_READING_CHARS = 18_000;
 
 async function createAndLoadSession(summaryId: string): Promise<ChatSession> {
   const createRes = await fetch('/api/chat/sessions', {
@@ -96,18 +114,52 @@ export function AskAiDrawer({
   summaryUrl,
   open,
   onOpenChange,
+  initialTab = 'ai',
+  teamStatus = 'published',
+  currentUserId = null,
+  currentUserRole = null,
+  contextExcerpt = null,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<'team' | 'ai'>(initialTab);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [thinkingStep, setThinkingStep] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [input, setInput] = useState('');
+  const [contextExpanded, setContextExpanded] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const loadRef = useRef<{ summaryId: string; promise: Promise<ChatSession> } | null>(null);
+  const readingContent = contextExcerpt ?? '';
+  const readingTruncated = readingContent.length > MAX_READING_CHARS;
+  const visibleReadingContent = readingTruncated
+    ? `${readingContent.slice(0, MAX_READING_CHARS)}\n\n…`
+    : readingContent;
 
   useEffect(() => {
-    if (!open || !summaryId) return;
+    if (open) setActiveTab(initialTab);
+  }, [open, initialTab]);
+
+  useEffect(() => {
+    if (open) setContextExpanded(false);
+  }, [open, summaryId]);
+
+  useEffect(() => {
+    if (!sending) {
+      setThinkingStep(0);
+      return;
+    }
+    const timers = [
+      window.setTimeout(() => setThinkingStep(1), 900),
+      window.setTimeout(() => setThinkingStep(2), 1900),
+    ];
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [sending]);
+
+  useEffect(() => {
+    if (!open || !summaryId || activeTab !== 'ai') return;
     if (!loadRef.current || loadRef.current.summaryId !== summaryId) {
       loadRef.current = { summaryId, promise: createAndLoadSession(summaryId) };
     }
@@ -132,7 +184,7 @@ export function AskAiDrawer({
     return () => {
       cancelled = true;
     };
-  }, [open, summaryId]);
+  }, [activeTab, open, summaryId, retryCount]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -147,6 +199,7 @@ export function AskAiDrawer({
       loadRef.current = null;
       setSession(null);
       setInput('');
+      setContextExpanded(false);
     }, 300);
   }
 
@@ -215,50 +268,158 @@ export function AskAiDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col p-0 sm:max-w-md"
+        overlayClassName="bg-foreground/15 backdrop-blur-0"
+        hideClose
+        className="gap-0 p-0 sm:max-w-none lg:left-1/2 lg:right-auto lg:w-[min(1120px,calc(100vw-32px))] lg:-translate-x-1/2 lg:flex-row"
       >
-        {/* Header */}
-        <SheetHeader>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            <span
-              className="truncate text-sm font-medium"
-              title={summaryTitle}
-            >
-              {summaryTitle}
-            </span>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Button asChild variant="link" size="xs" className="h-auto p-0 text-method-ai">
+        {/* Desktop reading pane: the article remains visible while discussing. */}
+        <div className="hidden min-h-0 min-w-0 flex-1 flex-col bg-background lg:flex">
+          <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-6">
+            <div className="flex min-w-0 items-center gap-2">
+              <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">正文阅读</span>
+            </div>
+            <Button asChild variant="link" size="xs" className="h-auto shrink-0 p-0">
               <a href={summaryUrl} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="size-3" />
-                看原文
+                新窗口打开
               </a>
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={close}
-              aria-label="关闭"
-            >
-              <X className="size-4" />
-            </Button>
           </div>
-        </SheetHeader>
-
-        {/* Context strip */}
-        <div className="flex items-center gap-1.5 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
-          <Sparkles className="size-3 text-method-ai" />
-          <span>
-            {session?.seedSnapshot.originalMarkdown
-              ? 'AI 上下文：原文 + 解读 + 摘要'
-              : 'AI 上下文：原文 + interpretation'}
-          </span>
+          <article className="min-h-0 flex-1 overflow-y-auto px-6 py-7">
+            <h2 className="text-xl font-semibold leading-tight tracking-tight">{summaryTitle}</h2>
+            <MarkdownContent
+              content={visibleReadingContent || '暂无正文内容。'}
+              className="mt-5 text-[15px] leading-8"
+            />
+            <p className="mt-5 rounded-md bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              {readingTruncated ? `正文较长，已展示前 ${MAX_READING_CHARS.toLocaleString()} 字。` : '想查看完整正文或网页排版？'}
+              <a className="ml-1 font-medium text-primary hover:underline" href={summaryUrl} target="_blank" rel="noopener noreferrer">
+                Read more · 继续阅读原文
+              </a>
+            </p>
+          </article>
+          <p className="shrink-0 border-t border-border px-6 py-2 text-[11px] leading-5 text-muted-foreground">
+            当前显示平台提取并清洗后的正文；原文网页请使用右上角新窗口打开。
+          </p>
         </div>
 
+        {/* Discussion pane: shared by team comments and AI conversation. */}
+        <div className="flex min-h-0 w-full flex-1 flex-col bg-card lg:w-[430px] lg:flex-none">
+          {/* Header */}
+          <SheetHeader className="flex-row items-center justify-between gap-3 pr-4">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span
+                className="truncate text-sm font-medium"
+                title={summaryTitle}
+              >
+                {summaryTitle}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button asChild variant="link" size="xs" className="h-auto p-0 text-method-ai lg:hidden">
+                <a href={summaryUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="size-3" />
+                  看原文
+                </a>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={close}
+                aria-label="关闭"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+          </SheetHeader>
+
+          <div className="border-b border-border px-4 pt-2" role="tablist" aria-label="讨论类型">
+          <div className="inline-flex rounded-md border border-border bg-muted/50 p-0.5">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'team'}
+              className={`inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${activeTab === 'team' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setActiveTab('team')}
+            >
+              <MessageSquare className="size-3.5" />
+              团队讨论
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'ai'}
+              className={`inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${activeTab === 'ai' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              onClick={() => setActiveTab('ai')}
+            >
+              <Sparkles className="size-3.5" />
+              与 AI 讨论
+            </button>
+          </div>
+          </div>
+
+        {/* Shared reading context: keep the article visible while composing either kind of discussion. */}
+          {contextExcerpt ? (
+            <div className="border-b border-border bg-accent/30 px-4 py-2.5 text-xs leading-relaxed text-muted-foreground lg:hidden">
+            <div className="flex items-center justify-between gap-3">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                {activeTab === 'ai' ? <Sparkles className="size-3 shrink-0 text-method-ai" /> : <FileText className="size-3 shrink-0 text-muted-foreground" />}
+                <span className="font-medium text-foreground">正文摘录</span>
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-[11px] font-medium text-primary hover:underline"
+                onClick={() => setContextExpanded((value) => !value)}
+                aria-expanded={contextExpanded}
+              >
+                {contextExpanded ? '收起' : '展开'}
+              </button>
+            </div>
+            <p className={`mt-1.5 whitespace-pre-wrap ${contextExpanded ? '' : 'line-clamp-3'}`}>
+              {visibleReadingContent}
+            </p>
+            {activeTab === 'ai' ? (
+              <p className="mt-1 text-[11px] text-muted-foreground/80">
+                AI 只基于原文、解读和摘要回答；资料不足会明确标注推断。
+              </p>
+            ) : (
+              <p className="mt-1 text-[11px] text-muted-foreground/80">
+                保持这段上下文可见，再写下团队判断或行动建议。
+              </p>
+            )}
+            </div>
+          ) : null}
+
+          {activeTab === 'team' ? (
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            {teamStatus === 'published' ? (
+              <CommentSection
+                targetType="summary"
+                targetId={summaryId}
+                currentUserId={currentUserId}
+                currentUserRole={currentUserRole}
+              />
+            ) : (
+              <div className="rounded-lg border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+                该候选尚未选入每日摘要，选入发布后可在此讨论。
+              </div>
+            )}
+            </div>
+          ) : null}
+
+        {/* AI context state */}
+          {activeTab === 'ai' ? (
+            <div className="flex items-center gap-1.5 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+            <Sparkles className="size-3 text-method-ai" />
+            <span>{session?.seedSnapshot.originalMarkdown ? 'AI 上下文：原文 + 解读 + 摘要' : 'AI 上下文：原文 + interpretation'}</span>
+            </div>
+          ) : null}
+
         {/* Suggestion chips */}
-        <div className="border-b border-border px-4 py-3">
+          <div className={`${activeTab === 'team' ? 'hidden' : 'block'} border-b border-border px-4 py-3`}>
           <div className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
             <Lightbulb className="size-3" />
             试试这些问题
@@ -278,18 +439,29 @@ export function AskAiDrawer({
               </Button>
             ))}
           </div>
-        </div>
+          </div>
 
         {/* Messages */}
-        <div ref={messagesRef} className="flex-1 overflow-y-auto bg-card px-4 py-4">
+          <div ref={messagesRef} className={`${activeTab === 'team' ? 'hidden' : 'flex'} flex-1 overflow-y-auto bg-card px-4 py-4`}>
           {loading ? (
             <div className="py-4 text-center text-sm text-muted-foreground">加载会话中…</div>
           ) : err ? (
-            <div
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-            >
-              {err}
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4" role="alert">
+              <div className="text-sm font-medium text-destructive">AI 讨论暂时无法打开</div>
+              <p className="mt-1 text-xs leading-5 text-destructive/80">{err}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="mt-3 border-destructive/30 bg-background"
+                onClick={() => {
+                  loadRef.current = null;
+                  setSession(null);
+                  setRetryCount((count) => count + 1);
+                }}
+              >
+                重试连接
+              </Button>
             </div>
           ) : (
             <>
@@ -323,8 +495,13 @@ export function AskAiDrawer({
                     >
                       <Sparkles className="size-3.5" />
                     </div>
-                    <div className="flex-1 text-sm leading-relaxed whitespace-pre-wrap break-words">
-                      {m.content}
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-1 text-[11px] font-medium text-method-ai">AI 助手</div>
+                      <MarkdownContent
+                        content={m.content}
+                        compact
+                        className="text-sm leading-7"
+                      />
                       {m.latencyMs ? (
                         <div className="mt-1.5 text-[11px] text-muted-foreground">
                           {m.latencyMs < 1000
@@ -338,24 +515,30 @@ export function AskAiDrawer({
               )}
 
               {sending ? (
-                <div className="mb-3 flex gap-3" aria-live="polite">
+                <div className="mb-3 flex gap-3 rounded-lg border border-method-ai/20 bg-method-ai/5 p-3" aria-live="polite" role="status">
                   <div
                     aria-hidden
                     className="flex size-7 shrink-0 items-center justify-center rounded-full bg-method-ai text-xs text-primary-foreground"
                   >
-                    <Sparkles className="size-3.5" />
+                    <Sparkles className="size-3.5 animate-pulse" />
                   </div>
-                  <div className="text-sm text-muted-foreground">
-                    AI 正在思考<span className="typing-cursor">▍</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-foreground">AI 正在处理</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">{THINKING_STEPS[thinkingStep]}</div>
+                    <div className="mt-2 flex gap-1" aria-hidden>
+                      {THINKING_STEPS.map((step, index) => (
+                        <span key={step} className={`h-1 flex-1 rounded-full ${index <= thinkingStep ? 'bg-method-ai' : 'bg-method-ai/15'}`} />
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : null}
             </>
           )}
-        </div>
+          </div>
 
         {/* Input */}
-        <div className="border-t border-border bg-card p-3">
+          <div className={`${activeTab === 'team' ? 'hidden' : 'block'} border-t border-border bg-card p-3`}>
           <div className="rounded-md border border-input focus-within:border-method-ai focus-within:ring-1 focus-within:ring-method-ai/40">
             <textarea
               ref={textareaRef}
@@ -363,6 +546,7 @@ export function AskAiDrawer({
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder="提问… (⌘+Enter 发送)"
+              aria-label="向 AI 提问"
               rows={2}
               disabled={!session || sending}
               className="w-full resize-none border-0 bg-transparent p-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50"
@@ -378,6 +562,7 @@ export function AskAiDrawer({
                 发送
               </Button>
             </div>
+          </div>
           </div>
         </div>
       </SheetContent>

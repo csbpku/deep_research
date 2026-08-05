@@ -24,7 +24,7 @@ export function RadarGithubItemSummary({ meta }: { meta: RadarGithubItemMeta }) 
     : `#${meta.numberOrTag}`;
 
   return (
-    <section className="my-5 border-y border-border py-4" aria-labelledby="github-item-summary-title">
+    <section className="my-5 rounded-lg bg-muted/30 px-4 py-4" aria-labelledby="github-item-summary-title">
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 id="github-item-summary-title" className="flex items-center gap-1.5 text-sm font-semibold">
           <Icon className="size-4 text-muted-foreground" aria-hidden />

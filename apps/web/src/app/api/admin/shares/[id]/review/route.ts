@@ -49,6 +49,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       canonicalUrl: true,
       userNote: true,
       fetchedTitle: true,
+      fetchedMarkdown: true,
       summaryText: true,
       submitterId: true,
       contentSha256: true,
@@ -86,6 +87,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         data: {
           title: share.fetchedTitle ?? share.url,
           body: share.summaryText ?? '',
+          interpretation: share.summaryText ?? null,
           url: share.url,
           canonicalUrl: share.canonicalUrl,
           source: 'user',
@@ -97,6 +99,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           // Summary.contentSha256 是 Char(64)；ShareSubmission 已经在 safe_fetch 时算过
           // contentSha256（同样 Char(64)），这里直接复用。如果 share 还没生成（老数据），置 null。
           contentSha256: share.contentSha256 ?? null,
+          originalMarkdown: share.fetchedMarkdown ?? null,
+          originalKind: 'web_share',
+          originalFetchedAt: share.fetchedMarkdown ? new Date() : null,
+          originalBytes: share.fetchedMarkdown
+            ? Buffer.byteLength(share.fetchedMarkdown, 'utf8')
+            : null,
+          originalSha256: share.contentSha256 ?? null,
           summaryDate: new Date(),
         },
         select: { id: true },

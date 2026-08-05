@@ -11,6 +11,7 @@ from ai_engine.adapters.gpt_researcher import _collect_sources_from_research
 from ai_engine.adapters.gpt_researcher import (
     _append_references,
     _report_needs_completion,
+    _strip_reference_section,
     _resolved_internal_sources,
     _strip_overlap,
 )
@@ -116,6 +117,25 @@ def test_append_references_uses_collected_sources() -> None:
     assert "## 参考文献" in completed
     assert "[Source A](https://a.example)" in completed
     assert "[Source B](https://b.example)" in completed
+
+
+def test_append_references_replaces_model_generated_reference_section() -> None:
+    report = (
+        "## 结论\n\n完整结论。\n\n## 参考文献\n\n"
+        "1. 只有标题没有外链\n"
+    )
+    completed = _append_references(
+        report,
+        [_source("https://a.example", "Source A")],
+    )
+    assert "只有标题没有外链" not in completed
+    assert completed.count("## 参考文献") == 1
+    assert "[Source A](https://a.example)" in completed
+
+
+def test_strip_reference_section_removes_existing_references_only() -> None:
+    report = "正文\n\n## 参考文献\n\n1. old"
+    assert _strip_reference_section(report) == "正文"
 
 
 def test_strip_overlap_drops_repeated_tail_sentence() -> None:

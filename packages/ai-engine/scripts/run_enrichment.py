@@ -68,7 +68,10 @@ async def _pending_counts(store: DbJobStore, kinds: tuple[str, ...]) -> dict[str
                 'SELECT "originalKind", count(*) AS n FROM "summaries" '
                 f'WHERE "originalKind" IN ({placeholders}) '
                 'AND "originalMeta" IS NULL '
-                'AND "syncRunId" IS NOT NULL '
+                'AND ("syncRunId" IS NOT NULL OR EXISTS ('
+                'SELECT 1 FROM "share_submissions" sh '
+                'WHERE sh."publishedSummaryId" = "summaries"."id" '
+                'AND sh."status" = \'approved\')) '
                 'GROUP BY "originalKind" ORDER BY "originalKind"',
                 tuple(kinds),
             )

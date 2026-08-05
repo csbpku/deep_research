@@ -35,7 +35,9 @@ interface DigestRankedItem {
 interface DigestMeta {
   tldr?: string;
   sections?: Array<{ title: string; body: string }>;
-  highlights?: string[];
+  // Older digest jobs stored highlight cards as `{ title, summary }` objects;
+  // newer jobs store short strings. Keep the API contract stable for clients.
+  highlights?: unknown;
   ranked?: DigestRankedItem[];
   sourcesUsed?: string[];
   candidateCount?: number;
@@ -117,7 +119,7 @@ function serializeDigest(row: DigestRow) {
     publishedAt: row.publishedAt ? row.publishedAt.toISOString() : null,
     tldr: meta.tldr ?? '',
     sections: meta.sections ?? [],
-    highlights: meta.highlights ?? [],
+    highlights: normalizeHighlights(meta.highlights),
     ranked: meta.ranked ?? [],
     sourcesUsed: meta.sourcesUsed ?? [],
     candidateCount: meta.candidateCount ?? 0,
@@ -125,4 +127,23 @@ function serializeDigest(row: DigestRow) {
     model: meta.model ?? null,
     generatedAt: meta.generatedAt ?? null,
   };
+}
+
+function normalizeHighlights(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === 'string') {
+      const text = item.trim();
+      return text ? [text] : [];
+    }
+    if (item && typeof item === 'object') {
+      const record = item as Record<string, unknown>;
+      const title = typeof record.title === 'string' ? record.title.trim() : '';
+      const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
+      // The list view is intentionally compact: use the title as the chip and
+      // leave the full summary for the daily detail page.
+      return title ? [title] : summary ? [summary] : [];
+    }
+    return [];
+  });
 }

@@ -193,6 +193,7 @@ model User {
   bookmarks        UserBookmark[]
   researchTemplates ResearchTemplate[]
   topicFollows     TopicFollow[]
+  topicProposalReviews TopicProposal[] @relation("topic_proposal_reviewer")
 
   @@index([role, disabledAt])
   @@map("users")
@@ -285,6 +286,7 @@ model Summary {
   seedChatSessions AiChatSession[]  @relation("summary_seed_chat")
   radarSubmission  RadarSubmission? @relation("radar_submission_to_summary")
   topicLinks       TopicCandidate[] @relation("topic_candidate_summary")
+  topicProposalLinks TopicProposalCandidate[]
 
   @@index([source, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
@@ -959,6 +961,18 @@ enum TopicCandidateReason {
   admin_manual
 }
 
+enum TopicProposalStatus {
+  proposed
+  approved
+  rejected
+  expired
+}
+
+enum TopicProposalKind {
+  event
+  problem
+}
+
 model Topic {
   id                       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   slug                     String    @unique @db.VarChar(120)
@@ -1015,6 +1029,56 @@ model TopicFollow {
   @@unique([userId, topicId])
   @@index([topicId, createdAt(sort: Desc)])
   @@map("topic_follows")
+}
+
+// Algorithm output stays here until an admin verifies the shared proposition.
+// Only approved proposals are materialized into the public Topic tables.
+model TopicProposal {
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  proposalKey      String              @unique @db.VarChar(64)
+  name             String              @db.VarChar(200)
+  proposition      String              @db.VarChar(1000)
+  kind             TopicProposalKind
+  status           TopicProposalStatus @default(proposed)
+  confidence       Float?
+  candidateCount   Int                 @default(0)
+  sourceCount      Int                 @default(0)
+  windowStart      DateTime            @db.Timestamptz(3)
+  windowEnd        DateTime            @db.Timestamptz(3)
+  algorithmVersion String              @db.VarChar(32)
+  evidence         Json                @default("{}")
+  publishedTopicId String?             @unique @db.Uuid
+  reviewerId       String?             @db.Uuid
+  reviewReason     String?             @db.VarChar(500)
+  reviewedAt       DateTime?           @db.Timestamptz(3)
+  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
+
+  reviewer   User?                   @relation("topic_proposal_reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  candidates TopicProposalCandidate[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([windowEnd(sort: Desc)])
+  @@map("topic_proposals")
+}
+
+model TopicProposalCandidate {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  proposalId      String   @db.Uuid
+  summaryId       String   @db.Uuid
+  fitScore        Float?
+  evidence        String?  @db.VarChar(500)
+  included        Boolean  @default(true)
+  exclusionReason String?  @db.VarChar(300)
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  proposal TopicProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  summary  Summary       @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+
+  @@unique([proposalId, summaryId])
+  @@index([summaryId])
+  @@map("topic_proposal_candidates")
 }
 
 

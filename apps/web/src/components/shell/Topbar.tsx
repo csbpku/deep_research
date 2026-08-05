@@ -9,18 +9,18 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { FilePenLine, Loader2, Menu, Search as SearchIcon, Telescope } from 'lucide-react';
+import { FilePenLine, Loader2, Menu, Search as SearchIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Sheet,
   SheetContent,
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
+import { BrandMark } from './BrandMark';
 import { SidebarNav, type NavItem } from './SidebarNav';
 import { ThemeToggle } from './ThemeToggle';
 import { UserMenu } from './UserMenu';
@@ -66,17 +66,12 @@ function AiResearchIndicator() {
   );
 }
 
-/** 顶栏全局搜索框：轻量版 —— 回车跳转 /search?q=...，⌘K / Ctrl K 聚焦。 */
-function GlobalSearchBox() {
+/**
+ * 顶栏搜索命令入口：完整检索留在 /search，顶栏只承担快速进入。
+ * ⌘K / Ctrl+K 在任意页面都打开完整搜索页，避免顶栏输入框挤占阅读空间。
+ */
+function GlobalSearchCommand() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
-  const [q, setQ] = React.useState(searchParams.get('q') ?? '');
-
-  // 离开 /search 时把本地输入清空；进入 /search 时同步 URL。
-  React.useEffect(() => {
-    setQ(searchParams.get('q') ?? '');
-  }, [searchParams]);
 
   React.useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -84,41 +79,29 @@ function GlobalSearchBox() {
       const trigger = isMac ? e.metaKey : e.ctrlKey;
       if (trigger && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
+        router.push('/search');
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = q.trim();
-    if (!trimmed) return;
-    router.push(`/search?q=${encodeURIComponent(trimmed)}`);
-  }
+  }, [router]);
 
   return (
-    <form onSubmit={submit} className="hidden flex-1 sm:block" role="search">
-      <label htmlFor="topbar-search" className="sr-only">全局搜索</label>
-      <div className="relative mx-auto w-full max-w-md">
-        <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          id="topbar-search"
-          ref={inputRef}
-          type="search"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="搜索雷达、摘要、调研库…（⌘K）"
-          aria-label="全局搜索"
-          className="h-8 w-full pl-7 pr-12 text-sm"
-        />
-        <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-muted/40 px-1 font-mono text-[10px] text-muted-foreground sm:inline">
-          ⌘K
-        </kbd>
-      </div>
-    </form>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => router.push('/search')}
+      aria-label="打开全局搜索（⌘K）"
+      aria-keyshortcuts="Meta+K Control+K"
+      className="hidden h-8 min-w-0 gap-2 px-2.5 text-muted-foreground sm:flex sm:w-52 sm:justify-start"
+    >
+      <SearchIcon className="size-3.5" />
+      <span className="truncate text-xs">搜索研究内容</span>
+      <kbd className="ml-auto rounded border border-border bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground">
+        ⌘K
+      </kbd>
+    </Button>
   );
 }
 
@@ -158,8 +141,8 @@ export function Topbar({
         <SheetContent side="left" className="w-64 p-0 sm:max-w-xs">
           <SheetTitle className="sr-only">主导航</SheetTitle>
           <div className="flex h-topbar items-center gap-2 border-b border-border px-4">
-            <Telescope className="size-4 text-primary" />
-            <span className="text-sm font-semibold tracking-tight">技术调研</span>
+            <BrandMark />
+            <span className="text-sm font-semibold tracking-tight">AI技术调研平台</span>
           </div>
           <div className="p-2">
             <SidebarNav items={navItems} onNavigate={() => setMobileOpen(false)} />
@@ -168,12 +151,13 @@ export function Topbar({
       </Sheet>
 
       {/* 移动端品牌位 */}
-      <Link href="/" className="flex items-center gap-2 md:hidden">
-        <span className="text-sm font-semibold tracking-tight">技术调研</span>
+      <Link href="/" className="flex min-w-0 items-center gap-2 md:hidden" aria-label="AI技术调研平台首页">
+        <BrandMark className="size-6" />
+        <span className="truncate text-sm font-semibold tracking-tight">AI技术调研平台</span>
       </Link>
 
       <PageContext navItems={navItems} />
-      <GlobalSearchBox />
+      <GlobalSearchCommand />
 
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* AI 调研进行中（仅登录用户才可能返回非空） */}

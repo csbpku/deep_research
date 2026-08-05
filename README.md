@@ -1,4 +1,4 @@
-# Deep Research · 技术调研平台
+# AI技术调研平台
 
 > AI 帮我们读文章、抓热搜、看趋势；我们给反馈、踩坑记下来，团队的判断和经验会越攒越多。
 > 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v3.6
@@ -7,55 +7,84 @@
 
 ## 这个项目做什么
 
-一个面向个人 / 小团队的技术调研与情报沉淀平台。AI 自动跟进 GitHub、arXiv、RSS、WeWe RSS 微信公众号和成员分享的来源，提炼候选；人在阅读、做标注、转发给同事，团队对这些内容的判断会被保留、检索、再利用。
+一个面向个人 / 小团队的技术调研与情报沉淀平台。AI 自动跟进 GitHub、arXiv、RSS、微信公众号和社区讨论等来源，把候选人文章用多维度评分排序、聚合；成员阅读、做标注、转发给同事，团队对这些内容的判断会被保留、检索、再利用。
 
 **核心能力**
 
-- **技术雷达**：从 GitHub、arXiv、RSS、WeWe RSS 微信公众号和用户分享持续发现候选，附 LLM 生成的轻量解读（覆盖 distilled 7 维评分 + audience-matched profile）。
-- **每日摘要**：每天最多 4 条精选，从雷达池人工确认，含入选理由、标签、来源、可深读的详情页。
+- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选，每条附 LLM 轻量解读与多维内容评分：7 个维度（受众匹配、信息增量、分析深度、可行动性等）每维 0–3 分，加权总分 0–100，并归入深入阅读 / 略读 / 收藏等层级。
+- **AI 雷达日报**：每天自动聚合当日高信号雷达候选，由 LLM 生成一篇跨来源总结文章（含 TL;DR、分节叙事、重点与来源排名），作为一条 `digest://YYYY-MM-DD` 的发布摘要。
 - **沉淀库**：长文与讨论精华共用同一结构，支持草稿 / 发布 / 全文搜索 / 修改审计。
 - **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
 - **AI 调研**：给一个主题，启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），用户必须实际修改过才能发布。
-- **基础评论 + Admin**：雷达、摘要和沉淀都能评论；Admin 控制台统一处理雷达 promote、分享审核、评论提名和失败任务。
+- **基础评论 + Admin**：雷达、日报和沉淀都能评论；Admin 控制台统一处理雷达 promote、分享审核、评论提名、同步状态和失败任务。
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
-- **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、SSH 部署脚手架。
+- **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、Docker Compose 部署脚手架。
 
 技术设计说明见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)，部署见下文。
 
 ## 架构总览
 
-```
-┌──────────────────────────┐    ┌──────────────────────────┐
-│  apps/web (Next.js 15)   │    │  packages/ai-engine      │
-│  App Router + BFF        │    │  (FastAPI + Python 3.11) │
-│  Prisma · NextAuth       │    │  adapters · job runner   │
-│  评论 / Admin / 搜索     │◀──▶│  radar / import worker   │
-└──────────┬───────────────┘    └──────────┬───────────────┘
-           │                                │
-           └────────────┬───────────────────┘
-                        ▼
-              ┌──────────────────────┐
-              │  PostgreSQL 16       │
-              │  业务库 + 任务队列表 │
-              │  + 全文索引 + metric │
-              └──────────────────────┘
-                        ▲
-                        │
-              ┌─────────┴───────────┐
-              │ infra/              │
-              │ nginx · Dockerfiles │
-              │ pg-backup · restore │
-              └─────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Web["apps/web · Next.js 15"]
+        UI["页面 / 雷达 / 日报 / 沉淀"]
+        BFF["BFF + NextAuth + Prisma"]
+    end
+
+    subgraph Engine["packages/ai-engine · FastAPI + Python"]
+        Radar["雷达同步 sync → 增强 enrich"]
+        Digest["日报生成 digest"]
+        Research["AI 调研 5 步流水线"]
+        Worker["导入 / 分享 worker"]
+        Adapter["ResearchEngineAdapter"]
+    end
+
+    subgraph Infra["infra / PostgreSQL"]
+        DB[("PostgreSQL 16<br/>业务 + 队列 + 全文索引")]
+        Nginx["nginx + pg-backup / restore"]
+    end
+
+    Sources["GitHub · arXiv · RSS · 微信 · 社区"] --> Radar
+    UI --> BFF
+    BFF --> DB
+    BFF <--> Engine
+    Radar --> Digest
+    Digest --> DB
+    Research --> Adapter
+    Worker --> Adapter
+    Adapter --> DB
+    DB <--> Nginx
 ```
 
-- **`apps/web/`** —— 用户能看到的：登录、雷达列表、每日摘要、沉淀详情 / 编辑、文件导入、管理员控制台。
-- **`packages/ai-engine/`** —— 后台长任务：调研 5 步流水线、雷达抓取与同步、文件导入转换、分享提交、SSRF-safe URL fetch、Tavily retriever。
-- **`packages/shared/`** —— TypeScript ↔ Python 镜像的 Zod schema、错误码、状态枚举；A/B 双方向只读，修改走 `[shared]` PR。
+- **`apps/web/`** —— 用户能看到的：登录、雷达列表、AI 雷达日报、沉淀详情 / 编辑、文件导入、管理员控制台。
+- **`packages/ai-engine/`** —— 后台长任务：雷达同步 → 增强 → 日报、调研 5 步流水线、文件导入转换、分享提交、SSRF-safe URL fetch、Tavily retriever。
+- **`packages/shared/`** —— TypeScript ↔ Python 镜像的 Zod schema、错误码、状态枚举；跨语言双方向只读，改动走独立 PR。
 - **`infra/`** —— `docker-compose.yml` + nginx + 多阶段 Dockerfile + `pg-backup.sh` / `pg-restore.sh` / `import-tmp-cleanup.sh`。
 
 更多见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
 
 ## 技术栈
+
+### 本地开发服务常驻（macOS）
+
+如果希望关闭终端后仍保持本地 Web 和 AI engine 运行，可安装仓库中的 launchd 模板：
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+cp infra/launchd/com.deep-research.web.plist ~/Library/LaunchAgents/
+cp infra/launchd/com.deep-research.ai.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.deep-research.web.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.deep-research.ai.plist
+```
+
+停止托管服务：
+
+```bash
+launchctl bootout gui/$(id -u)/com.deep-research.web
+launchctl bootout gui/$(id -u)/com.deep-research.ai
+```
+
+日志位于 `/tmp/deep-research-web*.log` 和 `/tmp/deep-research-ai*.log`。
 
 | 层 | 选型 |
 |---|---|

@@ -11,9 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-from ai_engine.radar.daily_digest import _resolve_ranked_links
+from ai_engine.radar.daily_digest import _normalize_highlights, _resolve_ranked_links
 
 
 def _candidate(cid: str, url: str, title: str, canonical: str | None = None) -> dict[str, Any]:
@@ -121,3 +119,24 @@ def test_resolve_ranked_links_first_occurrence_wins() -> None:
 
     assert len(digest["ranked"]) == 1
     assert digest["ranked"][0]["oneLineReason"] == "real"
+
+
+def test_normalize_highlights_accepts_strings_and_common_object_shapes() -> None:
+    digest = {
+        "highlights": [
+            "纯文本亮点",
+            {"title": "MCP 2.0", "summary": "协议更新"},
+            {"title": "代理方法", "body": "规范驱动开发"},
+            {"text": "仅文本字段"},
+            None,
+        ]
+    }
+
+    _normalize_highlights(digest)
+
+    assert digest["highlights"] == [
+        "纯文本亮点",
+        "MCP 2.0：协议更新",
+        "代理方法：规范驱动开发",
+        "仅文本字段",
+    ]

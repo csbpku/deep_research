@@ -22,6 +22,7 @@ import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi } from '@/lib/errors/friendly';
 import { StatusBadge } from '@/components/domain/StatusBadge';
+import { PageHeader } from '@/components/domain/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -52,11 +53,11 @@ interface AiJobStatus {
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
 const STEPS = [
-  { key: 'plan', label: '规划', desc: '拆解调研计划', icon: ListChecks },
-  { key: 'search', label: '检索', desc: '检索并抓取来源', icon: Radar },
-  { key: 'compress', label: '压缩', desc: '压缩检索上下文', icon: FileText },
-  { key: 'analyze', label: '分析', desc: '提炼关键事实', icon: Lightbulb },
-  { key: 'write', label: '写作', desc: '生成可编辑草稿', icon: PenLine },
+  { key: 'plan', label: '规划研究问题', desc: '拆分背景、约束和验证方向', icon: ListChecks },
+  { key: 'search', label: '检索与抓取', desc: '优先处理指定资料，再补充外部来源', icon: Radar },
+  { key: 'compress', label: '压缩证据', desc: '合并相似结论并保留来源链路', icon: FileText },
+  { key: 'analyze', label: '分析与对比', desc: '形成可执行的取舍和风险判断', icon: Lightbulb },
+  { key: 'write', label: '写作草稿', desc: '生成可编辑的团队私有草稿', icon: PenLine },
 ] as const;
 
 type StepState = 'done' | 'current' | 'error' | 'waiting';
@@ -90,23 +91,28 @@ export default function AiJobStatusPage() {
 
   return (
     <div className="mx-auto max-w-shell">
-      <Button asChild variant="link" size="xs" className="mb-2 h-auto p-0">
-        <Link href="/ai-research">
-          <ArrowLeft />
-          返回 AI 调研
-        </Link>
-      </Button>
-
-      <h1 className="text-xl font-semibold tracking-tight">
-        {q.isError
-          ? '无法加载调研'
-          : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus)
-            ? '调研结果'
-            : '调研进行中'}
-      </h1>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {q.data?.topic ?? '本次调研'}
-      </p>
+      <PageHeader
+        title={q.isError ? '无法加载调研' : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
+        description={
+          q.data
+            ? `${q.data.reportType === 'summary_brief' ? '轻量摘要' : '研究报告'} · ${q.data.topic ?? '本次调研'}`
+            : '正在读取调研任务状态…'
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/ai-research#research-history">调研历史</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/ai-research">
+                <ArrowLeft />
+                返回 AI 调研
+              </Link>
+            </Button>
+          </div>
+        }
+        className="mb-5"
+      />
 
       <div className="mt-4">
         {q.isLoading ? (
@@ -131,12 +137,12 @@ function StatusBody({ s }: { s: AiJobStatus }) {
   const isBrief = s.reportType === 'summary_brief';
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
+    <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold leading-snug">{s.topic ?? 'AI 调研任务'}</h2>
-          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">执行状态</p>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <StatusBadge kind="job" value={statusLabel} label={statusLabel} />
             {activeIdx >= 0 ? (
               <span className="font-mono">
@@ -273,8 +279,13 @@ function formatElapsed(s: AiJobStatus): string {
   const ms = new Date(end).getTime() - new Date(start).getTime();
   if (Number.isNaN(ms) || ms < 0) return '—';
   const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  if (sec < 60) return `${sec} 秒`;
+  const minutes = Math.floor(sec / 60);
+  const seconds = sec % 60;
+  if (minutes < 60) return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes ? `${hours} 小时 ${restMinutes} 分钟` : `${hours} 小时`;
 }
 
 function stepState(s: AiJobStatus, idx: number): StepState {
@@ -357,8 +368,8 @@ function DetailRow({ label, value, mono = false }: { label: string; value: strin
 /**
  * 任务状态详情 disclosure —— 默认折叠，只露一行关键摘要。
  *
- * 默认信息：耗时 + 费用 + 令牌 + 当前步骤 —— 工程师排错时一眼可见。
- * 完整字段（已抓取 / 失败 / 出错于 / 完整 ID）藏在展开后。
+ * 默认信息：耗时 + 资料数量 + 当前步骤 —— 把用户关心的进度放在第一层。
+ * 完整字段（已抓取 / 失败 / 出错于）藏在展开后。
  *
  * 与 ScoreReasonDisclosure 同样的设计：debug 字段不该污染主屏，需要时再展开。
  */
@@ -371,8 +382,7 @@ function JobStatusDisclosure({
 }) {
   const [open, setOpen] = useState(false);
   const summary =
-    `${elapsed} · 费用 $${(s.costCents / 100).toFixed(2)}` +
-    ` · 令牌 ${s.tokenInputTotal} / ${s.tokenOutputTotal}` +
+    `${elapsed} · 已抓取 ${s.partialSourcesCount} 条资料` +
     (s.currentStep ? ` · 当前 ${stepLabel(s.currentStep)}` : '');
 
   return (
@@ -383,7 +393,7 @@ function JobStatusDisclosure({
         aria-expanded={open}
         className="flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2 text-left transition-colors duration-150 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           {open ? (
             <ChevronDown className="size-3.5" aria-hidden />
           ) : (
@@ -400,8 +410,6 @@ function JobStatusDisclosure({
           <DetailRow label="抓取失败" value={String(s.failedSourcesCount)} mono />
           <DetailRow label="出错于" value={stepLabel(s.errorStage)} />
           <DetailRow label="耗时" value={elapsed} mono />
-          <DetailRow label="费用" value={`$${(s.costCents / 100).toFixed(2)}`} mono />
-          <DetailRow label="令牌 输入/输出" value={`${s.tokenInputTotal} / ${s.tokenOutputTotal}`} mono />
         </div>
       )}
     </div>

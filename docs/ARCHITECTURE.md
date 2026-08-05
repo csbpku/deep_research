@@ -1,4 +1,4 @@
-# 技术调研平台 · 架构方案
+# AI技术调研平台 · 架构方案
 
 > 版本：v3.6 · 2026-07-23
 > 本文件描述当前系统架构、数据模型、安全边界与部署拓扑。
@@ -10,13 +10,13 @@
 ### 当前能力
 
 1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号和用户分享发现候选，生成可追溯的轻量解读，支持筛选、反馈和人工流转。
-2. **每日摘要**：Admin 从雷达候选中确认每天最多 4 条精选，包含入选理由、标签、来源和详情。
+2. **AI 雷达日报**：每天自动聚合当日高信号雷达候选，由 LLM 生成一篇跨来源总结文章（`digest://YYYY-MM-DD` 的发布摘要），含 TL;DR、分节叙事、重点与来源排名。
 3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
 4. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
 5. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
 6. **基础评论**：雷达、摘要和沉淀可评论；由 Admin 手动提炼高价值评论。
 7. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
-8. **Admin**：雷达与分享审核、失败任务入口、同步状态、成员管理。
+8. **Admin**：雷达与分享审核、失败任务入口、同步状态、日报重新生成、成员管理。
 9. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
 
 ### 规划能力
@@ -40,20 +40,22 @@
 
 ### 系统边界
 
-```text
-[Browser]
-   |
-   v
-[Next.js Web + BFF] ----------------------+
-   | Auth / API / UI / permissions        |
-   |                                       v
-   +--> [PostgreSQL 16 + tsvector/GIN] <--> [DB-backed workers]
-   |                                       | AI jobs / import jobs
-   |                                       v
-   +--------------------------------> [ResearchEngineAdapter]
-                                           |
-                                           v
-                              [Tavily / arxiv / GitHub / LLM]
+```mermaid
+flowchart LR
+    Browser["Browser"]
+    Web["Next.js Web + BFF<br/>Auth / API / UI / permissions"]
+    PG[("PostgreSQL 16<br/>tsvector/GIN + 队列")]
+    Workers["DB-backed workers<br/>AI jobs / import jobs"]
+    Adapter["ResearchEngineAdapter"]
+    Src["Tavily · arxiv · GitHub · RSS · 微信 · LLM"]
+
+    Browser --> Web
+    Web --> PG
+    Web --> Workers
+    Workers --> Adapter
+    Adapter --> Src
+    Adapter --> PG
+    PG <--> Workers
 ```
 
 ### 组件职责
@@ -99,7 +101,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 | 表 | 作用 |
 |---|---|
 | `users` | 成员、角色和禁用状态 |
-| `summaries` | 每日摘要和用户分享 |
+| `summaries` | 雷达候选、AI 雷达日报和用户分享 |
 | `researches` | 长文、精华和所有私有/公开草稿 |
 | `research_sources` | 调研挂载资料和来源引用 |
 | `ai_research_jobs` | AI 调研与轻量摘要任务 |
@@ -173,20 +175,27 @@ AI job 使用请求者 + `Idempotency-Key` 唯一约束。单 job 最长 5 分�
 
 ## 五、核心流程
 
-### 技术雷达与每日摘要
+### 技术雷达与 AI 雷达日报
 
-```text
-cron/admin trigger -> radar_sync_run -> 安全抓取 -> 规范化/去重 -> 轻量解读/评分
-  -> candidate summary -> 团队反馈/Admin 判断 -> 最多 4 条 published daily summary
+```mermaid
+flowchart LR
+    T["cron / admin 触发"]
+    Sync["radar sync 抓取 + 多源去重"]
+    Enrich["enrich 轻量解读 + 多维评分"]
+    Digest["LLM 聚合 → AI 雷达日报<br/>digest://YYYY-MM-DD"]
+    Store[("published summaries")]
+
+    T --> Sync --> Enrich --> Digest --> Store
 ```
 
-- 雷达候选与每日摘要复用 `summaries` 主体：`candidate` 是雷达候选，`published` 是已确认摘要；不能再维护一套平行的候选内容表。
-- 每条候选保存来源发布时间、抓取时间、结构化解读、评分维度、`score_version` 和人类可读理由。评分只参与排序，不能自动批准或公开。
-- 来源包括预置 GitHub、arxiv、RSS，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
+- 每次同步是 `sync → enrich → digest` 三段流水线；日报按 `digest://YYYY-MM-DD` 作为一条 published summary 落库，`digestMeta` 保存结构化文章（TL;DR、分节、重点、来源排名），前端直接渲染，不解析 Markdown。
+- 雷达候选与日报都复用 `summaries`：雷达候选为 `candidate`，日报为 `published` 的 `digest://*` 记录；不再维护一套平行的候选内容表。
+- 每条候选保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分只参与排序，不能自动批准或公开。
+- 来源包括预置 GitHub、arxiv、RSS、微信公众号、社区（Hacker News / Product Hunt / Reddit / Lobsters）等，Admin 可启停、手动同步、重试和重新生成日报；任一来源失败不阻断其他来源。
+- 日报候选上层最多取 40 条，且每个来源类别最多 5 条，避免单一来源挤占其他信号。
 - 普通成员可提交有用、不准确、我用过、收藏和建议调研；重复反馈幂等，反馈只辅助 Admin 判断。
-- 允许来源不足时少于 4 条精选，但必须展示失败原因，不能编造内容补足。
 - 每条内容保留 canonical URL、来源类型、发布时间和抓取时间。
-- 用户分享先进入 `share_submissions`，安全处理和人工审核后进入同一雷达候选/摘要流。
+- 用户分享先进入 `share_submissions`，安全处理和人工审核后进入同一雷达候选池。
 
 ### 文件导入
 
@@ -223,7 +232,7 @@ Confluence 导入只解析站点和 page id，正文必须通过用户委托授�
 
 ```text
 评论 -> Admin 选择并提炼 -> published knowledge
-用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> radar candidate / daily summary
+用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> radar candidate / AI 雷达日报
 ```
 
 - 所有批准都必须由 Admin 明确操作；机器评分只用于排序。

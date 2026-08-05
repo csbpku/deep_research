@@ -212,6 +212,77 @@ async def test_enrich_web_candidate_ignores_fetch_failure(
     assert pool.connection_value.updates == []
 
 
+async def test_enrich_web_candidate_uses_clean_cached_content_on_fetch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cached = "A detailed cached article about agent evaluation. " * 30
+    pool = _Pool(row={
+        "id": "s4",
+        "title": "Cached article",
+        "interpretation": "缓存文章摘要",
+        "originalMarkdown": cached,
+        "originalMeta": None,
+        "tldr": None,
+    })
+
+    async def failing_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        raise TimeoutError("timeout")
+
+    async def fake_highlights(markdown: str, title: str) -> dict[str, Any]:
+        return {"summary": "摘要", "highlights": ["亮点一", "亮点二", "亮点三"]}
+
+    monkeypatch.setattr(ew, "safe_fetch", failing_fetch)
+    monkeypatch.setattr(ew, "_generate_web_highlights", fake_highlights)
+
+    payload = await ew.enrich_web_candidate(
+        pool, summary_id="s4", canonical_url="https://example.com/cached",
+    )
+
+    assert payload is not None
+    assert payload["degraded"] is True
+    assert payload["reason"] == "cached_source"
+    assert len(pool.connection_value.updates) == 1
+
+
+async def test_enrich_arxiv_uses_cached_abstract_when_pdf_is_too_large(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(row={
+        "id": "paper-1",
+        "title": "Large PDF paper",
+        "interpretation": "论文摘要",
+        "originalMarkdown": "A sufficiently detailed cached arXiv abstract. " * 20,
+        "originalMeta": None,
+        "tldr": None,
+    })
+
+    async def oversized_pdf(url: str) -> bytes:
+        return b"x" * (8 * 1024 * 1024 + 1)
+
+    async def fake_analysis(markdown: str, title: str) -> dict[str, str]:
+        return {
+            "tldr": "一句话总结",
+            "motivation": "研究动机",
+            "method": "研究方法",
+            "result": "实验结果",
+            "conclusion": "研究结论",
+        }
+
+    monkeypatch.setattr(ew, "_fetch_arxiv_pdf", oversized_pdf)
+    monkeypatch.setattr(ew, "_generate_arxiv_analysis", fake_analysis)
+
+    result = await ew.enrich_arxiv_candidate(
+        pool,
+        summary_id="paper-1",
+        canonical_url="https://arxiv.org/abs/2608.02412",
+    )
+
+    assert result is not None
+    assert result["meta"]["degraded"] is True
+    assert result["meta"]["reason"] == "pdf_too_large"
+    assert result["analysis"]["method"] == "研究方法"
+
+
 async def test_run_enrichment_for_pending_dispatches_all_default_kinds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,6 +339,7 @@ async def test_run_enrichment_for_pending_filters_current_sync_runs(
     assert succeeded == 1
     sql, params = pool.connection_value.executions[0]
     assert '"syncRunId" IN (%s,%s)' in sql
+    assert '"share_submissions"' in sql
     assert params == ("rss", "run-a", "run-b", 10)
 
 

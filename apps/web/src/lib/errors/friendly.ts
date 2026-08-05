@@ -164,6 +164,8 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
       return { message: '已导入过相同内容' };
     case ERROR_CODES.URL_FETCH_BLOCKED:
       return { message: 'URL 在抓取黑名单中' };
+    case ERROR_CODES.URL_FETCH_DNS:
+      return { message: '目标网站域名解析失败', hint: '可能是临时网络故障，请稍后重试。' };
     case ERROR_CODES.URL_FETCH_TIMEOUT:
       return { message: '抓取超时' };
     case ERROR_CODES.URL_FETCH_TOO_LARGE:

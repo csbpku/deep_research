@@ -14,7 +14,7 @@ async function main() {
   console.log('[seed:e2e] starting');
 
   // Admin user（E2E Credentials provider 会 upsert；这里预置更好）
-  const adminEmail = 'admin@e2e.local';
+  const adminEmail = 'e2e-admin@example.com';
   await prisma.user.upsert({
     where: { email: adminEmail },
     update: { role: 'admin' },

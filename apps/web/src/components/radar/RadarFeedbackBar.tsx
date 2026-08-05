@@ -12,11 +12,11 @@
 
 import { useState } from 'react';
 import {
-  AlertTriangle,
   CheckCircle2,
   Search,
   Star,
   ThumbsUp,
+  ThumbsDown,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -42,8 +42,8 @@ interface RadarFeedbackBarProps {
 }
 
 const FEEDBACK_LABELS: Record<RadarFeedbackType, { label: string; icon: LucideIcon }> = {
-  useful: { label: '有用', icon: ThumbsUp },
-  inaccurate: { label: '不准确', icon: AlertTriangle },
+  useful: { label: '点赞', icon: ThumbsUp },
+  inaccurate: { label: '点踩', icon: ThumbsDown },
   used: { label: '我用过', icon: CheckCircle2 },
   favorite: { label: '收藏', icon: Star },
   suggest_research: { label: '建议调研', icon: Search },

@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   summaryFindFirst: vi.fn(),
   summaryCount: vi.fn(),
   summaryUpdate: vi.fn(),
+  summaryCreate: vi.fn(),
+  shareSubmissionFindUnique: vi.fn(),
+  shareSubmissionUpdate: vi.fn(),
   summaryQueryRaw: vi.fn(),
   summaryGroupBy: vi.fn(),
   radarFeedbackCreate: vi.fn(),
@@ -54,6 +57,7 @@ vi.mock('../../../lib/env.js', () => ({
 vi.mock('../../../lib/db.js', () => ({
   prisma: {
     summary: {
+      create: mocks.summaryCreate,
       findMany: mocks.summaryFindMany,
       findUnique: mocks.summaryFindUnique,
       findFirst: mocks.summaryFindFirst,
@@ -61,6 +65,10 @@ vi.mock('../../../lib/db.js', () => ({
       update: mocks.summaryUpdate,
       $queryRaw: mocks.summaryQueryRaw,
       groupBy: mocks.summaryGroupBy,
+    },
+    shareSubmission: {
+      findUnique: mocks.shareSubmissionFindUnique,
+      update: mocks.shareSubmissionUpdate,
     },
     radarFeedback: {
       create: mocks.radarFeedbackCreate,
@@ -97,6 +105,7 @@ import { POST as adminCreateResearch } from '../admin/radar/[id]/create-research
 import { POST as adminRetry } from '../admin/radar/[id]/retry-interpretation/route';
 import { POST as adminRadarSync } from '../admin/radar/sync/route';
 import { POST as adminDigestRegenerate } from '../admin/radar/digest/route';
+import { POST as adminShareReview } from '../admin/shares/[id]/review/route';
 
 const MEMBER = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -120,7 +129,8 @@ beforeEach(() => {
   mocks.requireUser.mockResolvedValue(MEMBER);
   mocks.requireAdmin.mockResolvedValue(ADMIN);
   mocks.transaction.mockImplementation((cb) => cb({
-    summary: { update: mocks.summaryUpdate },
+    summary: { create: mocks.summaryCreate, update: mocks.summaryUpdate },
+    shareSubmission: { update: mocks.shareSubmissionUpdate },
     radarFeedback: {
       create: mocks.radarFeedbackCreate,
       upsert: mocks.radarFeedbackUpsert,
@@ -140,6 +150,8 @@ beforeEach(() => {
     sortOrder: 0,
     syncRunId: 'r',
   }));
+  mocks.summaryCreate.mockResolvedValue({ id: SUM_ID });
+  mocks.shareSubmissionUpdate.mockResolvedValue({ id: 'share-1' });
   // 清除 findMany 的特殊 mock —— 每个 test 从 clean slate 开始
   mocks.summaryFindMany.mockReset();
   mocks.adminActionCreate.mockResolvedValue({ id: 'action-1', requestId: 'req-1' });
@@ -162,6 +174,43 @@ beforeEach(() => {
     JSON.stringify({ runId: 'run-1', status: 'queued', requestId: 'req-1' }),
     { status: 202, headers: { 'content-type': 'application/json' } },
   )));
+});
+
+describe('POST /api/admin/shares/[id]/review', () => {
+  it('preserves fetched content for scoring and enrichment when approved', async () => {
+    const markdown = '# Shared article\n\nUseful technical details.';
+    mocks.shareSubmissionFindUnique.mockResolvedValue({
+      id: '33333333-3333-4333-8333-333333333333',
+      status: 'pending',
+      url: 'https://example.com/shared',
+      canonicalUrl: 'https://example.com/shared',
+      userNote: 'Worth reading',
+      fetchedTitle: 'Shared article',
+      fetchedMarkdown: markdown,
+      summaryText: '这是一篇值得关注的技术文章。',
+      submitterId: MEMBER.id,
+      contentSha256: 'a'.repeat(64),
+    });
+
+    const response = await adminShareReview(new Request('http://localhost/x', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'approve' }),
+    }) as never, {
+      params: Promise.resolve({ id: '33333333-3333-4333-8333-333333333333' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mocks.summaryCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        interpretation: '这是一篇值得关注的技术文章。',
+        originalKind: 'web_share',
+        originalMarkdown: markdown,
+        originalBytes: Buffer.byteLength(markdown, 'utf8'),
+        originalSha256: 'a'.repeat(64),
+      }),
+    }));
+  });
 });
 
 describe('POST /api/admin/radar actions', () => {

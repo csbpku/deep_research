@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
 import { PreferencesForm } from '@/components/me/PreferencesForm';
+import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 
 interface Initial {
   drafts: Array<{ id: string; title: string; updatedAt: string }>;
@@ -120,9 +121,17 @@ function DraftsSection({ drafts }: { drafts: Initial['drafts'] }) {
               <Link href={`/researches/${d.id}`} className="text-sm font-medium hover:text-primary hover:underline">
                 {d.title || '（未命名草稿）'}
               </Link>
-              <span className="text-xs text-muted-foreground">
-                {new Date(d.updatedAt).toLocaleString('zh-CN')}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {new Date(d.updatedAt).toLocaleString('zh-CN')}
+                </span>
+                <DeleteDraftButton
+                  researchId={d.id}
+                  title={d.title || '未命名草稿'}
+                  compact
+                  onDeleted={() => window.location.reload()}
+                />
+              </div>
             </CardContent>
           </Card>
         </li>

@@ -19,7 +19,7 @@
 import { Suspense, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownNarrowWide, ArrowUpDown, Plus, Search as SearchIcon, Wand2 } from 'lucide-react';
 
 import { PageHeader } from '@/components/domain/PageHeader';
@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
+import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { cn } from '@/lib/utils';
 import {
   parseResearchTab,
@@ -70,8 +71,8 @@ interface ListResponse {
 }
 
 const TABS: Array<{ value: ResearchTab; label: string }> = [
-  { value: 'research', label: '长文' },
-  { value: 'knowledge', label: '精华' },
+  { value: 'research', label: '研究报告' },
+  { value: 'knowledge', label: '知识卡片' },
   { value: 'draft', label: '我的草稿' },
 ];
 
@@ -100,6 +101,7 @@ export default function ResearchesPage() {
 
 function ResearchesContent() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const tab = parseResearchTab(searchParams.get('tab'));
   const [page, setPage] = useState(1);
@@ -154,7 +156,7 @@ function ResearchesContent() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="调研库"
-        description="调研长文与讨论精华的长期归档。"
+        description="完整研究报告与讨论知识卡片的长期归档。"
         actions={
           <Button asChild size="sm">
             <Link href="/researches/new">
@@ -221,7 +223,7 @@ function ResearchesContent() {
         {isLoading && (
           <div className="grid gap-3">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-4">
+              <div key={i} className="space-y-2 rounded-md border border-border bg-card p-4">
                 <Skeleton className="h-3 w-20" />
                 <Skeleton className="h-4 w-1/2" />
                 <Skeleton className="h-3 w-full" />
@@ -234,7 +236,7 @@ function ResearchesContent() {
 
         {data && data.items.length === 0 && (
           <EmptyState
-            title={tab === 'draft' ? '暂无草稿' : `暂无${tab === 'research' ? '长文' : '精华'}`}
+            title={tab === 'draft' ? '暂无草稿' : `暂无${tab === 'research' ? '研究报告' : '知识卡片'}`}
             description={
               tab === 'draft' ? '新建或由 AI 调研产出的草稿会出现在这里。' : '发布后的内容会出现在这里。'
             }
@@ -250,14 +252,13 @@ function ResearchesContent() {
 
         <div className={cn('grid gap-3', filteredOut && 'hidden')}>
           {visible.map((item) => (
-            <Link
+            <Card
               key={item.id}
-              href={`/researches/${item.id}`}
-              className="group block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="group transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:shadow-sm"
             >
-              <Card className="transition-all duration-200 group-hover:-translate-y-px group-hover:border-primary/40 group-hover:shadow-sm">
-                <CardContent className="p-4">
-                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+              <CardContent className="p-4">
+                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                     <StatusBadge kind="method" value={item.creationMethod} />
                     {item.aiAssisted && (
                       <span className="inline-flex items-center gap-1 rounded-full border border-method-ai/40 px-2 py-0.5 text-xs text-method-ai">
@@ -267,7 +268,21 @@ function ResearchesContent() {
                     )}
                     {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
                   </div>
+                  {tab === 'draft' ? (
+                    <DeleteDraftButton
+                      researchId={item.id}
+                      title={item.title}
+                      compact
+                      className="ml-auto shrink-0"
+                      onDeleted={() => queryClient.invalidateQueries({ queryKey: ['researches', 'draft'] })}
+                    />
+                  ) : null}
+                </div>
 
+                <Link
+                  href={`/researches/${item.id}`}
+                  className="block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   <h2 className="text-sm font-semibold leading-snug">{item.title}</h2>
 
                   <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
@@ -288,9 +303,9 @@ function ResearchesContent() {
                       {new Date(item.publishedAt ?? item.createdAt).toLocaleDateString('zh-CN')}
                     </span>
                   </div>
-                </CardContent>
-              </Card>
-            </Link>
+                </Link>
+              </CardContent>
+            </Card>
           ))}
         </div>
 

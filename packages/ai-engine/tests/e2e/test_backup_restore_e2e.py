@@ -369,16 +369,16 @@ def _seed_representative_data(admin_id: str, member_id: str) -> dict[str, str]:
                 INSERT INTO ai_research_jobs (
                     id, "requesterId", topic, context, "reportType",
                     "sourcePolicy", status, attempts, "partialSources",
-                    "sourceRefs", "failedSources", "idempotencyKey",
+                    "sourceRefs", "failedSources", "draftResearchId", "idempotencyKey",
                     "createdAt", "updatedAt"
                 ) VALUES (
                     %s, %s, 'Backup drill topic', 'Backup drill ctx',
                     'research_report', 'prefer_user_sources', 'succeeded',
-                    0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, %s,
+                    0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, %s, %s,
                     now(), now()
                 )
                 """,
-                (job_id, member_id, str(uuid.uuid4())),
+                (job_id, member_id, research_id, str(uuid.uuid4())),
             )
             cur.execute(
                 """

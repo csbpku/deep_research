@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ai_engine.radar.topic_aggregation_worker import run_topic_aggregation
+from ai_engine.radar.topic_proposal_worker import run_topic_proposal_generation
 from ai_engine.radar.topic_synthesis_worker import run_topic_synthesis
 
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -37,11 +38,21 @@ class TopicAggregateResponse(BaseModel):
     topicsCreated: int
     candidatesLinked: int
     staleRemoved: int
+    topicsRetired: int
+    proposalsCreated: int
+    proposalCandidatesLinked: int
+    proposalFailed: int
 
 
 class TopicSynthesizeResponse(BaseModel):
     processed: int
     succeeded: int
+    failed: int
+
+
+class TopicProposalGenerateResponse(BaseModel):
+    proposalsCreated: int
+    candidatesLinked: int
     failed: int
 
 
@@ -81,6 +92,10 @@ async def aggregate_topics(
         topicsCreated=result["topics_created"],
         candidatesLinked=result["candidates_linked"],
         staleRemoved=result["stale_removed"],
+        topicsRetired=result["topics_retired"],
+        proposalsCreated=result["proposals_created"],
+        proposalCandidatesLinked=result["proposal_candidates_linked"],
+        proposalFailed=result["proposal_failed"],
     )
 
 
@@ -104,6 +119,31 @@ async def synthesize_topics(
     return TopicSynthesizeResponse(
         processed=result["processed"],
         succeeded=result["succeeded"],
+        failed=result["failed"],
+    )
+
+
+@router.post(
+    "/proposals/generate",
+    response_model=TopicProposalGenerateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def generate_topic_proposals(
+    request: Request,
+    pool: Any = Depends(_pool),
+    _token: None = Depends(_require_internal_token),
+) -> TopicProposalGenerateResponse:
+    """Generate evidence-backed proposals for Admin review only."""
+    try:
+        result = await run_topic_proposal_generation(pool)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "TOPIC_PROPOSAL_GENERATION_FAILED"},
+        ) from exc
+    return TopicProposalGenerateResponse(
+        proposalsCreated=result["proposals_created"],
+        candidatesLinked=result["candidates_linked"],
         failed=result["failed"],
     )
 

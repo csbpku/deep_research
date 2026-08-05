@@ -356,6 +356,34 @@ def _normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
 
 
+def _normalize_highlights(digest: dict[str, Any]) -> dict[str, Any]:
+    """Keep the persisted/UI contract stable when an LLM emits objects.
+
+    The prompt asks for ``string[]``, but some compatible models return
+    ``{title, summary}`` objects.  React cannot render those objects and the
+    Markdown renderer previously exposed their Python repr.  Convert common
+    object variants to concise strings and discard unusable values.
+    """
+    normalized: list[str] = []
+    for item in digest.get("highlights") or []:
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            title = str(item.get("title") or "").strip()
+            detail = str(
+                item.get("summary")
+                or item.get("body")
+                or item.get("text")
+                or ""
+            ).strip()
+            text = f"{title}：{detail}" if title and detail else title or detail
+        if text:
+            normalized.append(text[:300])
+    digest["highlights"] = normalized[:8]
+    return digest
+
+
 def _resolve_ranked_links(
     digest: dict[str, Any],
     candidates: list[dict[str, Any]],
@@ -628,6 +656,7 @@ async def generate_daily_digest(
         logger.warning("digest.degraded_fallback")
         digest = _degraded_digest(candidates, target_date_str)
 
+    digest = _normalize_highlights(digest)
     digest = _resolve_ranked_links(digest, candidates)
     markdown = _render_markdown(digest)
     meta = _digest_meta(

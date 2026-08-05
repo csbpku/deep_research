@@ -8,7 +8,7 @@
 # ──────────────────────────── Stage 1: deps ────────────────────────────
 FROM --platform=linux/amd64 node:20-alpine AS deps
 RUN apk add --no-cache openssl
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
 WORKDIR /repo
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
@@ -17,7 +17,7 @@ RUN echo "node-linker=hoisted" > .npmrc
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
 
-RUN pnpm install --filter '@deep-research/web...' --filter '@deep-research/shared' \
+RUN pnpm install --config.node-linker=hoisted --filter '@deep-research/web...' --filter '@deep-research/shared' \
     --frozen-lockfile
 
 # ──────────────────────────── Stage 2: build ───────────────────────────
@@ -58,6 +58,11 @@ COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next apps/web/.next
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public apps/web/public
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/package.json apps/web/package.json
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/next.config.ts apps/web/next.config.ts
+# The workspace package links are required at runtime.  The pnpm store under
+# /repo/node_modules/.pnpm contains the packages, but the Next bundle resolves
+# react/next from apps/web/node_modules first.  Omitting these links makes the
+# container start but every App Router/BFF request fail with MODULE_NOT_FOUND.
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/node_modules apps/web/node_modules
 COPY --from=build --chown=nextjs:nodejs /repo/node_modules node_modules
 COPY --from=build --chown=nextjs:nodejs /repo/packages packages
 COPY --chown=nextjs:nodejs scripts/docker-entrypoint-web.sh /entrypoint.sh

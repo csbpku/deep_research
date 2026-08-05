@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCurrentUser } from '@/lib/auth/client';
 import { isHttpUrl } from '@/lib/external-url';
+import MarkdownContent from '@/components/MarkdownContent';
 
 interface SummaryDetail {
   id: string;
@@ -266,14 +267,17 @@ function DetailBody({ data }: { data: SummaryDetail }) {
       })()}
 
       {data.interpretation ? (
-        <p className="my-3 rounded-r-md border-l-2 border-l-primary bg-muted/50 px-4 py-3 text-[15px] leading-relaxed">
+        <p className="my-3 rounded-r-md border-l-2 border-l-primary bg-muted/50 px-4 py-3 text-[15px] leading-7">
           <span className="mr-1.5 text-xs text-muted-foreground">AI 一句话解读：</span>
           {data.interpretation}
         </p>
       ) : null}
 
       {data.body && data.body !== data.interpretation ? (
-        <div className="my-4 whitespace-pre-wrap text-[15px] leading-relaxed">{data.body}</div>
+        <section className="my-8" aria-labelledby="summary-body-title">
+          <h2 id="summary-body-title" className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">正文</h2>
+          <MarkdownContent content={data.body} className="text-[15px]" />
+        </section>
       ) : null}
 
       {isHttpUrl(data.url) ? (

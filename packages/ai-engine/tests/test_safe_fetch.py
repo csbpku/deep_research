@@ -330,6 +330,22 @@ async def test_ssrf_10_timeout_rejected(
 
 
 @pytest.mark.asyncio
+async def test_dns_resolution_failure_has_specific_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolver failures are transport errors, not AI-engine outages."""
+    def failed_resolver(host: str, *args: Any, **kwargs: Any) -> list[Any]:
+        raise socket.gaierror(socket.EAI_NONAME, "name not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", failed_resolver)
+    client = _client(_MockTransport({}))
+    with pytest.raises(SafeFetchError) as exc_info:
+        await safe_fetch("https://dns-failure.example/", client=client)
+    assert exc_info.value.code == "URL_FETCH_DNS"
+    assert exc_info.value.host == "dns-failure.example"
+
+
+@pytest.mark.asyncio
 async def test_ssrf_11_scheme_file_rejected(
     patch_resolver: Callable[[str, str], None],
 ) -> None:

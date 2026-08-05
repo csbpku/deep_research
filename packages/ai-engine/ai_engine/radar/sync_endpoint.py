@@ -63,6 +63,11 @@ class RadarRunView(BaseModel):
     errorCode: str | None
     createdAt: str
     completedAt: str | None
+    candidateCount: int
+    scoredCount: int
+    pendingScoreCount: int
+    enrichedCount: int
+    pendingEnrichmentCount: int
 
 
 def _pool(request: Request) -> Any:
@@ -346,8 +351,16 @@ async def list_radar_runs(
                 's."sourceType", r."triggeredBy", r."status", r."totalFetched", '
                 'r."totalNew", r."totalSkipped", r."totalFailed", r."tokenInputTotal", '
                 'r."tokenOutputTotal", r."costUsd", r."elapsedMs", r."errorCode", '
-                'r."createdAt", r."completedAt" FROM "radar_sync_runs" r '
+                'r."createdAt", r."completedAt", '
+                'COUNT(c."id")::int AS "candidateCount", '
+                'COUNT(c."id") FILTER (WHERE c."distilledScore" IS NOT NULL)::int AS "scoredCount", '
+                'COUNT(c."id") FILTER (WHERE c."distilledScore" IS NULL)::int AS "pendingScoreCount", '
+                'COUNT(c."id") FILTER (WHERE c."originalMeta" IS NOT NULL)::int AS "enrichedCount", '
+                'COUNT(c."id") FILTER (WHERE c."originalMeta" IS NULL)::int AS "pendingEnrichmentCount" '
+                'FROM "radar_sync_runs" r '
                 'JOIN "radar_sources" s ON s."id" = r."sourceId" '
+                'LEFT JOIN "summaries" c ON c."syncRunId" = r."id" '
+                'GROUP BY r."id", s."name", s."sourceType" '
                 'ORDER BY r."createdAt" DESC LIMIT %s',
                 (bounded_limit,),
             )

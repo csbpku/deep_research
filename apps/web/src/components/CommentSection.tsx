@@ -152,7 +152,7 @@ export function CommentSection({
 
   return (
     <section
-      className="mt-4 rounded-lg border border-border bg-card p-4"
+      className="mt-4 rounded-md border border-border bg-card p-4"
       data-testid="comment-section"
     >
       <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
@@ -255,7 +255,7 @@ function CommentRow({
             {comment.promoteStatus === 'approved' && (
               <span className="inline-flex items-center gap-1 rounded bg-radar-published-bg px-1.5 py-0.5 text-[10px] text-radar-published-fg">
                 <Sparkles className="size-3" />
-                已提炼为精华
+                已提炼为知识卡片
               </span>
             )}
             {comment.promoteStatus === 'rejected' && (

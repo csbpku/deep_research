@@ -282,6 +282,14 @@ def _report_has_references(report: str) -> bool:
     return bool(_REFERENCE_HEADING_RE.search(report))
 
 
+def _strip_reference_section(report: str) -> str:
+    """Remove any trailing reference section so we can rebuild it deterministically."""
+    match = _REFERENCE_HEADING_RE.search(report)
+    if not match:
+        return report.strip()
+    return report[:match.start()].rstrip()
+
+
 def _report_needs_completion(report: str, sources: list[AdapterSource]) -> bool:
     """True when the report has no reference section or ends mid-sentence."""
     if _report_has_references(report):
@@ -317,7 +325,8 @@ def _format_source_lines(sources: list[AdapterSource]) -> str:
 def _append_references(report: str, sources: list[AdapterSource]) -> str:
     if not sources:
         return report
-    return f"{report.rstrip()}\n\n## 参考文献\n\n{_format_source_lines(sources)}"
+    body = _strip_reference_section(report)
+    return f"{body.rstrip()}\n\n## 参考文献\n\n{_format_source_lines(sources)}"
 
 
 def _strip_overlap(previous: str, chunk: str) -> str:
@@ -400,7 +409,7 @@ async def _ensure_complete_report(
             break
         parts.append(chunk.strip())
     current = "\n\n".join(parts)
-    if not _report_has_references(current) and sources:
+    if sources:
         current = _append_references(current, sources)
     return current.strip()
 

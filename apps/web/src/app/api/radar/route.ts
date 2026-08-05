@@ -102,8 +102,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   };
 
   const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
-    { distilledMustRead: 'desc' },
-    { distilledTotal: 'desc' },
+    { distilledMustRead: { sort: 'desc', nulls: 'last' } },
+    { distilledTotal: { sort: 'desc', nulls: 'last' } },
     { createdAt: 'desc' },
   ];
 

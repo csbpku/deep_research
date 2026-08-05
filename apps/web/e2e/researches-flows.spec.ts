@@ -6,6 +6,7 @@
 //   - 调研库详情对不存在 id 的处理
 
 import { test, expect } from '@playwright/test';
+import { loginWithCredentials } from './fixtures';
 
 test.describe('Research flows', () => {
   test('researches list page renders', async ({ page }) => {
@@ -24,5 +25,40 @@ test.describe('Research flows', () => {
     const fakeId = '00000000-0000-4000-8000-000000000000';
     const res = await page.goto(`/researches/${fakeId}`);
     expect([200, 404]).toContain(res?.status() ?? 0);
+  });
+
+  test('owner can permanently delete a draft after confirmation', async ({ page }) => {
+    await loginWithCredentials(page.context().request, {
+      email: 'member@shopee.com',
+      role: 'member',
+    });
+
+    const title = `E2E 删除草稿 ${Date.now()}`;
+    const created = await page.request.post('/api/researches', {
+      data: {
+        type: 'research',
+        title,
+        body: '这是一份用于验证删除流程的临时草稿。',
+        tags: ['e2e-delete'],
+      },
+    });
+    expect(created.status()).toBe(201);
+    const draft = await created.json() as { id: string };
+
+    try {
+      await page.goto('/researches?tab=draft');
+      await expect(page.getByRole('button', { name: `删除草稿：${title}` })).toBeVisible();
+
+      await page.goto(`/researches/${draft.id}`);
+      await page.getByRole('button', { name: `删除草稿：${title}` }).click();
+      await expect(page.getByRole('dialog')).toContainText('此操作无法撤销');
+      await page.getByRole('button', { name: '永久删除' }).click();
+
+      await expect(page).toHaveURL(/\/researches\?tab=draft/u);
+      const deleted = await page.request.get(`/api/researches/${draft.id}`);
+      expect(deleted.status()).toBe(404);
+    } finally {
+      await page.request.delete(`/api/researches/${draft.id}`).catch(() => undefined);
+    }
   });
 });

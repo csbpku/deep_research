@@ -16,6 +16,7 @@ from ai_engine.radar.source_manager import fetch_source as dispatch_source
 from ai_engine.radar.sync_runner import (
     _NAV_NOISE_PATTERNS,
     _clean_content,
+    _extract_article_content,
     _generate_brief_with_retry,
     _is_low_quality_content,
     RadarSyncResult,
@@ -451,6 +452,37 @@ async def test_candidate_safe_fetch_failure_makes_run_partial() -> None:
     assert result.runs[0].status == "partial"
     assert result.runs[0].total_failed == 1
     assert result.runs[0].error_code == "URL_FETCH_BLOCKED"
+    finish = next(
+        params for sql, params in pool.connection_value.executions
+        if 'UPDATE "radar_sync_runs" SET' in sql
+    )
+    assert "SafeFetchError/URL_FETCH_BLOCKED@example.com x1" in str(finish[10])
+
+
+async def test_source_transport_failure_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([_source()])
+    calls = 0
+
+    async def flaky_fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise httpx.ConnectError("temporary DNS/connect failure")
+        return []
+
+    monkeypatch.setattr(
+        "ai_engine.radar.sync_runner.RADAR_FETCH_RETRY_BACKOFF_SECONDS", 0.0,
+    )
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 2)
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": flaky_fetcher},
+    )
+    assert calls == 3
+    assert result.runs[0].status == "completed"
 
 
 async def test_generate_failure_isolated_from_next_candidate() -> None:
@@ -755,6 +787,23 @@ async def test_cloudflare_content_fallback_keeps_raw_text() -> None:
     insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
     _, params = insert
     assert params[21] == body.strip()[:2000]
+
+
+def test_extract_article_content_preserves_structure_with_trafilatura() -> None:
+    html = """
+    <html><body><nav>noise</nav><article>
+      <h1>Readable title</h1>
+      <p>First paragraph with enough detail to be selected by the article extractor. It explains the context, the user problem, and why the proposed approach matters for a real engineering team.</p>
+      <h2>Method</h2>
+      <p>Second paragraph with a <a href="https://example.com">source link</a>. It describes the method, the evidence, and the limitations that readers should verify before adopting the result.</p>
+      <ul><li>One item</li><li>Two items</li></ul>
+    </article><footer>noise</footer></body></html>
+    """
+    result = _extract_article_content(html, "https://example.com/article", "rss")
+    assert "# Readable title" in result
+    assert "## Method" in result
+    assert "- One item" in result
+    assert "[source link](https://example.com)" in result
 
 
 async def test_generate_brief_with_retry_retries_429(monkeypatch: pytest.MonkeyPatch) -> None:

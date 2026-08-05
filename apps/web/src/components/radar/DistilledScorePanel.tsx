@@ -62,7 +62,7 @@ function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: Distilled
   const displayScore = score.rankingScore ?? score.effectiveTotal ?? score.total;
 
   return (
-    <div className="border-y border-border">
+    <div className="rounded-lg bg-muted/30 px-4">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

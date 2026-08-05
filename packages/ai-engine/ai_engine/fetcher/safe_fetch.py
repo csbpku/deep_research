@@ -110,11 +110,24 @@ class FetchedDocument:
 
 
 def _resolve_ip(host: str) -> str:
-    """Resolve `host` (DNS) → single IP string. Raises on failure."""
-    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    """Resolve ``host`` and convert resolver failures to the public contract.
+
+    ``socket.gaierror`` used to escape this function and was later collapsed
+    to ``AI_ENGINE_UNAVAILABLE`` by the radar runner.  DNS is an upstream URL
+    transport failure, not an AI-engine outage, so retain the host and expose
+    a retryable, caller-visible code.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise SafeFetchError(
+            code="URL_FETCH_DNS",
+            message=f"DNS resolution failed for host {host}",
+            host=host,
+        ) from exc
     if not infos:
         raise SafeFetchError(
-            code="URL_FETCH_BLOCKED",
+            code="URL_FETCH_DNS",
             message=f"DNS resolution failed for host {host}",
             host=host,
         )

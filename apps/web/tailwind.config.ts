@@ -111,6 +111,7 @@ const config: Config = {
           'Hiragino Sans GB',
           'Noto Sans SC',
           'Microsoft YaHei',
+          'Arial',
           'sans-serif',
         ],
         mono: [

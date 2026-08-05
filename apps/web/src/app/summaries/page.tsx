@@ -85,15 +85,17 @@ export default function SummariesPage() {
       ) : (q.data?.dates.length ?? 0) === 0 ? (
         <EmptyState title="暂无日报" description="完成雷达同步后会自动生成每日总结文章。" />
       ) : (
-        <div className="grid gap-3">
-          {q.data!.dates.map((d) => (
+        <div className="relative grid gap-3 sm:pl-8">
+          <div className="absolute bottom-3 left-2 top-3 hidden w-px bg-border sm:block" aria-hidden />
+          {q.data!.dates.map((d, index) => (
             <Link
               key={d.summaryId}
               href={`/summaries/${d.date}`}
               className="group block rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <Card className="transition-all duration-200 group-hover:-translate-y-px group-hover:border-primary/40 group-hover:shadow-sm">
-                <CardContent className="p-4">
+              <Card className={`transition-all duration-200 group-hover:-translate-y-px group-hover:border-primary/40 group-hover:shadow-sm ${index === 0 ? 'border-l-2 border-l-primary bg-gradient-to-br from-card to-accent/25' : ''}`}>
+                <CardContent className={index === 0 ? 'min-h-48 p-5' : 'p-4'}>
+                  {index === 0 ? <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">今日看点 · 最新日报</div> : null}
                   <div className="flex flex-wrap items-baseline gap-2.5">
                     <h2 className="font-mono text-base font-semibold tabular-nums">{d.date}</h2>
                     <span className="text-xs text-muted-foreground">{formatTime(d.publishedAt)}</span>
@@ -106,12 +108,17 @@ export default function SummariesPage() {
                     <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-primary" />
                   </div>
 
-                  <h3 className="mt-2 text-sm font-medium leading-snug">{d.title}</h3>
+                  <h3 className={`${index === 0 ? 'mt-3 text-xl' : 'mt-2 text-sm'} font-semibold leading-snug tracking-tight`}>{d.title}</h3>
 
                   {d.tldr ? (
-                    <p className="mt-1.5 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
+                    <p className={`${index === 0 ? 'mt-3 text-[15px] leading-7' : 'mt-1.5 text-sm leading-relaxed'} line-clamp-3 text-muted-foreground`}>
                       {d.tldr}
                     </p>
+                  ) : null}
+                  {index === 0 && d.highlights.length > 0 ? (
+                    <div className="mt-4 flex flex-wrap gap-1.5">
+                      {d.highlights.slice(0, 3).map((highlight, highlightIndex) => <span key={`${highlight}-${highlightIndex}`} className="rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[11px] text-primary">{highlight}</span>)}
+                    </div>
                   ) : null}
                 </CardContent>
               </Card>

@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import date
 from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -33,6 +32,7 @@ _SOURCE_PROFILE: dict[str, str] = {
     "lobsters": "news",
     "wechat": "news",
     "vendor_news": "news",
+    "web_share": "news",
 }
 
 
@@ -53,13 +53,13 @@ async def main() -> int:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=int(os.environ.get("RADAR_RESCORE_CONCURRENCY", "8")),
+        default=int(os.environ.get("RADAR_RESCORE_CONCURRENCY", "5")),
         help="Maximum concurrent LLM scoring calls",
     )
     parser.add_argument(
         "--date",
-        default=date.today().isoformat(),
-        help="Only score candidates for this summary date (YYYY-MM-DD; defaults to today)",
+        default=None,
+        help="Only score candidates for this summary date (YYYY-MM-DD; default: all dates)",
     )
     parser.add_argument(
         "--recalibrate-only",
@@ -74,20 +74,26 @@ async def main() -> int:
     async with store.pool.connection() as conn:
         rows = await (await conn.execute(
             'SELECT "id", "title", "body", "url", "publishedAt", "syncRunId", '
+            '  "originalMarkdown", '
             '  "distilledScore", "distilledProfile", '
             '  (SELECT s."sourceType" FROM "radar_sync_runs" r '
             '   JOIN "radar_sources" s ON s."id" = r."sourceId" '
             '   WHERE r."id" = "summaries"."syncRunId" LIMIT 1) AS "sourceType" '
-            'FROM "summaries" WHERE "source" = \'daily\' '
-            'AND "syncRunId" IS NOT NULL '
-            'AND "summaryDate" = %s::date '
+            'FROM "summaries" WHERE (("source" = \'daily\' '
+            'AND "syncRunId" IS NOT NULL) OR ("source" = \'user\' '
+            'AND "status" IN (\'candidate\', \'published\') AND EXISTS ('
+            'SELECT 1 FROM "share_submissions" sh '
+            'WHERE sh."publishedSummaryId" = "summaries"."id" '
+            'AND sh."status" = \'approved\'))) '
+            'AND "canonicalUrl" NOT LIKE \'digest://%%\' '
+            + ('AND "summaryDate" = %s::date ' if args.date else '')
             + ('' if args.rescore else 'AND "distilledScore" IS NULL ')
             + ('AND (SELECT s."sourceType" FROM "radar_sync_runs" r '
                'JOIN "radar_sources" s ON s."id" = r."sourceId" '
                'WHERE r."id" = "summaries"."syncRunId" LIMIT 1) = %s '
                if args.source_type else '')
             + 'LIMIT %s',
-            (args.date,)
+            ((args.date,) if args.date else ())
             + ((args.source_type,) if args.source_type else ())
             + (args.limit,)
         )).fetchall()
@@ -98,8 +104,8 @@ async def main() -> int:
     async def score_row(raw: Any) -> tuple[dict[str, Any], DistilledScore]:
         row = dict(raw)
         title = str(row["title"])
-        body = str(row.get("body", "") or title)
-        source_type = str(row.get("sourceType", "rss"))
+        body = str(row.get("originalMarkdown") or row.get("body") or title)
+        source_type = str(row.get("sourceType") or "web_share")
 
         profile_id = _SOURCE_PROFILE.get(source_type, "engineering")
         profile = get_profile(profile_id)

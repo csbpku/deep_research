@@ -19,9 +19,9 @@ const CONTRACT_FAIL = (msg: string) =>
   new Error(`contract: ${msg} — UI 重设计可能丢失了关键 DOM 钩子`);
 
 test.describe('UI 重设计 · 契约守护', () => {
-  test('首页有 h1「技术调研平台」', async ({ page }) => {
+  test('首页有品牌 h1「AI技术调研平台」', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('h1', { hasText: '技术调研平台' })).toBeVisible();
+    await expect(page.locator('h1', { hasText: 'AI技术调研平台' })).toBeVisible();
   });
 
   test('/researches 含 h1「调研库」与「新建」入口', async ({ page }) => {

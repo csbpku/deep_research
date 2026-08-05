@@ -1,5 +1,6 @@
-// BFF handler: GET  /api/researches/[id] — 详情
-//               PUT  /api/researches/[id] — 编辑（含 published 修改审计）
+// BFF handler: GET    /api/researches/[id] — 详情
+//               PUT    /api/researches/[id] — 编辑（含 published 修改审计）
+//               DELETE /api/researches/[id] — owner 永久删除 draft
 //
 // 契约源：
 //   - docs/contracts/state-machines.md §5: ResearchStatus
@@ -325,6 +326,67 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     ...shapeResearchDetail(updated),
     commentCount: updated._count.comments,
   });
+});
+
+// ─── DELETE /api/researches/[id] ──────────────────────────────────────
+
+export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
+  const requestId = withRequestId(req.headers);
+  const u = await requireUser(req);
+  if (u instanceof NextResponse) return u;
+
+  const parsed = IdParam.safeParse(await ctx.params);
+  if (!parsed.success) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'id 必须为 UUID',
+      requestId,
+      details: parsed.error.flatten(),
+    });
+  }
+
+  const existing = await prisma.research.findUnique({
+    where: { id: parsed.data.id },
+    select: {
+      id: true,
+      authorId: true,
+      status: true,
+      sourceAiJob: { select: { id: true } },
+    },
+  });
+
+  if (!existing || existing.authorId !== u.id) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '草稿不存在',
+      requestId,
+    });
+  }
+  if (existing.status !== RESEARCH_STATUS.DRAFT) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_ALREADY_PUBLISHED,
+      message: '只有草稿可以永久删除',
+      requestId,
+    });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (existing.sourceAiJob?.id) {
+      await tx.aiResearchJob.delete({
+        where: { id: existing.sourceAiJob.id },
+      });
+    }
+    await tx.research.delete({ where: { id: existing.id } });
+  });
+
+  log.info('research.delete', 'draft permanently deleted', {
+    requestId,
+    userId: u.id,
+    researchId: existing.id,
+    linkedAiJobId: existing.sourceAiJob?.id ?? null,
+  });
+
+  return NextResponse.json({ ok: true, id: existing.id });
 });
 
 // ──────────────────────────────────────────────────────────────────────

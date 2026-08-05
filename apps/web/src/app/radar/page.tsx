@@ -9,8 +9,9 @@
 //  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
 
 import { useQueries, useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
 import { useState } from 'react';
-import { LayoutGrid, List, Search } from 'lucide-react';
+import { Layers3, ListOrdered, Search, Workflow } from 'lucide-react';
 
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
 import { ShareUrlDialog } from '@/components/radar/ShareUrlDialog';
@@ -31,6 +32,7 @@ import { EmptyState } from '@/components/EmptyState';
 import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import { useCurrentUser } from '@/lib/auth/client';
 import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 
 interface RadarCandidateListItem {
@@ -120,12 +122,13 @@ async function fetchRadar(params: URLSearchParams): Promise<RadarListResponse> {
 }
 
 export default function RadarPage() {
+  const me = useCurrentUser();
   const [q, setQ] = useState('');
   const [sourceType, setSourceType] = useState(ALL);
   const [status, setStatus] = useState(ALL);
   const [quality, setQuality] = useState('relevant');
   const [page, setPage] = useState(1);
-  const [view, setView] = useState<'grouped' | 'list'>('grouped');
+  const [view, setView] = useState<'source' | 'ranked'>('ranked');
 
   const query = useQuery<RadarListResponse>({
     queryKey: ['radar', q, sourceType, status, quality, page],
@@ -140,7 +143,7 @@ export default function RadarPage() {
       return fetchRadar(params);
     },
     placeholderData: (prev) => prev,
-    enabled: view === 'list',
+    enabled: view === 'ranked',
   });
 
   const groupedQueries = useQueries({
@@ -157,40 +160,54 @@ export default function RadarPage() {
         if (status !== ALL) params.set('status', status);
         return fetchRadar(params);
       },
-      enabled: view === 'grouped',
+      enabled: view === 'source',
     })),
   });
 
   const items = query.data?.items ?? [];
   const totalPages = query.data?.totalPages ?? 1;
+  const memberActions = (summaryId: string) => me.data ? (
+    <Button asChild type="button" variant="outline" size="xs">
+      <Link href={`/ai-research?seed=${summaryId}`} aria-label="深入调研">
+        <Workflow />
+        深入调研
+      </Link>
+    </Button>
+  ) : null;
 
   return (
     <div className="mx-auto min-w-0 max-w-shell">
       <PageHeader
         title="技术雷达"
-        description="每个条目附带 AI 一句话解读与多维度评分；点击标题进入详情。"
+        description="默认按团队价值排序；来源只是证据，不决定阅读顺序。"
         actions={(
           <div className="flex items-center gap-2">
-            <div className="inline-flex rounded-md border border-border p-0.5" aria-label="雷达展示方式">
+            <div className="inline-flex items-center rounded-lg border border-border bg-card p-1 shadow-sm" aria-label="雷达展示方式">
               <Button
                 type="button"
-                variant={view === 'grouped' ? 'secondary' : 'ghost'}
-                size="icon-sm"
-                title="分类视图"
-                aria-label="分类视图"
-                onClick={() => setView('grouped')}
+                variant={view === 'ranked' ? 'default' : 'ghost'}
+                size="sm"
+                className={view === 'ranked' ? 'shadow-sm' : 'text-muted-foreground'}
+                title="按团队价值和新鲜度统一排序"
+                aria-label="统一排序"
+                aria-pressed={view === 'ranked'}
+                onClick={() => setView('ranked')}
               >
-                <LayoutGrid />
+                <ListOrdered className="size-3.5" />
+                统一排序
               </Button>
               <Button
                 type="button"
-                variant={view === 'list' ? 'secondary' : 'ghost'}
-                size="icon-sm"
-                title="列表视图"
-                aria-label="列表视图"
-                onClick={() => setView('list')}
+                variant={view === 'source' ? 'default' : 'ghost'}
+                size="sm"
+                className={view === 'source' ? 'shadow-sm' : 'text-muted-foreground'}
+                title="按来源分组巡检"
+                aria-label="来源分组"
+                aria-pressed={view === 'source'}
+                onClick={() => setView('source')}
               >
-                <List />
+                <Layers3 className="size-3.5" />
+                来源分组
               </Button>
             </div>
             <ShareUrlDialog />
@@ -219,7 +236,7 @@ export default function RadarPage() {
           <span>来源</span>
           <Select
             value={sourceType}
-            onValueChange={(v) => { setSourceType(v); setPage(1); setView('list'); }}
+              onValueChange={(v) => { setSourceType(v); setPage(1); setView('ranked'); }}
           >
             <SelectTrigger className="w-32" aria-label="来源类型筛选">
               <SelectValue />
@@ -272,37 +289,48 @@ export default function RadarPage() {
         </Button>
       </FilterBar>
 
-      {view === 'grouped' ? (
-        <div className="grid min-w-0 gap-x-6 gap-y-8 xl:grid-cols-2">
+      {view === 'source' ? (
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
           {RADAR_GROUPS.map((group, index) => {
             const groupQuery = groupedQueries[index];
             const groupItems = groupQuery.data?.items ?? [];
+            const accent = ['bg-primary', 'bg-status-succeeded-fg', 'bg-status-queued-fg', 'bg-status-running-fg'][index] ?? 'bg-primary';
             return (
-              <section key={group.id} className="min-w-0" aria-labelledby={`radar-group-${group.id}`}>
-                <div className="mb-3 flex min-w-0 items-end justify-between gap-3 border-b border-border pb-2">
-                  <div className="min-w-0">
-                    <h2 id={`radar-group-${group.id}`} className="text-base font-semibold">{group.title}</h2>
-                    <p className="truncate text-xs text-muted-foreground">{group.description}</p>
+              <section key={group.id} className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm" aria-labelledby={`radar-group-${group.id}`}>
+                <div className="flex min-w-0 items-start justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${accent}`} aria-hidden />
+                    <div className="min-w-0">
+                      <h2 id={`radar-group-${group.id}`} className="text-sm font-semibold">{group.title}</h2>
+                      <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{group.description}</p>
+                    </div>
                   </div>
                   <button
                     type="button"
                     className="shrink-0 text-xs text-primary hover:underline"
-                    onClick={() => { setSourceType(group.sourceType); setPage(1); setView('list'); }}
+                    onClick={() => { setSourceType(group.sourceType); setPage(1); setView('ranked'); }}
                   >
-                    查看全部 {groupQuery.data?.total ?? 0}
+                    {groupQuery.data?.total ?? 0} 条 · 查看全部
                   </button>
                 </div>
                 {groupQuery.isLoading ? (
-                  <div className="grid gap-3">
+                  <div className="grid gap-2.5 p-3">
                     {[0, 1].map((i) => <Skeleton key={i} className="h-36 w-full" />)}
                   </div>
                 ) : groupQuery.isError ? (
-                  <p className="py-8 text-sm text-destructive">加载失败</p>
+                  <p className="p-5 text-sm text-destructive">加载失败</p>
                 ) : groupItems.length === 0 ? (
-                  <p className="py-8 text-sm text-muted-foreground">暂无相关内容</p>
+                  <p className="p-5 text-sm text-muted-foreground">暂无相关内容</p>
                 ) : (
-                  <div className="grid gap-3">
-                    {groupItems.map((it) => <RadarCandidateCard key={it.id} candidate={it} />)}
+                  <div className="grid gap-2.5 p-3">
+                    {groupItems.map((it) => (
+                      <RadarCandidateCard
+                        key={it.id}
+                        candidate={it}
+                        memberActions={memberActions(it.id)}
+                        compact
+                      />
+                    ))}
                   </div>
                 )}
               </section>
@@ -327,14 +355,19 @@ export default function RadarPage() {
           description="雷达同步尚未产出候选；稍后再来或联系 admin 触发手动同步。"
         />
       ) : (
-        <div className="grid gap-3">
+        <div className="overflow-hidden rounded-md border border-border bg-card">
           {items.map((it) => (
-            <RadarCandidateCard key={it.id} candidate={it} />
+            <RadarCandidateCard
+              key={it.id}
+              candidate={it}
+              memberActions={memberActions(it.id)}
+              compact
+            />
           ))}
         </div>
       )}
 
-      {view === 'list' ? (
+      {view === 'ranked' ? (
         <Pagination
           page={page}
           totalPages={totalPages}

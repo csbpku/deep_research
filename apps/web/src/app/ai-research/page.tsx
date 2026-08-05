@@ -4,7 +4,7 @@
 //
 // ⚠️ e2e 契约：
 //   - form 上的 data-ai-research-form 属性
-//   - aria-label="资料类型" / "资料地址或 ID"
+//   - aria-label="资料类型"；URL 输入保留 aria-label="资料地址或 ID"
 //   - 提交按钮文案含「提交」；正文含 /AI 调研/
 //   - LastSubmittedBanner 的 aria-label="关闭"
 
@@ -22,6 +22,7 @@ import {
   Loader2,
   Plus,
   Rocket,
+  Search,
   Send,
   X,
 } from 'lucide-react';
@@ -59,12 +60,19 @@ interface SourceRefInput {
   type: 'url' | 'summary' | 'research';
   value: string;
   required: boolean;
+  label?: string;
+}
+
+interface SourceOption {
+  id: string;
+  title: string;
+  meta?: string;
 }
 
 const REPORT_TYPES: Array<{ value: 'research_report' | 'summary_brief'; label: string; desc: string }> = [
   {
     value: 'research_report',
-    label: '长文调研',
+    label: '研究报告',
     desc: '5 步流水线（规划 → 检索 → 压缩 → 分析 → 写作），生成可编辑的私有草稿。',
   },
   {
@@ -73,6 +81,11 @@ const REPORT_TYPES: Array<{ value: 'research_report' | 'summary_brief'; label: s
     desc: '抓取 + 压缩 + 写作的轻量路径，不写草稿，结果返回到本页。',
   },
 ];
+
+/** 仅用于 React 列表 key，不进入 API；避免旧浏览器缺少 crypto.randomUUID 时点击失效。 */
+function createSourceRowId(): string {
+  return `source-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 /** 表单里的分组框 —— 与 SectionCard 观感一致，但语义上是 fieldset。 */
 function FormSection({
@@ -100,7 +113,7 @@ function FormSection({
     <details
       open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      className="rounded-lg border border-border bg-card p-3 [&_summary::-webkit-details-marker]:hidden"
+      className="rounded-md border border-border bg-card p-3 [&_summary::-webkit-details-marker]:hidden"
     >
       <summary className="-mx-1 flex cursor-pointer list-none items-center justify-between gap-2 rounded px-1 py-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <span className="inline-flex items-center gap-1.5">
@@ -114,6 +127,153 @@ function FormSection({
       {hint ? <p className="mb-2 mt-2 text-xs text-muted-foreground">{hint}</p> : null}
       <div className="mt-2">{children}</div>
     </details>
+  );
+}
+
+function InternalSourcePicker({
+  kind,
+  value,
+  label,
+  disabled,
+  onChange,
+}: {
+  kind: 'summary' | 'research';
+  value: string;
+  label?: string;
+  disabled?: boolean;
+  onChange: (option: SourceOption | null) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SourceOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(!value);
+
+  useEffect(() => {
+    setQuery('');
+    setEditing(!value);
+  }, [kind]);
+
+  useEffect(() => {
+    if (disabled || (value && !editing)) return;
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      setSearchError(null);
+      const params = new URLSearchParams();
+      const trimmedQuery = query.trim();
+      if (trimmedQuery) params.set('q', trimmedQuery);
+
+      const endpoint = kind === 'summary'
+        ? `/api/radar?per_page=8&${params}`
+        : `/api/researches?scope=published&limit=8&${params}`;
+
+      void fetch(endpoint, { cache: 'no-store', signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error('资料搜索失败');
+          const data = await response.json() as {
+            items?: Array<{
+              id: string;
+              title: string;
+              sourceType?: string;
+              status?: string;
+              publishedAt?: string | null;
+              author?: { name?: string };
+            }>;
+          };
+          return (data.items ?? []).map((item) => ({
+            id: item.id,
+            title: item.title,
+            meta: kind === 'summary'
+              ? item.sourceType ?? item.status
+              : [item.author?.name, item.publishedAt?.slice(0, 10)].filter(Boolean).join(' · '),
+          }));
+        })
+        .then(setResults)
+        .catch((error: unknown) => {
+          if ((error as Error).name !== 'AbortError') {
+            setResults([]);
+            setSearchError('没有加载到资料，请稍后重试。');
+          }
+        })
+        .finally(() => setLoading(false));
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [disabled, editing, kind, query, value]);
+
+  if (value && !editing) {
+    return (
+      <div className="flex min-w-0 items-center gap-2 rounded-md border border-primary/25 bg-primary/5 px-3 py-2">
+        <CheckCircle2 className="size-4 shrink-0 text-primary" aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={label}>
+          {label ?? '已选资料'}
+        </span>
+        {!disabled ? (
+          <>
+            <Button type="button" variant="ghost" size="xs" onClick={() => setEditing(true)}>
+              更换
+            </Button>
+            <Button type="button" variant="ghost" size="xs" onClick={() => onChange(null)}>
+              清除
+            </Button>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-0 rounded-md border border-input bg-card shadow-sm">
+      <div className="flex items-center gap-2 px-3">
+        <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <input
+          type="search"
+          aria-label={kind === 'summary' ? '搜索雷达内容' : '搜索已发布调研'}
+          value={query}
+          autoFocus={editing && Boolean(value)}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={kind === 'summary' ? '搜索标题、标签或关键词' : '搜索调研标题或正文'}
+          className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+        />
+        {loading ? <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="正在搜索" /> : null}
+      </div>
+      <div className="max-h-52 overflow-y-auto border-t border-border p-1">
+        {searchError ? (
+          <p role="status" className="px-2 py-3 text-xs text-status-partial-fg">{searchError}</p>
+        ) : results.length === 0 && !loading ? (
+          <p className="px-2 py-3 text-xs text-muted-foreground">
+            {query.trim() ? '没有匹配结果，换个关键词试试。' : '暂无可选资料。'}
+          </p>
+        ) : (
+          results.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => {
+                onChange(option);
+                setEditing(false);
+              }}
+              className="group flex w-full items-center gap-3 rounded px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{option.title}</span>
+                {option.meta ? (
+                  <span className="block truncate text-[11px] text-muted-foreground">{option.meta}</span>
+                ) : null}
+              </span>
+              <span className="shrink-0 text-xs font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                选择
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -186,7 +346,13 @@ function AiResearchForm() {
         setSeededSummaryId(seed.id);
         setSources((current) => current.some((source) => source.type === 'summary' && source.value === seed.id)
           ? current
-          : [...current, { id: crypto.randomUUID(), type: 'summary', value: seed.id, required: true }]);
+          : [...current, {
+              id: createSourceRowId(),
+              type: 'summary',
+              value: seed.id,
+              required: true,
+              label: seed.title,
+            }]);
       })
       .catch((seedError: unknown) => {
         if (!cancelled) {
@@ -209,7 +375,7 @@ function AiResearchForm() {
       return;
     }
     if (sourcePolicy === 'only_user_sources' && !sources.some((source) => source.value.trim())) {
-      setErr('“仅使用指定资料”时，至少需要添加一条资料。');
+      setErr('选择“只使用所选资料”时，至少需要添加一条参考资料。');
       return;
     }
     setSubmitting(true);
@@ -257,11 +423,6 @@ function AiResearchForm() {
 
   return (
     <div>
-      <PageHeader
-        title="AI 调研"
-        description="输入主题与团队背景；提交后自动跟踪调研进度。"
-      />
-
       {seedWarning ? (
         <div
           role="alert"
@@ -271,7 +432,7 @@ function AiResearchForm() {
         </div>
       ) : null}
 
-      <form data-ai-research-form onSubmit={onSubmit} className="grid max-w-2xl gap-3">
+      <form data-ai-research-form onSubmit={onSubmit} className="grid max-w-2xl gap-3 lg:h-full">
         <div className="grid gap-1.5">
           <label htmlFor="ai-topic" className="text-sm font-medium">
             主题 <span className="text-destructive">*</span>
@@ -302,8 +463,8 @@ function AiResearchForm() {
         </div>
 
         <FormSection
-          legend="指定资料（最多 10 条）"
-          hint="可粘贴外部 URL、雷达候选 ID 或已发布调研的 ID。"
+          legend="参考资料（可选，最多 10 条）"
+          hint="粘贴外部 URL，或按标题从雷达和调研库中选择；平台会自动处理内部 ID。"
         >
           <div className="grid gap-2">
             {sources.map((source) => {
@@ -311,7 +472,7 @@ function AiResearchForm() {
               return (
                 <div
                   key={source.id}
-                  className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[130px_1fr_auto_auto]"
+                  className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[130px_minmax(0,1fr)_auto_auto]"
                 >
                   {/* 原生 select：e2e 用 aria-label="资料类型" 定位并 selectOption，
                       换成 Radix Select 会破坏该契约，这里保持原生但套 token 样式。 */}
@@ -319,22 +480,42 @@ function AiResearchForm() {
                     aria-label="资料类型"
                     value={source.type}
                     disabled={isSeeded}
-                    onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, type: e.target.value as SourceRefInput['type'], value: '' } : item))}
+                    onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? {
+                      ...item,
+                      type: e.target.value as SourceRefInput['type'],
+                      value: '',
+                      label: undefined,
+                    } : item))}
                     className="h-9 cursor-pointer rounded-md border border-input bg-card px-2 text-sm shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    <option value="url">指定 URL</option>
-                    <option value="summary">雷达候选</option>
-                    <option value="research">调研库</option>
+                    <option value="url">网页链接</option>
+                    <option value="summary">雷达内容</option>
+                    <option value="research">已发布调研</option>
                   </select>
-                  <Input
-                    aria-label="资料地址或 ID"
-                    type="text"
-                    value={source.value}
-                    readOnly={isSeeded}
-                    placeholder={source.type === 'url' ? 'https://example.com/article' : 'ID'}
-                    onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, value: e.target.value } : item))}
-                  />
-                  <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
+                  {source.type === 'url' ? (
+                    <Input
+                      aria-label="资料地址或 ID"
+                      type="url"
+                      value={source.value}
+                      placeholder="https://example.com/article"
+                      onChange={(e) => setSources((current) => current.map((item) => item.id === source.id ? { ...item, value: e.target.value } : item))}
+                    />
+                  ) : (
+                    <InternalSourcePicker
+                      kind={source.type}
+                      value={source.value}
+                      disabled={isSeeded}
+                      label={source.label}
+                      onChange={(selected) => {
+                        setSources((current) => current.map((item) => item.id === source.id ? {
+                          ...item,
+                          value: selected?.id ?? '',
+                          label: selected?.title,
+                        } : item));
+                      }}
+                    />
+                  )}
+                  <label className="flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
                     <input
                       type="checkbox"
                       className="cursor-pointer accent-primary"
@@ -347,7 +528,7 @@ function AiResearchForm() {
                     type="button"
                     variant="ghost"
                     size="xs"
-                    className="text-destructive hover:text-destructive"
+                    className="mt-1 text-destructive hover:text-destructive"
                     onClick={() => setSources((current) => current.filter((item) => item.id !== source.id))}
                   >
                     移除
@@ -356,22 +537,31 @@ function AiResearchForm() {
               );
             })}
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-2"
-            disabled={sources.length >= 10}
-            onClick={() => setSources((current) => [...current, { id: crypto.randomUUID(), type: 'url', value: '', required: false }])}
-          >
-            <Plus />
-            添加资料
-          </Button>
+          <div className="mt-2 flex items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={sources.length >= 10}
+              onClick={() => setSources((current) => [...current, {
+                id: createSourceRowId(),
+                type: 'url',
+                value: '',
+                required: false,
+              }])}
+            >
+              <Plus />
+              添加参考资料
+            </Button>
+            <span aria-live="polite" className="text-xs text-muted-foreground">
+              {sources.length > 0 ? `已添加 ${sources.length}/10` : '尚未添加'}
+            </span>
+          </div>
         </FormSection>
 
-        <FormSection legend="资料优先级" defaultOpen={false}>
-          <div className="space-y-1.5">
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
+        <FormSection legend="资料使用方式" defaultOpen={false}>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <label className={cn('flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors', sourcePolicy === 'prefer_user_sources' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-muted/30 text-muted-foreground')}>
               <input
                 type="radio"
                 name="sourcePolicy"
@@ -379,9 +569,9 @@ function AiResearchForm() {
                 checked={sourcePolicy === 'prefer_user_sources'}
                 onChange={() => setSourcePolicy('prefer_user_sources')}
               />
-              优先使用指定资料，可补充外部搜索
+              优先参考所选资料，必要时搜索互联网
             </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <label className={cn('flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors', sourcePolicy === 'only_user_sources' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-muted/30 text-muted-foreground')}>
               <input
                 type="radio"
                 name="sourcePolicy"
@@ -389,15 +579,15 @@ function AiResearchForm() {
                 checked={sourcePolicy === 'only_user_sources'}
                 onChange={() => setSourcePolicy('only_user_sources')}
               />
-              仅使用指定资料
+              只使用所选资料，不搜索互联网
             </label>
           </div>
         </FormSection>
 
         <FormSection legend="报告类型" defaultOpen={false}>
-          <div className="space-y-2">
+          <div className="grid gap-1.5 sm:grid-cols-2">
             {REPORT_TYPES.map((rt) => (
-              <label key={rt.value} className="flex cursor-pointer items-start gap-2">
+              <label key={rt.value} className={cn('flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs transition-colors', reportType === rt.value ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-muted/30 text-muted-foreground')}>
                 <input
                   type="radio"
                   name="reportType"
@@ -406,7 +596,7 @@ function AiResearchForm() {
                   checked={reportType === rt.value}
                   onChange={() => setReportType(rt.value)}
                 />
-                <span className="text-sm">
+                <span className="text-xs">
                   <strong className="font-medium">{rt.label}</strong>
                   <span className="block text-muted-foreground">{rt.desc}</span>
                 </span>
@@ -454,11 +644,24 @@ type HistoryFilter = 'all' | 'running' | 'published' | 'failed' | 'cancelled';
 
 const FILTERS: Array<{ key: HistoryFilter; label: string }> = [
   { key: 'all', label: '全部' },
-  { key: 'running', label: '跑中' },
+  { key: 'running', label: '进行中' },
   { key: 'published', label: '已发布' },
   { key: 'failed', label: '失败' },
   { key: 'cancelled', label: '已取消' },
 ];
+
+const REPORT_TYPE_LABEL: Record<string, string> = {
+  research_report: '研究报告',
+  summary_brief: '轻量摘要',
+};
+
+const STEP_LABEL: Record<string, string> = {
+  plan: '规划',
+  search: '检索资料',
+  compress: '整理证据',
+  analyze: '分析',
+  write: '撰写报告',
+};
 
 /** mockup tab → server-side status filter. 已发布在客户端二次过滤。 */
 function filterToQuery(key: HistoryFilter): string {
@@ -525,8 +728,8 @@ function historyBadgeValue(item: HistoryItem): string | null {
 // 表单底部的「当前模式」提示：把 API enum (prefer_user_sources / only_user_sources)
 // 翻译成中文标签，避免在 UI 上泄漏内部命名。
 const SOURCE_POLICY_LABEL: Record<'prefer_user_sources' | 'only_user_sources', string> = {
-  prefer_user_sources: '优先使用指定资料，可补充外部搜索',
-  only_user_sources: '仅使用指定资料',
+  prefer_user_sources: '优先参考所选资料，必要时搜索互联网',
+  only_user_sources: '只使用所选资料，不搜索互联网',
 };
 
 function StatusRow({ sourcePolicy, sources }: { sourcePolicy: 'prefer_user_sources' | 'only_user_sources'; sources: { value: string }[] }) {
@@ -674,7 +877,7 @@ export function AiResearchHistory() {
   }
 
   return (
-    <div className="mt-8 space-y-3">
+    <div id="research-history" className="mt-8 scroll-mt-20 space-y-3">
       {lastSubmitted ? (
         <LastSubmittedBanner
           entry={lastSubmitted}
@@ -713,7 +916,7 @@ export function AiResearchHistory() {
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="overflow-hidden rounded-md border border-border bg-card">
         {q.isLoading ? (
           <div className="space-y-2 p-4">
             {[0, 1, 2].map((i) => (
@@ -735,8 +938,7 @@ export function AiResearchHistory() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>主题</TableHead>
-                <TableHead className="w-40">状态</TableHead>
-                <TableHead className="w-20">成本</TableHead>
+                <TableHead className="w-40">进度</TableHead>
                 <TableHead className="w-28">创建时间</TableHead>
                 <TableHead className="w-32 text-right">操作</TableHead>
               </TableRow>
@@ -761,27 +963,27 @@ export function AiResearchHistory() {
                         />
                         <span className="font-medium">{item.topic}</span>
                         {badgeValue ? <StatusBadge kind="job" value={badgeValue} /> : null}
+                        <span className="text-[11px] text-muted-foreground">
+                          {REPORT_TYPE_LABEL[item.reportType] ?? '调研任务'}
+                        </span>
                       </div>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {/* 不再显示原始 status 枚举 —— StatusIcon + StatusBadge 已传达语义 */}
                       {item.currentStep ? (
                         <span className="font-mono text-xs">
-                          · {item.currentStep}
+                          {STEP_LABEL[item.currentStep] ?? item.currentStep}
                         </span>
                       ) : (
                         <span className="text-xs text-muted-foreground/60">—</span>
                       )}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">
-                      ${(item.costCents / 100).toFixed(2)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {relativeTime(item.createdAt)}
                     </TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <Button asChild variant="link" size="xs">
-                        <Link href={`/ai-research/${item.jobId}`}>查看</Link>
+                        <Link href={`/ai-research/${item.jobId}`}>打开</Link>
                       </Button>
                       <Button
                         type="button"
@@ -791,7 +993,7 @@ export function AiResearchHistory() {
                         disabled={isInFlight || rerunning === item.jobId}
                         onClick={() => void rerun(item)}
                       >
-                        {rerunning === item.jobId ? '重跑中…' : '重跑'}
+                        {rerunning === item.jobId ? '重新运行中…' : '重新运行'}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -812,9 +1014,53 @@ export function AiResearchHistory() {
 function AiResearchPageClient() {
   return (
     <div className="mx-auto max-w-shell">
-      <AiResearchForm />
+      <PageHeader
+        title="AI 调研"
+        description="输入主题与团队背景；提交后自动跟踪调研进度。"
+      />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(300px,.9fr)] lg:items-stretch">
+        <div className="lg:h-full">
+          <AiResearchForm />
+        </div>
+        <ResearchPipelineRail />
+      </div>
       <AiResearchHistory />
     </div>
+  );
+}
+
+function ResearchPipelineRail() {
+  const steps = [
+    ['1', '规划研究问题', '拆分背景、约束和验证方向', '提交后开始'],
+    ['2', '检索与抓取', '优先处理指定资料，再补充外部来源', '待开始'],
+    ['3', '压缩证据', '合并相似结论并保留来源链路', '待开始'],
+    ['4', '分析与对比', '形成可执行的取舍和风险判断', '待开始'],
+    ['5', '写作草稿', '生成可编辑的团队私有草稿', '待开始'],
+  ];
+  return (
+    <aside className="flex h-full flex-col rounded-md border border-border bg-card p-5 lg:sticky lg:top-20">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">Research flow</p>
+          <h2 className="mt-1 text-base font-semibold">调研流程预览</h2>
+        </div>
+        <span className="font-mono text-[11px] text-muted-foreground">brief → evidence → draft</span>
+      </div>
+      <ol className="mt-5 flex-1 space-y-1">
+        {steps.map(([number, title, description, state], index) => (
+          <li key={number} className="relative flex gap-3 py-3">
+            {index < steps.length - 1 ? <span className="absolute left-[11px] top-9 h-8 w-px bg-border" aria-hidden /> : null}
+            <span className="z-10 grid size-6 shrink-0 place-items-center rounded-full bg-muted font-mono text-[11px] text-muted-foreground">{number}</span>
+            <span className="min-w-0">
+              <strong className="block text-xs font-medium">{title}</strong>
+              <span className="mt-0.5 block text-[11px] leading-5 text-muted-foreground">{description}</span>
+            </span>
+            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">{state}</span>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-3 border-t border-border pt-3 text-xs leading-5 text-muted-foreground">这是提交前的流程预览。提交后会创建可追踪任务，并在详情页显示实时进度。</p>
+    </aside>
   );
 }
 

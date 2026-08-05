@@ -12,6 +12,7 @@ empty-response). These tests pin the new contract.
 from __future__ import annotations
 
 import asyncio
+import socket
 
 import httpx
 import pytest
@@ -26,6 +27,7 @@ from ai_engine.radar.sync_runner import _safe_error_code
 def test_safe_error_code_passes_through_safe_fetch_codes() -> None:
     for code in (
         "URL_FETCH_BLOCKED",
+        "URL_FETCH_DNS",
         "URL_FETCH_TIMEOUT",
         "URL_FETCH_TOO_LARGE",
         "URL_REDIRECT_LIMIT",
@@ -40,6 +42,10 @@ def test_safe_error_code_maps_timeouts_to_worker_timeout() -> None:
 
 def test_safe_error_code_maps_value_error_to_validation_failed() -> None:
     assert _safe_error_code(ValueError("bad cat")) == "VALIDATION_FAILED"
+
+
+def test_safe_error_code_maps_dns_resolution_failure() -> None:
+    assert _safe_error_code(socket.gaierror("dns")) == "URL_FETCH_DNS"
 
 
 def test_safe_error_code_maps_httpx_timeout_to_url_fetch_timeout() -> None:

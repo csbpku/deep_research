@@ -27,6 +27,7 @@ export default async function SignInPage({
     await signIn('google', { redirectTo: callbackUrl });
   }
 
+
   if (error) {
     return (
       <div className="mx-auto max-w-md py-10">
@@ -61,6 +62,7 @@ export default async function SignInPage({
           使用 Google 登录
         </Button>
       </form>
+
 
       <details className="mt-8 rounded-lg border border-border bg-card p-4 text-left text-sm text-muted-foreground">
         <summary className="cursor-pointer text-foreground">本地开发提示</summary>

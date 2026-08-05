@@ -53,15 +53,15 @@ const TYPE_TABS: Array<{ key: string; label: string }> = [
   { key: ALL, label: '全部' },
   { key: 'radar', label: '雷达' },
   { key: 'summary', label: '摘要' },
-  { key: 'long_research', label: '长文' },
-  { key: 'knowledge', label: '精华' },
+  { key: 'long_research', label: '研究报告' },
+  { key: 'knowledge', label: '知识卡片' },
 ];
 
 const TYPE_BADGE: Record<SearchRow['type'], { label: string; className: string }> = {
   radar: { label: '雷达', className: 'bg-radar-candidate-bg text-radar-candidate-fg' },
   summary: { label: '摘要', className: 'bg-radar-published-bg text-radar-published-fg' },
-  long_research: { label: '长文', className: 'bg-status-running-bg text-status-running-fg' },
-  knowledge: { label: '精华', className: 'bg-status-queued-bg text-status-queued-fg' },
+  long_research: { label: '研究报告', className: 'bg-status-running-bg text-status-running-fg' },
+  knowledge: { label: '知识卡片', className: 'bg-status-queued-bg text-status-queued-fg' },
 };
 
 export default function SearchPage() {
@@ -207,13 +207,13 @@ function SearchContent() {
         )}
 
         {!submittedQ && (
-          <EmptyState title="开始搜索" description="输入关键词以搜索雷达、摘要、长文和精华。" />
+          <EmptyState title="开始搜索" description="输入关键词以搜索雷达、摘要、研究报告和知识卡片。" />
         )}
 
         {loading && (
           <div className="grid gap-2">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="space-y-2 rounded-lg border border-border bg-card p-3.5">
+              <div key={i} className="space-y-2 rounded-md border border-border bg-card p-3.5">
                 <Skeleton className="h-4 w-1/2" />
                 <Skeleton className="h-3 w-full" />
               </div>

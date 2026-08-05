@@ -1,5 +1,5 @@
 /* ============================================================================
-   技术调研平台 — 全局样式与设计 token
+   AI技术调研平台 — 全局样式与设计 token
    ----------------------------------------------------------------------------
    设计方向：Data-Dense Dashboard × Swiss Modernism 2.0
    - 密度 8/10：侧栏 240px、顶栏 56px、表格行 36px、卡片内边距 12px
@@ -22,22 +22,22 @@
     color-scheme: light;
 
     /* ---- 表面：暖白系（Notion 风）—— 区别于 v1 的冷蓝灰 ---- */
-    --background: 36 14% 96%; /* #F1F0EB 中性微冷(原 #FAF9F5 暖米) */
-    --foreground: 24 12% 14%; /* #21201D 近黑(原 #37352F 暖黑) */
+    --background: 60 10% 95%; /* #F4F4F1 研究画布 */
+    --foreground: 80 3% 13%; /* #20211F 近黑 */
     --card: 0 0% 100%; /* #FFFFFF 纯白卡片(原 #FCFBF8) */
-    --card-foreground: 24 12% 14%;
+    --card-foreground: 80 3% 13%;
 
     /* ---- 强调色：蓝（非 v1 的靛蓝）—— 更接近 mockup 的 #2383E2 ---- */
-    --primary: 217 85% 51%; /* #2A6BF2 (原 #2383E2, 略深现代感) */
+    --primary: 224 79% 55%; /* #315FE8 研究蓝 */
     --primary-foreground: 0 0% 100%;
 
     /* ---- 中性：暖灰系 ---- */
-    --secondary: 36 14% 92%; /* #ECEAE3 中性(原 #F1F1EE 暖灰) */
-    --secondary-foreground: 24 12% 14%;
-    --muted: 36 14% 92%;
-    --muted-foreground: 24 6% 38%; /* #5A5D63 对比度更高(原 #787774) */
-    --accent: 217 95% 96%; /* 蓝底 hover */
-    --accent-foreground: 217 85% 38%;
+    --secondary: 60 8% 90%; /* #EAEAE4 弱化表面 */
+    --secondary-foreground: 80 3% 13%;
+    --muted: 60 8% 90%;
+    --muted-foreground: 60 3% 38%;
+    --accent: 222 100% 96%; /* #EAF0FF 蓝底 */
+    --accent-foreground: 224 69% 42%;
 
     /* ---- 破坏性 ---- */
     --destructive: 12 62% 38%; /* #94402E 锈红(原 #DC2626 纯红,与状态色协调) */
@@ -45,12 +45,12 @@
 
     /* 弹层（Popover 跟随 Card）*/
     --popover: 0 0% 100%;
-    --popover-foreground: 24 12% 14%;
+    --popover-foreground: 80 3% 13%;
 
     /* ---- 线条与焦点 ---- */
-    --border: 36 12% 86%; /* #DAD7CC 略深(原 #E9E9E7) */
-    --input: 36 12% 86%;
-    --ring: 217 85% 51%;
+    --border: 60 6% 85%; /* #DCDDD6 */
+    --input: 60 6% 85%;
+    --ring: 224 79% 55%;
 
     --radius: 0.5rem;
 
@@ -111,30 +111,30 @@
     color-scheme: dark;
 
     /* ---- 深色：冷蓝灰底（暖白底不适合深色，更稳） ---- */
-    --background: 222 47% 11%; /* #0F172A */
-    --foreground: 210 40% 98%; /* #F8FAFC */
-    --card: 222 32% 14%; /* 略浅于 bg，让卡片浮起来 */
-    --card-foreground: 210 40% 98%;
-    --popover: 222 32% 14%;
-    --popover-foreground: 210 40% 98%;
+    --background: 220 14% 8%; /* #101216 */
+    --foreground: 80 10% 95%;
+    --card: 220 14% 12%; /* #171A20 */
+    --card-foreground: 80 10% 95%;
+    --popover: 220 14% 12%;
+    --popover-foreground: 80 10% 95%;
 
     /* 深底上提亮，保证 4.5:1 */
-    --primary: 212 90% 68%;
-    --primary-foreground: 222 47% 11%;
+    --primary: 220 100% 77%;
+    --primary-foreground: 220 14% 8%;
 
-    --secondary: 217 25% 22%; /* #272F42 */
-    --secondary-foreground: 214 25% 84%;
-    --muted: 217 25% 22%;
-    --muted-foreground: 24 6% 65%; /* #A3A09B 与 light 主题色相族对齐(原 #9CA3AF 冷蓝) */
-    --accent: 212 50% 25%;
-    --accent-foreground: 212 95% 85%;
+    --secondary: 220 14% 16%;
+    --secondary-foreground: 80 8% 84%;
+    --muted: 220 14% 16%;
+    --muted-foreground: 80 4% 67%;
+    --accent: 220 45% 24%;
+    --accent-foreground: 220 100% 88%;
 
     --destructive: 0 72% 62%;
     --destructive-foreground: 222 47% 11%;
 
-    --border: 217 25% 27%; /* #334155 */
-    --input: 217 25% 27%;
-    --ring: 212 90% 68%;
+    --border: 220 14% 24%;
+    --input: 220 14% 24%;
+    --ring: 220 100% 77%;
 
     /* 深色下状态色：低饱和底 + 高亮字，维持 4.5:1 */
     --status-queued-bg: 38 50% 20%;

@@ -13,8 +13,10 @@ import json
 import logging
 import os
 import re as _re
+import socket
 import time
 import uuid
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -52,6 +54,10 @@ DEEPDIVE_ENABLED = os.environ.get("RADAR_DEEPDIVE_ENABLED", "true").lower() in (
 RADAR_SOURCE_CONCURRENCY = int(os.environ.get("RADAR_SOURCE_CONCURRENCY", "5"))
 RADAR_CANDIDATE_CONCURRENCY = int(
     os.environ.get("RADAR_CANDIDATE_CONCURRENCY", "3")
+)
+RADAR_FETCH_RETRIES = max(0, int(os.environ.get("RADAR_FETCH_RETRIES", "2")))
+RADAR_FETCH_RETRY_BACKOFF_SECONDS = max(
+    0.0, float(os.environ.get("RADAR_FETCH_RETRY_BACKOFF_SECONDS", "0.5"))
 )
 
 # Brief generation retry policy mirrors agents-radar/src/report.ts:
@@ -178,6 +184,8 @@ def _safe_error_code(exc: BaseException) -> str:
     """
     if isinstance(exc, SafeFetchError):
         return exc.code
+    if isinstance(exc, socket.gaierror):
+        return "URL_FETCH_DNS"
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return "WORKER_TIMEOUT"
     if isinstance(exc, ValueError):
@@ -214,6 +222,95 @@ def _safe_error_code(exc: BaseException) -> str:
             return "VALIDATION_FAILED"
         # Unknown arxiv_* tag — fall through to default.
     return "AI_ENGINE_UNAVAILABLE"
+
+
+def _error_domain(exc: BaseException, fallback: str = "") -> str:
+    """Return a query-free host for persisted failure diagnostics."""
+    if isinstance(exc, SafeFetchError) and exc.host:
+        return exc.host.lower()
+    try:
+        request = getattr(exc, "request", None)
+    except RuntimeError:
+        # httpx exposes ``request`` as a property that raises when a synthetic
+        # transport exception was created without attaching a request.
+        request = None
+    request_url = getattr(request, "url", None)
+    request_host = getattr(request_url, "host", None)
+    if request_host:
+        return str(request_host).lower()
+    return fallback.lower()
+
+
+def _source_domain(source: RadarSource) -> str:
+    for key in ("feedUrl", "url", "sitemapUrl", "sitemap_url"):
+        value = str(source.config.get(key) or "").strip()
+        if value:
+            return _host(value)
+    return ""
+
+
+def _is_retryable_transport_error(exc: BaseException) -> bool:
+    if isinstance(exc, SafeFetchError):
+        return exc.code in {"URL_FETCH_DNS", "URL_FETCH_TIMEOUT"}
+    if isinstance(exc, socket.gaierror):
+        return True
+    import httpx as _httpx
+
+    if isinstance(exc, (_httpx.TimeoutException, _httpx.ConnectError,
+                        _httpx.NetworkError, _httpx.RemoteProtocolError)):
+        return True
+    # Some source adapters deliberately wrap their HTTP exception to keep a
+    # stable source-specific prefix. Retry only when that wrapper still
+    # contains an unambiguous transient transport/rate-limit marker.
+    message = str(exc).lower()
+    return any(marker in message for marker in (
+        "connecttimeout", "readtimeout", "connecterror", "networkerror",
+        "timed out", "timeout", "rate limit", "status code 429", " 429 ",
+    ))
+
+
+async def _with_transport_retries(
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    run_id: str,
+    source_id: str,
+    domain: str,
+) -> Any:
+    """Retry transient source/page transport failures with bounded backoff."""
+    for attempt in range(RADAR_FETCH_RETRIES + 1):
+        try:
+            return await operation()
+        except Exception as exc:
+            if attempt >= RADAR_FETCH_RETRIES or not _is_retryable_transport_error(exc):
+                raise
+            wait_seconds = RADAR_FETCH_RETRY_BACKOFF_SECONDS * (2 ** attempt)
+            logger.warning(
+                "ai-engine.radar.transport_retry",
+                extra={
+                    "request_id": run_id,
+                    "source_id": source_id,
+                    "domain": _error_domain(exc, domain),
+                    "error_code": _safe_error_code(exc),
+                    "error_type": type(exc).__name__,
+                    "attempt": attempt + 1,
+                    "wait_seconds": wait_seconds,
+                },
+            )
+            if wait_seconds:
+                await asyncio.sleep(wait_seconds)
+
+
+def _format_failure_summary(
+    failures: Counter[tuple[str, str, str]],
+    *,
+    prefix: str,
+) -> str:
+    """Build a compact aggregate suitable for ``radar_sync_runs.errorMessage``."""
+    parts: list[str] = []
+    for (error_code, error_type, domain), count in failures.most_common():
+        location = f"@{domain}" if domain else ""
+        parts.append(f"{error_type}/{error_code}{location} x{count}")
+    return f"{prefix}: " + "; ".join(parts)
 
 
 async def _create_run(pool: Any, source: RadarSource, triggered_by: str) -> str:
@@ -565,6 +662,28 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
     """
     import re as _re
 
+    # Prefer a real article extractor for prose pages. The previous fallback
+    # stripped tags with regexes, which preserved text but destroyed headings,
+    # paragraphs, and lists. Trafilatura returns Markdown with those blocks
+    # intact. If extraction fails, source-specific parsers below still provide
+    # safe fallbacks for arXiv and GitHub.
+    try:
+        import trafilatura
+
+        extracted = trafilatura.extract(
+            html,
+            url=url,
+            output_format="markdown",
+            include_comments=False,
+            include_tables=True,
+            include_links=True,
+            favor_precision=True,
+        )
+        if extracted and len(extracted.strip()) >= 200:
+            return extracted.strip()[:ORIGINAL_MARKDOWN_MAX_BYTES]
+    except Exception as exc:  # extraction is an enhancement, never a sync blocker
+        logger.debug("trafilatura extraction failed", extra={"url": url[:2048], "error": str(exc)})
+
     # ── ArXiv: extract abstract from <blockquote class="abstract"> ──
     if source_type == "arxiv" or "arxiv.org/abs/" in url:
         m = _re.search(
@@ -672,8 +791,14 @@ async def _run_source(
     token_in = token_out = 0
     cost_usd = 0.0
     first_error_code: str | None = None
+    candidate_failures: Counter[tuple[str, str, str]] = Counter()
     try:
-        candidates = await fetch_source(source, fetchers=fetchers)
+        candidates = await _with_transport_retries(
+            lambda: fetch_source(source, fetchers=fetchers),
+            run_id=run_id,
+            source_id=source.id,
+            domain=_source_domain(source),
+        )
         total_fetched = len(candidates)
         candidate_semaphore = asyncio.Semaphore(
             max(1, candidate_concurrency or RADAR_CANDIDATE_CONCURRENCY)
@@ -711,7 +836,12 @@ async def _run_source(
                         )
                         fetched = _repo_activity_document(raw_candidate.url, markdown)
                     else:
-                        fetched = await document_fetcher(raw_candidate.url)
+                        fetched = await _with_transport_retries(
+                            lambda: document_fetcher(raw_candidate.url),
+                            run_id=run_id,
+                            source_id=source.id,
+                            domain=_host(raw_candidate.url),
+                        )
                         raw_html = fetched.content.decode("utf-8", errors="replace")
                         markdown = _extract_article_content(
                             raw_html, raw_candidate.url, source.source_type
@@ -879,26 +1009,45 @@ async def _run_source(
                     )
                 except Exception as exc:
                     total_failed += 1
-                    first_error_code = first_error_code or _safe_error_code(exc)
+                    error_code = _safe_error_code(exc)
+                    error_domain = _error_domain(exc, _host(raw_candidate.url))
+                    first_error_code = first_error_code or error_code
+                    candidate_failures[(
+                        error_code,
+                        type(exc).__name__,
+                        error_domain,
+                    )] += 1
                     logger.warning(
                         "ai-engine.radar.candidate_failed",
                         extra={
                             "request_id": run_id,
                             "source_id": source.id,
-                            "domain": _host(raw_candidate.url),
-                            "error_code": _safe_error_code(exc),
+                            "domain": error_domain,
+                            "error_code": error_code,
                             "error_type": type(exc).__name__,
                         },
                     )
 
         await asyncio.gather(*(_process_candidate(candidate) for candidate in candidates))
         run_status = "partial" if total_failed else "completed"
-        error_message = "one or more candidates failed" if total_failed else None
+        error_message = (
+            _format_failure_summary(candidate_failures, prefix="candidate failures")
+            if total_failed
+            else None
+        )
     except Exception as exc:
         total_failed = max(1, total_failed)
         first_error_code = _safe_error_code(exc)
         run_status = "failed"
-        error_message = f"source failed: {type(exc).__name__}"
+        source_failure = Counter({(
+            first_error_code,
+            type(exc).__name__,
+            _error_domain(exc, _source_domain(source)),
+        ): 1})
+        error_message = _format_failure_summary(
+            source_failure,
+            prefix="source failure",
+        )
         logger.warning(
             "ai-engine.radar.source_failed",
             extra={
@@ -1041,9 +1190,16 @@ async def run_radar_pipeline(
         )
     started = time.monotonic()
     try:
+        from ai_engine.radar.candidate_postprocessor import (
+            score_missing_candidates,
+        )
         from ai_engine.radar.enrichment_worker import run_enrichment_for_pending
 
         total_new = sum(run.total_new for run in sync_result.runs)
+        await score_missing_candidates(
+            pool,
+            limit=max(20, total_new),
+        )
         enriched_count = await run_enrichment_for_pending(
             pool,
             limit=max(1, total_new),
