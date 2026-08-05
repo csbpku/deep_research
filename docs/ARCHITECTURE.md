@@ -1,39 +1,25 @@
 # 技术调研平台 · 架构方案
 
 > 版本：v3.6 · 2026-07-23
-> 本版只保留当前有效的技术决策；历史推演和完整旧稿见 `docs/archive/`
-> 产品概览：`docs/DIAGRAMS.md`；逐周实施与验收：`docs/IMPLEMENTATION_PLAN.md`；交互原型：`docs/mockups/index.html`
-
----
-
-## 一、文档职责
-
-| 文档 | 面向对象 | 唯一职责 |
-|---|---|---|
-| `DIAGRAMS.md` | 全团队 | 产品是什么、为什么做、怎样判断价值 |
-| `ARCHITECTURE.md` | 开发与评审人 | 当前有效的范围、技术契约、安全边界和部署方案 |
-| `IMPLEMENTATION_PLAN.md` | 执行团队 | 每周任务、负责人、测试、验收和退出条件 |
-| `mockups/index.html` | 产品与开发 | 目标交互和页面状态参考，不作为后端契约 |
-
-同一事实只维护一次：排期以实施计划为准，技术契约以本文为准，价值指标的白话解释以概览为准。归档文件不再同步更新。
+> 本文件描述当前系统架构、数据模型、安全边界与部署拓扑。
 
 ---
 
 ## 二、产品范围
 
-### P0：9 周 MVP
+### 当前能力
 
-1. **技术雷达**：从 GitHub、arxiv、RSS 和用户分享发现候选，生成可追溯的轻量解读，支持筛选、反馈和人工流转。
+1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号和用户分享发现候选，生成可追溯的轻量解读，支持筛选、反馈和人工流转。
 2. **每日摘要**：Admin 从雷达候选中确认每天最多 4 条精选，包含入选理由、标签、来源和详情。
 3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
 4. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
 5. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
-6. **基础评论**：雷达、摘要和沉淀可评论；P0 由 Admin 手动提炼高价值评论。
+6. **基础评论**：雷达、摘要和沉淀可评论；由 Admin 手动提炼高价值评论。
 7. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
-8. **精简 Admin**：雷达与分享审核、失败任务入口、同步状态。
-9. **运行底线**：Auth、权限、日志、成本、备份恢复和 Week 13 决策埋点。
+8. **Admin**：雷达与分享审核、失败任务入口、同步状态、成员管理。
+9. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
 
-### P1：试用数据通过后再做
+### 规划能力
 
 - Confluence 用户授权单页导入、`.docx/.pdf`、页面树批量导入和更新提醒。
 - 热点主题、跨模块热门 Top 5、专家自动关联和复杂统计图表。
@@ -85,8 +71,8 @@
 - Web：Next.js 15、TypeScript、Tailwind CSS、shadcn/ui、TanStack Query。
 - 编辑器：react-md-editor。
 - Auth：NextAuth.js + Google OAuth。
-- ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；P0 使用 `simple` 配置，`zhparser` 升级留 P1。
-- AI：主引擎 gpt-researcher (ADR 0004, 2026-07-27 复评通过)；FakeAdapter 为测试/CI fallback。
+- ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
+- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。
 - 数据源：Tavily、arxiv、GitHub；arxiv MCP 仅在原生 API 不够时启用。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
 
@@ -100,7 +86,7 @@
 | arxiv-mcp | 8001 | 可选论文读取服务 |
 | postgres | 5432 | 业务表、全文索引和两个任务队列 |
 
-P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data/import-tmp`。导入临时目录不进入数据库备份。
+部署必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data/import-tmp`。导入临时目录不进入数据库备份。
 
 ---
 
@@ -108,7 +94,7 @@ P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data
 
 ### 表清单
 
-当前 Week 4 Schema 有 14 张表。Week 5 开工前由主会话新增 3 张雷达表并迁移到 17 张；A/B Agent 不得自行修改 Prisma 或 migration。
+Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migration。
 
 | 表 | 作用 |
 |---|---|
@@ -121,14 +107,14 @@ P0 必须挂载 `/var/log/{web,ai-engine,nginx}`、`/backup` 和隔离的 `/data
 | `comments` | 摘要或沉淀评论 |
 | `research_audit` | 已发布沉淀的修改留痕 |
 | `comment_stars` | 评论一人一票 |
-| `content_import_jobs` | 文件转换任务；P1 扩展 Confluence |
-| `product_events` | Week 13 产品事件、metadata 和去重键 |
+| `content_import_jobs` | 文件转换任务；可扩展 Confluence 导入 |
+| `product_events` | 产品事件、metadata 和去重键 |
 | `admin_actions` | 管理员审核、角色与禁用动作审计 |
 | `share_submissions` | 用户 URL 分享的安全抓取、处理和审核状态 |
 | `search_docs` | 已发布摘要/沉淀的事务内全文索引 |
-| `radar_sources`（W5） | 预置 GitHub/arxiv/RSS 源、启停状态和抓取配置 |
-| `radar_sync_runs`（W5） | 每次同步的来源级结果、失败码、token 与成本 |
-| `radar_feedback`（W5） | 有用、不准确、我用过、收藏和建议调研；用户维度幂等 |
+| `radar_sources` | 预置 GitHub/arxiv/RSS 源、启停状态和抓取配置 |
+| `radar_sync_runs` | 每次同步的来源级结果、失败码、token 与成本 |
+| `radar_feedback` | 有用、不准确、我用过、收藏和建议调研；用户维度幂等 |
 
 ### 核心关系
 
@@ -196,9 +182,9 @@ cron/admin trigger -> radar_sync_run -> 安全抓取 -> 规范化/去重 -> 轻�
 
 - 雷达候选与每日摘要复用 `summaries` 主体：`candidate` 是雷达候选，`published` 是已确认摘要；不能再维护一套平行的候选内容表。
 - 每条候选保存来源发布时间、抓取时间、结构化解读、评分维度、`score_version` 和人类可读理由。评分只参与排序，不能自动批准或公开。
-- P0 来源是预置 GitHub、arxiv、RSS，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
+- 来源包括预置 GitHub、arxiv、RSS，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
 - 普通成员可提交有用、不准确、我用过、收藏和建议调研；重复反馈幂等，反馈只辅助 Admin 判断。
-- P0 允许来源不足时少于 4 条，必须展示失败原因，不能编造内容补足。
+- 允许来源不足时少于 4 条精选，但必须展示失败原因，不能编造内容补足。
 - 每条内容保留 canonical URL、来源类型、发布时间和抓取时间。
 - 用户分享先进入 `share_submissions`，安全处理和人工审核后进入同一雷达候选/摘要流。
 
@@ -209,14 +195,14 @@ cron/admin trigger -> radar_sync_run -> 安全抓取 -> 规范化/去重 -> 轻�
         -> 当前用户 private draft -> 用户检查/编辑 -> 显式发布 -> 进入团队搜索
 ```
 
-- P0 只接受单个不超过 5MB 的 `.md/.txt/.html`。
+- 只接受单个不超过 5MB 的 `.md/.txt/.html`。
 - 扩展名和实际 MIME 必须同时通过；文本必须为 UTF-8。
 - HTML 删除 `script/style/iframe/object`、事件属性和危险 URL，不加载外部资源。
 - 文件名只作展示，磁盘路径由服务端生成；成功或失败后 24 小时内清理原文件。
 - 相同用户 + SHA-256 在 `queued/running/succeeded` 中只保留一个 job；并发冲突返回已有 job，失败后允许重新上传。
 - 转换不调用 LLM，不占 AI 配额；不支持结构进入 `warnings`，不得静默丢失。
 
-P1 Confluence 只解析站点和 page id，正文必须通过用户委托授权的 API 读取。首版是单页一次性快照，不使用超级账号，不读取整个空间，也不做双向同步。
+Confluence 导入只解析站点和 page id，正文必须通过用户委托授权的 API 读取。首版是单页一次性快照，不使用超级账号，不读取整个空间，也不做双向同步。
 
 ### AI 调研
 
@@ -230,7 +216,7 @@ P1 Confluence 只解析站点和 page id，正文必须通过用户委托授权�
 - `prefer_user_sources` 先读指定资料，再自动搜索；指定资料失败可降级并标注。
 - `only_user_sources` 只使用指定资料；全部失败则 job 失败。
 - 用户指定 URL 与分享共用同一个安全抓取器；收藏和沉淀使用内部 ID，由 BFF 先做可见性检查。
-- 前端每 5 秒轮询 job 状态；SSE 留 P1。
+- 前端每 5 秒轮询 job 状态；SSE 为可选增强。
 - AI 原始草稿、失败 job 和 partial 资料都不自动公开。
 
 ### 评论与审核
@@ -295,58 +281,24 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 
 ---
 
-## 八、运行、成本与决策指标
-
-### 运行底线
+## 八、运行底线
 
 - BFF 日志：`request_id`、脱敏用户、角色、route、latency 和 status code。
-- Job 日志：状态、step、elapsed、attempts、来源数、失败分类、`tokenInputTotal` / `tokenOutputTotal` 数值和估算成本；不记录正文或 prompt。
-- 每日 pg_dump；恢复点目标 24 小时内，恢复时间目标 2 小时内。
-- Week 8 和 Week 9 各执行一次空环境恢复演练。
+- Job 日志：状态、step、elapsed、attempts、来源数、失败分类和 token 用量；不记录正文或 prompt。
+- 每日 pg_dump 备份；恢复点目标 24 小时内，恢复时间目标 2 小时内。
 - 导入原文件不进入数据库备份或应用日志。
 
-### 配额与成本
-
-- AI 调研、雷达轻量解读和用户分享摘要共用成本预算；AI 调研全团 20 次/日硬限制，雷达按同步批次单独记录成本。
-- 个人 AI 调研 5 次/日为软提醒。
-- 规划月成本 `$75-160`，预算硬上限 `$200`。
-- 文件转 Markdown 是确定性本地转换，模型成本为 `$0`。
-
-### Week 13 决策
-
-硬门槛：无未关闭高危安全/隐私问题，且月成本不超过 `$200`。
-
-| 指标 | 继续标准 |
-|---|---:|
-| 4 周正式调研产出 | ≥ 5 篇 |
-| 周有效使用成员 | ≥ 30% |
-| 成功 AI 调研 / 团队人数 | ≥ 1 次/人/月 |
-| 节省工时价值 | > `$200/月` |
-
-硬门槛通过后，至少 2 个价值指标达标，并且必须包含“正式调研产出”或“ROI”之一。指标计算、固定试用名单、事件去重和 ROI 公式以 `docs/contracts/metrics.md` 为唯一契约；具体 Go / Adjust / Stop 动作见实施计划。
+AI 调研、雷达轻量解读和用户分享摘要共用成本预算并逐档记录；文件转 Markdown 是确定性本地转换，不调用模型。
 
 ---
 
 ## 九、主要风险与处理
 
-| 风险 | P0 处理 |
+| 风险 | 处理 |
 |---|---|
-| AI 引擎中文质量或集成成本不达标 | Week 1 三个真实主题 spike；2026-07-27 复评切 gpt-researcher (ADR 0004) |
-| 长任务超时、重复计费或永久 running | DB queue、幂等 key、租约、心跳、重试、5 分钟超时 |
+| 长任务超时、重复计费或永久 running | DB queue、幂等 key、租约、心跳、重试、超时 |
 | URL SSRF | 统一抓取器、逐次重定向 IP 校验、大小与时间限制 |
-| 文件携带恶意 HTML 或静默丢内容 | MIME + 扩展名校验、HTML 清洗、warnings、24 小时 TTL |
+| 文件携带恶意 HTML 或静默丢内容 | MIME + 扩展名校验、HTML 清洗、warnings、临时文件清理 |
 | 私有草稿或追问泄露 | BFF owner 过滤，不进入公共搜索和 comments |
 | 外部资料 prompt injection | 不可信资料边界、注入文本降权、来源与推断标识 |
-| Admin 审核积压 | 两类审核共用队列；连续两周 > 30 条才评估 P1 机器排序 |
-| 缺指标无法决策 | Week 1 定义事件，Week 9 验收，Week 10-13 冻结口径 |
-
----
-
-## 十、参考与归档
-
-- 开源方案调研：`docs/inputs/research-oss-references.md`。
-- 完整 v3.5 架构旧稿：`docs/archive/ARCHITECTURE.v3.5-full.md`。
-- 原系统模块图：`docs/archive/MODULE_MAP.v3.5.md`。
-- 早期 brainstorm：`docs/archive/2026-07-14-tech-research-platform-brainstorm.md`。
-
-归档文件只用于追溯，不代表当前方案，也不参与跨文档一致性维护。
+| Admin 审核积压 | 审核共用队列和运行状态入口 |

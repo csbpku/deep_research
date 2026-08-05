@@ -43,6 +43,24 @@ infra/data/import-tmp/
 docs/references/
 docs/inputs/
 docs/notes/
+
+# 本地内部文档：执行计划、进度、契约、决策、周记、mockup（不进公开仓库）
+docs/agent-prompts/
+docs/weekly/
+docs/archive/
+docs/mockups/
+docs/decisions/
+docs/contracts/
+docs/wiki/
+docs/superpowers/
+docs/IMPLEMENTATION_PLAN.md
+docs/P1_PLAN.md
+docs/E2E_TESTING.md
+docs/DIAGRAMS.md
+docs/PROJECT_STATUS.md
+docs/WEEK0_DONE.md
+docs/MODULE_MAP.md
+
 .claude/
 packages/ai-engine/reports/
 

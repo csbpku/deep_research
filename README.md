@@ -1,7 +1,6 @@
 # Deep Research · 技术调研平台
 
 > AI 帮我们读文章、抓热搜、看趋势；我们给反馈、踩坑记下来，团队的判断和经验会越攒越多。
-> 一图看懂这个产品在做什么：[`docs/DIAGRAMS.md`](./docs/DIAGRAMS.md)
 > 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v3.6
 
 [![CI](https://github.com/csbpku/deep_research/actions/workflows/ci.yml/badge.svg)](https://github.com/csbpku/deep_research/actions/workflows/ci.yml)
@@ -21,7 +20,7 @@
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
 - **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、SSH 部署脚手架。
 
-完整的 P0 / P1 边界、测试指标、follow-up 与历史交付见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)。
+技术设计说明见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)，部署见下文。
 
 ## 架构总览
 
@@ -53,9 +52,8 @@
 - **`packages/ai-engine/`** —— 后台长任务：调研 5 步流水线、雷达抓取与同步、文件导入转换、分享提交、SSRF-safe URL fetch、Tavily retriever。
 - **`packages/shared/`** —— TypeScript ↔ Python 镜像的 Zod schema、错误码、状态枚举；A/B 双方向只读，修改走 `[shared]` PR。
 - **`infra/`** —— `docker-compose.yml` + nginx + 多阶段 Dockerfile + `pg-backup.sh` / `pg-restore.sh` / `import-tmp-cleanup.sh`。
-- **契约层** —— `docs/contracts/` 定义了所有跨边界字段的 single source of truth；改 schema 走 ADR。
 
-更多见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)、[`docs/DIAGRAMS.md`](./docs/DIAGRAMS.md)、[`docs/wiki/development.md`](./docs/wiki/development.md)。
+更多见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
 
 ## 技术栈
 
@@ -111,7 +109,7 @@ curl -fsS http://localhost:4000/healthz          # ai-engine
 docker compose --env-file .env -f infra/docker-compose.yml ps
 ```
 
-容器启动时 Web entrypoint 自动执行 `prisma migrate deploy` 和可选的 Admin bootstrap。PostgreSQL 只绑定 `127.0.0.1:5432`；生产环境不要改成公网监听。环境变量全字段见 [`docs/contracts/env-and-scripts.md`](./docs/contracts/env-and-scripts.md)。
+容器启动时 Web entrypoint 自动执行 `prisma migrate deploy` 和可选的 Admin bootstrap。PostgreSQL 只绑定 `127.0.0.1:5432`；生产环境不要改成公网监听。完整环境变量清单见 [`.env.example`](./.env.example)。
 
 ### 验证
 
@@ -146,7 +144,7 @@ curl -fsS https://research.example.com/ai-healthz
 
 部署后必须实际登录一次，确认 Admin 仪表板、雷达同步、文件导入和 AI 调研可用。日志用 `docker compose ... logs --since=30m web ai-engine nginx` 查看。
 
-备份、升级和回滚：每天运行 `infra/pg-backup.sh` 并把备份复制到异机/对象存储；定期在隔离库执行 `infra/pg-restore.sh`。升级前先备份和记录当前 Git SHA/镜像，`git pull` 后重建；若健康检查或 smoke 失败，切回原 SHA/镜像并恢复兼容备份。完整命令、TLS、cron、故障排查见 [`docs/wiki/deployment.md`](./docs/wiki/deployment.md)。
+备份、升级和回滚：每天运行 `infra/pg-backup.sh` 并把备份复制到异机/对象存储；定期在隔离库执行 `infra/pg-restore.sh`。升级前先备份并记录当前 Git SHA/镜像，`git pull` 后重建；若健康检查或 smoke 失败，切回原 SHA/镜像并恢复兼容备份。
 
 ## 仓库布局
 
@@ -156,40 +154,16 @@ curl -fsS https://research.example.com/ai-healthz
 | `packages/ai-engine/` | FastAPI + `gpt-researcher` 适配 + radar / import worker + SSRF-safe fetch |
 | `packages/shared/` | 跨 runtime 的 Zod schema、错误码、状态枚举（双方只读） |
 | `infra/` | `docker-compose.yml`、nginx、Dockerfile、`pg-backup.sh`、`pg-restore.sh` |
-| `docs/contracts/` | API / 状态 / 错误 / env / metric / URL 安全契约（single source of truth） |
-| `docs/decisions/` | ADR（架构决策记录） |
-| `docs/wiki/` | 项目 wiki：上手 / 开发 / 部署 / 运维 |
+| `docs/` | 公开技术文档：`ARCHITECTURE.md`（见下） |
 | `scripts/` | 仓库根 helper：`setup.sh`、`cost_extrapolation.py`、`test-local-env.sh` |
-
-## 文档地图
-
-| 我想…… | 看这里 |
-|---|---|
-| 第一次 clone 跑起来 | [`docs/wiki/getting-started.md`](./docs/wiki/getting-started.md) |
-| 理解代码怎么分工、怎么改 | [`docs/wiki/development.md`](./docs/wiki/development.md) |
-| 部署到一台机器 / 备份恢复 | [`docs/wiki/deployment.md`](./docs/wiki/deployment.md) + [`infra/README.md`](./infra/README.md) |
-| 跑试用、收集反馈 | [`docs/wiki/operations.md`](./docs/wiki/operations.md) |
-| 看当前进度 / 测试指标 / follow-up | [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) |
-| 看架构方案和取舍 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) |
-| 看逐周实施与验收 | [`docs/IMPLEMENTATION_PLAN.md`](./docs/IMPLEMENTATION_PLAN.md) |
-| 共享契约（schema / API / 状态） | [`docs/contracts/`](./docs/contracts/) |
-| 历史决策 | [`docs/decisions/`](./docs/decisions/) |
-| 按周交付记录 | [`docs/weekly/`](./docs/weekly/) |
 
 ## 当前状态
 
-截至 2026-08-05：已对 22 个页面和核心闭环完成两遍真实浏览器验收，包括真实 Markdown 导入、模板套用、搜索分页、关注/收藏、偏好带入、Admin 全队列，以及带 required Radar 来源的真实 AI 调研。修复后的 AI brief 会解析并校验内部/URL `sourceRefs`，严格执行 `only_user_sources`，不再把 0 来源空内容标为成功。生产构建、Web/AI Docker 镜像、真实数据库备份恢复均已验收；本轮测试账号及关联数据、临时文件已逐项清零。平台仍未宣称 product-ready：公网 TLS 实签、VPS 上线 smoke、监控告警和真实用户 Go/Adjust/Stop 数据仍待完成。
-
-测试基线（详细见 `PROJECT_STATUS.md`）：
-
-- Web 单测 305/305，shared schema 单测 5/5；浏览器 E2E 全量集合 33 passed / 2 skipped
-- Python 371 passed / 1 skipped
-- `pnpm typecheck`、`ruff`、`mypy`、生产 `pnpm build` 全绿
-- `docker compose build web ai-engine` 成功；带数据备份恢复逐表精确计数一致
+技术方案、数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
 
 ## 贡献
 
-这是一个个人项目仓库，目前不接受外部 PR。新克隆按 `scripts/setup.sh` 即可起，按 [`docs/wiki/development.md`](./docs/wiki/development.md) 的工程师 A / B 边界与 PR 约定工作。在 [`docs/decisions/`](./docs/decisions/) 里有完整的 ADR 索引可参考。
+这是一个个人项目仓库，目前不接受外部 PR。新克隆按 `scripts/setup.sh` 即可起，按 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 约定的架构与数据模型工作。
 
 ## License
 
