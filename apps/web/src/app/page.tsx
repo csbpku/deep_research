@@ -1,9 +1,8 @@
 import Link from 'next/link';
 import {
-  Radar as RadarIcon,
+  FilePlus2,
   Rocket,
-  Search as SearchIcon,
-  Workflow,
+  Upload,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -12,13 +11,13 @@ import { PageHeader } from '@/components/domain/PageHeader';
 import { Button } from '@/components/ui/button';
 
 /**
- * 首页：工程师的"晨报 + 调研入口"。
+ * 首页：工程师的"今日研究概览"。
  *
  * UI 重设计第三轮：
- *   1. 顶部 PageHeader 一句话点题
- *   2. RecentActivityStrip：拿最近的日报 / 候选 / AI 任务作为状态信号
- *   3. "快速开始"一行：3 个动作（提交 AI 调研 / 浏览技术雷达 / 打开搜索），
- *      不再堆 4 张卡 —— 调研库、AI 雷达日报等入口全部经侧栏导航
+ *   1. 顶部 PageHeader 保留稳定的产品标题，描述改为每日工作语境
+ *   2. RecentActivityStrip：最新日报 + 按 Distilled 分数排序的今日高信号
+ *   3. "开始研究"一行：3 个创作动作（AI 调研 / 新建 / 导入）；
+ *      搜索和雷达浏览已有全局/侧栏入口，不在首页重复
  *   4. Admin 入口由 AppShell 侧栏控制（前端显隐）；直链 /admin 仍被服务端拦截
  */
 export default function HomePage() {
@@ -26,17 +25,17 @@ export default function HomePage() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="技术调研平台"
-        description="从信号发现到深度调研，再到调研库的长期归档 —— 一条链路上的四个环节。"
+        description="从今天的高信号开始，继续未完成的研究，把值得复用的结论沉淀下来。"
       />
 
       <RecentActivityStrip />
 
       <section
-        aria-label="快速开始"
+        aria-label="开始研究"
         className="mt-5 flex flex-col gap-2 rounded-lg border border-border bg-card p-3 sm:flex-row sm:items-center sm:gap-3"
       >
         <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground sm:shrink-0">
-          快速开始
+          开始研究
         </p>
         <QuickAction
           href="/ai-research"
@@ -46,16 +45,16 @@ export default function HomePage() {
           primary
         />
         <QuickAction
-          href="/radar"
-          icon={RadarIcon}
-          label="浏览技术雷达"
-          desc="候选池与每日评分"
+          href="/researches/new"
+          icon={FilePlus2}
+          label="新建调研"
+          desc="从问题开始整理结论"
         />
         <QuickAction
-          href="/search"
-          icon={SearchIcon}
-          label="打开搜索"
-          desc="跨雷达 / 摘要 / 长文检索"
+          href="/researches/import"
+          icon={Upload}
+          label="导入资料"
+          desc="把已有文档带进研究库"
         />
       </section>
     </div>

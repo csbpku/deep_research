@@ -10,6 +10,7 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { createHash } from 'node:crypto';
 import { prisma } from '../../../../../../lib/db';
 import { apiHandler } from '../../../../../../lib/api-handler';
 import { requireAdmin } from '../../../../../../lib/auth/session';
@@ -78,6 +79,16 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     ? `基于雷达候选自动生成。原始候选：${source.url}`
     : `基于雷达候选自动生成。原始候选：${source.url}`;
 
+  // CHECK constraint research_ai_origin_hash_required 要求 creationMethod='ai_research'
+  // 时 originContentSha256 必须非空。这里用源候选正文 + AI 解读的 SHA-256 作为"原始内容指纹"，
+  // 发布闸门可以拿它和当前 research.body 的 hash 对比，识别"AI 草稿是否被改过"——
+  // 防止没改的草稿直接被发布（schema.prisma 注释：阻止未修改 AI 草稿直接发布）。
+  const originContentSha256 = createHash('sha256')
+    .update(source.body ?? '')
+    .update('\x00')
+    .update(source.interpretation ?? '')
+    .digest('hex');
+
   const actionRequestId = newAdminActionRequestId();
 
   const result = await prisma.$transaction(async (tx) => {
@@ -94,7 +105,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         authorId: u.id,
         aiAssisted: false,
         creationMethod: CREATION_METHOD.AI_RESEARCH,
-        originContentSha256: null, // 实际 AI 草稿产出后由 worker 写入
+        originContentSha256,
       },
       select: {
         id: true,

@@ -360,7 +360,17 @@ def _resolve_ranked_links(
     digest: dict[str, Any],
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Attach summary ids to ranked entries and rewrite URLs to radar links."""
+    """Attach summary ids to ranked entries, rewrite URLs to radar links, and
+    dedupe by ``(summaryId, url)`` so the LLM emitting the same candidate
+    twice with different titles does not bloat the ranked list.
+
+    Background: the LLM occasionally emits two ranked entries pointing at the
+    same radar source — e.g. one entry with the candidate's real title and
+    another with a hallucinated title but the same URL. After link resolution
+    both rows collapse to identical ``(summaryId, url)``. Without this dedup,
+    the web client renders the same article twice (and React throws a
+    "duplicate key" warning once we keyed by URL).
+    """
     by_url: dict[str, dict[str, Any]] = {}
     by_canonical: dict[str, dict[str, Any]] = {}
     by_title: dict[str, dict[str, Any]] = {}
@@ -375,6 +385,7 @@ def _resolve_ranked_links(
 
     ranked = digest.get("ranked") or []
     resolved: list[dict[str, Any]] = []
+    seen: set[tuple[str | None, str]] = set()
     for item in ranked:
         item = dict(item)
         candidate = (
@@ -389,6 +400,13 @@ def _resolve_ranked_links(
             item["radarUrl"] = f"/radar/{candidate['id']}"
         else:
             item["summaryId"] = None
+        # Dedup: keep first occurrence per (summaryId, url). When the entry
+        # could not be resolved (summaryId is None), still dedupe by URL so
+        # the LLM's "two titles, one URL" failure mode is collapsed too.
+        key = (item.get("summaryId"), item.get("url") or "")
+        if key in seen:
+            continue
+        seen.add(key)
         resolved.append(item)
     digest["ranked"] = resolved
     return digest
