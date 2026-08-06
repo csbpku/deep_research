@@ -4,7 +4,8 @@
 // 这里只解析 apps/web 自己关心的变量；ai-engine 的 secret（Tavily / Anthropic /
 // OpenAI）禁止出现在 web 进程（env-and-scripts.md §2 "禁止"）。
 //
-// 校验失败必须立即抛出，不允许静默退化 —— 缺关键变量意味着 OAuth 不可能工作。
+// 校验失败必须立即抛出，不允许静默退化。Google OAuth 例外：本地 UI 模式允许
+// 两个凭证都为空（登录禁用），生产部署必须显式配置。
 
 import { z } from 'zod';
 
@@ -47,8 +48,8 @@ const webEnvSchema = z
 
     AI_ENGINE_URL: z.string().url('AI_ENGINE_URL must be a URL').default('http://localhost:4000'),
 
-    GOOGLE_CLIENT_ID: z.string().min(1, 'GOOGLE_CLIENT_ID is required for Google OAuth'),
-    GOOGLE_CLIENT_SECRET: z.string().min(1, 'GOOGLE_CLIENT_SECRET is required for Google OAuth'),
+    GOOGLE_CLIENT_ID: z.string().default(''),
+    GOOGLE_CLIENT_SECRET: z.string().default(''),
     ALLOWED_EMAIL_DOMAINS: csvDomains,
 
     MAX_UPLOAD_SIZE_MB: positiveInt.default('5'),

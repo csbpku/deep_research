@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ./scripts/setup.sh                  # interactive, auto-detects best mode
-#   ./scripts/setup.sh --quick          # non-interactive: fake adapter, zero API keys
+#   ./scripts/setup.sh --quick          # non-interactive: fake adapter, no API keys, no Google login
 #   ./scripts/setup.sh --docker         # interactive + Docker Compose build & deploy
 #   ./scripts/setup.sh --vps --domain example.com  # generate VPS deployment pack
 #
@@ -219,7 +219,7 @@ run_interactive_prompts() {
 
   prompt_choice "Configure Google OAuth login?" OAUTH_CHOICE \
     "Yes — I have Client ID / Secret (from Google Cloud Console)" \
-    "Skip (login disabled, browse freely)"
+    "Skip (login disabled; browse public pages only)"
 
   case "$OAUTH_CHOICE" in
     1)
@@ -300,7 +300,7 @@ if [[ "$MODE" == "auto" ]]; then
 
   echo ""
   echo -e "${BOLD}Choose a setup mode:${NC}"
-  echo "  1) Quick  — fake adapter, zero keys, browse UI immediately"
+  echo "  1) Quick  — fake adapter, zero keys, browse public pages without login"
   echo "  2) Docker — Docker Compose, interactive config, full stack"
   echo "  3) Local  — interactive, bare-metal dev (Node + Python + PostgreSQL)"
   echo "  4) VPS    — generate deployment pack for remote VPS"
@@ -513,10 +513,11 @@ if [[ "$MODE" == "docker" ]]; then
     sleep 2
   done
 
-  DATABASE_URL="postgresql://postgres:${PG_PASS}@localhost:5432/deep_research" \
-    pnpm db:migrate 2>/dev/null \
-    && info "Migrations applied" \
-    || warn "Migration via host failed. Run inside container: docker compose -f infra/docker-compose.yml exec web pnpm db:migrate"
+  if DATABASE_URL="postgresql://postgres:${PG_PASS}@localhost:5432/deep_research" pnpm db:deploy; then
+    info "Migrations applied"
+  else
+    fail "Migration failed. Run inside container: docker compose -f infra/docker-compose.yml exec web pnpm db:deploy"
+  fi
 
   pnpm db:generate 2>/dev/null && info "Prisma client generated" || true
 
@@ -541,9 +542,11 @@ if [[ "$MODE" == "docker" ]]; then
 
   if [[ "$ADAPTER_VAL" == "fake" ]]; then
     echo -e "  ${YELLOW}Fake adapter${NC} — AI research returns mock data."
+    echo -e "  Public pages work without login; AI research, comments, follows, bookmarks, personal content, and admin require login."
+    echo -e "  AI research uses mock data, no API costs."
   fi
   if [[ -z "$GOOGLE_ID" ]]; then
-    echo -e "  ${YELLOW}Google OAuth: not configured${NC} (login disabled)"
+    echo -e "  ${YELLOW}Google OAuth: not configured${NC} (browse public pages only)"
   fi
 
   exit 0
@@ -565,12 +568,22 @@ command -v pnpm    >/dev/null 2>&1 || {
   corepack enable && corepack prepare pnpm@latest --activate \
     || fail "Failed to install pnpm. Run: npm install -g pnpm"
 }
-command -v python3 >/dev/null 2>&1 || fail "Python 3 not found. Install Python >= 3.11 (https://python.org/)"
 command -v uv      >/dev/null 2>&1 || fail "uv not found. Install: curl -LsSf https://astral.sh/uv/install.sh | sh"
 command -v psql    >/dev/null 2>&1 || warn "psql not found — PostgreSQL client tools recommended"
 
-PYVER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PYVER_OK=$(python3 -c 'import sys; print(1 if sys.version_info >= (3,11) else 0)')
+PY_BIN="${PYTHON_BIN:-}"
+if [[ -z "$PY_BIN" ]]; then
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      PY_BIN="$candidate"
+      break
+    fi
+  done
+fi
+[[ -n "$PY_BIN" ]] || fail "Python 3 not found. Install Python >= 3.11 (https://python.org/)"
+
+PYVER=$("$PY_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+PYVER_OK=$("$PY_BIN" -c 'import sys; print(1 if sys.version_info >= (3,11) else 0)')
 [[ "$PYVER_OK" == "1" ]] || fail "Python $PYVER found, need >= 3.11"
 
 NODEVER=$(node -v | sed 's/v//' | cut -d. -f1)
@@ -655,7 +668,7 @@ if [[ "$MODE" != "quick" ]]; then
 
   prompt_choice "Configure Google OAuth login?" OAUTH_CHOICE \
     "Yes — I have Client ID / Secret (from Google Cloud Console)" \
-    "Skip (login disabled)"
+    "Skip (login disabled; browse public pages only)"
 
   case "$OAUTH_CHOICE" in
     1)
@@ -668,7 +681,7 @@ if [[ "$MODE" != "quick" ]]; then
       ;;
   esac
 else
-  PG_HOST="localhost"; PG_PORT="5432"; PG_USER="postgres"; PG_PASS="postgres"
+  PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
   EMAIL_DOMAINS="gmail.com"
   ANTHROPIC_KEY=""; LLM_BASE_URL=""; ADAPTER_VAL="fake"
   TAVILY_KEY=""; RETRIEVER_VAL="tavily"
@@ -681,7 +694,7 @@ info "JS dependencies installed"
 
 step "Setting up Python environment"
 cd packages/ai-engine
-uv sync
+UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/deep-research-uv-cache}" uv sync
 info "Python environment ready"
 cd "$repo_root"
 
@@ -746,14 +759,11 @@ if pg_isready -h "$PG_HOST" -p "$PG_PORT" >/dev/null 2>&1; then
   fi
 
   step "Running Prisma migrations"
-  DATABASE_URL="$DB_URL" pnpm db:migrate && info "Migrations applied" \
-    || warn "Migration failed — check DATABASE_URL in apps/web/.env"
+  DATABASE_URL="$DB_URL" pnpm db:deploy || fail "Migration failed — check DATABASE_URL in apps/web/.env"
+  info "Migrations applied"
   DATABASE_URL="$DB_URL" pnpm db:generate && info "Prisma client generated" || true
 else
-  warn "PostgreSQL not detected at ${PG_HOST}:${PG_PORT}"
-  echo "  Start PostgreSQL, then run:"
-  echo "    DATABASE_URL='${DB_URL}' pnpm db:migrate"
-  echo "    DATABASE_URL='${DB_URL}' pnpm db:generate"
+  fail "PostgreSQL not detected at ${PG_HOST}:${PG_PORT} — start PostgreSQL, then rerun ./scripts/setup.sh"
 fi
 
 echo ""
@@ -761,7 +771,8 @@ echo -e "${BOLD}${GREEN}Setup complete!${NC}"
 echo ""
 if [[ "$ADAPTER_VAL" == "fake" ]]; then
   echo -e "  ${YELLOW}Fake adapter${NC} — AI research returns mock data."
-  echo -e "  UI is fully navigable, no API costs."
+  echo -e "  Public pages work without login; AI research, comments, follows, bookmarks, personal content, and admin require login."
+  echo -e "  AI research uses mock data, no API costs."
 else
   if [[ -z "$ANTHROPIC_KEY" ]]; then
     echo -e "  ${YELLOW}⚠  ANTHROPIC_API_KEY is empty${NC} — edit packages/ai-engine/.env to enable real LLM"
@@ -776,7 +787,7 @@ echo "  pnpm dev:web    →  http://localhost:3000"
 echo "  pnpm dev:ai     →  http://localhost:4000  (separate terminal)"
 echo ""
 if [[ -z "$GOOGLE_ID" ]]; then
-  echo "  Google OAuth: not configured (login disabled)"
+  echo "  Google OAuth: not configured (browse public pages only; actions require login)"
   echo "  To enable: https://console.cloud.google.com/apis/credentials"
   echo "  Callback: http://localhost:3000/api/auth/callback/google"
 fi

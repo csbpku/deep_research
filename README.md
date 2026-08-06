@@ -94,7 +94,7 @@ launchd 托管的 AI engine 使用稳定模式（不随代码文件自动重启�
 | 部署 | Docker Compose + nginx 1.27（HTTP-only，TLS 模板待签发），本地/单 VPS |
 | 工具链 | pnpm workspace（10+）、uv、ruff + mypy、tsc、GitHub Actions CI |
 
-外部依赖：Anthropic / OpenAI（按 adapter）、Tavily、Google OAuth。
+外部依赖：Anthropic / OpenAI（按 adapter）、Tavily；Google OAuth 仅真实登录需要，本地快速模式可省略。
 
 ## 本地部署
 
@@ -103,7 +103,7 @@ launchd 托管的 AI engine 使用稳定模式（不随代码文件自动重启�
 - 原生模式：Node.js ≥ 20.11、pnpm ≥ 10、Python ≥ 3.11、uv、PostgreSQL 16。
 - Docker 模式：Docker Engine 24+ 与 Compose v2；建议至少 2 vCPU / 4 GB RAM。
 - 真实 AI：一个受支持 provider 的 API key，以及 Tavily key（或将 `RETRIEVER=duckduckgo`）。只验 UI 可用 `AI_ENGINE_ADAPTER=fake`。
-- Google OAuth：创建 Web application，并登记 `http://localhost:3000/api/auth/callback/google`。
+- Google OAuth（可选，真实登录需要）：创建 Web application，并登记 `http://localhost:3000/api/auth/callback/google`。
 
 ### 原生启动
 
@@ -115,7 +115,7 @@ cd deep_research
 # 2. 检测环境、安装依赖、生成 env、建库并执行 migration
 ./scripts/setup.sh
 
-# 不配 AI key，只验证产品 UI 与流程
+# 不配 AI key / Google OAuth，只验证产品 UI 与流程（登录页提示 OAuth 未配置）
 ./scripts/setup.sh --quick
 
 # 3. 起服务（两个终端）
@@ -123,7 +123,9 @@ pnpm dev:web     # → http://localhost:3000
 pnpm dev:ai      # → http://localhost:4000
 ```
 
-首次登录前，在 Google OAuth 控制台登记回调 URL，确认 `ALLOWED_EMAIL_DOMAINS` 包含登录邮箱域名。`BOOTSTRAP_ADMIN_EMAIL` 可在首次启动时幂等创建/提升初始 Admin；也可稍后由已有 Admin 在成员管理中调整角色。
+启用真实登录前，先在 Google OAuth 控制台登记回调 URL，确认 `ALLOWED_EMAIL_DOMAINS` 包含登录邮箱域名。`--quick` 生成的配置不会注册 Google provider，登录页会提示 OAuth 未配置。`BOOTSTRAP_ADMIN_EMAIL` 可在首次启动时幂等创建/提升初始 Admin；也可稍后由已有 Admin 在成员管理中调整角色。
+
+未配置 Google OAuth 时，仍可免登录浏览首页、日报、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
 ### 本地 Docker
 

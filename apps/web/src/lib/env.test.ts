@@ -19,9 +19,11 @@ describe('parseWebEnv', () => {
     expect(env.ALLOWED_EMAIL_DOMAINS).toEqual(['example.com', 'foo.org']);
   });
 
-  it('rejects missing GOOGLE_CLIENT_ID', () => {
-    const { GOOGLE_CLIENT_ID: _ignore, ...rest } = validBase;
-    expect(() => parseWebEnv({ ...rest, NODE_ENV: 'development' })).toThrow(/GOOGLE_CLIENT_ID/);
+  it('accepts missing Google OAuth credentials (local UI mode)', () => {
+    const { GOOGLE_CLIENT_ID: _id, GOOGLE_CLIENT_SECRET: _secret, ...rest } = validBase;
+    const env = parseWebEnv({ ...rest, NODE_ENV: 'development' });
+    expect(env.GOOGLE_CLIENT_ID).toBe('');
+    expect(env.GOOGLE_CLIENT_SECRET).toBe('');
   });
 
   it('rejects empty ALLOWED_EMAIL_DOMAINS', () => {

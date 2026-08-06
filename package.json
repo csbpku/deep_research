@@ -17,6 +17,7 @@
     ]
   },
   "scripts": {
+    "db:deploy": "pnpm --filter @deep-research/web db:deploy",
     "db:migrate": "pnpm --filter @deep-research/web db:migrate",
     "db:generate": "pnpm --filter @deep-research/web db:generate",
     "db:reset": "pnpm --filter @deep-research/web db:reset",

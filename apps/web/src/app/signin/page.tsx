@@ -1,6 +1,7 @@
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
 import { signIn } from '@/lib/auth/config';
+import { getWebEnv } from '@/lib/env';
 
 /**
  * 登录页。窄栏居中，不套业务侧栏的宽布局。
@@ -15,6 +16,9 @@ export default async function SignInPage({
 }) {
   const sp = await searchParams;
   const error = sp?.error;
+  const googleConfigured = Boolean(
+    getWebEnv().GOOGLE_CLIENT_ID && getWebEnv().GOOGLE_CLIENT_SECRET,
+  );
   // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
   // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
   // 攻击者可构造 /signin?callbackUrl=https://evil.com 做开放重定向钓鱼。
@@ -24,6 +28,7 @@ export default async function SignInPage({
 
   async function doSignIn() {
     'use server';
+    if (!googleConfigured) return;
     await signIn('google', { redirectTo: callbackUrl });
   }
 
@@ -40,9 +45,11 @@ export default async function SignInPage({
               : `登录失败（error=${error}）。请重试或联系管理员。`
           }
           action={
-            <form action={doSignIn}>
-              <Button type="submit">重新登录</Button>
-            </form>
+            googleConfigured ? (
+              <form action={doSignIn}>
+                <Button type="submit">重新登录</Button>
+              </form>
+            ) : undefined
           }
         />
       </div>
@@ -52,28 +59,38 @@ export default async function SignInPage({
   return (
     <div className="mx-auto max-w-md py-10 text-center">
       <h1 className="text-xl font-semibold tracking-normal">登录</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        使用 Google 账号登录。邮箱必须在允许域名列表内。
-      </p>
+      {googleConfigured ? (
+        <>
+          <p className="mt-2 text-sm text-muted-foreground">
+            使用 Google 账号登录。邮箱必须在允许域名列表内。
+          </p>
 
-      <form action={doSignIn} className="mt-6">
-        <Button type="submit" variant="outline" size="lg" className="w-full">
-          <GoogleMark />
-          使用 Google 登录
-        </Button>
-      </form>
+          <form action={doSignIn} className="mt-6">
+            <Button type="submit" variant="outline" size="lg" className="w-full">
+              <GoogleMark />
+              使用 Google 登录
+            </Button>
+          </form>
+        </>
+      ) : (
+        <div className="mt-6 rounded-lg border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Google OAuth 未配置</p>
+          <p className="mt-2">登录已禁用。配置 GOOGLE_CLIENT_ID 与 GOOGLE_CLIENT_SECRET 后重新启动服务即可启用。</p>
+        </div>
+      )}
 
 
       <details className="mt-8 rounded-lg border border-border bg-card p-4 text-left text-sm text-muted-foreground">
         <summary className="cursor-pointer text-foreground">本地开发提示</summary>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>
-            需在 Google Cloud Console 登记{' '}
+            启用 Google 登录时，需在 Google Cloud Console 登记{' '}
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
               http://localhost:3000/api/auth/callback/google
             </code>{' '}
             为已授权重定向 URI。
           </li>
+          <li>本地快速模式不要求 Google 凭证；未配置时登录页会显示“未配置”状态。</li>
           <li>未在 ALLOWED_EMAIL_DOMAINS 的域名会被拒绝（?error=AccessDenied）。</li>
           <li>已禁用账号无法建立新 session。</li>
         </ul>

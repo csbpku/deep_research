@@ -1,4 +1,4 @@
-// NextAuth v5 配置 —— Google OAuth + JWT 策略。
+// NextAuth v5 配置 —— Google OAuth（可禁用）+ JWT 策略。
 //
 // 关键决策（Week 1 复评 ADR 0002 + 当前 schema freeze）：
 //   - schema 已 freeze，且**没有** Account / Session / VerificationToken 表。
@@ -61,18 +61,24 @@ export const authConfig: NextAuthConfig = {
           }),
         ]
       : []),
-    Google({
-      clientId: getWebEnv().GOOGLE_CLIENT_ID,
-      clientSecret: getWebEnv().GOOGLE_CLIENT_SECRET,
-      // 强制提供 email + profile；allowlist 校验依赖 email
-      authorization: {
-        params: {
-          prompt: 'consent',
-          access_type: 'offline',
-          scope: 'openid email profile',
-        },
-      },
-    }),
+    // 本地 quick / UI-only 模式允许两个凭证都为空；此时不注册 Google provider，
+    // /signin 会展示“登录未配置”状态，页面和 health endpoint 不会 500。
+    ...(getWebEnv().GOOGLE_CLIENT_ID && getWebEnv().GOOGLE_CLIENT_SECRET
+      ? [
+          Google({
+            clientId: getWebEnv().GOOGLE_CLIENT_ID,
+            clientSecret: getWebEnv().GOOGLE_CLIENT_SECRET,
+            // 强制提供 email + profile；allowlist 校验依赖 email
+            authorization: {
+              params: {
+                prompt: 'consent',
+                access_type: 'offline',
+                scope: 'openid email profile',
+              },
+            },
+          }),
+        ]
+      : []),
   ],
   // JWT session；详见文件头注释。maxAge 与 cookie 名走 NextAuth 默认。
   session: { strategy: 'jwt', maxAge: 60 * 60 * 24 * 7 },
