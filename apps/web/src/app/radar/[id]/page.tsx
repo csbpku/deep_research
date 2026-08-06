@@ -5,8 +5,9 @@ import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
-import { ExternalLink, MessageSquare, Users, Workflow } from 'lucide-react';
+import { ExternalLink, Sparkles, Users, Workflow } from 'lucide-react';
 import { EmptyState } from '../../../components/EmptyState';
+import { CommentSection } from '../../../components/CommentSection';
 import { useCurrentUser } from '../../../lib/auth/client';
 import { AskAiDrawer } from '../../../components/radar/AskAiDrawer';
 import { RadarFeedbackBar } from '../../../components/radar/RadarFeedbackBar';
@@ -20,10 +21,12 @@ import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
+import { TIER_LABELS } from '../../../components/domain/ScoreBar';
 import MarkdownContent from '../../../components/MarkdownContent';
 import { Button } from '../../../components/ui/button';
 import { toApiHttpError } from '../../../lib/errors/api-error';
 import { retryOnceAi } from '../../../lib/errors/friendly';
+import { BackToSearchButton } from '../../../components/domain/BackToSearchButton';
 
 interface RadarDetail {
   id: string;
@@ -91,7 +94,6 @@ interface RepoMeta {
 export default function RadarDetailPage() {
   const params = useParams<{ id: string }>();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<'team' | 'ai'>('ai');
   const me = useCurrentUser();
   const q = useQuery<RadarDetail>({
     queryKey: ['radar', params.id],
@@ -108,7 +110,10 @@ export default function RadarDetailPage() {
   if (q.isLoading) {
     return (
       <div className="mx-auto max-w-measure">
-        <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回候选列表</Link>
+        <div className="flex items-center gap-2">
+          <BackToSearchButton />
+          <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
+        </div>
         <p className="mt-4 text-sm text-muted-foreground">加载中…</p>
       </div>
     );
@@ -118,7 +123,10 @@ export default function RadarDetailPage() {
     const needsLogin = errorMessage.includes('登录') || errorMessage.includes('授权');
     return (
       <div className="mx-auto max-w-measure">
-        <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回候选列表</Link>
+        <div className="flex items-center gap-2">
+          <BackToSearchButton />
+          <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
+        </div>
         <div className="mt-4">
           <EmptyState
             title={needsLogin ? '需要登录' : '加载失败'}
@@ -136,7 +144,10 @@ export default function RadarDetailPage() {
 
   return (
     <div className="mx-auto max-w-5xl">
-      <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回候选列表</Link>
+      <div className="flex items-center gap-2">
+        <BackToSearchButton />
+        <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
+      </div>
 
       <div className="mt-5 grid gap-8 lg:grid-cols-[minmax(0,760px)_240px] lg:items-start">
       <article className="min-w-0 space-y-4 leading-7">
@@ -156,12 +167,22 @@ export default function RadarDetailPage() {
               内容类型 {d.originalKind === 'arxiv' ? 'arXiv 论文' : d.originalKind}
             </span>
           ) : null}
-          <span className="font-mono text-[11px] text-muted-foreground">
-            抓取 {new Date(d.crawledAt).toISOString().slice(0, 10)}
-          </span>
         </header>
 
-        <h1 className="text-3xl font-semibold leading-tight tracking-tight">{d.title}</h1>
+        <h1 className="text-3xl font-semibold leading-tight tracking-normal">{d.title}</h1>
+
+        <div className="flex items-center gap-2 lg:hidden" aria-label="文章操作">
+          <Button type="button" variant="outline" size="sm" onClick={() => setDrawerOpen(true)}>
+            <Sparkles className="size-3.5" />
+            与 AI 讨论
+          </Button>
+          <Button asChild type="button" variant="outline" size="sm">
+            <a href="#discussion">
+            <Users className="size-3.5" />
+            团队讨论
+            </a>
+          </Button>
+        </div>
 
         {d.interpretation ? (
           <p
@@ -260,16 +281,21 @@ export default function RadarDetailPage() {
           </Button>
         </div>
 
+        <div id="discussion" className="scroll-mt-20">
+          <CommentSection
+            targetType="summary"
+            targetId={d.id}
+            currentUserId={me.data?.id ?? null}
+            currentUserRole={me.data?.role ?? null}
+          />
+        </div>
+
         <AskAiDrawer
           summaryId={d.id}
           summaryTitle={d.title}
           summaryUrl={d.url}
           open={drawerOpen}
           onOpenChange={setDrawerOpen}
-          initialTab={drawerTab}
-          teamStatus={d.status}
-          currentUserId={me.data?.id ?? null}
-          currentUserRole={me.data?.role ?? null}
           contextExcerpt={d.originalMarkdown ?? d.body ?? d.highlights?.summary ?? d.interpretation ?? d.excerpt}
         />
       </article>
@@ -280,19 +306,21 @@ export default function RadarDetailPage() {
           <dl className="grid gap-3 text-xs">
             <div><dt className="text-muted-foreground">来源</dt><dd className="mt-0.5 font-medium">{sourceLabel.full}</dd></div>
             <div><dt className="text-muted-foreground">抓取时间</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(d.crawledAt).toISOString().slice(0, 10)}</dd></div>
-            <div><dt className="text-muted-foreground">阅读等级</dt><dd className="mt-0.5 font-medium">{d.distilledScore?.tier === 'deep_read' ? '深度阅读' : d.distilledScore?.tier === 'skim' ? '略读' : '待评估'}</dd></div>
+            <div><dt className="text-muted-foreground">阅读等级</dt><dd className="mt-0.5 font-medium">{d.distilledScore ? (TIER_LABELS[d.distilledScore.tier] ?? '待评估') : '待评估'}</dd></div>
             <div><dt className="text-muted-foreground">团队价值</dt><dd className="mt-0.5 font-mono text-sm text-status-succeeded-fg">{d.distilledScore?.rankingScore ?? d.distilledScore?.effectiveTotal ?? '—'}</dd></div>
           </dl>
         </section>
         <section className="rounded-lg border border-border bg-card p-4">
-          <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">讨论</h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">围绕当前证据继续团队协作，或让 AI 解释方法、风险和落地方式。</p>
-          <Button type="button" variant="outline" size="sm" className="mt-3 w-full" onClick={() => { setDrawerTab('team'); setDrawerOpen(true); }}>
+          <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">协作</h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">团队判断沉淀在正文下方；AI 对话作为当前文章的辅助工具。</p>
+          <Button asChild type="button" variant="outline" size="sm" className="mt-3 w-full">
+            <a href="#discussion">
             <Users className="size-3.5" />
-            打开讨论
+            查看团队讨论
+            </a>
           </Button>
-          <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={() => { setDrawerTab('ai'); setDrawerOpen(true); }}>
-            <MessageSquare className="size-3.5" />
+          <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={() => setDrawerOpen(true)}>
+            <Sparkles className="size-3.5" />
             与 AI 讨论
           </Button>
           <a href={d.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted">

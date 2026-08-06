@@ -19,7 +19,16 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
   const url = new URL(req.url);
   const limit = url.searchParams.get('limit') ?? '20';
-  const target = `${getWebEnv().AI_ENGINE_URL.replace(/\/$/u, '')}/api/radar/runs?limit=${encodeURIComponent(limit)}`;
+  const date = url.searchParams.get('date');
+  if (date && !/^\d{4}-\d{2}-\d{2}$/u.test(date)) {
+    return NextResponse.json(
+      { code: 'VALIDATION_FAILED', message: 'date 必须是 YYYY-MM-DD', requestId },
+      { status: 400 },
+    );
+  }
+  const targetParams = new URLSearchParams({ limit });
+  if (date) targetParams.set('date', date);
+  const target = `${getWebEnv().AI_ENGINE_URL.replace(/\/$/u, '')}/api/radar/runs?${targetParams.toString()}`;
 
   const headers: Record<string, string> = { 'x-request-id': requestId };
   const token = getWebEnv().INTERNAL_SERVICE_TOKEN;

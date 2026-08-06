@@ -16,6 +16,7 @@ import { toApiErrorResponse } from '../../../../../lib/errors';
 import { log, withRequestId } from '../../../../../lib/log';
 import { CommentListQuery, CreateCommentInput, SummaryIdParam } from '../../../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
+import { createCommentMentionsAndNotifications } from '../../../../../lib/comments/notifications';
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
@@ -49,12 +50,18 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   }
   const { page, per_page, sort } = parsed.data;
 
-  // 先校验 summary 存在（published 或雷达候选均可评论）
+  // 先校验 summary 存在（日报、自动雷达、已批准分享均可评论）
   const summary = await prisma.summary.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, status: true, source: true, syncRunId: true },
+    select: {
+      id: true,
+      status: true,
+      source: true,
+      syncRunId: true,
+      shareSource: { select: { status: true } },
+    },
   });
-  if (!summary || (summary.status !== 'published' && !(summary.source === 'daily' && summary.syncRunId != null))) {
+  if (!isCommentableSummary(summary)) {
     return toApiErrorResponse({
       code: ERROR_CODES.NOT_FOUND,
       message: '摘要不存在或不可评论',
@@ -81,6 +88,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
         promoteStatus: true,
         createdAt: true,
         author: { select: { id: true, name: true, avatarUrl: true } },
+        mentions: { select: { user: { select: { id: true, name: true, avatarUrl: true } } } },
         children: {
           select: {
             id: true,
@@ -88,6 +96,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
             starCount: true,
             createdAt: true,
             author: { select: { id: true, name: true, avatarUrl: true } },
+            mentions: { select: { user: { select: { id: true, name: true, avatarUrl: true } } } },
           },
           orderBy: { createdAt: 'asc' as const },
           take: 3, // 默认展示前 3 条回复，更多可展开
@@ -127,9 +136,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   // 校验 summary 存在且可评论
   const summary = await prisma.summary.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, status: true, source: true, syncRunId: true },
+    select: {
+      id: true,
+      status: true,
+      source: true,
+      syncRunId: true,
+      shareSource: { select: { status: true } },
+    },
   });
-  if (!summary || (summary.status !== 'published' && !(summary.source === 'daily' && summary.syncRunId != null))) {
+  if (!isCommentableSummary(summary)) {
     return toApiErrorResponse({
       code: ERROR_CODES.NOT_FOUND,
       message: '摘要不存在或不可评论',
@@ -138,10 +153,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   }
 
   // 校验 parentId：必须指向同 summary 的评论
+  let parentAuthorId: string | null = null;
   if (body.parentId) {
     const parent = await prisma.comment.findUnique({
       where: { id: body.parentId },
-      select: { id: true, summaryId: true, researchId: true },
+      select: { id: true, summaryId: true, researchId: true, authorId: true },
     });
     if (!parent || parent.summaryId !== idParsed.data.id) {
       return toApiErrorResponse({
@@ -150,25 +166,37 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         requestId,
       });
     }
+    parentAuthorId = parent.authorId;
   }
 
-  const created = await prisma.comment.create({
-    data: {
-      authorId: u.id,
-      targetType: 'summary',
-      summaryId: idParsed.data.id,
+  const created = await prisma.$transaction(async (tx) => {
+    const comment = await tx.comment.create({
+      data: {
+        authorId: u.id,
+        targetType: 'summary',
+        summaryId: idParsed.data.id,
+        body: body.body,
+        parentId: body.parentId ?? null,
+      },
+      select: {
+        id: true,
+        body: true,
+        parentId: true,
+        starCount: true,
+        promoteStatus: true,
+        createdAt: true,
+        author: { select: { id: true, name: true, avatarUrl: true } },
+      },
+    });
+    await createCommentMentionsAndNotifications({
+      tx,
+      commentId: comment.id,
       body: body.body,
-      parentId: body.parentId ?? null,
-    },
-    select: {
-      id: true,
-      body: true,
-      parentId: true,
-      starCount: true,
-      promoteStatus: true,
-      createdAt: true,
-      author: { select: { id: true, name: true, avatarUrl: true } },
-    },
+      actorId: u.id,
+      mentionedUserIds: body.mentionedUserIds,
+      parentAuthorId,
+    });
+    return comment;
   });
 
   // 增加 Research.commentCount（用于调研库详情统计口径）
@@ -193,12 +221,14 @@ function serializeComment(c: {
   promoteStatus: string;
   createdAt: Date;
   author: { id: string; name: string; avatarUrl: string | null };
+  mentions?: Array<{ user: { id: string; name: string; avatarUrl: string | null } }>;
   children?: Array<{
     id: string;
     body: string;
     starCount: number;
     createdAt: Date;
     author: { id: string; name: string; avatarUrl: string | null };
+    mentions?: Array<{ user: { id: string; name: string; avatarUrl: string | null } }>;
   }>;
   _count?: { children: number };
 }) {
@@ -210,13 +240,27 @@ function serializeComment(c: {
     promoteStatus: c.promoteStatus,
     createdAt: c.createdAt.toISOString(),
     author: c.author,
+    mentions: c.mentions?.map((mention) => mention.user) ?? [],
     children: (c.children ?? []).map((r) => ({
       id: r.id,
       body: r.body,
       starCount: r.starCount,
       createdAt: r.createdAt.toISOString(),
       author: r.author,
+      mentions: r.mentions?.map((mention) => mention.user) ?? [],
     })),
     childCount: c._count?.children ?? c.children?.length ?? 0,
   };
+}
+
+function isCommentableSummary(summary: {
+  status: string;
+  source: string;
+  syncRunId: string | null;
+  shareSource: { status: string } | null;
+} | null): summary is NonNullable<typeof summary> {
+  if (!summary) return false;
+  return summary.status === 'published'
+    || (summary.source === 'daily' && summary.syncRunId !== null)
+    || (summary.source === 'user' && summary.shareSource?.status === 'approved');
 }

@@ -1,7 +1,7 @@
 // BFF handler: POST/DELETE /api/comments/[id]/star —— 评论点赞（一人一票）。
 //
 // 契约源：schema.prisma::CommentStar (@@unique [commentId, userId])
-// Week 8：基础点赞（不是 Phase 1a 的 3 票自动提名）；后者需要 trigger，本周只搭架子。
+// 点赞表达团队认可；知识沉淀通过独立的 /nominate 动作进入 Admin 待提炼队列。
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';

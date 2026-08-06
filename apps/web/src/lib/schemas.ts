@@ -39,12 +39,22 @@ export type UpdateResearchInput = z.infer<typeof UpdateResearchInput>;
 /** 查询沉淀列表 */
 export const ResearchListQuery = z.object({
   type: z.enum([RESEARCH_TYPE.RESEARCH, RESEARCH_TYPE.KNOWLEDGE]).optional(),
-  scope: z.enum(['published', 'draft']).default('published'),
+  scope: z.enum(['published', 'draft', 'mine']).default('published'),
   q: z.string().trim().max(200).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 export type ResearchListQuery = z.infer<typeof ResearchListQuery>;
+
+/** 查询 Admin 调研库管理列表（含草稿/归档） */
+export const AdminResearchListQuery = z.object({
+  status: z.enum(['all', 'draft', 'published', 'archived']).default('all'),
+  type: z.enum([RESEARCH_TYPE.RESEARCH, RESEARCH_TYPE.KNOWLEDGE]).optional(),
+  q: z.string().trim().max(200).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type AdminResearchListQuery = z.infer<typeof AdminResearchListQuery>;
 
 // ──────────────────────────────────────────────────────────────────────
 // File Import
@@ -116,8 +126,13 @@ export const RadarListQuery = z.object({
   sourceType: z.string().trim().min(1).max(32).optional(),
   status: z.enum(RADAR_STATUS_VALUES).optional(),
   quality: z.enum(['relevant', 'all']).default('relevant'),
+  /** 内容时间下限；优先 publishedAt，没有时回退到 createdAt。 */
+  dateFrom: z.coerce.date().optional(),
   page: z.coerce.number().int().min(1).default(1),
   per_page: z.coerce.number().int().min(1).max(50).default(20),
+  /** 首页等只展示少量卡片的调用可以跳过全量统计和反馈聚合。 */
+  includeTotal: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  includeFeedback: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
 });
 export type RadarListQuery = z.infer<typeof RadarListQuery>;
 
@@ -159,14 +174,6 @@ export const DeleteRadarFeedbackQuery = z.object({
 });
 export type DeleteRadarFeedbackQuery = z.infer<typeof DeleteRadarFeedbackQuery>;
 
-/** POST /api/admin/radar/[id]/select 选入每日摘要 */
-export const AdminRadarSelectInput = z.object({
-  summaryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, 'summaryDate must be YYYY-MM-DD'),
-  sortOrder: z.number().int().min(1).max(4),
-  selectionReason: z.string().trim().min(2).max(500),
-});
-export type AdminRadarSelectInput = z.infer<typeof AdminRadarSelectInput>;
-
 // ──────────────────────────────────────────────────────────────────────
 // Week 8 评论 (Comments)
 // ──────────────────────────────────────────────────────────────────────
@@ -176,8 +183,15 @@ export const COMMENT_TARGET_VALUES = ['summary', 'research'] as const;
 
 /** POST /api/summaries/[date]/comments 或 /api/researches/[id]/comments */
 export const CreateCommentInput = z.object({
-  body: z.string().trim().min(1).max(2000),
+  body: z.string().trim().min(1, '评论不能为空').max(2000, '评论最多 2000 字'),
   parentId: z.string().uuid().optional(),
+  mentionedUserIds: z.array(z.string().uuid()).max(10, '一次最多 @ 10 位成员').default([]),
+  anchor: z.object({
+    quote: z.string().trim().min(1).max(4000),
+    startOffset: z.number().int().min(0),
+    endOffset: z.number().int().min(0),
+    contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  }).nullish(),
 });
 export type CreateCommentInput = z.infer<typeof CreateCommentInput>;
 

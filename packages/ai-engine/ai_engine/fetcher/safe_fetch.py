@@ -42,6 +42,7 @@ import ipaddress
 import logging
 import os
 import socket
+import time
 from dataclasses import dataclass
 from typing import Final
 from urllib.parse import urljoin, urlsplit
@@ -80,6 +81,10 @@ _DEFAULT_TIMEOUT_SECONDS: Final[float] = 10.0
 
 # Default max redirects (3) per IMPLEMENTATION_PLAN §六.
 _DEFAULT_MAX_REDIRECTS: Final[int] = 3
+_DNS_RETRIES: Final[int] = max(0, int(os.environ.get("URL_FETCH_DNS_RETRIES", "2")))
+_DNS_BACKOFF_SECONDS: Final[float] = max(
+    0.0, float(os.environ.get("URL_FETCH_DNS_BACKOFF_SECONDS", "0.1"))
+)
 
 
 class SafeFetchError(Exception):
@@ -117,21 +122,37 @@ def _resolve_ip(host: str) -> str:
     transport failure, not an AI-engine outage, so retain the host and expose
     a retryable, caller-visible code.
     """
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise SafeFetchError(
-            code="URL_FETCH_DNS",
-            message=f"DNS resolution failed for host {host}",
-            host=host,
-        ) from exc
-    if not infos:
-        raise SafeFetchError(
-            code="URL_FETCH_DNS",
-            message=f"DNS resolution failed for host {host}",
-            host=host,
-        )
-    return str(infos[0][4][0])
+    last_error: socket.gaierror | None = None
+    for attempt in range(_DNS_RETRIES + 1):
+        # The local development network is IPv4-first. Asking for IPv4
+        # explicitly avoids intermittent IPv6 resolver failures while
+        # retaining a normal-family fallback for public IPv6-only hosts.
+        for family in (socket.AF_INET, socket.AF_UNSPEC):
+            try:
+                infos = socket.getaddrinfo(
+                    host,
+                    None,
+                    family=family,
+                    type=socket.SOCK_STREAM,
+                    flags=getattr(socket, "AI_ADDRCONFIG", 0),
+                )
+                if infos:
+                    return str(infos[0][4][0])
+            except socket.gaierror as exc:
+                last_error = exc
+        if last_error is not None:
+            if attempt < _DNS_RETRIES and _DNS_BACKOFF_SECONDS:
+                time.sleep(_DNS_BACKOFF_SECONDS * (2**attempt))
+
+    assert last_error is not None  # the loop always executes at least once
+    raise SafeFetchError(
+        code="URL_FETCH_DNS",
+        message=(
+            f"DNS resolution failed for host {host} after {_DNS_RETRIES + 1} attempts "
+            f"(errno={last_error.errno})"
+        ),
+        host=host,
+    ) from last_error
 
 
 def _is_blocked_ip(ip_str: str) -> tuple[bool, str]:

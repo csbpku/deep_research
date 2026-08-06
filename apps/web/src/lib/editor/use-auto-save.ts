@@ -11,6 +11,8 @@ export interface AutoSaveResult {
   saveNow: () => Promise<void>;
 }
 
+type AutoSaveSave = (value: string, signal: AbortSignal) => Promise<void>;
+
 /**
  * useAutoSave —— 编辑器轻量自动保存。
  *
@@ -27,38 +29,59 @@ export function useAutoSave(
   value: string,
   options: {
     delayMs?: number;
-    onSave: (value: string) => Promise<void>;
+    /** Temporarily disable autosave while a workflow requires explicit confirmation. */
+    enabled?: boolean;
+    onSave: AutoSaveSave;
   },
 ): AutoSaveResult {
-  const { delayMs = 1500, onSave } = options;
+  const { delayMs = 1500, enabled = true, onSave } = options;
   const [status, setStatus] = useState<AutoSaveStatus>('idle');
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inflight = useRef<{ token: number } | null>(null);
+  const inflight = useRef<{ token: number; controller: AbortController } | null>(null);
   const token = useRef(0);
+  const onSaveRef = useRef(onSave);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
+
+  const invalidateInflight = useCallback(() => {
+    token.current += 1;
+    inflight.current?.controller.abort();
+    inflight.current = null;
+  }, []);
 
   const run = useCallback(
     async (snapshot: string) => {
-      const my = { token: ++token.current };
+      invalidateInflight();
+      const my = { token: ++token.current, controller: new AbortController() };
       inflight.current = my;
       setStatus('saving');
       try {
-        await onSave(snapshot);
+        await onSaveRef.current(snapshot, my.controller.signal);
         if (inflight.current?.token !== my.token) return;
         setStatus('saved');
         setLastSavedAt(new Date());
       } catch (err) {
         if (inflight.current?.token !== my.token) return;
+        if (my.controller.signal.aborted) return;
         // eslint-disable-next-line no-console
         console.warn('[useAutoSave] save failed', err);
         setStatus('error');
       }
     },
-    [onSave],
+    [invalidateInflight],
   );
 
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
+    invalidateInflight();
+    if (!enabled) {
+      timer.current = null;
+      setStatus('idle');
+      return;
+    }
     setStatus((s) => (s === 'idle' || s === 'saved' || s === 'error' ? 'pending' : s));
     timer.current = setTimeout(() => {
       timer.current = null;
@@ -66,16 +89,18 @@ export function useAutoSave(
     }, delayMs);
     return () => {
       if (timer.current) clearTimeout(timer.current);
+      invalidateInflight();
     };
-  }, [value, delayMs, run]);
+  }, [value, delayMs, enabled, invalidateInflight, run]);
 
   const saveNow = useCallback(async () => {
+    if (!enabled) return;
     if (timer.current) {
       clearTimeout(timer.current);
       timer.current = null;
     }
     await run(value);
-  }, [run, value]);
+  }, [enabled, run, value]);
 
   return { status, lastSavedAt, saveNow };
 }

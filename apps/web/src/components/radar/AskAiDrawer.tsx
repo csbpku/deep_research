@@ -18,7 +18,6 @@ import {
   ExternalLink,
   FileText,
   Lightbulb,
-  MessageSquare,
   Send,
   Sparkles,
   X,
@@ -30,7 +29,6 @@ import {
   SheetContent,
   SheetHeader,
 } from '@/components/ui/sheet';
-import { CommentSection } from '@/components/CommentSection';
 import MarkdownContent from '@/components/MarkdownContent';
 
 interface ChatMessage {
@@ -79,14 +77,11 @@ interface Props {
   summaryUrl: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  initialTab?: 'team' | 'ai';
-  teamStatus?: string;
-  currentUserId?: string | null;
-  currentUserRole?: 'member' | 'admin' | null;
   contextExcerpt?: string | null;
 }
 
 const MAX_READING_CHARS = 18_000;
+const CHAT_MESSAGE_LIMIT = 4000;
 
 async function createAndLoadSession(summaryId: string): Promise<ChatSession> {
   const createRes = await fetch('/api/chat/sessions', {
@@ -114,13 +109,8 @@ export function AskAiDrawer({
   summaryUrl,
   open,
   onOpenChange,
-  initialTab = 'ai',
-  teamStatus = 'published',
-  currentUserId = null,
-  currentUserRole = null,
   contextExcerpt = null,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<'team' | 'ai'>(initialTab);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -139,10 +129,6 @@ export function AskAiDrawer({
     : readingContent;
 
   useEffect(() => {
-    if (open) setActiveTab(initialTab);
-  }, [open, initialTab]);
-
-  useEffect(() => {
     if (open) setContextExpanded(false);
   }, [open, summaryId]);
 
@@ -159,7 +145,7 @@ export function AskAiDrawer({
   }, [sending]);
 
   useEffect(() => {
-    if (!open || !summaryId || activeTab !== 'ai') return;
+    if (!open || !summaryId) return;
     if (!loadRef.current || loadRef.current.summaryId !== summaryId) {
       loadRef.current = { summaryId, promise: createAndLoadSession(summaryId) };
     }
@@ -184,7 +170,7 @@ export function AskAiDrawer({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, open, summaryId, retryCount]);
+  }, [open, summaryId, retryCount]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -206,6 +192,10 @@ export function AskAiDrawer({
   async function sendMessage(content: string, anchor?: { quote: string; startOffset: number; endOffset: number } | null) {
     const trimmed = content.trim();
     if (!trimmed || !session || sending) return;
+    if (trimmed.length > CHAT_MESSAGE_LIMIT) {
+      setErr(`提问最多 ${CHAT_MESSAGE_LIMIT} 字`);
+      return;
+    }
     setSending(true);
     setErr(null);
     const optimisticUserMsg: ChatMessage = {
@@ -235,8 +225,14 @@ export function AskAiDrawer({
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.message ?? '发送失败');
+        const body = await res.json().catch(() => ({})) as {
+          message?: string;
+          details?: { fieldErrors?: Record<string, string[]> };
+        };
+        const fieldError = body.details?.fieldErrors
+          ? Object.values(body.details.fieldErrors).flat()[0]
+          : undefined;
+        throw new Error(fieldError ?? body.message ?? '发送失败');
       }
       const reply = (await res.json()) as ChatMessage;
       setSession((prev) =>
@@ -270,7 +266,7 @@ export function AskAiDrawer({
         side="right"
         overlayClassName="bg-foreground/15 backdrop-blur-0"
         hideClose
-        className="gap-0 p-0 sm:max-w-none lg:left-1/2 lg:right-auto lg:w-[min(1120px,calc(100vw-32px))] lg:-translate-x-1/2 lg:flex-row"
+        className="gap-0 overflow-hidden p-0 sm:max-w-none lg:left-1/2 lg:right-auto lg:w-[min(1120px,calc(100vw-32px))] lg:-translate-x-1/2 lg:flex-row"
       >
         {/* Desktop reading pane: the article remains visible while discussing. */}
         <div className="hidden min-h-0 min-w-0 flex-1 flex-col bg-background lg:flex">
@@ -287,7 +283,7 @@ export function AskAiDrawer({
             </Button>
           </div>
           <article className="min-h-0 flex-1 overflow-y-auto px-6 py-7">
-            <h2 className="text-xl font-semibold leading-tight tracking-tight">{summaryTitle}</h2>
+              <h2 className="text-xl font-semibold leading-tight tracking-normal">{summaryTitle}</h2>
             <MarkdownContent
               content={visibleReadingContent || '暂无正文内容。'}
               className="mt-5 text-[15px] leading-8"
@@ -304,18 +300,18 @@ export function AskAiDrawer({
           </p>
         </div>
 
-        {/* Discussion pane: shared by team comments and AI conversation. */}
-        <div className="flex min-h-0 w-full flex-1 flex-col bg-card lg:w-[430px] lg:flex-none">
+        {/* AI pane. Team discussion is persistent below the radar article. */}
+        <div className="flex min-h-0 w-full flex-1 flex-col bg-card lg:w-[430px] lg:flex-none lg:border-l lg:border-border">
           {/* Header */}
           <SheetHeader className="flex-row items-center justify-between gap-3 pr-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-              <span
-                className="truncate text-sm font-medium"
-                title={summaryTitle}
-              >
-                {summaryTitle}
-              </span>
+              <Sparkles className="size-4 shrink-0 text-method-ai" aria-hidden />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">与 AI 讨论</div>
+                <div className="truncate text-[11px] text-muted-foreground" title={summaryTitle}>
+                  基于当前雷达条目
+                </div>
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <Button asChild variant="link" size="xs" className="h-auto p-0 text-method-ai lg:hidden">
@@ -336,37 +332,12 @@ export function AskAiDrawer({
             </div>
           </SheetHeader>
 
-          <div className="border-b border-border px-4 pt-2" role="tablist" aria-label="讨论类型">
-          <div className="inline-flex rounded-md border border-border bg-muted/50 p-0.5">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'team'}
-              className={`inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${activeTab === 'team' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-              onClick={() => setActiveTab('team')}
-            >
-              <MessageSquare className="size-3.5" />
-              团队讨论
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'ai'}
-              className={`inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${activeTab === 'ai' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-              onClick={() => setActiveTab('ai')}
-            >
-              <Sparkles className="size-3.5" />
-              与 AI 讨论
-            </button>
-          </div>
-          </div>
-
-        {/* Shared reading context: keep the article visible while composing either kind of discussion. */}
+        {/* Reading context stays visible while composing an AI question. */}
           {contextExcerpt ? (
             <div className="border-b border-border bg-accent/30 px-4 py-2.5 text-xs leading-relaxed text-muted-foreground lg:hidden">
             <div className="flex items-center justify-between gap-3">
               <span className="inline-flex min-w-0 items-center gap-1.5">
-                {activeTab === 'ai' ? <Sparkles className="size-3 shrink-0 text-method-ai" /> : <FileText className="size-3 shrink-0 text-muted-foreground" />}
+                <Sparkles className="size-3 shrink-0 text-method-ai" />
                 <span className="font-medium text-foreground">正文摘录</span>
               </span>
               <button
@@ -381,45 +352,20 @@ export function AskAiDrawer({
             <p className={`mt-1.5 whitespace-pre-wrap ${contextExpanded ? '' : 'line-clamp-3'}`}>
               {visibleReadingContent}
             </p>
-            {activeTab === 'ai' ? (
-              <p className="mt-1 text-[11px] text-muted-foreground/80">
-                AI 只基于原文、解读和摘要回答；资料不足会明确标注推断。
-              </p>
-            ) : (
-              <p className="mt-1 text-[11px] text-muted-foreground/80">
-                保持这段上下文可见，再写下团队判断或行动建议。
-              </p>
-            )}
-            </div>
-          ) : null}
-
-          {activeTab === 'team' ? (
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            {teamStatus === 'published' ? (
-              <CommentSection
-                targetType="summary"
-                targetId={summaryId}
-                currentUserId={currentUserId}
-                currentUserRole={currentUserRole}
-              />
-            ) : (
-              <div className="rounded-lg border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-                该候选尚未选入每日摘要，选入发布后可在此讨论。
-              </div>
-            )}
+            <p className="mt-1 text-[11px] text-muted-foreground/80">
+              AI 只基于原文、解读和摘要回答；资料不足会明确标注推断。
+            </p>
             </div>
           ) : null}
 
         {/* AI context state */}
-          {activeTab === 'ai' ? (
-            <div className="flex items-center gap-1.5 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
             <Sparkles className="size-3 text-method-ai" />
             <span>{session?.seedSnapshot.originalMarkdown ? 'AI 上下文：原文 + 解读 + 摘要' : 'AI 上下文：原文 + interpretation'}</span>
-            </div>
-          ) : null}
+          </div>
 
         {/* Suggestion chips */}
-          <div className={`${activeTab === 'team' ? 'hidden' : 'block'} border-b border-border px-4 py-3`}>
+          <div className="border-b border-border px-4 py-3">
           <div className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground">
             <Lightbulb className="size-3" />
             试试这些问题
@@ -442,7 +388,7 @@ export function AskAiDrawer({
           </div>
 
         {/* Messages */}
-          <div ref={messagesRef} className={`${activeTab === 'team' ? 'hidden' : 'flex'} flex-1 overflow-y-auto bg-card px-4 py-4`}>
+          <div ref={messagesRef} className="flex flex-1 flex-col overflow-y-auto bg-card px-4 py-4">
           {loading ? (
             <div className="py-4 text-center text-sm text-muted-foreground">加载会话中…</div>
           ) : err ? (
@@ -482,26 +428,31 @@ export function AskAiDrawer({
 
               {(session?.messages ?? []).map((m) =>
                 m.role === 'user' ? (
-                  <div key={m.id} className="mb-2 flex justify-end">
-                    <div className="max-w-[78%] rounded-2xl rounded-tl-md bg-muted px-3.5 py-2 text-sm whitespace-pre-wrap break-words">
-                      {m.content}
+                  <div key={m.id} className="mb-4 flex justify-end pl-8">
+                    <div className="max-w-[86%]">
+                      <div className="mb-1 text-right text-[11px] font-medium text-muted-foreground">你</div>
+                      <div className="rounded-2xl rounded-tr-md bg-primary px-3.5 py-2.5 text-sm leading-6 text-primary-foreground shadow-sm whitespace-pre-wrap break-words">
+                        {m.content}
+                      </div>
                     </div>
                   </div>
                 ) : (
-                  <div key={m.id} className="mb-3 flex gap-3">
+                  <div key={m.id} className="mb-5 flex gap-2.5 pr-3">
                     <div
                       aria-hidden
-                      className="flex size-7 shrink-0 items-center justify-center rounded-full bg-method-ai text-xs text-primary-foreground"
+                      className="mt-5 flex size-7 shrink-0 items-center justify-center rounded-full bg-method-ai text-xs text-primary-foreground shadow-sm"
                     >
                       <Sparkles className="size-3.5" />
                     </div>
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 max-w-[92%]">
                       <div className="mb-1 text-[11px] font-medium text-method-ai">AI 助手</div>
-                      <MarkdownContent
-                        content={m.content}
-                        compact
-                        className="text-sm leading-7"
-                      />
+                      <div className="rounded-2xl rounded-tl-md border border-border bg-muted/45 px-3.5 py-2.5">
+                        <MarkdownContent
+                          content={m.content || 'AI 没有生成有效回答，请重试。'}
+                          compact
+                          className="text-sm leading-7"
+                        />
+                      </div>
                       {m.latencyMs ? (
                         <div className="mt-1.5 text-[11px] text-muted-foreground">
                           {m.latencyMs < 1000
@@ -538,7 +489,7 @@ export function AskAiDrawer({
           </div>
 
         {/* Input */}
-          <div className={`${activeTab === 'team' ? 'hidden' : 'block'} border-t border-border bg-card p-3`}>
+          <div className="border-t border-border bg-card p-3">
           <div className="rounded-md border border-input focus-within:border-method-ai focus-within:ring-1 focus-within:ring-method-ai/40">
             <textarea
               ref={textareaRef}
@@ -548,10 +499,14 @@ export function AskAiDrawer({
               placeholder="提问… (⌘+Enter 发送)"
               aria-label="向 AI 提问"
               rows={2}
+              maxLength={CHAT_MESSAGE_LIMIT}
               disabled={!session || sending}
               className="w-full resize-none border-0 bg-transparent p-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <div className="flex justify-end px-1 pb-1">
+            <div className="flex items-center justify-between gap-2 px-1 pb-1">
+              <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                {input.length}/{CHAT_MESSAGE_LIMIT}
+              </span>
               <Button
                 type="button"
                 size="xs"

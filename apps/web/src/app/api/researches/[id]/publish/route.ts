@@ -2,14 +2,13 @@
 //
 // 契约源：
 //   - docs/contracts/state-machines.md §5: draft → published
-//   - 验收: 仅 owner 可发布；已发布报 409；审计失败时事务回滚
+//   - 验收: owner/admin 可发布；已发布报 409；审计失败时事务回滚
 //
 // 行为：校验 owner + draft 状态 → 写 publish audit + 更新 status
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { normalizedSha256, legacyBodySha256 } from '../../../../../lib/research-content-hash';
 import { prisma } from '../../../../../lib/db';
 import { apiHandler } from '../../../../../lib/api-handler';
 import { requireUser } from '../../../../../lib/auth/session';
@@ -48,7 +47,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       risks: true,
       tags: true,
       creationMethod: true,
-      originContentSha256: true,
+      reviewStatus: true,
     },
   });
 
@@ -60,11 +59,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
-  // 仅 owner 可发布
-  if (existing.authorId !== u.id) {
+  // owner / admin 可发布；发布动作统一经过摘要与事实审核门禁。
+  if (existing.authorId !== u.id && u.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
-      message: '只能发布自己的调研库',
+      message: '没有权限发布这份调研',
       requestId,
     });
   }
@@ -85,30 +84,33 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
-  let aiAssisted = false;
-  if (existing.creationMethod === 'ai_research') {
-    const originSha256 = existing.originContentSha256?.trim();
-    const currentNormalizedSha256 = normalizedSha256({
-      title: existing.title,
-      body: existing.body,
-      background: existing.background,
-      conclusion: existing.conclusion,
-      risks: existing.risks,
-      tags: existing.tags,
+  if (existing.reviewStatus === 'blocked') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '事实审核发现冲突，修订并重新审核后才能发布',
+      requestId,
     });
-    const unchanged = Boolean(originSha256) && (
-      currentNormalizedSha256 === originSha256
-      || legacyBodySha256(existing.body) === originSha256
-    );
-    if (!originSha256 || unchanged) {
-      return toApiErrorResponse({
-        code: ERROR_CODES.VALIDATION_FAILED,
-        message: 'AI 原稿必须由成员实际修改后才能发布',
-        requestId,
-      });
-    }
-    aiAssisted = true;
   }
+
+  const missingSummaryFields = [
+    !existing.background?.trim() ? '背景' : null,
+    !existing.conclusion?.trim() ? '结论' : null,
+    !existing.risks?.trim() ? '风险或待验证项' : null,
+  ].filter((field): field is string => Boolean(field));
+  if (missingSummaryFields.length > 0) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: `发布前必须填写研究摘要：${missingSummaryFields.join('、')}`,
+      requestId,
+      details: { missing: missingSummaryFields },
+    });
+  }
+
+  // AI-generated drafts may be published as-is after the author explicitly
+  // confirms publication. The review status remains the safety gate for
+  // factual conflicts; an artificial "must edit one field" requirement is
+  // not part of the publishing contract.
+  const aiAssisted = existing.creationMethod === 'ai_research';
 
   // $transaction: update status + audit —— 审计失败时正文修改整体回滚
   const result = await prisma.$transaction(async (tx) => {

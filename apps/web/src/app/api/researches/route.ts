@@ -23,6 +23,7 @@ import { log, withRequestId } from '../../../lib/log';
 import { CreateResearchInput, ResearchListQuery } from '../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
+import { researchListWhere } from '../../../lib/research-list-where';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
@@ -61,6 +62,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         creationMethod: true,
         aiAssisted: true,
         publishedAt: true,
+        featuredAt: true,
         createdAt: true,
         updatedAt: true,
         author: { select: { id: true, name: true, email: true } },
@@ -118,7 +120,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const [items, total] = await Promise.all([
     prisma.research.findMany({
       where,
-      orderBy: [{ publishedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+      orderBy: [
+        { featuredAt: { sort: 'desc', nulls: 'last' } },
+        { publishedAt: { sort: 'desc', nulls: 'last' } },
+        { createdAt: 'desc' },
+      ],
       skip: (page - 1) * limit,
       take: limit,
       select: {
@@ -135,6 +141,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         creationMethod: true,
         aiAssisted: true,
         publishedAt: true,
+        featuredAt: true,
         createdAt: true,
         updatedAt: true,
         author: { select: { id: true, name: true, email: true } },
@@ -158,6 +165,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       creationMethod: item.creationMethod,
       aiAssisted: item.aiAssisted,
       publishedAt: item.publishedAt?.toISOString() ?? null,
+      featuredAt: item.featuredAt?.toISOString() ?? null,
+      canEdit:
+        item.authorId === u.id ||
+        (u.role === 'admin' && item.status === RESEARCH_STATUS.PUBLISHED),
       createdAt: item.createdAt.toISOString(),
       updatedAt: item.updatedAt.toISOString(),
       author: { id: item.author.id, name: item.author.name },
@@ -168,32 +179,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     totalPages: Math.ceil(total / limit),
   });
 });
-
-/** 列表查询的安全过滤条件（独立导出便于单测）。 */
-export function researchListWhere(
-  scope: 'published' | 'draft',
-  userId: string,
-  type?: 'research' | 'knowledge',
-  query?: string,
-): Prisma.ResearchWhereInput {
-  return {
-    AND: [
-      ...(type ? [{ type: { equals: type as Prisma.EnumResearchTypeFilter['equals'] } }] : []),
-      scope === 'draft'
-        ? { authorId: userId, status: { equals: 'draft' as const } }
-        : { status: { equals: RESEARCH_STATUS.PUBLISHED as Prisma.EnumResearchStatusFilter['equals'] } },
-      ...(query
-        ? [{
-            OR: [
-              { title: { contains: query, mode: 'insensitive' as Prisma.QueryMode } },
-              { body: { contains: query, mode: 'insensitive' as Prisma.QueryMode } },
-              { tags: { has: query } },
-            ],
-          }]
-        : []),
-    ],
-  };
-}
 
 // ──────────────────────────────────────────────────────────────────────
 // Research → API response shape
@@ -213,6 +198,7 @@ function shapeResearch(r: {
   creationMethod: string;
   aiAssisted: boolean;
   publishedAt: Date | null;
+  featuredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   author: { id: string; name: string; email: string };
@@ -231,6 +217,7 @@ function shapeResearch(r: {
     creationMethod: r.creationMethod,
     aiAssisted: r.aiAssisted,
     publishedAt: r.publishedAt?.toISOString() ?? null,
+    featuredAt: r.featuredAt?.toISOString() ?? null,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
     author: { id: r.author.id, name: r.author.name },

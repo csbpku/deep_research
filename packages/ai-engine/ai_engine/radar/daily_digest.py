@@ -100,6 +100,7 @@ async def query_digest_candidates(
                     LEFT JOIN "radar_sources" rs ON rsr."sourceId" = rs.id
                     WHERE s."summaryDate" = %s::date
                       AND s."syncRunId" IS NOT NULL
+                      AND s."status" IN ('candidate', 'published')
                       AND s."distilledScore" IS NOT NULL
                       AND s."distilledTier" = ANY(%s)
                 )
@@ -567,7 +568,13 @@ async def _upsert_digest(
         ).fetchone()
     if row is None:
         raise RuntimeError("digest upsert returned no row")
-    return str(row[0])
+    # The shared pool uses psycopg's dict_row factory.  The INSERT already
+    # succeeded before this value is read, so using tuple-style row[0] here
+    # made successful digests look like failed pipeline stages (KeyError: 0).
+    # The shared server pool uses dict_row; standalone CLI pools use the
+    # default tuple row factory. Support both so a successful upsert is never
+    # misreported as a post-write pipeline failure.
+    return str(row["id"] if isinstance(row, dict) else row[0])
 
 
 async def generate_daily_digest(
@@ -680,6 +687,12 @@ async def generate_daily_digest(
 
 
 async def _main_async(args: argparse.Namespace) -> int:
+    # The server loads the project environment during boot, while the CLI is
+    # invoked directly. Load the same local .env so BRIEF/SMART_LLM and proxy
+    # base URLs are consistent in both paths.
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
     from psycopg_pool import AsyncConnectionPool
 
     dsn = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/deep_research")

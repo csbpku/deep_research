@@ -3,23 +3,25 @@
 // 调研库详情页 —— 按 type 分支显示研究报告 / 知识卡片布局。
 //
 // draft: 仅 owner 可见；显示「编辑」「发布」按钮
-// published: 全员可见；owner / admin 可编辑（W3 canEdit 由服务端计算）
+// published: 全员可见；owner 可编辑，admin 仅可编辑已发布内容
+// （W3 canEdit / canManageStatus 由服务端计算）
 //
-// type='research'（研究报告）：背景 → 正文 → 结论 → 风险 → research_sources 列表
+// type='research'（研究报告）：研究摘要 → 正文 → 参考文献由正文引用承担
 // type='knowledge'（知识卡片）：sourceComment 引用 → 短 body → 来源评论跳转
-// W9：评论改为右下浮按钮 + Sheet 抽屉；正文 SectionCard 减少（仅保留 tone 区分手感）。
+// W9：评论使用右侧 Sheet 抽屉；正文 SectionCard 减少（仅保留 tone 区分手感）。
 //
 // 布局：max-w-measure（760px）—— 中文长文的舒适量度。
 
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 
 import { CommentSection } from '@/components/CommentSection';
 import MarkdownContent from '@/components/MarkdownContent';
 import { EmptyState } from '@/components/EmptyState';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
+import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
 import { MetaItem, MetaRow } from '@/components/domain/MetaRow';
 import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -28,18 +30,15 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCurrentUser } from '@/lib/auth/client';
-import { resolveResearchSourceLink } from '@/lib/research-source-link';
+import { BackToSearchButton } from '@/components/domain/BackToSearchButton';
+import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
 import {
-  AlertTriangle,
   CalendarDays,
-  CheckCircle2,
-  ExternalLink,
   Info,
-  Link2,
   MessageSquare,
   Pencil,
+  Star,
   User,
-  Wand2,
 } from 'lucide-react';
 
 interface ResearchSourceItem {
@@ -74,10 +73,12 @@ interface ResearchDetail {
   creationMethod: string;
   aiAssisted: boolean;
   publishedAt: string | null;
+  featuredAt: string | null;
   createdAt: string;
   updatedAt: string;
   author: { id: string; name: string };
   canEdit: boolean;
+  canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
   sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
@@ -95,6 +96,9 @@ interface AuditEntry {
 export default function ResearchDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const me = useCurrentUser();
+  const [discussionOpen, setDiscussionOpen] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery<ResearchDetail>({
     queryKey: ['research', params.id],
@@ -137,6 +141,7 @@ export default function ResearchDetailPage() {
   const isLongResearch = data.type === 'research';
   const isKnowledge = data.type === 'knowledge';
   const isDraft = data.status === 'draft';
+  const isArchived = data.status === 'archived';
 
   return (
     <div className="mx-auto max-w-shell">
@@ -144,6 +149,7 @@ export default function ResearchDetailPage() {
       <div className="mb-5 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <nav className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <BackToSearchButton />
             <Link href="/researches" className="hover:text-foreground hover:underline">
               调研库
             </Link>
@@ -151,7 +157,7 @@ export default function ResearchDetailPage() {
             <span className="truncate">{data.title}</span>
           </nav>
 
-          <h1 className="text-2xl font-semibold leading-tight tracking-tight">{data.title}</h1>
+          <h1 className="text-2xl font-semibold leading-tight tracking-normal">{data.title}</h1>
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <span
@@ -164,13 +170,13 @@ export default function ResearchDetailPage() {
               {isLongResearch ? '研究报告' : '知识卡片'}
             </span>
             <StatusBadge kind="method" value={data.creationMethod} />
-            {data.aiAssisted && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-method-ai/40 px-2 py-0.5 text-xs text-method-ai">
-                <Wand2 className="size-3" />
-                AI 协助
+            {isDraft && <StatusBadge kind="research" value="draft" />}
+            {data.featuredAt && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                <Star className="size-3" />
+                精华
               </span>
             )}
-            {isDraft && <StatusBadge kind="research" value="draft" />}
           </div>
 
           <MetaRow className="mt-2">
@@ -187,9 +193,9 @@ export default function ResearchDetailPage() {
           </MetaRow>
         </div>
 
-        {data.canEdit ? (
+        {data.canEdit || data.canManageStatus ? (
           <div className="flex shrink-0 items-center gap-2">
-            {isDraft ? (
+            {isDraft && data.canEdit ? (
               <DeleteDraftButton
                 researchId={data.id}
                 title={data.title}
@@ -199,12 +205,26 @@ export default function ResearchDetailPage() {
                 }}
               />
             ) : null}
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/researches/${data.id}/edit`}>
-                <Pencil />
-                编辑
-              </Link>
-            </Button>
+            {!isDraft && data.canManageStatus && (
+              <ResearchStatusActionButton
+                researchId={data.id}
+                title={data.title}
+                status={isArchived ? 'archived' : 'published'}
+                onChanged={() => {
+                  queryClient.invalidateQueries({ queryKey: ['research', data.id] });
+                  queryClient.invalidateQueries({ queryKey: ['researches'] });
+                  router.refresh();
+                }}
+              />
+            )}
+            {data.canEdit && (
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/researches/${data.id}/edit`}>
+                  <Pencil />
+                  编辑
+                </Link>
+              </Button>
+            )}
           </div>
         ) : null}
       </div>
@@ -219,82 +239,23 @@ export default function ResearchDetailPage() {
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,760px)_240px] lg:items-start">
       <div className="min-w-0 space-y-5">
-        {/* ── 长文布局：background → body → conclusion → risks → research_sources ── */}
+        {/* ── 长文布局：研究摘要 → 正文；参考文献由正文引用承担 ── */}
         {isLongResearch && (
           <>
-            {data.background && (
-              <SectionCard title="背景" tone="info" icon={Info}>
-                <MarkdownContent content={data.background} compact={data.aiAssisted} />
+            {(data.background || data.conclusion || data.risks) && (
+              <SectionCard title="研究摘要" tone="default" icon={Info}>
+                <div className="space-y-3">
+                  {data.background && <div className="rounded-md border border-status-running-fg/25 bg-status-running-bg/35 p-3"><h2 className="mb-1 text-sm font-medium text-status-running-fg">背景</h2><MarkdownContent content={data.background} compact={data.aiAssisted} /></div>}
+                  {data.conclusion && <div className="rounded-md border border-status-succeeded-fg/25 bg-status-succeeded-bg/35 p-3"><h2 className="mb-1 text-sm font-medium text-status-succeeded-fg">结论</h2><MarkdownContent content={data.conclusion} compact={data.aiAssisted} /></div>}
+                  {data.risks && <div className="rounded-md border border-status-failed-fg/25 bg-status-failed-bg/35 p-3"><h2 className="mb-1 text-sm font-medium text-status-failed-fg">风险与待验证项</h2><MarkdownContent content={data.risks} compact={data.aiAssisted} /></div>}
+                </div>
               </SectionCard>
             )}
 
             <article className="py-2 sm:py-3" aria-label="正文">
-              <MarkdownContent content={data.body} compact={data.aiAssisted} />
+              <MarkdownContent content={cleanResearchMarkdown(data.body)} compact={data.aiAssisted} />
             </article>
 
-            {data.conclusion && (
-              <SectionCard title="结论" tone="success" icon={CheckCircle2}>
-                <MarkdownContent content={data.conclusion} compact={data.aiAssisted} />
-              </SectionCard>
-            )}
-
-            {data.risks && (
-              <SectionCard title="风险" tone="destructive" icon={AlertTriangle}>
-                <MarkdownContent content={data.risks} compact={data.aiAssisted} />
-              </SectionCard>
-            )}
-
-            {/* research_sources：仅已发布长文挂载（draft 不展示） */}
-            {data.status === 'published' && data.researchSources.length > 0 && (
-              <section className="mt-6 border-t border-border pt-4">
-                <h2 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  <Link2 className="size-3.5" />
-                  挂载资料 · {data.researchSources.length}
-                </h2>
-                <ul className="list-none divide-y divide-border p-0">
-                  {data.researchSources.map((s) => {
-                    const ref = (s.sourceRef ?? {}) as { type?: string; value?: string };
-                    const sourceLink = resolveResearchSourceLink(ref, s.canonicalKey);
-                    const label = s.title ?? ref.value ?? s.canonicalKey;
-                    return (
-                      <li key={s.id} className="py-2.5 text-sm">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded bg-accent px-1.5 py-0.5 font-mono text-[10px] font-medium text-accent-foreground">
-                            {ref.type ?? 'unknown'}
-                          </span>
-                          {sourceLink?.external ? (
-                            <a
-                              href={sourceLink.href}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              className="inline-flex items-center gap-1 font-medium text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary"
-                            >
-                              {label}
-                              <ExternalLink className="size-3" />
-                            </a>
-                          ) : sourceLink ? (
-                            <Link
-                              href={sourceLink.href}
-                              className="font-medium text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary"
-                            >
-                              {label}
-                            </Link>
-                          ) : (
-                            <span className="font-medium">{label}</span>
-                          )}
-                        </div>
-                        {s.description && (
-                          <p className="mt-1 text-xs text-muted-foreground">{s.description}</p>
-                        )}
-                        <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
-                          {s.canonicalKey}
-                        </p>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
           </>
         )}
 
@@ -357,8 +318,8 @@ export default function ResearchDetailPage() {
         {data.status === 'published' ? (
           <section className="rounded-lg border border-border bg-card p-4">
             <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">团队讨论</h2>
-            <p className="text-xs leading-relaxed text-muted-foreground">在右下角打开讨论抽屉，查看评论并继续协作。</p>
-            <Button type="button" variant="outline" size="sm" className="mt-3 w-full" onClick={() => document.querySelector<HTMLButtonElement>('[aria-label^="打开讨论"]')?.click()}>
+            <p className="text-xs leading-relaxed text-muted-foreground">发布后可在这里查看评论、回复并继续协作。</p>
+            <Button type="button" variant="outline" size="sm" className="mt-3 w-full" onClick={() => setDiscussionOpen(true)}>
               <MessageSquare className="size-3.5" />
               打开讨论
             </Button>
@@ -382,8 +343,16 @@ export default function ResearchDetailPage() {
                     : a.action === 'edit'
                       ? '编辑'
                       : a.action === 'publish'
-                        ? '发布'
-                        : a.action}
+                    ? '发布'
+                    : a.action === 'archive'
+                      ? '归档'
+                      : a.action === 'restore'
+                        ? '恢复'
+                        : a.action === 'feature'
+                          ? '设为精华'
+                          : a.action === 'unfeature'
+                            ? '取消精华'
+                    : a.action}
                 </span>{' '}
                 by {a.editor.name} at {new Date(a.createdAt).toLocaleString('zh-CN')}
                 {a.diff &&
@@ -397,57 +366,19 @@ export default function ResearchDetailPage() {
         </details>
       )}
 
-      {/* 评论：右下浮按钮 + Sheet 抽屉（仅已发布可见） */}
-      {data.status === 'published' ? <CommentsFab researchId={data.id} commentCount={data.commentCount ?? 0} /> : null}
+      {data.status === 'published' ? (
+        <Sheet open={discussionOpen} onOpenChange={setDiscussionOpen}>
+          <SheetContent side="right" className="flex w-full max-w-md flex-col gap-0 p-0 sm:max-w-md">
+            <SheetTitle className="flex h-topbar items-center gap-2 border-b border-border px-4 text-sm font-semibold">
+              <MessageSquare className="size-4 text-muted-foreground" />
+              讨论 · {data.commentCount ?? 0} 条
+            </SheetTitle>
+            <div className="flex-1 overflow-y-auto px-4 py-4">
+              <CommentSection targetType="research" targetId={data.id} currentUserId={me.data?.id ?? null} currentUserRole={me.data?.role ?? null} content={data.body} />
+            </div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </div>
-  );
-}
-
-function CommentsFab({
-  researchId,
-  commentCount,
-}: {
-  researchId: string;
-  commentCount: number;
-}) {
-  const me = useCurrentUser();
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button
-        type="button"
-        size="sm"
-        onClick={() => setOpen(true)}
-        aria-label={`打开讨论 · ${commentCount} 条`}
-        className="fixed bottom-5 right-5 z-30 h-11 gap-2 rounded-full px-4 shadow-lg"
-      >
-        <MessageSquare className="size-4" />
-        讨论
-        {commentCount > 0 ? (
-          <span className="rounded-full bg-primary-foreground/20 px-1.5 font-mono text-[11px] tabular-nums">
-            {commentCount}
-          </span>
-        ) : null}
-      </Button>
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent
-          side="right"
-          className="flex w-full max-w-md flex-col gap-0 p-0 sm:max-w-md"
-        >
-          <SheetTitle className="flex h-topbar items-center gap-2 border-b border-border px-4 text-sm font-semibold">
-            <MessageSquare className="size-4 text-muted-foreground" />
-            讨论 · {commentCount} 条
-          </SheetTitle>
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            <CommentSection
-              targetType="research"
-              targetId={researchId}
-              currentUserId={me.data?.id ?? null}
-              currentUserRole={me.data?.role ?? null}
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
-    </>
   );
 }

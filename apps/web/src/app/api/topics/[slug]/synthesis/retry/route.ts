@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server';
 
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
+import { findTopicBySlugOrId } from '@/lib/topics';
 import { requireAdmin } from '@/lib/auth/session';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
@@ -17,7 +18,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ slug: string }>
   if (!slug) {
     return toApiErrorResponse({ code: ERROR_CODES.VALIDATION_FAILED, message: 'slug 必填', requestId });
   }
-  const topic = await prisma.topic.findUnique({ where: { slug }, select: { id: true, candidateCount: true } });
+  const topic = await findTopicBySlugOrId(slug, { id: true, candidateCount: true });
   if (!topic) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: 'topic 不存在', requestId });
   }

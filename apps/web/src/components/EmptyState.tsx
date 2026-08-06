@@ -24,7 +24,7 @@ export function EmptyState({
         className,
       )}
     >
-      <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+      <h2 className="text-base font-semibold tracking-normal">{title}</h2>
       {description ? (
         <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-muted-foreground">
           {description}

@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field
 
 from ai_engine.adapters.base import ResearchEngineAdapter
@@ -61,6 +70,7 @@ class RadarRunView(BaseModel):
     costUsd: float
     elapsedMs: int | None
     errorCode: str | None
+    errorMessage: str | None
     createdAt: str
     completedAt: str | None
     candidateCount: int
@@ -124,6 +134,20 @@ async def _has_active_run(pool: Any) -> bool:
     Admin console surfaces their age separately.
     """
     async with pool.connection() as conn:
+        # radar_sync_runs is a batch table, not a DbJobStore queue, so the
+        # generic worker reaper cannot recover rows left behind by a process
+        # restart. Reap only rows with no lease/heartbeat and a conservative
+        # age threshold before enforcing the active-run guard.
+        await conn.execute(
+            'UPDATE "radar_sync_runs" SET "status" = \'failed\', '
+            '"errorCode" = \'STALE_RUN_REAPED\', '
+            '"errorMessage" = \'reaped stale running radar run\', '
+            '"completedAt" = now(), "elapsedMs" = '
+            '(EXTRACT(EPOCH FROM (now() - "createdAt")) * 1000)::int '
+            'WHERE "status" = \'running\' '
+            'AND "heartbeatAt" IS NULL AND "leaseExpiresAt" IS NULL '
+            'AND "createdAt" < now() - interval \'15 minutes\''
+        )
         row = await (
             await conn.execute(
                 'SELECT 1 FROM "radar_sync_runs" '
@@ -342,15 +366,27 @@ async def list_radar_runs(
     pool: Annotated[Any, Depends(_pool)],
     _token: Annotated[None, Depends(_require_internal_token)] = None,
     limit: int = 50,
+    run_date: date | None = Query(default=None, alias="date"),
 ) -> list[RadarRunView]:
     bounded_limit = min(max(limit, 1), 200)
+    params: list[Any] = []
+    where_clause = ""
+    if run_date is not None:
+        start_at = datetime.combine(
+            run_date,
+            datetime.min.time(),
+            tzinfo=ZoneInfo("Asia/Shanghai"),
+        )
+        where_clause = 'WHERE r."createdAt" >= %s AND r."createdAt" < %s '
+        params.extend((start_at, start_at + timedelta(days=1)))
+    params.append(bounded_limit)
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
                 'SELECT r."id", r."sourceId", s."name" AS "sourceName", '
                 's."sourceType", r."triggeredBy", r."status", r."totalFetched", '
                 'r."totalNew", r."totalSkipped", r."totalFailed", r."tokenInputTotal", '
-                'r."tokenOutputTotal", r."costUsd", r."elapsedMs", r."errorCode", '
+                'r."tokenOutputTotal", r."costUsd", r."elapsedMs", r."errorCode", r."errorMessage", '
                 'r."createdAt", r."completedAt", '
                 'COUNT(c."id")::int AS "candidateCount", '
                 'COUNT(c."id") FILTER (WHERE c."distilledScore" IS NOT NULL)::int AS "scoredCount", '
@@ -360,9 +396,10 @@ async def list_radar_runs(
                 'FROM "radar_sync_runs" r '
                 'JOIN "radar_sources" s ON s."id" = r."sourceId" '
                 'LEFT JOIN "summaries" c ON c."syncRunId" = r."id" '
+                f"{where_clause}"
                 'GROUP BY r."id", s."name", s."sourceType" '
                 'ORDER BY r."createdAt" DESC LIMIT %s',
-                (bounded_limit,),
+                tuple(params),
             )
         ).fetchall()
     result: list[RadarRunView] = []

@@ -1,14 +1,15 @@
 // BFF handler: GET    /api/researches/[id] — 详情
 //               PUT    /api/researches/[id] — 编辑（含 published 修改审计）
-//               DELETE /api/researches/[id] — owner 永久删除 draft
+//               DELETE /api/researches/[id] — owner 永久删除自己的 draft
 //
 // 契约源：
 //   - docs/contracts/state-machines.md §5: ResearchStatus
-//   - 验收: draft 仅 owner 可见; published 全员可见
+//   - 验收: draft 仅 owner/admin 可见; published 全员可见
 //   - 修改已发布内容 → $transaction 写 research_audit(diff)
 //
 // GET:  返回完整 research（含 audit history）
-// PUT:  仅 owner 可改；published 时写 audit；任何失败整事务回滚
+// PUT:  owner 可改自己的内容；admin 仅可改已发布内容；published 时写 audit；
+//       任何失败整事务回滚
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -22,6 +23,7 @@ import { log, withRequestId } from '../../../../lib/log';
 import { UpdateResearchInput } from '../../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
+import { resolveResearchSourceLink } from '../../../../lib/research-source-link';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
@@ -39,8 +41,15 @@ const researchSelect = {
   creationMethod: true,
   aiAssisted: true,
   originContentSha256: true,
+  reviewStatus: true,
+  reviewAttempts: true,
+  reviewSummary: true,
+  reviewClaims: true,
+  reviewedAt: true,
+  reviewDetails: true,
   sourceCommentId: true,
   publishedAt: true,
+  featuredAt: true,
   createdAt: true,
   updatedAt: true,
   author: { select: { id: true, name: true, email: true } },
@@ -77,9 +86,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  // 权限检查：draft 仅 owner 可见；published 全员可见
-  if (research.status !== RESEARCH_STATUS.PUBLISHED && research.authorId !== u.id) {
-    // 返回 404，不泄露草稿存在性
+  // 权限检查：published 全员可见；draft/archived 仅 owner 与 admin 可见。
+  // Admin 可查看草稿与归档内容，但不能编辑他人草稿；非 owner 成员仍返回
+  // 404，不泄露草稿存在性。
+  if (research.status !== RESEARCH_STATUS.PUBLISHED && research.authorId !== u.id && u.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '调研库不存在',
@@ -87,12 +97,16 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  // 服务端 canEdit 计算（W4 review 修订：避免前端硬编码 isOwner = true）。
-  // 仅 draft/published/archived 三种状态下：
-  //   - author === me → canEdit = true
-  //   - admin → canEdit = true（admin 可代编辑走 publish action 校验）
-  // 注：admin 实际能不能改取决于 publish handler；前端仅做显隐。
-  const canEdit = research.authorId === u.id || u.role === 'admin';
+  // 服务端权限计算（避免前端硬编码 isOwner = true）：
+  //   - canEdit：owner 可编辑自己的内容；admin 仅可编辑已发布内容
+  //   - canManageStatus：owner 可归档/恢复自己的内容；admin 可管理
+  //     published/archived，但不能管理他人的 draft
+  const canEdit =
+    research.authorId === u.id ||
+    (u.role === 'admin' && research.status === RESEARCH_STATUS.PUBLISHED);
+  const canManageStatus =
+    research.authorId === u.id ||
+    (u.role === 'admin' && research.status !== RESEARCH_STATUS.DRAFT);
 
   // 读取审计历史
   const audits = await prisma.researchAudit.findMany({
@@ -102,13 +116,14 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       id: true,
       action: true,
       diff: true,
+      prevSnapshot: true,
       createdAt: true,
       editor: { select: { id: true, name: true, email: true } },
     },
   });
 
-  // 长文（type='research'，已发布）→ 挂载 research_sources
-  // 草稿不挂载（避免泄漏未发布调研的引用；架构 §十二）。
+  // 长文（type='research'）挂载来源；草稿仅对 owner 可见，因此可用于
+  // 编辑器中的证据核对和后续 Reviewer 重审。
   // 精华（type='knowledge'）→ 不挂 research_sources，只挂 sourceComment 跳转。
   let researchSources: Array<{
     id: string;
@@ -128,7 +143,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     targetTitle: string | null;
   } | null = null;
 
-  if (research.status === RESEARCH_STATUS.PUBLISHED && research.type === 'research') {
+  if (research.type === 'research') {
     const sources = await prisma.researchSource.findMany({
       where: { researchId: research.id },
       orderBy: { createdAt: 'asc' },
@@ -140,7 +155,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
         description: true,
       },
     });
-    researchSources = sources;
+    researchSources = sources.filter((source) => {
+      const ref = (source.sourceRef ?? {}) as { type?: string; value?: string };
+      return resolveResearchSourceLink(ref, source.canonicalKey) !== null;
+    });
   }
 
   if (research.sourceCommentId) {
@@ -177,6 +195,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   return NextResponse.json({
     ...shapeResearchDetail(research),
     canEdit,
+    canManageStatus,
     researchSources: researchSources.map((s) => ({
       id: s.id,
       sourceRef: s.sourceRef,
@@ -189,6 +208,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       id: a.id,
       action: a.action,
       diff: a.diff,
+      prevSnapshot: a.prevSnapshot,
       createdAt: a.createdAt.toISOString(),
       editor: { id: a.editor.id, name: a.editor.name },
     })),
@@ -201,6 +221,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
+  const saveMode = req.headers.get('x-save-mode') === 'auto' ? 'auto' : 'manual';
   if (u instanceof NextResponse) return u;
 
   const parsed = IdParam.safeParse(await ctx.params);
@@ -230,11 +251,14 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  // 仅 owner 可编辑
-  if (existing.authorId !== u.id) {
+  // owner 可编辑自己的草稿/已发布/已归档；admin 只能代编辑已发布内容
+  if (
+    existing.authorId !== u.id &&
+    !(u.role === 'admin' && existing.status === RESEARCH_STATUS.PUBLISHED)
+  ) {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
-      message: '只能编辑自己的调研库',
+      message: '没有权限编辑这份调研',
       requestId,
     });
   }
@@ -302,18 +326,49 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  // draft 状态：直接更新，不需要审计
-  const updated = await prisma.research.update({
-    where: { id: parsed.data.id },
-    data: {
-      ...(body.title !== undefined ? { title: body.title } : {}),
-      ...(body.body !== undefined ? { body: body.body } : {}),
-      background: body.background !== undefined ? body.background : undefined,
-      conclusion: body.conclusion !== undefined ? body.conclusion : undefined,
-      risks: body.risks !== undefined ? body.risks : undefined,
-      ...(body.tags !== undefined ? { tags: body.tags } : {}),
-    },
-    select: researchSelect,
+  // draft 状态：自动保存不创建版本；显式保存保留可恢复快照。
+  const prevSnapshot = {
+    title: existing.title,
+    body: existing.body,
+    background: existing.background,
+    conclusion: existing.conclusion,
+    risks: existing.risks,
+    tags: existing.tags,
+  };
+  const nextSnapshot = {
+    title: body.title ?? existing.title,
+    body: body.body ?? existing.body,
+    background: body.background !== undefined ? body.background : existing.background,
+    conclusion: body.conclusion !== undefined ? body.conclusion : existing.conclusion,
+    risks: body.risks !== undefined ? body.risks : existing.risks,
+    tags: body.tags ?? existing.tags,
+  };
+  const diff = computeDiff(prevSnapshot, nextSnapshot);
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await tx.research.update({
+      where: { id: parsed.data.id },
+      data: {
+        ...(body.title !== undefined ? { title: body.title } : {}),
+        ...(body.body !== undefined ? { body: body.body } : {}),
+        background: body.background !== undefined ? body.background : undefined,
+        conclusion: body.conclusion !== undefined ? body.conclusion : undefined,
+        risks: body.risks !== undefined ? body.risks : undefined,
+        ...(body.tags !== undefined ? { tags: body.tags } : {}),
+      },
+      select: researchSelect,
+    });
+    if (saveMode === 'manual' && Object.keys(diff).length > 0) {
+      await tx.researchAudit.create({
+        data: {
+          researchId: parsed.data.id,
+          editorId: u.id,
+          action: 'edit',
+          diff: diff as unknown as Prisma.InputJsonValue,
+          prevSnapshot: prevSnapshot as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
+    return next;
   });
 
   log.info('research.edit', 'draft updated', {
@@ -327,6 +382,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     commentCount: updated._count.comments,
   });
 });
+
+// ─── POST /api/researches/[id]/versions/[versionId]/restore ─────────
+
 
 // ─── DELETE /api/researches/[id] ──────────────────────────────────────
 
@@ -355,8 +413,23 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
     },
   });
 
-  if (!existing || existing.authorId !== u.id) {
+  if (!existing) {
     return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '草稿不存在',
+      requestId,
+    });
+  }
+  if (existing.authorId !== u.id) {
+    if (u.role === 'admin') {
+      return toApiErrorResponse({
+        code: ERROR_CODES.PERMISSION_DENIED,
+        message: 'admin 不能删除他人的草稿',
+        requestId,
+      });
+    }
+    return toApiErrorResponse({
+      // Do not reveal that another user's private draft exists.
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '草稿不存在',
       requestId,
@@ -407,7 +480,14 @@ function shapeResearchDetail(r: {
   creationMethod: string;
   aiAssisted: boolean;
   originContentSha256: string | null;
+  reviewStatus: string | null;
+  reviewAttempts: number;
+  reviewSummary: unknown;
+  reviewClaims: unknown;
+  reviewedAt: Date | null;
+  reviewDetails: unknown;
   publishedAt: Date | null;
+  featuredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   author: { id: string; name: string; email: string };
@@ -425,7 +505,14 @@ function shapeResearchDetail(r: {
     authorId: r.authorId,
     creationMethod: r.creationMethod,
     aiAssisted: r.aiAssisted,
+    reviewStatus: r.reviewStatus,
+    reviewAttempts: r.reviewAttempts,
+    reviewSummary: r.reviewSummary,
+    reviewClaims: r.reviewClaims,
+    reviewedAt: r.reviewedAt?.toISOString() ?? null,
+    reviewDetails: r.reviewDetails,
     publishedAt: r.publishedAt?.toISOString() ?? null,
+    featuredAt: r.featuredAt?.toISOString() ?? null,
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt.toISOString(),
     author: { id: r.author.id, name: r.author.name },

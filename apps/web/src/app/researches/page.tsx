@@ -20,7 +20,16 @@ import { Suspense, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownNarrowWide, ArrowUpDown, Plus, Search as SearchIcon, Wand2 } from 'lucide-react';
+import {
+  ArrowDownNarrowWide,
+  ArrowUpDown,
+  ChevronDown,
+  FilePlus2,
+  Rocket,
+  Search as SearchIcon,
+  Star,
+  Upload,
+} from 'lucide-react';
 
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
@@ -28,6 +37,12 @@ import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TagChip, TagList } from '@/components/domain/TagChip';
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -40,6 +55,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
+import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
 import { cn } from '@/lib/utils';
 import {
   parseResearchTab,
@@ -58,8 +74,10 @@ interface ResearchItem {
   creationMethod: string;
   aiAssisted: boolean;
   publishedAt: string | null;
+  featuredAt: string | null;
   createdAt: string;
   author: { id: string; name: string };
+  canEdit?: boolean;
 }
 
 interface ListResponse {
@@ -70,11 +88,12 @@ interface ListResponse {
   totalPages: number;
 }
 
-const TABS: Array<{ value: ResearchTab; label: string }> = [
+const TABS = [
   { value: 'research', label: '研究报告' },
   { value: 'knowledge', label: '知识卡片' },
+  { value: 'mine', label: '我的内容' },
   { value: 'draft', label: '我的草稿' },
-];
+] as const;
 
 const SORTS = [
   { key: 'newest', label: '最新发布' },
@@ -112,11 +131,11 @@ function ResearchesContent() {
     queryKey: ['researches', tab, page],
     queryFn: async () => {
       const params = new URLSearchParams({
-        scope: tab === 'draft' ? 'draft' : 'published',
+        scope: tab === 'draft' ? 'draft' : tab === 'mine' ? 'mine' : 'published',
         page: String(page),
         limit: '20',
       });
-      if (tab !== 'draft') params.set('type', tab);
+      if (tab !== 'draft' && tab !== 'mine') params.set('type', tab);
       const res = await fetch(`/api/researches?${params}`);
       if (!res.ok) throw new Error('Failed to fetch');
       return res.json();
@@ -158,12 +177,36 @@ function ResearchesContent() {
         title="调研库"
         description="完整研究报告与讨论知识卡片的长期归档。"
         actions={
-          <Button asChild size="sm">
-            <Link href="/researches/new">
-              <Plus />
-              新建
-            </Link>
-          </Button>
+          <>
+            <Button asChild size="sm">
+              <Link href="/ai-research">
+                <Rocket />
+                开始 AI 调研
+              </Link>
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  添加内容
+                  <ChevronDown />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem asChild>
+                  <Link href="/researches/new#blank">
+                    <FilePlus2 />
+                    空白草稿
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/researches/import">
+                    <Upload />
+                    导入文件
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
         }
       />
 
@@ -236,9 +279,29 @@ function ResearchesContent() {
 
         {data && data.items.length === 0 && (
           <EmptyState
-            title={tab === 'draft' ? '暂无草稿' : `暂无${tab === 'research' ? '研究报告' : '知识卡片'}`}
+            title={
+              tab === 'draft'
+                ? '暂无草稿'
+                : tab === 'mine'
+                  ? '暂无我的内容'
+                  : `暂无${tab === 'research' ? '研究报告' : '知识卡片'}`
+            }
             description={
-              tab === 'draft' ? '新建或由 AI 调研产出的草稿会出现在这里。' : '发布后的内容会出现在这里。'
+              tab === 'draft'
+                ? 'AI 调研生成的草稿会出现在这里。'
+                : tab === 'mine'
+                  ? '你发布或归档的调研会出现在这里。'
+                  : '发布后的内容会出现在这里。'
+            }
+            action={
+              tab === 'draft' ? (
+                <Button asChild size="sm">
+                  <Link href="/ai-research">
+                    <Rocket />
+                    开始 AI 调研
+                  </Link>
+                </Button>
+              ) : undefined
             }
           />
         )}
@@ -260,13 +323,13 @@ function ResearchesContent() {
                 <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                   <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                     <StatusBadge kind="method" value={item.creationMethod} />
-                    {item.aiAssisted && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-method-ai/40 px-2 py-0.5 text-xs text-method-ai">
-                        <Wand2 className="size-3" />
-                        AI 协助
+                    {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
+                    {item.featuredAt && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                        <Star className="size-3" />
+                        精华
                       </span>
                     )}
-                    {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
                   </div>
                   {tab === 'draft' ? (
                     <DeleteDraftButton
@@ -276,6 +339,15 @@ function ResearchesContent() {
                       className="ml-auto shrink-0"
                       onDeleted={() => queryClient.invalidateQueries({ queryKey: ['researches', 'draft'] })}
                     />
+                  ) : item.canEdit && item.status !== 'draft' ? (
+                    <ResearchStatusActionButton
+                      researchId={item.id}
+                      title={item.title}
+                      status={item.status === 'archived' ? 'archived' : 'published'}
+                      compact
+                      className="ml-auto shrink-0"
+                      onChanged={() => queryClient.invalidateQueries({ queryKey: ['researches'] })}
+                    />
                   ) : null}
                 </div>
 
@@ -283,7 +355,7 @@ function ResearchesContent() {
                   href={`/researches/${item.id}`}
                   className="block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <h2 className="text-sm font-semibold leading-snug">{item.title}</h2>
+                  <h2 className="text-sm font-semibold leading-snug tracking-normal">{item.title}</h2>
 
                   <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
                     {excerpt(item.body, 200)}

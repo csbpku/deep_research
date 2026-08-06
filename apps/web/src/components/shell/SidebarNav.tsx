@@ -58,10 +58,12 @@ const ICONS: Record<NavItemIconKey, LucideIcon> = {
 export function SidebarNav({
   items,
   onNavigate,
+  collapsed = false,
 }: {
   items: NavItem[];
   /** 移动端 Sheet 里点击后收起 */
   onNavigate?: () => void;
+  collapsed?: boolean;
 }) {
   const pathname = usePathname() ?? '/';
 
@@ -79,7 +81,8 @@ export function SidebarNav({
             aria-current={active ? 'page' : undefined}
             className={cn(
               // 左侧 2px 高亮条：给 active 状态更强的视觉权重
-              'group relative flex items-center gap-2.5 rounded-md py-2 pl-3.5 pr-2.5 text-[13px] transition-colors duration-150',
+              'group relative flex items-center rounded-md py-2 text-[13px] transition-colors duration-150',
+              collapsed ? 'justify-center px-2' : 'gap-2.5 pl-3.5 pr-2.5',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors before:duration-150',
               active
@@ -88,8 +91,9 @@ export function SidebarNav({
             )}
           >
             <Icon className="size-4 shrink-0" />
-            <span className="truncate">{item.label}</span>
-            {pill && (
+            {!collapsed && <span className="truncate">{item.label}</span>}
+            {collapsed ? <span className="sr-only">{item.label}</span> : null}
+            {pill && !collapsed && (
               <span
                 className={cn(
                   'ml-auto rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide',

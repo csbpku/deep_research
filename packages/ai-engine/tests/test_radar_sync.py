@@ -459,6 +459,37 @@ async def test_candidate_safe_fetch_failure_makes_run_partial() -> None:
     assert "SafeFetchError/URL_FETCH_BLOCKED@example.com x1" in str(finish[10])
 
 
+async def test_candidate_transport_failure_opens_host_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One unreachable host must not create one failure per candidate."""
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            _candidate("https://example.com/one"),
+            _candidate("https://example.com/two"),
+        ]
+
+    async def unavailable(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError("URL_FETCH_DNS", "dns failed", host="example.com")
+
+    monkeypatch.setattr(
+        "ai_engine.radar.sync_runner.RADAR_FETCH_RETRY_BACKOFF_SECONDS", 0.0,
+    )
+    result = await run_radar_sync(
+        pool,
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=unavailable,
+    )
+
+    run = result.runs[0]
+    assert run.total_failed == 1
+    assert run.total_skipped == 1
+    assert run.status == "partial"
+
+
 async def test_source_transport_failure_retries_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

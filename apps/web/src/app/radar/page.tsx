@@ -4,7 +4,7 @@
 //
 // 功能：
 //  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
-//  - 过滤器：sourceType（GitHub / arXiv / RSS）、status（候选 / 已发布 / 已忽略）
+//  - 过滤器：sourceType（GitHub / arXiv / RSS）、status（雷达内容 / 历史精选 / 已屏蔽）
 //  - 分页（Pagination domain component）
 //  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
 
@@ -55,6 +55,7 @@ interface RadarCandidateListItem {
   sortOrder: number | null;
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
+  commentCount: number;
 }
 
 interface RadarListResponse {
@@ -75,15 +76,34 @@ const SOURCE_TYPE_OPTIONS = [
 
 const STATUS_OPTIONS = [
   { value: ALL, label: '全部状态' },
-  { value: 'candidate', label: '候选' },
-  { value: 'published', label: '已发布' },
-  { value: 'rejected', label: '已忽略' },
+  { value: 'candidate', label: '雷达内容' },
+  { value: 'published', label: '历史精选' },
 ];
 
 const QUALITY_OPTIONS = [
   { value: 'relevant', label: '相关内容' },
   { value: 'all', label: '全部内容（含噪声）' },
 ];
+
+const DATE_OPTIONS = [
+  { value: 'all', label: '全部时间' },
+  { value: 'today', label: '今天' },
+  { value: '7d', label: '近 7 天' },
+  { value: '30d', label: '近 30 天' },
+] as const;
+
+type DateRange = (typeof DATE_OPTIONS)[number]['value'];
+
+function dateFromForRange(range: DateRange): string | null {
+  if (range === 'all') return null;
+  const date = new Date();
+  if (range === 'today') {
+    date.setHours(0, 0, 0, 0);
+  } else {
+    date.setDate(date.getDate() - Number.parseInt(range, 10));
+  }
+  return date.toISOString();
+}
 
 const RADAR_GROUPS = [
   {
@@ -105,10 +125,16 @@ const RADAR_GROUPS = [
     description: 'Hacker News、Product Hunt 与社区讨论',
   },
   {
-    id: 'arxiv',
-    sourceType: 'arxiv',
+    id: 'research',
+    sourceType: 'research',
     title: '研究论文',
     description: '与当前工程方向相关的 arXiv 研究',
+  },
+  {
+    id: 'shared',
+    sourceType: 'shared',
+    title: '用户分享',
+    description: '经审核后进入雷达的用户推荐内容',
   },
 ] as const;
 
@@ -127,17 +153,20 @@ export default function RadarPage() {
   const [sourceType, setSourceType] = useState(ALL);
   const [status, setStatus] = useState(ALL);
   const [quality, setQuality] = useState('relevant');
+  const [dateRange, setDateRange] = useState<DateRange>('30d');
   const [page, setPage] = useState(1);
   const [view, setView] = useState<'source' | 'ranked'>('ranked');
 
   const query = useQuery<RadarListResponse>({
-    queryKey: ['radar', q, sourceType, status, quality, page],
+    queryKey: ['radar', q, sourceType, status, quality, dateRange, page],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
       if (sourceType !== ALL) params.set('sourceType', sourceType);
       if (status !== ALL) params.set('status', status);
       params.set('quality', quality);
+      const dateFrom = dateFromForRange(dateRange);
+      if (dateFrom) params.set('dateFrom', dateFrom);
       params.set('page', String(page));
       params.set('per_page', '20');
       return fetchRadar(params);
@@ -148,7 +177,7 @@ export default function RadarPage() {
 
   const groupedQueries = useQueries({
     queries: RADAR_GROUPS.map((group) => ({
-      queryKey: ['radar-group', group.id, q, status, quality],
+      queryKey: ['radar-group', group.id, q, status, quality, dateRange],
       queryFn: () => {
         const params = new URLSearchParams({
           sourceType: group.sourceType,
@@ -156,6 +185,8 @@ export default function RadarPage() {
           page: '1',
           per_page: '5',
         });
+        const dateFrom = dateFromForRange(dateRange);
+        if (dateFrom) params.set('dateFrom', dateFrom);
         if (q) params.set('q', q);
         if (status !== ALL) params.set('status', status);
         return fetchRadar(params);
@@ -228,7 +259,7 @@ export default function RadarPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="搜索标题 / 解读 / 标签…"
-          aria-label="搜索雷达候选"
+          aria-label="搜索雷达内容"
           className="w-full sm:w-64"
         />
 
@@ -260,6 +291,23 @@ export default function RadarPage() {
             </SelectTrigger>
             <SelectContent>
               {STATUS_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>时间</span>
+          <Select
+            value={dateRange}
+            onValueChange={(v) => { setDateRange(v as DateRange); setPage(1); }}
+          >
+            <SelectTrigger className="w-32" aria-label="时间范围筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DATE_OPTIONS.map((o) => (
                 <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
               ))}
             </SelectContent>
@@ -328,6 +376,8 @@ export default function RadarPage() {
                         key={it.id}
                         candidate={it}
                         memberActions={memberActions(it.id)}
+                        currentUserId={me.data?.id ?? null}
+                        currentUserRole={me.data?.role ?? null}
                         compact
                       />
                     ))}
@@ -361,6 +411,8 @@ export default function RadarPage() {
               key={it.id}
               candidate={it}
               memberActions={memberActions(it.id)}
+              currentUserId={me.data?.id ?? null}
+              currentUserRole={me.data?.role ?? null}
               compact
             />
           ))}

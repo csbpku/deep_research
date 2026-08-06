@@ -8,7 +8,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { Library, Bookmark, FileText, Settings as SettingsIcon, Plus, Trash2, Copy } from 'lucide-react';
+import { AtSign, Bell, Bookmark, CheckCheck, Copy, FileText, Library, Plus, Reply, Settings as SettingsIcon, Trash2 } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -50,7 +50,7 @@ interface Initial {
 export function MeWorkspace({ userEmail, initial }: { userEmail: string; initial: Initial }) {
   const searchParams = useSearchParams();
   const initialTab = searchParams?.get('tab');
-  const validTabs = ['drafts', 'bookmarks', 'templates', 'preferences'];
+  const validTabs = ['drafts', 'bookmarks', 'templates', 'notifications', 'preferences'];
   const [tab, setTab] = useState(
     initialTab && validTabs.includes(initialTab) ? initialTab : 'drafts',
   );
@@ -62,7 +62,7 @@ export function MeWorkspace({ userEmail, initial }: { userEmail: string; initial
 
   return (
     <Tabs value={tab} onValueChange={setTab}>
-      <TabsList>
+      <TabsList className="h-auto flex-wrap justify-start">
         <TabsTrigger value="drafts">
           <FileText className="size-3" />
           草稿
@@ -74,6 +74,10 @@ export function MeWorkspace({ userEmail, initial }: { userEmail: string; initial
         <TabsTrigger value="templates">
           <Library className="size-3" />
           模板
+        </TabsTrigger>
+        <TabsTrigger value="notifications">
+          <Bell className="size-3" />
+          通知
         </TabsTrigger>
         <TabsTrigger value="preferences">
           <SettingsIcon className="size-3" />
@@ -90,10 +94,103 @@ export function MeWorkspace({ userEmail, initial }: { userEmail: string; initial
       <TabsContent value="templates">
         <TemplatesSection initial={initial.templates} />
       </TabsContent>
+      <TabsContent value="notifications">
+        <NotificationsSection />
+      </TabsContent>
       <TabsContent value="preferences">
         <PreferencesForm userEmail={userEmail} />
       </TabsContent>
     </Tabs>
+  );
+}
+
+interface NotificationItem {
+  id: string;
+  type: 'mention' | 'reply';
+  readAt: string | null;
+  createdAt: string;
+  actor: { id: string; name: string; avatarUrl: string | null };
+  excerpt: string;
+  href: string;
+}
+
+function NotificationsSection() {
+  const queryClient = useQueryClient();
+  const q = useQuery<{ items: NotificationItem[]; unreadCount: number }>({
+    queryKey: ['me-notifications'],
+    queryFn: async () => {
+      const r = await fetch('/api/me/notifications', { cache: 'no-store' });
+      if (!r.ok) throw new Error('通知加载失败');
+      return r.json();
+    },
+  });
+  const readMut = useMutation({
+    mutationFn: async (id: string) => {
+      const r = await fetch(`/api/me/notifications/${id}`, { method: 'PATCH' });
+      if (!r.ok) throw new Error('更新通知失败');
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me-notifications'] }),
+  });
+  const readAllMut = useMutation({
+    mutationFn: async () => {
+      const r = await fetch('/api/me/notifications', { method: 'PATCH' });
+      if (!r.ok) throw new Error('更新通知失败');
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['me-notifications'] }),
+  });
+  const items = q.data?.items ?? [];
+
+  if (q.isLoading) return <p className="py-8 text-sm text-muted-foreground">正在加载通知…</p>;
+  if (q.isError) return <p className="py-8 text-sm text-destructive">{(q.error as Error).message}</p>;
+  if (items.length === 0) return <EmptyState title="暂无通知" description="有人 @你或回复你的评论时，会显示在这里。" />;
+
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          {q.data?.unreadCount ? `${q.data.unreadCount} 条未读` : '全部已读'}
+        </p>
+        {Boolean(q.data?.unreadCount) && (
+          <Button type="button" size="xs" variant="outline" onClick={() => readAllMut.mutate()} disabled={readAllMut.isPending}>
+            <CheckCheck className="size-3.5" />
+            全部标为已读
+          </Button>
+        )}
+      </div>
+      <ul className="grid list-none gap-2 p-0">
+        {items.map((item) => {
+          const unread = item.readAt === null;
+          const Icon = item.type === 'mention' ? AtSign : Reply;
+          return (
+            <li key={item.id}>
+              <Link
+                href={item.href}
+                onClick={() => unread && readMut.mutate(item.id)}
+                className="group block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Card className={unread ? 'border-primary/35 bg-primary/[0.035]' : ''}>
+                  <CardContent className="flex gap-3 p-3">
+                    <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground group-hover:text-foreground">
+                      <Icon className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="text-sm font-medium">
+                          {item.actor.name} {item.type === 'mention' ? '@了你' : '回复了你'}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
+                        {unread && <span className="size-1.5 rounded-full bg-primary" aria-label="未读" />}
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{item.excerpt}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

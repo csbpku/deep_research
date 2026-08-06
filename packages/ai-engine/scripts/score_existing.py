@@ -18,12 +18,15 @@ from ai_engine.radar.distilled_scorer import (
     compute_score,
     score_with_llm,
 )
-from ai_engine.scoring.scoring_profiles import get_profile
+from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 _SOURCE_PROFILE: dict[str, str] = {
     "arxiv": "paper",
     "github": "engineering",
+    "github_tracked": "engineering",
     "github_trending": "engineering",
+    "github_topic_search": "engineering",
+    "huggingface_models": "engineering",
     "devto": "engineering",
     "producthunt": "engineering",
     "rss": "news",
@@ -50,6 +53,8 @@ async def main() -> int:
         help="Re-score rows that already have a distilled score",
     )
     parser.add_argument("--limit", type=int, default=80)
+    parser.add_argument("--offset", type=int, default=0,
+                        help="Skip this many matching rows (for observable batches)")
     parser.add_argument(
         "--concurrency",
         type=int,
@@ -62,6 +67,16 @@ async def main() -> int:
         help="Only score candidates for this summary date (YYYY-MM-DD; default: all dates)",
     )
     parser.add_argument(
+        "--before-date",
+        default=None,
+        help="Only score candidates before this summary date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--summary-id",
+        default=None,
+        help="Only score one candidate by summary id",
+    )
+    parser.add_argument(
         "--recalibrate-only",
         action="store_true",
         help="Recompute tiers/effective scores from stored dimensions without LLM calls",
@@ -71,6 +86,19 @@ async def main() -> int:
     store = DbJobStore(dsn=os.environ["DATABASE_URL"])
     await store.open()
 
+    # An explicit summary id is an operator request to score that article,
+    # including a pending user share that has not entered the approved-share
+    # feed yet. Batch runs retain the normal published/approved filter.
+    eligibility = (
+        '"id" = %s '
+        if args.summary_id
+        else '( ("source" = \'daily\' AND "syncRunId" IS NOT NULL) '
+             'OR ("source" = \'user\' AND "status" IN (\'candidate\', \'published\') '
+             'AND EXISTS (SELECT 1 FROM "share_submissions" sh '
+             'WHERE sh."publishedSummaryId" = "summaries"."id" '
+             'AND sh."status" = \'approved\')) ) '
+    )
+
     async with store.pool.connection() as conn:
         rows = await (await conn.execute(
             'SELECT "id", "title", "body", "url", "publishedAt", "syncRunId", '
@@ -79,23 +107,22 @@ async def main() -> int:
             '  (SELECT s."sourceType" FROM "radar_sync_runs" r '
             '   JOIN "radar_sources" s ON s."id" = r."sourceId" '
             '   WHERE r."id" = "summaries"."syncRunId" LIMIT 1) AS "sourceType" '
-            'FROM "summaries" WHERE (("source" = \'daily\' '
-            'AND "syncRunId" IS NOT NULL) OR ("source" = \'user\' '
-            'AND "status" IN (\'candidate\', \'published\') AND EXISTS ('
-            'SELECT 1 FROM "share_submissions" sh '
-            'WHERE sh."publishedSummaryId" = "summaries"."id" '
-            'AND sh."status" = \'approved\'))) '
-            'AND "canonicalUrl" NOT LIKE \'digest://%%\' '
+            'FROM "summaries" WHERE ' + eligibility
+            + 'AND "canonicalUrl" NOT LIKE \'digest://%%\' '
             + ('AND "summaryDate" = %s::date ' if args.date else '')
+            + ('AND "summaryDate" < %s::date ' if args.before_date else '')
+            + ('' if args.summary_id else '')
             + ('' if args.rescore else 'AND "distilledScore" IS NULL ')
             + ('AND (SELECT s."sourceType" FROM "radar_sync_runs" r '
                'JOIN "radar_sources" s ON s."id" = r."sourceId" '
                'WHERE r."id" = "summaries"."syncRunId" LIMIT 1) = %s '
                if args.source_type else '')
-            + 'LIMIT %s',
+            + 'ORDER BY "id" LIMIT %s OFFSET %s',
             ((args.date,) if args.date else ())
+            + ((args.before_date,) if args.before_date else ())
+            + ((args.summary_id,) if args.summary_id else ())
             + ((args.source_type,) if args.source_type else ())
-            + (args.limit,)
+            + (args.limit, args.offset)
         )).fetchall()
 
     concurrency = max(1, args.concurrency)
@@ -107,9 +134,8 @@ async def main() -> int:
         body = str(row.get("originalMarkdown") or row.get("body") or title)
         source_type = str(row.get("sourceType") or "web_share")
 
-        profile_id = _SOURCE_PROFILE.get(source_type, "engineering")
-        profile = get_profile(profile_id)
         url = str(row.get("url", "") or "")
+        profile, profile_id = profile_for_source_url(source_type, url)
         published_at = row.get("publishedAt")
         stored = row.get("distilledScore")
         if args.recalibrate_only and isinstance(stored, dict):
@@ -117,6 +143,9 @@ async def main() -> int:
             parsed = dict(dimensions) if isinstance(dimensions, dict) else {}
             parsed["directRelevance"] = stored.get("directRelevance")
             parsed["relevanceEvidence"] = stored.get("relevanceEvidence")
+            parsed["scopeBreadth"] = stored.get("scopeBreadth")
+            parsed["scopeEvidence"] = stored.get("scopeEvidence")
+            parsed["validationBreadth"] = stored.get("validationBreadth")
             parsed["veto"] = stored.get("veto")
             risk_flags = stored.get("riskFlags") or []
             parsed["risk_flag"] = "security_risk" if "security_review_required" in risk_flags else None
@@ -125,6 +154,7 @@ async def main() -> int:
                 parsed,
                 profile=profile,
                 source_type=source_type,
+                evidence_text=f"{title}\n{body}",
             )
         else:
             async with score_gate:

@@ -1,7 +1,5 @@
-import Link from 'next/link';
-
 import { getCurrentUser } from '@/lib/auth/session';
-import { BrandMark } from './BrandMark';
+import { DesktopSidebar } from './DesktopSidebar';
 import { Topbar } from './Topbar';
 import { SidebarNav } from './SidebarNav';
 // ⚠️ 必须从 server-safe 模块拿常量：从 './SidebarNav'（'use client'）拿会被 RSC
@@ -28,29 +26,14 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   const navItems: NavItem[] = isAdmin ? [...PRIMARY_NAV, ADMIN_NAV] : PRIMARY_NAV;
 
   // 传给 client 组件的必须是可序列化的纯数据。
-  const navUser = user ? { email: user.email, name: user.name, role: user.role } : null;
+  const navUser = user
+    ? { email: user.email, name: user.name, image: user.image ?? null, role: user.role }
+    : null;
 
   return (
     <div className="flex min-h-screen">
       {/* 桌面侧栏 */}
-      <aside className="sticky top-0 hidden h-screen w-sidebar shrink-0 flex-col border-r border-border bg-background md:flex">
-        <Link
-          href="/"
-          className="flex h-topbar shrink-0 items-center gap-2 border-b border-border px-4 transition-colors hover:bg-muted/50"
-          aria-label="AI技术调研平台首页"
-        >
-          <BrandMark />
-          <span className="truncate text-sm font-semibold tracking-tight">AI技术调研平台</span>
-        </Link>
-
-        <div className="flex-1 overflow-y-auto p-2">
-          <SidebarNav items={navItems} />
-        </div>
-
-        <div className="shrink-0 border-t border-border px-4 py-3">
-          <p className="text-[11px] text-muted-foreground">小型团队 · 共享研究空间</p>
-        </div>
-      </aside>
+      <DesktopSidebar items={navItems} />
 
       {/* 主列 */}
       <div className="flex min-w-0 flex-1 flex-col">

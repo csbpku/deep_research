@@ -96,10 +96,15 @@ function SearchContent() {
   const [error, setError] = useState<string | null>(null);
 
   const detailHref = useCallback((row: SearchRow) => {
-    if (row.type === 'radar') return `/radar/${row.refId}`;
-    if (row.type === 'summary') return `/summaries/${row.refId}`;
-    return `/researches/${row.refId}`;
-  }, []);
+    const base = row.type === 'radar'
+      ? `/radar/${row.refId}`
+      : row.type === 'summary'
+        ? `/summaries/${row.refId}`
+        : `/researches/${row.refId}`;
+    const currentSearch = searchParams.toString();
+    const returnTo = `/search${currentSearch ? `?${currentSearch}` : ''}`;
+    return `${base}?returnTo=${encodeURIComponent(returnTo)}`;
+  }, [searchParams]);
 
   // 同步 query string（不刷页面，仅 router.replace）
   useEffect(() => {

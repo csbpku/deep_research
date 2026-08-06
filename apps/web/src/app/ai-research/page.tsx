@@ -19,20 +19,21 @@ import {
   CheckCircle2,
   ChevronRight,
   FolderOpen,
+  Info,
   Loader2,
   Plus,
-  Rocket,
   Search,
   Send,
-  X,
 } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/domain/PageHeader';
+import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -42,7 +43,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { LastSubmittedBanner } from '@/components/home/LastSubmittedBanner';
 import { cn } from '@/lib/utils';
+import { progressPct } from '@/lib/ai-progress';
+import { writeLastSubmitted } from '@/lib/last-submitted';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi } from '@/lib/errors/friendly';
@@ -73,12 +77,12 @@ const REPORT_TYPES: Array<{ value: 'research_report' | 'summary_brief'; label: s
   {
     value: 'research_report',
     label: '研究报告',
-    desc: '5 步流水线（规划 → 检索 → 压缩 → 分析 → 写作），生成可编辑的私有草稿。',
+    desc: '走完整流水线 + 事实审核，生成可编辑的私有草稿。',
   },
   {
     value: 'summary_brief',
     label: '轻量摘要',
-    desc: '抓取 + 压缩 + 写作的轻量路径，不写草稿，结果返回到本页。',
+    desc: '抓取 + 压缩 + 写作的轻量路径，结果直接返回本页。',
   },
 ];
 
@@ -400,19 +404,9 @@ function AiResearchForm() {
         return;
       }
       const body = (await r.json()) as { jobId: string };
-      // 跳详情；前端从 /ai-research/[jobId] 拿状态
-      // 顺手把刚提交的写入 sessionStorage，详情页按"返回"后，
-      // 历史区域的上方能看到"查看刚提交的"横幅（120s TTL）。
-      try {
-        if (typeof window !== 'undefined') {
-          window.sessionStorage.setItem(
-            LAST_SUBMITTED_KEY,
-            JSON.stringify({ jobId: body.jobId, topic: topic.trim(), at: Date.now() }),
-          );
-        }
-      } catch {
-        // sessionStorage 在隐身/受限模式下不可用 —— 横幅不显示，但提交本身成功。
-      }
+      // 跳详情；顺手把刚提交的写入 sessionStorage，详情页按"返回"或
+      // 首页直接访问时都能看到"查看刚提交的"横幅（120s TTL）。
+      writeLastSubmitted(body.jobId, topic.trim());
       router.push(`/ai-research/${body.jobId}`);
     } catch (e2) {
       setErr(String((e2 as Error).message ?? '提交失败'));
@@ -560,46 +554,70 @@ function AiResearchForm() {
         </FormSection>
 
         <FormSection legend="资料使用方式" defaultOpen={false}>
-          <div className="grid gap-1.5 sm:grid-cols-2">
-            <label className={cn('flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors', sourcePolicy === 'prefer_user_sources' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-muted/30 text-muted-foreground')}>
-              <input
-                type="radio"
-                name="sourcePolicy"
-                className="cursor-pointer accent-primary"
-                checked={sourcePolicy === 'prefer_user_sources'}
-                onChange={() => setSourcePolicy('prefer_user_sources')}
-              />
-              优先参考所选资料，必要时搜索互联网
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className={cn(
+              'flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-xs transition-colors',
+              sourcePolicy === 'prefer_user_sources'
+                ? 'border-primary bg-accent/60 text-accent-foreground'
+                : 'border-border bg-card text-muted-foreground hover:border-primary/30'
+            )}>
+              <span className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="sourcePolicy"
+                  className="cursor-pointer accent-primary"
+                  checked={sourcePolicy === 'prefer_user_sources'}
+                  onChange={() => setSourcePolicy('prefer_user_sources')}
+                />
+                优先参考所选资料
+              </span>
+              <span className="pl-6 text-muted-foreground">必要时搜索互联网补充</span>
             </label>
-            <label className={cn('flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors', sourcePolicy === 'only_user_sources' ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-muted/30 text-muted-foreground')}>
-              <input
-                type="radio"
-                name="sourcePolicy"
-                className="cursor-pointer accent-primary"
-                checked={sourcePolicy === 'only_user_sources'}
-                onChange={() => setSourcePolicy('only_user_sources')}
-              />
-              只使用所选资料，不搜索互联网
+            <label className={cn(
+              'flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-xs transition-colors',
+              sourcePolicy === 'only_user_sources'
+                ? 'border-primary bg-accent/60 text-accent-foreground'
+                : 'border-border bg-card text-muted-foreground hover:border-primary/30'
+            )}>
+              <span className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="sourcePolicy"
+                  className="cursor-pointer accent-primary"
+                  checked={sourcePolicy === 'only_user_sources'}
+                  onChange={() => setSourcePolicy('only_user_sources')}
+                />
+                只使用所选资料
+              </span>
+              <span className="pl-6 text-muted-foreground">不搜索互联网</span>
             </label>
           </div>
         </FormSection>
 
         <FormSection legend="报告类型" defaultOpen={false}>
-          <div className="grid gap-1.5 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             {REPORT_TYPES.map((rt) => (
-              <label key={rt.value} className={cn('flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2 text-xs transition-colors', reportType === rt.value ? 'border-primary/40 bg-accent text-accent-foreground' : 'border-border bg-muted/30 text-muted-foreground')}>
-                <input
-                  type="radio"
-                  name="reportType"
-                  value={rt.value}
-                  className="mt-1 cursor-pointer accent-primary"
-                  checked={reportType === rt.value}
-                  onChange={() => setReportType(rt.value)}
-                />
-                <span className="text-xs">
+              <label
+                key={rt.value}
+                className={cn(
+                  'flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-xs transition-colors',
+                  reportType === rt.value
+                    ? 'border-primary bg-accent/60 text-accent-foreground'
+                    : 'border-border bg-card text-muted-foreground hover:border-primary/30'
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="reportType"
+                    value={rt.value}
+                    className="cursor-pointer accent-primary"
+                    checked={reportType === rt.value}
+                    onChange={() => setReportType(rt.value)}
+                  />
                   <strong className="font-medium">{rt.label}</strong>
-                  <span className="block text-muted-foreground">{rt.desc}</span>
                 </span>
+                <span className="pl-6 text-muted-foreground">{rt.desc}</span>
               </label>
             ))}
           </div>
@@ -608,8 +626,23 @@ function AiResearchForm() {
         <StatusRow sourcePolicy={sourcePolicy} sources={sources} />
 
         {err ? (
-          <div role="alert" className="text-sm text-destructive">
-            {err}
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            <AlertTriangle className="size-3.5 shrink-0" />
+            <span className="flex-1">{err}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={() => {
+                setErr(null);
+                void onSubmit({ preventDefault: () => {} } as React.FormEvent);
+              }}
+            >
+              重试
+            </Button>
           </div>
         ) : null}
 
@@ -630,6 +663,7 @@ interface HistoryItem {
   jobId: string;
   topic: string;
   status: string;
+  finalStatus?: string | null;
   currentStep: string | null;
   reportType: string;
   sourcePolicy: string;
@@ -713,6 +747,9 @@ function StatusIcon({ status, published }: { status: string; published: boolean 
   if (status === 'failed' || status === 'cancelled') {
     return <AlertTriangle className="size-4 shrink-0 text-status-failed-fg" />;
   }
+  if (status === 'partial') {
+    return <AlertTriangle className="size-4 shrink-0 text-status-partial-fg" />;
+  }
   return <Loader2 className="size-4 shrink-0 animate-spin text-status-running-fg" />;
 }
 
@@ -725,88 +762,23 @@ function historyBadgeValue(item: HistoryItem): string | null {
   return null;
 }
 
-// 表单底部的「当前模式」提示：把 API enum (prefer_user_sources / only_user_sources)
-// 翻译成中文标签，避免在 UI 上泄漏内部命名。
-const SOURCE_POLICY_LABEL: Record<'prefer_user_sources' | 'only_user_sources', string> = {
-  prefer_user_sources: '优先参考所选资料，必要时搜索互联网',
-  only_user_sources: '只使用所选资料，不搜索互联网',
-};
-
-function StatusRow({ sourcePolicy, sources }: { sourcePolicy: 'prefer_user_sources' | 'only_user_sources'; sources: { value: string }[] }) {
+// 表单底部的"已指定资料"提示 —— 当前模式从上方单选框读出,这里只补一个计数。
+function StatusRow({ sourcePolicy: _sourcePolicy, sources }: { sourcePolicy: 'prefer_user_sources' | 'only_user_sources'; sources: { value: string }[] }) {
+  const filled = sources.filter((source) => source.value.trim()).length;
+  if (filled === 0) return null;
   return (
-    <p className="text-xs text-muted-foreground">
-      当前模式：{SOURCE_POLICY_LABEL[sourcePolicy]}；已指定{' '}
-      {sources.filter((source) => source.value.trim()).length} 条资料。
-    </p>
+    <SectionCard tone="muted" icon={Info} title="参考资料" bodyClassName="py-3">
+      <p className="text-xs text-muted-foreground">
+        已指定 <span className="font-mono tabular-nums text-foreground">{filled}</span> / 10 条资料。
+      </p>
+    </SectionCard>
   );
 }
 
-interface LastSubmitted {
-  jobId: string;
-  topic: string;
-  at: number;
-}
-
-const LAST_SUBMITTED_KEY = 'ai-research:last-submitted:v1';
-
-interface LastSubmitted {
-  jobId: string;
-  topic: string;
-  at: number;
-}
-
-function readLastSubmitted(): LastSubmitted | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.sessionStorage.getItem(LAST_SUBMITTED_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as LastSubmitted;
-    if (typeof parsed.jobId !== 'string' || typeof parsed.at !== 'number') return null;
-    if (Date.now() - parsed.at > 120_000) {
-      window.sessionStorage.removeItem(LAST_SUBMITTED_KEY);
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function LastSubmittedBanner({
-  entry,
-  onDismiss,
-}: {
-  entry: LastSubmitted;
-  onDismiss: () => void;
-}) {
-  return (
-    <div
-      role="status"
-      className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-accent/50 px-3.5 py-2.5 text-sm text-accent-foreground"
-    >
-      <Rocket className="size-4 shrink-0" />
-      <span className="flex-1">
-        刚提交的：<strong className="font-medium">{entry.topic}</strong>
-      </span>
-      <Button asChild size="xs">
-        <Link href={`/ai-research/${entry.jobId}`}>查看进度</Link>
-      </Button>
-      <Button type="button" variant="ghost" size="icon-sm" onClick={onDismiss} aria-label="关闭">
-        <X />
-      </Button>
-    </div>
-  );
-}
-
-export function AiResearchHistory() {
+function AiResearchHistory() {
   const [filter, setFilter] = useState<HistoryFilter>('all');
-  const [lastSubmitted, setLastSubmitted] = useState<LastSubmitted | null>(null);
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLastSubmitted(readLastSubmitted());
-  }, []);
 
   const q = useQuery<{ items: HistoryItem[]; total: number }>({
     queryKey: ['ai-research-jobs', filter],
@@ -863,12 +835,7 @@ export function AiResearchHistory() {
         return;
       }
       const data = (await r.json()) as { jobId: string };
-      try {
-        window.sessionStorage.setItem(
-          LAST_SUBMITTED_KEY,
-          JSON.stringify({ jobId: data.jobId, topic: item.topic, at: Date.now() }),
-        );
-      } catch {}
+      writeLastSubmitted(data.jobId, item.topic);
       q.refetch(); // 立刻把新行刷到表格
       window.location.href = `/ai-research/${data.jobId}`;
     } finally {
@@ -878,15 +845,7 @@ export function AiResearchHistory() {
 
   return (
     <div id="research-history" className="mt-8 scroll-mt-20 space-y-3">
-      {lastSubmitted ? (
-        <LastSubmittedBanner
-          entry={lastSubmitted}
-          onDismiss={() => {
-            window.sessionStorage.removeItem(LAST_SUBMITTED_KEY);
-            setLastSubmitted(null);
-          }}
-        />
-      ) : null}
+      <LastSubmittedBanner />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -918,21 +877,56 @@ export function AiResearchHistory() {
 
       <div className="overflow-hidden rounded-md border border-border bg-card">
         {q.isLoading ? (
-          <div className="space-y-2 p-4">
-            {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-8 w-full" />
-            ))}
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>主题</TableHead>
+                <TableHead className="w-40">进度</TableHead>
+                <TableHead className="w-28">创建时间</TableHead>
+                <TableHead className="w-32 text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[0, 1, 2, 3, 4].map((i) => (
+                <TableRow key={i} className="hover:bg-transparent">
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Skeleton className="size-4 rounded-full" />
+                      <Skeleton className="h-4 w-3/4" />
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-3 w-24" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-3 w-16" />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Skeleton className="ml-auto h-3 w-16" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         ) : q.isError ? (
-          <div className="grid gap-1.5 p-6 text-center">
-            <p className="text-sm font-medium text-destructive">{friendlyMessage(q.error, '加载历史失败')}</p>
-            {q.error instanceof Error ? null : null}
-            <p className="text-xs text-muted-foreground">已自动重试一次，可刷新再试。</p>
-          </div>
+          <EmptyState
+            title="加载历史失败"
+            description={friendlyMessage(q.error, '请稍后重试')}
+            action={
+              <Button type="button" size="sm" onClick={() => void q.refetch()}>
+                重试
+              </Button>
+            }
+          />
         ) : filteredItems.length === 0 ? (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            暂无{tabCounts.all === 0 ? '调研任务。提交上面表单后会出现在这里。' : '当前过滤下的任务。'}
-          </p>
+          <EmptyState
+            title={tabCounts.all === 0 ? '还没有调研任务' : '当前过滤下没有任务'}
+            description={
+              tabCounts.all === 0
+                ? '提交上方表单后，任务会出现在这里。'
+                : '换个过滤条件看看其他任务。'
+            }
+          />
         ) : (
           <Table>
             <TableHeader>
@@ -947,6 +941,11 @@ export function AiResearchHistory() {
               {filteredItems.map((item) => {
                 const badgeValue = historyBadgeValue(item);
                 const isInFlight = item.status === 'queued' || item.status === 'running';
+                const itemPct = progressPct({
+                  status: item.status,
+                  finalStatus: item.finalStatus ?? null,
+                  currentStep: item.currentStep,
+                });
                 return (
                   <TableRow
                     key={item.jobId}
@@ -968,15 +967,22 @@ export function AiResearchHistory() {
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {/* 不再显示原始 status 枚举 —— StatusIcon + StatusBadge 已传达语义 */}
-                      {item.currentStep ? (
-                        <span className="font-mono text-xs">
-                          {STEP_LABEL[item.currentStep] ?? item.currentStep}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground/60">—</span>
-                      )}
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        {item.currentStep ? (
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {STEP_LABEL[item.currentStep] ?? item.currentStep}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground/60">—</span>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <Progress value={itemPct} className="h-1 w-20" />
+                          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                            {itemPct}%
+                          </span>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       {relativeTime(item.createdAt)}
@@ -1016,7 +1022,7 @@ function AiResearchPageClient() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="AI 调研"
-        description="输入主题与团队背景；提交后自动跟踪调研进度。"
+        description="输入主题与团队背景，提交后跟踪进度。"
       />
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(300px,.9fr)] lg:items-stretch">
         <div className="lg:h-full">
@@ -1036,16 +1042,11 @@ function ResearchPipelineRail() {
     ['3', '压缩证据', '合并相似结论并保留来源链路', '待开始'],
     ['4', '分析与对比', '形成可执行的取舍和风险判断', '待开始'],
     ['5', '写作草稿', '生成可编辑的团队私有草稿', '待开始'],
+    ['6', '事实审核', '核验高风险事实、引用和来源冲突', '待开始'],
   ];
   return (
     <aside className="flex h-full flex-col rounded-md border border-border bg-card p-5 lg:sticky lg:top-20">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">Research flow</p>
-          <h2 className="mt-1 text-base font-semibold">调研流程预览</h2>
-        </div>
-        <span className="font-mono text-[11px] text-muted-foreground">brief → evidence → draft</span>
-      </div>
+      <h2 className="text-base font-semibold">调研流程预览</h2>
       <ol className="mt-5 flex-1 space-y-1">
         {steps.map(([number, title, description, state], index) => (
           <li key={number} className="relative flex gap-3 py-3">
@@ -1059,7 +1060,9 @@ function ResearchPipelineRail() {
           </li>
         ))}
       </ol>
-      <p className="mt-3 border-t border-border pt-3 text-xs leading-5 text-muted-foreground">这是提交前的流程预览。提交后会创建可追踪任务，并在详情页显示实时进度。</p>
+      <p className="mt-3 border-t border-border pt-3 text-xs leading-5 text-muted-foreground">
+        研究报告走 6 步（含事实审核）；轻量摘要跳过审核。
+      </p>
     </aside>
   );
 }

@@ -9,8 +9,8 @@ import {
   RadarIdParam,
   CreateRadarFeedbackInput,
   DeleteRadarFeedbackQuery,
-  AdminRadarSelectInput,
   RADAR_STATUS_VALUES,
+  CreateCommentInput,
 } from './schemas';
 
 describe('RadarListQuery', () => {
@@ -104,49 +104,13 @@ describe('DeleteRadarFeedbackQuery', () => {
   });
 });
 
-describe('AdminRadarSelectInput', () => {
-  it('accepts valid input', () => {
-    expect(AdminRadarSelectInput.safeParse({
-      summaryDate: '2026-07-21',
-      sortOrder: 2,
-      selectionReason: '本周 GitHub 趋势项目，与团队 RAG 评估相关',
-    }).success).toBe(true);
-  });
-
-  it('rejects bad date format', () => {
-    expect(AdminRadarSelectInput.safeParse({
-      summaryDate: 'not-a-date',
-      sortOrder: 1,
-      selectionReason: 'reason here',
-    }).success).toBe(false);
-  });
-
-  it('rejects sortOrder out of range', () => {
-    expect(AdminRadarSelectInput.safeParse({
-      summaryDate: '2026-07-21',
-      sortOrder: 5,
-      selectionReason: 'reason',
-    }).success).toBe(false);
-    expect(AdminRadarSelectInput.safeParse({
-      summaryDate: '2026-07-21',
-      sortOrder: 0,
-      selectionReason: 'reason',
-    }).success).toBe(false);
-  });
-
-  it('rejects selectionReason < 2 chars', () => {
-    expect(AdminRadarSelectInput.safeParse({
-      summaryDate: '2026-07-21',
-      sortOrder: 1,
-      selectionReason: 'x',
-    }).success).toBe(false);
-  });
-
-  it('rejects selectionReason > 500 chars', () => {
-    expect(AdminRadarSelectInput.safeParse({
-      summaryDate: '2026-07-21',
-      sortOrder: 1,
-      selectionReason: 'x'.repeat(501),
-    }).success).toBe(false);
+describe('CreateCommentInput', () => {
+  it('treats a null anchor as absent', () => {
+    const result = CreateCommentInput.safeParse({
+      body: 'hello',
+      mentionedUserIds: [],
+      anchor: null,
+    });
+    expect(result.success).toBe(true);
   });
 });

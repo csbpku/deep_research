@@ -125,7 +125,10 @@ async def fetch_source(
 
     if handler is None:
         raise ValueError(f"unsupported radar source type: {source.source_type}")
-    return await handler(dict(source.config))
+    # Keep the source config object shared with the runner. RSS fetchers use
+    # this narrow mutable channel to report upstream diagnostics even when the
+    # feed returns zero usable items (for example, an expired WeWe account).
+    return await handler(source.config)
 
 
 __all__ = ["SourceFetcher", "fetch_source", "load_enabled_sources"]

@@ -6,11 +6,15 @@
   <string>com.deep-research.ai</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/pnpm</string>
-    <string>dev:ai</string>
+    <string>/Users/shaobo.chen/deep_research/packages/ai-engine/.venv/bin/uvicorn</string>
+    <string>ai_engine.server.app:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>4000</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/shaobo.chen/deep_research</string>
+  <string>/Users/shaobo.chen/deep_research/packages/ai-engine</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

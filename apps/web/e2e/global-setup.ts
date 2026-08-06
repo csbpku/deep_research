@@ -38,7 +38,10 @@ const WARMUP_ENDPOINTS = [
 export default async function globalSetup() {
   for (const path of WARMUP_ENDPOINTS) {
     try {
-      await fetch(`${BASE_URL}${path}`, { method: 'GET' });
+      await fetch(`${BASE_URL}${path}`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5_000),
+      });
     } catch {
       // 忽略错误：目的是触发编译，不是校验
     }

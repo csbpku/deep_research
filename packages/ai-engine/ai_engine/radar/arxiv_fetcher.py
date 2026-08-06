@@ -42,7 +42,12 @@ async def fetch_arxiv_candidates(config: Mapping[str, Any]) -> list[RadarCandida
     keep_tier = int(config.get("keepTier", 3))
     enable_filter = bool(config.get("institutionFilter", False))
 
-    items = await fetch_arxiv(max_results=max_results, categories=categories)
+    timeout_seconds = float(config.get("timeoutSeconds", 90.0))
+    items = await fetch_arxiv(
+        max_results=max_results,
+        categories=categories,
+        timeout=max(30.0, min(timeout_seconds, 180.0)),
+    )
 
     # agents-radar keeps only papers published in the last 48h (arXiv has a
     # ~1-day publishing delay, so 24h would miss today's batch).

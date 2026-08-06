@@ -23,6 +23,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ai_engine.radar.topic_clustering import is_metadata_tag as _is_metadata_tag
+
 logger = logging.getLogger("ai_engine.radar.topic_worker")
 
 WORKER_ID = f"topic-aggregator-{os.getpid()}"
@@ -38,49 +40,6 @@ MIN_SOURCES = 2
 # AdminConsole 设置页）；目前 V1 不强约束，避免和现有 Admin 队列不一致。
 SCORE_THRESHOLD = 0.0  # 兜底用；V1 主要靠 tier 守门
 ALLOWED_TIERS = frozenset({"skim", "deep_read"})
-
-# 由同步阶段打的元 tags（不算"主题"）：
-# - profile_* : 评分 profile（engineering / paper / news）
-# - tier_*    : 评分 tier（deep_read / skim / collection）
-# - 源名 tags  : github / arxiv / huggingface / devto / hackernews / trending
-# - must_read / topic_search : 评分标记 / 搜索模块占位
-_METADATA_TAG_PREFIXES = ("profile_", "tier_")
-_METADATA_TAG_EXACT = frozenset({
-    "github", "arxiv", "huggingface", "devto", "hackernews",
-    "lobsters", "producthunt", "rss", "news", "trending", "must_read",
-    "topic_search",
-})
-
-# “热点主题”必须表达一个近期可跟进的具体议题，而不是内容所属的大类或
-# 实现语言。原始来源的 tags 是采集/检索 metadata，并不是产品级 taxonomy；
-# 直接按 tag 分桶会把互不相关的内容聚成 `ai`，也会把 GitHub 的语言标签
-# (`python` / `typescript`) 错当成热点。
-#
-# V1 先做严格守门：宁可没有主题，也不展示没有共同命题的伪主题。具体议题
-#（例如 mcp、rag、agent-evaluation）仍可进入；后续语义聚类不能绕过此守门。
-_NON_TOPIC_TAGS = frozenset({
-    # 领域总类
-    "ai", "artificial-intelligence", "artificialintelligence",
-    "llm", "llms", "large-language-model", "large-language-models",
-    "machine-learning", "machinelearning", "deep-learning", "deeplearning",
-    "programming", "coding", "software-development", "webdev",
-    "opensource", "open-source",
-    # 编程语言 / 运行时
-    "python", "typescript", "javascript", "java", "kotlin", "scala",
-    "go", "golang", "rust", "ruby", "php", "swift", "c", "cpp",
-    "csharp", "c-sharp", "dotnet", "shell", "bash", "node", "nodejs",
-})
-
-
-def _is_metadata_tag(tag: str) -> bool:
-    raw = tag.strip().lower()
-    normalized = raw.replace("_", "-")
-    return (
-        raw.startswith(_METADATA_TAG_PREFIXES)
-        or raw in _METADATA_TAG_EXACT
-        or normalized in _NON_TOPIC_TAGS
-    )
-
 
 def _topic_slug(name: str) -> str:
     """Return the stable canonical slug used for reconciliation and upsert."""

@@ -24,7 +24,10 @@ import httpx
 logger = logging.getLogger("ai_engine.ingestion.sources")
 
 _SUMMARY_TAGS_DEFAULT: list[str] = ["tech", "ai", "engineering"]
-_ARXIV_BASE = "https://export.arxiv.org/api/query"
+# The canonical arxiv.org API endpoint is less likely to be throttled than the
+# export hostname from local desktop IPs. Keep the query shape identical so
+# this remains compatible with the public API.
+_ARXIV_BASE = "https://arxiv.org/api/query"
 _ARXIV_CATEGORIES = ["cs.AI", "cs.CL", "cs.LG"]
 # arXiv rate-limits anonymous clients without a descriptive User-Agent
 # (HTTP 403 / 503 with no body). We carry a stable UA on the default
@@ -34,8 +37,9 @@ _ARXIV_USER_AGENT = "deep-research-ai-engine/0.1 (+https://example.com/deep-rese
 # distinct error so callers can fall back. 503 with Retry-After → rate limit.
 _ARXIV_RATE_LIMIT_STATUS = 429
 _ARXIV_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-_ARXIV_MAX_RETRIES = 2
-_ARXIV_RETRY_DEFAULT_WAIT = 5.0  # seconds
+_ARXIV_MAX_RETRIES = 4
+_ARXIV_RETRY_DEFAULT_WAIT = 15.0  # seconds; arXiv asks clients to back off
+_ARXIV_MIN_REQUEST_INTERVAL = 3.0  # arXiv public API etiquette
 
 
 async def fetch_rss_feeds(
@@ -147,6 +151,8 @@ async def fetch_arxiv(
         resp: httpx.Response | None = None
         for _attempt in range(_ARXIV_MAX_RETRIES + 1):
             try:
+                if _attempt > 0:
+                    await asyncio.sleep(_ARXIV_MIN_REQUEST_INTERVAL)
                 resp = await client.get(query_url)
             except httpx.TimeoutException as exc:
                 logger.warning(
@@ -177,6 +183,10 @@ async def fetch_arxiv(
                         wait_s = float(retry_after_raw) if retry_after_raw else _ARXIV_RETRY_DEFAULT_WAIT
                     except ValueError:
                         wait_s = _ARXIV_RETRY_DEFAULT_WAIT
+                    wait_s = max(
+                        _ARXIV_MIN_REQUEST_INTERVAL,
+                        min(wait_s, 120.0),
+                    )
                     logger.info(
                         "ai-engine.ingestion.arxiv_retry",
                         extra={"categories": cats, "attempt": _attempt + 1, "wait_s": wait_s},

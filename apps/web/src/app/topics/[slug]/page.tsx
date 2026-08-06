@@ -5,6 +5,7 @@ import { ArrowLeft, CalendarRange, ExternalLink, FileText, ListTree, Sparkles } 
 
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
+import { findTopicBySlugOrId } from '@/lib/topics';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,7 +28,21 @@ interface SynthesisPayload {
 export default async function TopicDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const user = await getCurrentUser();
-  const topic = await prisma.topic.findUnique({ where: { slug } });
+  const topic = await findTopicBySlugOrId(slug, {
+    id: true,
+    slug: true,
+    name: true,
+    summary: true,
+    tier: true,
+    aggregationWindowStart: true,
+    aggregationWindowEnd: true,
+    candidateCount: true,
+    sourceCount: true,
+    lastSyncedAt: true,
+    synthesisPayload: true,
+    synthesisErrorCode: true,
+    synthesisErrorMessage: true,
+  });
   if (!topic) notFound();
 
   const [candidates, followed] = await Promise.all([

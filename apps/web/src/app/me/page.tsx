@@ -1,12 +1,11 @@
 // /me — "我的"汇总页 (P1-C)
 //
 // Server Component 入口：未登录 redirect 到 /signin。
-// 三个区块：草稿 / 收藏 / 模板 / 设置；设置使用独立子组件承载 client 表单。
+// 五个区块：草稿 / 收藏 / 模板 / 通知 / 设置；设置使用独立子组件承载 client 表单。
 import { redirect } from 'next/navigation';
 
 import { getCurrentUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
-import { EmptyState } from '@/components/EmptyState';
 import { hydrateBookmarks } from '@/lib/me/bookmarks';
 import { MeWorkspace } from './MeWorkspace';
 
@@ -39,17 +38,11 @@ export default async function MePage() {
   return (
     <div className="mx-auto max-w-shell">
       <header className="mb-4">
-        <h1 className="text-xl font-semibold tracking-tight">我的</h1>
+        <h1 className="text-xl font-semibold tracking-normal">我的</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          草稿、收藏、调研模板、个性化设置。
+          草稿、收藏、调研模板、团队通知与个性化设置。
         </p>
       </header>
-      {drafts.length === 0 && bookmarks.length === 0 && templates.length === 0 ? (
-        <EmptyState
-          title="这里还空着"
-          description="你可以在 雷达 收藏内容，或在调研库 新建草稿 / 保存模板。"
-        />
-      ) : null}
       <MeWorkspace
         userEmail={user.email}
         initial={{

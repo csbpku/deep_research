@@ -24,6 +24,8 @@ export interface FetchAiEngineOptions {
   body?: unknown;
   /** 每次 retry 前打日志；用于回溯「为什么重试了」 */
   context: string; // 例如 "ai.bff.status" / "ai.bff.list"
+  /** Long-running reviewer calls can exceed the normal 5s polling budget. */
+  timeoutMs?: number;
 }
 
 export interface FetchAiEngineFailure {
@@ -32,6 +34,7 @@ export interface FetchAiEngineFailure {
   requestId: string;
   /** 直接给前端的用户可见 message（已翻译为 zh-CN）。 */
   message: string;
+  details?: unknown;
 }
 
 export interface FetchAiEngineSuccess<T> {
@@ -68,7 +71,7 @@ export async function fetchAiEngine<T = unknown>(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
+      const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? AI_ENGINE_TIMEOUT_MS);
       upstreamRes = await fetch(opts.url, {
         method,
         headers: {
@@ -143,15 +146,34 @@ export async function fetchAiEngine<T = unknown>(
     return { ok: true, body: parsed as T, status: upstreamRes.status };
   }
 
-  // 非期望状态 → 把上游 .code / .message 当成内部错误透出。
-  const obj = parsed as { code?: string; message?: string; details?: unknown };
-  const code = (obj.code as ErrorCode) ?? ERROR_CODES.AI_ENGINE_UNAVAILABLE;
+  // 非期望状态：FastAPI/Pydantic 的 400/422 通常只有 detail，没有业务
+  // code。它们是输入问题，不应被伪装成 AI engine 宕机。
+  const obj = parsed as { code?: string; message?: string; details?: unknown; detail?: unknown };
+  const isInputError = upstreamRes.status === 400 || upstreamRes.status === 422;
+  const code = (obj.code as ErrorCode) ?? (isInputError ? ERROR_CODES.VALIDATION_FAILED : ERROR_CODES.AI_ENGINE_UNAVAILABLE);
+  const details = obj.details ?? (isInputError ? sanitizeUpstreamDetail(obj.detail) : undefined);
   return {
     ok: false,
     code,
     requestId: opts.requestId,
-    // 仍然翻译为友好 message，除非上游 .message 是已翻译的中文（P0 简单策略：直接信任上游 message）。
-    message: obj.message ?? FRIENDLY_UPSTREAM_DOWN,
-    // ⚠️ 详情塞在 details 字段，但本返回对象无该字段；调用方改用本函数再去取。
+    message: obj.message ?? (isInputError ? 'AI 请求参数不合法，请重新选择文本后重试' : FRIENDLY_UPSTREAM_DOWN),
+    ...(details === undefined ? {} : { details }),
   };
+}
+
+/** Keep FastAPI validation details useful without exposing request contents. */
+function sanitizeUpstreamDetail(detail: unknown): unknown {
+  if (!Array.isArray(detail)) return undefined;
+  return detail.slice(0, 10).map((item) => {
+    if (!item || typeof item !== 'object') return { message: '参数不合法' };
+    const record = item as Record<string, unknown>;
+    const location = Array.isArray(record.loc)
+      ? record.loc.filter((part): part is string | number => typeof part === 'string' || typeof part === 'number').slice(0, 5)
+      : undefined;
+    return {
+      ...(location ? { location } : {}),
+      message: typeof record.msg === 'string' ? record.msg.slice(0, 160) : '参数不合法',
+      type: typeof record.type === 'string' ? record.type.slice(0, 80) : undefined,
+    };
+  });
 }

@@ -36,6 +36,7 @@ from ai_engine.contracts.states import (
     AI_JOB_STATUS,
     PARTIAL_MIN_SOURCES,
     AiJobStatus,
+    AiJobStep,
 )
 from ai_engine.job_runner.models import (
     JobLease,
@@ -46,6 +47,30 @@ from ai_engine.job_runner.models import (
     noop_hooks,
 )
 from ai_engine.job_runner.store import JobStore, cast_status
+
+
+def _review_details(metadata: dict[str, object] | None) -> dict[str, object] | None:
+    """Narrow JSON metadata before passing it through the typed job APIs."""
+    if not metadata:
+        return None
+    value = metadata.get("review")
+    return value if isinstance(value, dict) else None
+
+
+def _metadata_int(metadata: dict[str, object] | None, key: str, default: int = 0) -> int:
+    if not metadata:
+        return default
+    value = metadata.get(key, default)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 def _default_worker_id() -> str:
@@ -64,7 +89,7 @@ async def run_once(
     lease: JobLease,
     snapshot: JobSnapshot,
     hooks: RunnerHooks | None = None,
-    draft_factory: "Callable[[JobSnapshot, tuple[AdapterSource, ...], str], Awaitable[str | None]] | None" = None,
+    draft_factory: "Callable[[JobSnapshot, tuple[AdapterSource, ...], str, dict[str, object] | None], Awaitable[str | None]] | None" = None,
 ) -> RunOutcome:
     """Execute one acquired job end-to-end.
 
@@ -86,6 +111,29 @@ async def run_once(
         source_refs=snapshot.source_refs,
         timeout_seconds=int(os.environ.get("WORKER_JOB_TIMEOUT_SECONDS", "300")),
     )
+    started_monotonic = asyncio.get_event_loop().time()
+
+    def error_details(
+        current_step: AiJobStep | None,
+        *,
+        adapter_status: AdapterStatus | None = None,
+        code: str | None = None,
+    ) -> dict[str, object]:
+        """Build safe, structured diagnostics without prompt/source content."""
+        return {
+            "phase": current_step or "unknown",
+            "elapsedSeconds": round(asyncio.get_event_loop().time() - started_monotonic, 2),
+            "budgetSeconds": request.timeout_seconds,
+            "attempt": snapshot.attempts,
+            "adapter": type(adapter).__name__,
+            "reportType": request.report_type,
+            "sourcePolicy": request.source_policy,
+            "sourceRefsCount": len(request.source_refs),
+            "sourcesCount": len(adapter_status.sources) if adapter_status else 0,
+            "currentStep": adapter_status.current_step if adapter_status else current_step,
+            "adapterStatus": adapter_status.status if adapter_status else None,
+            "adapterErrorCode": adapter_status.error_code if adapter_status else code,
+        }
 
     try:
         await adapter.submit(request)
@@ -124,6 +172,7 @@ async def run_once(
                         if heartbeat is not None and heartbeat.reason
                         else "lease expired during poll"
                     ),
+                    error_details=error_details(snapshot.current_step, code="WORKER_LEASE_LOST"),
                 )
         try:
             status = await adapter.get_status(lease.job_id)
@@ -136,6 +185,7 @@ async def run_once(
                     current_step=None,
                     error_code=exc.code,
                     error_message=exc.message,
+                    error_details=error_details(snapshot.current_step, code=exc.code),
                     draft_research_id=None,
                 )
                 hooks.on_terminal(
@@ -172,6 +222,7 @@ async def run_once(
                 token_out=status.cost.token_output_total,
                 cost_cents=status.cost.cost_cents,
                 sources=status.sources,
+                review_details=_review_details(status.output_metadata),
             )
             terminal = status
             break
@@ -192,6 +243,7 @@ async def run_once(
             token_out=status.cost.token_output_total,
             cost_cents=status.cost.cost_cents,
             sources=status.sources,
+            review_details=_review_details(status.output_metadata),
         )
         if asyncio.get_event_loop().time() >= deadline_monotonic:
             # Adapter is still running past our budget → lease lost.
@@ -202,6 +254,7 @@ async def run_once(
                 current_step=status.current_step,
                 error_code="WORKER_TIMEOUT",
                 error_message="worker exceeded job budget",
+                error_details=error_details(status.current_step, adapter_status=status, code="WORKER_TIMEOUT"),
                 draft_research_id=None,
             )
             return RunOutcome(
@@ -212,6 +265,7 @@ async def run_once(
                 current_step=status.current_step,
                 error_code="WORKER_TIMEOUT",
                 error_message="worker exceeded job budget",
+                error_details=error_details(status.current_step, adapter_status=status, code="WORKER_TIMEOUT"),
             )
         await asyncio.sleep(0.05 if os.environ.get("AI_ENGINE_TEST_FAST_POLL") else 0.5)
 
@@ -221,6 +275,7 @@ async def run_once(
     draft_id: str | None = None
     output_text: str | None = None
     sources_tuple: tuple[AdapterSource, ...] = terminal.sources
+    review_details = _review_details(terminal.output_metadata)
     if final_status == AI_JOB_STATUS["SUCCEEDED"]:
         # research_report persists a private draft; summary_brief persists
         # inline output on the job and never invokes the draft factory.
@@ -239,13 +294,20 @@ async def run_once(
                 "via": "default_factory",
             }
         else:
-            draft_id = await draft_factory(snapshot, sources_tuple, terminal.output_text)
+            draft_id = await draft_factory(
+                snapshot, sources_tuple, terminal.output_text, review_details
+            )
             if not draft_id:
                 raise ValueError(
                     "run_once: draft_factory returned None for succeeded job; "
                     "must INSERT a research row and return its id."
                 )
 
+    terminal_error_details = (
+        error_details(terminal.current_step, adapter_status=terminal, code=terminal.error_code)
+        if terminal.status in (AI_JOB_STATUS["FAILED"], AI_JOB_STATUS["PARTIAL"])
+        else None
+    )
     await store.mark_terminal(
         lease,
         cast_status(final_status),  # type: ignore[arg-type]
@@ -254,6 +316,8 @@ async def run_once(
         error_message=terminal.error_message,
         draft_research_id=draft_id,
         output_text=output_text,
+        error_details=terminal_error_details,
+        review_details=review_details,
     )
     hooks.on_terminal(
         lease,
@@ -273,6 +337,8 @@ async def run_once(
         error_message=terminal.error_message,
         draft_research_id=draft_id,
         output_text=output_text,
+        error_details=terminal_error_details,
+        review_details=review_details,
         field_metadata={
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "search_count": str(terminal.cost.search_count),
@@ -283,6 +349,17 @@ async def run_once(
                 terminal.output_metadata
                 and bool(terminal.output_metadata.get("is_inferred"))
             ) else "false",
+            "fact_checks": str(
+                _metadata_int(terminal.output_metadata, "fact_checks")
+            ),
+            "fact_corrections": str(
+                _metadata_int(terminal.output_metadata, "fact_corrections")
+            ),
+            "fact_checks_unavailable": str(
+                _metadata_int(terminal.output_metadata, "fact_checks_unavailable")
+            ),
+            "review_status": str(review_details.get("status", "unavailable")) if review_details else "unavailable",
+            "review_attempts": str(review_details.get("attempts", 0)) if review_details else "0",
         },
     )
 
@@ -293,7 +370,7 @@ async def run_one_available_job(
     adapter: ResearchEngineAdapter,
     worker_id: str | None = None,
     hooks: RunnerHooks | None = None,
-    draft_factory: Callable[[JobSnapshot, tuple[AdapterSource, ...], str], Awaitable[str | None]] | None = None,
+    draft_factory: Callable[[JobSnapshot, tuple[AdapterSource, ...], str, dict[str, object] | None], Awaitable[str | None]] | None = None,
 ) -> RunOutcome | None:
     """Acquire + execute one job; return None if the queue is empty.
 

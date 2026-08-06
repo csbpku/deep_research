@@ -59,6 +59,17 @@ RADAR_FETCH_RETRIES = max(0, int(os.environ.get("RADAR_FETCH_RETRIES", "2")))
 RADAR_FETCH_RETRY_BACKOFF_SECONDS = max(
     0.0, float(os.environ.get("RADAR_FETCH_RETRY_BACKOFF_SECONDS", "0.5"))
 )
+RADAR_SOURCE_RETRIES = max(0, int(os.environ.get("RADAR_SOURCE_RETRIES", "2")))
+RADAR_SOURCE_RETRY_BACKOFF_SECONDS = max(
+    0.0, float(os.environ.get("RADAR_SOURCE_RETRY_BACKOFF_SECONDS", "10"))
+)
+RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS = max(
+    0.0, float(os.environ.get("RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS", "60"))
+)
+RADAR_ENRICHMENT_RETRIES = max(
+    0, int(os.environ.get("RADAR_ENRICHMENT_RETRIES", "2"))
+)
+RADAR_DIGEST_RETRIES = max(0, int(os.environ.get("RADAR_DIGEST_RETRIES", "2")))
 
 # Brief generation retry policy mirrors agents-radar/src/report.ts:
 # HTTP 429 gets up to 3 retries with 5s/10s/20s backoff.
@@ -85,6 +96,13 @@ _LOW_QUALITY_MARKERS = (
 # context, capped below the 64KB deep-dive limit so one prompt can cover a
 # whole repo's 24h activity.
 _REPO_DIGEST_CONTEXT_MAX_CHARS = 8000
+
+# These sources provide a meaningful title/snippet in their API response.
+# A blocked detail page must not turn an otherwise usable signal into a hard
+# candidate failure.
+_SNIPPET_FALLBACK_SOURCE_TYPES = {
+    "hackernews", "producthunt", "reddit", "lobsters", "devto",
+}
 
 
 def _classify_original_kind(source_type: str, url: str) -> str:
@@ -269,6 +287,26 @@ def _is_retryable_transport_error(exc: BaseException) -> bool:
     ))
 
 
+def _is_retryable_source_result(result: SourceRunResult) -> bool:
+    """Return whether a failed/partial source is likely to recover on retry."""
+    if result.status not in {"partial", "failed"}:
+        return False
+    # Explicit upstream blocks are policy decisions, not transient failures.
+    return result.error_code not in {
+        "URL_FETCH_BLOCKED",
+        "CONTENT_TYPE_REJECTED",
+        "UPSTREAM_AUTH_REQUIRED",
+        "WEWE_AUTH_CONFIG_INVALID",
+    }
+
+
+def _can_use_snippet_fallback(source: RadarSource, candidate: RadarCandidate) -> bool:
+    return (
+        source.source_type in _SNIPPET_FALLBACK_SOURCE_TYPES
+        and bool(candidate.snippet.strip())
+    )
+
+
 async def _with_transport_retries(
     operation: Callable[[], Awaitable[Any]],
     *,
@@ -335,6 +373,11 @@ async def _finish_run(
     total_new: int,
     total_skipped: int,
     total_failed: int,
+    fallback_count: int,
+    skipped_existing: int,
+    skipped_rule_noise: int,
+    skipped_distilled_noise: int,
+    skipped_conflict: int,
     token_input_total: int,
     token_output_total: int,
     cost_usd: float,
@@ -348,6 +391,9 @@ async def _finish_run(
             '"totalNew" = %s, "totalSkipped" = %s, "totalFailed" = %s, '
             '"tokenInputTotal" = %s, "tokenOutputTotal" = %s, "costUsd" = %s, '
             '"elapsedMs" = %s, "errorCode" = %s, "errorMessage" = %s, '
+            '"fallbackCount" = %s, "skippedExisting" = %s, '
+            '"skippedRuleNoise" = %s, "skippedDistilledNoise" = %s, '
+            '"skippedConflict" = %s, '
             '"completedAt" = now(), "lockedBy" = NULL, "leaseExpiresAt" = NULL, '
             '"heartbeatAt" = NULL WHERE "id" = %s',
             (
@@ -362,6 +408,11 @@ async def _finish_run(
                 elapsed_ms,
                 error_code,
                 error_message[:500] if error_message else None,
+                fallback_count,
+                skipped_existing,
+                skipped_rule_noise,
+                skipped_distilled_noise,
+                skipped_conflict,
                 run_id,
             ),
         )
@@ -765,6 +816,21 @@ def _repo_activity_document(url: str, markdown: str) -> FetchedDocument:
     )
 
 
+def _snippet_document(url: str, snippet: str) -> FetchedDocument:
+    """Build a document from source-provided text without a second HTTP fetch."""
+    content = snippet.strip().encode("utf-8")
+    return FetchedDocument(
+        url=url,
+        final_ip="",
+        status=200,
+        headers={"content-type": "text/plain"},
+        content=content,
+        content_type="text/plain",
+        elapsed_ms=0,
+        redirect_count=0,
+    )
+
+
 async def _run_source(
     pool: Any,
     *,
@@ -792,6 +858,9 @@ async def _run_source(
     cost_usd = 0.0
     first_error_code: str | None = None
     candidate_failures: Counter[tuple[str, str, str]] = Counter()
+    unavailable_hosts: set[str] = set()
+    unavailable_hosts_lock = asyncio.Lock()
+    source_diagnostic: tuple[str, str] | None = None
     try:
         candidates = await _with_transport_retries(
             lambda: fetch_source(source, fetchers=fetchers),
@@ -800,6 +869,17 @@ async def _run_source(
             domain=_source_domain(source),
         )
         total_fetched = len(candidates)
+        raw_diagnostic = source.config.get("_wewe_refresh_diagnostic")
+        source_diagnostic = (
+            raw_diagnostic
+            if isinstance(raw_diagnostic, tuple)
+            and len(raw_diagnostic) == 2
+            and all(isinstance(value, str) for value in raw_diagnostic)
+            else next(
+                (candidate.source_diagnostic for candidate in candidates if candidate.source_diagnostic),
+                None,
+            )
+        )
         candidate_semaphore = asyncio.Semaphore(
             max(1, candidate_concurrency or RADAR_CANDIDATE_CONCURRENCY)
         )
@@ -813,6 +893,7 @@ async def _run_source(
             async with candidate_semaphore:
                 try:
                     normalized = normalize_candidate(raw_candidate)
+                    markdown = ""
                     if await _candidate_exists(pool, normalized.canonical_url):
                         total_skipped += 1
                         skipped_existing += 1
@@ -835,17 +916,64 @@ async def _run_source(
                             max_chars=_REPO_DIGEST_CONTEXT_MAX_CHARS,
                         )
                         fetched = _repo_activity_document(raw_candidate.url, markdown)
+                    elif source.source_type == "arxiv" and normalized.snippet.strip():
+                        # The arXiv API already returns the abstract. Fetching
+                        # every /abs page afterwards multiplies one upstream
+                        # request into 50 rate-limited page requests.
+                        markdown = normalized.snippet.strip()[:8000]
+                        fetched = _snippet_document(raw_candidate.url, markdown)
                     else:
-                        fetched = await _with_transport_retries(
-                            lambda: document_fetcher(raw_candidate.url),
-                            run_id=run_id,
-                            source_id=source.id,
-                            domain=_host(raw_candidate.url),
-                        )
-                        raw_html = fetched.content.decode("utf-8", errors="replace")
-                        markdown = _extract_article_content(
-                            raw_html, raw_candidate.url, source.source_type
-                        )
+                        document_host = _host(raw_candidate.url)
+                        # A source batch often contains many links on one host
+                        # (ArXiv, Dev.to, GitHub). Once transport fails for a
+                        # host, retrying every remaining candidate only turns a
+                        # single outage into dozens of identical failures.
+                        async with unavailable_hosts_lock:
+                            host_unavailable = document_host in unavailable_hosts
+                        if host_unavailable:
+                            total_skipped += 1
+                            logger.info(
+                                "ai-engine.radar.host_circuit_open",
+                                extra={
+                                    "request_id": run_id,
+                                    "source_id": source.id,
+                                    "domain": document_host,
+                                },
+                            )
+                            return
+                        try:
+                            fetched = await _with_transport_retries(
+                                lambda: document_fetcher(raw_candidate.url),
+                                run_id=run_id,
+                                source_id=source.id,
+                                domain=document_host,
+                            )
+                        except Exception as fetch_exc:
+                            if _can_use_snippet_fallback(source, raw_candidate):
+                                fallback_count += 1
+                                markdown = raw_candidate.snippet.strip()[:8000]
+                                fetched = _snippet_document(
+                                    raw_candidate.url, markdown
+                                )
+                                logger.info(
+                                    "ai-engine.radar.snippet_transport_fallback",
+                                    extra={
+                                        "request_id": run_id,
+                                        "source_id": source.id,
+                                        "error_code": _safe_error_code(fetch_exc),
+                                        "domain": document_host,
+                                    },
+                                )
+                            else:
+                                if _is_retryable_transport_error(fetch_exc):
+                                    async with unavailable_hosts_lock:
+                                        unavailable_hosts.add(document_host)
+                                raise
+                        if not markdown:
+                            raw_html = fetched.content.decode("utf-8", errors="replace")
+                            markdown = _extract_article_content(
+                                raw_html, raw_candidate.url, source.source_type
+                            )
                     raw_content = markdown or normalized.snippet
                     # Tracked-repo digests are structured API data: always run
                     # the per-repo LLM summary over the combined activity rather
@@ -907,24 +1035,39 @@ async def _run_source(
                     }
                     # 低质量 fallback（snippet 路径）已直接用 snippet 作 interpretation，跳过 LLM
                     if not low_quality:
-                        brief = await _generate_brief_with_retry(
-                            generate_brief,
-                            adapter,
-                            item,
-                            normalized.canonical_url,
-                            timeout_seconds=generation_timeout_seconds,
-                            context_max_chars=(
-                                _REPO_DIGEST_CONTEXT_MAX_CHARS
-                                if repo_activity is not None
-                                else None
-                            ),
-                        )
-                        token_in += brief.cost.token_input_total
-                        token_out += brief.cost.token_output_total
-                        cost_usd += _cost_usd(brief.cost)
-                        if brief.status != AI_JOB_STATUS["SUCCEEDED"] or not brief.output_text:
-                            raise RuntimeError(f"brief generation ended in {brief.status}")
-                        interpretation = brief.output_text.strip()
+                        try:
+                            brief = await _generate_brief_with_retry(
+                                generate_brief,
+                                adapter,
+                                item,
+                                normalized.canonical_url,
+                                timeout_seconds=generation_timeout_seconds,
+                                context_max_chars=(
+                                    _REPO_DIGEST_CONTEXT_MAX_CHARS
+                                    if repo_activity is not None
+                                    else None
+                                ),
+                            )
+                            token_in += brief.cost.token_input_total
+                            token_out += brief.cost.token_output_total
+                            cost_usd += _cost_usd(brief.cost)
+                            if brief.status != AI_JOB_STATUS["SUCCEEDED"] or not brief.output_text:
+                                raise RuntimeError(f"brief generation ended in {brief.status}")
+                            interpretation = brief.output_text.strip()
+                        except Exception as brief_exc:
+                            if not _can_use_snippet_fallback(source, raw_candidate):
+                                raise
+                            fallback_count += 1
+                            brief = None
+                            interpretation = normalized.snippet.strip()[:2000]
+                            logger.info(
+                                "ai-engine.radar.snippet_brief_fallback",
+                                extra={
+                                    "request_id": run_id,
+                                    "source_id": source.id,
+                                    "error_code": _safe_error_code(brief_exc),
+                                },
+                            )
                     # Distilled 7-dimension LLM scoring (Stage 2)
                     distilled_result = None
                     if distilled_scorer is not None and brief is not None:
@@ -1035,6 +1178,12 @@ async def _run_source(
             if total_failed
             else None
         )
+        if source_diagnostic is not None:
+            diagnostic_code, diagnostic_message = source_diagnostic
+            first_error_code = first_error_code or diagnostic_code
+            error_message = diagnostic_message
+            if run_status == "completed":
+                run_status = "partial"
     except Exception as exc:
         total_failed = max(1, total_failed)
         first_error_code = _safe_error_code(exc)
@@ -1067,6 +1216,11 @@ async def _run_source(
         total_new=total_new,
         total_skipped=total_skipped,
         total_failed=total_failed,
+        fallback_count=fallback_count,
+        skipped_existing=skipped_existing,
+        skipped_rule_noise=skipped_rule_noise,
+        skipped_distilled_noise=skipped_distilled_noise,
+        skipped_conflict=skipped_conflict,
         token_input_total=token_in,
         token_output_total=token_out,
         cost_usd=round(cost_usd, 6),
@@ -1157,6 +1311,42 @@ async def run_radar_pipeline(
     stages; they are returned for reporting and can be retried independently.
     """
     sync_result = await run_radar_sync(pool, **sync_kwargs)
+    all_runs = list(sync_result.runs)
+    triggered_by = str(sync_kwargs.get("triggered_by", "cron"))
+    # Retry only the sources that failed or were partial. Successful sources
+    # are never re-fetched, so a flaky upstream cannot duplicate the whole
+    # daily batch. The retry creates its own run record for observability.
+    if triggered_by == "cron" and RADAR_SOURCE_RETRIES > 0:
+        for attempt in range(RADAR_SOURCE_RETRIES):
+            retry_source_ids = {
+                result.source_id
+                for result in all_runs
+                if _is_retryable_source_result(result)
+            }
+            if not retry_source_ids:
+                break
+            if any(
+                result.error_code in {"UPSTREAM_RATE_LIMITED", "AI_ENGINE_UNAVAILABLE"}
+                for result in all_runs
+                if result.source_id in retry_source_ids
+            ):
+                delay = RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS * (attempt + 1)
+            else:
+                delay = RADAR_SOURCE_RETRY_BACKOFF_SECONDS * (attempt + 1)
+            if delay:
+                await asyncio.sleep(delay)
+            retry_result = await run_radar_sync(
+                pool,
+                **{
+                    **sync_kwargs,
+                    "source_ids": retry_source_ids,
+                },
+            )
+            all_runs.extend(retry_result.runs)
+    sync_result = RadarSyncResult(
+        batch_id=sync_result.batch_id,
+        runs=tuple(all_runs),
+    )
     try:
         from ai_engine.radar.tracked_repo_manager import (
             run_tracked_repo_postprocessing,
@@ -1200,11 +1390,17 @@ async def run_radar_pipeline(
             pool,
             limit=max(20, total_new),
         )
-        enriched_count = await run_enrichment_for_pending(
-            pool,
-            limit=max(1, total_new),
-            sync_run_ids=tuple(run.run_id for run in sync_result.runs),
-        )
+        enriched_count = 0
+        enrichment_attempts = RADAR_ENRICHMENT_RETRIES if triggered_by == "cron" else 0
+        enrichment_limit = max(50, total_new) if triggered_by == "cron" else max(1, total_new)
+        for attempt in range(enrichment_attempts + 1):
+            enriched_count += await run_enrichment_for_pending(
+                pool,
+                limit=enrichment_limit,
+                sync_run_ids=tuple(run.run_id for run in sync_result.runs),
+            )
+            if attempt < RADAR_ENRICHMENT_RETRIES:
+                await asyncio.sleep(2.0 * (attempt + 1))
         enrichment_error = None
     except Exception as exc:
         enriched_count = 0
@@ -1221,10 +1417,13 @@ async def run_radar_pipeline(
         digest_date = target_date or datetime.now(
             ZoneInfo("Asia/Shanghai")
         ).date()
-        digest_result = await generate_daily_digest(
-            pool,
-            target_date=digest_date,
-        )
+        digest_result = await generate_daily_digest(pool, target_date=digest_date)
+        digest_attempts = RADAR_DIGEST_RETRIES if triggered_by == "cron" else 0
+        for attempt in range(digest_attempts):
+            if not digest_result.narrative_degraded:
+                break
+            await asyncio.sleep(2.0 * (attempt + 1))
+            digest_result = await generate_daily_digest(pool, target_date=digest_date)
         digest_summary_id = digest_result.summary_id
         digest_candidate_count = digest_result.candidate_count
         digest_narrative_degraded = digest_result.narrative_degraded

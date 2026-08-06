@@ -9,12 +9,15 @@
 //     拉最近 1 条已发布日报标题 + 按 Distilled 分数排序的 3 条高信号。
 //   - 加载策略：客户端拉取；空数据时整块不渲染（不展示"没有东西"的占位 ——
 //     数据库规则 #8 提到"empty is direction, not mood"）。
-//   - 只在登录后展示（getCurrentUser 由父 server 组件传入 null 时整块不挂）。
+//   - 团队区拆成两块独立 section：
+//       · "进行中的调研" — 登录用户可见，展示 running/queued AI jobs
+//       · "待审核"      — 仅 admin 可见，展示 pending shares / comment nominations
 
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRight,
+  CheckSquare,
   Clock3,
   Newspaper,
   Radar as RadarIcon,
@@ -58,6 +61,14 @@ interface AiJobsResponse {
   items: Array<{ jobId: string; topic: string; status: string }>;
 }
 
+interface AdminDashboardResponse {
+  pendingReviews: {
+    total: number;
+    shares: number;
+    commentNominations: number;
+  };
+}
+
 function formatTimeAgo(iso: string | null): string {
   if (!iso) return '—';
   const ms = Date.now() - new Date(iso).getTime();
@@ -75,11 +86,17 @@ function scoreValue(score: RadarCandidateItem['distilledScore']): number | null 
 function tierLabel(tier: string | undefined): string | null {
   if (tier === 'deep_read') return '深度阅读';
   if (tier === 'skim') return '略读';
-  if (tier === 'collection') return '收藏';
+  if (tier === 'collection') return '重点阅读';
   return null;
 }
 
-export function RecentActivityStrip() {
+export function RecentActivityStrip({
+  loggedIn,
+  isAdmin,
+}: {
+  loggedIn: boolean;
+  isAdmin: boolean;
+}) {
   const digestQ = useQuery<DigestListResponse>({
     queryKey: ['home', 'digest'],
     queryFn: async () => {
@@ -108,15 +125,34 @@ export function RecentActivityStrip() {
       return r.json();
     },
     staleTime: 30_000,
+    enabled: loggedIn,
+  });
+
+  const teamQ = useQuery<AdminDashboardResponse>({
+    queryKey: ['home', 'admin-dashboard'],
+    queryFn: async () => {
+      const r = await fetch('/api/admin/dashboard', { cache: 'no-store' });
+      if (!r.ok) {
+        return { pendingReviews: { total: 0, shares: 0, commentNominations: 0 } };
+      }
+      return r.json();
+    },
+    staleTime: 30_000,
+    enabled: isAdmin,
   });
 
   const latestDigest = digestQ.data?.dates[0];
   const latestRadar = (radarQ.data?.items ?? []).slice(0, 3);
 
   const runningJobs = jobsQ.data?.items ?? [];
-  const loading = digestQ.isLoading || radarQ.isLoading;
+  const pendingShares = teamQ.data?.pendingReviews.shares ?? 0;
+  const pendingCommentNominations = teamQ.data?.pendingReviews.commentNominations ?? 0;
+  const hasRunningJobs = loggedIn && runningJobs.length > 0;
+  const hasPendingReviews = isAdmin && (pendingShares > 0 || pendingCommentNominations > 0);
 
-  // 两路全空 → 整块不渲染（empty = direction, not mood）
+  const loading = digestQ.isLoading || radarQ.isLoading || jobsQ.isLoading || teamQ.isLoading;
+
+  // 主面板全空 → 整块不渲染（empty = direction, not mood）
   if (!loading && !latestDigest && latestRadar.length === 0) return null;
 
   return (
@@ -198,28 +234,75 @@ export function RecentActivityStrip() {
 
         </div>
       )}
-      {!loading && (runningJobs.length > 0 || latestRadar.length > 0) ? (
-        <section className="rounded-lg border border-border bg-card p-4" aria-label="团队待处理">
+
+      {/* 进行中的调研 — 仅登录用户、且有 running jobs 时显示 */}
+      {!loading && hasRunningJobs ? (
+        <section className="rounded-lg border border-border bg-card p-4" aria-label="进行中的调研">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">团队需要处理</h2>
-            <span className="font-mono text-[11px] text-muted-foreground">工作台提醒</span>
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <Clock3 className="size-3.5 text-primary" />
+              进行中的调研
+            </h2>
+            <Link href="/ai-research" className="font-mono text-[11px] text-muted-foreground hover:text-primary">
+              查看全部
+            </Link>
           </div>
-          <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+          <ul className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
             {runningJobs.map((job) => (
-              <Link key={job.jobId} href={`/ai-research/${job.jobId}`} className="flex min-w-0 items-center gap-2 rounded-md bg-accent/60 px-3 py-2 text-xs hover:bg-accent">
-                <Clock3 className="size-3.5 text-primary" />
-                <span className="min-w-0 flex-1 truncate">AI 调研 · {job.topic}</span>
-                <span className="text-primary">进行中</span>
-              </Link>
+              <li key={job.jobId}>
+                <Link
+                  href={`/ai-research/${job.jobId}`}
+                  className="flex min-w-0 items-center gap-2 rounded-md bg-accent/60 px-3 py-2 text-xs hover:bg-accent"
+                >
+                  <span className="min-w-0 flex-1 truncate">AI 调研 · {job.topic}</span>
+                  <span className="text-primary">进行中</span>
+                </Link>
+              </li>
             ))}
-            {latestRadar[0] ? (
-              <Link href={`/radar/${latestRadar[0].id}`} className="flex min-w-0 items-center gap-2 rounded-md bg-muted/70 px-3 py-2 text-xs hover:bg-muted">
-                <RadarIcon className="size-3.5 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">高信号待阅读 · {latestRadar[0].title}</span>
-                <span className="text-muted-foreground">查看</span>
-              </Link>
-            ) : null}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* 待审核 — 仅 admin、且有 pending review 时显示 */}
+      {!loading && hasPendingReviews ? (
+        <section className="rounded-lg border border-border bg-card p-4" aria-label="待审核">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <CheckSquare className="size-3.5 text-primary" />
+              待审核
+            </h2>
+            <Link href="/admin" className="font-mono text-[11px] text-muted-foreground hover:text-primary">
+              进入管理
+            </Link>
           </div>
+          <ul className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+            {pendingCommentNominations > 0 ? (
+              <li>
+                <Link
+                  href="/admin?tab=comments"
+                  className="flex min-w-0 items-center gap-2 rounded-md bg-muted/70 px-3 py-2 text-xs hover:bg-muted"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    评论提炼 · {pendingCommentNominations} 条待处理
+                  </span>
+                  <span className="text-muted-foreground">处理</span>
+                </Link>
+              </li>
+            ) : null}
+            {pendingShares > 0 ? (
+              <li>
+                <Link
+                  href="/admin?tab=shares"
+                  className="flex min-w-0 items-center gap-2 rounded-md bg-muted/70 px-3 py-2 text-xs hover:bg-muted"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    分享审核 · {pendingShares} 条待处理
+                  </span>
+                  <span className="text-muted-foreground">处理</span>
+                </Link>
+              </li>
+            ) : null}
+          </ul>
         </section>
       ) : null}
     </section>

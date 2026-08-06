@@ -54,6 +54,8 @@ class TopicProposalGenerateResponse(BaseModel):
     proposalsCreated: int
     candidatesLinked: int
     failed: int
+    eligibleCandidates: int
+    failureReason: str
 
 
 @router.post(
@@ -145,6 +147,8 @@ async def generate_topic_proposals(
         proposalsCreated=result["proposals_created"],
         candidatesLinked=result["candidates_linked"],
         failed=result["failed"],
+        eligibleCandidates=result["eligible_candidates"],
+        failureReason=result["failure_reason"],
     )
 
 

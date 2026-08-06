@@ -13,16 +13,26 @@ import type { TxClient } from './tx';
 
 export const ADMIN_TARGET_TYPE = {
   RADAR_SUMMARY: 'radar_summary',
+  RESEARCH: 'research',
 } as const;
 export type AdminTargetType = (typeof ADMIN_TARGET_TYPE)[keyof typeof ADMIN_TARGET_TYPE];
 
 export const ADMIN_RADAR_ACTIONS = {
-  SELECT: 'radar_select',
   DISMISS: 'radar_dismiss',
+  RESTORE: 'radar_restore',
   RETRY_INTERPRETATION: 'radar_retry_interpretation',
   CREATE_RESEARCH: 'radar_create_research',
 } as const;
 export type AdminRadarAction = (typeof ADMIN_RADAR_ACTIONS)[keyof typeof ADMIN_RADAR_ACTIONS];
+
+export const ADMIN_RESEARCH_ACTIONS = {
+  ARCHIVE: 'research_archive',
+  RESTORE: 'research_restore',
+  FEATURE: 'research_feature',
+  UNFEATURE: 'research_unfeature',
+} as const;
+export type AdminResearchAction =
+  (typeof ADMIN_RESEARCH_ACTIONS)[keyof typeof ADMIN_RESEARCH_ACTIONS];
 
 /** 通用审计写入：actor / action / target / metadata + requestId（unique）。 */
 export async function writeAdminAction(

@@ -9,7 +9,7 @@
 //   1. "从空白创建" → 表单（标题 + 正文 + 结构化字段 + 标签）
 //   2. "从文件导入" → /researches/import（弹窗 + 转换 + Markdown 预览）
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
@@ -33,6 +33,10 @@ export default function NewResearchPage() {
   const [tagsInput, setTagsInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (window.location.hash === '#blank') setMode('create');
+  }, []);
 
   const tags = tagsInput
     .split(',')
@@ -82,7 +86,7 @@ export default function NewResearchPage() {
         </nav>
         <div className="mb-6 flex items-end justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight">新建调研</h1>
+              <h1 className="text-3xl font-semibold tracking-normal">新建调研</h1>
             <p className="mt-1 text-sm text-muted-foreground">从一个空白问题开始，或导入已有资料后再整理成团队可复用的研究。</p>
           </div>
           <div className="hidden text-right font-mono text-[11px] text-muted-foreground sm:block">预计 2–5 分钟<br />可随时保存草稿</div>
@@ -96,7 +100,7 @@ export default function NewResearchPage() {
           >
             <div className="flex items-center gap-2">
               <FilePlus2 className="size-4 text-primary" />
-              <span className="text-lg font-semibold tracking-tight">从空白创建</span>
+              <span className="text-lg font-semibold tracking-normal">从空白创建</span>
             </div>
             <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
               直接写标题 + 正文 + 背景 / 结论 / 风险 / 标签
@@ -109,7 +113,7 @@ export default function NewResearchPage() {
           >
             <div className="flex items-center gap-2">
               <Upload className="size-4 text-primary" />
-              <span className="text-lg font-semibold tracking-tight">从文件导入</span>
+              <span className="text-lg font-semibold tracking-normal">从文件导入</span>
             </div>
             <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
               拖拽 .md / .txt / .html（≤ 5MB）→ 自动转 Markdown → 个人草稿
@@ -123,7 +127,7 @@ export default function NewResearchPage() {
   return (
     <div className="mx-auto max-w-measure">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold tracking-tight">新建调研</h1>
+        <h1 className="text-xl font-semibold tracking-normal">新建调研</h1>
         <Button type="button" variant="outline" size="sm" onClick={() => setMode('pick')}>
           返回
         </Button>

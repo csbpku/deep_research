@@ -497,7 +497,11 @@ async def append_message(
             topic=str(snapshot.get("title") or "Chat"),
             context=prompt,
             report_type="summary_brief",
-            source_policy="only_user_sources",
+            # The chat session already carries the captured article in its
+            # prompt context; it does not submit a URL source_ref. Using
+            # only_user_sources here incorrectly fails every follow-up with
+            # NO_SOURCES_FOUND before the model can read the snapshot.
+            source_policy="prefer_user_sources",
             source_refs=(),
             timeout_seconds=60,
         )
@@ -513,7 +517,16 @@ async def append_message(
         if brief is None:
             raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 60s 超时")
         latency_ms = int((time.monotonic() - started) * 1000)
-        content = (brief.output_text or "").strip() or "(空响应)"
+        if brief.status != "succeeded":
+            raise _http_error(
+                "AI_ENGINE_UNAVAILABLE",
+                brief.error_message or "AI 暂时没有生成回答，请重试",
+            )
+        content = (brief.output_text or "").strip()
+        if not content:
+            # Do not persist or return an empty assistant bubble. An empty
+            # model result is an upstream failure from the user's perspective.
+            raise _http_error("AI_ENGINE_UNAVAILABLE", "AI 没有生成有效回答，请重试")
     except AdapterError as exc:
         raise _http_error(exc.code, exc.message)
 

@@ -57,7 +57,7 @@ def test_dedupes_and_uses_visited_urls_as_fallback() -> None:
     assert keys == ["https://a.example/post", "https://b.example/other", "https://c.example/page"]
     assert sources[1].title == "B"
     assert sources[1].snippet is None
-    assert sources[2].title == "fallback topic"
+    assert sources[2].title is None
 
 
 def test_empty_inputs_return_empty_list() -> None:
@@ -117,6 +117,32 @@ def test_append_references_uses_collected_sources() -> None:
     assert "## 参考文献" in completed
     assert "[Source A](https://a.example)" in completed
     assert "[Source B](https://b.example)" in completed
+
+
+def test_append_references_derives_distinct_labels_when_titles_are_missing() -> None:
+    completed = _append_references(
+        "正文已经完整。",
+        [
+            _source("https://arxiv.org/abs/2608.02464", ""),
+            _source("https://www.youtube.com/watch?v=abc123", ""),
+        ],
+    )
+
+    assert "[arxiv.org（2608.02464）](https://arxiv.org/abs/2608.02464)" in completed
+    assert "[YouTube 视频（abc123）](https://www.youtube.com/watch?v=abc123)" in completed
+
+
+def test_append_references_replaces_duplicate_upstream_titles() -> None:
+    completed = _append_references(
+        "正文已经完整。",
+        [
+            _source("https://arxiv.org/abs/2608.02464", "同一个标题"),
+            _source("https://openreview.net/forum?id=PFR4E8583W", "同一个标题"),
+        ],
+    )
+
+    assert "[arxiv.org（2608.02464）](https://arxiv.org/abs/2608.02464)" in completed
+    assert "[openreview.net（PFR4E8583W）](https://openreview.net/forum?id=PFR4E8583W)" in completed
 
 
 def test_append_references_replaces_model_generated_reference_section() -> None:

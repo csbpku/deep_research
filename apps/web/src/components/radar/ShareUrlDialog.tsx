@@ -82,7 +82,7 @@ export function ShareUrlDialog() {
             系统会安全抓取并生成摘要，管理员审核后才会出现在技术雷达。
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           <Input
             type="url"
             value={url}
@@ -103,20 +103,20 @@ export function ShareUrlDialog() {
               <CheckCircle2 className="size-4" />已提交，可在下方查看处理状态。
             </p>
           ) : null}
-          <section aria-label="我的分享记录">
+          <section aria-label="我的分享记录" className="min-w-0">
             <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">最近分享</h3>
             {history.isLoading ? <p className="text-sm text-muted-foreground">加载中…</p> : null}
             {!history.isLoading && items.length === 0 ? <p className="text-sm text-muted-foreground">还没有分享记录。</p> : null}
-            <ul className="max-h-52 space-y-2 overflow-y-auto">
+            <ul className="max-h-52 min-w-0 space-y-2 overflow-y-auto">
               {items.map((item) => (
-                <li key={item.id} className="rounded-md border border-border p-2 text-xs">
+                <li key={item.id} className="min-w-0 rounded-md border border-border p-2 text-xs">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary">{STATUS_LABEL[item.status]}</Badge>
-                    <span className="truncate font-medium">{item.fetchedTitle ?? item.url}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{item.fetchedTitle ?? item.url}</span>
                   </div>
-                  {item.fetchErrorMessage ? <p className="mt-1 text-destructive">{item.fetchErrorMessage}</p> : null}
+                  {item.fetchErrorMessage ? <p className="mt-1 min-w-0 break-words text-destructive">{item.fetchErrorMessage}</p> : null}
                   {item.publishedSummaryId ? (
-                    <a className="mt-1 inline-block text-primary hover:underline" href={`/radar/${item.publishedSummaryId}`}>
+                    <a className="mt-1 inline-block min-w-0 max-w-full truncate text-primary hover:underline" href={`/radar/${item.publishedSummaryId}`}>
                       查看已收录内容
                     </a>
                   ) : null}

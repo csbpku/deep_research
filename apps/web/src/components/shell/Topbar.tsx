@@ -1,8 +1,8 @@
 'use client';
 
 // Topbar —— 顶栏（56px）。
-// 左：移动端汉堡（打开侧栏 Sheet）。右：全局搜索 + 新建 + AI 调研进行中
-//   指示器 + 主题切换 + 用户菜单。
+// 左：移动端汉堡（打开侧栏 Sheet）。右：全局搜索 + AI 调研进行中指示器
+//   + 主题切换 + 用户菜单。
 //
 // user 与 navItems 都是 RSC 传下来的纯数据，Topbar 自身不查询 nav；只有
 // 搜索框和 AI 调研指示器是 client-side 的。
@@ -11,7 +11,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { FilePenLine, Loader2, Menu, Search as SearchIcon } from 'lucide-react';
+import { Loader2, Menu, Search as SearchIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -125,7 +125,7 @@ export function Topbar({
   user,
 }: {
   navItems: NavItem[];
-  user: { email: string; name: string; role: 'member' | 'admin' } | null;
+  user: { email: string; name: string; image: string | null; role: 'member' | 'admin' } | null;
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
@@ -142,7 +142,7 @@ export function Topbar({
           <SheetTitle className="sr-only">主导航</SheetTitle>
           <div className="flex h-topbar items-center gap-2 border-b border-border px-4">
             <BrandMark />
-            <span className="text-sm font-semibold tracking-tight">AI技术调研平台</span>
+            <span className="text-sm font-semibold tracking-normal">AI技术调研平台</span>
           </div>
           <div className="p-2">
             <SidebarNav items={navItems} onNavigate={() => setMobileOpen(false)} />
@@ -153,7 +153,7 @@ export function Topbar({
       {/* 移动端品牌位 */}
       <Link href="/" className="flex min-w-0 items-center gap-2 md:hidden" aria-label="AI技术调研平台首页">
         <BrandMark className="size-6" />
-        <span className="truncate text-sm font-semibold tracking-tight">AI技术调研平台</span>
+        <span className="truncate text-sm font-semibold tracking-normal">AI技术调研平台</span>
       </Link>
 
       <PageContext navItems={navItems} />
@@ -162,15 +162,6 @@ export function Topbar({
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* AI 调研进行中（仅登录用户才可能返回非空） */}
         {user ? <AiResearchIndicator /> : null}
-
-        {/* 新建调研 */}
-        {user ? (
-          <Button asChild variant="ghost" size="icon-sm" aria-label="新建调研">
-            <Link href="/researches/new">
-              <FilePenLine />
-            </Link>
-          </Button>
-        ) : null}
 
         <ThemeToggle />
         <UserMenu user={user} />

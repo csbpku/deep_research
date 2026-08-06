@@ -25,12 +25,12 @@ const JOB_TONES: Record<string, Tone> = {
   cancelled: { className: 'bg-status-cancelled-bg text-status-cancelled-fg', label: '已取消' },
 };
 
-/** summaries.status（雷达候选生命周期） */
+/** summaries.status（雷达内容生命周期） */
 const RADAR_TONES: Record<string, Tone> = {
-  candidate: { className: 'bg-radar-candidate-bg text-radar-candidate-fg', label: '候选' },
+  candidate: { className: 'bg-radar-candidate-bg text-radar-candidate-fg', label: '雷达内容' },
   pending_review: { className: 'bg-radar-pending-bg text-radar-pending-fg', label: '待审核' },
-  published: { className: 'bg-radar-published-bg text-radar-published-fg', label: '已发布' },
-  rejected: { className: 'bg-radar-rejected-bg text-radar-rejected-fg', label: '已忽略' },
+  published: { className: 'bg-radar-published-bg text-radar-published-fg', label: '历史精选' },
+  rejected: { className: 'bg-radar-rejected-bg text-radar-rejected-fg', label: '已屏蔽' },
   archived: { className: 'bg-radar-archived-bg text-radar-archived-fg', label: '已归档' },
 };
 

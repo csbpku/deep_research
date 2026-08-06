@@ -54,6 +54,7 @@ export type RadarCandidateShape = {
   sharedBy: { id: string; name: string } | null;
   feedbackCounts: RadarFeedbackCount;
   myFeedbacks: RadarFeedbackType[];
+  commentCount: number;
   // Phase 2A deep-dive: original source + enrichment metadata. Optional
   // — pre-Phase-0 rows will be null across the board.
   originalKind: string | null;
@@ -118,6 +119,7 @@ export function shapeCandidate(input: {
       completedAt: Date | null;
       source: { sourceType: string; name: string } | null;
     } | null;
+    _count?: { comments: number };
   };
   feedbackCounts?: RadarFeedbackCount;
   myFeedbacks?: RadarFeedbackType[];
@@ -158,6 +160,7 @@ export function shapeCandidate(input: {
     sharedBy: s.sharedBy ?? null,
     feedbackCounts: counts,
     myFeedbacks: mine,
+    commentCount: s._count?.comments ?? 0,
     originalKind: s.originalKind ?? null,
     originalMarkdown: s.originalMarkdown ?? null,
     originalMeta: s.originalMeta ?? null,

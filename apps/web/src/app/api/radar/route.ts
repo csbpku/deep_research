@@ -35,8 +35,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     q: url.searchParams.get('q') ?? undefined,
     sourceType: url.searchParams.get('sourceType') ?? undefined,
     status: url.searchParams.get('status') ?? undefined,
+    quality: url.searchParams.get('quality') ?? undefined,
+    dateFrom: url.searchParams.get('dateFrom') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     per_page: url.searchParams.get('per_page') ?? undefined,
+    includeTotal: url.searchParams.get('includeTotal') ?? undefined,
+    includeFeedback: url.searchParams.get('includeFeedback') ?? undefined,
   });
   if (!parsed.success) {
     return toApiErrorResponse({
@@ -47,13 +51,31 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { q, sourceType, status, quality, page, per_page: perPage } = parsed.data;
+  const {
+    q,
+    sourceType,
+    status,
+    quality,
+    dateFrom,
+    page,
+    per_page: perPage,
+    includeTotal,
+    includeFeedback,
+  } = parsed.data;
+  if ((status === SUMMARY_STATUS.REJECTED || status === SUMMARY_STATUS.ARCHIVED) && u?.role !== 'admin') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.PERMISSION_DENIED,
+      message: '该状态仅用于 Admin 内容治理',
+      requestId,
+    });
+  }
 
   // 雷达候选 = 自动雷达条目，或已由 Admin 批准的用户分享。
   // 未审核分享只能停留在 share_submissions，不能出现在公开候选池。
   // 默认排除 archived，让 published/rejected 也可检索（admin 队列场景）。
   const where: Prisma.SummaryWhereInput = {
-    ...(status ? { status } : {}),
+    // 默认只展示正常雷达内容；已屏蔽/归档条目仅在显式筛选时返回。
+    status: status ?? { in: [SUMMARY_STATUS.CANDIDATE, SUMMARY_STATUS.PUBLISHED] },
     AND: [
       {
         OR: [
@@ -70,15 +92,21 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
                     sourceType:
                       sourceType === 'github'
                         ? { startsWith: 'github' }
+                        : sourceType === 'research'
+                          ? 'arxiv'
                         : sourceType === 'articles'
                           ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
                           : sourceType === 'community'
                             ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
+                            : sourceType === 'shared'
+                              ? '__user_share__'
                             : sourceType,
                   },
                 },
               },
-              ...(sourceType === 'articles' || sourceType === 'web_share'
+              ...(sourceType === 'shared'
+                ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+                : sourceType === 'articles' || sourceType === 'web_share'
                 ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
                 : []),
             ],
@@ -86,6 +114,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         : []),
       ...(quality === 'relevant'
         ? [{ OR: [{ distilledTier: { not: 'noise' } }, { distilledTier: null }] }]
+        : []),
+      ...(dateFrom
+        ? [{
+            OR: [
+              { publishedAt: { gte: dateFrom } },
+              { publishedAt: null, createdAt: { gte: dateFrom } },
+            ],
+          }]
         : []),
       ...(q && q.length > 0
         ? [
@@ -107,7 +143,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     { createdAt: 'desc' },
   ];
 
-  const [rawItems, total] = await Promise.all([
+  const [rawItems, totalResult] = await Promise.all([
     prisma.summary.findMany({
       where,
       orderBy,
@@ -142,10 +178,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             source: { select: { sourceType: true, name: true } },
           },
         },
+        _count: { select: { comments: true } },
       },
     }),
-    prisma.summary.count({ where }),
+    includeTotal ? prisma.summary.count({ where }) : Promise.resolve(null),
   ]);
+  const total = totalResult ?? 0;
 
   // sourceType is filtered in the Prisma query so pagination and total align.
   const itemsAfterSourceType = rawItems;
@@ -163,7 +201,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   const summaryIds = finalItems.map((it) => it.id);
   // Only fetch feedbacks if user is logged in (userId must be valid UUID)
-  const feedbackMap = u?.id
+  const feedbackMap = includeFeedback && u?.id
     ? await aggregateFeedbacks(prisma, summaryIds, u.id)
     : new Map<string, { counts: Record<string,number>; mine: string[] }>();
 

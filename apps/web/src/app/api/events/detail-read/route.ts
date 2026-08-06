@@ -18,7 +18,6 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { randomUUID } from 'node:crypto';
 import { DetailReadCompletedInput } from '@deep-research/shared/schemas';
 import { PRODUCT_EVENT_NAME } from '@deep-research/shared/metrics';
 import { ERROR_CODES } from '@deep-research/shared/errors';
@@ -119,4 +118,3 @@ function isoWeekOf(d: Date): string {
 }
 
 // quiet linter
-export const _exports = { randomUUID };

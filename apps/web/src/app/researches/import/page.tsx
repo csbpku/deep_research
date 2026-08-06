@@ -29,7 +29,7 @@ export default function ImportPage() {
         <span>从文件导入</span>
       </nav>
 
-      <h1 className="mb-3 text-xl font-semibold tracking-tight">从文件导入</h1>
+      <h1 className="mb-3 text-xl font-semibold tracking-normal">从文件导入</h1>
 
       <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
         支持导入 <code className="rounded bg-muted px-1 font-mono text-xs">.md</code> /{' '}
@@ -47,6 +47,7 @@ export default function ImportPage() {
       )}
 
       {dialogOpen && <ImportDialog onClose={() => setDialogOpen(false)} />}
+
     </div>
   );
 }

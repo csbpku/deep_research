@@ -59,7 +59,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       },
       ...(sourceType
         ? [{
-            OR: sourceType === 'web_share'
+            OR: sourceType === 'shared' || sourceType === 'web_share'
               ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
               : [{
                   syncRun: {
@@ -67,6 +67,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
                       sourceType:
                         sourceType === 'github'
                           ? { startsWith: 'github' }
+                          : sourceType === 'research'
+                            ? 'arxiv'
                           : sourceType === 'articles'
                             ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
                             : sourceType === 'community'
@@ -130,6 +132,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             source: { select: { sourceType: true, name: true } },
           },
         },
+        _count: { select: { comments: true } },
       },
     }),
     prisma.summary.count({ where }),

@@ -1,8 +1,8 @@
 // Unit tests: W5 BFF routes —— /api/radar / /api/radar/[id] / /api/radar-feedback
-// / /api/admin/radar / /api/admin/radar/[id]/select|dismiss|retry-interpretation
+// / /api/admin/radar / /api/admin/radar/[id]/dismiss|retry-interpretation
 //
 // 测试策略：mock prisma + mock session/auth helpers，覆盖：
-//   - 正常路径（list/detail 候选、POST 反馈、select/dismiss/retry）
+//   - 正常路径（list/detail 候选、POST 反馈、dismiss/retry）
 //   - 无权限路径（admin 端点对 member 返回 403）
 //   - 失败路径（zod 校验、404 来源、409 唯一约束、422 sortOrder 冲突）
 
@@ -99,12 +99,13 @@ import { GET as radarList } from '../radar/route';
 import { GET as radarDetail } from '../radar/[id]/route';
 import { POST as feedbackPost, DELETE as feedbackDelete } from '../radar-feedback/route';
 import { GET as adminRadarList } from '../admin/radar/route';
-import { POST as adminSelect } from '../admin/radar/[id]/select/route';
 import { POST as adminDismiss } from '../admin/radar/[id]/dismiss/route';
+import { POST as adminRestore } from '../admin/radar/[id]/restore/route';
 import { POST as adminCreateResearch } from '../admin/radar/[id]/create-research/route';
 import { POST as adminRetry } from '../admin/radar/[id]/retry-interpretation/route';
 import { POST as adminRadarSync } from '../admin/radar/sync/route';
 import { POST as adminDigestRegenerate } from '../admin/radar/digest/route';
+import { GET as adminRadarRuns } from '../admin/radar/runs/route';
 import { POST as adminShareReview } from '../admin/shares/[id]/review/route';
 
 const MEMBER = {
@@ -258,11 +259,43 @@ describe('POST /api/admin/radar actions', () => {
   });
 });
 
+describe('GET /api/admin/radar/runs', () => {
+  it('forwards the selected calendar date', async () => {
+    const response = await adminRadarRuns(
+      new Request('http://localhost/api/admin/radar/runs?limit=200&date=2026-08-06') as never,
+    );
+
+    expect(response.status).toBe(202);
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/radar/runs?limit=200&date=2026-08-06',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('rejects malformed dates before calling ai-engine', async () => {
+    const response = await adminRadarRuns(
+      new Request('http://localhost/api/admin/radar/runs?date=08-06-2026') as never,
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+});
+
 // ──────────────────────────────────────────────────────────────────────
 // /api/radar
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar', () => {
+  it('does not expose soft-hidden content to regular members', async () => {
+    const response = await radarList(
+      new Request('http://localhost/api/radar?status=rejected') as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.summaryFindMany).not.toHaveBeenCalled();
+  });
+
   it('returns public candidates when no user session exists', async () => {
     mocks.getCurrentUser.mockResolvedValueOnce(null);
     mocks.summaryFindMany.mockResolvedValue([]);
@@ -709,113 +742,6 @@ describe('GET /api/admin/radar', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
-// /api/admin/radar/[id]/select
-// ──────────────────────────────────────────────────────────────────────
-
-describe('POST /api/admin/radar/[id]/select', () => {
-  it('returns 403 for member', async () => {
-    const { NextResponse } = await import('next/server');
-    mocks.requireAdmin.mockResolvedValueOnce(NextResponse.json(
-      { code: 'PERMISSION_DENIED', message: '需要管理员权限', requestId: 'r' },
-      { status: 403 },
-    ));
-    const req = new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
-    });
-    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
-    expect(r.status).toBe(403);
-  });
-
-  it('returns 400 on bad sortOrder', async () => {
-    const req = new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 99, selectionReason: 'r' }),
-    });
-    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
-    expect(r.status).toBe(400);
-  });
-
-  it('returns 404 when summary is not radar', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({ id: SUM_ID, source: 'user', syncRunId: null, status: 'candidate' });
-    const req = new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'reason' }),
-    });
-    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
-    expect(r.status).toBe(404);
-  });
-
-  it('returns 400 when sortOrder slot is taken', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({
-      id: SUM_ID, source: 'daily', syncRunId: 'r', status: 'candidate',
-      summaryDate: new Date('2026-07-21'), sortOrder: 1,
-    });
-    mocks.summaryFindFirst.mockResolvedValue({ id: 'cccc' });
-    const req = new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
-    });
-    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
-    expect(r.status).toBe(400);
-  });
-
-  it('returns 400 when 4 already published on that date', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({
-      id: SUM_ID, source: 'daily', syncRunId: 'r', status: 'candidate',
-      summaryDate: new Date('2026-07-21'), sortOrder: null,
-    });
-    mocks.summaryFindFirst.mockResolvedValue(null);
-    mocks.summaryCount.mockResolvedValue(4);
-    const req = new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'r' }),
-    });
-    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
-    expect(r.status).toBe(400);
-  });
-
-  it('updates summary and writes admin_action on success', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({
-      id: SUM_ID, source: 'daily', syncRunId: 'r', status: 'candidate',
-      summaryDate: new Date('2026-07-21'), sortOrder: null,
-    });
-    mocks.summaryFindFirst.mockResolvedValue(null);
-    mocks.summaryCount.mockResolvedValue(0);
-    const req = new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'reason here' }),
-    });
-    const r = await adminSelect(req as never, { params: Promise.resolve({ id: SUM_ID }) });
-    const body = await r.json();
-    expect(r.status).toBe(200);
-    expect(body.ok).toBe(true);
-    expect(body.actionRequestId).toBeTruthy();
-    expect(mocks.summaryUpdate).toHaveBeenCalled();
-    expect(mocks.adminActionCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ action: 'radar_select', targetId: SUM_ID }),
-    }));
-  });
-
-  it('allows an approved user share to be selected', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({
-      id: SUM_ID, source: 'user', syncRunId: null, status: 'candidate',
-      summaryDate: new Date('2026-07-21'), sortOrder: null,
-      shareSource: { status: 'approved' },
-    });
-    mocks.summaryFindFirst.mockResolvedValue(null);
-    mocks.summaryCount.mockResolvedValue(0);
-    const response = await adminSelect(new Request('http://localhost/x', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ summaryDate: '2026-07-21', sortOrder: 1, selectionReason: 'reviewed' }),
-    }) as never, { params: Promise.resolve({ id: SUM_ID }) });
-
-    expect(response.status).toBe(200);
-    expect(mocks.summaryUpdate).toHaveBeenCalledOnce();
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────
 // /api/admin/radar/[id]/dismiss
 // ──────────────────────────────────────────────────────────────────────
 
@@ -862,6 +788,53 @@ describe('POST /api/admin/radar/[id]/dismiss', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.summaryUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+describe('POST /api/admin/radar/[id]/restore', () => {
+  it('restores a soft-hidden radar item and writes an audit action', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID,
+      source: 'daily',
+      syncRunId: 'r',
+      status: 'rejected',
+      shareSource: null,
+    });
+    mocks.summaryUpdate.mockResolvedValue({
+      id: SUM_ID,
+      status: 'candidate',
+      updatedAt: new Date('2026-08-06T00:00:00Z'),
+    });
+
+    const response = await adminRestore(
+      new Request('http://localhost/x', { method: 'POST' }) as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.summaryUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'candidate' },
+    }));
+    expect(mocks.adminActionCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: 'radar_restore' }),
+    }));
+  });
+
+  it('rejects restoring an item that is not hidden', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID,
+      source: 'daily',
+      syncRunId: 'r',
+      status: 'candidate',
+      shareSource: null,
+    });
+
+    const response = await adminRestore(
+      new Request('http://localhost/x', { method: 'POST' }) as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+
+    expect(response.status).toBe(400);
   });
 });
 

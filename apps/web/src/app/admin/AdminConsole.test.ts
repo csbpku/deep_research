@@ -13,7 +13,7 @@
 // 所以断言从 { bg, fg } 十六进制改为 className 字符串。
 
 import { describe, expect, it } from 'vitest';
-import { syncStatusStyle } from './AdminConsole';
+import { ADMIN_TAB_KEYS, shanghaiDateValue, syncStatusStyle } from './AdminConsole';
 
 describe('syncStatusStyle', () => {
   it('returns running badge for "running" status', () => {
@@ -72,15 +72,26 @@ describe('syncStatusStyle', () => {
   });
 });
 
+describe('shanghaiDateValue', () => {
+  it('uses the Asia/Shanghai calendar date around UTC midnight', () => {
+    expect(shanghaiDateValue(new Date('2026-08-05T16:30:00.000Z'))).toBe('2026-08-06');
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════
 // Tabs 列表契约
 // ════════════════════════════════════════════════════════════════════
 
 describe('AdminConsole tabs contract', () => {
-  it('defines 4 expected tab keys (dashboard/radar/shares/comments)', () => {
-    // 与 AdminConsole 组件 TABS 数组对应
-    const expected = ['dashboard', 'radar', 'shares', 'comments'];
-    expect(expected).toHaveLength(4);
-    expect(new Set(expected).size).toBe(4); // 全部唯一
+  it('keeps radar candidate review out of the console tabs', () => {
+    expect(ADMIN_TAB_KEYS).toEqual([
+      'dashboard',
+      'researches',
+      'topics',
+      'shares',
+      'comments',
+      'users',
+    ]);
+    expect(ADMIN_TAB_KEYS).not.toContain('radar');
   });
 });

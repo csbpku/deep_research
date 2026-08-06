@@ -54,6 +54,7 @@ interface ListAiJobsItem {
   published_research_id: string | null;
   error_code: string | null;
   error_message: string | null;
+  error_details: Record<string, unknown> | null;
   created_at: string | null;
   updated_at: string | null;
   completed_at: string | null;
@@ -121,6 +122,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       publishedResearchId: it.published_research_id,
       errorCode: it.error_code,
       errorMessage: it.error_message,
+      errorDetails: it.error_details,
       createdAt: it.created_at,
       updatedAt: it.updated_at,
       completedAt: it.completed_at,

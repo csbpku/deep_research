@@ -36,10 +36,12 @@ interface UpstreamJobOut {
   output_text?: string | null;
   error_code?: string | null;
   error_message?: string | null;
+  error_details?: Record<string, unknown> | null;
   request_id?: string | null;
   started_at?: string | null;
   created_at?: string | null;
   completed_at?: string | null;
+  review?: Record<string, unknown> | null;
 }
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }> }]>(async (req, ctx) => {
@@ -110,8 +112,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     outputText: up.output_text ?? null,
     errorCode: up.error_code ?? null,
     errorMessage: up.error_message ?? null,
+    errorDetails: up.error_details ?? null,
     startedAt: up.started_at ?? null,
     createdAt: up.created_at ?? null,
     completedAt: up.completed_at ?? null,
+    review: up.review ?? null,
   });
 });

@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { __testing__ as commentHelpers } from './CommentSection';
 
-const { hashHue, formatRelative } = commentHelpers;
+const { hashHue, formatRelative, isCommentAnchorStale } = commentHelpers;
 
 describe('hashHue', () => {
   it('returns 0 for empty string', () => {
@@ -70,6 +70,27 @@ describe('formatRelative', () => {
     const result = formatRelative(longAgo.toISOString());
     // 应该返回 YYYY/M/D 形式的本地化日期
     expect(result).toMatch(/^\d{4}\/\d{1,2}\/\d{1,2}$/);
+  });
+});
+
+describe('comment anchors', () => {
+  const anchor = {
+    quote: '正文片段',
+    startOffset: 2,
+    endOffset: 6,
+    contentHash: 'hash-at-save',
+  };
+
+  it('stays valid when the quoted range still matches', () => {
+    expect(isCommentAnchorStale(anchor, '前文正文片段后文', 'hash-at-save')).toBe(false);
+  });
+
+  it('warns when the article text changed at the saved range', () => {
+    expect(isCommentAnchorStale(anchor, '前文已修改后文', 'hash-at-save')).toBe(true);
+  });
+
+  it('does not claim stale when the current content is unavailable', () => {
+    expect(isCommentAnchorStale(anchor)).toBe(false);
   });
 });
 

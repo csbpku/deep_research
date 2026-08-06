@@ -14,7 +14,7 @@ export default async function AdminPage() {
   if (u.role !== 'admin') {
     return (
       <div className="mx-auto max-w-measure">
-        <h1 className="mb-4 text-xl font-semibold tracking-tight">Admin</h1>
+        <h1 className="mb-4 text-xl font-semibold tracking-normal">Admin</h1>
         <EmptyState
           title="403 — 需要管理员权限"
           description={`当前账号 ${u.email} 角色为普通成员；Admin 入口仅管理员可见。`}

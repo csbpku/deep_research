@@ -5,32 +5,30 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
+import { findTopicBySlugOrId } from '@/lib/topics';
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> }]>(async (req, ctx) => {
   const { slug } = await ctx.params;
   if (!slug) return NextResponse.json({ code: 'NOT_FOUND', message: 'topic 不存在' }, { status: 404 });
 
   const user = await getCurrentUser();
-  const topic = await prisma.topic.findUnique({
-    where: { slug },
-    select: {
-      id: true,
-      slug: true,
-      name: true,
-      summary: true,
-      tier: true,
-      candidateCount: true,
-      sourceCount: true,
-      aggregationWindowStart: true,
-      aggregationWindowEnd: true,
-      lastSyncedAt: true,
-      synthesisGeneratedAt: true,
-      synthesisModel: true,
-      synthesisVersion: true,
-      synthesisPayload: true,
-      synthesisErrorCode: true,
-      synthesisErrorMessage: true,
-    },
+  const topic = await findTopicBySlugOrId(slug, {
+    id: true,
+    slug: true,
+    name: true,
+    summary: true,
+    tier: true,
+    candidateCount: true,
+    sourceCount: true,
+    aggregationWindowStart: true,
+    aggregationWindowEnd: true,
+    lastSyncedAt: true,
+    synthesisGeneratedAt: true,
+    synthesisModel: true,
+    synthesisVersion: true,
+    synthesisPayload: true,
+    synthesisErrorCode: true,
+    synthesisErrorMessage: true,
   });
   if (!topic) return NextResponse.json({ code: 'NOT_FOUND', message: 'topic 不存在' }, { status: 404 });
 

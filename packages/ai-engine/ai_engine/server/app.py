@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -42,6 +43,7 @@ from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.contracts.errors import AdapterError, ERROR_CODES, HTTP_STATUS
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
+    AI_JOB_STEP,
     CREATION_METHOD,
     REPORT_TYPE,
     SOURCE_POLICY,
@@ -56,6 +58,7 @@ from ai_engine.job_runner.store import (
     make_job_snapshot,
 )
 from ai_engine.job_runner.models import JobSnapshot
+from ai_engine.llm.client import generate_text
 
 load_dotenv()
 
@@ -68,6 +71,23 @@ structlog.configure(
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
 )
+
+
+def _json_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _json_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -612,6 +632,7 @@ class SubmitAiJobResponse(BaseModel):
     search_count: int = 0
     error_code: str | None = None
     error_message: str | None = None
+    error_details: dict[str, object] | None = None
     request_id: str | None = None
     started_at: str | None = None
     created_at: str | None = None
@@ -619,6 +640,31 @@ class SubmitAiJobResponse(BaseModel):
     # W7 (工程师 B): structured output flag. True when the engine
     # produced a conclusion without any grounded source.
     is_inferred: bool = False
+    review: dict[str, object] | None = None
+
+
+class ReviewResearchBody(BaseModel):
+    """Synchronous re-review input for an already edited private draft."""
+
+    topic: str = Field(min_length=2, max_length=300)
+    report: str = Field(min_length=1, max_length=100_000)
+    sources: list[dict[str, object]] = Field(default_factory=list, max_length=100)
+
+
+class AssistantSelection(BaseModel):
+    quote: str = Field(min_length=1, max_length=4000)
+    start_offset: int = Field(ge=0)
+    end_offset: int = Field(ge=0)
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ResearchAssistantBody(BaseModel):
+    operation: str = Field(pattern=r"^(rewrite|summarize|counterpoint|fact_check|conclusion_check)$")
+    body: str = Field(min_length=1, max_length=30000)
+    selection: AssistantSelection | None = None
+    instruction: str | None = Field(default=None, max_length=2000)
+    topic: str = Field(default="调研文章", max_length=300)
+    sources: list[dict[str, object]] = Field(default_factory=list, max_length=100)
 
 
 class CancelAiJobResponse(BaseModel):
@@ -651,6 +697,7 @@ class ListAiJobsItem(BaseModel):
     published_research_id: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+    error_details: dict[str, object] | None = None
     created_at: str | None = None
     updated_at: str | None = None
     completed_at: str | None = None
@@ -673,6 +720,122 @@ class HealthResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────
 # Routes
 # ──────────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/ai/research-assistant")
+async def research_assistant(body: ResearchAssistantBody, request: Request) -> dict[str, object]:
+    """Small synchronous editor assistant; never mutates the research draft."""
+    started = asyncio.get_event_loop().time()
+    request_id = getattr(request.state, "request_id", None)
+    original = body.selection.quote if body.selection else body.body[:4000]
+    context = body.body[:30000]
+    warnings: list[str] = []
+    claims: list[dict[str, object]] = []
+    if body.operation in {"fact_check", "conclusion_check"}:
+        from ai_engine.reviewer import DefaultResearchReviewer
+        sources: list[AdapterSource] = []
+        for raw in body.sources:
+            canonical = raw.get("canonicalKey") or raw.get("canonical_key")
+            if isinstance(canonical, str) and canonical.strip():
+                sources.append(AdapterSource(
+                    source_ref={"type": "url", "value": canonical},
+                    canonical_key=canonical, title=_json_str(raw.get("title")),
+                    snippet=_json_str(raw.get("description")),
+                    score=None, step_captured=cast("Any", AI_JOB_STEP["SEARCH"]), is_accessible=True,
+                ))
+        reviewed = await DefaultResearchReviewer(llm_spec=os.environ.get("FACT_REVIEWER_LLM")).review(
+            original if body.operation == "fact_check" else context, tuple(sources), body.topic,
+        )
+        for claim in reviewed.claims:
+            verdict = "unsupported" if claim.verdict == "correctable" else claim.verdict
+            if verdict not in {"verified", "unsupported", "contradicted", "unverified"}:
+                verdict = "unverified"
+            claims.append({"text": claim.claim, "verdict": verdict, "evidence": claim.evidence.excerpt if claim.evidence else None})
+        metrics = {
+            "latency_ms": int((asyncio.get_event_loop().time() - started) * 1000),
+            "token_input_total": 0,
+            "token_output_total": 0,
+            "cost_cents": 0,
+        }
+        _safe_structlog(
+            structlog.get_logger("ai_engine.research_assistant"),
+            "info",
+            "research-assistant.completed",
+            request_id=request_id,
+            operation=body.operation,
+            **metrics,
+        )
+        return {"operation": body.operation, "original": original, "suggestion": None, "rationale": reviewed.status, "claims": claims, "warnings": warnings, "request_id": request_id, "metrics": metrics}
+
+    prompts = {
+        "rewrite": "改写这段文字，使其更清晰、准确、紧凑，保留原意。",
+        "summarize": "把这段文字压缩成一段简洁摘要。",
+        "counterpoint": "为这段文字补充一个有事实依据的反方观点。",
+    }
+    instruction = body.instruction or prompts[body.operation]
+    generated = await generate_text(
+        user_prompt=f"主题：{body.topic}\n上下文：{context}\n待处理文字：{original}\n要求：{instruction}",
+        system_prompt="你是研究文章编辑助手。只返回建议文本，不要 Markdown 包装或解释。",
+        llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=1800, timeout=30.0,
+        disable_thinking=True,
+    )
+    metrics = {
+        "latency_ms": int((asyncio.get_event_loop().time() - started) * 1000),
+        "token_input_total": generated.input_tokens,
+        "token_output_total": generated.output_tokens,
+        # Provider pricing is intentionally not guessed here; the numeric
+        # field remains present for a downstream cost meter to fill in.
+        "cost_cents": 0,
+    }
+    _safe_structlog(
+        structlog.get_logger("ai_engine.research_assistant"),
+        "info",
+        "research-assistant.completed",
+        request_id=request_id,
+        operation=body.operation,
+        **metrics,
+    )
+    return {"operation": body.operation, "original": original, "suggestion": generated.text.strip(), "rationale": instruction, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
+
+
+@app.post("/api/ai/review")
+async def review_research(body: ReviewResearchBody, request: Request) -> dict[str, object]:
+    """Re-review an edited report without invoking the Generator Agent."""
+    from ai_engine.reviewer import DefaultResearchReviewer
+
+    sources: list[AdapterSource] = []
+    for raw in body.sources:
+        canonical = raw.get("canonicalKey") or raw.get("canonical_key")
+        if not isinstance(canonical, str) or not canonical.strip():
+            continue
+        raw_ref = raw.get("sourceRef") or raw.get("source_ref")
+        source_ref: dict[str, str | bool] = {"type": "url", "value": canonical}
+        if isinstance(raw_ref, dict):
+            candidate = {
+                str(key): value
+                for key, value in raw_ref.items()
+                if isinstance(value, (str, bool))
+            }
+            if candidate:
+                source_ref = candidate
+        sources.append(
+            AdapterSource(
+                source_ref=source_ref,
+                canonical_key=canonical,
+                title=_json_str(raw.get("title")),
+                snippet=_json_str(raw.get("description")),
+                score=None,
+                step_captured=cast("Any", AI_JOB_STEP["SEARCH"]),
+                is_accessible=True,
+            )
+        )
+    result = await DefaultResearchReviewer(
+        llm_spec=os.environ.get("FACT_REVIEWER_LLM"),
+    ).review(body.report, tuple(sources), body.topic)
+    return {
+        "review": result.to_dict(),
+        "request_id": getattr(request.state, "request_id", None),
+    }
 
 
 @app.get("/health")
@@ -885,7 +1048,10 @@ async def _background_run(
         # print,避免把请求 body / env 变量刷到 stderr。
 
 
-DraftFactory = Callable[[JobSnapshot, tuple[AdapterSource, ...], str], Awaitable[str | None]]
+DraftFactory = Callable[
+    [JobSnapshot, tuple[AdapterSource, ...], str, dict[str, object] | None],
+    Awaitable[str | None],
+]
 
 
 def _make_draft_factory(store: JobStore) -> DraftFactory:
@@ -899,7 +1065,10 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
     if isinstance(store, _Db):
 
         async def _factory(
-            snapshot: JobSnapshot, sources: tuple[AdapterSource, ...], output_text: str
+            snapshot: JobSnapshot,
+            sources: tuple[AdapterSource, ...],
+            output_text: str,
+            review_details: dict[str, object] | None = None,
         ) -> str | None:
             assert isinstance(store, _Db)
             # The runner may be retried after the draft INSERT committed but
@@ -911,10 +1080,23 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             sql = (
                 'INSERT INTO "researches" '
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
+                ' "reviewStatus", "reviewAttempts", "reviewSummary", "reviewClaims", "reviewDetails", "reviewedAt", '
                 ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', true, %s, now(), now()) "
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now(), true, %s, now(), now()) "
                 'ON CONFLICT ("id") DO NOTHING'
             )
+            review_status = review_details.get("status") if review_details else None
+            review_attempts = _json_int(review_details.get("attempts", 0)) if review_details else 0
+            review_summary = (
+                {
+                    "corrected_count": review_details.get("corrected_count", 0),
+                    "unverified_count": review_details.get("unverified_count", 0),
+                    "contradicted_count": review_details.get("contradicted_count", 0),
+                }
+                if review_details
+                else None
+            )
+            review_claims = review_details.get("claims", []) if review_details else []
             async with store.pool.connection() as conn:
                 async with conn.transaction():
                     await conn.execute(
@@ -924,15 +1106,38 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                             snapshot.topic[:300],
                             body,
                             snapshot.requester_id,
+                            review_status,
+                            review_attempts,
+                            json.dumps(review_summary, ensure_ascii=False) if review_summary is not None else None,
+                            json.dumps(review_claims, ensure_ascii=False),
+                            json.dumps(review_details, ensure_ascii=False) if review_details is not None else None,
                             origin_sha256,
                         ),
                     )
+                    for source in sources:
+                        await conn.execute(
+                            'INSERT INTO "research_sources" '
+                            '("researchId", "sourceRef", "canonicalKey", "title", "description", "createdAt") '
+                            'VALUES (%s, %s::jsonb, %s, %s, %s, now()) '
+                            'ON CONFLICT ("researchId", "canonicalKey") DO UPDATE SET '
+                            '"title" = EXCLUDED."title", "description" = EXCLUDED."description"',
+                            (
+                                new_id,
+                                json.dumps(source.source_ref, ensure_ascii=False),
+                                source.canonical_key,
+                                source.title,
+                                source.snippet,
+                            ),
+                        )
             return new_id
 
         return _factory
 
     async def _in_memory_factory(
-        snapshot: JobSnapshot, sources: tuple[AdapterSource, ...], output_text: str
+        snapshot: JobSnapshot,
+        sources: tuple[AdapterSource, ...],
+        output_text: str,
+        review_details: dict[str, object] | None = None,
     ) -> str | None:
         # InMemory 测试路径:用全局 dict 记录 fake draft id。
         # 让 _background_run 测试 / FakeAdapter 测试可走 succeeded。
@@ -943,6 +1148,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             "requester_id": snapshot.requester_id,
             "sources": len(sources),
             "body": output_text,
+            "review": review_details or {},
         }
         return new_id
 
@@ -1027,6 +1233,7 @@ async def list_ai_jobs(
                 published_research_id=getattr(view, "published_research_id", None),
                 error_code=getattr(view, "last_error_code", None),
                 error_message=getattr(view, "last_error_message", None),
+                error_details=getattr(view, "last_error_details", None),
                 created_at=_iso(getattr(view, "created_at", None)),
                 updated_at=_iso(getattr(view, "updated_at", None)),
                 completed_at=_iso(getattr(view, "completed_at", None)),
@@ -1085,11 +1292,13 @@ async def get_ai_job(
         search_count=len(last_sources),
         error_code=getattr(row, "last_error_code", None),
         error_message=getattr(row, "last_error_message", None),
+        error_details=getattr(row, "last_error_details", None),
         request_id=getattr(request.state, "request_id", None),
         started_at=_iso(getattr(row, "started_at", None)),
         created_at=_iso(getattr(row, "created_at", None)),
         completed_at=_iso(getattr(row, "completed_at", None)),
         is_inferred=is_inferred,
+        review=getattr(row, "review_details", None),
     )
 
 

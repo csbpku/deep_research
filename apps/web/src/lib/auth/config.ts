@@ -39,7 +39,10 @@ export const authConfig: NextAuthConfig = {
               const role = (credentials?.role as 'member' | 'admin' | undefined) ?? 'member';
               if (!email) return null;
               const env = getWebEnv();
-              if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
+              // This provider exists only for local Playwright runs. Its fixture
+              // address must not be constrained by the production Google
+              // allowlist; Google OAuth still follows the normal check below.
+              if (!isE2E && !isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
               const u = await prisma.user.upsert({
                 where: { email },
                 create: { email, name: email.split('@')[0], role },
@@ -91,7 +94,10 @@ export const authConfig: NextAuthConfig = {
         return false;
       }
       const env = getWebEnv();
-      if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) {
+      // E2E credentials are an explicit local-test-only provider; its fixture
+      // domain must not depend on the production Google allowlist. This branch
+      // is unreachable unless the web server was started with E2E=1.
+      if (!(isE2E && account?.provider === 'e2e-credentials') && !isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) {
         log.warn('auth.signin', 'domain not allowed', {
           provider: account?.provider,
           domain: email.split('@')[1]?.toLowerCase() ?? '',

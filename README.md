@@ -1,7 +1,7 @@
 # AI技术调研平台
 
 > AI 帮我们读文章、抓热搜、看趋势；我们给反馈、踩坑记下来，团队的判断和经验会越攒越多。
-> 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v3.6
+> 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v3.8
 
 [![CI](https://github.com/csbpku/deep_research/actions/workflows/ci.yml/badge.svg)](https://github.com/csbpku/deep_research/actions/workflows/ci.yml)
 
@@ -16,7 +16,7 @@
 - **沉淀库**：长文与讨论精华共用同一结构，支持草稿 / 发布 / 全文搜索 / 修改审计。
 - **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
 - **AI 调研**：给一个主题，启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），用户必须实际修改过才能发布。
-- **基础评论 + Admin**：雷达、日报和沉淀都能评论；Admin 控制台统一处理雷达 promote、分享审核、评论提名、同步状态和失败任务。
+- **团队讨论 + Admin**：团队讨论常驻雷达正文下方，支持 @成员、回复通知和“我的通知”；成员可把高价值评论提议沉淀为知识卡片。Admin 对雷达做软屏蔽/恢复，而非逐条审批，并处理分享审核、评论提炼、同步状态和失败任务。
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
 - **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、Docker Compose 部署脚手架。
 
@@ -84,7 +84,7 @@ launchctl bootout gui/$(id -u)/com.deep-research.web
 launchctl bootout gui/$(id -u)/com.deep-research.ai
 ```
 
-日志位于 `/tmp/deep-research-web*.log` 和 `/tmp/deep-research-ai*.log`。
+launchd 托管的 AI engine 使用稳定模式（不随代码文件自动重启）；需要开发热重载时再单独运行 `pnpm dev:ai`。日志位于 `/tmp/deep-research-web*.log` 和 `/tmp/deep-research-ai*.log`。
 
 | 层 | 选型 |
 |---|---|

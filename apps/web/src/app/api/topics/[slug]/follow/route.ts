@@ -5,12 +5,13 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
+import { findTopicBySlugOrId } from '@/lib/topics';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 async function resolveTopicId(slug: string): Promise<string | NextResponse> {
-  const topic = await prisma.topic.findUnique({ where: { slug }, select: { id: true } });
+  const topic = await findTopicBySlugOrId(slug, { id: true });
   if (!topic) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: 'topic 不存在', requestId: '' });
   }

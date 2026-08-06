@@ -22,7 +22,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   const [
     pendingShares,
-    pendingRadarCandidates,
     pendingCommentNominations,
     newResearchesThisWeek,
     aiJobsLast24h,
@@ -30,13 +29,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     failedImportJobs,
     monthAiCostCents,
     lastRadarSync,
-    failedRadarSyncsLast24h,
-    recentFailedRadarSyncs,
   ] = await Promise.all([
     prisma.shareSubmission.count({ where: { status: 'pending' } }),
-    prisma.summary.count({
-      where: { source: 'daily', syncRunId: { not: null }, status: 'candidate' },
-    }),
     prisma.comment.count({ where: { promoteStatus: 'nominated' } }),
     prisma.research.count({
       where: { status: 'published', publishedAt: { gte: sevenDaysAgo } },
@@ -65,35 +59,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         errorCode: true,
       },
     }),
-    prisma.radarSyncRun.count({
-      where: {
-        status: 'failed',
-        createdAt: { gte: oneDayAgo },
-      },
-    }),
-    prisma.radarSyncRun.findMany({
-      where: {
-        status: 'failed',
-        createdAt: { gte: oneDayAgo },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      select: {
-        id: true,
-        createdAt: true,
-        errorCode: true,
-        errorMessage: true,
-        source: { select: { name: true, sourceType: true } },
-      },
-    }),
   ]);
 
   return NextResponse.json({
     // 待审核汇总
     pendingReviews: {
-      total: pendingShares + pendingRadarCandidates + pendingCommentNominations,
+      total: pendingShares + pendingCommentNominations,
       shares: pendingShares,
-      radarCandidates: pendingRadarCandidates,
       commentNominations: pendingCommentNominations,
     },
     // 内容产出
@@ -124,14 +96,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             errorCode: lastRadarSync.errorCode,
           }
         : null,
-      failedRunsLast24h: failedRadarSyncsLast24h,
-      recentFailures: recentFailedRadarSyncs.map((run) => ({
-        id: run.id,
-        source: run.source,
-        errorCode: run.errorCode,
-        errorMessage: run.errorMessage,
-        createdAt: run.createdAt.toISOString(),
-      })),
     },
     generatedAt: now.toISOString(),
   });

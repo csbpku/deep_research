@@ -15,6 +15,7 @@ from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
 from ai_engine.radar.source_manager import fetch_source
+from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 
 
 RSS_XML = b"""<?xml version="1.0"?><rss><channel><item>
@@ -116,6 +117,70 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     # fetch_rss_candidates returns parsed items; just verify kwargs were passed
     assert items[0].title == "Agent release"
     assert items[0].content_origin == "rss"
+
+
+async def test_wewe_feed_refreshes_before_reading_feed() -> None:
+    calls: list[str] = []
+
+    async def fake_refresh(config: Any) -> bool:
+        calls.append("refresh")
+        return True
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        calls.append("fetch")
+        return _doc()
+
+    await fetch_rss_candidates(
+        {"feedUrl": "http://localhost:4001/feeds/all.rss", "maxResults": 10},
+        fetcher=fake_fetch,
+        wewe_refresher=fake_refresh,
+    )
+    assert calls == ["refresh", "fetch"]
+
+
+async def test_wewe_refresh_uses_trpc_batch_request() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/trpc/feed.refreshArticles"
+        assert request.url.params.get("batch") == "1"
+        assert request.headers["content-type"] == "application/json"
+        assert request.read() == b'{"0":{"json":{}}}'
+        return httpx.Response(200, json=[{"result": {"data": True}}])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert is_wewe_config({"feedUrl": "http://localhost:4001/feeds/all.rss"})
+        assert await refresh_wewe_articles(
+            {"feedUrl": "http://localhost:4001/feeds/all.rss"}, client=client
+        )
+
+
+async def test_wewe_expired_account_is_reported_without_blocking_feed() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            json=[{"error": {"message": "暂无可用读书账号!"}}],
+        )
+
+    config: dict[str, Any] = {"feedUrl": "http://localhost:4001/feeds/all.rss"}
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert not await refresh_wewe_articles(config, client=client)
+    assert config["_wewe_refresh_diagnostic"] == (
+        "UPSTREAM_AUTH_REQUIRED",
+        "WeWe 读书账号登录已失效，需要重新扫码登录",
+    )
+
+
+async def test_non_wewe_rss_does_not_refresh() -> None:
+    async def fake_refresh(config: Any) -> bool:
+        raise AssertionError("ordinary RSS must not call WeWe")
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc()
+
+    await fetch_rss_candidates(
+        {"feedUrl": "https://feed.example/rss", "maxResults": 10},
+        fetcher=fake_fetch,
+        wewe_refresher=fake_refresh,
+    )
 
 
 async def test_rss_fetcher_reads_wewe_content_encoded() -> None:
@@ -226,12 +291,16 @@ async def test_github_release_candidates() -> None:
     assert items[0].tags == ("github", "release")
 
 
-def _github_pr(updated_at: str = "2026-07-30T00:00:00Z") -> dict[str, Any]:
+def _github_iso(days_ago: int = 0) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _github_pr(updated_at: str | None = None) -> dict[str, Any]:
     return {
         "title": "PR title",
         "html_url": "https://github.com/acme/agent/pull/1",
         "body": "PR body",
-        "updated_at": updated_at,
+        "updated_at": updated_at or _github_iso(),
         "state": "open",
         "user": {"login": "alice"},
     }
@@ -287,9 +356,9 @@ async def test_github_tracked_ordinary_repo_fetches_single_pull_page() -> None:
 
 
 async def test_github_tracked_caps_total_per_repo_across_types() -> None:
-    issues = [_github_issue(i, "2026-07-30T12:00:00Z") for i in range(10)]
-    prs = [_github_pr("2026-07-29T12:00:00Z") for _ in range(10)]
-    releases = [_github_release(f"v1.{i}", "2026-07-28T12:00:00Z") for i in range(10)]
+    issues = [_github_issue(i, _github_iso(1)) for i in range(10)]
+    prs = [_github_pr(_github_iso(2)) for _ in range(10)]
+    releases = [_github_release(f"v1.{i}", _github_iso(3)) for i in range(10)]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/issues"):
@@ -324,8 +393,8 @@ async def test_github_tracked_caps_total_per_repo_across_types() -> None:
 
 async def test_github_tracked_releases_respect_lookback() -> None:
     releases = [
-        _github_release("v1.0", "2026-07-01T00:00:00Z"),
-        _github_release("v2.0", "2026-07-30T00:00:00Z"),
+        _github_release("v1.0", _github_iso(10)),
+        _github_release("v2.0", _github_iso(1)),
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:

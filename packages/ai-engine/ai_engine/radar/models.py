@@ -38,6 +38,7 @@ class RadarCandidate:
     source_quality_hint: float | None = None
     timeliness_hint: float | None = None
     repo_activity: "RepoActivity | None" = None
+    source_diagnostic: tuple[str, str] | None = None
 
 
 @dataclass(slots=True, frozen=True)

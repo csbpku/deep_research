@@ -213,7 +213,7 @@ async def run_one_import_job(
         pool = store.pool
         async with pool.connection() as conn:
             cur = await conn.execute(
-                'SELECT "tempObjectKey", "originalFilename", "mimeType", "sizeBytes" '
+                'SELECT "tempObjectKey", "originalFilename", "mimeType", "sizeBytes", "sourceKind", "sourceUrl", "externalPageId", "externalVersion" '
                 'FROM "content_import_jobs" WHERE "id" = %s AND "lockedBy" = %s',
                 (lease.job_id, lease.worker_id),
             )
@@ -221,6 +221,7 @@ async def run_one_import_job(
         if row is None:
             raise LeaseLostError("import lease lost before conversion")
         record = dict(row)
+        source_kind = str(record.get("sourceKind") or "file")
         object_key = str(record.get("tempObjectKey") or "")
         original_filename = str(record.get("originalFilename") or "Imported document")
         extension = Path(original_filename).suffix.lower()
@@ -243,8 +244,8 @@ async def run_one_import_job(
                     'INSERT INTO "researches" '
                     '("id", "type", "status", "title", "body", "authorId", '
                     ' "creationMethod", "aiAssisted", "createdAt", "updatedAt") '
-                    "VALUES (%s, 'research', 'draft', %s, %s, %s, 'file_import', false, now(), now())",
-                    (research_id, title, markdown, snapshot.requester_id),
+                    "VALUES (%s, 'research', 'draft', %s, %s, %s, %s, false, now(), now())",
+                    (research_id, title, markdown, snapshot.requester_id, 'confluence_import' if source_kind == 'confluence' else 'file_import'),
                 )
                 await conn.execute(
                     'INSERT INTO "research_audit" '

@@ -13,7 +13,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Admin flows (public-facing)', () => {
   test('unauthenticated /admin redirects to signin', async ({ page }) => {
     await page.goto('/admin');
-    await expect(page).toHaveURL(/\/signin/);
+    await expect(page).toHaveURL(/\/signin/, { timeout: 15_000 });
   });
 
   test('unauthenticated /api/admin/dashboard rejects with non-2xx', async ({ request }) => {

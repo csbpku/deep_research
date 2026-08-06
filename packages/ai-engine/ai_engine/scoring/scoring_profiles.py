@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 
 # ── Profile IDs ────────────────────────────────────────────────────
@@ -112,10 +113,9 @@ ENGINEERING_PROFILE = ScoringProfile(
     id=PROFILE_ENGINEERING,
     description=(
         "AI engineering and tooling articles (frameworks, deployment, "
-        "infra, code-level tutorials). Audience: software engineers at an "
-        "e-commerce company, AI application engineers, MLOps, backend and "
-        "platform engineers. Reward actionability and direct relevance to "
-        "building or operating AI-powered e-commerce systems; penalize "
+        "infra, code-level tutorials). Audience: AI application developers, "
+        "backend engineers and platform engineers. Reward actionability and "
+        "direct relevance to building or operating AI applications; penalize "
         "unrelated novelty and hobby projects."
     ),
     weights={
@@ -127,7 +127,7 @@ ENGINEERING_PROFILE = ScoringProfile(
         _DIM_EXPRESSION: 5,
         _DIM_AUDIENCE_FIT: 5,
     },
-    tier_collection=85,
+    tier_collection=90,
     tier_deep_read=70,
     tier_skim=50,
     must_read_total=88,
@@ -139,10 +139,10 @@ NEWS_PROFILE = ScoringProfile(
     id=PROFILE_NEWS,
     description=(
         "Industry news, product launches, and market announcements relevant "
-        "to software engineers at an e-commerce company. Audience: e-commerce "
-        "software engineers, AI application engineers, platform/infra "
+        "to software engineers building AI applications. Audience: AI "
+        "application developers, backend engineers and platform/infra "
         "engineers. Reward direct relevance to building, operating, and "
-        "improving AI-powered e-commerce products; penalize unrelated tech "
+        "improving AI-powered products; penalize unrelated tech "
         "curiosity, retro/hobby content, and non-applicable news."
     ),
     weights={
@@ -219,6 +219,8 @@ __all__ = [
     "active_profile",
     "get_profile",
     "list_profiles",
+    "profile_for_source",
+    "profile_for_source_url",
 ]
 
 # ── Source-type → profile mapping ─────────────────────────────────
@@ -248,3 +250,26 @@ def profile_for_source(source_type: str) -> tuple[ScoringProfile, str]:
     """
     profile_id = _SOURCE_PROFILE_MAP.get(source_type, PROFILE_ENGINEERING)
     return get_profile(profile_id), profile_id
+
+
+def profile_for_source_url(source_type: str, url: str | None = None) -> tuple[ScoringProfile, str]:
+    """Use the engineering profile for first-party technical docs.
+
+    Vendor/news feeds also contain API and platform documentation. Those
+    pages should be judged by implementation usefulness rather than news
+    timeliness. Model announcements and ordinary vendor articles retain the
+    news profile.
+    """
+    normalized_type = (source_type or "").strip().lower()
+    raw_url = (url or "").strip()
+    parsed = urlsplit(raw_url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.lower()
+    is_technical_docs = (
+        "/docs/" in f"{path}/"
+        or host.startswith("docs.")
+        or host in {"platform.claude.com", "platform.openai.com", "ai.google.dev"}
+    )
+    if normalized_type in {"vendor_news", "rss", "sitemap_watch"} and is_technical_docs:
+        return ENGINEERING_PROFILE, PROFILE_ENGINEERING
+    return profile_for_source(source_type)

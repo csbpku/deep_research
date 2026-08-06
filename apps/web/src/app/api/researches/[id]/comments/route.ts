@@ -13,6 +13,7 @@ import { toApiErrorResponse } from '../../../../../lib/errors';
 import { log, withRequestId } from '../../../../../lib/log';
 import { CommentListQuery, CreateCommentInput, ResearchIdParam } from '../../../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
+import { createCommentMentionsAndNotifications } from '../../../../../lib/comments/notifications';
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
@@ -48,7 +49,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
   const research = await prisma.research.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, authorId: true },
   });
   if (!research || research.status !== 'published') {
     return toApiErrorResponse({
@@ -70,11 +71,13 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       select: {
         id: true,
         body: true,
+        anchor: true,
         parentId: true,
         starCount: true,
         promoteStatus: true,
         createdAt: true,
         author: { select: { id: true, name: true, avatarUrl: true } },
+        mentions: { select: { user: { select: { id: true, name: true, avatarUrl: true } } } },
         children: {
           select: {
             id: true,
@@ -82,6 +85,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
             starCount: true,
             createdAt: true,
             author: { select: { id: true, name: true, avatarUrl: true } },
+            mentions: { select: { user: { select: { id: true, name: true, avatarUrl: true } } } },
           },
           orderBy: { createdAt: 'asc' as const },
           take: 3,
@@ -120,7 +124,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
   const research = await prisma.research.findUnique({
     where: { id: idParsed.data.id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, authorId: true },
   });
   if (!research || research.status !== 'published') {
     return toApiErrorResponse({
@@ -130,10 +134,11 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
+  let parentAuthorId: string | null = null;
   if (body.parentId) {
     const parent = await prisma.comment.findUnique({
       where: { id: body.parentId },
-      select: { id: true, researchId: true, summaryId: true },
+      select: { id: true, researchId: true, summaryId: true, authorId: true },
     });
     if (!parent || parent.researchId !== idParsed.data.id) {
       return toApiErrorResponse({
@@ -142,6 +147,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         requestId,
       });
     }
+    parentAuthorId = parent.authorId;
   }
 
   const created = await prisma.$transaction(async (tx) => {
@@ -151,11 +157,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         targetType: 'research',
         researchId: idParsed.data.id,
         body: body.body,
+        anchor: body.anchor ?? undefined,
         parentId: body.parentId ?? null,
       },
       select: {
         id: true,
         body: true,
+        anchor: true,
         parentId: true,
         starCount: true,
         promoteStatus: true,
@@ -168,6 +176,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       where: { id: idParsed.data.id },
       data: { commentCount: { increment: 1 } },
       select: { id: true },
+    });
+    await createCommentMentionsAndNotifications({
+      tx,
+      commentId: c.id,
+      body: body.body,
+      actorId: u.id,
+      mentionedUserIds: body.mentionedUserIds,
+      parentAuthorId,
     });
     return c;
   });
@@ -189,34 +205,40 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 function serializeComment(c: {
   id: string;
   body: string;
+  anchor: unknown;
   parentId: string | null;
   starCount: number;
   promoteStatus: string;
   createdAt: Date;
   author: { id: string; name: string; avatarUrl: string | null };
+  mentions?: Array<{ user: { id: string; name: string; avatarUrl: string | null } }>;
   children?: Array<{
     id: string;
     body: string;
     starCount: number;
     createdAt: Date;
     author: { id: string; name: string; avatarUrl: string | null };
+    mentions?: Array<{ user: { id: string; name: string; avatarUrl: string | null } }>;
   }>;
   _count?: { children: number };
 }) {
   return {
     id: c.id,
     body: c.body,
+    anchor: c.anchor,
     parentId: c.parentId,
     starCount: c.starCount,
     promoteStatus: c.promoteStatus,
     createdAt: c.createdAt.toISOString(),
     author: c.author,
+    mentions: c.mentions?.map((mention) => mention.user) ?? [],
     children: (c.children ?? []).map((r) => ({
       id: r.id,
       body: r.body,
       starCount: r.starCount,
       createdAt: r.createdAt.toISOString(),
       author: r.author,
+      mentions: r.mentions?.map((mention) => mention.user) ?? [],
     })),
     childCount: c._count?.children ?? c.children?.length ?? 0,
   };

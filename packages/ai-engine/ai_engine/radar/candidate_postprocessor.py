@@ -9,7 +9,7 @@ import os
 from typing import Any, Awaitable, Callable
 
 from ai_engine.radar.distilled_scorer import DistilledScore, score_with_llm
-from ai_engine.scoring.scoring_profiles import get_profile
+from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 logger = logging.getLogger("ai_engine.radar.candidate_postprocessor")
 
@@ -79,7 +79,7 @@ async def score_missing_candidates(
     async def _score(raw: Any) -> tuple[str, DistilledScore] | None:
         row = dict(raw)
         source_type = str(row.get("sourceType") or "web_share")
-        profile = get_profile(_SOURCE_PROFILE.get(source_type, "engineering"))
+        profile, _ = profile_for_source_url(source_type, str(row.get("url") or ""))
         content = str(
             row.get("originalMarkdown")
             or row.get("body")

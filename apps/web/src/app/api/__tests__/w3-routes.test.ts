@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash } from 'node:crypto';
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -39,7 +38,8 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 import { POST as importPost } from '../imports/route';
-import { POST as researchPost, researchListWhere } from '../researches/route';
+import { POST as researchPost } from '../researches/route';
+import { researchListWhere } from '../../../lib/research-list-where';
 import { DELETE as researchDelete } from '../researches/[id]/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
 import { CreateResearchInput } from '../../../lib/schemas';
@@ -166,16 +166,15 @@ describe('research provenance input', () => {
   });
 
   it.each([
-    ['unchanged', 'AI output', 400, null],
-    ['edited', 'Owner edited output', 200, true],
-  ])('publishes %s AI content with expected provenance', async (_label, body, expectedStatus, expectedAiAssisted) => {
+    ['unchanged', 'AI output'],
+    ['edited', 'Owner edited output'],
+  ])('publishes %s AI content after explicit confirmation', async (_label, body) => {
     const now = new Date();
-    const origin = createHash('sha256').update('AI output').digest('hex');
     mocks.researchFindUnique.mockResolvedValue({
       id: '22222222-2222-2222-2222-222222222222',
       authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
-      title: 'AI draft', body, background: null, conclusion: null, risks: null, tags: [],
-      creationMethod: 'ai_research', originContentSha256: origin,
+      title: 'AI draft', body, background: '研究背景', conclusion: '研究结论', risks: '风险与待验证项', tags: [],
+      creationMethod: 'ai_research',
     });
     mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
       id: '22222222-2222-2222-2222-222222222222', type: 'research',
@@ -190,14 +189,51 @@ describe('research provenance input', () => {
       new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
       { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
     );
-    expect(response.status).toBe(expectedStatus);
-    if (expectedAiAssisted === null) {
-      expect(await response.json()).toMatchObject({ code: 'VALIDATION_FAILED' });
-      expect(mocks.researchUpdate).not.toHaveBeenCalled();
-    } else {
-      expect((await response.json()).aiAssisted).toBe(expectedAiAssisted);
-      expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(expectedAiAssisted);
-    }
+    expect(response.status).toBe(200);
+    expect((await response.json()).aiAssisted).toBe(true);
+    expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(true);
+  });
+
+  it('requires the research summary before publication', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'Incomplete draft', body: 'Body', background: '研究背景',
+      conclusion: null, risks: '风险与待验证项', tags: [], creationMethod: 'manual',
+      reviewStatus: null,
+    });
+
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      message: '发布前必须填写研究摘要：结论',
+      details: { missing: ['结论'] },
+    });
+    expect(mocks.researchUpdate).not.toHaveBeenCalled();
+  });
+
+  it('blocks publication when fact review finds a contradiction', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'Reviewed draft', body: 'Owner edited output', background: null,
+      conclusion: null, risks: null, tags: [], creationMethod: 'manual',
+      originContentSha256: null, reviewStatus: 'blocked',
+    });
+
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'VALIDATION_FAILED' });
+    expect(mocks.transaction).not.toHaveBeenCalled();
   });
 });
 
@@ -291,6 +327,17 @@ describe('GET /api/researches scope', () => {
   it('draft scope is owner-only', () => {
     expect(researchListWhere('draft', 'me')).toEqual({
       AND: [{ authorId: 'me', status: { equals: 'draft' } }],
+    });
+  });
+
+  it('mine scope keeps published and archived content owner-only', () => {
+    expect(researchListWhere('mine', 'me')).toEqual({
+      AND: [
+        {
+          authorId: 'me',
+          status: { in: ['published', 'archived'] },
+        },
+      ],
     });
   });
 

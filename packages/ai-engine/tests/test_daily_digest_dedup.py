@@ -9,9 +9,75 @@ the web client then rendered twice (and React warned about duplicate keys).
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from datetime import date
 from typing import Any
 
-from ai_engine.radar.daily_digest import _normalize_highlights, _resolve_ranked_links
+from ai_engine.radar.daily_digest import (
+    _normalize_highlights,
+    _resolve_ranked_links,
+    _upsert_digest,
+    query_digest_candidates,
+)
+
+
+class _DigestCursor:
+    async def fetchone(self) -> dict[str, str]:
+        return {"id": "digest-id"}
+
+
+class _DigestConnection:
+    async def execute(self, _sql: str, _params: tuple[Any, ...]) -> _DigestCursor:
+        return _DigestCursor()
+
+
+class _DigestPool:
+    @asynccontextmanager
+    async def connection(self):  # type: ignore[no-untyped-def]
+        yield _DigestConnection()
+
+
+class _CandidateCursor:
+    async def fetchall(self) -> list[dict[str, Any]]:
+        return []
+
+
+class _CandidateConnection:
+    def __init__(self) -> None:
+        self.sql = ""
+        self.row_factory: Any = None
+
+    async def execute(self, sql: str, _params: tuple[Any, ...]) -> _CandidateCursor:
+        self.sql = sql
+        return _CandidateCursor()
+
+
+class _CandidatePool:
+    def __init__(self) -> None:
+        self.conn = _CandidateConnection()
+
+    @asynccontextmanager
+    async def connection(self):  # type: ignore[no-untyped-def]
+        yield self.conn
+
+
+async def test_digest_candidates_exclude_soft_hidden_content() -> None:
+    pool = _CandidatePool()
+
+    assert await query_digest_candidates(pool, target_date=date(2026, 8, 6)) == []
+    assert 's."status" IN (\'candidate\', \'published\')' in pool.conn.sql
+
+
+async def test_upsert_digest_reads_dict_row_id() -> None:
+    """A successful RETURNING row must not be misreported as KeyError: 0."""
+    summary_id = await _upsert_digest(
+        _DigestPool(),
+        target_date=date(2026, 8, 6),
+        markdown="# digest",
+        meta={},
+    )
+
+    assert summary_id == "digest-id"
 
 
 def _candidate(cid: str, url: str, title: str, canonical: str | None = None) -> dict[str, Any]:

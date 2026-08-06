@@ -1,0 +1,6 @@
+ALTER TABLE "radar_sync_runs"
+  ADD COLUMN "fallbackCount" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "skippedExisting" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "skippedRuleNoise" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "skippedDistilledNoise" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "skippedConflict" INTEGER NOT NULL DEFAULT 0;

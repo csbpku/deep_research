@@ -34,6 +34,7 @@ from ai_engine.fetcher.safe_fetch import (
     DEFAULT_ALLOWED_PORTS,
     FetchedDocument,
     SafeFetchError,
+    _resolve_ip,
     safe_fetch,
 )
 
@@ -94,6 +95,25 @@ def _redirect_response(location: str, *, status: int = 302) -> httpx.Response:
         headers={"location": location},
         request=httpx.Request("GET", "http://public.example/"),
     )
+
+
+def test_dns_resolver_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transient resolver failures should recover before becoming URL_FETCH_DNS."""
+    calls = 0
+
+    def flaky_getaddrinfo(host: str, port: Any, **kwargs: Any) -> list[tuple[Any, ...]]:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise socket.gaierror(socket.EAI_AGAIN, "temporary failure")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", flaky_getaddrinfo)
+    monkeypatch.setattr("ai_engine.fetcher.safe_fetch._DNS_RETRIES", 2)
+    monkeypatch.setattr("ai_engine.fetcher.safe_fetch._DNS_BACKOFF_SECONDS", 0.0)
+
+    assert _resolve_ip("temporary.example") == "8.8.8.8"
+    assert calls == 3
 
 
 @pytest.fixture

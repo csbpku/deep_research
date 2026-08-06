@@ -41,6 +41,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
@@ -54,7 +55,15 @@ from ai_engine.scoring.scoring_profiles import (
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
 
-DISTILLED_VERSION = "3.0"
+DISTILLED_VERSION = "4.7"
+
+# The old 8k prefix often contained only a client-side documentation shell
+# (navigation, loading placeholders, and footer). Keep enough context for
+# long articles while bounding the prompt size. For very long documents we
+# retain both the opening (problem/setup) and closing (results/limitations).
+MAX_SCORING_CONTENT_CHARS = 24_000
+SCORING_CONTENT_HEAD_CHARS = 16_000
+SCORING_CONTENT_TAIL_CHARS = 8_000
 
 # ── 7 Dimensions (fixed; only weights vary per profile) ───────────
 #
@@ -143,12 +152,12 @@ DIMENSIONS: tuple[Dimension, ...] = (
     ),
     Dimension(
         name="综合信号",
-        description="对 AI/LLM 工程实践者是否有直接参考价值？（受众匹配度）",
+        description="对偏 AI 应用开发的软件工程师是否有直接参考价值？（受众匹配度）",
         rubric={
             0: "与 AI/LLM 工程无关或只有表面关联。地理、非技术领域、纯商业新闻、其他非 AI 学科内容",
             1: "与 AI 有间接联系但不提供工程层面的可操作信息。纯新闻播报、财务报告、行业趋势",
             2: "对 AI 工程实践有一定参考价值。产品发布、技术选型、架构思路，但缺乏深入的技术方案",
-            3: "直接回答 AI 工程实践者当前正在解决的问题。可立即应用于 Agent、LLM 部署、RAG、工具链优化等工作",
+            3: "直接回答 AI 应用开发中的工程问题。可立即用于架构、实现、评测、部署、可靠性或成本决策",
         },
     ),
 )
@@ -225,8 +234,12 @@ class DistilledScore:
     has_risk_signal: bool                 # True if any risk_flag is set
     profile_id: str                       # id of the active profile
     is_default: bool                      # True if LLM scoring was skipped/fallback
-    direct_relevance: int | None = None   # explicit e-commerce engineering fit
+    direct_relevance: int | None = None   # explicit application-engineering fit
     relevance_evidence: str | None = None # evidence supporting direct relevance
+    scope_breadth: int | None = None      # 0=narrow, 1=common, 2=broadly reusable
+    scope_evidence: str | None = None     # evidence supporting reuse breadth
+    validation_breadth: int | None = None # 0=anecdotal, 1=single setup, 2=independent breadth
+    implementation_stage: int | None = None # 0=proof, 1=prototype, 2=integrated
     effective_total: float | None = None  # relevance-adjusted display/ranking score
     quality_score: float | None = None    # source-neutral content quality
     team_value_score: float | None = None # expected usefulness to the target team
@@ -267,6 +280,14 @@ class DistilledScore:
             result["directRelevance"] = self.direct_relevance
         if self.relevance_evidence:
             result["relevanceEvidence"] = self.relevance_evidence
+        if self.scope_breadth is not None:
+            result["scopeBreadth"] = self.scope_breadth
+        if self.scope_evidence:
+            result["scopeEvidence"] = self.scope_evidence
+        if self.validation_breadth is not None:
+            result["validationBreadth"] = self.validation_breadth
+        if self.implementation_stage is not None:
+            result["implementationStage"] = self.implementation_stage
         if self.effective_total is not None:
             result["effectiveTotal"] = self.effective_total
         if self.quality_score is not None:
@@ -301,30 +322,59 @@ SERIAL_KEY_TO_CN: dict[str, str] = {v: k for k, v in SERIAL_KEYS.items()}
 # ── LLM scoring ───────────────────────────────────────────────────
 
 
-SYSTEM_PROMPT = """你是一名严苛的评审员，为一个电商公司的软件工程师团队筛选 AI 雷达文章。
+SYSTEM_PROMPT = """你是一名严苛的评审员，为偏 AI 应用开发的软件工程师筛选 AI 雷达文章；这些工程师正在构建、调试和运营 AI 项目。
 
 受众画像：
-- 主要工作：在电商业务中构建 LLM 应用、Agent 系统、RAG、AI 工具链、平台工程
-- 直接相关：AI 框架/模型部署、Agent 设计模式、RAG 管线、电商场景 AI 应用、LLM 工具链
+- 主要工作：构建和维护 AI 应用、Agent 系统、RAG、后端服务、评测体系及配套工程工具
+- 直接相关：架构设计、代码实现、API/数据流、测试评测、部署运维、可靠性、安全、性能与成本决策；尤其是能帮助工程师解决实际问题的内容
 - 不需要：纯商业新闻、非 AI 学科（地理/金融/体育/医疗）、纯营销稿、复古/玩具/业余项目
-- 如果文章与电商软件工程师的实际工作无关，即便有趣也不得给高分
+- 高分的核心问题是：工程师读完后，能否用它解决一个真实的 AI 项目问题，或更有把握地做出一个工程决策？如果不能，即便话题热门、模型很新或标题含 Agent/RAG，也不得给高分
 
 额外的硬相关性判断（必须单独输出 direct_relevance，0–3 分）：
-- 3 分：明确服务电商 AI 工程，例如搜索/推荐/排序、广告/定价、风控/反欺诈、客服、商品理解、电商 Agent，并包含具体工程决策或实践证据
-- 2 分：通用 AI 工程（RAG/LLM 平台、模型服务、Agent、评测等），存在合理的间接迁移价值，但没有明确电商场景
-- 1 分：泛 AI 兴趣、通用模型新闻、个人/设备项目、视频理解、与业务无关的应用等
+- 3 分：正文明确提出一个 AI 项目中的工程问题，并提供可接入真实应用的代码/配置/命令/测试/排障步骤或工作流，同时给出架构、选型、质量、可靠性、性能或成本取舍证据；读者可以据此把方案接入应用、CI/评测门禁、部署或运行时流程并开始解决问题
+- 2 分：与 AI 应用工程有关且有迁移价值，但实现资产、排障过程或决策证据不完整；可以帮助思考，但不能直接作为解决方案。单一模型的官方文档若提供具体 prompt、API/参数配置、timeout/streaming、fallback、评测或可靠性操作，也至少是 2 分；不能因为只绑定一个模型就降为 1 分
+- 1 分：泛 AI 兴趣、商业/产品趋势、领域应用展示、通用模型新闻、个人/设备项目，或只展示结果而没有工程方法
 - 0 分：非 AI 工程、纯数学/理论、医疗/生物/物理应用、纯营销/商业内容
-- “用了 LLM”或“模型很强/很新”不等于直接相关；没有明确电商上下文或可迁移的工程决策时，direct_relevance 最高只能给 1
+- “用了 LLM”、模型很新、标题含 Agent/RAG/Commerce，或场景恰好属于某个业务领域，都不能单独提高相关性
 - direct_relevance 是硬门槛，优先级高于文章的新颖性、深度和热度
-- direct_relevance=3 必须在 relevance_evidence 中写出正文支持的具体证据，或明确的电商工程决策；只写“可迁移”“对 AI 有用”不算证据
-- 如果没有这类证据，direct_relevance 最高只能给 2；relevance_evidence 填空字符串
+- direct_relevance=3 必须在 relevance_evidence 中同时引用：具体工程问题、具体实现/排障资产，以及至少一个工程取舍或验证结果；只写“可迁移”“对开发有用”或复述标题不算证据
+- 仅证明某个失败模式存在、做一次 benchmark/实验、提供数据采集脚本或复现实验 harness，而没有实际缓解方案及其应用/CI/运行时接入路径，direct_relevance 最高为 2；这类文章可以帮助判断问题，但不是直接解决问题
+- 如果缺少可执行实现细节，direct_relevance 最高只能给 2；relevance_evidence 填空字符串
+- 电商、金融、医疗、语音等业务领域本身既不加分也不减分，只评估其中的软件工程内容
+
+适用范围判断（必须单独输出 scope_breadth，0–2 分，并作为相关性的硬上限）：
+- 2 分：跨项目、跨模型或跨供应商可复用，解决大多数 AI 应用开发团队都会遇到的工程问题
+- 1 分：常见工程问题，但明显绑定单一框架、供应商或技术栈；迁移需要改造。针对单一模型的官方工程文档，如果包含超时、流式、异步任务、fallback、评测、成本或可靠性等可迁移实践，也属于 1 分
+- 0 分：单一模型权重/checkpoint/量化包/硬件调参，或语音、音频、视觉、机器人等窄模态及特定垂直场景；模型卡和安装说明通常是 0 分
+- scope_breadth=0 时 direct_relevance 最高为 1；scope_breadth=1 时最高为 2；只有 scope_breadth=2 才可能为 3
+- 安装步骤详细不代表适用范围广；“特定对象讲得很细”和“多数应用开发可复用”必须分开判断
+- 示例：跨工具的 agent 开发工作流/测试门禁可为 2；单个 HuggingFace 模型部署包通常为 0；单一模型的官方长任务/fallback/评测实践可为 1；Voice Agent 的 LangSmith 专项教程通常为 0
+
+GitHub 项目特别注意：README、代码/配置、可复用命令、工作流、评测方法或工程质量门禁是相关性证据；像 agent skills 这类能改善 AI 项目开发流程的仓库可以高分，但必须依据实际资产评分。只有仓库热度、24 小时动态、模型/项目名称或极薄介绍时，按 1 或更低处理。
+
+来源不设绝对上限：社区文章、官方文章和 Arxiv 论文都可能进入 collection/must_read，但前提是正文自身提供了能解决真实 AI 项目问题的证据。不要因为来源权威、论文形式、作者知名、文章流行、表达质量高或观点新颖而自动加分；同样，也不要因为来源是社区文章就自动降级。论文若能给出可迁移的实现、评测、部署、可靠性或成本指导，应提高可行动性和综合信号。
+
+经验/实验文章的验证广度（必须单独输出 validation_breadth，0–2）：
+- 2 分：正文自身在多个独立模型、独立数据集/仓库、生产流量或外部复现中验证；引用别人的实验不算本文验证
+- 1 分：单一作者/单一模型/少量自建样本或单一环境中的受控实验，即使有原始日志和完整方法，也只能证明该设置下成立
+- 0 分：个案、演示、主观体验或没有可审计验证
+- 原始日志、代码、样本量和边界说明可以提高事实可信度，但不能把 validation_breadth=1 自动升为 2
+
+工程落地阶段（必须单独输出 implementation_stage，0–2）：
+- 2 分：方案已经包含接入真实 AI 应用、CI/评测门禁、部署或运行时的完整路径，读者可以按文中资产集成
+- 1 分：有 prototype、实验 harness、检测脚本或局部代码，但没有完整的应用/CI/运行时接入路径
+- 0 分：只有问题演示、benchmark、数据分析或原则性建议
+- implementation_stage≤1 时，direct_relevance 最高为 2，可行动性最高为 2；实验可复现不等于工程方案可落地
 
 前置过滤规则（优先级最高）：
 1. 文章是否与 AI/LLM/Agent 工程实践直接相关？如果答案是"否"，受众匹配度必须为 0-1 分
 2. 纯财务报告、行业融资新闻、非 AI 技术工具（如 docker/nginx/linux 低层）→ 受众匹配度 0
-3. API 工具、AI 框架、模型部署、Agent 设计模式、RAG 管线等 → 正常评分
+3. API 工具、AI 框架、模型部署、Agent 设计模式、RAG 管线等 → 只有在能帮助工程师实现、调试、评测或运营 AI 项目时才正常评分
 
 评分纪律：
+- 3 分是例外，不是“写得不错”的同义词：必须有正文中的充分证据。对一篇普通文章，至少应有两个维度停在 2 分；不要为了让总分好看而把所有维度打满
+- 可行动性=3 需要完整的落地闭环（集成点、配置/代码、验证门禁或运行时行为）；只有实验步骤、观测脚本、问题证明或原则性建议时最高为 2
+- 分析深度=3 需要机制、因果链或非显然取舍，不是信息罗列；事实可信度=3 需要可追溯的原始数据/方法和边界说明，不是文章声称“做过实验”就够；表达质量=3 只给极度克制、几乎无冗余的文章
 - 受众匹配度低于 1.5 的文章，即便其他维度很高（如信息增量 3/分析深度 3），也说明
   它不属于本平台，请在 weak_point 中明确说明原因
 - 不要假定所有含"AI/neural"字眼的项目都面向 AI 工程师
@@ -425,6 +475,7 @@ def build_user_prompt(
         published_at=published_at,
         current_date=current_date,
     )
+    content_for_scoring = _prepare_scoring_content(title, content)
     return f"""请对以下文章进行 7 个维度的评分（每个维度 0–3 分）。
 
 ## 评分画像上下文
@@ -450,8 +501,8 @@ def build_user_prompt(
 ## 文章内容
 标题: {title}
 
-正文（截取）:
-{content[:8000]}
+正文（正文优先；超长内容保留开头和结尾）:
+{_limit_scoring_content(content_for_scoring)}
 
 ## 输出格式（严格 JSON，不要 markdown 代码块）
 {{
@@ -464,6 +515,10 @@ def build_user_prompt(
   "综合信号": 0,
   "direct_relevance": 0,
   "relevance_evidence": "支持相关性判断的原文证据或具体迁移决策；不相关时填空字符串",
+  "scope_breadth": 0,
+  "scope_evidence": "说明内容为何能跨项目复用，或为何仅适用于特定模型/平台/模态",
+  "validation_breadth": 0,
+  "implementation_stage": 0,
   "weak_point": "最低维度扣分原因",
   "veto": null,
   "risk_flag": null,
@@ -502,7 +557,7 @@ async def anthropic_scorer(
 
     Passes profile / source_type / url / published_at to the prompt so
     the LLM has temporal and source context for accurate scoring.
-    """
+"""
     from ai_engine.llm.client import generate_text
 
     llm_spec = (
@@ -526,6 +581,45 @@ async def anthropic_scorer(
         disable_thinking=True,
     )
     return result.text
+
+
+def _prepare_scoring_content(title: str, content: str) -> str:
+    """Prefer the real article body when a client-side docs shell is stored.
+
+    Some vendor docs persist a long navigation/loading shell before the
+    article body. Taking the first 8k characters would then score the shell
+    instead of the document. When repeated loading markers are present, use
+    the last title occurrence as the likely article start.
+    """
+    if not content:
+        return content
+    lowered = content.lower()
+    noisy_shell = lowered.count("loading") >= 3 or lowered.count("search") >= 4
+    if not noisy_shell:
+        return content
+    marker = title.strip()
+    if marker:
+        start = content.lower().rfind(marker.lower())
+        if start > 0:
+            return content[start:]
+    return content
+
+
+def _limit_scoring_content(content: str) -> str:
+    """Bound the article text without discarding useful conclusions.
+
+    A prefix-only limit is especially harmful for docs and experiment
+    reports: setup may be long while the actionable guidance, results, and
+    limitations are at the end. The 24k budget is intentionally larger than
+    the former 8k limit, and the split keeps both ends for long inputs.
+    """
+    if len(content) <= MAX_SCORING_CONTENT_CHARS:
+        return content
+    head = content[:SCORING_CONTENT_HEAD_CHARS]
+    tail = content[-SCORING_CONTENT_TAIL_CHARS:]
+    return (
+        f"{head}\n\n[正文中段过长，以下省略]\n\n{tail}"
+    )
 
 
 # ── Default (no-LLM) scorer ────────────────────────────────────────
@@ -668,6 +762,75 @@ def _normalize_relevance_evidence(parsed: dict[str, Any]) -> str | None:
     return evidence or None
 
 
+def _normalize_scope_breadth(parsed: dict[str, Any]) -> int | None:
+    """Read explicit reuse breadth while keeping old scores compatible."""
+    raw = parsed.get("scope_breadth", parsed.get("scopeBreadth"))
+    if raw is None:
+        return None
+    try:
+        return max(0, min(2, int(raw)))
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_scope_evidence(parsed: dict[str, Any]) -> str | None:
+    raw = parsed.get("scope_evidence", parsed.get("scopeEvidence"))
+    if not isinstance(raw, str):
+        return None
+    evidence = " ".join(raw.split())[:240]
+    return evidence or None
+
+
+def _normalize_validation_breadth(parsed: dict[str, Any]) -> int | None:
+    raw = parsed.get("validation_breadth", parsed.get("validationBreadth"))
+    if raw is None:
+        return None
+    try:
+        return max(0, min(2, int(raw)))
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_implementation_stage(parsed: dict[str, Any]) -> int | None:
+    raw = parsed.get("implementation_stage", parsed.get("implementationStage"))
+    if raw is None:
+        return None
+    try:
+        return max(0, min(2, int(raw)))
+    except (ValueError, TypeError):
+        return None
+
+
+_NARROW_MODALITY_RE = re.compile(
+    r"(?:\bvoice agents?\b|\bspeech agents?\b|\baudio agents?\b|"
+    r"语音\s*Agent|语音智能体|音频\s*Agent)",
+    re.IGNORECASE,
+)
+
+_NARROW_MODEL_ASSET_TITLE_RE = re.compile(
+    r"(?:\bsingle\b.{0,48}\b(?:gpu|hardware|amd|nvidia|mi\d{3,}|a\d{1,2})\b|"
+    r"\b(?:checkpoint|model\s+weights?|quantiz(?:ed|ation)|量化包|模型权重)\b)",
+    re.IGNORECASE,
+)
+
+_PRACTICAL_PAPER_TITLE_RE = re.compile(
+    r"(?=.*\b(?:agent|llm|language model)\b)(?=.*\b(?:failur\w*|repair\w*|"
+    r"monitor\w*|eval\w*|benchmark\w*|reliab\w*|verification)\b)",
+    re.IGNORECASE,
+)
+
+_DIAGNOSTIC_ONLY_RE = re.compile(
+    r"\b(?:hallucination|confabulation|benchmark|experiment|failure\s+mode|"
+    r"detection\s+harness|问题证明|幻觉检测|实验)\b",
+    re.IGNORECASE,
+)
+_INTEGRATION_PATH_RE = re.compile(
+    r"\b(?:production|runtime|middleware|deploy(?:ment)?|CI/CD|"
+    r"integrat(?:e|ion)|plug[- ]?in|fallback|门禁|接入|"
+    r"运行时|生产|部署)\b",
+    re.IGNORECASE,
+)
+
 _QUALITY_WEIGHTS: dict[str, int] = {
     "信息增量": 30,
     "分析深度": 20,
@@ -696,11 +859,11 @@ def _source_priority_bonus(source_type: str | None) -> float:
     """
     normalized = (source_type or "").strip().lower()
     if normalized == "github_tracked":
-        return 12.0
+        return 4.0
     if normalized.startswith("github"):
-        return 8.0
+        return 3.0
     if normalized in {"rss", "devto", "vendor_news"}:
-        return 2.0
+        return 1.0
     return 0.0
 
 
@@ -730,9 +893,25 @@ def compute_score(
     hard_veto = _normalize_hard_veto(parsed)
     direct_relevance = _normalize_direct_relevance(parsed)
     relevance_evidence = _normalize_relevance_evidence(parsed)
-    # A score of 3 is reserved for explicit e-commerce fit. If the model
-    # cannot cite evidence or a concrete transferable decision, downgrade it
-    # to the indirect-fit bucket before computing the visible score.
+    scope_breadth = _normalize_scope_breadth(parsed)
+    scope_evidence = _normalize_scope_evidence(parsed)
+    validation_breadth = _normalize_validation_breadth(parsed)
+    implementation_stage = _normalize_implementation_stage(parsed)
+
+    # Model-card feeds are single-checkpoint assets by construction. Voice/
+    # speech-agent tutorials are also outside the default application scope.
+    # Keep these deterministic so repeated LLM calls cannot promote them.
+    normalized_source = (source_type or "").strip().lower()
+    title_text = (evidence_text or "").split("\n", 1)[0]
+    narrow_model_asset = bool(_NARROW_MODEL_ASSET_TITLE_RE.search(title_text))
+    if normalized_source == "huggingface_models" or narrow_model_asset or (
+        evidence_text and _NARROW_MODALITY_RE.search(evidence_text)
+    ):
+        scope_breadth = 0
+
+    if direct_relevance is not None and scope_breadth is not None:
+        direct_relevance = min(direct_relevance, scope_breadth + 1)
+    # A score of 3 requires source-backed evidence, not domain/title matching.
     if direct_relevance == 3 and not relevance_evidence:
         direct_relevance = 2
 
@@ -745,6 +924,8 @@ def compute_score(
             dimension_scores=veto_scores,
             direct_relevance=direct_relevance,
             relevance_evidence=relevance_evidence,
+            scope_breadth=scope_breadth,
+            scope_evidence=scope_evidence,
             effective_total=0.0,
             quality_score=0.0,
             team_value_score=0.0,
@@ -774,6 +955,40 @@ def compute_score(
     if repost_flag and dim_scores["信息增量"] > 1:
         dim_scores["信息增量"] = 1
 
+    # Direct application-engineering relevance must also be immediately
+    # actionable. Conceptual papers, benchmarks and protocols remain useful,
+    # but cannot reach relevance=3 on domain fit alone.
+    if direct_relevance == 3 and (
+        dim_scores["可行动性"] < 3 or dim_scores["综合信号"] < 3
+    ):
+        direct_relevance = 2
+
+    if implementation_stage is not None and implementation_stage <= 1:
+        direct_relevance = min(direct_relevance, 2) if direct_relevance is not None else direct_relevance
+        if dim_scores["可行动性"] > 2:
+            dim_scores["可行动性"] = 2
+    elif (
+        implementation_stage == 2
+        and evidence_text
+        and _DIAGNOSTIC_ONLY_RE.search(evidence_text)
+        and not _INTEGRATION_PATH_RE.search(evidence_text)
+    ):
+        # Do not let a model promote a reproducible diagnostic harness to a
+        # production-ready solution when the article has no integration path.
+        implementation_stage = 1
+        direct_relevance = min(direct_relevance, 2) if direct_relevance is not None else direct_relevance
+        if dim_scores["可行动性"] > 2:
+            dim_scores["可行动性"] = 2
+
+    practical_paper = (
+        profile.id == "paper"
+        and bool(_PRACTICAL_PAPER_TITLE_RE.search(title_text))
+        and direct_relevance == 2
+        and dim_scores["信息增量"] >= 2
+        and dim_scores["分析深度"] >= 3
+        and dim_scores["可行动性"] >= 2
+    )
+
     # Weighted total using profile weights.
     total = sum(
         dim_scores[d.name] * profile.weights[d.name] / MAX_DIM_SCORE
@@ -793,8 +1008,8 @@ def compute_score(
     )
 
     # Two-layer scoring keeps editorial quality separate from usefulness to
-    # this team. The seven dimensions remain available as audit evidence, but
-    # no longer directly determine cross-source ordering.
+    # this team. Content quality and team value have equal influence; source
+    # priority is only a small tie-breaker and must not change reading tier.
     audience_fit = dim_scores.get("综合信号", 0)
     quality_score = _weighted_dimension_score(dim_scores, _QUALITY_WEIGHTS)
     team_relevance = direct_relevance if direct_relevance is not None else audience_fit
@@ -808,7 +1023,7 @@ def compute_score(
     source_bonus = _source_priority_bonus(source_type)
     github_priority = (source_type or "").strip().lower().startswith("github")
     ranking_score = round(
-        min(100.0, team_value_score * 0.75 + quality_score * 0.25 + source_bonus),
+        min(100.0, team_value_score * 0.50 + quality_score * 0.50 + source_bonus),
         2,
     )
 
@@ -817,7 +1032,7 @@ def compute_score(
     # changing historical ordering.
     if direct_relevance is not None:
         effective_fit = min(audience_fit, direct_relevance)
-        relevance_cap = {0: 35.0, 1: 49.0, 2: 82.0 if github_priority else 78.0}
+        relevance_cap = {0: 35.0, 1: 49.0, 2: 74.0 if github_priority else 72.0}
         ranking_score = min(ranking_score, relevance_cap.get(effective_fit, 100.0))
     else:
         ranking_score = total
@@ -840,6 +1055,33 @@ def compute_score(
         ranking_score = min(ranking_score, 64.0)
         effective_must_read = False
 
+    # Collection is the highest editorial tier, not just a high weighted
+    # average. Require complete engineering evidence across the core axis;
+    # otherwise a persuasive single article can still be deep_read, but it
+    # cannot become a top-priority reference by accumulating easy 3s.
+    collection_ready = (
+        direct_relevance == 3
+        and scope_breadth == 2
+        and dim_scores["信息增量"] == 3
+        and dim_scores["分析深度"] == 3
+        and dim_scores["可行动性"] == 3
+        and dim_scores["事实可信度"] == 3
+        and validation_breadth == 2
+    )
+    if direct_relevance is not None and not collection_ready:
+        ranking_score = min(ranking_score, profile.tier_collection - 0.01)
+        effective_must_read = False
+
+    # Reading tier is an editorial-quality decision. Keep ranking_score for
+    # cross-source ordering, but never let source bonus or team-value uplift
+    # turn a low-quality item into deep_read.
+    tier_score = min(total, ranking_score)
+    if practical_paper and tier_score < profile.tier_deep_read:
+        # A paper with a transferable engineering method and measured
+        # validation is deep-read material even when it lacks production
+        # code and therefore cannot earn direct_relevance=3.
+        tier_score = profile.tier_deep_read
+
     weak_point = str(parsed.get("weak_point", ""))[:100]
     if not weak_point:
         min_name = min(dim_scores, key=lambda k: dim_scores[k])
@@ -847,11 +1089,15 @@ def compute_score(
 
     return DistilledScore(
         total=total,
-        tier=_tier_for_score(ranking_score, profile),
+        tier=_tier_for_score(tier_score, profile),
         must_read=effective_must_read,
         dimension_scores=dim_scores,
         direct_relevance=direct_relevance,
         relevance_evidence=relevance_evidence,
+        scope_breadth=scope_breadth,
+        scope_evidence=scope_evidence,
+        validation_breadth=validation_breadth,
+        implementation_stage=implementation_stage,
         effective_total=round(ranking_score, 2),
         quality_score=quality_score,
         team_value_score=team_value_score,

@@ -31,7 +31,7 @@ export default async function SignInPage({
   if (error) {
     return (
       <div className="mx-auto max-w-md py-10">
-        <h1 className="mb-4 text-xl font-semibold tracking-tight">登录失败</h1>
+        <h1 className="mb-4 text-xl font-semibold tracking-normal">登录失败</h1>
         <EmptyState
           title="登录失败"
           description={
@@ -51,7 +51,7 @@ export default async function SignInPage({
 
   return (
     <div className="mx-auto max-w-md py-10 text-center">
-      <h1 className="text-xl font-semibold tracking-tight">登录</h1>
+      <h1 className="text-xl font-semibold tracking-normal">登录</h1>
       <p className="mt-2 text-sm text-muted-foreground">
         使用 Google 账号登录。邮箱必须在允许域名列表内。
       </p>

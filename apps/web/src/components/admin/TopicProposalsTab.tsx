@@ -3,12 +3,14 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ExternalLink, Layers3, Loader2, Sparkles, X } from 'lucide-react';
+import Link from 'next/link';
 
 import { AdminActionDialog } from '@/components/admin/AdminActionDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
+import { topicProposalReviewPayload } from '@/lib/topic-proposal-review';
 
 type Candidate = {
   id: string;
@@ -39,6 +41,10 @@ type Proposal = {
   candidates: Candidate[];
 };
 
+type ReviewResponse =
+  | { ok: true; action: 'approve'; topic?: { id: string; slug: string } }
+  | { ok: true; action: 'reject' };
+
 function sourceLabel(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./u, '');
@@ -50,6 +56,8 @@ function sourceLabel(url: string): string {
 export function TopicProposalsTab() {
   const queryClient = useQueryClient();
   const [rejecting, setRejecting] = useState<Proposal | null>(null);
+  const [generationMessage, setGenerationMessage] = useState<string | null>(null);
+  const [publishedTopic, setPublishedTopic] = useState<{ name: string; slug: string } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { name: string; proposition: string; selected: string[] }>>({});
   const q = useQuery<{ items: Proposal[] }>({
     queryKey: ['admin-topic-proposals', 'proposed'],
@@ -65,21 +73,33 @@ export function TopicProposalsTab() {
       const response = await fetch('/api/admin/topic-proposals/generate', { method: 'POST' });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error((body as { message?: string }).message ?? '生成提议失败');
-      return body as { proposalsCreated: number };
+      return body as { proposalsCreated: number; candidatesLinked: number; failed: number; eligibleCandidates: number; failureReason: string };
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-topic-proposals'] }),
+    onSuccess: (result) => {
+      if (result.failed > 0) {
+        setGenerationMessage(`生成失败：${result.failureReason || 'AI 模型调用失败'}（已筛选 ${result.eligibleCandidates} 条候选）`);
+      } else if (result.proposalsCreated === 0) {
+        setGenerationMessage(`本次没有形成主题：${result.failureReason === 'NO_QUALIFYING_CLUSTER' ? '模型未找到同时满足“至少 3 条资料 + 2 个独立发布方”的共同命题' : '候选不足'}。当前有效候选 ${result.eligibleCandidates} 条。`);
+      } else {
+        setGenerationMessage(`已生成 ${result.proposalsCreated} 个待审核提议，关联 ${result.candidatesLinked} 条证据。`);
+      }
+      queryClient.invalidateQueries({ queryKey: ['admin-topic-proposals'] });
+    },
   });
 
   const reviewMut = useMutation({
     mutationFn: async (input: { id: string; action: 'approve' | 'reject'; name?: string; proposition?: string; includedSummaryIds?: string[]; reason?: string }) => {
       const response = await fetch(`/api/admin/topic-proposals/${input.id}/review`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(topicProposalReviewPayload(input)),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error((body as { message?: string }).message ?? '审核操作失败');
-      return body;
+      return body as ReviewResponse;
     },
-    onSuccess: () => {
+    onSuccess: (result, input) => {
+      if (result.action === 'approve' && result.topic) {
+        setPublishedTopic({ name: input.name ?? '', slug: result.topic.slug });
+      }
       queryClient.invalidateQueries({ queryKey: ['admin-topic-proposals'] });
       queryClient.invalidateQueries({ queryKey: ['topics'] });
     },
@@ -103,16 +123,23 @@ export function TopicProposalsTab() {
         </div>
         <Button type="button" size="sm" variant="outline" disabled={generateMut.isPending} onClick={() => generateMut.mutate()}>
           {generateMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-          生成新提议
+          生成主题提议
         </Button>
       </div>
 
+      {generationMessage ? <p className="text-xs text-muted-foreground" role="status">{generationMessage}</p> : null}
+      {publishedTopic ? (
+        <p className="text-xs text-status-succeeded-fg" role="status">
+          已发布「{publishedTopic.name}」：
+          <Link href={`/topics/${publishedTopic.slug}`} className="ml-1 text-primary hover:underline">查看主题</Link>
+        </p>
+      ) : null}
       {generateMut.isError ? <p className="text-xs text-destructive">{(generateMut.error as Error).message}</p> : null}
       {reviewMut.isError ? <p className="text-xs text-destructive">{(reviewMut.error as Error).message}</p> : null}
       {q.isLoading ? <div className="h-24 animate-pulse rounded-lg bg-muted" /> : null}
       {q.isError ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : null}
       {!q.isLoading && (q.data?.items.length ?? 0) === 0 ? (
-        <EmptyState title="没有待审核提议" description="点击“生成新提议”分析最近 14 天的标题和 enrichment 内容。审核通过后，主题才会出现在公开热点列表。" />
+          <EmptyState title="没有待审核提议" description="点击“生成主题提议”分析最近 14 天的标题和 enrichment 内容。审核通过后，主题才会出现在公开热点列表。" />
       ) : null}
 
       {(q.data?.items ?? []).map((proposal) => {

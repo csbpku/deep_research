@@ -3,7 +3,6 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '../../../../lib/api-handler';
 import { requireAdmin } from '../../../../lib/auth/session';
 import { log } from '../../../../lib/log';
-import { getCurrentUser } from '../../../../lib/auth/session';
 
 /**
  * GET /api/admin/ping — Admin 健康检查 endpoint。
@@ -19,8 +18,3 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   log.info('admin.ping', 'ok', { userId: u.id, role: u.role });
   return NextResponse.json({ ok: true, role: u.role, userId: u.id });
 });
-
-/**
- * 用于单元测试 helper；不导出为 endpoint。
- */
-export const _helpers = { getCurrentUser };

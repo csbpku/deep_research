@@ -1,6 +1,6 @@
 # AI技术调研平台 · 架构方案
 
-> 版本：v3.6 · 2026-07-23
+> 版本：v3.8 · 2026-08-06
 > 本文件描述当前系统架构、数据模型、安全边界与部署拓扑。
 
 ---
@@ -9,22 +9,21 @@
 
 ### 当前能力
 
-1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号和用户分享发现候选，生成可追溯的轻量解读，支持筛选、反馈和人工流转。
+1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号和用户分享发现内容，生成可追溯的轻量解读，支持筛选、反馈、正文下团队讨论和负向内容治理。
 2. **AI 雷达日报**：每天自动聚合当日高信号雷达候选，由 LLM 生成一篇跨来源总结文章（`digest://YYYY-MM-DD` 的发布摘要），含 TL;DR、分节叙事、重点与来源排名。
 3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
 4. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
 5. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
-6. **基础评论**：雷达、摘要和沉淀可评论；由 Admin 手动提炼高价值评论。
+6. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
 7. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
-8. **Admin**：雷达与分享审核、失败任务入口、同步状态、日报重新生成、成员管理。
+8. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、失败任务入口、同步状态、日报重新生成、成员管理。
 9. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
 
 ### 规划能力
 
-- Confluence 用户授权单页导入、`.docx/.pdf`、页面树批量导入和更新提醒。
+- 外部知识库导入（包括 Confluence）暂不启用，待确认稳定的企业授权方案后再规划。
 - 热点主题、跨模块热门 Top 5、专家自动关联和复杂统计图表。
 - SSE、版本历史 UI、详细统计、机器评分排序、AI critic 和多 LLM 路由。
-- 评论星标、3 票自动提名、私有 AI 追问、成员管理 UI 和 `zhparser` 升级。
 - Prometheus/Grafana、Vault/SOPS 等增强运维能力。
 
 ### 不做
@@ -32,7 +31,7 @@
 - 多人实时协同编辑。
 - 语义搜索。
 - AI 自动批准或自动发布团队内容。
-- Confluence 双向同步或替代 Confluence 的协作能力。
+- Confluence 导入、双向同步或替代 Confluence 的协作能力。
 
 ---
 
@@ -107,9 +106,11 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 | `ai_research_jobs` | AI 调研与轻量摘要任务 |
 | `ai_research_sources` | AI 任务实际使用的来源 |
 | `comments` | 摘要或沉淀评论 |
+| `comment_mentions` | 评论与被提及成员的结构化关系 |
+| `notifications` | 评论提及/回复的收件人、发起人和已读状态 |
 | `research_audit` | 已发布沉淀的修改留痕 |
 | `comment_stars` | 评论一人一票 |
-| `content_import_jobs` | 文件转换任务；可扩展 Confluence 导入 |
+| `content_import_jobs` | 文件转换任务 |
 | `product_events` | 产品事件、metadata 和去重键 |
 | `admin_actions` | 管理员审核、角色与禁用动作审计 |
 | `share_submissions` | 用户 URL 分享的安全抓取、处理和审核状态 |
@@ -130,6 +131,8 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 - `radar_feedback(summary_id, user_id, type)` 唯一；业务状态不能只依赖分析事件反推。
 - `comments.research_id` 与 `comments.summary_id` 必须恰好一个非空。
 - `comment_stars(comment_id, user_id)` 为复合主键，保证一人一票。
+- `comment_mentions(comment_id, user_id)` 唯一；只接受未禁用的真实成员 ID，不从显示名反向解析用户。
+- `notifications(recipient_id, source_comment_id, type)` 唯一；自己提及/回复自己不发通知，回复对象同时被 @ 时只保留回复通知。
 - 私有草稿不依赖前端隐藏；所有读取均由 BFF 按 owner 和状态过滤。
 
 ### `researches` 关键字段
@@ -138,7 +141,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 |---|---|
 | `type` | `research` 或 `knowledge` |
 | `status` | `draft` 或 `published` |
-| `creation_method` | `manual`、`ai_research`、`file_import`、`confluence_import` |
+| `creation_method` | `manual`、`ai_research`、`file_import`（历史数据可能保留 `confluence_import`） |
 | `ai_assisted` | 只有 AI 草稿被成员实际修改并发布后才为 true |
 | `ai_assisted_job_id` | 来源 AI job，用于溯源 |
 | `origin_content_sha256` | 初始草稿归一化哈希，用于阻止未修改 AI 草稿直接发布 |
@@ -146,7 +149,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 
 AI job 创建草稿时设置 `creation_method='ai_research'`、`ai_assisted=false` 并保存初始哈希。发布 API 对标题、结构化字段和正文做相同归一化后重新计算；哈希未变化则拒绝发布，变化后设置 `ai_assisted=true`。
 
-文件或 Confluence 仅做确定性格式转换时 `ai_assisted=false`。只有之后实际调用 AI 改写，才关联对应 job 并改变标签。
+文件仅做确定性格式转换时 `ai_assisted=false`。只有之后实际调用 AI 改写，才关联对应 job 并改变标签。
 
 ### 任务状态
 
@@ -190,10 +193,10 @@ flowchart LR
 
 - 每次同步是 `sync → enrich → digest` 三段流水线；日报按 `digest://YYYY-MM-DD` 作为一条 published summary 落库，`digestMeta` 保存结构化文章（TL;DR、分节、重点、来源排名），前端直接渲染，不解析 Markdown。
 - 雷达候选与日报都复用 `summaries`：雷达候选为 `candidate`，日报为 `published` 的 `digest://*` 记录；不再维护一套平行的候选内容表。
-- 每条候选保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分只参与排序，不能自动批准或公开。
+- 每条雷达内容保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分用于雷达排序和自动日报选材；Admin 不逐条批准雷达内容。
 - 来源包括预置 GitHub、arxiv、RSS、微信公众号、社区（Hacker News / Product Hunt / Reddit / Lobsters）等，Admin 可启停、手动同步、重试和重新生成日报；任一来源失败不阻断其他来源。
 - 日报候选上层最多取 40 条，且每个来源类别最多 5 条，避免单一来源挤占其他信号。
-- 普通成员可提交有用、不准确、我用过、收藏和建议调研；重复反馈幂等，反馈只辅助 Admin 判断。
+- 普通成员可提交有用、不准确、我用过、收藏和建议调研；重复反馈幂等，反馈用于排序、调研决策和内容治理。
 - 每条内容保留 canonical URL、来源类型、发布时间和抓取时间。
 - 用户分享先进入 `share_submissions`，安全处理和人工审核后进入同一雷达候选池。
 
@@ -211,7 +214,7 @@ flowchart LR
 - 相同用户 + SHA-256 在 `queued/running/succeeded` 中只保留一个 job；并发冲突返回已有 job，失败后允许重新上传。
 - 转换不调用 LLM，不占 AI 配额；不支持结构进入 `warnings`，不得静默丢失。
 
-Confluence 导入只解析站点和 page id，正文必须通过用户委托授权的 API 读取。首版是单页一次性快照，不使用超级账号，不读取整个空间，也不做双向同步。
+Confluence 导入当前未启用；数据库中的历史字段仅为兼容既有迁移和历史数据保留。
 
 ### AI 调研
 
@@ -231,12 +234,13 @@ Confluence 导入只解析站点和 page id，正文必须通过用户委托授�
 ### 评论与审核
 
 ```text
-评论 -> Admin 选择并提炼 -> published knowledge
+雷达正文 -> 团队评论/@成员/回复 -> 站内通知 -> 成员提议沉淀 -> Admin 编辑提炼 -> published knowledge
 用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> radar candidate / AI 雷达日报
 ```
 
-- 所有批准都必须由 Admin 明确操作；机器评分只用于排序。
-- 分享、雷达候选和评论提炼复用一个 Admin 审核入口，按任务类型分 tab。
+- 雷达采集结果默认对团队可见并参与自动日报选材；Admin 只做软屏蔽、恢复和异常巡检，不维护逐条批准队列。
+- 用户分享仍需 Admin 批准；评论由成员明确“提议沉淀”后进入 Admin 待提炼队列，点赞不自动改变状态。
+- `@成员` 由前端选择器提交成员 UUID，服务端校验成员可用性并在同一事务内写 mention 与通知；“我的通知”只允许收件人读取和标记已读。
 - 审核记录 reviewer 和时间；精华必须能追溯到来源评论。
 
 ---
@@ -251,7 +255,7 @@ Confluence 导入只解析站点和 page id，正文必须通过用户委托授�
 | 创建/读取自己的 draft | 是 | 是 |
 | 读取他人的 draft | 否 | 否 |
 | 雷达反馈、评论、分享 | 是 | 是 |
-| 审核雷达、分享和提炼评论 | 否 | 是 |
+| 治理雷达、审核分享和提炼评论 | 否 | 是 |
 | 管理雷达预置源 | 否 | 是 |
 
 Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁用成员不能建立新 session，危险角色变更需要二次确认和审计。
@@ -284,6 +288,12 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | `POST /api/shares` | 使用统一安全抓取器，创建待审核分享 |
 | `POST /api/radar/{id}/feedback` | 相同用户、候选和反馈类型幂等 |
 | `POST /api/radar/sync` | Admin-only；触发同步并返回 run id |
+| `POST /api/comments/{id}/nominate` | 登录成员提议将顶层评论沉淀为知识；幂等进入 nominated |
+| `GET /api/team-members` | 登录成员搜索可用团队成员，用于评论 @ 选择器 |
+| `GET/PATCH /api/me/notifications` | 查询自己的通知 / 全部标为已读 |
+| `PATCH /api/me/notifications/{id}` | 仅收件人标记单条通知已读 |
+| `POST /api/admin/radar/{id}/dismiss` | Admin-only；软屏蔽雷达条目并写审计 |
+| `POST /api/admin/radar/{id}/restore` | Admin-only；恢复软屏蔽条目并写审计 |
 | `POST /api/admin/reviews/{id}` | Admin-only；明确批准或拒绝并写审计 |
 
 错误响应使用稳定业务码和 `request_id`，不把供应商错误、prompt、access token、API key 或 secret 直接返回前端。
@@ -310,4 +320,4 @@ AI 调研、雷达轻量解读和用户分享摘要共用成本预算并逐档�
 | 文件携带恶意 HTML 或静默丢内容 | MIME + 扩展名校验、HTML 清洗、warnings、临时文件清理 |
 | 私有草稿或追问泄露 | BFF owner 过滤，不进入公共搜索和 comments |
 | 外部资料 prompt injection | 不可信资料边界、注入文本降权、来源与推断标识 |
-| Admin 审核积压 | 审核共用队列和运行状态入口 |
+| Admin 审核积压 | 雷达采用自动排序 + 负向治理；Admin 待处理数只包含分享和评论提炼 |

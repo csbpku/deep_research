@@ -37,6 +37,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterable, cast
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from ai_engine.adapters.base import (
     AdapterCancelOutcome,
@@ -55,6 +56,8 @@ from ai_engine.contracts.states import (
     AiJobStep,
     AiJobStatus,
 )
+from ai_engine.fact_verifier import verify_github_star_claims
+from ai_engine.reviewer import DefaultResearchReviewer, ReviewResult
 
 # ── Import gpt-researcher with compatibility patches ──────────────
 
@@ -181,40 +184,52 @@ else:
     _IMPORT_ERROR = None
 
 
-# ── Step event capture via fake WebSocket ──────────────────────────
+# ── Step event capture via gpt-researcher log_handler ─────────────────
 
-class _StepCaptureWebSocket:
-    """Capture gpt-researcher ``logs`` events and map them to ``AiJobStep``.
+class _StepCaptureLogHandler:
+    """Capture gpt-researcher ``log_handler.on_research_step`` events and map
+    them to ``AiJobStep``.
 
-    gpt-researcher emits WebSocket events like::
-
-        {"type": "logs", "content": "planning_research", "output": "..."}
-
-    We map the ``content`` field to our ``AiJobStep`` enum so
-    ``get_status()`` can report progress.
+    gpt-researcher 0.15/0.16 reports progress through the optional
+    ``log_handler`` (``on_research_step(step, details)``), not the old
+    ``{"type":"logs","content":...}`` WebSocket format. Without it,
+    ``current_step`` stays on ``plan`` until ``write_report`` — the 5-step
+    pipeline looks like it completes at once.
     """
 
     _STEP_MAP: dict[str, str] = {
-        "starting_research": AI_JOB_STEP["PLAN"],
-        "planning_research": AI_JOB_STEP["PLAN"],
-        "agent_generated": AI_JOB_STEP["PLAN"],
-        "running_subquery_research": AI_JOB_STEP["SEARCH"],
-        "scraping_urls": AI_JOB_STEP["SEARCH"],
-        "fetching_query_content": AI_JOB_STEP["COMPRESS"],
-        "research_step_finalized": AI_JOB_STEP["ANALYZE"],
+        # conduct_research() 阶段
+        "research": AI_JOB_STEP["PLAN"],
+        "conducting_research": AI_JOB_STEP["SEARCH"],
+        "research_completed": AI_JOB_STEP["COMPRESS"],
+        # write_report() 阶段
         "writing_report": AI_JOB_STEP["WRITE"],
+        "report_completed": AI_JOB_STEP["WRITE"],
     }
 
     def __init__(self, job: _Job) -> None:
         self._job = job
 
-    async def send_json(self, data: dict[str, Any]) -> None:
-        evt_type = data.get("type", "")
-        content = data.get("content", "")
-        if evt_type == "logs" and content in self._STEP_MAP:
-            step = self._STEP_MAP[content]
-            async with self._job.lock:
-                self._job.current_step = cast("AiJobStep", step)
+    async def on_research_step(self, step: str, details: dict[str, Any] | None = None) -> None:
+        mapped = self._STEP_MAP.get(step)
+        if mapped is None:
+            return
+        async with self._job.lock:
+            if mapped == AI_JOB_STEP["COMPRESS"]:
+                # compress 是证据压缩阶段,发生在搜索结束后、分析前;report 阶段没有
+                # 独立事件,用 research_completed 推进到 analyze 更准确。
+                self._job.current_step = cast("AiJobStep", AI_JOB_STEP["ANALYZE"])
+            else:
+                self._job.current_step = cast("AiJobStep", mapped)
+
+    # gpt-researcher 的 log_handler 还要求这些方法存在(不会被我们使用,占位)。
+    # 注意:不能声明具名参数 —— agent.py 用 ``on_agent_action(kwargs.get('action',''), **kwargs)``
+    # 调用,具名参数会和 **kwargs 里的同名 key 冲突(TypeError)。
+    async def on_tool_start(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def on_agent_action(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 def _collect_sources_from_research(
@@ -236,7 +251,7 @@ def _collect_sources_from_research(
         if url in seen:
             return
         seen.add(url)
-        clean_title = title if isinstance(title, str) and title.strip() else topic
+        clean_title = title if isinstance(title, str) and title.strip() else None
         out.append(
             AdapterSource(
                 source_ref={"type": "url", "value": url},
@@ -258,12 +273,12 @@ def _collect_sources_from_research(
         raw = item.get("raw_content")
         snippet = None
         if isinstance(raw, str) and raw.strip():
-            snippet = " ".join(raw.split())[:240]
+            snippet = " ".join(raw.split())[:900]
         append(url.strip(), item.get("title"), snippet)
 
     for url in visited_urls:
         if isinstance(url, str) and url.strip():
-            append(url.strip(), topic, None)
+            append(url.strip(), None, None)
 
     return out
 
@@ -307,12 +322,44 @@ def _report_needs_completion(report: str, sources: list[AdapterSource]) -> bool:
     return not bool(re.search(r"[。！？.!?）)」』\"']\s*$", last))
 
 
+def _url_source_label(url: str) -> str:
+    parsed = urlsplit(url)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host in {"youtube.com", "youtu.be"}:
+        video_id = parse_qs(parsed.query).get("v", [""])[0]
+        if not video_id and parsed.path.strip("/"):
+            video_id = parsed.path.strip("/").split("/")[-1]
+        return f"YouTube 视频（{video_id}）" if video_id else "YouTube 视频"
+    if host in {"arxiv.org", "openreview.net", "chatpaper.com"}:
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        query_identifier = parse_qs(parsed.query).get("id", [""])[0]
+        identifier = query_identifier or (parts[-1] if parts else host)
+        return f"{host}（{identifier}）"
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    slug = parts[-1] if parts else host
+    slug = re.sub(r"\.(?:html?|pdf)$", "", slug, flags=re.IGNORECASE)
+    slug = re.sub(r"[-_]+", " ", slug).strip()
+    return f"{host}：{slug}" if slug else host
+
+
 def _format_source_lines(sources: list[AdapterSource]) -> str:
+    title_counts: dict[str, int] = {}
+    for source in sources:
+        title = (source.title or "").strip()
+        if title:
+            title_counts[title] = title_counts.get(title, 0) + 1
+
     lines: list[str] = []
     for index, source in enumerate(sources, start=1):
-        title = (source.title or source.canonical_key or "来源").strip()
         ref = source.source_ref if isinstance(source.source_ref, dict) else {}
         url = ref.get("value")
+        title = (source.title or "").strip()
+        if (
+            (not title or title_counts.get(title, 0) > 1)
+            and isinstance(url, str)
+        ):
+            title = _url_source_label(url)
+        title = title or source.canonical_key or "来源"
         if isinstance(url, str) and url.startswith(("http://", "https://")):
             lines.append(f"{index}. [{title}]({url})")
         elif isinstance(url, str):
@@ -327,6 +374,42 @@ def _append_references(report: str, sources: list[AdapterSource]) -> str:
         return report
     body = _strip_reference_section(report)
     return f"{body.rstrip()}\n\n## 参考文献\n\n{_format_source_lines(sources)}"
+
+
+async def _repair_report_with_review(
+    report: str,
+    instructions: tuple[str, ...],
+    sources: list[AdapterSource],
+) -> str | None:
+    """Ask the generator tier to apply reviewer instructions only."""
+    if not instructions:
+        return None
+    from ai_engine.llm.client import generate_text
+
+    source_lines = _format_source_lines(sources)
+    prompt = (
+        "请根据事实审核意见修订以下中文调研报告。只修改审核意见涉及的事实，"
+        "不得新增没有来源支持的内容，不要输出参考文献章节。保留原有结构。\n\n"
+        "审核意见：\n- " + "\n- ".join(instructions) + "\n\n"
+        f"报告：\n{_strip_reference_section(report)[:24000]}\n\n"
+        f"可用来源：\n{source_lines[:8000]}"
+    )
+    try:
+        result = await generate_text(
+            user_prompt=prompt,
+            system_prompt=(
+                "你是调研报告修订 Agent。只能依据审核意见和给定来源修改报告，"
+                "无法确认的事实必须删除或标记为未核实。只输出修订后的报告正文。"
+            ),
+            llm_spec=os.environ.get("FACT_REPAIR_LLM"),
+            tier="light",
+            max_tokens=3000,
+            timeout=60.0,
+            disable_thinking=True,
+        )
+    except Exception:
+        return None
+    return result.text.strip() or None
 
 
 def _strip_overlap(previous: str, chunk: str) -> str:
@@ -430,6 +513,9 @@ class _Job:
     error_message: str | None = None
     body: str = ""
     inferred: bool = False
+    fact_verification: dict[str, int] = field(default_factory=dict)
+    review_result: ReviewResult | None = None
+    review_phase: str = "not_started"
     cost_usd: float = 0.0
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     completion_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -584,6 +670,9 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
     def _snapshot(self, job: _Job) -> AdapterStatus:
         cost_cents = int(job.cost_usd * 100) if job.cost_usd else 0
+        review_metadata: dict[str, object] = {"phase": job.review_phase} if job.review_phase != "not_started" else {}
+        if job.review_result:
+            review_metadata.update(job.review_result.to_dict())
         return AdapterStatus(
             job_id=job.request.job_id,
             status=job.status,
@@ -599,7 +688,11 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             error_code=job.error_code,
             error_message=job.error_message,
             output_text=job.body or None,
-            output_metadata={"is_inferred": True} if job.inferred else None,
+            output_metadata={
+                **({"is_inferred": True} if job.inferred else {}),
+                **job.fact_verification,
+                **({"review": review_metadata} if review_metadata else {}),
+            } or None,
         )
 
     async def _run(self, job: _Job) -> None:
@@ -658,7 +751,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
             complement = job.request.source_policy != "only_user_sources"
 
-            ws = _StepCaptureWebSocket(job)
+            step_capture = _StepCaptureLogHandler(job)
 
             researcher = GPTResearcher(
                 query=job.request.topic,
@@ -666,7 +759,8 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 report_source="web",
                 source_urls=source_urls or None,
                 complement_source_urls=complement if source_urls else False,
-                websocket=ws,
+                websocket=None,
+                log_handler=step_capture,
                 verbose=False,
             )
 
@@ -696,12 +790,56 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 job.request.topic,
             )
             report = await _ensure_complete_report(researcher, report, sources)
+            async with job.lock:
+                job.review_phase = "reviewing"
+            reviewer = DefaultResearchReviewer(
+                llm_spec=os.environ.get("FACT_REVIEWER_LLM")
+            )
+            review_result = ReviewResult("review_unavailable")
+            for review_attempt in range(1, 3):
+                review_result = await reviewer.review(
+                    report,
+                    tuple(sources),
+                    job.request.topic,
+                    report_type=job.request.report_type,
+                )
+                review_result = ReviewResult(
+                    status=review_result.status,
+                    claims=review_result.claims,
+                    revision_instructions=review_result.revision_instructions,
+                    reviewed_report=review_result.reviewed_report,
+                    error=review_result.error,
+                    attempts=review_attempt,
+                )
+                if review_result.status in {"passed", "blocked", "review_unavailable"}:
+                    break
+                if review_attempt == 2:
+                    break
+                corrected = await verify_github_star_claims(report, sources)
+                if corrected.report != report:
+                    report = corrected.report
+                    continue
+                repaired = await _repair_report_with_review(
+                    report,
+                    review_result.revision_instructions,
+                    sources,
+                )
+                if not repaired or repaired == report:
+                    break
+                report = _append_references(repaired, sources)
 
             async with job.lock:
                 job.body = report
                 job.cost_usd = cost_usd
                 job.search_count = len(sources)
                 job.sources = sources
+                job.fact_verification = {
+                    "fact_checks": len(review_result.claims),
+                    "fact_corrections": review_result.corrected_count,
+                    "fact_checks_unavailable": review_result.unverified_count,
+                }
+                job.review_result = review_result
+                job.review_phase = "completed"
                 job.current_step = cast("AiJobStep", AI_JOB_STEP["WRITE"])
 
             if not sources:

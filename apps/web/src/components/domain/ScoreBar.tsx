@@ -9,8 +9,8 @@ import { cn } from '@/lib/utils';
 export const TIER_LABELS: Record<string, string> = {
   deep_read: '深读',
   skim: '速览',
-  collection: '收录',
-  noise: '噪音',
+  collection: '重点阅读',
+  noise: '不推荐',
 };
 
 /** tier → 文字色 / 描边色 / 填充色 三件套（token 化，深浅色自动切换） */

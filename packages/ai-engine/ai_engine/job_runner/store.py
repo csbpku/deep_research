@@ -47,6 +47,8 @@ class _Row:
     # error_message,但原 Row 没存。mark_terminal 写入这两个字段供 HTTP 层读。
     last_error_code: str | None = None
     last_error_message: str | None = None
+    last_error_details: dict[str, object] | None = None
+    review_details: dict[str, object] | None = None
     draft_research_id: str | None = None
     output_text: str | None = None
 
@@ -85,6 +87,7 @@ class JobStore:
         token_out: int,
         cost_cents: int,
         sources: Iterable[AdapterSource],
+        review_details: dict[str, object] | None = None,
     ) -> None:
         return None
 
@@ -98,6 +101,8 @@ class JobStore:
         error_message: str | None,
         draft_research_id: str | None,
         output_text: str | None = None,
+        error_details: dict[str, object] | None = None,
+        review_details: dict[str, object] | None = None,
     ) -> None:
         return None
 
@@ -302,6 +307,7 @@ class InMemoryJobStore(JobStore):
         token_out: int,
         cost_cents: int,
         sources: Iterable[AdapterSource],
+        review_details: dict[str, object] | None = None,
     ) -> None:
         row = self._require_lease(lease)
         async with self._row_lock(lease.job_id):
@@ -322,6 +328,8 @@ class InMemoryJobStore(JobStore):
             row.last_token_out = token_out
             row.last_cost_cents = cost_cents
             row.last_sources = tuple(sources)
+            if review_details is not None:
+                row.review_details = review_details
 
     async def mark_terminal(
         self,
@@ -333,6 +341,8 @@ class InMemoryJobStore(JobStore):
         error_message: str | None,
         draft_research_id: str | None,
         output_text: str | None = None,
+        error_details: dict[str, object] | None = None,
+        review_details: dict[str, object] | None = None,
     ) -> None:
         row = self._require_lease(lease)
         if status == "succeeded" and bool(draft_research_id) == bool(output_text):
@@ -363,6 +373,8 @@ class InMemoryJobStore(JobStore):
             row.heartbeat_at = None
             row.last_error_code = error_code
             row.last_error_message = error_message
+            row.last_error_details = error_details
+            row.review_details = review_details
             row.draft_research_id = draft_research_id
             row.output_text = output_text
         # Caller is responsible for downstream side-effects (e.g. draft

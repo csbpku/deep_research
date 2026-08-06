@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { signOut } from 'next-auth/react';
 import {
   Bookmark,
+  Bell,
   ChevronDown,
   FilePenLine,
   LogIn,
@@ -23,7 +25,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { researchTabHref } from '@/lib/research-tabs';
 
 /**
@@ -36,8 +38,10 @@ import { researchTabHref } from '@/lib/research-tabs';
 export function UserMenu({
   user,
 }: {
-  user: { email: string; name: string; role: 'member' | 'admin' } | null;
+  user: { email: string; name: string; image: string | null; role: 'member' | 'admin' } | null;
 }) {
+  const [avatarLoaded, setAvatarLoaded] = useState(false);
+
   if (!user) {
     return (
       <Button asChild size="sm">
@@ -61,7 +65,18 @@ export function UserMenu({
           aria-label="打开用户菜单"
         >
           <Avatar className="size-7">
-            <AvatarFallback>{initial}</AvatarFallback>
+            {user.image ? (
+              <AvatarImage
+                src={user.image}
+                alt={user.name}
+                className={avatarLoaded ? undefined : 'opacity-0'}
+                onLoad={() => setAvatarLoaded(true)}
+                onError={() => setAvatarLoaded(false)}
+              />
+            ) : null}
+            <AvatarFallback className={avatarLoaded ? 'opacity-0' : undefined}>
+              {initial}
+            </AvatarFallback>
           </Avatar>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </Button>
@@ -95,6 +110,12 @@ export function UserMenu({
           <Link href="/me/topics">
             <Pin />
             我的主题关注
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/me?tab=notifications">
+            <Bell />
+            我的通知
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>

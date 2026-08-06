@@ -45,9 +45,17 @@ interface DigestListResponse {
   total: number;
 }
 
-function formatTime(iso: string | null): string {
+function formatPublishTime(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  return new Date(iso).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function displayTitle(title: string): string {
+  return title.replace(/\s*·\s*\d{4}-\d{2}-\d{2}$/u, '');
 }
 
 export default function SummariesPage() {
@@ -67,7 +75,7 @@ export default function SummariesPage() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="AI 雷达日报"
-        description="每天一篇跨来源总结：今日看点、分类综述与信号榜单。"
+        description="每天一篇跨来源总结，提炼值得先读的信号。"
       />
 
       {q.isLoading ? (
@@ -95,10 +103,9 @@ export default function SummariesPage() {
             >
               <Card className={`transition-all duration-200 group-hover:-translate-y-px group-hover:border-primary/40 group-hover:shadow-sm ${index === 0 ? 'border-l-2 border-l-primary bg-gradient-to-br from-card to-accent/25' : ''}`}>
                 <CardContent className={index === 0 ? 'min-h-48 p-5' : 'p-4'}>
-                  {index === 0 ? <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">今日看点 · 最新日报</div> : null}
                   <div className="flex flex-wrap items-baseline gap-2.5">
                     <h2 className="font-mono text-base font-semibold tabular-nums">{d.date}</h2>
-                    <span className="text-xs text-muted-foreground">{formatTime(d.publishedAt)}</span>
+                    <span className="text-xs text-muted-foreground">更新于 {formatPublishTime(d.publishedAt)}</span>
                     {d.narrativeDegraded ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-xs text-status-partial-fg">
                         <AlertTriangle className="size-3" />
@@ -108,7 +115,7 @@ export default function SummariesPage() {
                     <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-primary" />
                   </div>
 
-                  <h3 className={`${index === 0 ? 'mt-3 text-xl' : 'mt-2 text-sm'} font-semibold leading-snug tracking-tight`}>{d.title}</h3>
+                  <h3 className={`${index === 0 ? 'mt-3 text-xl' : 'mt-2 text-sm'} font-semibold leading-snug tracking-normal`}>{displayTitle(d.title)}</h3>
 
                   {d.tldr ? (
                     <p className={`${index === 0 ? 'mt-3 text-[15px] leading-7' : 'mt-1.5 text-sm leading-relaxed'} line-clamp-3 text-muted-foreground`}>

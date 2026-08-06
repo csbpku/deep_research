@@ -22,7 +22,7 @@ import type { UpstreamChatMessage, UpstreamChatSession } from '../../../../../..
 
 const SessionIdParam = z.object({ id: z.string().uuid() });
 const CreateChatMessageInput = z.object({
-  content: z.string().trim().min(1).max(4000),
+  content: z.string().trim().min(1, '提问不能为空').max(4000, '提问最多 4000 字'),
   // Phase 3.b: optional text-selection anchor
   anchor: z
     .object({ quote: z.string().max(4000), startOffset: z.number().int(), endOffset: z.number().int() })

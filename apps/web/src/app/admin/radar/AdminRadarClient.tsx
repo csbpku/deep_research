@@ -1,12 +1,12 @@
 'use client';
 
-// /admin/radar —— 雷达候选队列管理。
+// /admin/radar —— 雷达内容治理。
 // 所有操作会写入 admin_actions 审计。
 
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Workflow, X } from 'lucide-react';
+import { RotateCcw, Workflow, X } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
@@ -49,6 +49,7 @@ interface RadarCandidateListItem {
   sortOrder: number | null;
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
+  commentCount: number;
 }
 
 interface RadarListResponse {
@@ -60,9 +61,9 @@ interface RadarListResponse {
 }
 
 const STATUS_OPTIONS = [
-  { value: 'candidate', label: '候选' },
-  { value: 'published', label: '已发布' },
-  { value: 'rejected', label: '已忽略' },
+  { value: 'candidate', label: '雷达内容' },
+  { value: 'published', label: '历史精选' },
+  { value: 'rejected', label: '已屏蔽' },
   { value: 'archived', label: '已归档' },
 ];
 
@@ -108,7 +109,7 @@ export default function AdminRadarClient() {
       const r = await fetch(`/api/admin/radar/${id}/dismiss`, { method: 'POST' });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        throw new Error((body as { message?: string }).message ?? '忽略失败');
+        throw new Error((body as { message?: string }).message ?? '屏蔽失败');
       }
       return r.json();
     },
@@ -117,7 +118,7 @@ export default function AdminRadarClient() {
       void queryClient.invalidateQueries({ queryKey: ['adminRadar'] });
     },
     onError: (e) => {
-      setActionErr(e instanceof Error ? e.message : '忽略失败');
+      setActionErr(e instanceof Error ? e.message : '屏蔽失败');
     },
   });
 
@@ -140,14 +141,32 @@ export default function AdminRadarClient() {
     },
   });
 
+  const restoreMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const r = await fetch(`/api/admin/radar/${id}/restore`, { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error((body as { message?: string }).message ?? '恢复失败');
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      setActionErr(null);
+      void queryClient.invalidateQueries({ queryKey: ['adminRadar'] });
+    },
+    onError: (e) => {
+      setActionErr(e instanceof Error ? e.message : '恢复失败');
+    },
+  });
+
   const items = query.data?.items ?? [];
   const totalPages = query.data?.totalPages ?? 1;
 
   return (
     <div className="mx-auto max-w-shell">
       <PageHeader
-        title="Admin · 雷达队列"
-        description="审核候选并创建 AI 调研或忽略；所有操作会写入 admin_actions 审计。"
+        title="Admin · 雷达治理"
+        description="按需巡检和屏蔽无关内容，或从高价值信号创建调研；雷达内容无需逐条审批。"
         actions={<AddRadarCandidateDialog />}
       />
 
@@ -210,7 +229,7 @@ export default function AdminRadarClient() {
       ) : query.isError ? (
         <EmptyState title="加载失败" description={String((query.error as Error).message)} />
       ) : items.length === 0 ? (
-        <EmptyState title="队列为空" description={`当前状态 ${status} 下没有候选。`} />
+        <EmptyState title="暂无内容" description={`当前状态 ${status} 下没有雷达条目。`} />
       ) : (
         <div className="grid gap-3">
           {items.map((it) => (
@@ -239,7 +258,19 @@ export default function AdminRadarClient() {
                       disabled={dismissMutation.isPending}
                     >
                       <X />
-                      忽略
+                      屏蔽
+                    </Button>
+                  ) : null}
+                  {it.status === 'rejected' ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={() => restoreMutation.mutate(it.id)}
+                      disabled={restoreMutation.isPending}
+                    >
+                      <RotateCcw />
+                      恢复到雷达
                     </Button>
                   ) : null}
                 </div>
@@ -259,13 +290,13 @@ export default function AdminRadarClient() {
       <AdminActionDialog
         open={!!dismissing}
         onOpenChange={(o) => !o && setDismissing(null)}
-        title="忽略该雷达候选？"
-        description={dismissing ? <>候选：<strong className="font-medium text-foreground">{dismissing.title}</strong>。忽略后该条目会被标记为「已忽略」，不会再出现在候选列表中。</> : undefined}
+        title="屏蔽该雷达条目？"
+        description={dismissing ? <>条目：<strong className="font-medium text-foreground">{dismissing.title}</strong>。屏蔽后不会再出现在默认雷达和后续日报中，仍可在「已屏蔽」状态下恢复或审计。</> : undefined}
         fields={[
-          { kind: 'static', id: 'note', label: '说明', value: '该操作会写入 admin_actions 审计日志，提交后可在「已忽略」状态下回看。' },
+          { kind: 'static', id: 'note', label: '说明', value: '该操作会写入 admin_actions 审计日志，已有评论和引用不会被物理删除。' },
         ]}
-        confirmLabel="忽略"
-        cancelLabel="保留候选"
+        confirmLabel="确认屏蔽"
+        cancelLabel="保留内容"
         destructive
         pending={dismissMutation.isPending}
         onSubmit={async () => {

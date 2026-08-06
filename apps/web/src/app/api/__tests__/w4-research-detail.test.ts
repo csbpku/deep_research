@@ -1,7 +1,7 @@
 // Unit tests: W4 BFF — researches 详情 canEdit / researchSources / sourceComment。
 //
 // 测试范围：
-//   - canEdit 计算：author === u.id || u.role === 'admin'
+//   - canEdit 计算：author === u.id || (admin && published)
 //   - canEdit 计算：published 给非 author 非 admin → false
 //   - canEdit 计算：draft 给非 owner → API 返回 404
 //   - type 分支：research 已发布 → 返回 researchSources
@@ -27,13 +27,26 @@ interface CanEditArgs {
 
 /**
  * Mirror of route.ts GET logic:
- *   - canEdit = authorId === u.id || u.role === 'admin'
- *   - 权限检查：non-published + non-author → 404 DRAFT_NOT_FOUND
+ *   - canEdit = authorId === u.id || (admin && status === 'published')
+ *   - canManageStatus = authorId === u.id || (admin && status !== 'draft')
+ *   - 权限检查：non-published + non-author + non-admin → 404 DRAFT_NOT_FOUND
  */
-function canViewAndEdit(r: CanEditArgs): { canView: boolean; canEdit: boolean } {
-  const canView = r.status === RESEARCH_STATUS.PUBLISHED || r.authorId === r.userId;
-  const canEdit = r.authorId === r.userId || r.userRole === 'admin';
-  return { canView, canEdit };
+function canViewAndEdit(r: CanEditArgs): {
+  canView: boolean;
+  canEdit: boolean;
+  canManageStatus: boolean;
+} {
+  const canView =
+    r.status === RESEARCH_STATUS.PUBLISHED ||
+    r.authorId === r.userId ||
+    r.userRole === 'admin';
+  const canEdit =
+    r.authorId === r.userId ||
+    (r.userRole === 'admin' && r.status === RESEARCH_STATUS.PUBLISHED);
+  const canManageStatus =
+    r.authorId === r.userId ||
+    (r.userRole === 'admin' && r.status !== RESEARCH_STATUS.DRAFT);
+  return { canView, canEdit, canManageStatus };
 }
 
 describe('canEdit / canView logic for research detail', () => {
@@ -41,6 +54,7 @@ describe('canEdit / canView logic for research detail', () => {
     const r = canViewAndEdit({ authorId: 'A', status: 'draft', userId: 'A', userRole: 'member' });
     expect(r.canView).toBe(true);
     expect(r.canEdit).toBe(true);
+    expect(r.canManageStatus).toBe(true);
   });
 
   it('non-owner cannot view draft (returns 404 DRAFT_NOT_FOUND)', () => {
@@ -61,10 +75,25 @@ describe('canEdit / canView logic for research detail', () => {
     expect(r.canEdit).toBe(true);
   });
 
-  it('admin can edit any research', () => {
+  it('admin can edit another user\'s published research', () => {
     const r = canViewAndEdit({ authorId: 'A', status: 'published', userId: 'B', userRole: 'admin' });
     expect(r.canView).toBe(true);
     expect(r.canEdit).toBe(true);
+    expect(r.canManageStatus).toBe(true);
+  });
+
+  it('admin can view but cannot edit another user\'s draft', () => {
+    const r = canViewAndEdit({ authorId: 'A', status: 'draft', userId: 'B', userRole: 'admin' });
+    expect(r.canView).toBe(true);
+    expect(r.canEdit).toBe(false);
+    expect(r.canManageStatus).toBe(false);
+  });
+
+  it('admin can view and restore but cannot edit another user\'s archived research', () => {
+    const r = canViewAndEdit({ authorId: 'A', status: 'archived', userId: 'B', userRole: 'admin' });
+    expect(r.canView).toBe(true);
+    expect(r.canEdit).toBe(false);
+    expect(r.canManageStatus).toBe(true);
   });
 
   it('member cannot edit others published research', () => {

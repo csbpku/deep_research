@@ -10,6 +10,7 @@ from ai_engine.fetcher.safe_fetch import FetchedDocument, safe_fetch
 from ai_engine.ingestion.sources import _parse_rss_xml_simple
 from ai_engine.radar.community_fetcher import _is_ai_related
 from ai_engine.radar.models import RadarCandidate
+from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
 DEFAULT_MAX_AGE_HOURS = 24 * 30
@@ -34,6 +35,7 @@ async def fetch_rss_candidates(
     *,
     fetcher: SafeFetcher = safe_fetch,
     allow_localhost: bool = False,
+    wewe_refresher: Callable[[Mapping[str, Any]], Awaitable[bool]] = refresh_wewe_articles,
 ) -> list[RadarCandidate]:
     """Fetch one configured feed through ``safe_fetch`` and parse RSS items.
 
@@ -51,6 +53,11 @@ async def fetch_rss_candidates(
     feed_url = str(config.get("feedUrl") or "").strip()
     if not feed_url:
         raise ValueError("RSS source requires feedUrl")
+    if is_wewe_config(config):
+        await wewe_refresher(config)
+    source_diagnostic = config.get("_wewe_refresh_diagnostic")
+    if not isinstance(source_diagnostic, tuple) or len(source_diagnostic) != 2:
+        source_diagnostic = None
     raw_max = config.get("maxResults", 50)
     if isinstance(raw_max, bool):
         raise ValueError("RSS maxResults must be an integer")
@@ -113,6 +120,7 @@ async def fetch_rss_candidates(
                 content_origin="rss",
                 tags=("rss",),
                 source_quality_hint=0.7,
+                source_diagnostic=source_diagnostic,
             )
         )
     return candidates

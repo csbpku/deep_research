@@ -30,7 +30,7 @@ export function PageHeader({
       )}
     >
       <div className="min-w-0 space-y-1.5">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-[30px] sm:leading-tight">{title}</h1>
+        <h1 className="text-2xl font-semibold tracking-normal sm:text-[30px] sm:leading-tight">{title}</h1>
         {description ? (
           <p className="max-w-2xl text-sm leading-7 text-muted-foreground">{description}</p>
         ) : null}

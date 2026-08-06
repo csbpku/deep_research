@@ -6,11 +6,15 @@
 // 管理队列才附加状态、排序和管理操作。
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import { MessageSquare } from 'lucide-react';
+import { CommentSection } from '@/components/CommentSection';
 import { StatusBadge } from '@/components/domain/StatusBadge';
+import { Button } from '@/components/ui/button';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { cn } from '@/lib/utils';
 
@@ -34,6 +38,7 @@ interface RadarCandidate {
   sortOrder: number | null;
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
+  commentCount: number;
 }
 
 interface RadarCandidateCardProps {
@@ -42,6 +47,9 @@ interface RadarCandidateCardProps {
   memberActions?: React.ReactNode;
   /** Admin 操作按钮组（select/dismiss/retry）；不传则不展示 */
   adminActions?: React.ReactNode;
+  /** 当前登录用户（用于评论区交互）；不传则只读 */
+  currentUserId?: string | null;
+  currentUserRole?: 'member' | 'admin' | null;
   /** 统一排序流使用无卡片行，来源分组和 Admin 保留卡片容器。 */
   compact?: boolean;
 }
@@ -69,8 +77,11 @@ export function RadarCandidateCard({
   candidate,
   memberActions,
   adminActions,
+  currentUserId = null,
+  currentUserRole = null,
   compact = false,
 }: RadarCandidateCardProps) {
+  const [discussionOpen, setDiscussionOpen] = useState(false);
   const interpretation = candidate.interpretation;
   const showExcerpt =
     !interpretation ||
@@ -88,13 +99,13 @@ export function RadarCandidateCard({
     ?? null;
   const tierLabel =
     tier === 'deep_read'
-      ? '深度阅读'
-      : tier === 'skim'
-        ? '略读'
+        ? '深度阅读'
+        : tier === 'skim'
+          ? '略读'
         : tier === 'collection'
-          ? '收藏'
+          ? '重点阅读'
           : tier === 'noise'
-            ? '噪声'
+            ? '不推荐'
             : null;
   const tierClass = cn(
     'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
@@ -125,7 +136,7 @@ export function RadarCandidateCard({
 
       <Link
         href={`/radar/${candidate.id}`}
-        className="text-base font-semibold leading-snug hover:text-primary hover:underline"
+        className="text-base font-semibold leading-snug tracking-normal hover:text-primary hover:underline"
       >
         {candidate.title}
       </Link>
@@ -157,6 +168,20 @@ export function RadarCandidateCard({
           types={['favorite']}
           className="shrink-0 gap-1 py-0"
         />
+        {candidate.commentCount > 0 ? (
+          <Button
+            type="button"
+            variant={discussionOpen ? 'default' : 'outline'}
+            size="xs"
+            className="shrink-0"
+            aria-expanded={discussionOpen}
+            aria-controls={`discussion-${candidate.id}`}
+            onClick={() => setDiscussionOpen((open) => !open)}
+          >
+            <MessageSquare className="size-3.5" />
+            {candidate.commentCount} 条讨论
+          </Button>
+        ) : null}
         {memberActions}
         <Link
           href={`/radar/${candidate.id}`}
@@ -168,6 +193,18 @@ export function RadarCandidateCard({
 
       {adminActions ? (
         <div className="flex flex-wrap gap-1.5 border-t border-border pt-2">{adminActions}</div>
+      ) : null}
+
+      {discussionOpen ? (
+        <div id={`discussion-${candidate.id}`} className="min-w-0">
+          <CommentSection
+            targetType="summary"
+            targetId={candidate.id}
+            currentUserId={currentUserId}
+            currentUserRole={currentUserRole}
+            compact
+          />
+        </div>
       ) : null}
     </article>
   );

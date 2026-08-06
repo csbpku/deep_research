@@ -7,6 +7,9 @@ import path from 'node:path';
 // 详见 docs/decisions/2026-07-17-no-double-proxy.md。
 const config: NextConfig = {
   reactStrictMode: true,
+  // Allow CI/verification to isolate production output from a concurrently
+  // running dev server. Local development keeps the conventional .next path.
+  distDir: process.env.NEXT_DIST_DIR ?? '.next',
   outputFileTracingRoot: path.join(__dirname, '../..'),
   experimental: {
     // Server Actions 默认开启

@@ -57,6 +57,19 @@ SHARED_TABLES: tuple[str, ...] = (AI_TABLE, IMPORT_TABLE)
 _drafts_for_tests: dict[str, dict[str, object]] = {}
 
 
+def _json_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -116,6 +129,8 @@ def _view_from_row(row_dict: dict[str, Any]) -> DbJobView:
         last_cost_cents=int(row_dict.get("costCents") or 0),
         last_error_code=row_dict.get("errorCode"),
         last_error_message=row_dict.get("errorMessage"),
+        last_error_details=(row_dict.get("errorDetails") if isinstance(row_dict.get("errorDetails"), dict) else None),
+        review_details=(row_dict.get("reviewDetails") if isinstance(row_dict.get("reviewDetails"), dict) else None),
     )
 
 
@@ -493,6 +508,7 @@ class DbJobStore(JobStore):
         token_out: int,
         cost_cents: int,
         sources: Iterable[AdapterSource],
+        review_details: dict[str, object] | None = None,
     ) -> None:
         # content_import_jobs doesn't have currentStep / tokenInputTotal / partialSources
         # columns — record_progress is a no-op for the import table. The import worker
@@ -519,7 +535,7 @@ class DbJobStore(JobStore):
         sql = (
             f"UPDATE {t} "
             f'SET "currentStep" = %s, "tokenInputTotal" = %s, "tokenOutputTotal" = %s, '
-            f'    "costCents" = %s, "partialSources" = %s::jsonb '
+            f'    "costCents" = %s, "partialSources" = %s::jsonb, "reviewDetails" = %s::jsonb '
             f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\''
         )
         async with self.pool.connection() as conn:
@@ -532,6 +548,7 @@ class DbJobStore(JobStore):
                         token_out,
                         cost_cents,
                         sources_json,
+                        json.dumps(review_details, ensure_ascii=False) if review_details is not None else None,
                         lease.job_id,
                         lease.worker_id,
                     ),
@@ -547,6 +564,8 @@ class DbJobStore(JobStore):
         error_message: str | None,
         draft_research_id: str | None,
         output_text: str | None = None,
+        error_details: dict[str, object] | None = None,
+        review_details: dict[str, object] | None = None,
     ) -> None:
         await self.open()
         t = f'"{self._table_name}"'
@@ -590,9 +609,22 @@ class DbJobStore(JobStore):
             # ai_jobs_partial_sources_valid 要求 succeeded >= 1 sources,
             # partial >= 3 sources。caller(adapter)在 mark_terminal 之前
             # 自己 record_progress 写真 sources;db_store 不再写 partialSources。
+            review_status = review_details.get("status") if review_details else None
+            review_attempts = _json_int(review_details.get("attempts", 0)) if review_details else 0
+            review_summary = (
+                {
+                    "corrected_count": review_details.get("corrected_count", 0),
+                    "unverified_count": review_details.get("unverified_count", 0),
+                    "contradicted_count": review_details.get("contradicted_count", 0),
+                }
+                if review_details
+                else None
+            )
+            review_claims = review_details.get("claims", []) if review_details else []
             sql = (
                 f"UPDATE {t} "
-                f'SET "status" = %s, "currentStep" = %s, "errorCode" = %s, "errorMessage" = %s, '
+                f'SET "status" = %s, "currentStep" = %s, "errorCode" = %s, "errorMessage" = %s, "errorDetails" = %s::jsonb, '
+                f'    "reviewStatus" = %s, "reviewAttempts" = %s, "reviewSummary" = %s::jsonb, "reviewClaims" = %s::jsonb, "reviewedAt" = now(), "reviewDetails" = %s::jsonb, '
                 f'    "draftResearchId" = %s, "outputText" = %s, "completedAt" = now(), '
                 f'    "lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
                 f'WHERE "id" = %s AND "lockedBy" = %s AND "status" = \'running\' '
@@ -603,6 +635,12 @@ class DbJobStore(JobStore):
                 current_step,
                 error_code,
                 error_message,
+                json.dumps(error_details, ensure_ascii=False) if error_details is not None else None,
+                review_status,
+                review_attempts,
+                json.dumps(review_summary, ensure_ascii=False) if review_summary is not None else None,
+                json.dumps(review_claims, ensure_ascii=False),
+                json.dumps(review_details, ensure_ascii=False) if review_details is not None else None,
                 draft_research_id,
                 output_text,
                 lease.job_id,
@@ -676,7 +714,7 @@ class DbJobStore(JobStore):
                 f'       "sourcePolicy", "status", "currentStep", "attempts", '
                 f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
                 f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
-                f'       "errorCode", "errorMessage", "startedAt", "createdAt", '
+                f'       "errorCode", "errorMessage", "errorDetails", "reviewDetails", "startedAt", "createdAt", '
                 f'       "completedAt", "draftResearchId", "outputText" '
                 f'FROM {t} WHERE "id" = %s'
             )
@@ -729,6 +767,8 @@ class DbJobStore(JobStore):
             last_cost_cents=int(row_dict.get("costCents") or 0),
             last_error_code=row_dict.get("errorCode"),
             last_error_message=row_dict.get("errorMessage"),
+            last_error_details=(row_dict.get("errorDetails") if isinstance(row_dict.get("errorDetails"), dict) else None),
+            review_details=(row_dict.get("reviewDetails") if isinstance(row_dict.get("reviewDetails"), dict) else None),
             draft_research_id=view.draft_research_id,
             output_text=(
                 str(row_dict["outputText"])
@@ -776,7 +816,7 @@ class DbJobStore(JobStore):
             f"       j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", "
             f"       j.\"sourceRefs\", j.\"partialSources\", j.\"failedSources\", "
             f"       j.\"tokenInputTotal\", j.\"tokenOutputTotal\", j.\"costCents\", "
-            f"       j.\"errorCode\", j.\"errorMessage\", j.\"startedAt\", "
+            f"       j.\"errorCode\", j.\"errorMessage\", j.\"errorDetails\", j.\"reviewDetails\", j.\"startedAt\", "
             f"       j.\"completedAt\", j.\"createdAt\", j.\"updatedAt\", "
             f"       j.\"draftResearchId\", "
             f"       r.\"id\" AS \"publishedResearchId\" "
@@ -803,6 +843,16 @@ class DbJobStore(JobStore):
             failed_sources = row_dict.get("failedSources") or []
             view.last_failed_sources = (
                 tuple(failed_sources) if isinstance(failed_sources, list) else ()
+            )
+            view.last_error_details = (
+                row_dict.get("errorDetails")
+                if isinstance(row_dict.get("errorDetails"), dict)
+                else None
+            )
+            view.review_details = (
+                row_dict.get("reviewDetails")
+                if isinstance(row_dict.get("reviewDetails"), dict)
+                else None
             )
             view.draft_research_id = (
                 str(row_dict["draftResearchId"])
@@ -988,6 +1038,8 @@ class DbJobView:
     last_cost_cents: int = 0
     last_error_code: str | None = None
     last_error_message: str | None = None
+    last_error_details: dict[str, object] | None = None
+    review_details: dict[str, object] | None = None
     # 由 list_jobs 填充,get_row 路径留 None
     draft_research_id: str | None = None
     output_text: str | None = None

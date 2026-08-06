@@ -15,6 +15,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useCurrentUser } from '@/lib/auth/client';
 import { isHttpUrl } from '@/lib/external-url';
 import MarkdownContent from '@/components/MarkdownContent';
+import { BackToSearchButton } from '@/components/domain/BackToSearchButton';
+import { formatSourceType } from '@/lib/radar/source-labels';
 
 interface SummaryDetail {
   id: string;
@@ -89,6 +91,7 @@ export default function SummaryDetailPage() {
 
   return (
     <div className="mx-auto max-w-measure">
+      <BackToSearchButton />
       <Button asChild variant="link" size="xs" className="mb-2 h-auto p-0">
         <Link href="/summaries">
           <ArrowLeft />
@@ -156,16 +159,17 @@ function DigestArticle({ data }: { data: DigestArticleData }) {
   const me = useCurrentUser();
   const fmt = (iso: string | null) =>
     iso ? new Date(iso).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : '—';
+  const sourceLabels = [...new Set(data.sourcesUsed.map((source) => formatSourceType(source).short))];
 
   return (
     <article>
-      <h1 className="text-2xl font-semibold leading-tight tracking-tight">{data.title}</h1>
+      <h1 className="text-2xl font-semibold leading-tight tracking-normal">{data.title}</h1>
       <div className="mt-2 text-xs text-muted-foreground">
         <span className="font-mono">{data.date}</span>
         {' · '}发布 <span className="font-mono">{fmt(data.publishedAt)}</span>
         {' · '}
-        {data.candidateCount} 条高分信号
-        {' · '}来源 {data.sourcesUsed.join(', ') || '—'}
+        纳入综述 {data.candidateCount} 条
+        {' · '}来源 {sourceLabels.join('、') || '—'}
       </div>
 
       {data.narrativeDegraded ? (
@@ -247,7 +251,7 @@ function DetailBody({ data }: { data: SummaryDetail }) {
 
   return (
     <article ref={articleRef}>
-      <h1 className="text-2xl font-semibold leading-tight tracking-tight">{data.title}</h1>
+      <h1 className="text-2xl font-semibold leading-tight tracking-normal">{data.title}</h1>
       <Meta data={data} />
 
       {(() => {

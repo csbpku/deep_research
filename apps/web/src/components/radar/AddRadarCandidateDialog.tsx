@@ -127,7 +127,7 @@ export function AddRadarCandidateDialog() {
     <>
       <Button type="button" onClick={() => setOpen(true)} variant="default" size="sm">
         <LinkIcon className="size-4" />
-        添加候选
+        添加内容
       </Button>
       {open ? (
         <div
@@ -135,14 +135,14 @@ export function AddRadarCandidateDialog() {
           onClick={() => setOpen(false)}
           role="dialog"
           aria-modal="true"
-          aria-label="添加雷达候选"
+          aria-label="添加雷达内容"
         >
           <div
             className="w-full max-w-xl rounded-lg border border-border bg-card p-4 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <header className="mb-3 flex items-center justify-between">
-              <h2 className="text-base font-semibold">添加雷达候选</h2>
+              <h2 className="text-base font-semibold">添加雷达内容</h2>
               <Button type="button" variant="ghost" size="xs" onClick={() => setOpen(false)}>
                 关闭
               </Button>
@@ -168,7 +168,7 @@ export function AddRadarCandidateDialog() {
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://github.com/owner/repo"
-                  aria-label="候选 URL"
+                  aria-label="雷达内容 URL"
                 />
                 <Button
                   type="button"
@@ -191,7 +191,7 @@ export function AddRadarCandidateDialog() {
                   accept={ACCEPTED_MIME}
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                   className="block w-full text-sm"
-                  aria-label="候选文件"
+                  aria-label="雷达内容文件"
                 />
                 <Button
                   type="button"
@@ -258,7 +258,7 @@ function SubmissionsHistory({ onRetry, retrying }: { onRetry: (id: string) => vo
                     className="ml-auto inline-flex items-center gap-0.5 text-primary hover:underline"
                   >
                     <CheckCircle2 className="size-3" />
-                    打开候选
+                    打开雷达内容
                   </a>
                 ) : null}
                 {s.status === 'failed' ? (

@@ -70,6 +70,8 @@ def _all_max_parsed(profile: ScoringProfile = ENGINEERING_PROFILE) -> dict[str, 
     parsed["veto"] = None
     parsed["risk_flag"] = None
     parsed["suspected_repost"] = False
+    parsed["validation_breadth"] = 2
+    parsed["implementation_stage"] = 2
     return parsed
 
 
@@ -149,7 +151,11 @@ def test_system_prompt_is_strict() -> None:
     assert "严苛" in SYSTEM_PROMPT
     assert "标准太松" in SYSTEM_PROMPT
     assert "direct_relevance" in SYSTEM_PROMPT
-    assert "没有明确电商上下文" in SYSTEM_PROMPT
+    assert "偏 AI 应用开发的软件工程师" in SYSTEM_PROMPT
+    assert "业务领域本身既不加分也不减分" in SYSTEM_PROMPT
+    assert "解决一个真实的 AI 项目问题" in SYSTEM_PROMPT
+    assert "来源不设绝对上限" in SYSTEM_PROMPT
+    assert "单一模型的官方文档若提供具体 prompt" in SYSTEM_PROMPT
 
 
 def test_user_prompt_contains_rubric_and_meta() -> None:
@@ -197,7 +203,17 @@ def test_user_prompt_meta_includes_domain_published_current() -> None:
 
 
 def test_version_string_is_v3() -> None:
-    assert DISTILLED_VERSION == "3.0"
+    assert DISTILLED_VERSION == "4.7"
+
+
+def test_scoring_content_skips_client_side_docs_shell() -> None:
+    from ai_engine.radar.distilled_scorer import _prepare_scoring_content
+
+    content = "Navigation Search Loading Loading Loading " \
+        "Prompting Claude Fable 5 old shell " \
+        "Prompting Claude Fable 5 Actual guidance begins here"
+    prepared = _prepare_scoring_content("Prompting Claude Fable 5", content)
+    assert prepared.startswith("Prompting Claude Fable 5 Actual guidance")
 
 
 # ── Serialization keys ────────────────────────────────────────────
@@ -262,12 +278,22 @@ def test_direct_relevance_one_caps_high_quality_article() -> None:
     assert result.must_read is False
 
 
+def test_generic_engineering_asset_can_be_indirectly_relevant() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 2
+    parsed["relevance_evidence"] = "完整的 coding-agent 工作流、命令和质量门禁"
+    result = compute_score(parsed, source_type="github")
+    assert result.direct_relevance == 2
+    assert result.ranking_score == 74.0
+    assert result.tier == TIER_DEEP_READ
+
+
 def test_direct_relevance_two_cannot_reach_collection() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 2
     result = compute_score(parsed)
     assert result.total == 100.0
-    assert result.ranking_score == 78.0
+    assert result.ranking_score == 72.0
     assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
@@ -275,8 +301,14 @@ def test_direct_relevance_two_cannot_reach_collection() -> None:
 def test_direct_relevance_three_preserves_normal_tier() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 3
-    parsed["relevance_evidence"] = "文章明确讨论搜索排序中的线上评测决策"
-    result = compute_score(parsed)
+    parsed["relevance_evidence"] = "提供 API 重试实现、压测结果和延迟/可靠性取舍"
+    parsed["scope_breadth"] = 2
+    parsed["validation_breadth"] = 2
+    parsed["implementation_stage"] = 2
+    result = compute_score(
+        parsed,
+        evidence_text="本文提供 API 重试代码、压测结果和延迟/可靠性取舍。",
+    )
     assert result.tier == TIER_COLLECTION
     assert result.must_read is True
     assert result.effective_total == 100.0
@@ -287,9 +319,156 @@ def test_direct_relevance_three_without_evidence_downgrades_to_indirect() -> Non
     parsed["direct_relevance"] = 3
     result = compute_score(parsed)
     assert result.direct_relevance == 2
-    assert result.effective_total == 78.0
+    assert result.effective_total == 72.0
     assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
+
+
+def test_direct_relevance_three_without_actionable_details_downgrades() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["可行动性"] = 2
+    parsed["relevance_evidence"] = "提出 Agent 交易协议和研究基准"
+    result = compute_score(parsed)
+    assert result.direct_relevance == 2
+    assert result.ranking_score == 72.0
+
+
+def test_collection_requires_complete_engineering_evidence() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["scope_breadth"] = 2
+    parsed["relevance_evidence"] = "提供可复现实现、验证结果和工程取舍"
+    parsed["validation_breadth"] = 2
+    parsed["事实可信度"] = 2
+    result = compute_score(parsed)
+    assert result.total == 96.67
+    assert result.ranking_score == ENGINEERING_PROFILE.tier_collection - 0.01
+    assert result.tier == TIER_DEEP_READ
+    assert result.must_read is False
+
+
+def test_single_setup_experiment_cannot_enter_collection() -> None:
+    parsed = _all_max_parsed()
+    parsed.update({
+        "direct_relevance": 3,
+        "scope_breadth": 2,
+        "validation_breadth": 1,
+        "relevance_evidence": "32 次运行、两个自建仓库、完整 JSON 收据",
+    })
+    result = compute_score(parsed)
+    assert result.validation_breadth == 1
+    assert result.tier == TIER_DEEP_READ
+    assert result.must_read is False
+
+
+def test_experiment_harness_cannot_claim_direct_implementation_relevance() -> None:
+    parsed = _all_max_parsed()
+    parsed.update({
+        "direct_relevance": 3,
+        "implementation_stage": 1,
+        "relevance_evidence": "实验 harness、检测脚本和数据分析",
+    })
+    result = compute_score(parsed)
+    assert result.implementation_stage == 1
+    assert result.direct_relevance == 2
+    assert result.dimension_scores["可行动性"] == 2
+
+
+def test_diagnostic_harness_without_integration_path_is_capped() -> None:
+    parsed = _all_max_parsed()
+    parsed.update({"direct_relevance": 3, "implementation_stage": 2})
+    result = compute_score(
+        parsed,
+        evidence_text="A hallucination experiment benchmark with a detection harness",
+    )
+    assert result.implementation_stage == 1
+    assert result.direct_relevance == 2
+    assert result.dimension_scores["可行动性"] == 2
+
+
+def test_narrow_scope_caps_relevance_at_one() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["scope_breadth"] = 0
+    parsed["scope_evidence"] = "仅适用于单一模型和硬件配置"
+    result = compute_score(parsed)
+    assert result.scope_breadth == 0
+    assert result.direct_relevance == 1
+    assert result.ranking_score == 49.0
+    assert result.tier == TIER_NOISE
+    assert result.to_dict()["scopeBreadth"] == 0
+
+
+def test_huggingface_model_source_is_narrow_even_if_llm_overrates() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["scope_breadth"] = 2
+    parsed["relevance_evidence"] = "完整部署命令和显存调优"
+    result = compute_score(parsed, source_type="huggingface_models")
+    assert result.scope_breadth == 0
+    assert result.direct_relevance == 1
+    assert result.tier == TIER_NOISE
+
+
+def test_single_model_single_hardware_asset_is_narrow_even_if_llm_overrates() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["scope_breadth"] = 2
+    parsed["relevance_evidence"] = "完整的单卡部署命令和显存调优"
+    result = compute_score(
+        parsed,
+        source_type="github",
+        evidence_text="DeepSeek V4 Flash on a Single AMD MI300X\n部署说明",
+    )
+    assert result.scope_breadth == 0
+    assert result.direct_relevance == 1
+    assert result.tier == TIER_NOISE
+
+
+def test_voice_agent_tutorial_is_narrow_even_if_llm_overrates() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["scope_breadth"] = 2
+    parsed["relevance_evidence"] = "LangSmith 评测步骤"
+    result = compute_score(
+        parsed,
+        evidence_text="How to Evaluate Voice Agents with LangSmith",
+    )
+    assert result.scope_breadth == 0
+    assert result.direct_relevance == 1
+    assert result.tier == TIER_NOISE
+
+
+def test_practical_paper_with_measured_agent_eval_is_deep_read() -> None:
+    parsed = _all_max_parsed()
+    parsed.update({
+        "direct_relevance": 2,
+        "scope_breadth": 1,
+        "信息增量": 2,
+        "分析深度": 3,
+        "可行动性": 2,
+    })
+    result = compute_score(
+        parsed,
+        profile=PAPER_PROFILE,
+        source_type="arxiv",
+        evidence_text="Real-Time Detection and Repair of LLM Agent Failures\n"
+        "measured evaluation across models",
+    )
+    assert result.total == 85.0
+    assert result.tier == TIER_DEEP_READ
+
+
+def test_devto_source_does_not_get_an_arbitrary_score_cap() -> None:
+    parsed = _all_max_parsed()
+    parsed["direct_relevance"] = 3
+    parsed["scope_breadth"] = 2
+    parsed["relevance_evidence"] = "跨 SDK 的完整评测管线和错误处理实现"
+    result = compute_score(parsed, source_type="devto")
+    assert result.ranking_score == 100.0
+    assert result.tier == TIER_COLLECTION
+    assert result.must_read is True
 
 
 def test_v3_separates_content_quality_from_team_value() -> None:
@@ -308,7 +487,7 @@ def test_v3_separates_content_quality_from_team_value() -> None:
     result = compute_score(parsed, source_type="arxiv", profile=PAPER_PROFILE)
     assert result.quality_score is not None and result.quality_score > 80
     assert result.team_value_score is not None and result.team_value_score < 10
-    assert result.ranking_score is not None and result.ranking_score < 35
+    assert result.ranking_score is not None and result.ranking_score <= 35
     assert result.tier == TIER_NOISE
 
 
@@ -317,12 +496,31 @@ def test_github_bonus_breaks_close_cross_source_tie() -> None:
     parsed["direct_relevance"] = 2
     github = compute_score(parsed, source_type="github_tracked")
     article = compute_score(parsed, source_type="rss")
-    assert github.source_bonus == 12.0
-    assert article.source_bonus == 2.0
+    assert github.source_bonus == 4.0
+    assert article.source_bonus == 1.0
     assert github.ranking_score is not None
     assert article.ranking_score is not None
     assert github.ranking_score > article.ranking_score
-    assert github.ranking_score <= 82.0
+    assert github.ranking_score <= 74.0
+
+
+def test_source_bonus_cannot_lift_low_quality_item_to_deep_read() -> None:
+    parsed = _all_zero_parsed(
+        **{
+            "信息增量": 2,
+            "分析深度": 2,
+            "可行动性": 2,
+            "事实可信度": 2,
+            "时效性": 2,
+            "表达质量": 2,
+            "综合信号": 3,
+            "direct_relevance": 2,
+        }
+    )
+    result = compute_score(parsed, source_type="github_tracked")
+    assert result.total < 70
+    assert result.ranking_score is not None and result.ranking_score > result.total
+    assert result.tier == TIER_SKIM
 
 
 def test_legacy_result_without_direct_relevance_remains_compatible() -> None:

@@ -89,12 +89,6 @@ export const CreateCommentInput = z.object({
 });
 export type CreateCommentInput = z.infer<typeof CreateCommentInput>;
 
-/** 评论提名（架构 §十四 §2） */
-export const NominateCommentInput = z.object({
-  commentId: z.string().uuid(),
-});
-export type NominateCommentInput = z.infer<typeof NominateCommentInput>;
-
 /** Admin 审批（架构 §十七） */
 const KnowledgeDraft = z.object({
   title: z.string().min(2).max(200),

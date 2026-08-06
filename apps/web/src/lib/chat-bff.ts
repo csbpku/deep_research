@@ -120,13 +120,27 @@ export async function readUpstreamJson(
 
   if (response.ok) return body;
 
-  const upstream = body as {
+  // FastAPI's default HTTPException handler wraps our contract payload in
+  // `{ detail: { code, message, ... } }`; successful responses are flat.
+  // Normalize both shapes before mapping the error so the UI does not show
+  // the misleading generic "ai-engine 返回 503" message.
+  const raw = body as {
+    detail?: unknown;
     code?: string;
     message?: string;
     requestId?: string;
     request_id?: string;
     details?: unknown;
   };
+  const upstream = raw.detail && typeof raw.detail === 'object'
+    ? raw.detail as {
+        code?: string;
+        message?: string;
+        requestId?: string;
+        request_id?: string;
+        details?: unknown;
+      }
+    : raw;
   const code = CHAT_ERROR_CODES.has(upstream.code ?? '')
     ? (upstream.code as ErrorCode)
     : ERROR_CODES.AI_ENGINE_UNAVAILABLE;

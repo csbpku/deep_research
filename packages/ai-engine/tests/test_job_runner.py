@@ -256,3 +256,9 @@ async def test_failed_path_uses_proper_error_code() -> None:
     )
     assert outcome.final_status == AI_JOB_STATUS["FAILED"]
     assert outcome.error_code == "AI_ENGINE_UNAVAILABLE"
+    assert outcome.error_details is not None
+    assert outcome.error_details["phase"] == "plan"
+    assert outcome.error_details["adapter"] == "FakeAdapter"
+    row = store.get_row(snap.job_id)
+    assert row is not None
+    assert row.last_error_details == outcome.error_details

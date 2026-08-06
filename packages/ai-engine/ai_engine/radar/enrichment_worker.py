@@ -260,7 +260,7 @@ async def _fetch_enrichment_row(pool: Any, summary_id: str) -> dict[str, Any]:
         row = await (
             await conn.execute(
                 'SELECT "id", "title", "interpretation", "originalMarkdown", '
-                '"originalMeta", "tldr" FROM "summaries" WHERE "id" = %s',
+                '"originalMeta", "tldr", "highlights" FROM "summaries" WHERE "id" = %s',
                 (summary_id,),
             )
         ).fetchone()
@@ -271,7 +271,7 @@ async def _fetch_enrichment_row(pool: Any, summary_id: str) -> dict[str, Any]:
     except (TypeError, ValueError):
         keys = (
             "id", "title", "interpretation",
-            "originalMarkdown", "originalMeta", "tldr",
+            "originalMarkdown", "originalMeta", "tldr", "highlights",
         )
         return dict(zip(keys, row))
 
@@ -370,7 +370,11 @@ async def enrich_web_candidate(
         return None
     existing_markdown = _strip_nul(str(current.get("originalMarkdown") or ""))
     existing_meta = current.get("originalMeta")
-    if isinstance(existing_meta, dict) and existing_meta.get("provider") == "web":
+    if (
+        isinstance(existing_meta, dict)
+        and existing_meta.get("provider") == "web"
+        and isinstance(current.get("highlights"), dict)
+    ):
         return dict(existing_meta)
 
     doc = None
@@ -1462,7 +1466,13 @@ async def run_enrichment_for_pending(
             await conn.execute(
                 'SELECT "id", "canonicalUrl", "originalKind" FROM "summaries" '
                 f'WHERE "originalKind" IN ({placeholders}) '
-                'AND "originalMeta" IS NULL '
+                'AND (('
+                '"originalKind" IN (\'rss\', \'web_share\') '
+                'AND "highlights" IS NULL'
+                ') OR ('
+                '"originalKind" NOT IN (\'rss\', \'web_share\') '
+                'AND "originalMeta" IS NULL'
+                ')) '
                 'AND ("syncRunId" IS NOT NULL OR EXISTS ('
                 'SELECT 1 FROM "share_submissions" sh '
                 'WHERE sh."publishedSummaryId" = "summaries"."id" '
