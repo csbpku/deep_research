@@ -135,12 +135,23 @@ configure_llm_models() {
 
   SMART_LLM_VAL="$MAIN_LLM_VAL"
   STRATEGIC_LLM_VAL="$MAIN_LLM_VAL"
-  if [[ "$MAIN_LLM_VAL" == "$current_main" && -n "$current_fast" ]]; then
-    FAST_LLM_VAL="$current_fast"
-    BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$current_fast}"
+  if [[ "$MAIN_LLM_VAL" == "$current_main" && ( -n "$current_fast" || -n "$BRIEF_LLM_VAL" ) ]]; then
+    FAST_LLM_VAL="${current_fast:-$(derive_light_llm "$MAIN_LLM_VAL")}"
+    BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$FAST_LLM_VAL}"
   else
-    FAST_LLM_VAL="$MAIN_LLM_VAL"
-    BRIEF_LLM_VAL="$MAIN_LLM_VAL"
+    FAST_LLM_VAL="$(derive_light_llm "$MAIN_LLM_VAL")"
+    BRIEF_LLM_VAL="$FAST_LLM_VAL"
+  fi
+}
+
+derive_light_llm() {
+  local main="$1" provider model
+  provider="${main%%:*}"
+  model="${main#*:}"
+  if [[ "$model" == *"-pro" ]]; then
+    printf '%s:%s' "$provider" "${model%-pro}-flash"
+  else
+    printf '%s' "$main"
   fi
 }
 
