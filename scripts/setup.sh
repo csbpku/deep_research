@@ -125,19 +125,12 @@ load_existing_llm_models() {
   BRIEF_LLM_VAL="$(read_env_value "$env_file" BRIEF_LLM)"
 }
 
-configure_llm_models() {
-  local fresh_default="${1:-anthropic:deepseek-v4-flash}"
-  local current_main="${SMART_LLM_VAL:-}"
-  local current_fast="${FAST_LLM_VAL:-}"
-  local default_main="${current_main:-$fresh_default}"
-
-  prompt "Main LLM model (provider:model)" "$default_main" MAIN_LLM_VAL
-  prompt "Light/fast LLM model (provider:model)" "${current_fast:-$MAIN_LLM_VAL}" LIGHT_LLM_VAL
-
-  SMART_LLM_VAL="$MAIN_LLM_VAL"
-  STRATEGIC_LLM_VAL="$MAIN_LLM_VAL"
-  FAST_LLM_VAL="$LIGHT_LLM_VAL"
-  BRIEF_LLM_VAL="$LIGHT_LLM_VAL"
+ensure_llm_models() {
+  local default="$1"
+  SMART_LLM_VAL="${SMART_LLM_VAL:-$default}"
+  FAST_LLM_VAL="${FAST_LLM_VAL:-$default}"
+  STRATEGIC_LLM_VAL="${STRATEGIC_LLM_VAL:-$SMART_LLM_VAL}"
+  BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$FAST_LLM_VAL}"
 }
 
 detect_and_recommend() {
@@ -224,19 +217,20 @@ run_interactive_prompts() {
       validate_non_empty "$ANTHROPIC_KEY" "ANTHROPIC_API_KEY"
       ANTHROPIC_BASE_URL_VAL=""
       ADAPTER_VAL="gpt_researcher"
-      configure_llm_models "anthropic:claude-haiku-4-5@20251001"
+      ensure_llm_models "anthropic:claude-haiku-4-5@20251001"
       ;;
     2)
       prompt "LLM base URL (e.g. http://localhost:8318/v1)" "" LLM_BASE_URL
       prompt_secret "LLM API key" ANTHROPIC_KEY
       ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL"
       ADAPTER_VAL="gpt_researcher"
-      configure_llm_models "anthropic:deepseek-v4-flash"
+      ensure_llm_models "anthropic:deepseek-v4-flash"
       ;;
     3)
       ANTHROPIC_KEY=""
       ANTHROPIC_BASE_URL_VAL=""
       ADAPTER_VAL="fake"
+      ensure_llm_models "anthropic:deepseek-v4-flash"
       ;;
   esac
 
@@ -678,18 +672,19 @@ if [[ "$MODE" != "quick" ]]; then
       prompt_secret "Anthropic API key" ANTHROPIC_KEY
       LLM_BASE_URL=""
       ADAPTER_VAL="gpt_researcher"
-      configure_llm_models "anthropic:claude-haiku-4-5@20251001"
+      ensure_llm_models "anthropic:claude-haiku-4-5@20251001"
       ;;
     2)
       prompt "LLM base URL (e.g. http://localhost:8318/v1)" "" LLM_BASE_URL
       prompt_secret "LLM API key" ANTHROPIC_KEY
       ADAPTER_VAL="gpt_researcher"
-      configure_llm_models "anthropic:deepseek-v4-flash"
+      ensure_llm_models "anthropic:deepseek-v4-flash"
       ;;
     3)
       ANTHROPIC_KEY=""
       LLM_BASE_URL=""
       ADAPTER_VAL="fake"
+      ensure_llm_models "anthropic:deepseek-v4-flash"
       ;;
   esac
 
@@ -730,10 +725,7 @@ else
   TAVILY_KEY=""; RETRIEVER_VAL="tavily"
   GOOGLE_ID=""; GOOGLE_SECRET=""
   load_existing_llm_models "packages/ai-engine/.env"
-  SMART_LLM_VAL="${SMART_LLM_VAL:-anthropic:deepseek-v4-flash}"
-  FAST_LLM_VAL="${FAST_LLM_VAL:-$SMART_LLM_VAL}"
-  STRATEGIC_LLM_VAL="${STRATEGIC_LLM_VAL:-$SMART_LLM_VAL}"
-  BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$SMART_LLM_VAL}"
+  ensure_llm_models "anthropic:deepseek-v4-flash"
 fi
 
 step "Installing JS dependencies"
