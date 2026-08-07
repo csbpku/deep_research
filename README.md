@@ -127,7 +127,7 @@ pnpm dev:ai      # → http://localhost:4000
 
 未配置 Google OAuth 时，仍可免登录浏览首页、日报、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
-选择真实 LLM provider 后，setup 只询问一个主模型（`provider:model`，回车用默认值；重跑时默认值自动取现有 env 中的 `SMART_LLM`）。四个槽位自动推导：`SMART_LLM` / `STRATEGIC_LLM` 用主模型；`FAST_LLM` / `BRIEF_LLM` 自动推导轻量模型——主模型以 `-pro` 结尾时取同前缀的 `-flash`，否则跟随主模型（重跑且未改主模型时保留现有值）。需要单独调快/慢模型时，直接编辑 `packages/ai-engine/.env`（本地）或根目录 `.env`（Docker/VPS）。
+选择真实 LLM provider 后，setup 询问两个模型：主模型（`provider:model`）和轻量模型（用于 `FAST_LLM` / `BRIEF_LLM`），都可以直接回车用默认值——重跑时默认分别取现有 env 中的 `SMART_LLM` / `FAST_LLM`，新装时轻量模型默认跟随主模型。setup 不会根据模型名猜测轻量版（例如 Claude Opus 没有通用推导规则），需要单独确认；高级调优仍可编辑 `packages/ai-engine/.env`（本地）或根目录 `.env`（Docker/VPS）。
 
 ### 本地 Docker
 
