@@ -109,6 +109,41 @@ prompt_choice() {
   printf -v "$var_name" '%s' "${choice:-1}"
 }
 
+read_env_value() {
+  local file="$1" key="$2" value
+  [[ -f "$file" ]] || return 0
+  value="$(sed -n "s/^${key}=//p" "$file" | tail -n 1)"
+  printf '%s' "$value"
+}
+
+load_existing_llm_models() {
+  local env_file="${1:-packages/ai-engine/.env}"
+  [[ -f "$env_file" ]] || env_file="packages/ai-engine/.env"
+  SMART_LLM_VAL="$(read_env_value "$env_file" SMART_LLM)"
+  FAST_LLM_VAL="$(read_env_value "$env_file" FAST_LLM)"
+  STRATEGIC_LLM_VAL="$(read_env_value "$env_file" STRATEGIC_LLM)"
+  BRIEF_LLM_VAL="$(read_env_value "$env_file" BRIEF_LLM)"
+}
+
+configure_llm_models() {
+  local fresh_default="${1:-anthropic:deepseek-v4-flash}"
+  local current_main="${SMART_LLM_VAL:-}"
+  local current_fast="${FAST_LLM_VAL:-}"
+  local default_main="${current_main:-$fresh_default}"
+
+  prompt "Main LLM model (provider:model)" "$default_main" MAIN_LLM_VAL
+
+  SMART_LLM_VAL="$MAIN_LLM_VAL"
+  STRATEGIC_LLM_VAL="$MAIN_LLM_VAL"
+  if [[ "$MAIN_LLM_VAL" == "$current_main" && -n "$current_fast" ]]; then
+    FAST_LLM_VAL="$current_fast"
+    BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$current_fast}"
+  else
+    FAST_LLM_VAL="$MAIN_LLM_VAL"
+    BRIEF_LLM_VAL="$MAIN_LLM_VAL"
+  fi
+}
+
 detect_and_recommend() {
   echo -e "${CYAN}Detected environment:${NC}"
   local has_docker=false has_pg=false has_node=false has_pnpm=false has_python=false has_uv=false
@@ -150,6 +185,12 @@ detect_and_recommend() {
 run_interactive_prompts() {
   local deploy_url_default="$1"
 
+  if [[ "$MODE" == "vps" ]]; then
+    load_existing_llm_models "deploy/.env"
+  else
+    load_existing_llm_models ".env"
+  fi
+
   prompt "Deploy URL (for NextAuth callback)" "$deploy_url_default" DEPLOY_URL
   prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
   validate_non_empty "$EMAIL_DOMAINS" "ALLOWED_EMAIL_DOMAINS"
@@ -187,12 +228,14 @@ run_interactive_prompts() {
       validate_non_empty "$ANTHROPIC_KEY" "ANTHROPIC_API_KEY"
       ANTHROPIC_BASE_URL_VAL=""
       ADAPTER_VAL="gpt_researcher"
+      configure_llm_models "anthropic:claude-haiku-4-5@20251001"
       ;;
     2)
       prompt "LLM base URL (e.g. http://localhost:8318/v1)" "" LLM_BASE_URL
       prompt_secret "LLM API key" ANTHROPIC_KEY
       ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL"
       ADAPTER_VAL="gpt_researcher"
+      configure_llm_models "anthropic:deepseek-v4-flash"
       ;;
     3)
       ANTHROPIC_KEY=""
@@ -266,10 +309,10 @@ ALLOWED_EMAIL_DOMAINS=${EMAIL_DOMAINS}
 AI_ENGINE_ADAPTER=${ADAPTER_VAL}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_VAL}
-SMART_LLM=anthropic:claude-haiku-4-5@20251001
-FAST_LLM=anthropic:deepseek-v4-flash
-STRATEGIC_LLM=anthropic:claude-haiku-4-5@20251001
-BRIEF_LLM=anthropic:deepseek-v4-flash
+SMART_LLM=${SMART_LLM_VAL}
+FAST_LLM=${FAST_LLM_VAL}
+STRATEGIC_LLM=${STRATEGIC_LLM_VAL}
+BRIEF_LLM=${BRIEF_LLM_VAL}
 
 # Search
 TAVILY_API_KEY=${TAVILY_KEY}
@@ -597,6 +640,8 @@ PH_TOKEN_VAL=""
 if [[ "$MODE" != "quick" ]]; then
   step "Configuration"
 
+  load_existing_llm_models "packages/ai-engine/.env"
+
   prompt "PostgreSQL host" "localhost" PG_HOST
   prompt "PostgreSQL port" "5432" PG_PORT
   prompt "PostgreSQL user" "postgres" PG_USER
@@ -637,11 +682,13 @@ if [[ "$MODE" != "quick" ]]; then
       prompt_secret "Anthropic API key" ANTHROPIC_KEY
       LLM_BASE_URL=""
       ADAPTER_VAL="gpt_researcher"
+      configure_llm_models "anthropic:claude-haiku-4-5@20251001"
       ;;
     2)
       prompt "LLM base URL (e.g. http://localhost:8318/v1)" "" LLM_BASE_URL
       prompt_secret "LLM API key" ANTHROPIC_KEY
       ADAPTER_VAL="gpt_researcher"
+      configure_llm_models "anthropic:deepseek-v4-flash"
       ;;
     3)
       ANTHROPIC_KEY=""
@@ -686,6 +733,11 @@ else
   ANTHROPIC_KEY=""; LLM_BASE_URL=""; ADAPTER_VAL="fake"
   TAVILY_KEY=""; RETRIEVER_VAL="tavily"
   GOOGLE_ID=""; GOOGLE_SECRET=""
+  load_existing_llm_models "packages/ai-engine/.env"
+  SMART_LLM_VAL="${SMART_LLM_VAL:-anthropic:deepseek-v4-flash}"
+  FAST_LLM_VAL="${FAST_LLM_VAL:-$SMART_LLM_VAL}"
+  STRATEGIC_LLM_VAL="${STRATEGIC_LLM_VAL:-$SMART_LLM_VAL}"
+  BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$SMART_LLM_VAL}"
 fi
 
 step "Installing JS dependencies"
@@ -726,11 +778,11 @@ AI_ENGINE_ADAPTER=${ADAPTER_VAL}
 TAVILY_API_KEY=${TAVILY_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 ANTHROPIC_BASE_URL=${LLM_BASE_URL}
-ANTHROPIC_MODEL=claude-haiku-4-5@20251001
-SMART_LLM=anthropic:claude-haiku-4-5@20251001
-FAST_LLM=anthropic:deepseek-v4-flash
-STRATEGIC_LLM=anthropic:claude-haiku-4-5@20251001
-BRIEF_LLM=anthropic:deepseek-v4-flash
+ANTHROPIC_MODEL=${SMART_LLM_VAL#*:}
+SMART_LLM=${SMART_LLM_VAL}
+FAST_LLM=${FAST_LLM_VAL}
+STRATEGIC_LLM=${STRATEGIC_LLM_VAL}
+BRIEF_LLM=${BRIEF_LLM_VAL}
 RETRIEVER=${RETRIEVER_VAL}
 GH_TOKEN=
 WORKER_LEASE_SECONDS=60
