@@ -125,12 +125,146 @@ load_existing_llm_models() {
   BRIEF_LLM_VAL="$(read_env_value "$env_file" BRIEF_LLM)"
 }
 
-ensure_llm_models() {
-  local default="$1"
-  SMART_LLM_VAL="${SMART_LLM_VAL:-$default}"
-  FAST_LLM_VAL="${FAST_LLM_VAL:-$default}"
-  STRATEGIC_LLM_VAL="${STRATEGIC_LLM_VAL:-$SMART_LLM_VAL}"
-  BRIEF_LLM_VAL="${BRIEF_LLM_VAL:-$FAST_LLM_VAL}"
+load_existing_llm_config() {
+  local env_file="${1:-packages/ai-engine/.env}"
+  load_existing_llm_models "$env_file"
+  ANTHROPIC_KEY="$(read_env_value "$env_file" ANTHROPIC_API_KEY)"
+  ANTHROPIC_BASE_URL_VAL="$(read_env_value "$env_file" ANTHROPIC_BASE_URL)"
+  OPENAI_KEY="$(read_env_value "$env_file" OPENAI_API_KEY)"
+  OPENAI_BASE_URL_VAL="$(read_env_value "$env_file" OPENAI_BASE_URL)"
+}
+
+prompt_secret_keep() {
+  local question="$1" existing="$2" var_name="$3" answer
+  read -rsp "$(echo -e "${CYAN}${question}${NC} (input hidden, Enter to keep existing): ")" answer
+  echo ""
+  printf -v "$var_name" '%s' "${answer:-$existing}"
+}
+
+fetch_llm_models() {
+  local base_url="$1" api_key="$2" protocol="$3" response model
+  AVAILABLE_MODELS=()
+  [[ -n "$base_url" ]] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+
+  local -a headers=(-H "Authorization: Bearer ${api_key:-local-setup}")
+  if [[ "$protocol" == "anthropic" ]]; then
+    headers+=(-H "x-api-key: ${api_key:-local-setup}" -H "anthropic-version: 2023-06-01")
+  fi
+  response="$(curl -fsS --max-time 15 "${headers[@]}" "${base_url%/}/models" 2>/dev/null)" || return 1
+
+  if command -v python3 >/dev/null 2>&1; then
+    while IFS= read -r model; do
+      [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
+    done < <(printf '%s' "$response" | python3 -c 'import json,sys
+try:
+    data=json.load(sys.stdin)
+    for item in data.get("data", []):
+        if isinstance(item, dict) and item.get("id"):
+            print(item["id"])
+except (ValueError, TypeError, AttributeError):
+    pass')
+  fi
+  [[ "${#AVAILABLE_MODELS[@]}" -gt 0 ]]
+}
+
+select_llm_model() {
+  local protocol="$1" base_url="$2" api_key="$3" existing_model="$4"
+  local model_choice model_input model
+  if fetch_llm_models "$base_url" "$api_key" "$protocol"; then
+    echo -e "${CYAN}Models returned by ${base_url%/}/models:${NC}"
+    local options=()
+    local max_models=20
+    local index=0
+    for model in "${AVAILABLE_MODELS[@]}"; do
+      ((index++))
+      [[ "$index" -le "$max_models" ]] && options+=("$model")
+    done
+    options+=("Enter model manually")
+    prompt_choice "Choose LLM model:" model_choice "${options[@]}"
+    if [[ "$model_choice" =~ ^[0-9]+$ ]] && [[ "$model_choice" -ge 1 ]] && [[ "$model_choice" -le "$(( ${#options[@]} - 1 ))" ]]; then
+      SELECTED_LLM_MODEL="${options[$((model_choice - 1))]}"
+      return 0
+    fi
+  else
+    warn "Could not read ${base_url%/}/models; enter the model id manually"
+  fi
+  prompt "LLM model id" "$existing_model" model_input
+  SELECTED_LLM_MODEL="$model_input"
+  [[ -n "${SELECTED_LLM_MODEL// }" ]]
+}
+
+configure_llm_provider() {
+  local existing_protocol="2" existing_model="${SMART_LLM_VAL#*:}"
+  [[ "${SMART_LLM_VAL%%:*}" == "anthropic" ]] && existing_protocol="1"
+  [[ "${SMART_LLM_VAL%%:*}" == "openai" ]] && existing_protocol="2"
+
+  if [[ "$MODE" == "vps" ]]; then
+    prompt_choice "Choose LLM provider:" LLM_CHOICE \
+      "OpenAI-compatible API (DeepSeek default)" \
+      "Anthropic-compatible API" \
+      "Fake adapter (no LLM calls — UI walkthrough only)"
+  else
+    prompt_choice "Choose LLM provider:" LLM_CHOICE \
+      "Anthropic-compatible API (cc-switch / Anthropic / DeepSeek)" \
+      "OpenAI-compatible API (ais-switch / vibeproxy / OpenAI)" \
+      "Fake adapter (no LLM calls — UI walkthrough only)"
+  fi
+
+  case "$LLM_CHOICE" in
+    1)
+      if [[ "$MODE" == "vps" ]]; then
+        LLM_PROTOCOL_VAL="openai"
+        LLM_BASE_URL_VAL="https://api.deepseek.com/v1"
+        prompt "LLM base URL" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
+        prompt_secret_keep "DeepSeek API key" "$OPENAI_KEY" OPENAI_KEY
+        OPENAI_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+        ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
+      else
+        LLM_PROTOCOL_VAL="anthropic"
+        LLM_BASE_URL_VAL="${ANTHROPIC_BASE_URL_VAL:-}"
+        prompt "LLM base URL (include /v1 when required; local cc-switch: http://localhost:15721)" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
+        prompt_secret_keep "LLM API key" "$ANTHROPIC_KEY" ANTHROPIC_KEY
+        ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+        OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
+      fi
+      ;;
+    2)
+      if [[ "$MODE" == "vps" ]]; then
+        LLM_PROTOCOL_VAL="anthropic"
+        LLM_BASE_URL_VAL="https://api.anthropic.com/v1"
+        prompt "LLM base URL" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
+        prompt_secret_keep "Anthropic API key" "$ANTHROPIC_KEY" ANTHROPIC_KEY
+        ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+        OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
+      else
+        LLM_PROTOCOL_VAL="openai"
+        LLM_BASE_URL_VAL="${OPENAI_BASE_URL_VAL:-}"
+        prompt "LLM base URL (include /v1 when required; ais-switch: http://localhost:15722/v1)" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
+        prompt_secret_keep "LLM API key" "$OPENAI_KEY" OPENAI_KEY
+        OPENAI_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+        ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
+      fi
+      ;;
+    3)
+      ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
+      OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
+      ADAPTER_VAL="fake"
+      SMART_LLM_VAL="anthropic:deepseek-v4-flash"
+      FAST_LLM_VAL="$SMART_LLM_VAL"
+      STRATEGIC_LLM_VAL="$SMART_LLM_VAL"
+      BRIEF_LLM_VAL="$SMART_LLM_VAL"
+      return 0
+      ;;
+  esac
+
+  ADAPTER_VAL="gpt_researcher"
+  select_llm_model "$LLM_PROTOCOL_VAL" "$LLM_BASE_URL_VAL" "${ANTHROPIC_KEY:-$OPENAI_KEY}" "$existing_model" \
+    || fail "No LLM model selected"
+  SMART_LLM_VAL="${LLM_PROTOCOL_VAL}:${SELECTED_LLM_MODEL}"
+  FAST_LLM_VAL="$SMART_LLM_VAL"
+  STRATEGIC_LLM_VAL="$SMART_LLM_VAL"
+  BRIEF_LLM_VAL="$SMART_LLM_VAL"
 }
 
 detect_and_recommend() {
@@ -175,9 +309,9 @@ run_interactive_prompts() {
   local deploy_url_default="$1"
 
   if [[ "$MODE" == "vps" ]]; then
-    load_existing_llm_models "deploy/.env"
+    load_existing_llm_config "deploy/.env"
   else
-    load_existing_llm_models ".env"
+    load_existing_llm_config ".env"
   fi
 
   prompt "Deploy URL (for NextAuth callback)" "$deploy_url_default" DEPLOY_URL
@@ -206,33 +340,7 @@ run_interactive_prompts() {
     fi
   fi
 
-  prompt_choice "Choose LLM provider:" LLM_CHOICE \
-    "Anthropic (direct API — needs key)" \
-    "OpenAI-compatible proxy (custom base URL)" \
-    "Skip LLM for now (fake adapter — UI only)"
-
-  case "$LLM_CHOICE" in
-    1)
-      prompt_secret "Anthropic API key" ANTHROPIC_KEY
-      validate_non_empty "$ANTHROPIC_KEY" "ANTHROPIC_API_KEY"
-      ANTHROPIC_BASE_URL_VAL=""
-      ADAPTER_VAL="gpt_researcher"
-      ensure_llm_models "anthropic:claude-haiku-4-5@20251001"
-      ;;
-    2)
-      prompt "LLM base URL (e.g. http://localhost:8318/v1)" "" LLM_BASE_URL
-      prompt_secret "LLM API key" ANTHROPIC_KEY
-      ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL"
-      ADAPTER_VAL="gpt_researcher"
-      ensure_llm_models "anthropic:deepseek-v4-flash"
-      ;;
-    3)
-      ANTHROPIC_KEY=""
-      ANTHROPIC_BASE_URL_VAL=""
-      ADAPTER_VAL="fake"
-      ensure_llm_models "anthropic:deepseek-v4-flash"
-      ;;
-  esac
+  configure_llm_provider
 
   if [[ "$ADAPTER_VAL" != "fake" ]]; then
     prompt_choice "Choose web search provider:" SEARCH_CHOICE \
@@ -299,6 +407,8 @@ ALLOWED_EMAIL_DOMAINS=${EMAIL_DOMAINS}
 AI_ENGINE_ADAPTER=${ADAPTER_VAL}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_VAL}
+OPENAI_API_KEY=${OPENAI_KEY}
+OPENAI_BASE_URL=${OPENAI_BASE_URL_VAL}
 SMART_LLM=${SMART_LLM_VAL}
 FAST_LLM=${FAST_LLM_VAL}
 STRATEGIC_LLM=${STRATEGIC_LLM_VAL}
@@ -521,6 +631,17 @@ if [[ "$MODE" == "docker" ]]; then
 
   run_interactive_prompts "http://localhost:3000"
 
+  # Containers reach host-side proxies through host.docker.internal.
+  if [[ "$LLM_BASE_URL_VAL" == http://localhost:* || "$LLM_BASE_URL_VAL" == http://127.0.0.1:* ]]; then
+    LLM_BASE_URL_VAL="$(printf '%s' "$LLM_BASE_URL_VAL" | sed 's#^http://localhost:#http://host.docker.internal:#; s#^http://127.0.0.1:#http://host.docker.internal:#')"
+    if [[ "$LLM_PROTOCOL_VAL" == "anthropic" ]]; then
+      ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+    else
+      OPENAI_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+    fi
+    info "Docker will reach the host proxy at ${LLM_BASE_URL_VAL}"
+  fi
+
   step "Generating .env"
   if [[ -f .env ]]; then
     warn ".env exists, backing up to .env.bak"
@@ -630,7 +751,7 @@ PH_TOKEN_VAL=""
 if [[ "$MODE" != "quick" ]]; then
   step "Configuration"
 
-  load_existing_llm_models "packages/ai-engine/.env"
+  load_existing_llm_config "packages/ai-engine/.env"
 
   prompt "PostgreSQL host" "localhost" PG_HOST
   prompt "PostgreSQL port" "5432" PG_PORT
@@ -662,31 +783,7 @@ if [[ "$MODE" != "quick" ]]; then
     fi
   fi
 
-  prompt_choice "Choose LLM provider:" LLM_CHOICE \
-    "Anthropic (direct API — needs key)" \
-    "OpenAI-compatible proxy (custom base URL)" \
-    "Fake adapter (no LLM calls — UI walkthrough only)"
-
-  case "$LLM_CHOICE" in
-    1)
-      prompt_secret "Anthropic API key" ANTHROPIC_KEY
-      LLM_BASE_URL=""
-      ADAPTER_VAL="gpt_researcher"
-      ensure_llm_models "anthropic:claude-haiku-4-5@20251001"
-      ;;
-    2)
-      prompt "LLM base URL (e.g. http://localhost:8318/v1)" "" LLM_BASE_URL
-      prompt_secret "LLM API key" ANTHROPIC_KEY
-      ADAPTER_VAL="gpt_researcher"
-      ensure_llm_models "anthropic:deepseek-v4-flash"
-      ;;
-    3)
-      ANTHROPIC_KEY=""
-      LLM_BASE_URL=""
-      ADAPTER_VAL="fake"
-      ensure_llm_models "anthropic:deepseek-v4-flash"
-      ;;
-  esac
+  configure_llm_provider
 
   if [[ "$ADAPTER_VAL" != "fake" ]]; then
     prompt_choice "Choose web search provider:" SEARCH_CHOICE \
@@ -721,11 +818,11 @@ if [[ "$MODE" != "quick" ]]; then
 else
   PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
   EMAIL_DOMAINS="gmail.com"
-  ANTHROPIC_KEY=""; LLM_BASE_URL=""; ADAPTER_VAL="fake"
+  ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""; OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""; ADAPTER_VAL="fake"
   TAVILY_KEY=""; RETRIEVER_VAL="tavily"
   GOOGLE_ID=""; GOOGLE_SECRET=""
-  load_existing_llm_models "packages/ai-engine/.env"
-  ensure_llm_models "anthropic:deepseek-v4-flash"
+  load_existing_llm_config "packages/ai-engine/.env"
+  SMART_LLM_VAL="anthropic:deepseek-v4-flash"; FAST_LLM_VAL="$SMART_LLM_VAL"; STRATEGIC_LLM_VAL="$SMART_LLM_VAL"; BRIEF_LLM_VAL="$SMART_LLM_VAL"
 fi
 
 step "Installing JS dependencies"
@@ -765,7 +862,9 @@ DATABASE_URL=${DB_URL}
 AI_ENGINE_ADAPTER=${ADAPTER_VAL}
 TAVILY_API_KEY=${TAVILY_KEY}
 ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
-ANTHROPIC_BASE_URL=${LLM_BASE_URL}
+ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_VAL}
+OPENAI_API_KEY=${OPENAI_KEY}
+OPENAI_BASE_URL=${OPENAI_BASE_URL_VAL}
 ANTHROPIC_MODEL=${SMART_LLM_VAL#*:}
 SMART_LLM=${SMART_LLM_VAL}
 FAST_LLM=${FAST_LLM_VAL}
@@ -814,7 +913,9 @@ if [[ "$ADAPTER_VAL" == "fake" ]]; then
   echo -e "  Public pages work without login; AI research, comments, follows, bookmarks, personal content, and admin require login."
   echo -e "  AI research uses mock data, no API costs."
 else
-  if [[ -z "$ANTHROPIC_KEY" ]]; then
+  if [[ "$LLM_PROTOCOL_VAL" == "openai" && -z "$OPENAI_KEY" ]]; then
+    echo -e "  ${YELLOW}⚠  OPENAI_API_KEY is empty${NC} — edit packages/ai-engine/.env to enable real LLM"
+  elif [[ "$LLM_PROTOCOL_VAL" == "anthropic" && -z "$ANTHROPIC_KEY" ]]; then
     echo -e "  ${YELLOW}⚠  ANTHROPIC_API_KEY is empty${NC} — edit packages/ai-engine/.env to enable real LLM"
   fi
   if [[ "$RETRIEVER_VAL" == "tavily" && -z "$TAVILY_KEY" ]]; then

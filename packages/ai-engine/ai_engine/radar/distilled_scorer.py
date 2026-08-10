@@ -245,6 +245,8 @@ class DistilledScore:
     team_value_score: float | None = None # expected usefulness to the target team
     ranking_score: float | None = None    # final cross-source ordering score
     source_bonus: float = 0.0             # small, explicit product-priority adjustment
+    repo_signal_bonus: float = 0.0        # bounded GitHub evidence calibration
+    repo_signals: dict[str, Any] = field(default_factory=dict)
     version: str = DISTILLED_VERSION
 
     @property
@@ -298,6 +300,10 @@ class DistilledScore:
             result["rankingScore"] = self.ranking_score
         if self.source_bonus:
             result["sourceBonus"] = self.source_bonus
+        if self.repo_signal_bonus:
+            result["repoSignalBonus"] = self.repo_signal_bonus
+        if self.repo_signals:
+            result["repoSignals"] = self.repo_signals
         return result
 
 
@@ -352,7 +358,7 @@ SYSTEM_PROMPT = """你是一名严苛的评审员，为偏 AI 应用开发的软
 
 GitHub 项目特别注意：README、代码/配置、可复用命令、工作流、评测方法或工程质量门禁是相关性证据；像 agent skills 这类能改善 AI 项目开发流程的仓库可以高分，但必须依据实际资产评分。只有仓库热度、24 小时动态、模型/项目名称或极薄介绍时，按 1 或更低处理。
 
-来源不设绝对上限：社区文章、官方文章和 Arxiv 论文都可能进入 collection/must_read，但前提是正文自身提供了能解决真实 AI 项目问题的证据。不要因为来源权威、论文形式、作者知名、文章流行、表达质量高或观点新颖而自动加分；同样，也不要因为来源是社区文章就自动降级。论文若能给出可迁移的实现、评测、部署、可靠性或成本指导，应提高可行动性和综合信号。
+来源不设绝对上限，但来源不自动等价：官方/大厂一手实践可以提供较强事实依据；社区个人实践即使代码完整，也只能证明作者自己的环境有效，不能直接当作生产级可靠性证据。对 dev.to 等社区实践，除非正文给出独立模型/数据/生产流量复现或明确的大厂一手来源，否则事实可信度和验证广度必须保守，不能进入 collection/must_read。不要因为来源权威、论文形式、作者知名、文章流行、表达质量高或观点新颖而自动加分；同样，也不要把社区文章的可操作代码误判为生产实践。
 
 经验/实验文章的验证广度（必须单独输出 validation_breadth，0–2）：
 - 2 分：正文自身在多个独立模型、独立数据集/仓库、生产流量或外部复现中验证；引用别人的实验不算本文验证
@@ -422,6 +428,7 @@ def _format_meta_block(
     url: str | None,
     published_at: datetime | None,
     current_date: datetime | None,
+    structured_signals: dict[str, Any] | None = None,
 ) -> str:
     """Format the contextual meta block (profile / source / domain /
     published / current date) for the prompt."""
@@ -445,6 +452,16 @@ def _format_meta_block(
     if current_date is None:
         current_date = datetime.now(timezone.utc)
     lines.append(f"- 当前日期 (current_date): {current_date.strftime('%Y-%m-%d')}")
+    if structured_signals:
+        safe_signals = {
+            str(key): value for key, value in structured_signals.items()
+            if value is not None and isinstance(value, (bool, int, float, str))
+        }
+        if safe_signals:
+            lines.append(
+                "- GitHub 仓库结构化证据 (repo_signals): "
+                + json.dumps(safe_signals, ensure_ascii=False, sort_keys=True)
+            )
     return "\n".join(lines)
 
 
@@ -459,6 +476,7 @@ def build_user_prompt(
     url: str | None = None,
     published_at: datetime | None = None,
     current_date: datetime | None = None,
+    structured_signals: dict[str, Any] | None = None,
 ) -> str:
     """Build the user message for the LLM scoring call.
 
@@ -474,6 +492,7 @@ def build_user_prompt(
         url=url,
         published_at=published_at,
         current_date=current_date,
+        structured_signals=structured_signals,
     )
     content_for_scoring = _prepare_scoring_content(title, content)
     return f"""请对以下文章进行 7 个维度的评分（每个维度 0–3 分）。
@@ -489,6 +508,8 @@ def build_user_prompt(
 - weak_point 只写最低维度的具体扣分原因，一句话，不超过 30 字
 - 不要解释高分，只解释最低分
 - "综合信号" 这一维度的评判基准是上面评分画像的目标读者，而不是泛化的"信号"
+- GitHub 仓库结构化证据只能校准事实可信度、时效性和工程价值，不能仅凭 stars 把仓库评为重点或深度阅读
+- README 中有明确实现机制、benchmark、测试或 CI/Action 证据时，不要把仓库误判成只有安装命令
 
 ## 论文源校准（仅 profile=paper）
 - 论文形式、摘要完整、实验数字或数学推导本身，不等于高信息增量或高综合信号
@@ -552,6 +573,7 @@ async def anthropic_scorer(
     source_type: str | None = None,
     url: str | None = None,
     published_at: datetime | None = None,
+    structured_signals: dict[str, Any] | None = None,
 ) -> str:
     """Call the configured light LLM to score article dimensions.
 
@@ -575,6 +597,7 @@ async def anthropic_scorer(
             source_type=source_type,
             url=url,
             published_at=published_at,
+            structured_signals=structured_signals,
         ),
         max_tokens=_LLM_SCORING_MAX_TOKENS,
         timeout=60.0,
@@ -839,6 +862,11 @@ _QUALITY_WEIGHTS: dict[str, int] = {
     "表达质量": 15,
 }
 
+# Community how-to posts can contain useful code, but a single author's
+# successful demo is not production evidence. Keep this policy deterministic
+# so an overly generous LLM response cannot promote it to collection.
+_COMMUNITY_PRACTICE_SOURCES = frozenset({"devto"})
+
 
 def _weighted_dimension_score(
     scores: dict[str, int],
@@ -867,12 +895,63 @@ def _source_priority_bonus(source_type: str | None) -> float:
     return 0.0
 
 
+def _github_repo_signal_bonus(
+    *,
+    source_type: str | None,
+    signals: dict[str, Any] | None,
+) -> float:
+    """Return a small floor-calibration bonus for documented GitHub repos.
+
+    Popularity alone is intentionally insufficient. At least one technical
+    evidence signal and a substantive README are required before any bonus is
+    applied; the cap can lift a false negative to skim, never to deep read.
+    """
+    if not (source_type or "").strip().lower().startswith("github") or not signals:
+        return 0.0
+
+    def _number(name: str) -> float:
+        value = signals.get(name)
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+    readme_chars = _number("readmeChars")
+    technical_density = _number("technicalDensity")
+    has_technical_evidence = any(
+        bool(signals.get(name))
+        for name in ("hasBenchmark", "hasCiAction", "hasTests", "hasArchitecture")
+    ) or technical_density >= 0.02
+    if readme_chars < 3000 or not has_technical_evidence:
+        return 0.0
+
+    bonus = 0.0
+    stars = _number("stars")
+    stars_today = _number("starsToday")
+    if stars >= 10_000:
+        bonus += 3.0
+    elif stars >= 1_000:
+        bonus += 2.0
+    if stars_today >= 100:
+        bonus += 2.0
+    elif stars_today >= 20:
+        bonus += 1.0
+    if readme_chars >= 6_000:
+        bonus += 2.0
+    if bool(signals.get("hasBenchmark")):
+        bonus += 2.0
+    if bool(signals.get("hasCiAction")):
+        bonus += 2.0
+    if bool(signals.get("hasTests")):
+        bonus += 1.0
+    return min(12.0, bonus)
+
+
 def compute_score(
     parsed: dict[str, Any],
     *,
     profile: ScoringProfile | None = None,
     source_type: str | None = None,
     evidence_text: str | None = None,
+    url: str | None = None,
+    structured_signals: dict[str, Any] | None = None,
 ) -> DistilledScore:
     """Compute weighted score from parsed LLM dimension scores.
 
@@ -908,6 +987,8 @@ def compute_score(
         evidence_text and _NARROW_MODALITY_RE.search(evidence_text)
     ):
         scope_breadth = 0
+
+    community_practice = normalized_source in _COMMUNITY_PRACTICE_SOURCES
 
     if direct_relevance is not None and scope_breadth is not None:
         direct_relevance = min(direct_relevance, scope_breadth + 1)
@@ -967,7 +1048,15 @@ def compute_score(
         direct_relevance = min(direct_relevance, 2) if direct_relevance is not None else direct_relevance
         if dim_scores["可行动性"] > 2:
             dim_scores["可行动性"] = 2
-    elif (
+
+    if community_practice:
+        # Code and tests establish usefulness, not production reliability.
+        # A personal Dev.to post stays discoverable, but cannot be treated as
+        # independently validated or as a direct production recommendation.
+        dim_scores["事实可信度"] = min(dim_scores["事实可信度"], 1)
+        validation_breadth = min(validation_breadth, 1) if validation_breadth is not None else 0
+        direct_relevance = min(direct_relevance, 2) if direct_relevance is not None else direct_relevance
+    if (
         implementation_stage == 2
         and evidence_text
         and _DIAGNOSTIC_ONLY_RE.search(evidence_text)
@@ -995,6 +1084,10 @@ def compute_score(
         for d in DIMENSIONS
     )
     total = round(total, 2)
+    repo_signal_bonus = _github_repo_signal_bonus(
+        source_type=source_type,
+        signals=structured_signals,
+    )
 
     # must_read: total >= profile.must_read_total AND ≥ core_count of
     # 3 core dims ≥ 2.
@@ -1072,10 +1165,14 @@ def compute_score(
         ranking_score = min(ranking_score, profile.tier_collection - 0.01)
         effective_must_read = False
 
+    if community_practice:
+        ranking_score = min(ranking_score, profile.tier_skim)
+        effective_must_read = False
+
     # Reading tier is an editorial-quality decision. Keep ranking_score for
     # cross-source ordering, but never let source bonus or team-value uplift
     # turn a low-quality item into deep_read.
-    tier_score = min(total, ranking_score)
+    tier_score = min(total + repo_signal_bonus, ranking_score)
     if practical_paper and tier_score < profile.tier_deep_read:
         # A paper with a transferable engineering method and measured
         # validation is deep-read material even when it lacks production
@@ -1103,6 +1200,8 @@ def compute_score(
         team_value_score=team_value_score,
         ranking_score=round(ranking_score, 2),
         source_bonus=source_bonus,
+        repo_signal_bonus=repo_signal_bonus,
+        repo_signals=dict(structured_signals or {}),
         weak_point=weak_point,
         veto=None,
         risk_flag=risk_flag,
@@ -1185,6 +1284,7 @@ async def score_with_llm(
     source_type: str | None = None,
     url: str | None = None,
     published_at: datetime | None = None,
+    structured_signals: dict[str, Any] | None = None,
 ) -> DistilledScore:
     """Score an article using the LLM dimension scorer.
 
@@ -1215,6 +1315,7 @@ async def score_with_llm(
                 source_type=source_type,
                 url=url,
                 published_at=published_at,
+                structured_signals=structured_signals,
             )
         active_scorer: Callable[[str, str], Awaitable[str]] = _contextual_scorer
     else:
@@ -1231,6 +1332,8 @@ async def score_with_llm(
                 profile=profile,
                 source_type=source_type,
                 evidence_text=f"{title}\n{content}",
+                url=url,
+                structured_signals=structured_signals,
             )
         except Exception as exc:
             rate_limited = _is_rate_limit_error(exc)

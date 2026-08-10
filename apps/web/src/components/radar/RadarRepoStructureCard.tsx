@@ -23,7 +23,10 @@ interface RepoMeta {
   defaultBranch?: string | null;
   language?: string | null;
   stars?: number | null;
+  forks?: number | null;
+  openIssues?: number | null;
   lastPushedAt?: string | null;
+  snapshotFetchedAt?: string | null;
   description?: string | null;
   tree?: TreeNode[];
   entryPoints?: string[];
@@ -153,6 +156,8 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
         </div>
         <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#94a3b8' }}>
           <span>⭐ {formatStars(meta.stars)}</span>
+          {meta.forks != null && <span>🍴 {formatStars(meta.forks)}</span>}
+          {meta.openIssues != null && <span>🐛 {meta.openIssues}</span>}
           {meta.defaultBranch && <span>🌿 {meta.defaultBranch}</span>}
           {meta.lastPushedAt && (
             <span>
@@ -163,6 +168,9 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
                 day: '2-digit',
               })}
             </span>
+          )}
+          {meta.snapshotFetchedAt && (
+            <span>📡 {new Date(meta.snapshotFetchedAt).toLocaleDateString('zh-CN')}</span>
           )}
         </div>
         {meta.description && (

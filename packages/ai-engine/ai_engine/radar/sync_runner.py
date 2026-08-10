@@ -19,7 +19,7 @@ import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, cast
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -43,6 +43,7 @@ EmbeddingScorerFn = Any  # BatchEmbeddingScorer or None
 # Phase 0 deep-dive: original markdown is capped to 64KB to keep Postgres
 # rows under the TOAST threshold and chat prompt snapshot under 50KB.
 ORIGINAL_MARKDOWN_MAX_BYTES = 65_536
+MIN_BRIEF_OUTPUT_CHARS = 120
 
 # Feature flag: when false, sync behaves as Week 9 (no capture, no UI).
 DEEPDIVE_ENABLED = os.environ.get("RADAR_DEEPDIVE_ENABLED", "true").lower() in (
@@ -58,6 +59,12 @@ RADAR_CANDIDATE_CONCURRENCY = int(
 RADAR_FETCH_RETRIES = max(0, int(os.environ.get("RADAR_FETCH_RETRIES", "2")))
 RADAR_FETCH_RETRY_BACKOFF_SECONDS = max(
     0.0, float(os.environ.get("RADAR_FETCH_RETRY_BACKOFF_SECONDS", "0.5"))
+)
+# A successful HTTP response can still be an empty page or bot-verification
+# shell. Give that content one bounded retry before routing it to governance.
+RADAR_CONTENT_RETRIES = max(0, int(os.environ.get("RADAR_CONTENT_RETRIES", "1")))
+RADAR_CONTENT_RETRY_BACKOFF_SECONDS = max(
+    0.0, float(os.environ.get("RADAR_CONTENT_RETRY_BACKOFF_SECONDS", "1.0"))
 )
 RADAR_SOURCE_RETRIES = max(0, int(os.environ.get("RADAR_SOURCE_RETRIES", "2")))
 RADAR_SOURCE_RETRY_BACKOFF_SECONDS = max(
@@ -303,8 +310,24 @@ def _is_retryable_source_result(result: SourceRunResult) -> bool:
 def _can_use_snippet_fallback(source: RadarSource, candidate: RadarCandidate) -> bool:
     return (
         source.source_type in _SNIPPET_FALLBACK_SOURCE_TYPES
-        and bool(candidate.snippet.strip())
+        and len(candidate.snippet.strip()) >= 200
     )
+
+
+def _best_content_body(
+    interpretation: str,
+    markdown: str,
+    snippet: str,
+) -> str:
+    """Choose a reviewable body without hiding fetched content behind a terse brief."""
+    brief = interpretation.strip()
+    raw = markdown.strip()
+    source_snippet = snippet.strip()
+    if len(brief) >= MIN_BRIEF_OUTPUT_CHARS:
+        return brief[:2000]
+    if len(raw) >= 200:
+        return raw[:2000]
+    return (brief or raw or source_snippet)[:2000]
 
 
 async def _with_transport_retries(
@@ -336,6 +359,45 @@ async def _with_transport_retries(
             )
             if wait_seconds:
                 await asyncio.sleep(wait_seconds)
+
+
+async def _fetch_document_with_content_retries(
+    document_fetcher: SafeFetcher,
+    *,
+    url: str,
+    source_type: str,
+    run_id: str,
+    source_id: str,
+    domain: str,
+) -> tuple[FetchedDocument, str]:
+    """Fetch and extract a page, retrying successful-but-empty responses once."""
+    for attempt in range(RADAR_CONTENT_RETRIES + 1):
+        fetched = await _with_transport_retries(
+            lambda: document_fetcher(url),
+            run_id=run_id,
+            source_id=source_id,
+            domain=domain,
+        )
+        raw_html = fetched.content.decode("utf-8", errors="replace")
+        markdown = _extract_article_content(raw_html, url, source_type)
+        if not _is_low_quality_content(markdown) or attempt >= RADAR_CONTENT_RETRIES:
+            return fetched, markdown
+        wait_seconds = RADAR_CONTENT_RETRY_BACKOFF_SECONDS * (attempt + 1)
+        logger.warning(
+            "ai-engine.radar.content_retry",
+            extra={
+                "request_id": run_id,
+                "source_id": source_id,
+                "domain": domain,
+                "attempt": attempt + 1,
+                "wait_seconds": wait_seconds,
+                "status": fetched.status,
+                "content_length": len(markdown),
+            },
+        )
+        if wait_seconds:
+            await asyncio.sleep(wait_seconds)
+    raise RuntimeError("content retry loop exhausted")
 
 
 def _format_failure_summary(
@@ -424,16 +486,294 @@ async def _finish_run(
         await conn.commit()
 
 
-async def _candidate_exists(pool: Any, canonical_url: str) -> bool:
+async def _existing_candidate(pool: Any, canonical_url: str) -> dict[str, Any] | None:
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                'SELECT "id" FROM "summaries" WHERE "canonicalUrl" = %s '
+                'SELECT "id", "body", "originalMarkdown" FROM "summaries" '
+                'WHERE "canonicalUrl" = %s '
                 "AND \"status\" <> 'archived' LIMIT 1",
                 (canonical_url,),
             )
         ).fetchone()
-    return row is not None
+    return dict(row) if row else None
+
+
+def _needs_content_retry(row: dict[str, Any]) -> bool:
+    content = str(row.get("originalMarkdown") or row.get("body") or "")
+    return _is_low_quality_content(content)
+
+
+async def _retry_existing_summary_content(
+    pool: Any,
+    *,
+    summary_id: str,
+    candidate: RadarCandidate,
+    canonical_url: str,
+    source: RadarSource,
+    run_id: str,
+    document_fetcher: SafeFetcher,
+    generate_brief: BriefGenerator,
+    adapter: ResearchEngineAdapter,
+    timeout_seconds: float,
+) -> bool:
+    """Replace a bot-check placeholder when a later fetch gets real content."""
+    try:
+        fetched, markdown = await _fetch_document_with_content_retries(
+            document_fetcher,
+            url=candidate.url,
+            source_type=source.source_type,
+            run_id=run_id,
+            source_id=source.id,
+            domain=_host(candidate.url),
+        )
+    except Exception:
+        return False
+    if _is_low_quality_content(markdown):
+        return False
+    interpretation = ""
+    try:
+        brief = await _generate_brief_with_retry(
+            generate_brief,
+            adapter,
+            {"title": candidate.title, "snippet": markdown[:2000]},
+            canonical_url,
+            timeout_seconds=timeout_seconds,
+        )
+        if brief.status == AI_JOB_STATUS["SUCCEEDED"] and brief.output_text:
+            interpretation = brief.output_text.strip()[:2000]
+    except Exception:
+        pass
+    body = _best_content_body(interpretation, markdown, candidate.snippet)
+    content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    async with pool.connection() as conn:
+        await conn.execute(
+            'UPDATE "summaries" SET "title" = %s, "body" = %s, '
+            '"interpretation" = %s, "originalMarkdown" = %s, '
+            '"originalFetchedAt" = now(), "originalBytes" = %s, '
+            '"originalSha256" = %s, "summaryDate" = CURRENT_DATE, '
+            '"publishedAt" = %s, "syncRunId" = %s, "updatedAt" = now() '
+            'WHERE "id" = %s',
+            (
+                candidate.title[:300], body, interpretation or None,
+                markdown[:ORIGINAL_MARKDOWN_MAX_BYTES],
+                len(markdown.encode("utf-8")), content_sha256,
+                candidate.published_at or datetime.now(timezone.utc),
+                run_id, summary_id,
+            ),
+        )
+        await conn.commit()
+    return True
+
+
+async def _refresh_existing_github_summary(
+    pool: Any,
+    *,
+    summary_id: str,
+    candidate: RadarCandidate,
+    canonical_url: str,
+    generate_brief: BriefGenerator,
+    adapter: ResearchEngineAdapter,
+    run_id: str,
+    source_id: str,
+    source_type: str,
+    timeout_seconds: float,
+    distilled_scorer: DistilledScorerFn | None = None,
+) -> None:
+    """Refresh a GitHub summary while preserving comments and governance."""
+    existing_markdown = ""
+    async with pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                'SELECT "originalMarkdown" FROM "summaries" WHERE "id" = %s',
+                (summary_id,),
+            )
+        ).fetchone()
+        if row is not None:
+            existing_markdown = str(dict(row).get("originalMarkdown") or "")
+    markdown = existing_markdown or candidate.snippet.strip()[:_REPO_DIGEST_CONTEXT_MAX_CHARS]
+    if candidate.repo_activity is not None:
+        from ai_engine.radar.github_tracked import format_repo_activity
+
+        markdown = format_repo_activity(
+            candidate.repo_activity,
+            max_chars=_REPO_DIGEST_CONTEXT_MAX_CHARS,
+        )
+    if not markdown:
+        return
+    interpretation = ""
+    try:
+        brief = await _generate_brief_with_retry(
+            generate_brief,
+            adapter,
+            {"title": candidate.title, "snippet": markdown[:2000]},
+            canonical_url,
+            timeout_seconds=timeout_seconds,
+            context_max_chars=_REPO_DIGEST_CONTEXT_MAX_CHARS,
+        )
+        if brief.status == AI_JOB_STATUS["SUCCEEDED"] and brief.output_text:
+            interpretation = brief.output_text.strip()[:2000]
+    except Exception:
+        logger.warning(
+            "ai-engine.radar.github_summary_refresh_failed",
+            extra={"request_id": run_id, "source_id": source_id, "summary_id": summary_id},
+        )
+    content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    async with pool.connection() as conn:
+        await conn.execute(
+            'UPDATE "summaries" SET "title" = %s, "body" = %s, '
+            '"interpretation" = %s, "originalMarkdown" = %s, '
+            '"originalFetchedAt" = now(), "originalBytes" = %s, '
+            '"originalSha256" = %s, '
+            '"summaryDate" = CURRENT_DATE, "publishedAt" = %s, '
+            '"syncRunId" = %s, '
+            '"updatedAt" = now() '
+            'WHERE "id" = %s',
+            (
+                candidate.title[:300],
+                markdown,
+                interpretation or None,
+                markdown[:ORIGINAL_MARKDOWN_MAX_BYTES],
+                len(markdown.encode("utf-8")),
+                content_sha256,
+                candidate.published_at or datetime.now(timezone.utc),
+                run_id,
+                summary_id,
+            ),
+        )
+        await conn.commit()
+    if distilled_scorer is not None and markdown:
+        try:
+            from ai_engine.scoring.scoring_profiles import profile_for_source
+
+            profile, _ = profile_for_source(source_type)
+            cleaned = _clean_content(markdown)
+            if cleaned:
+                distilled = await distilled_scorer(
+                    candidate.title,
+                    cleaned,
+                    profile=profile,
+                    source_type=source_type,
+                    url=candidate.url,
+                    published_at=candidate.published_at,
+                    structured_signals=_github_repo_signals(candidate, markdown),
+                )
+                if not getattr(distilled, "is_default", False):
+                    async with pool.connection() as conn:
+                        await conn.execute(
+                            'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
+                            '"distilledTotal" = %s, "distilledTier" = %s, '
+                            '"distilledMustRead" = %s, "distilledProfile" = %s, '
+                            '"updatedAt" = now() WHERE "id" = %s',
+                            (
+                                json.dumps(distilled.to_dict(), ensure_ascii=False),
+                                distilled.ranking_score or distilled.effective_total or distilled.total,
+                                distilled.tier,
+                                distilled.must_read,
+                                distilled.profile_id,
+                                summary_id,
+                            ),
+                        )
+                        await conn.commit()
+                    if distilled.tier != "noise":
+                        async with pool.connection() as conn:
+                            await conn.execute(
+                                'UPDATE "radar_sync_diagnostics" SET "status" = \'dismissed\', '
+                                '"promotedSummaryId" = %s, "updatedAt" = now() '
+                                'WHERE "canonicalUrl" = %s AND "reasonCode" = \'DISTILLED_NOISE\' '
+                                'AND "status" = \'pending\'',
+                                (summary_id, canonical_url),
+                            )
+                            await conn.commit()
+        except Exception:
+            logger.warning(
+                "ai-engine.radar.github_rescore_failed",
+                extra={"request_id": run_id, "source_id": source_id, "summary_id": summary_id},
+            )
+    try:
+        from ai_engine.radar.enrichment_worker import enrich_github_candidate
+
+        await enrich_github_candidate(
+            pool,
+            summary_id=summary_id,
+            canonical_url=canonical_url,
+        )
+    except Exception:
+        logger.warning(
+            "ai-engine.radar.github_enrichment_refresh_failed",
+            extra={"request_id": run_id, "source_id": source_id, "summary_id": summary_id},
+        )
+
+
+async def _record_sync_diagnostic(
+    pool: Any,
+    *,
+    source: RadarSource,
+    run_id: str,
+    candidate: RadarCandidate,
+    canonical_url: str,
+    kind: str,
+    reason_code: str,
+    reason_message: str | None = None,
+    error_type: str | None = None,
+    error_domain: str | None = None,
+    distilled: Any | None = None,
+    body: str | None = None,
+    markdown: str | None = None,
+) -> None:
+    """Persist a reviewable record for candidates that never become summaries."""
+    original_markdown = None
+    original_kind = None
+    if markdown and DEEPDIVE_ENABLED:
+        original_kind = _classify_original_kind(source.source_type, candidate.url)
+        original_markdown = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+    distilled_payload = None
+    distilled_tier = None
+    if distilled is not None and not getattr(distilled, "is_default", False):
+        distilled_payload = json.dumps(distilled.to_dict(), ensure_ascii=False)
+        distilled_tier = getattr(distilled, "tier", None)
+    try:
+        async with pool.connection() as conn:
+            await conn.execute(
+                'INSERT INTO "radar_sync_diagnostics" '
+                '("id", "runId", "sourceId", "kind", "title", "url", '
+                '"canonicalUrl", "body", "originalMarkdown", "originalKind", '
+                '"contentOrigin", "publishedAt", "tags", "reasonCode", '
+                '"reasonMessage", "errorType", "errorDomain", "distilledScore", '
+                '"distilledTier", "createdAt", "updatedAt") '
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "%s::text[], %s, %s, %s, %s, %s::jsonb, %s, now(), now())",
+                (
+                    str(uuid.uuid4()),
+                    run_id,
+                    source.id,
+                    kind,
+                    (candidate.title or "Untitled")[:300],
+                    candidate.url[:2048],
+                    canonical_url[:2048],
+                    (body or candidate.snippet or "")[:64_000],
+                    original_markdown,
+                    original_kind,
+                    candidate.content_origin,
+                    candidate.published_at,
+                    list(candidate.tags),
+                    reason_code,
+                    (reason_message or "")[:500] or None,
+                    error_type,
+                    error_domain,
+                    distilled_payload,
+                    distilled_tier,
+                ),
+            )
+            await conn.commit()
+    except Exception:
+        # Diagnostics must never turn a source-level skip into a source failure.
+        logger.warning(
+            "ai-engine.radar.diagnostic_write_failed",
+            extra={"request_id": run_id, "source_id": source.id, "kind": kind},
+        )
 
 
 async def _insert_candidate(
@@ -474,9 +814,10 @@ async def _insert_candidate(
         if persisted_distilled.suspected_repost:
             merged_tags.append("risk_suspected_repost")
         merged_tags.append(f"profile_{persisted_distilled.profile_id}")
-    # Prefer the AI-generated interpretation as the display body.
-    # Raw scraped markdown is noisy (nav menus, footers) for sites like GitHub.
-    body = interpretation or candidate.snippet or markdown[:2000]
+    # Prefer a substantive AI brief, but never hide a fetched article behind a
+    # terse one-line model response. The full capture remains available in
+    # originalMarkdown for deep-dive rendering.
+    body = _best_content_body(interpretation, markdown, candidate.snippet)
     content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     published_at = candidate.published_at
 
@@ -596,6 +937,30 @@ def _clean_content(text: str, min_len: int = 200) -> str:
     if len(cleaned) < min_len:
         return ""
     return cleaned
+
+
+def _github_repo_signals(candidate: RadarCandidate, markdown: str) -> dict[str, Any]:
+    """Combine source metadata with cheap, auditable README evidence."""
+    signals = dict(candidate.repo_signals)
+    if not signals:
+        return {}
+    text = markdown or ""
+    lowered = text.lower()
+    signals.update({
+        "readmeChars": len(text),
+        "technicalDensity": round(
+            sum(1 for token in (
+                "tree-sitter", "mcp", "api", "benchmark", "test", "ci",
+                "github action", "docker", "deploy", "latency", "token",
+            ) if token in lowered) / max(1, len(text) / 1000),
+            4,
+        ),
+        "hasBenchmark": bool(_re.search(r"benchmark|evaluation|\beval\b|performance|latency", lowered)),
+        "hasCiAction": bool(_re.search(r"github action|github/workflows|ci/cd|continuous integration", lowered)),
+        "hasTests": bool(_re.search(r"\btests?\b|pytest|unit test|test suite", lowered)),
+        "hasArchitecture": bool(_re.search(r"architecture|tree-sitter|ast|graph|pipeline|incremental", lowered)),
+    })
+    return signals
 
 
 def _is_low_quality_content(text: str) -> bool:
@@ -894,7 +1259,48 @@ async def _run_source(
                 try:
                     normalized = normalize_candidate(raw_candidate)
                     markdown = ""
-                    if await _candidate_exists(pool, normalized.canonical_url):
+                    if raw_candidate.repo_snapshot is not None:
+                        from ai_engine.radar.tracked_repo_manager import upsert_repo_snapshot
+
+                        await upsert_repo_snapshot(pool, raw_candidate.repo_snapshot)
+                    if raw_candidate.repo_activity is not None:
+                        from ai_engine.radar.tracked_repo_manager import upsert_repo_activity
+
+                        await upsert_repo_activity(pool, raw_candidate.repo_activity)
+                    existing = await _existing_candidate(pool, normalized.canonical_url)
+                    if existing is not None:
+                        existing_id = str(existing["id"])
+                        if _needs_content_retry(existing):
+                            await _retry_existing_summary_content(
+                                pool,
+                                summary_id=existing_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                source=source,
+                                run_id=run_id,
+                                document_fetcher=document_fetcher,
+                                generate_brief=generate_brief,
+                                adapter=adapter,
+                                timeout_seconds=generation_timeout_seconds,
+                            )
+                        is_github_repo = (
+                            _classify_original_kind(source.source_type, normalized.url)
+                            == "github_repo"
+                        )
+                        if is_github_repo:
+                            await _refresh_existing_github_summary(
+                                pool,
+                                summary_id=existing_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                generate_brief=generate_brief,
+                                adapter=adapter,
+                                run_id=run_id,
+                                source_id=source.id,
+                                source_type=source.source_type,
+                                timeout_seconds=generation_timeout_seconds,
+                                distilled_scorer=distilled_scorer,
+                            )
                         total_skipped += 1
                         skipped_existing += 1
                         return
@@ -903,11 +1309,26 @@ async def _run_source(
                     score = score_candidate(normalized, source_type=source.source_type)
                     filter_result = filter_candidate(normalized, score, source.source_type)
                     if not filter_result.keep:
+                        await _record_sync_diagnostic(
+                            pool,
+                            source=source,
+                            run_id=run_id,
+                            candidate=raw_candidate,
+                            canonical_url=normalized.canonical_url,
+                            kind="filtered",
+                            reason_code="RULE_NOISE",
+                            reason_message=filter_result.reason,
+                            body=normalized.snippet,
+                        )
                         total_skipped += 1
                         skipped_rule_noise += 1
                         return
 
                     repo_activity = raw_candidate.repo_activity
+                    if repo_activity is not None:
+                        from ai_engine.radar.tracked_repo_manager import upsert_repo_activity
+
+                        await upsert_repo_activity(pool, repo_activity)
                     if repo_activity is not None:
                         from ai_engine.radar.github_tracked import format_repo_activity
 
@@ -932,6 +1353,17 @@ async def _run_source(
                             host_unavailable = document_host in unavailable_hosts
                         if host_unavailable:
                             total_skipped += 1
+                            await _record_sync_diagnostic(
+                                pool,
+                                source=source,
+                                run_id=run_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                kind="filtered",
+                                reason_code="HOST_CIRCUIT_OPEN",
+                                reason_message="同一主机前序抓取失败，后续候选跳过重试",
+                                body=normalized.snippet,
+                            )
                             logger.info(
                                 "ai-engine.radar.host_circuit_open",
                                 extra={
@@ -942,8 +1374,10 @@ async def _run_source(
                             )
                             return
                         try:
-                            fetched = await _with_transport_retries(
-                                lambda: document_fetcher(raw_candidate.url),
+                            fetched, markdown = await _fetch_document_with_content_retries(
+                                document_fetcher,
+                                url=raw_candidate.url,
+                                source_type=source.source_type,
                                 run_id=run_id,
                                 source_id=source.id,
                                 domain=document_host,
@@ -969,11 +1403,6 @@ async def _run_source(
                                     async with unavailable_hosts_lock:
                                         unavailable_hosts.add(document_host)
                                 raise
-                        if not markdown:
-                            raw_html = fetched.content.decode("utf-8", errors="replace")
-                            markdown = _extract_article_content(
-                                raw_html, raw_candidate.url, source.source_type
-                            )
                     raw_content = markdown or normalized.snippet
                     # Tracked-repo digests are structured API data: always run
                     # the per-repo LLM summary over the combined activity rather
@@ -996,7 +1425,7 @@ async def _run_source(
                         # ``_insert_candidate`` falls through to ``markdown``
                         # (not the snippet) when building the summary body.
                         snippet_clean = normalized.snippet.strip()
-                        if snippet_clean and not any(
+                        if len(snippet_clean) >= 200 and not any(
                             m in snippet_clean.lower() for m in _LOW_QUALITY_MARKERS
                         ):
                             logger.info(
@@ -1008,12 +1437,12 @@ async def _run_source(
                                     "url": normalized.url[:2048],
                                 },
                             )
+                            # A sufficiently long source snippet is an explicit
+                            # fallback, so it can still go through brief + score.
+                            markdown = snippet_clean
+                            raw_content = snippet_clean
                             brief_context = snippet_clean
-                            # Keep the raw scraped text as the ``interpretation``
-                            # field so Admin can still see what the page returned
-                            # (avoiding the empty-string default that would
-                            # otherwise replace the row's body with the snippet).
-                            interpretation = markdown or snippet_clean
+                            low_quality = False
                         else:
                             logger.info(
                                 "ai-engine.radar.low_quality_skip",
@@ -1023,6 +1452,18 @@ async def _run_source(
                                     "title": normalized.title[:200],
                                     "url": normalized.url[:2048],
                                 },
+                            )
+                            await _record_sync_diagnostic(
+                                pool,
+                                source=source,
+                                run_id=run_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                kind="filtered",
+                                reason_code="LOW_QUALITY",
+                                reason_message="抓取内容不足以完成评分或解读",
+                                body=markdown or normalized.snippet,
+                                markdown=markdown,
                             )
                             total_skipped += 1
                             return
@@ -1054,12 +1495,26 @@ async def _run_source(
                             if brief.status != AI_JOB_STATUS["SUCCEEDED"] or not brief.output_text:
                                 raise RuntimeError(f"brief generation ended in {brief.status}")
                             interpretation = brief.output_text.strip()
+                            if len(interpretation) < MIN_BRIEF_OUTPUT_CHARS:
+                                logger.warning(
+                                    "ai-engine.radar.brief_output_short",
+                                    extra={
+                                        "request_id": run_id,
+                                        "source_id": source.id,
+                                        "title": normalized.title[:200],
+                                        "output_length": len(interpretation),
+                                        "content_length": len(raw_content),
+                                    },
+                                )
+                                # A terse model answer is not a useful summary;
+                                # let the captured article become the visible body.
+                                interpretation = ""
                         except Exception as brief_exc:
                             if not _can_use_snippet_fallback(source, raw_candidate):
                                 raise
                             fallback_count += 1
                             brief = None
-                            interpretation = normalized.snippet.strip()[:2000]
+                            interpretation = ""
                             logger.info(
                                 "ai-engine.radar.snippet_brief_fallback",
                                 extra={
@@ -1083,6 +1538,11 @@ async def _run_source(
                                 source_type=source.source_type,
                                 url=normalized.url,
                                 published_at=normalized.published_at,
+                                structured_signals=(
+                                    _github_repo_signals(raw_candidate, raw_content)
+                                    if source.source_type.startswith("github")
+                                    else None
+                                ),
                             )
                         else:
                             from ai_engine.radar.distilled_scorer import default_score
@@ -1091,12 +1551,25 @@ async def _run_source(
                             fallback_count += 1
                         if monitor is not None:
                             monitor.record(distilled_result)
+                        if distilled_result.is_default:
+                            await _record_sync_diagnostic(
+                                pool,
+                                source=source,
+                                run_id=run_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                kind="filtered",
+                                reason_code="PENDING_SCORE",
+                                reason_message="评分未完成，已保留在数据库等待治理",
+                                body=_best_content_body(
+                                    interpretation, markdown, normalized.snippet
+                                ),
+                                markdown=markdown,
+                            )
                     extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
-                    # Distilled v2 is the sole quality gate. Skip `tier=noise`
-                    # rows from entering the DB entirely (Day 4 change). A
-                    # low-quality fallback never has a real LLM verdict, so it
-                    # stays in the queue for human review instead of being
-                    # auto-skipped as noise.
+                    # Persist every scored result, including tier=noise. The
+                    # public radar/search surfaces apply the quality gate;
+                    # Admin governance keeps the diagnostic for review.
                     if (
                         distilled_result is not None
                         and brief is not None
@@ -1111,9 +1584,21 @@ async def _run_source(
                                 "url": normalized.url[:2048],
                             },
                         )
-                        total_skipped += 1
-                        skipped_distilled_noise += 1
-                        return
+                        await _record_sync_diagnostic(
+                            pool,
+                            source=source,
+                            run_id=run_id,
+                            candidate=raw_candidate,
+                            canonical_url=normalized.canonical_url,
+                            kind="filtered",
+                            reason_code="DISTILLED_NOISE",
+                            reason_message=getattr(distilled_result, "weak_point", None),
+                            distilled=distilled_result,
+                            body=_best_content_body(
+                                interpretation, markdown, normalized.snippet
+                            ),
+                            markdown=markdown,
+                        )
 
                     inserted = await _insert_candidate(
                         pool,
@@ -1169,6 +1654,23 @@ async def _run_source(
                             "error_code": error_code,
                             "error_type": type(exc).__name__,
                         },
+                    )
+                    try:
+                        diagnostic_url = normalize_candidate(raw_candidate).canonical_url
+                    except Exception:
+                        diagnostic_url = raw_candidate.url
+                    await _record_sync_diagnostic(
+                        pool,
+                        source=source,
+                        run_id=run_id,
+                        candidate=raw_candidate,
+                        canonical_url=diagnostic_url,
+                        kind="failed",
+                        reason_code=error_code,
+                        reason_message=str(exc)[:500],
+                        error_type=type(exc).__name__,
+                        error_domain=error_domain,
+                        body=raw_candidate.snippet,
                     )
 
         await asyncio.gather(*(_process_candidate(candidate) for candidate in candidates))
@@ -1468,8 +1970,7 @@ async def retry_radar_run(
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                'SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s '
-                "AND \"status\" IN ('partial', 'failed')",
+                'SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s ',
                 (run_id,),
             )
         ).fetchone()

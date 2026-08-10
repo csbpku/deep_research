@@ -5,6 +5,18 @@ import type { Components } from 'react-markdown';
 
 import { cn } from '@/lib/utils';
 
+const SAFE_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+
+function safeMarkdownUrl(value: string): string {
+  try {
+    const parsed = new URL(value, 'https://markdown.invalid');
+    if (SAFE_URL_PROTOCOLS.has(parsed.protocol)) return value;
+  } catch {
+    // Invalid URLs are omitted by react-markdown.
+  }
+  return '';
+}
+
 /**
  * Source extraction frequently returns hard-wrapped plain text rather than
  * authored Markdown (especially PDF/arXiv). ReactMarkdown cannot infer
@@ -181,7 +193,12 @@ export default function MarkdownContent({
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        urlTransform={safeMarkdownUrl}
+        components={components}
+      >
         {prepareContent(content)}
       </ReactMarkdown>
     </div>

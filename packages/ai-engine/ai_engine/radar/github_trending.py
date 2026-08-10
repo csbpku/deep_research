@@ -220,6 +220,12 @@ async def fetch_github_trending(
                 tags=("github", "trending", parsed["language"].lower() or "unknown"),
                 source_quality_hint=0.85,
                 timeliness_hint=timeliness_hint,
+                repo_signals={
+                    "stars": parsed["stars_total"],
+                    "starsToday": parsed["stars_today"],
+                    "forks": parsed["forks"],
+                    "trendWindow": since,
+                },
             )
         )
 

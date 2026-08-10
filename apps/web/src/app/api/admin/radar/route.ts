@@ -46,6 +46,25 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   }
 
   const { q, sourceType, status, page, per_page: perPage } = parsed.data;
+  const sourceTypes = Array.isArray(sourceType) ? sourceType : sourceType ? [sourceType] : [];
+  const sourceFilters: Prisma.SummaryWhereInput[] = [];
+  for (const selectedSource of sourceTypes) {
+    if (selectedSource === 'shared' || selectedSource === 'web_share') {
+      sourceFilters.push({ source: 'user', shareSource: { is: { status: 'approved' } } });
+      continue;
+    }
+    const sourceTypeFilter: Prisma.StringFilter | string = selectedSource === 'github'
+      ? { startsWith: 'github' }
+      : selectedSource === 'research'
+        ? 'arxiv'
+      : selectedSource === 'articles'
+        ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
+        : selectedSource === 'community'
+          ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
+          : selectedSource;
+    sourceFilters.push({ syncRun: { source: { sourceType: sourceTypeFilter } } });
+  }
+  const effectivePerPage = perPage === 'all' ? 100 : perPage;
 
   // Admin 默认 status 过滤为 candidate；不传则全部
   const where: Prisma.SummaryWhereInput = {
@@ -57,27 +76,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           { source: 'user', shareSource: { is: { status: 'approved' } } },
         ],
       },
-      ...(sourceType
-        ? [{
-            OR: sourceType === 'shared' || sourceType === 'web_share'
-              ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
-              : [{
-                  syncRun: {
-                    source: {
-                      sourceType:
-                        sourceType === 'github'
-                          ? { startsWith: 'github' }
-                          : sourceType === 'research'
-                            ? 'arxiv'
-                          : sourceType === 'articles'
-                            ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
-                            : sourceType === 'community'
-                              ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
-                              : sourceType,
-                    },
-                  },
-                }],
-          }]
+      ...(sourceFilters.length > 0
+        ? [{ OR: sourceFilters }]
         : []),
       ...(q && q.length > 0
         ? [{
@@ -101,8 +101,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     prisma.summary.findMany({
       where,
       orderBy,
-      skip: (page - 1) * perPage,
-      take: perPage,
+      skip: (page - 1) * effectivePerPage,
+      take: effectivePerPage,
       select: {
         id: true,
         title: true,
@@ -154,7 +154,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     page,
     perPage,
     total,
-    totalPages: Math.max(1, Math.ceil(total / perPage)),
+    totalPages: Math.max(1, Math.ceil(total / effectivePerPage)),
     items: finalItems.map((it) => {
       const fb = feedbackMap.get(it.id) ?? {
         counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },

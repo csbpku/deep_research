@@ -24,6 +24,7 @@ from ai_engine.adapters.base import ResearchEngineAdapter
 from ai_engine.radar.daily_digest import generate_daily_digest
 from ai_engine.radar.enrichment_worker import (
     _generate_web_highlights as _gen_highlights,
+    run_enrichment_for_pending,
 )
 from ai_engine.radar.sync_runner import (
     _is_low_quality_content as _is_lq_highlight,
@@ -54,6 +55,17 @@ class RadarDigestRegenerateBody(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RadarEnrichmentBody(BaseModel):
+    summary_ids: list[str] = Field(
+        min_length=1,
+        max_length=50,
+        alias="summaryIds",
+    )
+    force: bool = True
+
+    model_config = {"populate_by_name": True}
+
+
 class RadarRunView(BaseModel):
     id: str
     sourceId: str
@@ -78,6 +90,10 @@ class RadarRunView(BaseModel):
     pendingScoreCount: int
     enrichedCount: int
     pendingEnrichmentCount: int
+    skippedExisting: int
+    skippedRuleNoise: int
+    skippedDistilledNoise: int
+    skippedConflict: int
 
 
 def _pool(request: Request) -> Any:
@@ -202,6 +218,39 @@ async def enqueue_highlights(
     return {"status": "queued"}
 
 
+@router.post("/enrich", status_code=status.HTTP_202_ACCEPTED)
+async def enqueue_radar_enrichment(
+    body: RadarEnrichmentBody,
+    pool: Any = Depends(_pool),
+    _token: None = Depends(_require_internal_token),
+) -> dict[str, Any]:
+    """Re-run deep-dive enrichment for candidates promoted by Admin."""
+    summary_ids = tuple(dict.fromkeys(body.summary_ids))
+
+    async def _run() -> None:
+        async with pool.connection() as conn:
+            placeholders = ",".join(["%s"] * len(summary_ids))
+            await conn.execute(
+                'UPDATE "summaries" SET "originalMeta" = NULL, "highlights" = NULL, '
+                '"updatedAt" = now() WHERE "id" IN (' + placeholders + ')',
+                summary_ids,
+            )
+            await conn.commit()
+        enriched = await run_enrichment_for_pending(
+            pool,
+            limit=len(summary_ids),
+            summary_ids=summary_ids,
+        )
+        structlog.get_logger("ai_engine.radar").info(
+            "ai-engine.radar.promoted_enrichment_done",
+            requested=len(summary_ids),
+            enriched=enriched,
+        )
+
+    asyncio.create_task(_run())
+    return {"status": "queued", "summaryIds": list(summary_ids)}
+
+
 async def _run_background(
     *,
     pool: Any,
@@ -261,6 +310,25 @@ async def _run_background(
             elapsed_ms=pipeline_result.digest_elapsed_ms,
             error=pipeline_result.digest_error,
         )
+        # Refresh only topics that already exist. New-topic proposal generation
+        # is intentionally a separate Admin-triggered chain.
+        try:
+            from ai_engine.radar.topic_aggregation_worker import run_topic_aggregation
+
+            topic_result = await run_topic_aggregation(pool)
+            log.info(
+                "ai-engine.radar.topic_refresh_done",
+                request_id=request_id,
+                **topic_result,
+            )
+        except Exception as exc:
+            # Topic refresh must not turn a successful radar sync into a failed
+            # run; the next radar run or manual refresh can retry it.
+            log.warning(
+                "ai-engine.radar.topic_refresh_failed",
+                request_id=request_id,
+                error_type=type(exc).__name__,
+            )
     except Exception as exc:
         log.error(
             "ai-engine.radar.sync_unhandled",
@@ -387,6 +455,7 @@ async def list_radar_runs(
                 's."sourceType", r."triggeredBy", r."status", r."totalFetched", '
                 'r."totalNew", r."totalSkipped", r."totalFailed", r."tokenInputTotal", '
                 'r."tokenOutputTotal", r."costUsd", r."elapsedMs", r."errorCode", r."errorMessage", '
+                'r."skippedExisting", r."skippedRuleNoise", r."skippedDistilledNoise", r."skippedConflict", '
                 'r."createdAt", r."completedAt", '
                 'COUNT(c."id")::int AS "candidateCount", '
                 'COUNT(c."id") FILTER (WHERE c."distilledScore" IS NOT NULL)::int AS "scoredCount", '
@@ -434,11 +503,15 @@ async def retry_sync(
     adapter: Annotated[ResearchEngineAdapter, Depends(_adapter)],
     _token: Annotated[None, Depends(_require_internal_token)] = None,
 ) -> RadarSyncAccepted:
+    if await _has_active_run(pool):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "RADAR_SYNC_ALREADY_RUNNING"},
+        )
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                'SELECT "id" FROM "radar_sync_runs" WHERE "id" = %s '
-                "AND \"status\" IN ('partial', 'failed')",
+                'SELECT "id" FROM "radar_sync_runs" WHERE "id" = %s ',
                 (run_id,),
             )
         ).fetchone()

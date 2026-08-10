@@ -102,6 +102,21 @@ def test_profile_weights_differ_per_audience() -> None:
     )
 
 
+def test_community_practice_cannot_be_promoted_to_collection() -> None:
+    result = compute_score(
+        _all_max_parsed(),
+        profile=ENGINEERING_PROFILE,
+        source_type="devto",
+        url="https://dev.to/example/llm-practice",
+        evidence_text="Parsing an LLM response with code and tests",
+    )
+    assert result.dimension_scores["事实可信度"] == 1
+    assert result.validation_breadth == 1
+    assert result.direct_relevance is None
+    assert result.tier == TIER_SKIM
+    assert result.ranking_score <= ENGINEERING_PROFILE.tier_skim
+
+
 def test_get_profile_legacy_tech_blog_maps_to_engineering() -> None:
     legacy = get_profile("tech_blog")
     assert legacy.id == PROFILE_ENGINEERING
@@ -247,6 +262,46 @@ def test_compute_score_all_zeros() -> None:
     assert result.has_risk_signal is False
     assert result.profile_id == PROFILE_ENGINEERING
     assert result.is_default is False
+
+
+def test_github_structured_signals_rescue_documented_repo_to_skim() -> None:
+    parsed = _all_zero_parsed(
+        信息增量=1,
+        分析深度=1,
+        可行动性=2,
+        事实可信度=1,
+        时效性=1,
+        表达质量=2,
+        综合信号=3,
+        direct_relevance=2,
+        relevance_evidence="有 MCP 集成、CLI 命令和 CI 工作流",
+    )
+    result = compute_score(
+        parsed,
+        source_type="github_trending",
+        structured_signals={
+            "stars": 29_143,
+            "starsToday": 237,
+            "readmeChars": 39_149,
+            "hasBenchmark": True,
+            "hasCiAction": True,
+            "hasTests": True,
+        },
+    )
+    assert result.total == 46.67
+    assert result.repo_signal_bonus == 12.0
+    assert result.tier == TIER_SKIM
+    assert result.must_read is False
+
+
+def test_github_popularity_without_technical_evidence_does_not_rescue() -> None:
+    result = compute_score(
+        _all_zero_parsed(),
+        source_type="github_trending",
+        structured_signals={"stars": 100_000, "starsToday": 5_000, "readmeChars": 500},
+    )
+    assert result.repo_signal_bonus == 0.0
+    assert result.tier == TIER_NOISE
 
 
 def test_compute_score_all_max_engineering() -> None:
@@ -460,15 +515,15 @@ def test_practical_paper_with_measured_agent_eval_is_deep_read() -> None:
     assert result.tier == TIER_DEEP_READ
 
 
-def test_devto_source_does_not_get_an_arbitrary_score_cap() -> None:
+def test_devto_source_is_capped_without_independent_validation() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 3
     parsed["scope_breadth"] = 2
     parsed["relevance_evidence"] = "跨 SDK 的完整评测管线和错误处理实现"
     result = compute_score(parsed, source_type="devto")
-    assert result.ranking_score == 100.0
-    assert result.tier == TIER_COLLECTION
-    assert result.must_read is True
+    assert result.ranking_score == ENGINEERING_PROFILE.tier_skim
+    assert result.tier == TIER_SKIM
+    assert result.must_read is False
 
 
 def test_v3_separates_content_quality_from_team_value() -> None:

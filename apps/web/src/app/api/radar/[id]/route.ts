@@ -45,6 +45,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       summaryDate: true,
       publishedAt: true,
       createdAt: true,
+      updatedAt: true,
       interpretation: true,
       scoreReason: true,
       scoreVersion: true,

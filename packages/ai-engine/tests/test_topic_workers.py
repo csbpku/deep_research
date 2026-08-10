@@ -12,6 +12,12 @@ from ai_engine.radar.topic_clustering import (
 )
 from ai_engine.radar.topic_proposal_worker import _clean_json, _prompt, _source_key
 from ai_engine.radar.topic_synthesis_worker import _parse_payload
+from ai_engine.radar.topic_refresh_worker import (
+    _matches_topic,
+    _source_key as _refresh_source_key,
+    _tier,
+    _topic_anchor_tags,
+)
 
 
 # ── metadata tag 过滤 ─────────────────────────────────────────────
@@ -100,6 +106,35 @@ def test_build_candidate_clusters_prefers_specific_tag() -> None:
 def test_topic_slug_canonicalizes_case_and_separators() -> None:
     assert _topic_slug(" Agent Evaluation ") == "agent-evaluation"
     assert _topic_slug("MCP / Security") == "mcp-security"
+
+
+def test_existing_topic_refresh_uses_non_metadata_anchor_tags() -> None:
+    anchors = _topic_anchor_tags(
+        [{"tags": ["mcp", "tier_deep_read", "github"]}],
+        "MCP security",
+    )
+    assert anchors == {"mcp"}
+    assert _matches_topic({"tags": ["mcp", "tier_skim"]}, anchors)
+    assert not _matches_topic({"tags": ["rag"]}, anchors)
+
+
+def test_existing_topic_refresh_falls_back_to_topic_name() -> None:
+    anchors = _topic_anchor_tags([], "MCP Security")
+    assert anchors == {"mcp", "security"}
+    assert _matches_topic({"tags": ["mcp"]}, anchors)
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [(0, "emerging"), (3, "warming"), (5, "warming"), (6, "hot")],
+)
+def test_existing_topic_refresh_tier(count: int, expected: str) -> None:
+    assert _tier(count) == expected
+
+
+def test_existing_topic_refresh_source_key_uses_publisher() -> None:
+    assert _refresh_source_key("https://github.com/acme/tool", "github_repo") == "github:acme"
+    assert _refresh_source_key("https://example.com/article", "rss") == "example.com"
 
 
 def test_topic_proposal_source_key_uses_publisher_not_content_kind() -> None:

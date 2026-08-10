@@ -81,6 +81,11 @@ async def fetch_github_topic_search(
                     content_origin="api",
                     tags=("github", "topic_search", topic),
                     source_quality_hint=0.85,
+                    repo_signals={
+                        "stars": stars if isinstance(stars, int) else None,
+                        "forks": item.get("forks_count") if isinstance(item.get("forks_count"), int) else None,
+                        "openIssues": item.get("open_issues_count") if isinstance(item.get("open_issues_count"), int) else None,
+                    },
                 ))
                 if len(candidates) >= max_results:
                     break

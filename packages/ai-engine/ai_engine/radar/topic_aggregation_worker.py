@@ -1,7 +1,7 @@
-"""P1-D: 热点主题聚合 worker。
+"""P1-D: 已有热点主题刷新 worker。
 
 设计 (ADR 0009)：
-- 周期：每日一次（建议 02:00 Asia/Shanghai）；可以手动触发。
+- 触发：雷达流水线完成后；也可以手动触发。
 - 窗口：最近 14 天 published / candidate summary。
 - 归并算法 V1：按 summary 的 tags 数组做分桶 —— 每个非 metadata tag 满足
   ≥ 3 summary + ≥ 2 distinct originalKind 时，对应该 tag 的所有 summary 归为
@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from ai_engine.radar.topic_clustering import is_metadata_tag as _is_metadata_tag
@@ -251,39 +251,20 @@ async def run_topic_aggregation(
     *,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Generate review proposals and reconcile old auto-published topics.
+    """Refresh existing topics; never create a topic or a proposal."""
+    from ai_engine.radar.topic_refresh_worker import refresh_existing_topics
 
-    Public topics are no longer written by this scheduled path. Approval is an
-    explicit Admin action handled by the web BFF.
-    """
-    now = now or datetime.now(timezone.utc)
-    window_start = now - timedelta(days=WINDOW_DAYS)
-    from ai_engine.radar.topic_proposal_worker import run_topic_proposal_generation
-
-    proposal_result = await run_topic_proposal_generation(pool, now=now)
-    active_slugs: set[str] = set()
-
-    stale = await _cleanup_stale_topic_candidates(pool, window_start)
-    retired = await _retire_obsolete_auto_topics(pool, active_slugs)
-    logger.info(
-        "ai-engine.radar.topic.aggregation_done",
-        extra={
-            "topics_created": 0,
-            "candidates_linked": 0,
-            "proposals_created": proposal_result["proposals_created"],
-            "proposal_candidates_linked": proposal_result["candidates_linked"],
-            "stale_removed": stale,
-            "topics_retired": retired,
-        },
-    )
+    result = await refresh_existing_topics(pool, now=now)
+    logger.info("ai-engine.radar.topic.refresh_done", extra=result)
     return {
         "topics_created": 0,
-        "candidates_linked": 0,
-        "proposals_created": proposal_result["proposals_created"],
-        "proposal_candidates_linked": proposal_result["candidates_linked"],
-        "proposal_failed": proposal_result["failed"],
-        "stale_removed": stale,
-        "topics_retired": retired,
+        "candidates_linked": result["candidates_linked"],
+        "proposals_created": 0,
+        "proposal_candidates_linked": 0,
+        "proposal_failed": 0,
+        "stale_removed": result["candidates_removed"],
+        "topics_retired": 0,
+        "topics_refreshed": result["topics_refreshed"],
     }
 
 

@@ -137,6 +137,17 @@ enum RadarSyncStatus {
   failed
 }
 
+enum RadarDiagnosticKind {
+  filtered
+  failed
+}
+
+enum RadarDiagnosticStatus {
+  pending
+  promoted
+  dismissed
+}
+
 // Week 5 [db]：雷达反馈类型
 enum RadarFeedbackType {
   useful
@@ -761,6 +772,7 @@ model RadarSource {
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
   syncRuns RadarSyncRun[]
+  diagnostics RadarSyncDiagnostic[]
 
   @@index([sourceType, enabled])
   @@map("radar_sources")
@@ -804,10 +816,46 @@ model RadarSyncRun {
   source     RadarSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   // 候选 summaries 回指 batch（1:many）
   candidates Summary[]   @relation("sync_to_candidates")
+  diagnostics RadarSyncDiagnostic[]
 
   @@index([sourceId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Asc)])
   @@map("radar_sync_runs")
+}
+
+// 16.1 radar_sync_diagnostics — 被过滤/失败候选的逐条审计记录
+model RadarSyncDiagnostic {
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId             String                 @db.Uuid
+  sourceId          String                 @db.Uuid
+  kind              RadarDiagnosticKind
+  status            RadarDiagnosticStatus  @default(pending)
+  title             String                 @db.VarChar(300)
+  url               String                 @db.VarChar(2048)
+  canonicalUrl      String                 @db.VarChar(2048)
+  body              String?                @db.Text
+  originalMarkdown  String?                @db.Text
+  originalKind      String?                @db.VarChar(24)
+  contentOrigin     String?                @db.VarChar(16)
+  publishedAt       DateTime?              @db.Timestamptz(3)
+  tags              String[]               @default([])
+  reasonCode        String                 @db.VarChar(64)
+  reasonMessage     String?                @db.VarChar(500)
+  errorType         String?                @db.VarChar(128)
+  errorDomain       String?                @db.VarChar(255)
+  distilledScore    Json?                  @db.JsonB
+  distilledTier     String?                @db.VarChar(16)
+  promotedSummaryId String?                @db.Uuid
+  createdAt         DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime               @updatedAt @db.Timestamptz(3)
+
+  run    RadarSyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  source RadarSource  @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  @@index([kind, status, createdAt(sort: Desc)])
+  @@index([sourceId, createdAt(sort: Desc)])
+  @@index([runId, kind])
+  @@map("radar_sync_diagnostics")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1191,6 +1239,16 @@ model RadarTrackedRepo {
   lastSignalAt   DateTime?              @db.Timestamptz(3)
   // 最近一次有 GitHub 活动（issues/PRs/releases）
   lastActivityAt DateTime?              @db.Timestamptz(3)
+  // GitHub repository snapshot; refreshed whenever the repo is observed.
+  description   String?                 @db.Text
+  stars         Int?
+  forks         Int?
+  openIssues    Int?
+  defaultBranch String?                 @db.VarChar(200)
+  pushedAt      DateTime?                @db.Timestamptz(3)
+  githubUpdatedAt DateTime?              @db.Timestamptz(3)
+  snapshotFetchedAt DateTime?            @db.Timestamptz(3)
+  snapshotSha256 String?                 @db.Char(64)
   // 首次发现时间
   firstSeenAt    DateTime               @default(now()) @db.Timestamptz(3)
   createdAt      DateTime               @default(now()) @db.Timestamptz(3)
@@ -1199,4 +1257,33 @@ model RadarTrackedRepo {
   @@index([status, signalCount7d(sort: Desc)])
   @@index([status, lastActivityAt(sort: Desc)])
   @@map("radar_tracked_repos")
+}
+
+model RadarGithubActivity {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerRepo        String   @db.VarChar(200)
+  kind             String   @db.VarChar(16) // issue | pr | release
+  number           String   @db.VarChar(100)
+  title            String   @db.VarChar(500)
+  url              String   @db.VarChar(2048)
+  state            String?  @db.VarChar(32)
+  author           String?  @db.VarChar(200)
+  updatedAtGithub  DateTime? @db.Timestamptz(3)
+  firstSeenAt      DateTime @default(now()) @db.Timestamptz(3)
+  lastSeenAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([ownerRepo, kind, number])
+  @@index([ownerRepo, updatedAtGithub(sort: Desc)])
+  @@map("radar_github_activities")
+}
+
+model RadarGithubSignal {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerRepo  String   @db.VarChar(200)
+  runId      String   @db.Uuid
+  observedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([ownerRepo, runId])
+  @@index([ownerRepo, observedAt(sort: Desc)])
+  @@map("radar_github_signals")
 }

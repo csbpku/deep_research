@@ -37,8 +37,28 @@ class RadarCandidate:
     tags: tuple[str, ...] = field(default_factory=tuple)
     source_quality_hint: float | None = None
     timeliness_hint: float | None = None
+    # Structured repository evidence used to calibrate GitHub scoring.
+    # Keep this JSON-like so source fetchers can add fields without a schema
+    # migration; the persisted score contains the final audited snapshot.
+    repo_signals: dict[str, Any] = field(default_factory=dict)
     repo_activity: "RepoActivity | None" = None
+    repo_snapshot: "RepoSnapshot | None" = None
     source_diagnostic: tuple[str, str] | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class RepoSnapshot:
+    """Mutable metadata for a GitHub repository."""
+
+    owner_repo: str
+    description: str | None = None
+    stars: int | None = None
+    forks: int | None = None
+    open_issues: int | None = None
+    default_branch: str | None = None
+    pushed_at: str | None = None
+    github_updated_at: str | None = None
+    sha256: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

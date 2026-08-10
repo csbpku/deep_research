@@ -154,6 +154,10 @@ export function buildSearchSql(args: BuildSearchArgs): {
         AND s."syncRunId" IS NOT NULL
         AND s.status::text <> 'archived'
         AND (
+          s."distilledTier" IN ('collection', 'deep_read', 'skim')
+          OR s.tags @> ARRAY['admin_promoted']::text[]
+        )
+        AND (
           (
             setweight(to_tsvector('simple', coalesce(s.title, '')), 'A')
               || setweight(to_tsvector('simple', coalesce(s.interpretation, '')), 'B')

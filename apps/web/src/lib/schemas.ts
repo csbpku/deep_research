@@ -121,15 +121,25 @@ export const RADAR_STATUS_VALUES = [
 ] as const;
 
 /** /api/radar 列表查询参数 */
+const RADAR_QUALITY_VALUES = ['valuable', 'collection', 'deep_read', 'skim', 'noise', 'pending', 'all'] as const;
 export const RadarListQuery = z.object({
   q: z.string().trim().max(200).optional(),
-  sourceType: z.string().trim().min(1).max(32).optional(),
+  sourceType: z.union([
+    z.string().trim().min(1).max(32),
+    z.array(z.string().trim().min(1).max(32)).min(1),
+  ]).optional(),
   status: z.enum(RADAR_STATUS_VALUES).optional(),
-  quality: z.enum(['relevant', 'all']).default('relevant'),
-  /** 内容时间下限；优先 publishedAt，没有时回退到 createdAt。 */
+  quality: z.union([
+    z.enum(RADAR_QUALITY_VALUES),
+    z.array(z.enum(RADAR_QUALITY_VALUES)).min(1),
+  ]).default(['collection', 'deep_read', 'skim']),
+  /** 入库时间下限；用于技术雷达的“今天/近 N 天”筛选。 */
   dateFrom: z.coerce.date().optional(),
   page: z.coerce.number().int().min(1).default(1),
-  per_page: z.coerce.number().int().min(1).max(50).default(20),
+  per_page: z.union([
+    z.coerce.number().int().min(1).max(100),
+    z.literal('all'),
+  ]).default(20),
   /** 首页等只展示少量卡片的调用可以跳过全量统计和反馈聚合。 */
   includeTotal: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   includeFeedback: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),

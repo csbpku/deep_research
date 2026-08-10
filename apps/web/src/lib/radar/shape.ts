@@ -92,6 +92,7 @@ export function shapeCandidate(input: {
     summaryDate: Date;
     publishedAt: Date | null;
     createdAt: Date;
+    updatedAt?: Date;
     interpretation: string | null;
     scoreReason: string | null;
     scoreVersion: string | null;
@@ -146,7 +147,7 @@ export function shapeCandidate(input: {
     tags: s.tags,
     status: s.status,
     publishedAt: s.publishedAt ? s.publishedAt.toISOString() : null,
-    crawledAt: s.createdAt.toISOString(),
+    crawledAt: (s.updatedAt ?? s.createdAt).toISOString(),
     interpretation: s.interpretation,
     scoreReason: s.scoreReason,
     scoreVersion: s.scoreVersion,

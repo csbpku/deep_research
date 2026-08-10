@@ -11,7 +11,7 @@ import pytest
 
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
-from ai_engine.radar.models import RadarCandidate, RadarSource, RepoActivity, RepoActivityItem
+from ai_engine.radar.models import RadarCandidate, RadarSource, RepoActivity, RepoActivityItem, RepoSnapshot
 from ai_engine.radar.source_manager import fetch_source as dispatch_source
 from ai_engine.radar.sync_runner import (
     _NAV_NOISE_PATTERNS,
@@ -55,7 +55,7 @@ class _Connection:
             return _Cursor(rows=self.sources)
         if 'SELECT "id", "sourceType" FROM "radar_sources"' in sql:
             return _Cursor(rows=self.sources)
-        if 'SELECT "id" FROM "summaries"' in sql:
+        if 'FROM "summaries"' in sql and '"canonicalUrl"' in sql and 'SELECT' in sql:
             canonical = str(params[0])
             return _Cursor({"id": "existing"} if canonical in self.canonical_urls else None)
         if 'INSERT INTO "summaries"' in sql:
@@ -210,6 +210,46 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "仅用于排序，不自动发布" in params[15]
 
 
+async def test_existing_github_repo_refreshes_snapshot_before_deduplication() -> None:
+    pool = _Pool([_source("github-source", "github")])
+    snapshot = RepoSnapshot(
+        owner_repo="acme/agent",
+        description="Updated description",
+        stars=123,
+        forks=45,
+        open_issues=6,
+        default_branch="main",
+        pushed_at="2026-08-07T01:00:00Z",
+        github_updated_at="2026-08-07T02:00:00Z",
+        sha256="a" * 64,
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [RadarCandidate(
+            title="acme/agent",
+            url="https://github.com/acme/agent",
+            snippet="Updated description",
+            repo_snapshot=snapshot,
+        )]
+
+    pool.connection_value.canonical_urls.add("https://github.com/acme/agent")
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"github": fetcher},
+        document_fetcher=_safe_fetch,
+    )
+
+    assert result.runs[0].skipped_existing == 1
+    update = next(
+        item for item in pool.connection_value.executions
+        if 'UPDATE "radar_tracked_repos" SET' in item[0]
+    )
+    assert update[1][0] == "Updated description"
+    assert update[1][1:4] == (123, 45, 6)
+
+
 async def test_sync_duplicate_canonical_url_rerun_does_not_insert() -> None:
     pool = _Pool([_source()])
 
@@ -232,7 +272,7 @@ async def test_sync_duplicate_canonical_url_rerun_does_not_insert() -> None:
     assert second.runs[0].skipped_conflict == 0
 
 
-async def test_sync_tracks_default_score_as_fallback_and_skips_noise() -> None:
+async def test_sync_tracks_default_score_as_fallback_and_keeps_pending_row() -> None:
     from ai_engine.radar.distilled_scorer import default_score
 
     pool = _Pool([_source()])
@@ -253,8 +293,13 @@ async def test_sync_tracks_default_score_as_fallback_and_skips_noise() -> None:
     )
     run = result.runs[0]
     assert run.fallback_count == 1
-    assert run.skipped_distilled_noise == 1
-    assert run.total_new == 0
+    assert run.skipped_distilled_noise == 0
+    assert run.total_new == 1
+    assert any(
+        'INSERT INTO "radar_sync_diagnostics"' in sql
+        and params[13] == "PENDING_SCORE"
+        for sql, params in pool.connection_value.executions
+    )
 
 
 async def test_run_radar_sync_limits_source_concurrency() -> None:
@@ -738,7 +783,10 @@ def test_is_low_quality_content_detects_short_and_cloudflare_text() -> None:
     )
 
 
-async def test_short_content_fallback_skips_llm_and_keeps_raw_text() -> None:
+async def test_short_content_is_sent_to_governance_without_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ai_engine.radar.sync_runner as sync_runner
+
+    monkeypatch.setattr(sync_runner, "RADAR_CONTENT_RETRIES", 0)
     pool = _Pool([_source()])
 
     async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
@@ -773,16 +821,64 @@ async def test_short_content_fallback_skips_llm_and_keeps_raw_text() -> None:
     )
     run = result.runs[0]
     assert run.fallback_count == 1
-    assert run.total_new == 1
+    assert run.total_new == 0
     assert run.token_input_total == 0
     assert run.cost_usd == 0.0
     assert brief_called is False
-    insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
-    sql, params = insert
-    assert params[21] == "Too short to summarize."
+    assert any(
+        'INSERT INTO "radar_sync_diagnostics"' in sql
+        and params[13] == "LOW_QUALITY"
+        for sql, params in pool.connection_value.executions
+    )
 
 
-async def test_cloudflare_content_fallback_keeps_raw_text() -> None:
+async def test_content_retry_recovers_from_empty_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ai_engine.radar.sync_runner as sync_runner
+
+    monkeypatch.setattr(sync_runner, "RADAR_CONTENT_RETRY_BACKOFF_SECONDS", 0)
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate()]
+
+    calls = 0
+    good_body = "A recovered article with enough technical detail to summarize. " * 8
+
+    async def flaky_doc(url: str, **kwargs: Any) -> FetchedDocument:
+        nonlocal calls
+        calls += 1
+        body = "<p>Too short.</p>" if calls == 1 else f"<p>{good_body}</p>"
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=body.encode(),
+            content_type="text/html",
+            elapsed_ms=5,
+            redirect_count=0,
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=flaky_doc,
+    )
+    assert calls == 2
+    assert result.runs[0].total_new == 1
+    assert not any(
+        'INSERT INTO "radar_sync_diagnostics"' in sql
+        and params[13] == "LOW_QUALITY"
+        for sql, params in pool.connection_value.executions
+    )
+
+
+async def test_cloudflare_content_is_sent_to_governance(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ai_engine.radar.sync_runner as sync_runner
+
+    monkeypatch.setattr(sync_runner, "RADAR_CONTENT_RETRIES", 0)
     pool = _Pool([_source()])
 
     async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
@@ -814,10 +910,12 @@ async def test_cloudflare_content_fallback_keeps_raw_text() -> None:
     )
     run = result.runs[0]
     assert run.fallback_count == 1
-    assert run.total_new == 1
-    insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
-    _, params = insert
-    assert params[21] == body.strip()[:2000]
+    assert run.total_new == 0
+    assert any(
+        'INSERT INTO "radar_sync_diagnostics"' in sql
+        and params[13] == "LOW_QUALITY"
+        for sql, params in pool.connection_value.executions
+    )
 
 
 def test_extract_article_content_preserves_structure_with_trafilatura() -> None:

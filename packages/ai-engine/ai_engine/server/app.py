@@ -114,7 +114,7 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     import_worker_task: asyncio.Task[None] | None = None
     radar_daily_task: asyncio.Task[None] | None = None
     submission_task: asyncio.Task[None] | None = None
-    topic_agg_task: asyncio.Task[None] | None = None
+    topic_proposal_task: asyncio.Task[None] | None = None
     topic_synth_task: asyncio.Task[None] | None = None
     # asyncio tasks can start immediately, so publish the adapter before any
     # worker reads app.state.adapter.
@@ -150,12 +150,14 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
                 _submission_worker_loop(app_instance),
                 name="radar-submission-worker",
             )
-        # P1-D: topic aggregation (cron @ 02:00 Asia/Shanghai) + topic synthesis (every 5 min)
-        if os.environ.get("TOPIC_AGGREGATION_ENABLED", "1") == "1":
-            topic_agg_task = asyncio.create_task(
-                _topic_aggregation_loop(app_instance),
-                name="radar-topic-aggregator",
+        # P1-D: existing topics refresh after the radar pipeline; proposal
+        # generation is a separate daily cron for Admin review only.
+        if os.environ.get("TOPIC_PROPOSAL_ENABLED", "1") == "1":
+            topic_proposal_task = asyncio.create_task(
+                _topic_proposal_loop(app_instance),
+                name="radar-topic-proposals",
             )
+        # Synthesis remains a separate five-minute worker.
         if os.environ.get("TOPIC_SYNTHESIS_ENABLED", "1") == "1":
             topic_synth_task = asyncio.create_task(
                 _topic_synthesis_loop(app_instance),
@@ -184,10 +186,10 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             submission_task.cancel()
             with suppress(asyncio.CancelledError):
                 await submission_task
-        if topic_agg_task is not None:
-            topic_agg_task.cancel()
+        if topic_proposal_task is not None:
+            topic_proposal_task.cancel()
             with suppress(asyncio.CancelledError):
-                await topic_agg_task
+                await topic_proposal_task
         if topic_synth_task is not None:
             topic_synth_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -382,41 +384,6 @@ async def _submission_worker_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(poll_seconds)
 
 
-def _seconds_until_next_topic_window(schedule: str, tz: ZoneInfo) -> float:
-    """Topic 聚合窗口：默认 02:00 Asia/Shanghai。复用 radar daily 风格。"""
-    return _seconds_until_next_radar_window(schedule, tz)
-
-
-async def _topic_aggregation_loop(app_instance: FastAPI) -> None:
-    """P1-D: 每日一次主题聚合（默认 02:00 Asia/Shanghai）。"""
-    from ai_engine.radar.topic_aggregation_worker import run_topic_aggregation
-
-    log = structlog.get_logger("ai_engine.radar.topic_agg")
-    schedule = os.environ.get("TOPIC_AGGREGATION_CRON_TIME", "02:00")
-    tz = ZoneInfo("Asia/Shanghai")
-    while True:
-        try:
-            await asyncio.sleep(_seconds_until_next_topic_window(schedule, tz))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "ai-engine.radar.topic_agg.schedule_failed",
-                error_type=type(exc).__name__,
-            )
-            await asyncio.sleep(3600.0)
-            continue
-        try:
-            await run_topic_aggregation(app_instance.state.db_pool)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "ai-engine.radar.topic_agg.run_failed",
-                error_type=type(exc).__name__,
-            )
-
-
 async def _topic_synthesis_loop(app_instance: FastAPI) -> None:
     """P1-D: 每 5 分钟跑一次主题 AI 综述（默认）。"""
     from ai_engine.radar.topic_synthesis_worker import run_topic_synthesis
@@ -435,6 +402,46 @@ async def _topic_synthesis_loop(app_instance: FastAPI) -> None:
                 error_type=type(exc).__name__,
             )
             await asyncio.sleep(interval)
+
+
+async def _topic_proposal_loop(app_instance: FastAPI) -> None:
+    """P1-D: daily proposal generation for Admin review only.
+
+    This job writes ``topic_proposals`` and ``topic_proposal_candidates``;
+    approval remains an explicit Admin action in the web BFF.
+    """
+    from ai_engine.radar.topic_proposal_worker import run_topic_proposal_generation
+
+    log = structlog.get_logger("ai_engine.radar.topic_proposals")
+    schedule = os.environ.get("TOPIC_PROPOSAL_CRON_TIME", "09:00")
+    tz = ZoneInfo("Asia/Shanghai")
+    while True:
+        try:
+            await asyncio.sleep(_seconds_until_next_radar_window(schedule, tz))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.topic_proposals.schedule_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(3600.0)
+            continue
+        try:
+            result = await run_topic_proposal_generation(
+                app_instance.state.db_pool
+            )
+            log.info(
+                "ai-engine.radar.topic_proposals.done",
+                **result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.topic_proposals.run_failed",
+                error_type=type(exc).__name__,
+            )
 
 
 app = FastAPI(

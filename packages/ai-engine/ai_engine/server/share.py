@@ -152,17 +152,34 @@ def _strip_dangerous_html(text: str) -> str:
 
 
 def html_to_markdown(html: str) -> str:
-    """Convert HTML to a Markdown approximation (heading/paragraph/links).
+    """Convert fetched HTML to safe, structured Markdown.
 
-    The point is *not* fidelity — just safe-to-render text for the
-    admin reviewer and the eventual public page. We strip tags not in
-    the safe whitelist; everything else becomes plain text or basic
-    Markdown.
+    Trafilatura is the primary converter because it preserves article
+    structure (headings, paragraphs, links, lists and tables). The
+    lightweight text fallback remains deliberately conservative for
+    malformed pages or when extraction returns no usable content.
     """
     safe = _strip_dangerous_html(html)
-    # W9 code review 修订：此前实体解码在标签剥离之后，
-    # 导致 &lt;script&gt;…&lt;/script&gt; 被 decode 成活体标签残片。
-    # 对调顺序：先解码，再让 catch-all 正则抹掉所有尖括号标签。
+    try:
+        import trafilatura
+
+        extracted = trafilatura.extract(
+            safe,
+            output_format="markdown",
+            include_comments=False,
+            include_tables=True,
+            include_links=True,
+            favor_precision=True,
+        )
+        if extracted and len(extracted.strip()) >= 40:
+            return extracted.strip()
+    except Exception:
+        # Conversion is best-effort. The caller can still review a
+        # conservative text representation when a page is malformed.
+        pass
+
+    # Decode entities before removing tags. This prevents encoded HTML
+    # from becoming active markup while keeping the fallback deterministic.
     text = (
         safe.replace("&nbsp;", " ")
         .replace("&amp;", "&")
@@ -171,11 +188,8 @@ def html_to_markdown(html: str) -> str:
         .replace("&quot;", '"')
         .replace("&#39;", "'")
     )
-    # Strip remaining tags; keep text + newlines.
     text = re.sub(r"<[^>]+>", " ", text)
-    # Collapse runs of whitespace.
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", text).strip()
 
 
 # ─────────────── Result types ────────────────

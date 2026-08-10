@@ -110,7 +110,7 @@ export function RecentActivityStrip({
   const radarQ = useQuery<RadarListResponse>({
     queryKey: ['home', 'radar'],
     queryFn: async () => {
-      const r = await fetch('/api/radar?quality=relevant&per_page=3', { cache: 'no-store' });
+      const r = await fetch('/api/radar?quality=valuable&per_page=3', { cache: 'no-store' });
       if (!r.ok) return { items: [], total: 0 };
       return r.json();
     },

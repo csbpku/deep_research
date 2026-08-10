@@ -33,9 +33,17 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const url = new URL(req.url);
   const parsed = RadarListQuery.safeParse({
     q: url.searchParams.get('q') ?? undefined,
-    sourceType: url.searchParams.get('sourceType') ?? undefined,
+    sourceType: (() => {
+      const values = url.searchParams.getAll('sourceType');
+      return values.length > 1 ? values : values[0] ?? undefined;
+    })(),
     status: url.searchParams.get('status') ?? undefined,
-    quality: url.searchParams.get('quality') ?? undefined,
+    quality: (() => {
+      const values = url.searchParams.getAll('quality');
+      if (values.length > 1) return values;
+      const value = values[0];
+      return value?.includes(',') ? value.split(',') : value;
+    })(),
     dateFrom: url.searchParams.get('dateFrom') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     per_page: url.searchParams.get('per_page') ?? undefined,
@@ -62,6 +70,22 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     includeTotal,
     includeFeedback,
   } = parsed.data;
+  const qualityValues = Array.isArray(quality) ? quality : [quality];
+  const sourceTypes = Array.isArray(sourceType) ? sourceType : sourceType ? [sourceType] : [];
+  const qualityWhere = qualityValues.includes('all')
+    ? null
+    : {
+        OR: [
+          ...(qualityValues.includes('valuable')
+            ? [{ distilledTier: { in: ['collection', 'deep_read'] } }]
+            : []),
+          ...(qualityValues.some((value) => ['collection', 'deep_read', 'skim', 'noise'].includes(value))
+            ? [{ distilledTier: { in: qualityValues.filter((value): value is 'collection' | 'deep_read' | 'skim' | 'noise' => ['collection', 'deep_read', 'skim', 'noise'].includes(value)) } }]
+            : []),
+          ...(qualityValues.includes('pending') ? [{ distilledTier: null }] : []),
+          { tags: { has: 'admin_promoted' } },
+        ],
+      } satisfies Prisma.SummaryWhereInput;
   if ((status === SUMMARY_STATUS.REJECTED || status === SUMMARY_STATUS.ARCHIVED) && u?.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
@@ -83,44 +107,37 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           { source: 'user', shareSource: { is: { status: 'approved' } } },
         ],
       },
-      ...(sourceType
+      ...(sourceTypes.length > 0
         ? [{
-            OR: [
-              {
-                syncRun: {
-                  source: {
-                    sourceType:
-                      sourceType === 'github'
-                        ? { startsWith: 'github' }
-                        : sourceType === 'research'
-                          ? 'arxiv'
-                        : sourceType === 'articles'
-                          ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
-                          : sourceType === 'community'
-                            ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
-                            : sourceType === 'shared'
-                              ? '__user_share__'
-                            : sourceType,
-                  },
-                },
-              },
-              ...(sourceType === 'shared'
-                ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
-                : sourceType === 'articles' || sourceType === 'web_share'
-                ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
-                : []),
-            ],
+            OR: sourceTypes.flatMap((selectedSource) => {
+              const sourceTypeFilter = selectedSource === 'github'
+                ? { startsWith: 'github' }
+                : selectedSource === 'research'
+                  ? 'arxiv'
+                : selectedSource === 'articles'
+                  ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
+                  : selectedSource === 'community'
+                    ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
+                    : selectedSource === 'shared'
+                      ? '__user_share__'
+                    : selectedSource;
+              return [
+                { syncRun: { source: { sourceType: sourceTypeFilter } } },
+                ...(selectedSource === 'shared'
+                  ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+                  : selectedSource === 'articles' || selectedSource === 'web_share'
+                  ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+                  : []),
+              ];
+            }),
           }]
         : []),
-      ...(quality === 'relevant'
-        ? [{ OR: [{ distilledTier: { not: 'noise' } }, { distilledTier: null }] }]
-        : []),
+      ...(qualityWhere ? [qualityWhere] : []),
       ...(dateFrom
         ? [{
-            OR: [
-              { publishedAt: { gte: dateFrom } },
-              { publishedAt: null, createdAt: { gte: dateFrom } },
-            ],
+            // “今天/近 N 天”按入库时间筛选，和 Admin 的“今日写入”保持一致。
+            // publishedAt 是来源文章的原始发布时间，可能早于实际入库日期。
+            createdAt: { gte: dateFrom },
           }]
         : []),
       ...(q && q.length > 0
@@ -147,8 +164,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     prisma.summary.findMany({
       where,
       orderBy,
-      skip: (page - 1) * perPage,
-      take: perPage,
+      skip: perPage === 'all' ? 0 : (page - 1) * perPage,
+      ...(perPage === 'all' ? {} : { take: perPage }),
       select: {
         id: true,
         title: true,
@@ -159,6 +176,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         summaryDate: true,
         publishedAt: true,
         createdAt: true,
+        updatedAt: true,
         interpretation: true,
         scoreReason: true,
         scoreVersion: true,
@@ -212,7 +230,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     page,
     perPage,
     total,
-    totalPages: Math.max(1, Math.ceil(total / perPage)),
+    totalPages: perPage === 'all' ? 1 : Math.max(1, Math.ceil(total / perPage)),
     items: finalItems.map((it) => {
       const fb = feedbackMap.get(it.id) ?? emptyFeedback() as any;
       return shapeCandidate({

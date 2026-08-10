@@ -539,8 +539,11 @@ async def _fetch_repo_meta(
         "defaultBranch": data.get("default_branch"),
         "language": data.get("language"),
         "stars": data.get("stargazers_count"),
+        "forks": data.get("forks_count"),
+        "openIssues": data.get("open_issues_count"),
         "lastPushedAt": data.get("pushed_at"),
         "description": data.get("description"),
+        "snapshotFetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
 
@@ -1435,6 +1438,7 @@ async def run_enrichment_for_pending(
     limit: int = 50,
     source_kinds: tuple[str, ...] = DEFAULT_ENRICHMENT_KINDS,
     sync_run_ids: tuple[str, ...] | None = None,
+    summary_ids: tuple[str, ...] | None = None,
     concurrency: int | None = None,
 ) -> int:
     """Find candidates that need enrichment and process them.
@@ -1451,7 +1455,12 @@ async def run_enrichment_for_pending(
     """
     placeholders = ",".join(["%s"] * len(source_kinds))
     run_filter = ""
+    summary_filter = ""
     params: tuple[Any, ...] = (*source_kinds,)
+    if summary_ids:
+        summary_placeholders = ",".join(["%s"] * len(summary_ids))
+        summary_filter = f'AND "id" IN ({summary_placeholders}) '
+        params = (*params, *summary_ids)
     if sync_run_ids:
         run_placeholders = ",".join(["%s"] * len(sync_run_ids))
         run_filter = (
@@ -1477,6 +1486,7 @@ async def run_enrichment_for_pending(
                 'SELECT 1 FROM "share_submissions" sh '
                 'WHERE sh."publishedSummaryId" = "summaries"."id" '
                 'AND sh."status" = \'approved\')) '
+                f"{summary_filter}"
                 f"{run_filter}"
                 'ORDER BY "createdAt" DESC LIMIT %s',
                 (*params, limit),

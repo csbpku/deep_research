@@ -1,6 +1,6 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -93,6 +93,9 @@ interface RepoMeta {
 
 export default function RadarDetailPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const returnQuery = searchParams.get('from');
+  const backHref = returnQuery ? `/radar?${returnQuery}` : '/radar';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const me = useCurrentUser();
   const q = useQuery<RadarDetail>({
@@ -112,7 +115,7 @@ export default function RadarDetailPage() {
       <div className="mx-auto max-w-measure">
         <div className="flex items-center gap-2">
           <BackToSearchButton />
-          <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
+          <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
         </div>
         <p className="mt-4 text-sm text-muted-foreground">加载中…</p>
       </div>
@@ -125,7 +128,7 @@ export default function RadarDetailPage() {
       <div className="mx-auto max-w-measure">
         <div className="flex items-center gap-2">
           <BackToSearchButton />
-          <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
+          <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
         </div>
         <div className="mt-4">
           <EmptyState
@@ -146,7 +149,7 @@ export default function RadarDetailPage() {
     <div className="mx-auto max-w-5xl">
       <div className="flex items-center gap-2">
         <BackToSearchButton />
-        <Link href="/radar" className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
+        <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
       </div>
 
       <div className="mt-5 grid gap-8 lg:grid-cols-[minmax(0,760px)_240px] lg:items-start">
@@ -216,8 +219,8 @@ export default function RadarDetailPage() {
           </p>
         ) : null}
 
-        {d.originalKind === 'github_repo' && d.repoSummary ? (
-          <RadarRepoSummary summary={d.repoSummary} meta={(d.originalMeta ?? null) as RepoMeta | null} />
+        {d.originalKind === 'github_repo' && (d.repoSummary || d.originalMeta) ? (
+          <RadarRepoSummary summary={d.repoSummary ?? d.interpretation ?? ''} meta={(d.originalMeta ?? null) as RepoMeta | null} />
         ) : null}
 
         {d.originalKind === 'arxiv' ? (
@@ -237,7 +240,7 @@ export default function RadarDetailPage() {
           <RadarArticleHighlights {...d.highlights} />
         ) : null}
 
-        {d.body && d.body !== d.interpretation ? (
+        {d.body && d.body !== d.interpretation && !(d.originalKind === 'github_repo' && !d.tags.includes('repo_digest')) ? (
           <section className="my-8" aria-labelledby="radar-body-title">
             <h2 id="radar-body-title" className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">正文</h2>
             <MarkdownContent content={d.body} className="text-[15px] text-foreground" />
@@ -305,7 +308,7 @@ export default function RadarDetailPage() {
           <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">证据卡</h2>
           <dl className="grid gap-3 text-xs">
             <div><dt className="text-muted-foreground">来源</dt><dd className="mt-0.5 font-medium">{sourceLabel.full}</dd></div>
-            <div><dt className="text-muted-foreground">抓取时间</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(d.crawledAt).toISOString().slice(0, 10)}</dd></div>
+            <div><dt className="text-muted-foreground">最近同步</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(d.crawledAt).toISOString().slice(0, 10)}</dd></div>
             <div><dt className="text-muted-foreground">阅读等级</dt><dd className="mt-0.5 font-medium">{d.distilledScore ? (TIER_LABELS[d.distilledScore.tier] ?? '待评估') : '待评估'}</dd></div>
             <div><dt className="text-muted-foreground">团队价值</dt><dd className="mt-0.5 font-mono text-sm text-status-succeeded-fg">{d.distilledScore?.rankingScore ?? d.distilledScore?.effectiveTotal ?? '—'}</dd></div>
           </dl>

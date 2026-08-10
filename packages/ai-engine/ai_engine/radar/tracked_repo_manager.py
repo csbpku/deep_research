@@ -20,6 +20,55 @@ _PROMOTE_WINDOW_DAYS = 7
 _ARCHIVE_MAX_IDLE_DAYS = 30
 
 
+async def upsert_repo_snapshot(pool: Any, snapshot: Any) -> bool:
+    """Refresh mutable GitHub metadata without creating another summary."""
+    async with pool.connection() as conn:
+        row = await (await conn.execute(
+            'UPDATE "radar_tracked_repos" SET '
+            '"description" = %s, "stars" = %s, "forks" = %s, '
+            '"openIssues" = %s, "defaultBranch" = %s, "pushedAt" = %s, '
+            '"githubUpdatedAt" = %s, "snapshotFetchedAt" = now(), '
+            '"snapshotSha256" = %s, "updatedAt" = now() '
+            'WHERE "ownerRepo" = %s RETURNING "id"',
+            (
+                snapshot.description, snapshot.stars, snapshot.forks,
+                snapshot.open_issues, snapshot.default_branch,
+                snapshot.pushed_at, snapshot.github_updated_at,
+                snapshot.sha256, snapshot.owner_repo,
+            ),
+        )).fetchone()
+        return row is not None
+
+
+async def upsert_repo_activity(pool: Any, activity: Any) -> int:
+    """Persist GitHub activity objects idempotently for later aggregation."""
+    items = (*activity.issues, *activity.prs, *activity.releases)
+    if not items:
+        return 0
+    count = 0
+    async with pool.connection() as conn:
+        for item in items:
+            row = await (await conn.execute(
+                'INSERT INTO "radar_github_activities" '
+                '("id", "ownerRepo", "kind", "number", "title", "url", '
+                '"state", "author", "updatedAtGithub", "firstSeenAt", "lastSeenAt") '
+                'VALUES (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, now(), now()) '
+                'ON CONFLICT ("ownerRepo", "kind", "number") DO UPDATE SET '
+                '"title" = EXCLUDED."title", "url" = EXCLUDED."url", '
+                '"state" = EXCLUDED."state", "author" = EXCLUDED."author", '
+                '"updatedAtGithub" = EXCLUDED."updatedAtGithub", "lastSeenAt" = now() '
+                'RETURNING "id"',
+                (
+                    activity.repo.lower(), item.kind, item.number, item.title,
+                    item.url, item.state or None, item.author or None,
+                    item.updated_at or item.published_at or item.created_at or None,
+                ),
+            )).fetchone()
+            count += int(row is not None)
+        await conn.commit()
+    return count
+
+
 def _extract_owner_repo(url: str) -> str | None:
     from urllib.parse import urlsplit
     try:
@@ -34,22 +83,45 @@ def _extract_owner_repo(url: str) -> str | None:
     return None
 
 
-async def record_repo_signal(pool: Any, owner_repo: str) -> bool:
-    """Record a GitHub Trending signal. New repos start as 'archived' and
-    must accumulate _PROMOTE_MIN_SIGNALS signals before promotion."""
+async def record_repo_signal(pool: Any, owner_repo: str, run_id: str) -> bool:
+    """Record one run's Trending signal and recompute its 7-day count."""
     owner_repo = owner_repo.lower().strip()
     async with pool.connection() as conn:
         row = await (await conn.execute(
+            'INSERT INTO "radar_github_signals" ("id", "ownerRepo", "runId") '
+            'VALUES (gen_random_uuid(), %s, %s) '
+            'ON CONFLICT ("ownerRepo", "runId") DO NOTHING RETURNING "id"',
+            (owner_repo, run_id),
+        )).fetchone()
+        await conn.execute(
             'INSERT INTO "radar_tracked_repos" '
             '("ownerRepo", "status", "signalCount7d", "lastSignalAt", "firstSeenAt") '
-            "VALUES (%s, 'archived', 1, now(), now()) "
-            'ON CONFLICT ("ownerRepo") DO UPDATE SET '
-            '"signalCount7d" = "radar_tracked_repos"."signalCount7d" + 1, '
-            '"lastSignalAt" = now(), "updatedAt" = now() '
-            'RETURNING "id"',
+            "VALUES (%s, 'archived', 0, now(), now()) "
+            'ON CONFLICT ("ownerRepo") DO NOTHING',
             (owner_repo,),
-        )).fetchone()
+        )
+        if row is not None:
+            await conn.execute(
+                'UPDATE "radar_tracked_repos" SET "lastSignalAt" = now(), "updatedAt" = now() '
+                'WHERE "ownerRepo" = %s',
+                (owner_repo,),
+            )
+        await _refresh_signal_count(conn, owner_repo)
+        await conn.commit()
         return row is not None
+
+
+async def _refresh_signal_count(conn: Any, owner_repo: str | None = None) -> None:
+    where = 'WHERE "ownerRepo" = %s' if owner_repo else ''
+    params: tuple[Any, ...] = (owner_repo,) if owner_repo else ()
+    await conn.execute(
+        'UPDATE "radar_tracked_repos" r SET "signalCount7d" = ('
+        'SELECT COUNT(*) FROM "radar_github_signals" s '
+        'WHERE s."ownerRepo" = r."ownerRepo" '
+        'AND s."observedAt" >= now() - interval \'7 days\'), '
+        '"updatedAt" = now() ' + where,
+        params,
+    )
 
 
 async def record_repo_activity(pool: Any, owner_repo: str) -> bool:
@@ -114,7 +186,7 @@ async def _record_signals_from_run(pool: Any, run_id: str) -> int:
         owner_repo = _extract_owner_repo(str(r["url"]))
         if owner_repo and owner_repo not in seen:
             seen.add(owner_repo)
-            if await record_repo_signal(pool, owner_repo):
+            if await record_repo_signal(pool, owner_repo, run_id):
                 count += 1
     return count
 
@@ -166,6 +238,9 @@ async def run_tracked_repo_postprocessing(
         )
     result["activity_updated"] = await _update_activity_from_run(pool, tracked_run_id) if tracked_run_id else 0
     result["archived"] = await auto_archive_inactive(pool)
+    async with pool.connection() as conn:
+        await _refresh_signal_count(conn)
+        await conn.commit()
     result["promoted"] = await auto_promote_from_signals(pool)
     result["config_synced"] = 1 if await sync_github_tracked_source_config(pool) else 0
     return result

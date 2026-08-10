@@ -43,6 +43,8 @@ interface RadarCandidate {
 
 interface RadarCandidateCardProps {
   candidate: RadarCandidate;
+  /** 从列表进入详情时携带当前筛选和页码，详情页可准确返回。 */
+  detailHref?: string;
   /** 登录成员操作（例如从候选发起深入调研）；不传则不展示 */
   memberActions?: React.ReactNode;
   /** Admin 操作按钮组（select/dismiss/retry）；不传则不展示 */
@@ -75,6 +77,7 @@ function SourcePill({ sourceType }: { sourceType: string | null }) {
 
 export function RadarCandidateCard({
   candidate,
+  detailHref,
   memberActions,
   adminActions,
   currentUserId = null,
@@ -92,6 +95,7 @@ export function RadarCandidateCard({
     );
 
   const isAdminQueue = Boolean(adminActions);
+  const resolvedDetailHref = detailHref ?? `/radar/${candidate.id}`;
   const tier = candidate.distilledScore?.tier ?? null;
   const tierScore = candidate.distilledScore?.rankingScore
     ?? candidate.distilledScore?.effectiveTotal
@@ -129,13 +133,13 @@ export function RadarCandidateCard({
         {isAdminQueue && candidate.sortOrder !== null ? (
           <span className="font-mono text-[11px] text-muted-foreground">#{candidate.sortOrder}</span>
         ) : null}
-        <span className="ml-auto text-xs text-muted-foreground" title={candidate.publishedAt ?? candidate.crawledAt}>
-          {formatDate(candidate.publishedAt ?? candidate.crawledAt)}
+        <span className="ml-auto text-xs text-muted-foreground" title={candidate.crawledAt}>
+          {formatDate(candidate.crawledAt)}
         </span>
       </header>
 
       <Link
-        href={`/radar/${candidate.id}`}
+        href={resolvedDetailHref}
         className="text-base font-semibold leading-snug tracking-normal hover:text-primary hover:underline"
       >
         {candidate.title}
@@ -184,7 +188,7 @@ export function RadarCandidateCard({
         ) : null}
         {memberActions}
         <Link
-          href={`/radar/${candidate.id}`}
+          href={resolvedDetailHref}
           className="shrink-0 text-xs font-medium text-primary hover:underline"
         >
           查看详情 →

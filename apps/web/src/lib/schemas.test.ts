@@ -32,8 +32,20 @@ describe('RadarListQuery', () => {
     expect(RadarListQuery.safeParse({ status: 'nonsense' }).success).toBe(false);
   });
 
-  it('rejects per_page > 50', () => {
-    expect(RadarListQuery.safeParse({ per_page: 51 }).success).toBe(false);
+  it('rejects per_page > 100', () => {
+    expect(RadarListQuery.safeParse({ per_page: 101 }).success).toBe(false);
+  });
+
+  it('accepts per_page = 100', () => {
+    expect(RadarListQuery.safeParse({ per_page: 100 }).success).toBe(true);
+  });
+
+  it('accepts all radar rows', () => {
+    expect(RadarListQuery.safeParse({ per_page: 'all' }).success).toBe(true);
+  });
+
+  it('accepts multiple quality tiers', () => {
+    expect(RadarListQuery.safeParse({ quality: ['collection', 'deep_read', 'skim'] }).success).toBe(true);
   });
 
   it('rejects page < 1', () => {

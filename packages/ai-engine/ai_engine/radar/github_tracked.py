@@ -34,7 +34,7 @@ from typing import Any
 
 import httpx
 
-from ai_engine.radar.models import RadarCandidate, RepoActivity, RepoActivityItem
+from ai_engine.radar.models import RadarCandidate, RepoActivity, RepoActivityItem, RepoSnapshot
 
 _GITHUB_API = "https://api.github.com"
 _DEFAULT_LOOKBACK_DAYS = 1
@@ -345,6 +345,30 @@ async def _fetch_one_repo(
     raw_issues: list[dict[str, Any]] = []
     raw_prs: list[dict[str, Any]] = []
     raw_releases: list[dict[str, Any]] = []
+    repo_snapshot: RepoSnapshot | None = None
+    try:
+        repo_response = await http.get(f"{_GITHUB_API}/repos/{repo}")
+        _raise_if_rate_limited(repo_response, repo)
+        repo_data = repo_response.json()
+        if isinstance(repo_data, dict):
+            import hashlib
+            import json
+            snapshot_payload = json.dumps(repo_data, sort_keys=True, ensure_ascii=False)
+            repo_snapshot = RepoSnapshot(
+                owner_repo=repo.lower(),
+                description=str(repo_data.get("description") or "") or None,
+                stars=int(repo_data["stargazers_count"]) if isinstance(repo_data.get("stargazers_count"), int) else None,
+                forks=int(repo_data["forks_count"]) if isinstance(repo_data.get("forks_count"), int) else None,
+                open_issues=int(repo_data["open_issues_count"]) if isinstance(repo_data.get("open_issues_count"), int) else None,
+                default_branch=str(repo_data.get("default_branch") or "") or None,
+                pushed_at=str(repo_data.get("pushed_at") or "") or None,
+                github_updated_at=str(repo_data.get("updated_at") or "") or None,
+                sha256=hashlib.sha256(snapshot_payload.encode("utf-8")).hexdigest(),
+            )
+    except Exception:
+        # Snapshot freshness is useful but must never hide activity events.
+        pass
+
     try:
         if include_issues:
             raw_issues = await _fetch_issues(http, repo, lookback, paginate=paginate)
@@ -376,6 +400,7 @@ async def _fetch_one_repo(
         tags=("github", "tracked", repo, "repo_digest"),
         source_quality_hint=0.90,
         repo_activity=activity,
+        repo_snapshot=repo_snapshot,
     )
     return [candidate]
 
@@ -425,7 +450,7 @@ async def fetch_github_tracked(
 
     token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
     total_requests = len(repos) * (
-        int(include_issues) + int(include_prs) + int(include_releases)
+        1 + int(include_issues) + int(include_prs) + int(include_releases)
     )
     if not token and total_requests > 60:
         # Unauthenticated rate limit is 60 req/h — fail loudly so the

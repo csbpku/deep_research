@@ -127,7 +127,7 @@ pnpm dev:ai      # → http://localhost:4000
 
 未配置 Google OAuth 时，仍可免登录浏览首页、日报、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
-选择真实 LLM provider 后，setup 不询问模型槽位，直接按 provider 写入可用默认模型：Anthropic 直连默认 `anthropic:claude-haiku-4-5@20251001`，OpenAI 兼容代理默认 `anthropic:deepseek-v4-flash`。重跑 setup 时保留现有 `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM` 值。需要调整模型时直接编辑 `packages/ai-engine/.env`（本地）或根目录 `.env`（Docker/VPS）。
+选择真实 LLM provider 后，setup 询问兼容协议、Base URL 和 API key，并请求 `${BASE_URL}/models` 让你选择模型；也可以在接口不支持 `/models` 时手动输入模型 ID。支持 Anthropic-compatible（例如 cc-switch，默认本机端口 `15721`）和 OpenAI-compatible（例如 ais-switch `15722`、vibeproxy `8318`）。重跑 setup 时保留已有 key/URL 作为默认值。Docker 模式会把本机代理地址自动改为容器可访问的 `host.docker.internal`；VPS 模式默认使用 DeepSeek 官方 API，不依赖本机代理。模型会写入 `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM`，也可之后编辑 `packages/ai-engine/.env`（本地）或根目录 `.env`（Docker/VPS）。
 
 ### 本地 Docker
 

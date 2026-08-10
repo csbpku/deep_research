@@ -13,6 +13,7 @@ import type { TxClient } from './tx';
 
 export const ADMIN_TARGET_TYPE = {
   RADAR_SUMMARY: 'radar_summary',
+  RADAR_DIAGNOSTIC: 'radar_diagnostic',
   RESEARCH: 'research',
 } as const;
 export type AdminTargetType = (typeof ADMIN_TARGET_TYPE)[keyof typeof ADMIN_TARGET_TYPE];
@@ -21,6 +22,9 @@ export const ADMIN_RADAR_ACTIONS = {
   DISMISS: 'radar_dismiss',
   RESTORE: 'radar_restore',
   RETRY_INTERPRETATION: 'radar_retry_interpretation',
+  RETRY_SOURCE: 'radar_retry_source',
+  PROMOTE_DIAGNOSTIC: 'radar_promote_diagnostic',
+  DISMISS_DIAGNOSTIC: 'radar_dismiss_diagnostic',
   CREATE_RESEARCH: 'radar_create_research',
 } as const;
 export type AdminRadarAction = (typeof ADMIN_RADAR_ACTIONS)[keyof typeof ADMIN_RADAR_ACTIONS];

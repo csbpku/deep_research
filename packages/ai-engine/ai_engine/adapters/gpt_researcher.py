@@ -921,7 +921,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         ) if job.sources else ""
 
         user_content = (
-            f"请用中文为以下内容写一段简洁的摘要，保留关键事实，不要虚构。必须输出完整的句子，不能在半截处结束。\n\n"
+            f"请用中文为以下内容写 2-4 句摘要，至少 120 个字符，保留关键事实，不要虚构。必须输出完整的句子，不能在半截处结束。\n\n"
             f"标题: {topic}\n"
         )
         if context:

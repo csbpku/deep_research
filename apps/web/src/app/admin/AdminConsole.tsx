@@ -3,25 +3,30 @@
 // Admin 控制台客户端组件 —— Week 8：仪表板 + 调研库管理 + 3 个审核队列。
 // 由 app/admin/page.tsx（Server Component）做鉴权拦截后渲染。
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
   Archive,
+  ExternalLink,
+  FileWarning,
   CalendarDays,
   Check,
   CheckCircle2,
+  CircleAlert,
   DollarSign,
   Eye,
   Library,
   Lightbulb,
   Link2,
   LoaderCircle,
+  ListFilter,
   MessageSquare,
   Newspaper,
   Pencil,
+  Play,
   RefreshCw,
   RotateCcw,
   Search as SearchIcon,
@@ -60,6 +65,7 @@ import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 
 export const ADMIN_TAB_KEYS = [
   'dashboard',
+  'radar',
   'researches',
   'topics',
   'shares',
@@ -70,6 +76,7 @@ type Tab = typeof ADMIN_TAB_KEYS[number];
 
 const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'dashboard', label: '仪表板', icon: ShieldCheck },
+  { key: 'radar', label: '雷达治理', icon: RadarIcon },
   { key: 'researches', label: '调研库', icon: Library },
   { key: 'topics', label: '主题提议', icon: Sparkles },
   { key: 'shares', label: '用户分享', icon: Link2 },
@@ -91,6 +98,64 @@ interface DashboardData {
       createdAt: string;
       errorCode: string | null;
     };
+    monitor: {
+      date: string;
+      visibleToday: number;
+      failedUniqueItems: number;
+      failureRate: {
+        failed: number;
+        attempted: number;
+        percent: number;
+        targetPercent: number;
+        withinTarget: boolean;
+      };
+      active: boolean;
+      runs: {
+        total: number;
+        running: number;
+        completed: number;
+        partial: number;
+        failed: number;
+        fetched: number;
+        new: number;
+        skipped: number;
+        failedItems: number;
+        skipReasons: {
+          existing: number;
+          ruleNoise: number;
+          distilledNoise: number;
+          conflict: number;
+          other: number;
+        };
+        failures: Array<{ code: string; count: number; sources: string[] }>;
+      };
+      latest: {
+        total: number;
+        running: number;
+        completed: number;
+        partial: number;
+        failed: number;
+      };
+      readingLevels: {
+        collection: number;
+        deep_read: number;
+        skim: number;
+        noise: number;
+        pending: number;
+      };
+      scoreDistribution: Array<{ label: string; min: number; max: number; count: number }>;
+      governance: {
+        noise: number;
+        skipReasons: {
+          ruleNoise: number;
+          distilledNoise: number;
+          lowQuality: number;
+          pendingScore: number;
+          other: number;
+        };
+      };
+      activeSources: Array<{ name: string; sourceType: string; startedAt: string }>;
+    };
   };
   generatedAt: string;
 }
@@ -106,6 +171,10 @@ interface RadarRunStatus {
   totalNew: number;
   totalSkipped: number;
   totalFailed: number;
+  skippedExisting: number;
+  skippedRuleNoise: number;
+  skippedDistilledNoise: number;
+  skippedConflict: number;
   candidateCount: number;
   scoredCount: number;
   pendingScoreCount: number;
@@ -116,6 +185,40 @@ interface RadarRunStatus {
   errorMessage: string | null;
   createdAt: string;
   completedAt: string | null;
+}
+
+interface RadarDiagnosticItem {
+  id: string;
+  runId: string;
+  kind: 'filtered' | 'failed';
+  status: 'pending' | 'promoted' | 'dismissed';
+  title: string;
+  url: string;
+  body: string | null;
+  reasonCode: string;
+  reasonMessage: string | null;
+  errorType: string | null;
+  errorDomain: string | null;
+  distilledTier: string | null;
+  promotedSummaryId: string | null;
+  resolved: boolean;
+  createdAt: string;
+  source: { name: string; sourceType: string };
+}
+
+interface RadarDiagnosticListResponse {
+  items: RadarDiagnosticItem[];
+  page: number;
+  perPage: number;
+  total: number;
+  totalPages: number;
+  failureRate: {
+    failed: number;
+    attempted: number;
+    percent: number;
+    targetPercent: number;
+    withinTarget: boolean;
+  };
 }
 
 interface ShareItem {
@@ -216,6 +319,7 @@ export default function AdminConsole() {
 
       <div className="mt-4">
         {tab === 'dashboard' && <DashboardTab />}
+        {tab === 'radar' && <RadarGovernanceTab />}
         {tab === 'researches' && <ResearchesTab />}
         {tab === 'topics' && (
           <div className="space-y-4">
@@ -291,6 +395,7 @@ function DashboardTab() {
   const [radarActionMessage, setRadarActionMessage] = useState('');
   const [radarDate, setRadarDate] = useState(() => shanghaiDateValue());
   const [runFilter, setRunFilter] = useState<'all' | 'attention' | 'new'>('all');
+  const [failureRunId, setFailureRunId] = useState<string | null>(null);
   const q = useQuery<DashboardData>({
     queryKey: ['admin-dashboard'],
     queryFn: async () => {
@@ -298,7 +403,7 @@ function DashboardTab() {
       if (!r.ok) throw new Error('加载失败');
       return r.json();
     },
-    refetchInterval: 30_000,
+    refetchInterval: 5_000,
   });
   const runsQ = useQuery<RadarRunStatus[]>({
     queryKey: ['admin-radar-runs', radarDate],
@@ -345,6 +450,21 @@ function DashboardTab() {
       setRadarActionMessage((error as Error).message);
     },
   });
+  const retrySourceMut = useMutation({
+    mutationFn: async (runId: string) => {
+      const response = await fetch(`/api/admin/radar/runs/${runId}/retry`, { method: 'POST' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({ message: '来源重跑失败' }));
+        throw new Error((body as { message?: string }).message ?? '来源重跑失败');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      setRadarActionMessage('来源级重跑已提交');
+      queryClient.invalidateQueries({ queryKey: ['admin-radar-runs'] });
+    },
+    onError: (error) => setRadarActionMessage((error as Error).message),
+  });
 
   const syncInFlight = q.data?.radar.lastSync?.status === 'running';
   const latestRuns = useMemo(() => {
@@ -366,6 +486,26 @@ function DashboardTab() {
       0,
     ),
   }), [latestRuns]);
+  const dailyNewBySource = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const run of runsQ.data ?? []) {
+      totals.set(run.sourceId, (totals.get(run.sourceId) ?? 0) + run.totalNew);
+    }
+    return totals;
+  }, [runsQ.data]);
+  const displayRuns = useMemo(
+    () => latestRuns.map((run) => ({
+      ...run,
+      // The row represents the source's latest status, but its +N is the
+      // full selected-day total so the visible rows add up to dailyNew.
+      totalNew: dailyNewBySource.get(run.sourceId) ?? 0,
+    })),
+    [dailyNewBySource, latestRuns],
+  );
+  const dailyNew = useMemo(
+    () => (runsQ.data ?? []).reduce((sum, run) => sum + run.totalNew, 0),
+    [runsQ.data],
+  );
   const sortedRuns = useMemo(() => {
     const statusRank: Record<string, number> = {
       running: 0,
@@ -373,12 +513,12 @@ function DashboardTab() {
       partial: 2,
       completed: 3,
     };
-    return [...latestRuns].sort((a, b) => {
+    return [...displayRuns].sort((a, b) => {
       const statusDelta = (statusRank[a.status] ?? 4) - (statusRank[b.status] ?? 4);
       if (statusDelta !== 0) return statusDelta;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
-  }, [latestRuns]);
+  }, [displayRuns]);
   const visibleRuns = useMemo(() => sortedRuns.filter((run) => {
     if (runFilter === 'attention') {
       return run.status === 'running' || run.status === 'partial' || run.status === 'failed';
@@ -456,6 +596,9 @@ function DashboardTab() {
           className="p-3"
         />
       </div>
+
+      <RadarMonitorPanel monitor={d.radar.monitor} generatedAt={d.generatedAt} />
+      <RadarScoringRules />
 
       <section className="overflow-hidden rounded-md border border-border bg-card">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
@@ -544,7 +687,7 @@ function DashboardTab() {
               <RadarMetric label="信息源" value={latestRuns.length} />
               <RadarMetric label="完成" value={runSummary.completed} tone="success" />
               <RadarMetric label="异常" value={attentionCount} tone={attentionCount > 0 ? 'danger' : 'default'} />
-              <RadarMetric label="新增" value={`+${runSummary.totalNew}`} tone="success" />
+              <RadarMetric label="今日新增" value={`+${dailyNew}`} tone="success" />
               <RadarMetric label="待评分" value={runSummary.pendingScore} tone={runSummary.pendingScore > 0 ? 'warning' : 'default'} />
               <RadarMetric label="待补全" value={runSummary.pendingEnrichment} tone={runSummary.pendingEnrichment > 0 ? 'warning' : 'default'} />
             </div>
@@ -554,7 +697,7 @@ function DashboardTab() {
                 {([
                   ['all', `全部 ${latestRuns.length}`],
                   ['attention', `异常 ${attentionCount}`],
-                  ['new', `有新增 ${latestRuns.filter((run) => run.totalNew > 0).length}`],
+                    ['new', `有新增 ${displayRuns.filter((run) => run.totalNew > 0).length}`],
                 ] as const).map(([key, label]) => (
                   <button
                     key={key}
@@ -578,7 +721,7 @@ function DashboardTab() {
             </div>
 
             <div className="hidden overflow-x-auto md:block">
-              <table className="w-full min-w-[820px] text-left text-xs">
+              <table className="w-full min-w-[980px] text-left text-xs">
                 <thead className="border-b border-border bg-muted/10 text-muted-foreground">
                   <tr>
                     <th className="px-4 py-2 font-medium">信息源</th>
@@ -586,18 +729,19 @@ function DashboardTab() {
                     <th className="px-3 py-2 font-medium">同步结果</th>
                     <th className="px-3 py-2 font-medium">后处理</th>
                     <th className="px-4 py-2 font-medium">耗时 / 问题</th>
+                    <th className="px-3 py-2 font-medium">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {visibleRuns.map((run) => (
-                    <tr
-                      key={run.sourceId}
-                      className={cn(
-                        'align-middle transition-colors hover:bg-muted/20',
-                        run.status === 'failed' && 'bg-destructive/[0.035]',
-                        run.status === 'partial' && 'bg-amber-500/[0.035]',
-                      )}
-                    >
+                    <Fragment key={run.sourceId}>
+                      <tr
+                        className={cn(
+                          'align-middle transition-colors hover:bg-muted/20',
+                          run.status === 'failed' && 'bg-destructive/[0.035]',
+                          run.status === 'partial' && 'bg-amber-500/[0.035]',
+                        )}
+                      >
                       <td className="px-4 py-2.5">
                         <div className="font-medium text-foreground">{run.sourceName}</div>
                         <div className="mt-0.5 flex items-center gap-1.5 text-muted-foreground">
@@ -647,7 +791,43 @@ function DashboardTab() {
                           </div>
                         ) : null}
                       </td>
-                    </tr>
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="xs"
+                            title="重跑此来源"
+                            aria-label={`重跑${run.sourceName}`}
+                            disabled={retrySourceMut.isPending || syncMut.isPending || syncInFlight}
+                            onClick={() => retrySourceMut.mutate(run.id)}
+                          >
+                            <Play className="size-3.5" />
+                            重跑
+                          </Button>
+                          {run.totalFailed > 0 ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              title="查看失败条目"
+                              aria-label={`查看${run.sourceName}失败条目`}
+                              onClick={() => setFailureRunId(failureRunId === run.id ? null : run.id)}
+                            >
+                              <FileWarning className="size-3.5" />
+                            </Button>
+                          ) : null}
+                        </div>
+                      </td>
+                      </tr>
+                      {failureRunId === run.id ? (
+                        <tr>
+                          <td colSpan={6} className="p-0">
+                            <RunFailureDetails runId={run.id} sourceName={run.sourceName} />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -694,6 +874,30 @@ function DashboardTab() {
                       {run.errorMessage ? <div className="mt-0.5 text-xs">{run.errorMessage}</div> : null}
                     </div>
                   ) : null}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      disabled={retrySourceMut.isPending || syncMut.isPending || syncInFlight}
+                      onClick={() => retrySourceMut.mutate(run.id)}
+                    >
+                      <Play />
+                      重跑
+                    </Button>
+                    {run.totalFailed > 0 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setFailureRunId(failureRunId === run.id ? null : run.id)}
+                      >
+                        <FileWarning />
+                        查看失败条目
+                      </Button>
+                    ) : null}
+                  </div>
+                  {failureRunId === run.id ? <RunFailureDetails runId={run.id} sourceName={run.sourceName} /> : null}
                 </div>
               ))}
             </div>
@@ -706,6 +910,673 @@ function DashboardTab() {
       </p>
     </div>
   );
+}
+
+function RadarMonitorPanel({
+  monitor,
+  generatedAt,
+}: {
+  monitor: DashboardData['radar']['monitor'];
+  generatedAt: string;
+}) {
+  const levelTotal = Object.values(monitor.readingLevels).reduce((sum, count) => sum + count, 0);
+  const scoreTotal = monitor.scoreDistribution.reduce((sum, bucket) => sum + bucket.count, 0);
+  const completedRuns = monitor.latest.completed + monitor.latest.partial + monitor.latest.failed;
+  const runProgress = monitor.latest.total > 0
+    ? Math.round((completedRuns / monitor.latest.total) * 100)
+    : 0;
+  const maxLevel = Math.max(1, ...Object.values(monitor.readingLevels));
+  const maxScore = Math.max(1, ...monitor.scoreDistribution.map((bucket) => bucket.count));
+
+  return (
+    <section className="mb-4 overflow-hidden rounded-md border border-border bg-card">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <Activity className="size-4 text-muted-foreground" />
+              雷达实时监控
+            </h2>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                monitor.active
+                  ? 'bg-status-running-bg text-status-running-fg'
+                  : 'bg-status-succeeded-bg text-status-succeeded-fg',
+              )}
+            >
+              <span className={cn('size-1.5 rounded-full bg-current', monitor.active && 'animate-pulse')} />
+              {monitor.active ? '同步进行中' : '当前无运行任务'}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            今日 {monitor.date} · 数据更新时间 {new Date(generatedAt).toLocaleTimeString('zh-CN', { hour12: false })}
+          </p>
+        </div>
+        {monitor.activeSources.length > 0 ? (
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5 text-xs text-muted-foreground">
+            <span>正在处理：</span>
+            {monitor.activeSources.slice(0, 4).map((source) => (
+              <Badge key={`${source.name}-${source.startedAt}`} variant="secondary">{source.name}</Badge>
+            ))}
+            {monitor.activeSources.length > 4 ? <span>+{monitor.activeSources.length - 4}</span> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-2 border-b border-border bg-muted/20 sm:grid-cols-3 xl:grid-cols-6">
+        <RadarMetric label="来源数" value={monitor.latest.total} />
+        <RadarMetric label="完成" value={monitor.latest.completed} tone="success" />
+        <RadarMetric
+          label="异常来源"
+          value={monitor.latest.partial + monitor.latest.failed}
+          tone={monitor.latest.partial + monitor.latest.failed > 0 ? 'warning' : 'default'}
+        />
+        <RadarMetric label="今日写入" value={`+${monitor.runs.new}`} tone="success" />
+        <RadarMetric label="今日可见" value={monitor.visibleToday} />
+        <RadarMetric label="失败候选" value={monitor.failedUniqueItems} tone={monitor.failedUniqueItems > 0 ? 'danger' : 'default'} />
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+          <span className="font-semibold">今日同步进度</span>
+          <span className="text-muted-foreground">
+            {completedRuns}/{monitor.latest.total} 个来源已结束 · {monitor.runs.total} 次运行
+          </span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-sm bg-muted">
+          <div
+            className={cn('h-full bg-status-succeeded-fg transition-all', monitor.active && 'bg-status-running-fg')}
+            style={{ width: `${runProgress}%` }}
+          />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {monitor.latest.completed} 个完成
+          {monitor.latest.partial > 0 ? ` · ${monitor.latest.partial} 个部分完成` : ''}
+          {monitor.latest.failed > 0 ? ` · ${monitor.latest.failed} 个失败` : ''}
+          {monitor.runs.fetched > 0 ? ` · 最近一轮抓取 ${monitor.runs.fetched} 条，跳过 ${monitor.runs.skipped} 条` : ''}
+        </p>
+      </div>
+
+      <div className="grid gap-0 divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+        <RadarMonitorSection title="阅读等级分布" hint={`${levelTotal} 条今日写入内容`}>
+          <div className="space-y-2">
+            {([
+              ['重点阅读', monitor.readingLevels.collection, 'bg-tier-collection'],
+              ['深度阅读', monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
+              ['速览', monitor.readingLevels.skim, 'bg-tier-skim'],
+              ['不推荐', monitor.readingLevels.noise, 'bg-tier-noise'],
+              ['待评分', monitor.readingLevels.pending, 'bg-muted-foreground'],
+            ] as const).map(([label, count, color]) => (
+              <div key={label} className="grid grid-cols-[68px_1fr_30px] items-center gap-2 text-xs">
+                <span className="text-muted-foreground">{label}</span>
+                <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+                  <div className={cn('h-full', color)} style={{ width: `${(count / maxLevel) * 100}%` }} />
+                </div>
+                <span className="text-right font-mono tabular-nums">{count}</span>
+              </div>
+            ))}
+          </div>
+        </RadarMonitorSection>
+
+        <RadarMonitorSection title="评分分布" hint={`${scoreTotal} 条今日写入内容`}>
+          <div className="space-y-2">
+            {monitor.scoreDistribution.map((bucket) => (
+              <div key={bucket.label} className="grid grid-cols-[52px_1fr_30px] items-center gap-2 text-xs">
+                <span className="text-muted-foreground">{bucket.label}</span>
+                <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+                  <div className="h-full bg-primary" style={{ width: `${(bucket.count / maxScore) * 100}%` }} />
+                </div>
+                <span className="text-right font-mono tabular-nums">{bucket.count}</span>
+              </div>
+            ))}
+          </div>
+        </RadarMonitorSection>
+      </div>
+
+      <div className="grid gap-0 divide-y divide-border border-t border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+        <RadarMonitorSection title="今日跳过原因（canonicalUrl 去重）">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>规则噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.ruleNoise}</strong></span>
+            <span>评分噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.distilledNoise}</strong></span>
+            <span>抓取内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
+            <span>待评分 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.pendingScore}</strong></span>
+            <span>其他 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.other}</strong></span>
+          </div>
+        </RadarMonitorSection>
+        <RadarMonitorSection title="失败原因">
+          {monitor.runs.failures.length === 0 ? (
+            <p className="text-xs text-muted-foreground">今天暂无失败来源。</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {monitor.runs.failures.slice(0, 6).map((failure) => (
+                <Badge key={failure.code} variant="outline" className="text-destructive">
+                  {failure.code} · {failure.count}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </RadarMonitorSection>
+      </div>
+    </section>
+  );
+}
+
+function RadarMonitorSection({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0 px-4 py-3">
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <h3 className="text-xs font-semibold">{title}</h3>
+        {hint ? <span className="text-[11px] text-muted-foreground">{hint}</span> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function RadarScoringRules() {
+  return (
+    <section className="mb-4 overflow-hidden rounded-md border border-border bg-card">
+      <div className="border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">评分与阅读等级规则</h2>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          总分为 7 个维度的加权分数（0–100）。阅读等级按来源 profile 使用下表阈值；重点阅读还需要满足相关性和工程证据完整度，不是只看总分。
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] text-left text-xs">
+          <thead className="border-b border-border bg-muted/20 text-muted-foreground">
+            <tr>
+              <th className="px-4 py-2 font-medium">评分 profile</th>
+              <th className="px-3 py-2 font-medium">重点阅读</th>
+              <th className="px-3 py-2 font-medium">深度阅读</th>
+              <th className="px-3 py-2 font-medium">速览</th>
+              <th className="px-3 py-2 font-medium">不推荐</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            <tr>
+              <td className="px-4 py-2.5 font-medium">工程内容 / GitHub</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 90</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">70–89.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">50–69.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 50</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2.5 font-medium">研究论文 / arXiv</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 88</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">76–87.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">55–75.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 55</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2.5 font-medium">行业新闻 / 产品动态</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 82</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">68–81.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">50–67.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 50</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">
+        评分维度：信息增量、分析深度、可行动性、事实可信度、时效性、表达质量、综合信号。实际分级还会应用相关性、论文可迁移性、风险和疑似搬运等规则。
+      </div>
+    </section>
+  );
+}
+
+function RunFailureDetails({ runId, sourceName }: { runId: string; sourceName: string }) {
+  const q = useQuery<RadarDiagnosticListResponse>({
+    queryKey: ['admin-radar-failures', runId],
+    queryFn: async () => {
+      const r = await fetch(
+        `/api/admin/radar/diagnostics?kind=failed&status=all&runId=${encodeURIComponent(runId)}`,
+        { cache: 'no-store' },
+      );
+      if (!r.ok) throw new Error('加载失败条目失败');
+      return r.json();
+    },
+  });
+  return (
+    <div className="border-t border-border bg-destructive/[0.025] px-4 py-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-destructive">
+        <FileWarning className="size-3.5" />
+        {sourceName} · 失败条目
+      </div>
+      {q.isLoading ? <Skeleton className="h-10 w-full" /> : null}
+      {q.isError ? <p className="text-xs text-destructive">{(q.error as Error).message}</p> : null}
+      <div className="grid gap-2">
+        {(q.data?.items ?? []).map((item) => (
+          <div key={item.id} className="flex items-start justify-between gap-3 rounded border border-destructive/20 bg-background p-2.5 text-xs">
+            <div className="min-w-0">
+              <div className="font-medium">{item.title}</div>
+              <div className="mt-1 text-muted-foreground">
+                {item.reasonCode} · {item.errorType ?? 'unknown'} · {item.errorDomain ?? 'unknown'}
+              </div>
+              {item.reasonMessage ? <div className="mt-1 break-words text-destructive">{item.reasonMessage}</div> : null}
+            </div>
+            <a href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" className="shrink-0 text-muted-foreground hover:text-foreground">
+              <ExternalLink className="size-3.5" />
+            </a>
+          </div>
+        ))}
+      </div>
+      {!q.isLoading && !q.isError && (q.data?.items.length ?? 0) === 0 ? (
+        <p className="text-xs text-muted-foreground">暂无逐条失败记录。历史运行未持久化失败候选。</p>
+      ) : null}
+    </div>
+  );
+}
+
+function RadarGovernanceTab() {
+  const queryClient = useQueryClient();
+  const [kind, setKind] = useState<'filtered' | 'failed'>('filtered');
+  const [status, setStatus] = useState<'pending' | 'promoted' | 'dismissed' | 'all'>('pending');
+  const [query, setQuery] = useState('');
+  const [sourceType, setSourceType] = useState('all');
+  const [reasonCode, setReasonCode] = useState('all');
+  const [sort, setSort] = useState('newest');
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState<'20' | '50' | '100' | 'all'>('50');
+  const [date, setDate] = useState(() => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date());
+    return `${parts.find((part) => part.type === 'year')?.value}-${parts.find((part) => part.type === 'month')?.value}-${parts.find((part) => part.type === 'day')?.value}`;
+  });
+  const [actionMessage, setActionMessage] = useState('');
+  const q = useQuery<RadarDiagnosticListResponse>({
+    queryKey: ['admin-radar-diagnostics', kind, status, date, query, sourceType, reasonCode, sort, page, perPage],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        kind,
+        status,
+        date,
+        per_page: perPage === 'all' ? 'all' : perPage,
+        page: String(page),
+        sort,
+      });
+      if (query.trim()) params.set('q', query.trim());
+      if (sourceType !== 'all') params.set('sourceType', sourceType);
+      if (reasonCode !== 'all') params.set('reasonCode', reasonCode);
+      const r = await fetch(`/api/admin/radar/diagnostics?${params.toString()}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error('加载雷达诊断失败');
+      return r.json();
+    },
+  });
+  const countsQ = useQuery({
+    queryKey: ['admin-radar-diagnostic-counts', date],
+    queryFn: async () => {
+      const combinations = [
+        ['filtered', 'pending'],
+        ['filtered', 'promoted'],
+        ['filtered', 'dismissed'],
+        ['failed', 'pending'],
+        ['failed', 'all'],
+      ] as const;
+      const responses = await Promise.all(
+        combinations.map(async ([nextKind, nextStatus]) => {
+          const r = await fetch(
+            `/api/admin/radar/diagnostics?kind=${nextKind}&status=${nextStatus}&date=${date}&per_page=1`,
+            { cache: 'no-store' },
+          );
+          if (!r.ok) throw new Error('加载队列统计失败');
+          return r.json() as Promise<{ total: number }>;
+        }),
+      );
+      return {
+        filteredPending: responses[0].total,
+        filteredPromoted: responses[1].total,
+        filteredDismissed: responses[2].total,
+        failedPending: responses[3].total,
+        failedTotal: responses[4].total,
+      };
+    },
+    refetchInterval: 5_000,
+  });
+  const actionMut = useMutation({
+    mutationFn: async (input: { id: string; action: 'promote' | 'dismiss' }) => {
+      const r = await fetch(`/api/admin/radar/diagnostics/${input.id}/${input.action}`, { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({ message: '操作失败' }));
+        throw new Error((body as { message?: string }).message ?? '操作失败');
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      setActionMessage('操作已完成');
+      queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostics'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostic-counts'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
+    onError: (error) => setActionMessage((error as Error).message),
+  });
+  const counts = countsQ.data;
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="雷达治理"
+        description="查看不推荐、待评分和其他未进入雷达展示的内容，定位来源级失败，并把有价值的内容提升回雷达。"
+      />
+
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+        <GovernanceMetric
+          label="待治理 canonical"
+          value={counts?.filteredPending ?? '—'}
+          tone="warning"
+          icon={<ListFilter />}
+        />
+        <GovernanceMetric
+          label="待处理失败"
+          value={counts?.failedPending ?? '—'}
+          tone="danger"
+          icon={<CircleAlert />}
+        />
+        <GovernanceMetric
+          label="已 promote"
+          value={counts?.filteredPromoted ?? '—'}
+          tone="success"
+          icon={<CheckCircle2 />}
+        />
+        <GovernanceMetric
+          label="已忽略"
+          value={counts?.filteredDismissed ?? '—'}
+          tone="muted"
+          icon={<Eye />}
+        />
+        <GovernanceMetric
+          label="未恢复失败率"
+          value={q.data ? `${q.data.failureRate.percent}%` : '—'}
+          tone={q.data?.failureRate.withinTarget ? 'success' : 'danger'}
+          icon={<Activity />}
+        />
+      </div>
+      {q.data ? (
+        <p className="-mt-2 text-xs text-muted-foreground">
+          去重口径：{q.data.failureRate.failed} 个未恢复失败 / {q.data.failureRate.attempted} 个唯一尝试，目标 &lt; 1%
+        </p>
+      ) : null}
+
+      <section className="overflow-hidden rounded-md border border-border bg-card">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="inline-flex rounded-md border border-border bg-muted/30 p-0.5">
+            {([
+              ['filtered', '待治理内容', counts?.filteredPending ?? 0],
+              ['failed', '失败条目', counts?.failedPending ?? 0],
+            ] as const).map(([nextKind, label, count]) => (
+              <button
+                key={nextKind}
+                type="button"
+                aria-pressed={kind === nextKind}
+                className={cn(
+                  'inline-flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors',
+                  kind === nextKind
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+                onClick={() => {
+                  setKind(nextKind);
+                  setStatus('pending');
+                  setPage(1);
+                  setActionMessage('');
+                }}
+              >
+                {label}
+                <span className={cn(
+                  'rounded-full px-1.5 py-0.5 font-mono text-[10px]',
+                  kind === nextKind ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+                )}>
+                  {count}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="sr-only" htmlFor="radar-governance-date">诊断日期</label>
+            <Input
+              id="radar-governance-date"
+              type="date"
+              value={date === 'all' ? '' : date}
+              onChange={(event) => { setDate(event.target.value || 'all'); setPage(1); }}
+              className="h-8 w-36 text-xs"
+            />
+            <Button
+              type="button"
+              variant={date === 'all' ? 'secondary' : 'ghost'}
+              size="xs"
+              onClick={() => { setDate('all'); setPage(1); }}
+            >
+              全部日期
+            </Button>
+            <label className="sr-only" htmlFor="radar-governance-status">记录状态</label>
+            <Select value={status} onValueChange={(value) => { setStatus(value as typeof status); setPage(1); }}>
+              <SelectTrigger id="radar-governance-status" className="h-8 w-32 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pending">{kind === 'filtered' ? '待处理' : '未解决'}</SelectItem>
+                {kind === 'filtered' ? <SelectItem value="promoted">已 promote</SelectItem> : null}
+                {kind === 'filtered' ? <SelectItem value="dismissed">已忽略</SelectItem> : null}
+                <SelectItem value="all">全部状态</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sourceType} onValueChange={(value) => { setSourceType(value); setPage(1); }}>
+              <SelectTrigger className="h-8 w-36 text-xs" aria-label="来源筛选">
+                <SelectValue placeholder="全部来源" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部来源</SelectItem>
+                <SelectItem value="github_tracked">GitHub 跟踪仓库</SelectItem>
+                <SelectItem value="github_topic_search">GitHub 话题搜索</SelectItem>
+                <SelectItem value="github_trending">GitHub 趋势</SelectItem>
+                <SelectItem value="arxiv">arXiv</SelectItem>
+                <SelectItem value="rss">RSS / 博客</SelectItem>
+                <SelectItem value="devto">Dev.to</SelectItem>
+                <SelectItem value="hackernews">Hacker News</SelectItem>
+                <SelectItem value="huggingface_models">Hugging Face</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={reasonCode} onValueChange={(value) => { setReasonCode(value); setPage(1); }}>
+              <SelectTrigger className="h-8 w-36 text-xs" aria-label="原因筛选">
+                <SelectValue placeholder="全部原因" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部原因</SelectItem>
+                <SelectItem value="DISTILLED_NOISE">评分噪声</SelectItem>
+                <SelectItem value="RULE_NOISE">规则噪声</SelectItem>
+                <SelectItem value="LOW_QUALITY">内容不足</SelectItem>
+                <SelectItem value="PENDING_SCORE">待评分</SelectItem>
+                <SelectItem value="AI_ENGINE_UNAVAILABLE">AI 不可用</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sort} onValueChange={(value) => { setSort(value); setPage(1); }}>
+              <SelectTrigger className="h-8 w-32 text-xs" aria-label="排序方式">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="newest">最新优先</SelectItem>
+                <SelectItem value="oldest">最早优先</SelectItem>
+                <SelectItem value="source">按来源</SelectItem>
+                <SelectItem value="reason">按原因</SelectItem>
+                <SelectItem value="score">按评分</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={perPage} onValueChange={(value) => { setPerPage(value as typeof perPage); setPage(1); }}>
+              <SelectTrigger className="h-8 w-24 text-xs" aria-label="每页条数">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="20">20 条</SelectItem>
+                <SelectItem value="50">50 条</SelectItem>
+                <SelectItem value="100">100 条</SelectItem>
+                <SelectItem value="all">全部</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-xs text-muted-foreground">
+              {q.isLoading ? '加载中…' : `${q.data?.items.length ?? 0} / ${q.data?.total ?? 0} 条`}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/10 px-4 py-2">
+          <SearchIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+          <Input
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setPage(1); }}
+            placeholder="搜索标题、URL 或失败信息"
+            aria-label="搜索治理条目"
+            className="h-8 min-w-56 max-w-md text-xs"
+          />
+          <span className="text-[11px] text-muted-foreground">筛选结果按 canonicalUrl 去重</span>
+        </div>
+        {actionMessage ? (
+          <div className="border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
+            {actionMessage}
+          </div>
+        ) : null}
+      {q.isLoading ? <QueueSkeleton /> : null}
+      {q.isError ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : null}
+      <div className="divide-y divide-border">
+        {(q.data?.items ?? []).map((item) => (
+          <div key={item.id} className="group px-4 py-3.5 transition-colors hover:bg-muted/20">
+            <div className="flex items-start gap-3">
+              <span
+                className={cn(
+                  'mt-1.5 size-2 shrink-0 rounded-full',
+                  item.kind === 'failed' ? 'bg-status-failed-fg' : 'bg-tier-noise',
+                )}
+                aria-hidden="true"
+              />
+              <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-medium leading-snug">{item.title}</h3>
+                    <Badge variant="outline">{item.source.name}</Badge>
+                    {item.distilledTier ? <Badge variant="secondary">{readingTierLabel(item.distilledTier)}</Badge> : null}
+                    {item.resolved ? <Badge variant="secondary">已恢复</Badge> : null}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    <code className={cn(item.kind === 'failed' && 'text-destructive')}>{item.reasonCode}</code>
+                    <span aria-hidden="true">·</span>
+                    <span>{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <a href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" className="rounded p-1.5 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100">
+                    <ExternalLink className="size-4" />
+                  </a>
+                  {kind === 'filtered' && item.status === 'pending' ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="xs"
+                        disabled={actionMut.isPending}
+                        onClick={() => actionMut.mutate({ id: item.id, action: 'promote' })}
+                      >
+                        <Check />
+                        提升到雷达
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        disabled={actionMut.isPending}
+                        onClick={() => actionMut.mutate({ id: item.id, action: 'dismiss' })}
+                      >
+                        忽略
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              {item.reasonMessage ? (
+                <p className={cn('mt-2 text-xs', item.kind === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                  {item.reasonMessage}
+                </p>
+              ) : null}
+              {item.body ? <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">{item.body}</p> : null}
+              {item.kind === 'failed' && item.errorType ? (
+                <p className="mt-2 inline-flex items-center gap-1 text-xs text-destructive">
+                  <FileWarning className="size-3.5" />
+                  {item.errorType} · {item.errorDomain ?? 'unknown'}
+                </p>
+              ) : null}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {!q.isLoading && !q.isError && (q.data?.items.length ?? 0) === 0 ? (
+        <EmptyState
+          title={kind === 'filtered' ? '暂无待治理内容' : '暂无失败条目'}
+          description={kind === 'filtered'
+            ? '不推荐、待评分、规则噪声和低质量内容会出现在这里。当前没有待处理记录。'
+            : '新的同步失败会在这里留下逐条记录。当前没有未解决失败。'}
+          action={kind === 'filtered' && (counts?.failedPending ?? 0) > 0 ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => {
+              setKind('failed');
+              setStatus('pending');
+            }}>
+              <FileWarning />
+              查看失败条目（{counts?.failedPending}）
+            </Button>
+          ) : undefined}
+        />
+      ) : null}
+      {q.data && q.data.totalPages > 1 ? (
+        <Pagination page={q.data.page} totalPages={q.data.totalPages} onPageChange={setPage} disabled={q.isFetching} />
+      ) : null}
+      </section>
+    </div>
+  );
+}
+
+function GovernanceMetric({
+  label,
+  value,
+  tone,
+  icon,
+}: {
+  label: string;
+  value: number | string;
+  tone: 'warning' | 'danger' | 'success' | 'muted';
+  icon: React.ReactNode;
+}) {
+  const color = {
+    warning: 'text-status-partial-fg bg-status-partial-bg',
+    danger: 'text-status-failed-fg bg-status-failed-bg',
+    success: 'text-status-succeeded-fg bg-status-succeeded-bg',
+    muted: 'text-muted-foreground bg-muted',
+  }[tone];
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{label}</span>
+        <span className={cn('inline-flex size-6 items-center justify-center rounded', color)}>{icon}</span>
+      </div>
+      <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function readingTierLabel(tier: string): string {
+  return {
+    collection: '重点阅读',
+    deep_read: '深度阅读',
+    skim: '速览',
+    noise: '不推荐',
+    pending: '待评分',
+  }[tier] ?? tier;
 }
 
 function formatElapsed(elapsedMs: number | null): string {
@@ -810,7 +1681,7 @@ function PipelineMetric({
 }) {
   const complete = total > 0 && pending === 0;
   return (
-    <div className="flex items-center justify-between gap-3 py-0.5">
+    <div className="flex items-center justify-start gap-2 py-0.5">
       <span className="text-muted-foreground">{label}</span>
       <span
         className={cn(

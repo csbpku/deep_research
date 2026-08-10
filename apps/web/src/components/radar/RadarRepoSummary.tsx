@@ -4,7 +4,10 @@ interface RepoMeta {
   defaultBranch?: string | null;
   language?: string | null;
   stars?: number | null;
+  forks?: number | null;
+  openIssues?: number | null;
   lastPushedAt?: string | null;
+  snapshotFetchedAt?: string | null;
 }
 
 function formatStars(value: number): string {
@@ -31,11 +34,16 @@ export function RadarRepoSummary({ summary, meta }: { summary: string; meta: Rep
           {typeof meta?.stars === 'number' ? (
             <span className="inline-flex items-center gap-1"><Star className="size-3" />{formatStars(meta.stars)}</span>
           ) : null}
+          {typeof meta?.forks === 'number' ? <span>Forks {formatStars(meta.forks)}</span> : null}
+          {typeof meta?.openIssues === 'number' ? <span>Issues {meta.openIssues}</span> : null}
           {meta?.defaultBranch ? (
             <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{meta.defaultBranch}</span>
           ) : null}
           {meta?.lastPushedAt ? (
             <span>更新于 {new Date(meta.lastPushedAt).toLocaleDateString('zh-CN')}</span>
+          ) : null}
+          {meta?.snapshotFetchedAt ? (
+            <span>快照 {new Date(meta.snapshotFetchedAt).toLocaleDateString('zh-CN')}</span>
           ) : null}
         </div>
       </div>

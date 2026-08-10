@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
+import html as html_lib
+import re
 from typing import Any
 
 from ai_engine.fetcher.safe_fetch import FetchedDocument, safe_fetch
@@ -14,6 +16,34 @@ from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
 DEFAULT_MAX_AGE_HOURS = 24 * 30
+WEWE_CONTENT_MAX_CHARS = 64_000
+
+
+def _clean_wewe_content(value: str) -> str:
+    """Extract readable WeChat article text from WeWe's HTML content field."""
+    if not value:
+        return ""
+    try:
+        import trafilatura
+
+        extracted = trafilatura.extract(
+            value,
+            output_format="markdown",
+            include_comments=False,
+            include_tables=True,
+            include_links=True,
+            favor_precision=True,
+        )
+        if extracted and len(extracted.strip()) >= 200:
+            return extracted.strip()[:WEWE_CONTENT_MAX_CHARS]
+    except Exception:
+        # The lightweight fallback below is sufficient for simple WeWe pages.
+        pass
+    text = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", value, flags=re.I | re.S)
+    text = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()[:WEWE_CONTENT_MAX_CHARS]
 
 
 def _published_at(raw: str) -> datetime | None:
@@ -55,6 +85,7 @@ async def fetch_rss_candidates(
         raise ValueError("RSS source requires feedUrl")
     if is_wewe_config(config):
         await wewe_refresher(config)
+    is_wewe = is_wewe_config(config)
     source_diagnostic = config.get("_wewe_refresh_diagnostic")
     if not isinstance(source_diagnostic, tuple) or len(source_diagnostic) != 2:
         source_diagnostic = None
@@ -102,7 +133,12 @@ async def fetch_rss_candidates(
         if not link:
             continue
         title = (item.get("title") or "Untitled").strip()[:300]
-        description = item.get("description", "").strip()[:2000]
+        raw_description = item.get("description", "").strip()
+        description = (
+            _clean_wewe_content(raw_description)
+            if is_wewe
+            else raw_description[:2000]
+        )
         if apply_ai_filter:
             # Check title + description (case-insensitive regex)
             if not _is_ai_related(f"{title}\n{description}"):
@@ -118,7 +154,7 @@ async def fetch_rss_candidates(
                 snippet=description,
                 published_at=published_at,
                 content_origin="rss",
-                tags=("rss",),
+                tags=("rss", "wewe") if is_wewe else ("rss",),
                 source_quality_hint=0.7,
                 source_diagnostic=source_diagnostic,
             )

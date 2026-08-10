@@ -30,4 +30,17 @@ describe('MarkdownContent links', () => {
     expect(html).toContain('href="https://example.com/paper"');
     expect(html).toContain('>Source.</a>');
   });
+
+  it('does not render dangerous URL protocols or raw HTML', () => {
+    const html = renderToStaticMarkup(
+      createElement(MarkdownContent, {
+        content: '[bad](javascript:alert(1))\n\n<span>raw</span>',
+      }),
+    );
+
+    expect(html).not.toContain('javascript:');
+    expect(html).not.toContain('<span>raw</span>');
+    expect(html).toContain('bad');
+    expect(html).toContain('> raw</p>');
+  });
 });

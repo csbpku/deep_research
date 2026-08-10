@@ -195,6 +195,35 @@ async def test_rss_fetcher_reads_wewe_content_encoded() -> None:
     assert "公众号全文内容" in items[0].snippet
 
 
+async def test_rss_fetcher_cleans_wewe_html_instead_of_passing_page_shell() -> None:
+    article = "真正的公众号正文，包含 RAG 工程实践和 Agent 评测方法。 " * 40
+    xml = f"""<?xml version="1.0"?><rss><channel><item>
+    <title><![CDATA[正文测试]]></title><link>https://mp.weixin.qq.com/s/example2</link>
+    <content:encoded><![CDATA[<html><head><script>window.pageData = 'noise';</script></head>
+    <body><div id="js_content"><p>{article}</p></div></body></html>]]></content:encoded>
+    <pubDate>Wed, 22 Jul 2026 12:00:00 GMT</pubDate>
+    </item></channel></rss>""".encode()
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(xml)
+
+    items = await fetch_rss_candidates(
+        {"feedUrl": "http://localhost:4001/feeds/all.rss", "maxResults": 10,
+         "applyAiFilter": False, "allowLocalhost": True},
+        fetcher=fake_fetch,
+        wewe_refresher=lambda config: _noop_refresh(),
+    )
+    assert len(items) == 1
+    assert len(items[0].snippet) > 1000
+    assert "window.pageData" not in items[0].snippet
+    assert "真正的公众号正文" in items[0].snippet
+    assert "wewe" in items[0].tags
+
+
+async def _noop_refresh() -> bool:
+    return True
+
+
 async def test_rss_fetcher_prefers_atom_article_link_over_comments_feed() -> None:
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
         return _doc(BLOGGER_ATOM_XML)

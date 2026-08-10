@@ -83,15 +83,15 @@ describe('shanghaiDateValue', () => {
 // ════════════════════════════════════════════════════════════════════
 
 describe('AdminConsole tabs contract', () => {
-  it('keeps radar candidate review out of the console tabs', () => {
+  it('includes the radar governance tab', () => {
     expect(ADMIN_TAB_KEYS).toEqual([
       'dashboard',
+      'radar',
       'researches',
       'topics',
       'shares',
       'comments',
       'users',
     ]);
-    expect(ADMIN_TAB_KEYS).not.toContain('radar');
   });
 });
