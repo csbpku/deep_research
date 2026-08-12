@@ -11,6 +11,7 @@ from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
 from ai_engine.radar.github import fetch_github
 from ai_engine.radar.github_tracked import fetch_github_tracked
+from ai_engine.radar.huggingface_papers_fetcher import fetch_huggingface_papers
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
@@ -589,3 +590,103 @@ def test_rss_fetcher_allow_localhost_from_config() -> None:
     ))
     assert received_kwargs.get("allow_localhost") is True
     assert 4001 in received_kwargs.get("extra_allowed_ports", ())
+
+
+# PR2: Hugging Face Daily Papers fetcher — happy path + age gate + envelope shape.
+
+
+def _make_hf_payload(*, fresh_hours_ago: float, old_hours_ago: float) -> list[dict[str, Any]]:
+    """Build an HF Daily Papers payload with timestamps relative to ``datetime.now``.
+
+    The fetcher compares against ``datetime.now(timezone.utc)`` so the test must
+    as well — using fixed wall-clock timestamps would make the assertions
+    dependent on whoever is running pytest.
+    """
+    now = datetime.now(timezone.utc)
+    fresh_iso = (now - timedelta(hours=fresh_hours_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    old_iso = (now - timedelta(hours=old_hours_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return [
+        {
+            "title": "Omni-Modal Dialogue via Visual Thought Plans",
+            "summary": "Coordinated text + speech + video responses.",
+            "numComments": 3,
+            "submittedBy": {"name": "curator"},
+            "paper": {
+                "id": "2608.10720",
+                "title": "Omni-Modal Dialogue via Visual Thought Plans",
+                "ai_keywords": ["omni-modal dialogue", "video generator"],
+                "ai_summary": "An omni-modal dialogue framework.",
+                "authors": [{"name": "Alice"}, {"name": "Bob"}, {"name": "Carol"}],
+                "githubRepo": "https://github.com/example/repo",
+                "githubStars": 12,
+                "publishedAt": fresh_iso,
+            },
+        },
+        {
+            "title": "Older paper that should fall outside the lookback",
+            "paper": {
+                "id": "2601.99999",
+                "ai_keywords": [],
+                "authors": [],
+                "publishedAt": old_iso,
+            },
+        },
+    ]
+
+
+async def test_hf_daily_papers_parses_and_caps_results() -> None:
+    """The fetcher must map HF Daily Papers rows into RadarCandidates
+    and respect the maxResults cap."""
+
+    payload = _make_hf_payload(fresh_hours_ago=6, old_hours_ago=24 * 30)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/daily_papers"
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_huggingface_papers(
+            {"maxResults": 1, "maxAgeHours": 96},
+            client=client,
+        )
+    assert len(items) == 1, items
+    top = items[0]
+    assert top.title == "Omni-Modal Dialogue via Visual Thought Plans"
+    assert top.url == "https://huggingface.co/papers/2608.10720"
+    assert "Alice, Bob, Carol" in top.snippet
+    assert "omni-modal_dialogue" in top.tags
+    assert "An omni-modal dialogue" in top.snippet
+    assert top.content_origin == "api"
+    assert top.source_quality_hint == 0.90
+
+
+async def test_hf_daily_papers_drops_entries_outside_lookback() -> None:
+    """The age gate must drop >maxAgeHours items even when the API returns them."""
+
+    payload = _make_hf_payload(fresh_hours_ago=2, old_hours_ago=24 * 60)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_huggingface_papers(
+            {"maxResults": 20, "maxAgeHours": 24},
+            client=client,
+        )
+    # Only the fresh item survives the 24h gate.
+    assert len(items) == 1
+    assert items[0].url == "https://huggingface.co/papers/2608.10720"
+
+
+async def test_hf_daily_papers_handles_non_list_response() -> None:
+    """An unexpected response shape (e.g. API maintenance payload) must not crash."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "rate limited"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_huggingface_papers({"maxResults": 5}, client=client)
+    assert items == []

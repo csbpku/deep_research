@@ -52,13 +52,20 @@ except ModuleNotFoundError:
     _HAVE_HF = False
     fetch_huggingface_models = None  # type: ignore[assignment]
 
+try:
+    from ai_engine.radar.huggingface_papers_fetcher import fetch_huggingface_papers
+    _HAVE_HF_PAPERS = True
+except ModuleNotFoundError:
+    _HAVE_HF_PAPERS = False
+    fetch_huggingface_papers = None  # type: ignore[assignment]
+
 SourceFetcher = Callable[[dict[str, Any]], Awaitable[list[RadarCandidate]]]
 
 _KNOWN_SOURCE_TYPES: set[str] = {
     "github", "github_trending", "github_tracked", "arxiv", "rss",
     "hackernews", "reddit", "lobsters", "devto",
     "producthunt", "vendor_news", "sitemap_watch", "wechat",
-    "github_topic_search", "huggingface_models",
+    "github_topic_search", "huggingface_models", "huggingface_papers",
 }
 
 _HANDLERS: dict[str, SourceFetcher] = {
@@ -74,7 +81,11 @@ _HANDLERS: dict[str, SourceFetcher] = {
     "devto": fetch_devto_candidates,
     "producthunt": fetch_producthunt_candidates,
     "huggingface_models": fetch_huggingface_models,
-    "vendor_news": lambda cfg: check_and_fetch_vendor_news(str(cfg.get("vendor", "anthropic"))),
+    "huggingface_papers": fetch_huggingface_papers,
+    "vendor_news": lambda cfg: check_and_fetch_vendor_news(
+        str(cfg.get("vendor", "anthropic")),
+        lookback_hours=int(cfg.get("max_age_hours", 72)),
+    ),
 }
 
 
