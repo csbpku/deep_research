@@ -53,19 +53,23 @@ VALUES
   -- PR2: Hugging Face Daily Papers — the no-miss AI research signal used by every
   -- comparable newsletter (Latent Space / The Batch / AlphaSignal). Lag of ~24h
   -- is fine for a daily cron; arxiv-mcp enrichment still runs downstream.
+  -- P2.15: bumped maxResults 20 → 30 to capture the full daily set (~25-40).
   ('a0000000-0000-0000-0000-000000000012', 'Hugging Face Daily Papers', 'huggingface_papers',
-   '{"maxResults":20,"number_of_papers":50,"maxAgeHours":96,"minKeywordOverlap":0}'::jsonb,
+   '{"maxResults":30,"number_of_papers":80,"maxAgeHours":168,"minKeywordOverlap":0}'::jsonb,
    true, now()),
   -- PR3: OpenReview accepted papers — covers the venues that don't fully appear
   -- on arXiv (NeurIPS / ICML / ICLR). Config drives which venues + search term.
+  -- added 2025 venues for the active submission cycle.
   ('a0000000-0000-0000-0000-000000000013', 'OpenReview Accepted Papers', 'openreview',
-   '{"venues":["NeurIPS.cc/2024/Conference","ICLR.cc/2025/Conference","ICML.cc/2024/Conference"],"query":"agent","maxResults":30,"maxAgeDays":14,"limitPerVenue":30}'::jsonb,
+   '{"venues":["NeurIPS.cc/2025/Conference","NeurIPS.cc/2024/Conference","ICLR.cc/2025/Conference","ICML.cc/2024/Conference"],"query":"agent","maxResults":40,"maxAgeDays":30,"limitPerVenue":20}'::jsonb,
    true, now()),
   -- PR4: HN Algolia — keyword + time-bounded AI story search coexists with the
   -- existing Hacker News front-page RSS source so the admin sees two radar
-  -- rows instead of one.
+  -- rows instead of one. Query uses plain space-separated terms (Algolia
+  -- implicit OR); parenthetical OR with mixed terms ranks poorly so we kept
+  -- the query short and high-signal.
   ('a0000000-0000-0000-0000-000000000014', 'Hacker News AI Stories (Algolia)', 'hn_algolia',
-   '{"query":"(AI OR llm OR agent OR gpt OR claude OR gemini OR openai OR anthropic OR rag OR vector db)","maxResults":30,"maxAgeHours":24,"minPoints":0,"minComments":0,"tags":"story"}'::jsonb,
+   '{"query":"AI OR LLM OR agent OR chatgpt OR claude OR gemini","maxResults":30,"maxAgeHours":48,"minPoints":2,"minComments":0,"tags":"story"}'::jsonb,
    true, now()),
   -- PR5: vendor_news YAML-ised and extended from 2 → 6 vendors. The vendor key
   -- in config resolves to an entry in packages/ai-engine/configs/vendor_news.yml.

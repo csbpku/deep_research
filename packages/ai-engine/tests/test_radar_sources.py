@@ -1026,3 +1026,69 @@ async def test_vendor_changelog_applies_path_filter(tmp_path) -> None:
     # through without crashing; behavioural assertions live in
     # test_vendor_changelog_extracts_h2_titles_and_dedupes above.
     assert isinstance(items, list)
+
+
+async def test_vendor_changelog_anchor_extractor_handles_anthropic_html() -> None:
+    """Real-world check: anthropic.com docs embed slugs in inner <div id>.
+
+    The html sample below mirrors the structure Anthropic renders today
+    (h2 contains a nested div with id=claude-... plus an h3 with the title).
+    """
+    html = """
+    <h2 class="font-heading text-primary">
+      <div class="group relative pt-6 pb-2" id="claude-opus-5">
+        <div class="absolute hidden"><button>Anchor</button></div>
+        <h3 data-orientation="vertical" class="text-caption">
+          <a href="#claude-opus-5">Claude Opus 5</a>
+        </h3>
+      </div>
+    </h2>
+    <h2 class="font-heading text-primary">
+      <div class="group relative pt-6 pb-2" id="claude-fable-5">
+        <h3>Claude Fable 5</h3>
+      </div>
+    </h2>
+    """
+    from ai_engine.radar.vendor_changelog_fetcher import _extract_anchors
+
+    pairs = await _extract_anchors(html, "https://docs.anthropic.com/en/release-notes/")
+    titles_by_slug = {slug: title for slug, title in pairs}
+    assert "claude-opus-5" in titles_by_slug
+    assert "Claude Opus 5" in titles_by_slug["claude-opus-5"]
+    assert "claude-fable-5" in titles_by_slug
+
+
+async def test_vendor_changelog_falls_back_to_title_pattern_when_no_anchor() -> None:
+    """Vendor pages without id= anchors use the regex fallback."""
+
+    html = """
+    <body>
+    <h2>GPT-5 model launch</h2>
+    <p>The OpenAI team released GPT-5 with structured outputs.</p>
+    <h2>Responses API additions</h2>
+    <p>File search now supports 10k documents per request.</p>
+    </body>
+    """
+    import httpx
+    import asyncio
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=html.encode())
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_vendor_changelog(
+            {
+                "vendor": "openai",
+                "sources": ["https://example.com/changelog"],
+                "title_pattern": "<h2[^>]*>(.*?)</h2>",
+                "max_entries": 30,
+            },
+            client=client,
+        )
+    assert len(items) == 2
+    titles = [it.title for it in items]
+    assert "GPT-5 model launch" in titles
+    # Each candidate URL uses the title-slug fallback when no id= is present.
+    for item in items:
+        assert "#gpt" in item.url or "#responses" in item.url

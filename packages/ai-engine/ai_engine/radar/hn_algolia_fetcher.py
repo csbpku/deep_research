@@ -28,10 +28,7 @@ from ai_engine.radar.models import RadarCandidate
 
 _HN_ALGOLIA_SEARCH = "https://hn.algolia.com/api/v1/search_by_date"
 
-# Default AI-keyword query used when config has no override. Each OR clause is
-# matched against the HN Algolia full-text index. Kept short to stay under the
-# API's URL length budget; admins can override via ``config.query``.
-_DEFAULT_QUERY = "(AI OR llm OR agent OR gpt OR claude OR gemini OR openai OR anthropic OR rag OR vector db)"
+_DEFAULT_QUERY = "AI OR LLM OR agent OR chatgpt OR claude OR gemini"
 
 
 def _is_story_hit(hit: Mapping[str, Any]) -> bool:

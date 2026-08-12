@@ -35,3 +35,15 @@ os.environ.setdefault(
 # setdefault would silently flip the unit suite onto DbJobStore.
 os.environ["JOB_RUNNER_BACKEND"] = "memory"
 os.environ["AI_ENGINE_ADAPTER"] = "fake"  # tests always use fake adapter
+
+# Clear the vendor fetchers' statefiles before the test session so dedupe
+# tests do not see URLs left behind by prior runs. Each test that wants
+# explicit state isolation should arrange its own cleanup via monkeypatch.
+for p in (
+    Path(__file__).resolve().parent.parent / "ai_engine" / "static_docs"
+    / ".vendor_news_state.json",
+    Path(__file__).resolve().parent.parent / "ai_engine" / "static_docs"
+    / ".vendor_changelog_state.json",
+):
+    if p.exists():
+        p.unlink()

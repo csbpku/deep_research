@@ -80,6 +80,47 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+def _extract_block(block: str) -> str:
+    """Strip all tags/whitespace from an HTML block.
+
+    Vendor changelog pages often nest the actual entry title inside a header
+    like ``<h2><div id="claude-opus-5"><span class="icon"/>Claude Opus 5</span></div></h2>``.
+    The simpler ``<h2[^>]*>(.*?)</h2>`` regex captures the inner HTML; we strip
+    tags here to surface the visible title.
+    """
+    return _strip_html(block)
+
+
+async def _extract_anchors(html: str, source_url: str) -> list[tuple[str, str]]:
+    """Pull (slug, title) pairs from a vendor changelog HTML.
+
+    Strategy: find every heading (`<h2>` … `<h6>`) and look INSIDE the
+    captured block for an ``id="…"`` attribute whose value looks like an
+    anchor slug. The visible text inside the heading becomes the title.
+    Falls back to title-pattern matching when no anchor id is present.
+    """
+    out: list[tuple[str, str]] = []
+    seen_slugs: set[str] = set()
+    for match in _re.finditer(
+        r"<h([1-6])\b[^>]*>(.*?)</h\1>", html, _re.DOTALL
+    ):
+        block = match.group(2)
+        title = _extract_block(block)
+        if len(title) < 5:
+            continue
+        anchor_match = _re.search(
+            r'id="([^"]+)"', block
+        )
+        slug = anchor_match.group(1) if anchor_match else _re.sub(
+            r"[^a-z0-9]+", "-", title.lower()
+        ).strip("-")[:60]
+        if not slug or slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        out.append((slug, title[:240]))
+    return out
+
+
 async def fetch_vendor_changelog(
     config: Mapping[str, Any],
     *,
@@ -89,13 +130,17 @@ async def fetch_vendor_changelog(
 
     vendor = str(config.get("vendor") or "").strip()
     sources = [str(u) for u in config.get("sources", []) if isinstance(u, str) and u]
-    title_pattern = str(config.get("title_pattern") or r"<h[1-3][^>]*>(.*?)</h[1-3]>")
     allow_path_regex = config.get("allow_path_regex")
     if not vendor or not sources:
         return []
 
-    title_re = _re.compile(title_pattern, _re.DOTALL)
+    title_pattern = config.get("title_pattern")
+    if isinstance(title_pattern, str) and title_pattern:
+        legacy_title_re = _re.compile(title_pattern, _re.DOTALL)
+    else:
+        legacy_title_re = None
     path_re = _re.compile(allow_path_regex) if isinstance(allow_path_regex, str) and allow_path_regex else None
+    max_entries = max(1, min(60, int(config.get("max_entries", 30))))
 
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15.0, headers={"User-Agent": _USER_AGENT}, follow_redirects=True)
@@ -116,20 +161,22 @@ async def fetch_vendor_changelog(
                 )
                 continue
 
-            for match in title_re.finditer(html):
-                title_raw = match.group(1).strip()
-                title = _strip_html(title_raw)
-                if len(title) < 5 or len(title) > 240:
-                    continue
-                snippet = _strip_html(html[match.end():match.end() + 800])[:500]
-                # Approximate the per-entry URL via the source URL + title slug;
-                # a structured changelog would carry this metadata; for now the
-                # anchor forms a stable enough reference for admin triage.
-                slug = _re.sub(r"[^a-z0-9]+", "-", title.lower())[:60].strip("-")
-                url = f"{source_url.rstrip('/')}#{slug}" if slug else source_url
+            # Prefer the modern anchor-id extractor; fall back to legacy
+            # ``title_pattern`` regex for back-compat with existing seed rows.
+            entries: list[tuple[str, str]] = []
+            if legacy_title_re is None:
+                entries = await _extract_anchors(html, source_url)
+            if not entries:
+                for m in legacy_title_re.finditer(html) if legacy_title_re else []:
+                    title = _strip_html(m.group(1))
+                    if 5 <= len(title) <= 240:
+                        slug = _re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "entry"
+                        entries.append((slug, title))
 
-                if path_re and not path_re.search(url):
+            for slug, title in entries:
+                if path_re and not path_re.search(source_url):
                     continue
+                url = f"{source_url.rstrip('/')}#{slug}"
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
@@ -138,13 +185,13 @@ async def fetch_vendor_changelog(
                 candidates.append(RadarCandidate(
                     title=title[:300],
                     url=url,
-                    snippet=snippet,
+                    snippet="",
                     published_at=datetime.now(timezone.utc),
                     content_origin="web",
                     tags=tags,
                     source_quality_hint=0.85,
                 ))
-                if len(candidates) >= _MAX_ENTRIES_PER_VENDOR:
+                if len(candidates) >= max_entries:
                     break
 
             # If we got any candidates from this source, no need to try fallbacks.

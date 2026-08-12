@@ -14,17 +14,22 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "vendor_news.yml
 
 def test_vendor_yaml_loads_with_all_required_vendors() -> None:
     """The shipped YAML must include Anthropic + OpenAI (legacy) plus the
-    four new vendors added in this PR."""
+    four new vendors added in this PR.
+
+    Note: Mistral was removed in the firewall cleanup commit ``febd392``
+    because the smoke test could not reach mistral.ai from the deploy
+    environment. We assert it is absent here so the cleanup sticks.
+    """
 
     configs = _load_vendor_configs()
     assert "anthropic" in configs
     assert "openai" in configs
     assert "google_deepmind" in configs
-    assert "mistral" in configs
     assert "xai" in configs
     assert "huggingface_blog" in configs
-    # Each must surface a usable source URL and a url pattern.
-    for key in ("anthropic", "openai", "google_deepmind", "mistral", "xai", "huggingface_blog"):
+    assert "mistral" not in configs, "mistral.ai removed in febd392"
+    # Each remaining vendor must surface a usable source URL and a url pattern.
+    for key in ("anthropic", "openai", "google_deepmind", "xai", "huggingface_blog"):
         cfg = configs[key]
         assert cfg["url_pattern"], cfg
         assert cfg["rss_url"] or cfg["sitemap_url"], cfg
