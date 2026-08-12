@@ -11,6 +11,7 @@ from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
 from ai_engine.radar.github import fetch_github
 from ai_engine.radar.github_tracked import fetch_github_tracked
+from ai_engine.radar.hn_algolia_fetcher import fetch_hn_algolia
 from ai_engine.radar.huggingface_papers_fetcher import fetch_huggingface_papers
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.openreview_fetcher import fetch_openreview
@@ -804,3 +805,136 @@ async def test_openreview_handles_non_list_notes_payload() -> None:
             client=client,
         )
     assert items == []
+
+
+# PR4: HN Algolia fetcher — query + numeric filters + tag gating.
+
+
+def _hn_algolia_payload() -> dict[str, Any]:
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    return {
+        "hits": [
+            {
+                "objectID": "story-1",
+                "story_id": 42424242,
+                "title": "Show HN: New agentic LLM tooling",
+                "url": "https://example.com/post",
+                "author": "alice",
+                "created_at": now_iso,
+                "created_at_i": now_ts - 60,  # 1 minute old
+                "points": 80,
+                "num_comments": 12,
+                "_tags": ["story", "author_alice", "story_42424242"],
+            },
+            {
+                "objectID": "comment-1",
+                "title": None,
+                "url": None,
+                "created_at_i": now_ts - 30,
+                "_tags": ["comment", "author_bob"],
+            },
+            {
+                "objectID": "story-2",
+                "title": "Cryptocurrency airdrop tutorial",
+                "url": "https://example.com/crypto",
+                "author": "carol",
+                "created_at": now_iso,
+                "created_at_i": now_ts - 120,
+                "points": 200,
+                "num_comments": 50,
+                "_tags": ["story"],
+            },
+        ],
+    }
+
+
+async def test_hn_algolia_emits_story_with_external_link() -> None:
+    """A story hit with an external URL must surface the URL and an HN fallback id.
+
+    The keyword filter is enforced server-side by Algolia — the fetcher trusts
+    ``hits[]`` to be the already-filtered result set. The mock payload below
+    contains two story hits (one on AI, one off-topic) because that's what a
+    malicious or stale Algolia response could look like; the fetcher's job is
+    only to map them correctly, not to re-filter. We therefore assert on shape
+    and tags rather than expecting exactly one hit.
+    """
+
+    payload = _hn_algolia_payload()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("tags") == "story"
+        assert "created_at_i>" in request.url.params.get("numericFilters", "")
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_hn_algolia(
+            {"maxResults": 10, "maxAgeHours": 24, "minPoints": 5, "minComments": 0},
+            client=client,
+        )
+    assert items, items
+    ai_hit = next(item for item in items if "agentic" in item.title)
+    assert ai_hit.title == "Show HN: New agentic LLM tooling"
+    assert ai_hit.url == "https://example.com/post"
+    assert "alice" in ai_hit.snippet
+    assert "HN points: 80" in ai_hit.snippet
+    assert "hn_algolia" in ai_hit.tags
+
+
+async def test_hn_algolia_skips_non_story_hits() -> None:
+    """Comments and polls must be filtered out via the _tags gate."""
+
+    payload = _hn_algolia_payload()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_hn_algolia(
+            {"maxResults": 10, "maxAgeHours": 24, "minPoints": 0, "minComments": 0},
+            client=client,
+        )
+    # The comment hit (``_tags: ["comment", ...]``) must be filtered out by
+    # _is_story_hit. Only story-tagged hits survive.
+    titles = [item.title for item in items]
+    assert all("agentic" in t or "Cryptocurrency" in t for t in titles), titles
+    assert len(items) == 2, items  # both stories survived, the comment didn't.
+
+
+async def test_hn_algolia_enforces_min_points_and_min_comments() -> None:
+    """Both score gates must drop stories below the configured thresholds."""
+
+    payload = {
+        "hits": [
+            {
+                "objectID": "low-engagement",
+                "title": "Tiny mention of llm",
+                "created_at_i": int(datetime.now(timezone.utc).timestamp()),
+                "points": 1,
+                "num_comments": 0,
+                "_tags": ["story"],
+            },
+            {
+                "objectID": "high-engagement",
+                "title": "Strong agent benchmark",
+                "created_at_i": int(datetime.now(timezone.utc).timestamp()),
+                "points": 200,
+                "num_comments": 40,
+                "_tags": ["story"],
+            },
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_hn_algolia(
+            {"maxResults": 10, "maxAgeHours": 24, "minPoints": 10, "minComments": 5},
+            client=client,
+        )
+    assert len(items) == 1
+    assert items[0].title == "Strong agent benchmark"

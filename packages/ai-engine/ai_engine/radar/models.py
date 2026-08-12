@@ -11,7 +11,7 @@ SourceType = Literal[
     "hackernews", "reddit", "lobsters", "devto",
     "producthunt", "sitemap_watch", "vendor_guides", "wechat",
     "github_topic_search", "huggingface_models", "huggingface_papers",
-    "openreview",
+    "openreview", "hn_algolia",
 ]
 ContentOrigin = Literal["api", "rss", "web"]
 

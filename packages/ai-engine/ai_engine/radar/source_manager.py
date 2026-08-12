@@ -66,6 +66,13 @@ except ModuleNotFoundError:
     _HAVE_OPENREVIEW = False
     fetch_openreview = None  # type: ignore[assignment]
 
+try:
+    from ai_engine.radar.hn_algolia_fetcher import fetch_hn_algolia
+    _HAVE_HN_ALGOLIA = True
+except ModuleNotFoundError:
+    _HAVE_HN_ALGOLIA = False
+    fetch_hn_algolia = None  # type: ignore[assignment]
+
 SourceFetcher = Callable[[dict[str, Any]], Awaitable[list[RadarCandidate]]]
 
 _KNOWN_SOURCE_TYPES: set[str] = {
@@ -73,7 +80,7 @@ _KNOWN_SOURCE_TYPES: set[str] = {
     "hackernews", "reddit", "lobsters", "devto",
     "producthunt", "vendor_news", "sitemap_watch", "wechat",
     "github_topic_search", "huggingface_models", "huggingface_papers",
-    "openreview",
+    "openreview", "hn_algolia",
 }
 
 _HANDLERS: dict[str, SourceFetcher] = {
@@ -91,6 +98,7 @@ _HANDLERS: dict[str, SourceFetcher] = {
     "huggingface_models": fetch_huggingface_models,
     "huggingface_papers": fetch_huggingface_papers,
     "openreview": fetch_openreview,
+    "hn_algolia": fetch_hn_algolia,
     "vendor_news": lambda cfg: check_and_fetch_vendor_news(
         str(cfg.get("vendor", "anthropic")),
         lookback_hours=int(cfg.get("max_age_hours", 72)),
