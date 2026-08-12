@@ -215,7 +215,7 @@ SMOKE_MATRIX: list[dict[str, Any]] = [
         "label": "PaperWeekly RSS",
         "fetcher_name": "rss",
         "config": {
-            "feedUrl": "https://paperweekly.site/feed",
+            "feedUrl": "https://www.paperweekly.site/feed",
             "maxResults": 5,
             "maxAgeHours": 720,
             "applyAiFilter": False,

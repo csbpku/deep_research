@@ -89,7 +89,7 @@ VALUES
    '{"feedUrl":"https://www.qbitai.com/feed","maxResults":20,"maxAgeHours":72,"applyAiFilter":false}'::jsonb,
    true, now()),
   ('a0000000-0000-0000-0000-000000000021', 'PaperWeekly', 'rss',
-   '{"feedUrl":"https://paperweekly.site/feed","maxResults":15,"maxAgeHours":720,"applyAiFilter":false}'::jsonb,
+   '{"feedUrl":"https://www.paperweekly.site/feed","maxResults":15,"maxAgeHours":720,"applyAiFilter":false}'::jsonb,
    true, now()),
   -- P1.11 API Changelog — engineer-facing release notes for OpenAI + Anthropic.
   -- The fetcher uses configured sources + a title extraction pattern, dedupes
