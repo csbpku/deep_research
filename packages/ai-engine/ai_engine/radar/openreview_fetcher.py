@@ -84,8 +84,14 @@ async def fetch_openreview(
         }
     """
 
+    # OpenReview accepted papers use ``pdate`` (acceptance timestamp).
+    # NeurIPS accepts in Sept for Dec conferences; ICLR in Oct for May.
+    # Default 400-day cutoff covers every active venue round. Set to 0
+    # to disable the age gate (admins may want this to seed a fresh
+    # taxonomy / relationship graph on first sync).
     max_results = max(1, min(100, int(config.get("maxResults", 30))))
-    max_age_days = max(1, int(config.get("maxAgeDays", 14)))
+    _days_raw = config.get("maxAgeDays", 400)
+    max_age_days = max(0, int(_days_raw)) if _days_raw is not None else 400
     limit_per_venue = max(1, min(100, int(config.get("limitPerVenue", 30))))
     query_term = str(config.get("query", "agent").strip() or "agent")
     venues: list[str] = [str(v) for v in config.get("venues", []) if isinstance(v, str) and v]
@@ -155,7 +161,7 @@ async def fetch_openreview(
                 published = _parse_iso(note.get("pdate")) or _parse_iso(note.get("mdate"))
                 if published is not None:
                     age_days = (now - published).days
-                    if age_days > max_age_days:
+                    if max_age_days > 0 and age_days > max_age_days:
                         continue
 
                 authors = _author_names(_field(content, "authors", "authorids"))

@@ -8,12 +8,15 @@ BEGIN;
 INSERT INTO radar_sources (id, name, "sourceType", config, enabled, "updatedAt")
 VALUES
   -- GitHub 热门 AI 仓库（无需 token 即可读，但有 token 限额更高）
+  -- Expanded repo list 5→15 to capture the long-tail of active AI tooling.
   ('a0000000-0000-0000-0000-000000000001', 'GitHub Trending AI/ML', 'github',
-   '{"type": "trending", "orgs": [], "repos": ["huggingface/transformers", "pytorch/pytorch", "langchain-ai/langchain", "ollama/ollama", "openai/openai-cookbook"]}'::jsonb,
+   '{"type": "trending", "orgs": [], "repos": ["huggingface/transformers", "pytorch/pytorch", "langchain-ai/langchain", "ollama/ollama", "openai/openai-cookbook", "openai/codex", "anthropics/claude-code", "google-gemini/gemini-cli", "ggerganov/llama.cpp", "huggingface/diffusers", "huggingface/transformers", "run-llama/llama_index", "crewAIInc/crewAI", "All-Hands-AI/OpenHands", "vllm-project/vllm"]}'::jsonb,
    true, now()),
-  -- Arxiv cs.AI + cs.CL（纯公开 API，无需 key）
-  ('a0000000-0000-0000-0000-000000000002', 'Arxiv cs.AI / cs.CL', 'arxiv',
-   '{"categories": ["cs.AI", "cs.CL"], "maxResults": 15}'::jsonb,
+  -- Arxiv cs.AI + cs.CL + cs.LG — full daily AI set, 3 categories covers
+  -- Mon submission spikes; 30 papers per run keeps arxiv API latency <5s.
+  -- lookbackHours=168 keeps a 7-day backlog.
+  ('a0000000-0000-0000-0000-000000000002', 'Arxiv cs.AI / cs.CL / cs.LG', 'arxiv',
+   '{"categories": ["cs.AI", "cs.CL", "cs.LG"], "maxResults": 30, "maxCandidates": 30, "lookbackHours": 168}'::jsonb,
    true, now()),
   -- Hacker News via hnrss（纯公开，无需 key）
   ('a0000000-0000-0000-0000-000000000003', 'Hacker News Frontpage', 'rss',
@@ -23,9 +26,9 @@ VALUES
   ('a0000000-0000-0000-0000-000000000004', 'WeWe RSS 微信公众号', 'rss',
    '{"feedUrl": "http://localhost:4001/feeds/all.rss?limit=5", "localPort": 4001, "maxResults": 5, "maxAgeHours": 24, "allowLocalhost": true, "applyAiFilter": false}'::jsonb,
    true, now()),
-  -- GitHub Tracked：来自 configs/radar_tracked_repos.yml 的 26 个仓库
+  -- GitHub Tracked：来自 configs/radar_tracked_repos.yml 的 42 个仓库（PR2 扩 26→42，新增 deepseek/mistral/llama.cpp/unsloth/diffusers/peft 等）
   ('a0000000-0000-0000-0000-000000000005', 'GitHub Tracked Repos (curated)', 'github_tracked',
-   '{"repos":["anthropics/claude-code","openai/codex","google-gemini/gemini-cli","Aider-AI/aider","All-Hands-AI/OpenHands","cline/cline","block/goose","continuedev/continue","langchain-ai/langgraph","The-Pocket/PocketFlow","different-ai/openwork","microsoft/autogen","crewAIInc/crewAI","AI-Agent-Hackathon/agent-protocol","vllm-project/vllm","BerriAI/litellm","ollama/ollama","huggingface/transformers","sgl-project/sglang","langchain-ai/langchain","run-llama/llama_index","comfyanonymous/ComfyUI","openai/gpt-oss","meta-llama/llama3","moonshotai/Kimi-K3","QwenLM/Qwen3"],"lookback_days":1,"max_items_per_repo":20,"include_issues":true,"include_prs":true,"include_releases":true,"paginated_repos":["vllm-project/vllm","BerriAI/litellm","ollama/ollama","huggingface/transformers","sgl-project/sglang","langchain-ai/langchain","run-llama/llama_index"]}'::jsonb,
+   '{"repos":["anthropics/claude-code","openai/codex","google-gemini/gemini-cli","Aider-AI/aider","All-Hands-AI/OpenHands","cline/cline","block/goose","continuedev/continue","langchain-ai/langgraph","The-Pocket/PocketFlow","different-ai/openwork","microsoft/autogen","crewAIInc/crewAI","AI-Agent-Hackathon/agent-protocol","vllm-project/vllm","BerriAI/litellm","ollama/ollama","huggingface/transformers","sgl-project/sglang","langchain-ai/langchain","run-llama/llama_index","comfyanonymous/ComfyUI","openai/gpt-oss","meta-llama/llama3","moonshotai/Kimi-K3","QwenLM/Qwen3","deepseek-ai/DeepSeek-V3","mistralai/mistral-inference","anthropics/anthropic-sdk-python","huggingface/smol-course","unslothai/unsloth","ggerganov/llama.cpp","huggingface/diffusers","huggingface/peft","huggingface/trl","meta-llama/llama-cookbook","openvinotoolkit/openvino","microsoft/onnxruntime"],"lookback_days":3,"max_items_per_repo":15,"include_issues":true,"include_prs":true,"include_releases":true,"paginated_repos":["vllm-project/vllm","BerriAI/litellm","ollama/ollama","huggingface/transformers","sgl-project/sglang","langchain-ai/langchain","run-llama/llama_index","ggerganov/llama.cpp","microsoft/onnxruntime","openvinotoolkit/openvino"]}'::jsonb,
    true, now()),
   -- Reddit：P2.13 扩展 subreddits 至 6 个，覆盖 singularity / StableDiffusion / ChatGPT 等 AI 周圈。
   ('a0000000-0000-0000-0000-000000000006', 'Reddit AI Communities', 'reddit',

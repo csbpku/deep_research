@@ -49,9 +49,12 @@ async def fetch_arxiv_candidates(config: Mapping[str, Any]) -> list[RadarCandida
         timeout=max(30.0, min(timeout_seconds, 180.0)),
     )
 
-    # agents-radar keeps only papers published in the last 48h (arXiv has a
-    # ~1-day publishing delay, so 24h would miss today's batch).
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    # The hardcoded 48h lookback assumes a daily-cadence sync. Sources
+    # configured with a longer polling interval (e.g. weekly backfills)
+    # need a wider window; honor ``lookbackHours`` when set, else fall
+    # back to 48h.
+    lookback_hours = max(1, int(config.get("lookbackHours", 48)))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     recent: list[dict[str, Any]] = []
     for item in items:
         raw_published = item.get("published_at") or item.get("published")

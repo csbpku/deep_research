@@ -79,3 +79,34 @@ foundation_models:
     repo: moonshotai/Kimi-K3
   - id: qwen3
     repo: QwenLM/Qwen3
+  - id: deepseek
+    repo: deepseek-ai/DeepSeek-V3
+  - id: mistral
+    repo: mistralai/mistral-inference
+  - id: claude-sdk
+    repo: anthropics/anthropic-sdk-python
+  - id: smol-course
+    repo: huggingface/smol-course
+  - id: unsloth
+    repo: unslothai/unsloth
+  - id: llama.cpp
+    repo: ggerganov/llama.cpp
+    paginated: true
+  - id: vllm
+    repo: vllm-project/vllm
+    paginated: true
+  - id: sglang
+    repo: sgl-project/sglang
+    paginated: true
+  - id: diffusers
+    repo: huggingface/diffusers
+  - id: peft
+    repo: huggingface/peft
+  - id: trl
+    repo: huggingface/trl
+  - id: llama-recipes
+    repo: meta-llama/llama-cookbook
+  - id: openvino
+    repo: openvinotoolkit/openvino
+  - id: onnxruntime
+    repo: microsoft/onnxruntime

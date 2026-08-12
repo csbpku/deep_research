@@ -1,38 +1,9 @@
 {
   "anthropic": [
-    "https://docs.anthropic.com/en/release-notes#april-16-2026",
-    "https://docs.anthropic.com/en/release-notes#august-5-2025",
-    "https://docs.anthropic.com/en/release-notes#claude-fable-5",
-    "https://docs.anthropic.com/en/release-notes#claude-haiku-4-5",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-4",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-4-1",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-4-5",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-4-6",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-4-7",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-4-8",
-    "https://docs.anthropic.com/en/release-notes#claude-opus-5",
-    "https://docs.anthropic.com/en/release-notes#claude-sonnet-4-5",
-    "https://docs.anthropic.com/en/release-notes#claude-sonnet-4-6",
-    "https://docs.anthropic.com/en/release-notes#company",
-    "https://docs.anthropic.com/en/release-notes#february-17-2026",
-    "https://docs.anthropic.com/en/release-notes#february-5-2026",
-    "https://docs.anthropic.com/en/release-notes#help-and-security",
-    "https://docs.anthropic.com/en/release-notes#january-18-2026",
-    "https://docs.anthropic.com/en/release-notes#july-24-2026",
-    "https://docs.anthropic.com/en/release-notes#june-9-2026",
-    "https://docs.anthropic.com/en/release-notes#learn",
-    "https://docs.anthropic.com/en/release-notes#may-28-2026",
-    "https://docs.anthropic.com/en/release-notes#november-19-2025",
-    "https://docs.anthropic.com/en/release-notes#november-24-2025",
-    "https://docs.anthropic.com/en/release-notes#october-15-2025",
-    "https://docs.anthropic.com/en/release-notes#partners",
-    "https://docs.anthropic.com/en/release-notes#september-29-2025",
-    "https://docs.anthropic.com/en/release-notes#solutions",
-    "https://docs.anthropic.com/en/release-notes#system-prompts",
-    "https://docs.anthropic.com/en/release-notes#terms-and-policies"
+    "https://docs.anthropic.com/en/release-notes#marketing-post"
   ],
   "openai": [
-    "https://platform.openai.com/docs/changelog#docs-agent",
-    "https://platform.openai.com/docs/changelog#search-the-api-docs"
+    "https://example.com/changelog#gpt-5-model-launch",
+    "https://example.com/changelog#responses-api-additions"
   ]
 }
