@@ -311,6 +311,13 @@ model Summary {
   authors           String[]  @default([])
   arxivAnalysis     Json?     @db.JsonB
   highlights        Json?     @db.JsonB
+  // P2.15 Semantic Scholar enrich — citation count + reference count are
+  // surfaced via the radar/admin summary view to signal research impact.
+  // Populated lazily by the enrichment worker, never required.
+  semanticScholarId     String? @db.VarChar(64)
+  citationCount         Int?    // inbound citation count from Semantic Scholar
+  referenceCount        Int?    // outbound reference count
+  influentialCitationCount Int?
 
   comments           Comment[]                @relation("comments_summary")
   shareSource        ShareSubmission?         @relation("share_to_summary")

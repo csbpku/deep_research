@@ -27,9 +27,9 @@ VALUES
   ('a0000000-0000-0000-0000-000000000005', 'GitHub Tracked Repos (curated)', 'github_tracked',
    '{"repos":["anthropics/claude-code","openai/codex","google-gemini/gemini-cli","Aider-AI/aider","All-Hands-AI/OpenHands","cline/cline","block/goose","continuedev/continue","langchain-ai/langgraph","The-Pocket/PocketFlow","different-ai/openwork","microsoft/autogen","crewAIInc/crewAI","AI-Agent-Hackathon/agent-protocol","vllm-project/vllm","BerriAI/litellm","ollama/ollama","huggingface/transformers","sgl-project/sglang","langchain-ai/langchain","run-llama/llama_index","comfyanonymous/ComfyUI","openai/gpt-oss","meta-llama/llama3","moonshotai/Kimi-K3","QwenLM/Qwen3"],"lookback_days":1,"max_items_per_repo":20,"include_issues":true,"include_prs":true,"include_releases":true,"paginated_repos":["vllm-project/vllm","BerriAI/litellm","ollama/ollama","huggingface/transformers","sgl-project/sglang","langchain-ai/langchain","run-llama/llama_index"]}'::jsonb,
    true, now()),
-  -- Reddit：采用 fetcher 默认 subreddit 集合，24 小时窗口
+  -- Reddit：P2.13 扩展 subreddits 至 6 个，覆盖 singularity / StableDiffusion / ChatGPT 等 AI 周圈。
   ('a0000000-0000-0000-0000-000000000006', 'Reddit AI Communities', 'reddit',
-   '{"subreddits":["programming","MachineLearning","LocalLLaMA"],"max_per_subreddit":10,"max_age_hours":24}'::jsonb,
+   '{"subreddits":["programming","MachineLearning","LocalLLaMA","singularity","ChatGPT","StableDiffusion"],"max_per_subreddit":10,"max_age_hours":24}'::jsonb,
    true, now()),
   -- Lobste.rs：AI/ML 标签页，24 小时窗口
   ('a0000000-0000-0000-0000-000000000007', 'Lobste.rs AI/ML', 'lobsters',
@@ -80,6 +80,33 @@ VALUES
    true, now()),
   ('a0000000-0000-0000-0000-000000000018', 'Hugging Face Blog', 'vendor_news',
    '{"vendor":"huggingface_blog","max_age_hours":96}'::jsonb,
+   true, now()),
+  -- P2.14 中文 AI 信源 RSS — 机器之心、量子位、PaperWeekly 都有公开 RSS feed。
+  ('a0000000-0000-0000-0000-000000000019', '机器之心 (Jiqizhixin)', 'rss',
+   '{"feedUrl":"https://www.jiqizhixin.com/rss","maxResults":20,"maxAgeHours":72,"applyAiFilter":false}'::jsonb,
+   true, now()),
+  ('a0000000-0000-0000-0000-000000000020', '量子位 (QbitAI)', 'rss',
+   '{"feedUrl":"https://www.qbitai.com/feed","maxResults":20,"maxAgeHours":72,"applyAiFilter":false}'::jsonb,
+   true, now()),
+  ('a0000000-0000-0000-0000-000000000021', 'PaperWeekly', 'rss',
+   '{"feedUrl":"https://paperweekly.site/feed","maxResults":15,"maxAgeHours":720,"applyAiFilter":false}'::jsonb,
+   true, now()),
+  -- P1.11 API Changelog — engineer-facing release notes for OpenAI + Anthropic.
+  -- The fetcher uses configured sources + a title extraction pattern, dedupes
+  -- via a statefile, and surfaces entries as RadarCandidates so they show up
+  -- alongside vendor_news but in a distinct timeline.
+  ('a0000000-0000-0000-0000-000000000022', 'OpenAI Changelog', 'vendor_changelog',
+   '{"vendor":"openai","sources":["https://platform.openai.com/docs/changelog"],"title_pattern":"<h2[^>]*>(.*?)</h2>","max_entries":30}'::jsonb,
+   true, now()),
+  ('a0000000-0000-0000-0000-000000000023', 'Anthropic Release Notes', 'vendor_changelog',
+   '{"vendor":"anthropic","sources":["https://docs.anthropic.com/en/release-notes/"],"title_pattern":"<h[1-3][^>]*>(.*?)</h[1-3]>","allow_path_regex":"/release-notes/","max_entries":30}'::jsonb,
+   true, now()),
+  -- P1.9 Product Hunt — fetcher exists, requires PRODUCTHUNT_API_TOKEN env.
+  -- Without the env var the source will surface as a failed row in
+  -- radar_sync_diagnostics; the seed inserts the row so admins can flip the
+  -- env and have it appear in /radar without a separate migration.
+  ('a0000000-0000-0000-0000-000000000024', 'Product Hunt AI Tools', 'producthunt',
+   '{"fetch_count":60,"max_results":20,"max_age_hours":48}'::jsonb,
    true, now())
 ON CONFLICT DO NOTHING;
 

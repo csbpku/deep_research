@@ -44,6 +44,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     todayFilteredDiagnostics,
     todayFailedDiagnostics,
     todayRadarAccepted,
+    stuckRadarSources,
   ] = await Promise.all([
     prisma.shareSubmission.count({ where: { status: 'pending' } }),
     prisma.comment.count({ where: { promoteStatus: 'nominated' } }),
@@ -126,6 +127,26 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       },
       distinct: ['canonicalUrl'],
       select: { canonicalUrl: true, updatedAt: true },
+    }),
+    // P1.10: surface sources wedged into failure — consecutiveFailures ≥ 3.
+    // Independent of the today's runs aggregation so the operator sees chronic
+    // breakage even when today's runs haven't reported any failures yet.
+    prisma.radarSource.findMany({
+      where: { consecutiveFailures: { gte: 3 } } as Record<string, unknown>,
+      orderBy: [
+        { consecutiveFailures: 'desc' },
+        { lastErrorAt: 'desc' },
+      ] as unknown as never,
+      select: {
+        id: true,
+        name: true,
+        sourceType: true,
+        consecutiveFailures: true,
+        lastErrorCode: true,
+        lastErrorMessage: true,
+        lastErrorAt: true,
+        lastSyncAt: true,
+      } as unknown as never,
     }),
   ]);
 
@@ -299,6 +320,29 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             errorCode: lastRadarSync.errorCode,
           }
         : null,
+      // P1.10: chronic failure surface — sources stuck failing N+ times.
+      // Sorted descending by consecutiveFailures so the operator sees the
+      // worst offenders first; the cap of 3 consecutive failures matches
+      // the convention agreed with ops to alert but not panic.
+      stuckSources: (stuckRadarSources as unknown as Array<{
+        id: string;
+        name: string;
+        sourceType: string;
+        consecutiveFailures: number;
+        lastErrorCode: string | null;
+        lastErrorMessage: string | null;
+        lastErrorAt: Date | null;
+        lastSyncAt: Date | null;
+      }>).map((source) => ({
+        id: source.id,
+        name: source.name,
+        sourceType: source.sourceType,
+        consecutiveFailures: source.consecutiveFailures,
+        lastErrorCode: source.lastErrorCode,
+        lastErrorMessage: source.lastErrorMessage,
+        lastErrorAt: source.lastErrorAt?.toISOString() ?? null,
+        lastSyncAt: source.lastSyncAt?.toISOString() ?? null,
+      })),
       monitor: {
         date: shanghaiDate,
         visibleToday,

@@ -331,9 +331,53 @@ async def _fetch_arxiv_rss_fallback(
 def _parse_rss_xml_simple(text: str) -> list[dict[str, str]]:
     """Parse RSS 2.0 and Atom XML, extracting <item> or <entry> elements.
 
-    Uses simple regex parsing to avoid feedparser dep. Handles basic CDATA.
-    Atom <entry> elements are mapped to the same dict shape as RSS <item>.
+    Primary path: feedparser (industry-standard, handles malformed feeds
+    gracefully). Fallback: in-house regex parser that survives when feedparser
+    is unavailable or raises (rare, but seen on truly broken CDATA blocks).
     """
+
+    primary = _parse_via_feedparser(text)
+    if primary is not None:
+        return primary
+    return _parse_via_regex(text)
+
+
+def _parse_via_feedparser(text: str) -> list[dict[str, str]] | None:
+    """Return parsed items via feedparser, or None if the dep is unavailable."""
+    try:
+        import feedparser  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+    try:
+        parsed = feedparser.parse(text)
+    except Exception:
+        return None
+    out: list[dict[str, str]] = []
+    for entry in parsed.entries:
+        item: dict[str, str] = {}
+        if hasattr(entry, "title") and entry.title:
+            item["title"] = str(entry.title).strip()
+        if hasattr(entry, "link") and entry.link:
+            item["link"] = str(entry.link).strip()
+        if hasattr(entry, "summary") and entry.summary:
+            item["description"] = str(entry.summary).strip()
+        elif hasattr(entry, "content") and entry.content:
+            try:
+                value = entry.content[0].get("value") if entry.content else ""
+                if value:
+                    item["description"] = str(value).strip()
+            except Exception:
+                pass
+        if hasattr(entry, "published") and entry.published:
+            item["pubDate"] = str(entry.published).strip()
+        elif hasattr(entry, "updated") and entry.updated:
+            item["pubDate"] = str(entry.updated).strip()
+        if item:
+            out.append(item)
+    return out
+
+
+def _parse_via_regex(text: str) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
 
     # RSS 2.0: <item>...</item>

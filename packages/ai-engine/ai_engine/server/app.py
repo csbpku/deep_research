@@ -25,7 +25,7 @@ import inspect
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
@@ -317,45 +317,178 @@ def _seconds_until_next_radar_window(
     return (target - now).total_seconds()
 
 
-async def _radar_sync_loop(app_instance: FastAPI) -> None:
-    """Scheduled radar sync → enrichment at 08:00 Asia/Shanghai.
+# P1.6: tiered polling intervals.
+# Per-source-type default cadence (minutes) — overrides live in
+# radar_sources.config["pollingIntervalMinutes"] when set, otherwise the
+# tier default applies. ``hot`` is reserved for sources that benefit from
+# sub-hour freshness (HN Algolia, vendor news, vendor changelogs);
+# ``mid`` covers arXiv + community feeds; ``daily`` covers curated
+# tracked-repo digests whose content only changes a few times a week.
+_RADAR_DEFAULT_TIER_MINUTES: dict[str, int] = {
+    "hackernews": 30,
+    "hn_algolia": 30,
+    "vendor_news": 60,
+    "vendor_changelog": 60,
+    "rss": 60,
+    "huggingface_papers": 30,
+    "huggingface_models": 120,
+    "openreview": 60,
+    "arxiv": 60,
+    "devto": 120,
+    "lobsters": 120,
+    "reddit": 120,
+    "github": 30,
+    "github_trending": 30,
+    "github_tracked": 720,        # curated list, daily is fine
+    "github_topic_search": 120,
+    "producthunt": 240,
+    "sitemap_watch": 360,
+    "wechat": 360,
+}
 
-    Controlled by ``RADAR_SYNC_CRON_ENABLED`` (default 1 when a real DB pool
-    is present) and ``RADAR_SYNC_CRON_TIME`` (default "08:00"). The shared
-    ``radar_sync_lock`` prevents overlap with an admin-triggered sync.
+
+def _radar_polling_interval_minutes(source_type: str, config: Mapping[str, Any]) -> int:
+    """Pick the smallest positive interval allowed for a source.
+
+    Order of precedence:
+        1. explicit ``pollingIntervalMinutes`` in the radar_sources.config
+        2. tier default keyed by source_type
+        3. 60 minutes (one hour, the universal fallback)
+    """
+    raw = config.get("pollingIntervalMinutes")
+    try:
+        explicit = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        explicit = None
+    if explicit is not None and explicit > 0:
+        return max(5, min(explicit, 24 * 60))
+    return _RADAR_DEFAULT_TIER_MINUTES.get(source_type, 60)
+
+
+async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
+    """P1.6: per-source polling cadence.
+
+    Replaces the previous single-shot daily loop. Every ``RADAR_TICK_SECONDS``
+    (default 60) we wake, query ``radar_sources`` for sources whose next-fire
+    moment has arrived, and run only those. The cron-time ``RADAR_SYNC_CRON_TIME``
+    stays as a once-a-day forced full sweep so the system always catches up
+    even if the loop wedged.
+
+    Concurrency is the same as before (single asyncio.Lock; per-source fetcher
+    concurrency lives in the runner).
     """
     from ai_engine.radar.sync_endpoint import run_radar_sync_job
 
     log = structlog.get_logger("ai_engine.radar")
-    schedule = os.environ.get("RADAR_SYNC_CRON_TIME", "08:00")
+    tick_seconds = max(15.0, float(os.environ.get("RADAR_TICK_SECONDS", "60")))
+    daily_full_sync_time = os.environ.get("RADAR_SYNC_CRON_TIME", "08:00")
     tz = ZoneInfo("Asia/Shanghai")
+    last_daily_full_sync = datetime.now(tz) - timedelta(days=2)
+    last_run_at_per_source: dict[str, datetime] = {}
+
     while True:
         try:
-            await asyncio.sleep(_seconds_until_next_radar_window(schedule, tz))
+            await asyncio.sleep(tick_seconds)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.warning(
-                "ai-engine.radar.daily_schedule_failed",
+                "ai-engine.radar.tiered_loop_tick_failed",
                 error_type=type(exc).__name__,
             )
-            await asyncio.sleep(3600.0)
             continue
+
+        now = datetime.now(tz)
+        due_source_ids: list[str] = []
+        try:
+            async with app_instance.state.db_pool.connection() as conn:
+                rows = await (
+                    await conn.execute(
+                        'SELECT "id", "sourceType", "config", "lastSyncAt" '
+                        'FROM "radar_sources" WHERE "enabled" = true '
+                        'ORDER BY "createdAt" ASC'
+                    )
+                ).fetchall()
+            today_at_8am = now.replace(
+                hour=int(daily_full_sync_time.split(":")[0]),
+                minute=int(daily_full_sync_time.split(":")[1]),
+                second=0,
+                microsecond=0,
+            )
+            full_sync_overdue = (
+                last_daily_full_sync.date() < now.date()
+                or (last_daily_full_sync < today_at_8am <= now)
+            )
+
+            for row in rows:
+                raw_config = row.get("config") or {}
+                config = dict(raw_config) if isinstance(raw_config, dict) else {}
+                interval_minutes = _radar_polling_interval_minutes(
+                    str(row["sourceType"]), config
+                )
+                last_run = last_run_at_per_source.get(str(row["id"]))
+                last_sync = row.get("lastSyncAt")
+                anchor = last_run or (
+                    last_sync if isinstance(last_sync, datetime) else None
+                )
+                if anchor is None:
+                    due_source_ids.append(str(row["id"]))
+                    continue
+                if anchor.tzinfo is None:
+                    anchor = anchor.replace(tzinfo=tz)
+                if (now - anchor).total_seconds() >= interval_minutes * 60:
+                    due_source_ids.append(str(row["id"]))
+
+            # Force a full sweep at the configured daily window so any tier
+            # drift or missed loop iteration gets caught up.
+            if full_sync_overdue:
+                due_source_ids = [str(row["id"]) for row in rows]
+                last_daily_full_sync = now
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.due_source_query_failed",
+                error_type=type(exc).__name__,
+            )
+            continue
+
+        # Stamp first so even a failed run still suppresses re-firing within
+        # the pollingIntervalMinutes window after we exit the loop body.
+        for source_id in due_source_ids:
+            last_run_at_per_source[source_id] = now
+
+        if not due_source_ids:
+            continue
+
         try:
             await run_radar_sync_job(
                 pool=app_instance.state.db_pool,
                 adapter=app_instance.state.adapter,
                 triggered_by="cron",
-                request_id=f"cron-{uuid.uuid4()}",
+                request_id=f"tiered-{uuid.uuid4()}",
+                source_ids=set(due_source_ids),
                 lock=getattr(app_instance.state, "radar_sync_lock", None),
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.warning(
-                "ai-engine.radar.daily_job_failed",
+                "ai-engine.radar.tiered_job_failed",
                 error_type=type(exc).__name__,
+                sources=len(due_source_ids),
             )
+
+
+async def _radar_sync_loop(app_instance: FastAPI) -> None:
+    """Scheduled radar sync → enrichment at 08:00 Asia/Shanghai.
+
+    Controlled by ``RADAR_SYNC_CRON_ENABLED`` (default 1 when a real DB pool
+    is present) and ``RADAR_SYNC_CRON_TIME`` (default "08:00"). The shared
+    ``radar_sync_lock`` prevents overlap with an admin-triggered sync.
+
+    Kept as a thin shim that delegates to ``_radar_tiered_sync_loop``; the
+    old name is preserved so historical ``lifespan`` callers stay valid.
+    """
+    await _radar_tiered_sync_loop(app_instance)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -620,7 +753,10 @@ class SubmitAiJobBody(BaseModel):
     topic: str = Field(min_length=2, max_length=200)
     context: str | None = Field(default=None, max_length=2000)
     report_type: ReportType = Field(default="research_report")
+    # P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
     source_policy: SourcePolicy = Field(default="prefer_user_sources")
+    report_length: str = Field(default="standard")  # brief | standard | deep
+    max_urls_to_scrape: int | None = Field(default=None, ge=5, le=30)
     source_refs: list[dict[str, str | bool]] = Field(default_factory=list, max_length=10)
     idempotency_key: str | None = Field(default=None, max_length=64)
 

@@ -52,8 +52,18 @@ export const CreateAiJobInput = z.object({
   topic: z.string().min(2).max(200),
   context: z.string().max(2000).optional(),                    // 用户手填上下文
   reportType: z.enum(['research_report', 'summary_brief', 'slides']).default('research_report'),
+  // P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
+  // brief  = ~500 words / 5 URLs  (default for summary_brief)
+  // standard = 800 words / 10 URLs (legacy default for research_report)
+  // deep   = ~2000 words / 25 URLs (deep dive)
+  // The mapping lives in ai_engine.adapters.gpt_researcher; the API just
+  // echoes the user's pick back so the FE can render progress in real time.
+  reportLength: z.enum(['brief', 'standard', 'deep']).default('standard'),
   sourcePolicy: z.enum([SOURCE_POLICY.PREFER_USER_SOURCES, SOURCE_POLICY.ONLY_USER_SOURCES])
     .default(SOURCE_POLICY.PREFER_USER_SOURCES),
+  // P1.8: explicit URL-scrape cap override (5..30). When unset, the value
+  // is derived from reportLength.
+  maxUrlsToScrape: z.number().int().min(5).max(30).optional(),
   sourceRefs: z.array(z.discriminatedUnion('type', [
     SourceRefUrl,
     SourceRefUuid('favorite'),

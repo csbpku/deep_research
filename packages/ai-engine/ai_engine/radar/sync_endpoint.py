@@ -356,6 +356,7 @@ async def run_radar_sync_job(
     triggered_by: Literal["cron", "admin"],
     request_id: str,
     lock: asyncio.Lock | None = None,
+    source_ids: set[str] | None = None,
 ) -> None:
     """Shared radar task used by the cron loop and host-level script."""
     await _run_background(
@@ -364,6 +365,7 @@ async def run_radar_sync_job(
         triggered_by=triggered_by,
         request_id=request_id,
         lock=lock,
+        source_ids=source_ids,
     )
 
 

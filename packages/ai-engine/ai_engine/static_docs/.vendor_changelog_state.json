@@ -1,0 +1,8 @@
+{
+  "openai": [
+    "https://platform.openai.com/docs/changelog#2026-07-29-vision-input-pricing",
+    "https://platform.openai.com/docs/changelog#2026-08-05-responses-api-additions",
+    "https://platform.openai.com/docs/changelog#2026-08-10-gpt-5-model-launch"
+  ],
+  "anthropic": []
+}

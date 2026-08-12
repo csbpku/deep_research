@@ -7,11 +7,11 @@ FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓�
 - `adapters/`：统一 `ResearchEngineAdapter` 协议，提供 fake 与 Claude 实现。
 - `job_runner/`：内存/数据库 store、幂等 replay、日配额、lease、reaper 和任务执行。
 - `radar/`：GitHub、arXiv、RSS source 管理、抓取、同步与解释流水线。
-- `fetcher/`：安全 URL fetch 与 Tavily/source URL 处理。
+- `fetcher/`：SSRF-safe URL fetch 与 source URL 处理（gpt-researcher 内部使用 Tavily/DuckDuckGo 作为 retriever；该配置来自 `RETRIEVER` env，不再走我们 fetcher 目录）。
 - `server/`：health、AI job、radar sync、share submission 和 chat endpoints。
 - 顶层 worker：文件导入与分享提交处理。
 
-`gpt-researcher` 是当前运行时主适配（Week 7 切回，ADR 0004 复评通过）；`fake` 是测试/CI fallback。Claude 适配（`adapters/claude.py`）已从 `build_adapter` 工厂移除，历史 spike 报告保留在 `reports/`，引擎选型见 `docs/decisions/0004-ai-engine-selection.md`。默认 retriever 为 tavily（`fetcher/tavily.py`），`TAVILY_API_KEY` 仍为必填。
+`gpt-researcher` 是当前运行时主适配（Week 7 切回，ADR 0004 复评通过）；`fake` 是测试/CI fallback。Claude 适配（`adapters/claude.py`）已从 `build_adapter` 工厂移除，历史 spike 报告保留在 `reports/`，引擎选型见 `docs/decisions/0004-ai-engine-selection.md`。默认 retriever 通过 `RETRIEVER` env 切换（`tavily` / `duckduckgo` / `google` 等，由 gpt-researcher 内部负责；本仓库不直接调用 Tavily）。
 
 ## 目录
 

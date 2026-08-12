@@ -30,6 +30,12 @@ dependencies = [
     "markdown>=3.7",
     "ddgs>=9.0.0",
     "trafilatura>=2.0.0",
+    # feedparser is the industry-standard RSS/Atom parser. We use it as the
+    # primary path in ai_engine.ingestion.sources._parse_rss_xml_simple and
+    # fall back to the built-in regex parser if feedparser raises. Marked
+    # >=6.0.11 to align with the version that ships transitively with
+    # gpt-researcher so we don't bump a transitive package just for this.
+    "feedparser>=6.0.11",
 ]
 
 [dependency-groups]

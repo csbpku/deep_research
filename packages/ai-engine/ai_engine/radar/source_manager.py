@@ -73,6 +73,13 @@ except ModuleNotFoundError:
     _HAVE_HN_ALGOLIA = False
     fetch_hn_algolia = None  # type: ignore[assignment]
 
+try:
+    from ai_engine.radar.vendor_changelog_fetcher import fetch_vendor_changelog
+    _HAVE_VENDOR_CHANGELOG = True
+except ModuleNotFoundError:
+    _HAVE_VENDOR_CHANGELOG = False
+    fetch_vendor_changelog = None  # type: ignore[assignment]
+
 SourceFetcher = Callable[[dict[str, Any]], Awaitable[list[RadarCandidate]]]
 
 _KNOWN_SOURCE_TYPES: set[str] = {
@@ -80,7 +87,7 @@ _KNOWN_SOURCE_TYPES: set[str] = {
     "hackernews", "reddit", "lobsters", "devto",
     "producthunt", "vendor_news", "sitemap_watch", "wechat",
     "github_topic_search", "huggingface_models", "huggingface_papers",
-    "openreview", "hn_algolia",
+    "openreview", "hn_algolia", "vendor_changelog",
 }
 
 _HANDLERS: dict[str, SourceFetcher] = {
@@ -103,6 +110,7 @@ _HANDLERS: dict[str, SourceFetcher] = {
         str(cfg.get("vendor", "anthropic")),
         lookback_hours=int(cfg.get("max_age_hours", 72)),
     ),
+    "vendor_changelog": lambda cfg: fetch_vendor_changelog(cfg),
 }
 
 

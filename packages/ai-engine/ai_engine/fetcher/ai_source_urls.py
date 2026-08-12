@@ -141,6 +141,12 @@ async def _fetch_user_url(
     canonical = _canonical_key(url)
     log = structlog.get_logger("ai_engine.fetcher.ai_source_urls")
 
+    # P1.7: arxiv URLs go through the radar arxiv fetcher so research jobs
+    # share the same arxiv-mcp + pymupdf + institution filter pipeline that
+    # /radar uses. Other URLs keep the previous safe_fetch + HTML-strip path.
+    if _looks_like_arxiv(url):
+        return await _fetch_via_arxiv_radar(url, canonical, log, request_id)
+
     try:
         doc = await safe_fetch(url)
     except SafeFetchError as exc:
@@ -261,6 +267,147 @@ def _infer_title(doc: FetchedDocument, body_md: str) -> str | None:
     if m:
         return re.sub(r"\s+", " ", m.group(1)).strip()[:300]
     return None
+
+
+def _looks_like_arxiv(url: str) -> bool:
+    """Return True for arxiv.org/abs or arxiv.org/pdf URLs only."""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    # Allow arxiv.org and its pre-Lite mirrors (e.g. export.arxiv.org).
+    return host == "arxiv.org" or host.endswith(".arxiv.org") or host == "export.arxiv.org"
+
+
+async def _fetch_via_arxiv_radar(
+    url: str,
+    canonical: str,
+    log: Any,
+    request_id: str | None,
+) -> FetchedUrlSource:
+    """Route an arxiv URL through the radar arxiv fetcher and translate.
+
+    Returns a `FetchedUrlSource` mirroring the safe_fetch path so the rest
+    of the AI engine pipeline does not need to know which fetcher served
+    the document. When the radar fetcher returns nothing (off-topic,
+    rate-limited, blocked), we surface ``is_accessible=False`` so the
+    source policy in ``adapters/gpt_researcher.py`` can fall back to
+    auto-search.
+    """
+    try:
+        from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
+        _arxiv_fetcher_fn = fetch_arxiv_candidates  # rebind for monkeypatch in tests
+    except ImportError:
+        _arxiv_fetcher_fn = None
+
+    if _arxiv_fetcher_fn is None:
+        log.warning("ai-engine.ai_source.arxiv_fetcher_unavailable", url=url)
+        return await _fetch_via_safe_fetch(url, canonical, log, request_id)
+
+    candidates = await _arxiv_fetcher_fn({"maxResults": 5, "categories": [], "lookback_days": 365})
+    matched = next(
+        (c for c in candidates if c.url == url or canonical in (_canonical_key(c.url),)),
+        None,
+    )
+    if matched is None:
+        # The arxiv fetcher may have surfaced the same canonical via a
+        # different URL shape (e.g. https://arxiv.org/abs/2608.X vs
+        # https://arxiv.org/pdf/2608.X). Try matching by arxiv id.
+        for c in candidates:
+            if url.rsplit("/", 1)[-1].replace(".pdf", "") in c.url:
+                matched = c
+                break
+    if matched is None:
+        log.info("ai-engine.ai_source.arxiv_no_match", url=url, candidates=len(candidates))
+        return FetchedUrlSource(
+            adapter_source=AdapterSource(
+                source_ref={"type": "url", "value": url},
+                canonical_key=canonical,
+                title=None,
+                snippet=None,
+                score=None,
+                step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+                is_accessible=False,
+            ),
+            canonical_key=canonical,
+            is_accessible=False,
+            fetched_doc=None,
+            error_code="ARXIV_NO_MATCH",
+        )
+
+    snippet = matched.snippet or matched.title or ""
+    log.info(
+        "ai-engine.ai_source.arxiv_fetched",
+        request_id=request_id,
+        url=matched.url,
+        title=matched.title,
+    )
+    return FetchedUrlSource(
+        adapter_source=AdapterSource(
+            source_ref={"type": "url", "value": url, "resolvedUrl": matched.url},
+            canonical_key=canonical,
+            title=(matched.title or "")[:300] or None,
+            snippet=snippet[:1000] or None,
+            score=0.9,
+            step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+            is_accessible=True,
+        ),
+        canonical_key=canonical,
+        is_accessible=True,
+        fetched_doc=None,
+        error_code=None,
+    )
+
+
+async def _fetch_via_safe_fetch(
+    url: str,
+    canonical: str,
+    log: Any,
+    request_id: str | None,
+) -> FetchedUrlSource:
+    """Plain-HTML fetcher path used when an arxiv URL falls back."""
+    try:
+        doc = await safe_fetch(url)
+    except SafeFetchError as exc:
+        log.warning(
+            "ai-engine.ai_source.fetch_rejected",
+            request_id=request_id,
+            code=exc.code,
+            host=exc.host or "",
+        )
+        return FetchedUrlSource(
+            adapter_source=AdapterSource(
+                source_ref={"type": "url", "value": url},
+                canonical_key=canonical,
+                title=None,
+                snippet=None,
+                score=None,
+                step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+                is_accessible=False,
+            ),
+            canonical_key=canonical,
+            is_accessible=False,
+            fetched_doc=None,
+            error_code=exc.code,
+        )
+    body_md = _html_to_text(doc.content.decode("utf-8", errors="replace"))
+    return FetchedUrlSource(
+        adapter_source=AdapterSource(
+            source_ref={"type": "url", "value": url},
+            canonical_key=canonical,
+            title=_infer_title(doc, body_md),
+            snippet=body_md[:1000],
+            score=0.9,
+            step_captured=AI_JOB_STEP["SEARCH"],  # type: ignore[arg-type]
+            is_accessible=200 <= doc.status < 300,
+        ),
+        canonical_key=canonical,
+        is_accessible=200 <= doc.status < 300,
+        fetched_doc=doc,
+        error_code=None,
+    )
 
 
 __all__ = [

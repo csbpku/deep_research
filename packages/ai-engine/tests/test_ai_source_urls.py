@@ -20,13 +20,16 @@ import pytest
 
 from ai_engine.adapters.base import AdapterSource
 from ai_engine.contracts.errors import AdapterError
+from ai_engine.fetcher import ai_source_urls
 from ai_engine.fetcher.ai_source_urls import (
     FetchedUrlSource,
     _canonical_key,
     _fetch_user_url,
+    _looks_like_arxiv,
     _strip_query_for_log,
 )
 from ai_engine.fetcher.safe_fetch import SafeFetchError
+from ai_engine.radar.models import RadarCandidate
 
 
 # ---------------------------------------------------------------------------
@@ -224,3 +227,89 @@ async def test_ai_source_404_response_is_inaccessible(
     assert result.is_accessible is False
     assert result.error_code is None  # 404 is not an error_code, just inaccessible
     assert result.adapter_source.is_accessible is False
+
+
+# P1.7: arxiv URL detection + dispatch to radar arxiv_fetcher.
+import asyncio as _asyncio
+
+
+def test_looks_like_arxiv_matches_canonical_and_pdf_urls() -> None:
+    from ai_engine.fetcher.ai_source_urls import _looks_like_arxiv
+
+    assert _looks_like_arxiv("https://arxiv.org/abs/2608.10720")
+    assert _looks_like_arxiv("https://arxiv.org/pdf/2608.10720")
+    assert _looks_like_arxiv("https://export.arxiv.org/abs/2608.10720")
+    assert not _looks_like_arxiv("https://example.com/abs/2608.10720")
+    assert not _looks_like_arxiv("https://anthropic.com/news")
+    assert not _looks_like_arxiv("not a url")
+
+
+async def test_arxiv_url_dispatches_to_radar_fetcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An arxiv URL should reach the radar arxiv fetcher and surface a title."""
+    from ai_engine.fetcher import ai_source_urls
+
+    captured: dict[str, Any] = {}
+
+    async def fake_arxiv_candidates(config: Any) -> list[Any]:
+        captured["config"] = config
+        candidate = RadarCandidate(
+            title="SWE-agent benchmark",
+            url="https://arxiv.org/abs/2608.10720",
+            snippet="Comprehensive SWE-agent benchmark paper.",
+            published_at=None,
+            content_origin="api",
+            tags=("arxiv",),
+        )
+        return [candidate]
+
+    # Patch the source of the import, since the function imports it lazily.
+    import ai_engine.radar.arxiv_fetcher as _arxiv_mod
+
+    monkeypatch.setattr(_arxiv_mod, "fetch_arxiv_candidates", fake_arxiv_candidates)
+
+    result = await ai_source_urls._fetch_user_url(
+        {"type": "url", "value": "https://arxiv.org/abs/2608.10720"}
+    )
+    assert result.is_accessible is True
+    assert result.adapter_source.title == "SWE-agent benchmark"
+    assert captured["config"] == {"maxResults": 5, "categories": [], "lookback_days": 365}
+
+
+async def test_arxiv_url_without_match_returns_ARXIV_NO_MATCH(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ai_engine.radar.arxiv_fetcher as _arxiv_mod
+
+    async def fake_empty(config: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(_arxiv_mod, "fetch_arxiv_candidates", fake_empty)
+
+    result = await ai_source_urls._fetch_user_url(
+        {"type": "url", "value": "https://arxiv.org/abs/0000.00000"}
+    )
+    assert result.is_accessible is False
+    assert result.error_code == "ARXIV_NO_MATCH"
+
+
+async def test_non_arxiv_url_skips_radar_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-arxiv URL must NOT enter the radar arxiv fetcher."""
+    import ai_engine.radar.arxiv_fetcher as _arxiv_mod
+
+    called = {"n": 0}
+
+    async def fake_arxiv_candidates(config: Any) -> list[Any]:
+        called["n"] += 1
+        return []
+
+    monkeypatch.setattr(_arxiv_mod, "fetch_arxiv_candidates", fake_arxiv_candidates)
+    try:
+        try:
+            await ai_source_urls._fetch_user_url(
+                {"type": "url", "value": "https://example.com/post"}
+            )
+        except Exception:
+            # safe_fetch may raise in sandboxed environments; the assertion
+            # we care about is that the arxiv dispatch was NOT triggered.
+            pass
+        assert called["n"] == 0
+    finally:
+        pass

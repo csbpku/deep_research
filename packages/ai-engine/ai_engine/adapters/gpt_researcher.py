@@ -522,6 +522,64 @@ class _Job:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+# P1.8: reportLength → gpt-researcher ceiling mapping. The deep preset
+# raises TOTAL_WORDS / MAX_URLS_TO_SCRAPE so the same ResearchReport type
+# can render either a 500-word summary or a 2000-word deep dive. Operators
+# may override max_urls_to_scrape explicitly via the API.
+_REPORT_LENGTH_PRESETS: dict[str, dict[str, int]] = {
+    "brief":    {"total_words": 500,  "max_urls": 5,  "max_search_results": 3},
+    "standard": {"total_words": 800,  "max_urls": 10, "max_search_results": 5},
+    "deep":     {"total_words": 2000, "max_urls": 25, "max_search_results": 8},
+}
+
+
+def _resolve_run_ceiling(job: _Job) -> dict[str, int]:
+    """Return the per-run TOTAL_WORDS / MAX_URLS_TO_SCRAPE / MAX_SEARCH_RESULTS_PER_QUERY.
+
+    Honours (in priority order): explicit ``max_urls_to_scrape`` on the job,
+    the ``report_length`` preset, and finally the standard default.
+    """
+    raw = getattr(job.request, "report_length", None) or "standard"
+    preset_key = str(raw).strip().lower()
+    preset = _REPORT_LENGTH_PRESETS.get(preset_key, _REPORT_LENGTH_PRESETS["standard"])
+    ceiling = dict(preset)
+    explicit = getattr(job.request, "max_urls_to_scrape", None)
+    if isinstance(explicit, int) and 5 <= explicit <= 30:
+        ceiling["max_urls"] = explicit
+    return ceiling
+
+
+_INTERNAL_SOURCE_SECTION_HEADER = "--- pre-ingested radar items / research drafts (P1.12) ---"
+
+
+def _format_internal_sources_for_query(sources: list[Any]) -> str:
+    """Render job.sources as a plain-text block for the research_report prompt.
+
+    Only entries produced by ``_resolved_internal_sources`` carry an
+    AdapterSource whose ``canonical_key`` is a UUID; URL-only entries
+    carry a URL canonical_key. We pick the internal-ref ones and join
+    title + snippet, trimming each to a sane size so we do not blow up
+    the prompt on a research draft with a 5,000-word body.
+    """
+    if not sources:
+        return ""
+    internal = [
+        s for s in sources
+        if isinstance(getattr(s, "source_ref", None), dict)
+        and getattr(s.source_ref, "get", lambda _k: None)("type") in {"summary", "research"}
+    ]
+    if not internal:
+        return ""
+    blocks: list[str] = [_INTERNAL_SOURCE_SECTION_HEADER]
+    for s in internal:
+        title = (getattr(s, "title", None) or "").strip()
+        snippet = (getattr(s, "snippet", None) or "").strip()
+        kind = s.source_ref.get("type", "")
+        ref_value = str(s.source_ref.get("value") or "")
+        blocks.append(f"[{kind}] {title} (id: {ref_value})\n{snippet[:2000]}".strip())
+    return "\n\n".join(blocks)
+
+
 def _resolved_internal_sources(
     source_refs: tuple[dict[str, str | bool], ...],
 ) -> list[AdapterSource]:
@@ -735,9 +793,24 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     os.environ[f"{provider}_BASE_URL"] = heavy_url
             os.environ.setdefault("RETRIEVER", "tavily")
             os.environ.setdefault("LANGUAGE", "chinese")
-            os.environ.setdefault("TOTAL_WORDS", "800")
-            os.environ.setdefault("MAX_SEARCH_RESULTS_PER_QUERY", "5")
-            os.environ.setdefault("MAX_URLS_TO_SCRAPE", "10")
+            # P1.12: For research_report, surface resolved summary/research
+            # snippets into the report context. ``job.sources`` already
+            # contains AdapterSource entries for hydrated internal refs
+            # (see _resolved_internal_sources); here we prepend them to the
+            # query so gpt-researcher's planner sees them as primary material.
+            internal_context = _format_internal_sources_for_query(job.sources)
+            query_for_researcher = (
+                f"{job.request.topic}\n\n"
+                f"{internal_context}\n\n"
+                f"User context: {job.request.context or '(none)'}"
+            ) if internal_context else job.request.topic
+            # P1.8: reportLength preset controls TOTAL_WORDS / MAX_URLS_TO_SCRAPE
+            # / MAX_SEARCH_RESULTS_PER_QUERY. Explicit ``max_urls_to_scrape``
+            # on the request overrides the preset ceiling.
+            ceiling = _resolve_run_ceiling(job)
+            os.environ["TOTAL_WORDS"] = str(ceiling["total_words"])
+            os.environ["MAX_SEARCH_RESULTS_PER_QUERY"] = str(ceiling["max_search_results"])
+            os.environ["MAX_URLS_TO_SCRAPE"] = str(ceiling["max_urls"])
             # Bypass embeddings (proxy may not serve /v1/embeddings).
             os.environ.setdefault("COMPRESSION_THRESHOLD", "999999")
             os.environ.setdefault("SIMILARITY_THRESHOLD", "0")
@@ -754,7 +827,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             step_capture = _StepCaptureLogHandler(job)
 
             researcher = GPTResearcher(
-                query=job.request.topic,
+                query=query_for_researcher,
                 report_type="research_report",
                 report_source="web",
                 source_urls=source_urls or None,
