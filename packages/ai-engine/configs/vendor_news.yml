@@ -48,15 +48,6 @@ vendors:
     tags: [vendor, google_deepmind, deepmind]
     max_age_hours: 72
 
-  mistral:
-    name: Mistral AI
-    rss_url: https://mistral.ai/feed.xml
-    url_pattern: "/news/|/blog/"
-    ai_filter: true
-    quality_hint: 0.80
-    tags: [vendor, mistral]
-    max_age_hours: 96
-
   xai:
     name: xAI
     sitemap_url: https://x.ai/sitemap.xml

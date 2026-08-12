@@ -72,8 +72,8 @@ VALUES
   ('a0000000-0000-0000-0000-000000000015', 'Google DeepMind Blog', 'vendor_news',
    '{"vendor":"google_deepmind","max_age_hours":72}'::jsonb,
    true, now()),
-  ('a0000000-0000-0000-0000-000000000016', 'Mistral AI News', 'vendor_news',
-   '{"vendor":"mistral","max_age_hours":96}'::jsonb,
+  ('a0000000-0000-0000-0000-000000000016', 'xAI News', 'vendor_news',
+   '{"vendor":"xai","max_age_hours":96}'::jsonb,
    true, now()),
   ('a0000000-0000-0000-0000-000000000017', 'xAI News', 'vendor_news',
    '{"vendor":"xai","max_age_hours":96}'::jsonb,
@@ -81,15 +81,12 @@ VALUES
   ('a0000000-0000-0000-0000-000000000018', 'Hugging Face Blog', 'vendor_news',
    '{"vendor":"huggingface_blog","max_age_hours":96}'::jsonb,
    true, now()),
-  -- P2.14 中文 AI 信源 RSS — 机器之心、量子位、PaperWeekly 都有公开 RSS feed。
+  -- P2.14 中文 AI 信源 RSS — 机器之心、量子位都有公开 RSS feed。
   ('a0000000-0000-0000-0000-000000000019', '机器之心 (Jiqizhixin)', 'rss',
    '{"feedUrl":"https://www.jiqizhixin.com/rss","maxResults":20,"maxAgeHours":72,"applyAiFilter":false}'::jsonb,
    true, now()),
   ('a0000000-0000-0000-0000-000000000020', '量子位 (QbitAI)', 'rss',
    '{"feedUrl":"https://www.qbitai.com/feed","maxResults":20,"maxAgeHours":72,"applyAiFilter":false}'::jsonb,
-   true, now()),
-  ('a0000000-0000-0000-0000-000000000021', 'PaperWeekly', 'rss',
-   '{"feedUrl":"https://www.paperweekly.site/feed","maxResults":15,"maxAgeHours":720,"applyAiFilter":false}'::jsonb,
    true, now()),
   -- P1.11 API Changelog — engineer-facing release notes for OpenAI + Anthropic.
   -- The fetcher uses configured sources + a title extraction pattern, dedupes
