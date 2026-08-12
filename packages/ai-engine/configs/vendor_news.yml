@@ -1,0 +1,76 @@
+# Vendor news fetcher registry.
+#
+# Each entry maps a short vendor id to one or more sitemap/RSS sources plus an
+# allow-path regex. The fetcher (`ai_engine/radar/vendor_news_fetcher.py`)
+# reads this file at module load; any change here requires a process restart.
+#
+# Schema per entry:
+#   name          : human-readable label surfaced in admin UI
+#   sitemap_url   : a Sitemap XML document that advertises news/blog URLs
+#   rss_url       : (optional) Sitemap index — if absent, only sitemap_url is fetched
+#   url_pattern   : regex selecting which urls in the sitemap are news/blog
+#   ai_filter     : if true, drop urls whose extracted text has no AI keywords
+#   quality_hint  : 0..1 score passed to downstream ranking
+#   tags          : tuple of tag strings to add to every ingested candidate
+#   max_age_hours : upper bound on how old a publicAt may be before we skip
+#
+# Adding a vendor:
+#   1. Append a new entry below.
+#   2. Insert a row into radar_sources with sourceType='vendor_news' and
+#      config={"vendor":"<key>","max_age_hours":<max_age_hours>}.
+#   3. Restart ai-engine.
+
+vendors:
+  anthropic:
+    name: Anthropic
+    sitemap_url: https://www.anthropic.com/sitemap.xml
+    url_pattern: "/news/|/blog/|/engineering/"
+    ai_filter: true
+    quality_hint: 0.90
+    tags: [vendor, anthropic]
+    max_age_hours: 72
+
+  openai:
+    name: OpenAI
+    rss_url: https://openai.com/news/rss.xml
+    url_pattern: "/index/|/news/|/blog/"
+    ai_filter: true
+    quality_hint: 0.90
+    tags: [vendor, openai]
+    max_age_hours: 72
+
+  google_deepmind:
+    name: Google DeepMind
+    rss_url: https://deepmind.google/blog/rss.xml
+    url_pattern: "/blog/"
+    ai_filter: true
+    quality_hint: 0.85
+    tags: [vendor, google_deepmind, deepmind]
+    max_age_hours: 72
+
+  mistral:
+    name: Mistral AI
+    rss_url: https://mistral.ai/feed.xml
+    url_pattern: "/news/|/blog/"
+    ai_filter: true
+    quality_hint: 0.80
+    tags: [vendor, mistral]
+    max_age_hours: 96
+
+  xai:
+    name: xAI
+    sitemap_url: https://x.ai/sitemap.xml
+    url_pattern: "/news|/blog|/announce"
+    ai_filter: true
+    quality_hint: 0.80
+    tags: [vendor, xai]
+    max_age_hours: 96
+
+  huggingface_blog:
+    name: Hugging Face Blog
+    rss_url: https://huggingface.co/blog/feed.xml
+    url_pattern: "/blog/"
+    ai_filter: false
+    quality_hint: 0.75
+    tags: [vendor, huggingface, blog]
+    max_age_hours: 96

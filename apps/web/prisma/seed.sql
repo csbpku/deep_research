@@ -66,6 +66,20 @@ VALUES
   -- rows instead of one.
   ('a0000000-0000-0000-0000-000000000014', 'Hacker News AI Stories (Algolia)', 'hn_algolia',
    '{"query":"(AI OR llm OR agent OR gpt OR claude OR gemini OR openai OR anthropic OR rag OR vector db)","maxResults":30,"maxAgeHours":24,"minPoints":0,"minComments":0,"tags":"story"}'::jsonb,
+   true, now()),
+  -- PR5: vendor_news YAML-ised and extended from 2 → 6 vendors. The vendor key
+  -- in config resolves to an entry in packages/ai-engine/configs/vendor_news.yml.
+  ('a0000000-0000-0000-0000-000000000015', 'Google DeepMind Blog', 'vendor_news',
+   '{"vendor":"google_deepmind","max_age_hours":72}'::jsonb,
+   true, now()),
+  ('a0000000-0000-0000-0000-000000000016', 'Mistral AI News', 'vendor_news',
+   '{"vendor":"mistral","max_age_hours":96}'::jsonb,
+   true, now()),
+  ('a0000000-0000-0000-0000-000000000017', 'xAI News', 'vendor_news',
+   '{"vendor":"xai","max_age_hours":96}'::jsonb,
+   true, now()),
+  ('a0000000-0000-0000-0000-000000000018', 'Hugging Face Blog', 'vendor_news',
+   '{"vendor":"huggingface_blog","max_age_hours":96}'::jsonb,
    true, now())
 ON CONFLICT DO NOTHING;
 
