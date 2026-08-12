@@ -60,6 +60,12 @@ VALUES
   -- on arXiv (NeurIPS / ICML / ICLR). Config drives which venues + search term.
   ('a0000000-0000-0000-0000-000000000013', 'OpenReview Accepted Papers', 'openreview',
    '{"venues":["NeurIPS.cc/2024/Conference","ICLR.cc/2025/Conference","ICML.cc/2024/Conference"],"query":"agent","maxResults":30,"maxAgeDays":14,"limitPerVenue":30}'::jsonb,
+   true, now()),
+  -- PR4: HN Algolia — keyword + time-bounded AI story search coexists with the
+  -- existing Hacker News front-page RSS source so the admin sees two radar
+  -- rows instead of one.
+  ('a0000000-0000-0000-0000-000000000014', 'Hacker News AI Stories (Algolia)', 'hn_algolia',
+   '{"query":"(AI OR llm OR agent OR gpt OR claude OR gemini OR openai OR anthropic OR rag OR vector db)","maxResults":30,"maxAgeHours":24,"minPoints":0,"minComments":0,"tags":"story"}'::jsonb,
    true, now())
 ON CONFLICT DO NOTHING;
 
