@@ -22,12 +22,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, cast
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
 
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError, safe_fetch
 from ai_engine.ingestion.pipeline import _generate_brief
+from ai_engine.markdown_pipeline import normalize_markdown
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.candidate_filter import filter_candidate
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
@@ -76,8 +76,6 @@ RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS = max(
 RADAR_ENRICHMENT_RETRIES = max(
     0, int(os.environ.get("RADAR_ENRICHMENT_RETRIES", "2"))
 )
-RADAR_DIGEST_RETRIES = max(0, int(os.environ.get("RADAR_DIGEST_RETRIES", "2")))
-
 # Brief generation retry policy mirrors agents-radar/src/report.ts:
 # HTTP 429 gets up to 3 retries with 5s/10s/20s backoff.
 _BRIEF_RATE_LIMIT_RETRIES = 3
@@ -108,7 +106,9 @@ _REPO_DIGEST_CONTEXT_MAX_CHARS = 8000
 # A blocked detail page must not turn an otherwise usable signal into a hard
 # candidate failure.
 _SNIPPET_FALLBACK_SOURCE_TYPES = {
+    "github", "github_trending", "github_tracked",
     "hackernews", "producthunt", "reddit", "lobsters", "devto",
+    "huggingface_models", "vendor_news", "rss",
 }
 
 
@@ -167,18 +167,13 @@ class RadarSyncResult:
 
 @dataclass(slots=True, frozen=True)
 class RadarPipelineResult:
-    """One complete radar task, including the generated daily digest."""
+    """One complete radar task: sync, tracked-repo postprocessing and enrichment."""
 
     sync: RadarSyncResult
     tracked_repo_result: dict[str, int]
     enriched_count: int
     enrichment_elapsed_ms: int
     enrichment_error: str | None = None
-    digest_summary_id: str | None = None
-    digest_candidate_count: int = 0
-    digest_narrative_degraded: bool = False
-    digest_elapsed_ms: int = 0
-    digest_error: str | None = None
 
 
 def _host(value: str) -> str:
@@ -483,6 +478,36 @@ async def _finish_run(
             'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
             (run_id,),
         )
+        # PR1 radar-source-health: surface per-source failure state.
+        # A "completed" run resets the streak; any "failed" or "partial" run
+        # carrying an error_code bumps consecutive_failures + records the
+        # most recent failure for the admin dashboard.
+        if status == "completed":
+            await conn.execute(
+                'UPDATE "radar_sources" SET '
+                '"consecutiveFailures" = 0, '
+                '"lastErrorCode" = NULL, '
+                '"lastErrorMessage" = NULL, '
+                '"lastErrorAt" = NULL, '
+                '"updatedAt" = now() '
+                'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
+                (run_id,),
+            )
+        elif error_code:
+            await conn.execute(
+                'UPDATE "radar_sources" SET '
+                '"consecutiveFailures" = "consecutiveFailures" + 1, '
+                '"lastErrorCode" = %s, '
+                '"lastErrorMessage" = %s, '
+                '"lastErrorAt" = now(), '
+                '"updatedAt" = now() '
+                'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
+                (
+                    error_code,
+                    error_message[:500] if error_message else None,
+                    run_id,
+                ),
+            )
         await conn.commit()
 
 
@@ -1002,7 +1027,7 @@ async def _generate_brief_with_retry(
     timeout_seconds: float,
     context_max_chars: int | None = None,
 ) -> Any:
-    """Call generate_brief, retrying HTTP-429 failures with 5/10/20s backoff."""
+    """Call generate_brief, retrying transient provider failures."""
     last: Any = None
     for attempt in range(_BRIEF_RATE_LIMIT_RETRIES + 1):
         delay = (
@@ -1018,10 +1043,7 @@ async def _generate_brief_with_retry(
                 timeout_seconds=timeout_seconds,
                 context_max_chars=context_max_chars,
             )
-            if (
-                brief.status == AI_JOB_STATUS["FAILED"]
-                and _is_rate_limited_brief(brief=brief)
-            ):
+            if brief.status == AI_JOB_STATUS["FAILED"] and _is_retryable_brief_failure(brief=brief):
                 last = brief
                 if delay <= 0:
                     break
@@ -1034,7 +1056,7 @@ async def _generate_brief_with_retry(
             return brief
         except Exception as exc:
             last = exc
-            if _is_rate_limited_brief(exc=exc):
+            if _is_retryable_brief_failure(exc=exc):
                 if delay <= 0:
                     break
                 logger.info(
@@ -1047,6 +1069,30 @@ async def _generate_brief_with_retry(
     if isinstance(last, BaseException):
         raise last
     return last
+
+
+def _is_retryable_brief_failure(
+    *,
+    brief: Any | None = None,
+    exc: BaseException | None = None,
+) -> bool:
+    text = str(exc) if exc is not None else " ".join(
+        str(getattr(brief, key, "") or "")
+        for key in ("error_code", "error_message")
+    )
+    lowered = text.lower()
+    return _is_rate_limited_brief(brief=brief, exc=exc) or any(
+        marker in lowered
+        for marker in (
+            "ai_engine_unavailable",
+            "worker_timeout",
+            "upstream_status_502",
+            "upstream_status_503",
+            "internalservererror",
+            "apitimeout",
+            "proxy_error",
+        )
+    )
 
 
 def _strip_html_tags(html: str) -> str:
@@ -1096,7 +1142,7 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
             favor_precision=True,
         )
         if extracted and len(extracted.strip()) >= 200:
-            return extracted.strip()[:ORIGINAL_MARKDOWN_MAX_BYTES]
+            return normalize_markdown(extracted)[:ORIGINAL_MARKDOWN_MAX_BYTES]
     except Exception as exc:  # extraction is an enhancement, never a sync blocker
         logger.debug("trafilatura extraction failed", extra={"url": url[:2048], "error": str(exc)})
 
@@ -1109,7 +1155,7 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
         if m:
             abstract = _strip_html_tags(m.group(1))
             if len(abstract) > 50:
-                return abstract[:8000]
+                return normalize_markdown(abstract)[:8000]
 
     # ── GitHub: extract README article content ──
     if source_type in ("github", "github_trending") or "github.com" in url:
@@ -1121,14 +1167,14 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
         if m:
             readme = _strip_html_tags(m.group(1))
             if len(readme) > 100:
-                return readme[:8000]
+                return normalize_markdown(readme)[:8000]
         # Fallback: try <div id="readme">
         m = _re.search(r'<div[^>]*id="readme"[^>]*>(.*?)</div>\s*</div>',
                         html, _re.DOTALL | _re.IGNORECASE)
         if m:
             readme = _strip_html_tags(m.group(1))
             if len(readme) > 100:
-                return readme[:8000]
+                return normalize_markdown(readme)[:8000]
 
     # ── Dev.to: extract <div id="article-body"> ──
     if source_type == "devto" or "dev.to" in url:
@@ -1139,7 +1185,7 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
         if m:
             body = _strip_html_tags(m.group(1))
             if len(body) > 100:
-                return body[:8000]
+                return normalize_markdown(body)[:8000]
 
     # ── Generic: strip nav/header/footer/aside, then extract <main> or <article> ──
     # Try <main> tag first
@@ -1147,19 +1193,19 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
     if m:
         body = _strip_html_tags(m.group(1))
         if len(body) > 100:
-            return body[:8000]
+            return normalize_markdown(body)[:8000]
     # Try <article> tag
     m = _re.search(r"<article[^>]*>(.*?)</article>", html, _re.DOTALL | _re.IGNORECASE)
     if m:
         body = _strip_html_tags(m.group(1))
         if len(body) > 100:
-            return body[:8000]
+            return normalize_markdown(body)[:8000]
     # Last resort: strip known noise sections from full page
     cleaned = _strip_html_tags(html)
     if len(cleaned) > 200:
-        return cleaned[:8000]
+        return normalize_markdown(cleaned)[:8000]
     # Absolute fallback: original html_to_markdown
-    return html_to_markdown(html)[:8000]
+    return normalize_markdown(html_to_markdown(html))[:8000]
 
 
 def _repo_activity_document(url: str, markdown: str) -> FetchedDocument:
@@ -1510,7 +1556,10 @@ async def _run_source(
                                 # let the captured article become the visible body.
                                 interpretation = ""
                         except Exception as brief_exc:
-                            if not _can_use_snippet_fallback(source, raw_candidate):
+                            if not (
+                                _can_use_snippet_fallback(source, raw_candidate)
+                                or len(raw_content.strip()) >= 200
+                            ):
                                 raise
                             fallback_count += 1
                             brief = None
@@ -1806,7 +1855,7 @@ async def run_radar_pipeline(
     target_date: date | None = None,
     **sync_kwargs: Any,
 ) -> RadarPipelineResult:
-    """Run sync, post-processing, enrichment, then the daily digest.
+    """Run sync, post-processing and enrichment.
 
     Enrichment only sees summaries inserted by this sync's source-run IDs.
     Later-stage failures do not roll back successfully persisted earlier
@@ -1818,7 +1867,7 @@ async def run_radar_pipeline(
     # Retry only the sources that failed or were partial. Successful sources
     # are never re-fetched, so a flaky upstream cannot duplicate the whole
     # daily batch. The retry creates its own run record for observability.
-    if triggered_by == "cron" and RADAR_SOURCE_RETRIES > 0:
+    if RADAR_SOURCE_RETRIES > 0:
         for attempt in range(RADAR_SOURCE_RETRIES):
             retry_source_ids = {
                 result.source_id
@@ -1912,45 +1961,12 @@ async def run_radar_pipeline(
             extra={"error_type": type(exc).__name__},
         )
     enrichment_elapsed_ms = int((time.monotonic() - started) * 1000)
-    digest_started = time.monotonic()
-    try:
-        from ai_engine.radar.daily_digest import generate_daily_digest
-
-        digest_date = target_date or datetime.now(
-            ZoneInfo("Asia/Shanghai")
-        ).date()
-        digest_result = await generate_daily_digest(pool, target_date=digest_date)
-        digest_attempts = RADAR_DIGEST_RETRIES if triggered_by == "cron" else 0
-        for attempt in range(digest_attempts):
-            if not digest_result.narrative_degraded:
-                break
-            await asyncio.sleep(2.0 * (attempt + 1))
-            digest_result = await generate_daily_digest(pool, target_date=digest_date)
-        digest_summary_id = digest_result.summary_id
-        digest_candidate_count = digest_result.candidate_count
-        digest_narrative_degraded = digest_result.narrative_degraded
-        digest_error = None
-    except Exception as exc:
-        digest_summary_id = None
-        digest_candidate_count = 0
-        digest_narrative_degraded = False
-        digest_error = f"{type(exc).__name__}: {str(exc)[:200]}"
-        logger.warning(
-            "ai-engine.radar.digest_stage_failed",
-            extra={"error_type": type(exc).__name__},
-        )
-    digest_elapsed_ms = int((time.monotonic() - digest_started) * 1000)
     return RadarPipelineResult(
         sync=sync_result,
         tracked_repo_result=tracked_repo_result,
         enriched_count=enriched_count,
         enrichment_elapsed_ms=enrichment_elapsed_ms,
         enrichment_error=enrichment_error,
-        digest_summary_id=digest_summary_id,
-        digest_candidate_count=digest_candidate_count,
-        digest_narrative_degraded=digest_narrative_degraded,
-        digest_elapsed_ms=digest_elapsed_ms,
-        digest_error=digest_error,
     )
 
 
