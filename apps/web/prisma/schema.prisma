@@ -278,7 +278,6 @@ model Summary {
   syncRunId          String?  @db.Uuid // radar_sync_runs.id
   sortOrder          Int? // Admin 排列的序号（每日 1-4）
   selectionReason    String?  @db.VarChar(500) // 入选每日摘要理由
-  digestMeta         Json?    @db.JsonB // AI 雷达日报结构化文章；仅 canonicalUrl digest://* 使用
 
   // Phase 0 deep-dive 字段：sync 时抓取的原始内容，供后续 chat 读原文/结构化视图使用
   originalMarkdown  String?   @db.Text // ≤64KB markdown
@@ -438,6 +437,7 @@ model AiResearchJob {
   topic          String      @db.VarChar(200)
   context        String?     @db.VarChar(2000)
   reportType     String      @default("research_report") @db.VarChar(40) // research_report | summary_brief
+  artifactType   String      @default("markdown") @db.VarChar(24) // markdown | slides | table | chart
   sourcePolicy   String      @default("prefer_user_sources") @db.VarChar(40)
   status         AiJobStatus @default(queued)
   currentStep    AiJobStep? // 最近一步；中途失败时保留
@@ -768,6 +768,12 @@ model RadarSource {
   config     Json // 源特定配置：repo, category, feed URL 等
   enabled    Boolean   @default(true)
   lastSyncAt DateTime? @db.Timestamptz(3)
+  // PR1 radar-source-health: persist last per-source failure signal so a wedged
+  // source surfaces in the admin even before its next successful run.
+  lastErrorCode       String?   @db.VarChar(64)
+  lastErrorMessage    String?   @db.VarChar(500)
+  lastErrorAt         DateTime? @db.Timestamptz(3)
+  consecutiveFailures Int       @default(0)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
@@ -1043,7 +1049,7 @@ model RadarSubmission {
 
 // ─────────────────────────────────────────────────────────────────────
 // P1-C: "我的"菜单 (ADR 0008)
-//   user_bookmarks: 统一收藏 (radar_candidate / summary / research / knowledge / daily_digest)
+//   user_bookmarks: 统一收藏 (radar_candidate / summary / research / knowledge)
 //   research_templates: 调研模板（owner 用一次拷贝出 Research 草稿）
 //   User.preferences: per-user 设置 (JsonB)
 // ─────────────────────────────────────────────────────────────────────
@@ -1053,7 +1059,6 @@ enum BookmarkTargetType {
   summary
   research
   knowledge
-  daily_digest
 }
 
 model UserBookmark {
@@ -1133,11 +1138,16 @@ model Topic {
   aggregationWindowEnd   DateTime  @db.Timestamptz(3)
   lastSyncedAt           DateTime? @db.Timestamptz(3)
   synthesisGeneratedAt   DateTime? @db.Timestamptz(3)
+  lastSynthesisSuccessAt DateTime? @db.Timestamptz(3)
   synthesisModel         String?   @db.VarChar(64)
   synthesisVersion       String?   @db.VarChar(16)
   synthesisPayload       Json?     @db.JsonB
   synthesisErrorCode     String?   @db.VarChar(64)
   synthesisErrorMessage  String?   @db.VarChar(500)
+  isPreset               Boolean   @default(false)
+  keywords               Json      @default("[]")
+  refreshCron            String    @default("06:00") @db.VarChar(16)
+  enabled                Boolean   @default(true)
   createdAt              DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime  @updatedAt @db.Timestamptz(3)
 

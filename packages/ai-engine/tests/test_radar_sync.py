@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -17,6 +16,7 @@ from ai_engine.radar.sync_runner import (
     _NAV_NOISE_PATTERNS,
     _clean_content,
     _extract_article_content,
+    _finish_run,
     _generate_brief_with_retry,
     _is_low_quality_content,
     RadarSyncResult,
@@ -385,7 +385,7 @@ async def test_run_radar_sync_limits_candidate_concurrency() -> None:
 async def test_run_radar_pipeline_enriches_only_current_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_engine.radar import daily_digest, enrichment_worker, sync_runner
+    from ai_engine.radar import enrichment_worker, sync_runner
     from ai_engine.radar import tracked_repo_manager
 
     pool = _Pool([_source("source-1", "rss")])
@@ -425,14 +425,6 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
         captured["enrichment"] = kwargs
         return 2
 
-    async def fake_digest(pool: Any, *, target_date: Any) -> Any:
-        captured["digest_date"] = target_date
-        return SimpleNamespace(
-            summary_id="digest-1",
-            candidate_count=2,
-            narrative_degraded=False,
-        )
-
     monkeypatch.setattr(sync_runner, "run_radar_sync", fake_sync)
     monkeypatch.setattr(
         tracked_repo_manager,
@@ -444,14 +436,9 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
         "run_enrichment_for_pending",
         fake_enrichment,
     )
-    monkeypatch.setattr(daily_digest, "generate_daily_digest", fake_digest)
-
     result = await run_radar_pipeline(pool, triggered_by="admin")
 
     assert result.enriched_count == 2
-    assert result.digest_summary_id == "digest-1"
-    assert result.digest_candidate_count == 2
-    assert result.digest_error is None
     assert captured["tracked_ids"] == {"rss": "run-1"}
     assert captured["fallback"] is False
     assert captured["enrichment"] == {
@@ -588,9 +575,12 @@ async def test_generate_failure_isolated_from_next_candidate() -> None:
         document_fetcher=_safe_fetch,
         generate_brief=generate,
     )
-    assert result.runs[0].status == "partial"
-    assert result.runs[0].total_failed == 1
-    assert result.runs[0].total_new == 1
+    # A transient brief failure now degrades to the fetched snippet/body so
+    # the candidate is retained instead of counting as a source failure.
+    assert result.runs[0].status == "completed"
+    assert result.runs[0].total_failed == 0
+    assert result.runs[0].fallback_count >= 1
+    assert result.runs[0].total_new == 2
 
 
 async def test_github_tracked_repo_digest_uses_one_combined_activity_brief() -> None:
@@ -976,6 +966,116 @@ async def test_generate_brief_with_retry_retries_429(monkeypatch: pytest.MonkeyP
         "https://example.com/x",
         timeout_seconds=30.0,
     )
+    assert brief.output_text == "ok"
     assert calls == 3
     assert sleeps == [5.0, 10.0]
-    assert brief.output_text == "ok"
+    assert calls == 3
+    assert sleeps == [5.0, 10.0]
+
+
+# PR1: radar_sources.consecutiveFailures + lastError_* wiring through _finish_run.
+
+
+class _FinishRunConnection:
+    def __init__(self) -> None:
+        self.executions: list[tuple[str, tuple[Any, ...]]] = []
+
+    @asynccontextmanager
+    async def transaction(self):  # type: ignore[no-untyped-def]
+        yield
+
+    async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
+        self.executions.append((sql, params))
+        return _Cursor()
+
+    async def commit(self) -> None:
+        return None
+
+
+class _FinishRunPool:
+    def __init__(self) -> None:
+        self.connection_value = _FinishRunConnection()
+
+    @asynccontextmanager
+    async def connection(self):  # type: ignore[no-untyped-def]
+        yield self.connection_value
+
+
+def _finish_run_kwargs(*, status: str, error_code: str | None, error_message: str | None = None) -> dict[str, Any]:
+    return {
+        "run_id": "run-x",
+        "status": status,
+        "total_fetched": 1,
+        "total_new": 1,
+        "total_skipped": 0,
+        "total_failed": 1 if error_code else 0,
+        "fallback_count": 0,
+        "skipped_existing": 0,
+        "skipped_rule_noise": 0,
+        "skipped_distilled_noise": 0,
+        "skipped_conflict": 0,
+        "token_input_total": 0,
+        "token_output_total": 0,
+        "cost_usd": 0.0,
+        "elapsed_ms": 100,
+        "error_code": error_code,
+        "error_message": error_message,
+    }
+
+
+def _radar_source_updates(pool: _FinishRunPool) -> list[str]:
+    """Return UPDATE statements _finish_run issued against radar_sources."""
+    return [sql for sql, _ in pool.connection_value.executions if '"radar_sources"' in sql]
+
+
+def test_finish_run_completed_clears_health_state() -> None:
+    """A clean run must reset the failure streak and zero out last_error_*."""
+
+    async def _scenario() -> None:
+        pool = _FinishRunPool()
+        await _finish_run(pool, **_finish_run_kwargs(status="completed", error_code=None))
+        updates = _radar_source_updates(pool)
+        # Two radar_sources UPDATEs are expected: lastSyncAt always, then the health reset.
+        assert any('"consecutiveFailures" = 0' in sql for sql in updates), updates
+        assert any('"lastErrorCode" = NULL' in sql for sql in updates), updates
+        assert any('"lastErrorAt" = NULL' in sql for sql in updates), updates
+
+    asyncio.run(_scenario())
+
+
+def test_finish_run_failed_records_error_and_increments() -> None:
+    """A failed run with error_code must bump consecutiveFailures and persist last_error_*."""
+
+    async def _scenario() -> None:
+        pool = _FinishRunPool()
+        await _finish_run(
+            pool,
+            **_finish_run_kwargs(
+                status="failed",
+                error_code="UPSTREAM_RATE_LIMITED",
+                error_message="HTTP 429 from arxiv api",
+            ),
+        )
+        updates = _radar_source_updates(pool)
+        # The "completed" branch must NOT fire on a failed run.
+        assert not any('"consecutiveFailures" = 0' in sql for sql in updates), updates
+        # The increment UPDATE must carry the error_code as a bound parameter.
+        matched = [entry for entry in pool.connection_value.executions if '"consecutiveFailures" + 1' in entry[0]]
+        assert len(matched) == 1, pool.connection_value.executions
+        assert matched[0][1] == ("UPSTREAM_RATE_LIMITED", "HTTP 429 from arxiv api", "run-x"), matched[0]
+
+    asyncio.run(_scenario())
+
+
+def test_finish_run_partial_without_error_does_not_touch_health() -> None:
+    """A partial run with no error_code (e.g. partial freshness) must not mutate the streak."""
+
+    async def _scenario() -> None:
+        pool = _FinishRunPool()
+        await _finish_run(pool, **_finish_run_kwargs(status="partial", error_code=None))
+        updates = _radar_source_updates(pool)
+        # Only the lastSyncAt UPDATE is expected — health columns untouched.
+        assert not any('"consecutiveFailures"' in sql for sql in updates), updates
+        assert not any('"lastErrorCode"' in sql for sql in updates), updates
+
+    asyncio.run(_scenario())
