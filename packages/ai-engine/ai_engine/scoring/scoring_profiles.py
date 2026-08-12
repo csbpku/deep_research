@@ -227,11 +227,16 @@ __all__ = [
 
 _SOURCE_PROFILE_MAP: dict[str, str] = {
     "arxiv": PROFILE_PAPER,
+    "huggingface_papers": PROFILE_PAPER,       # Daily Papers → applied research
+    "openreview": PROFILE_PAPER,               # Top-venue papers → research quality
     "github": PROFILE_ENGINEERING,
     "github_trending": PROFILE_ENGINEERING,
+    "github_tracked": PROFILE_ENGINEERING,
     "github_topic_search": PROFILE_ENGINEERING,
     "huggingface_models": PROFILE_ENGINEERING,
     "devto": PROFILE_ENGINEERING,
+    "hn_algolia": PROFILE_ENGINEERING,          # Curated AI stories → engineering focus
+    "vendor_changelog": PROFILE_ENGINEERING,    # API changes → actionable for devs
     "producthunt": PROFILE_NEWS,
     "rss": PROFILE_NEWS,
     "hackernews": PROFILE_NEWS,

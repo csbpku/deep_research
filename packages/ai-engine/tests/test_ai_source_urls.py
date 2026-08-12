@@ -272,7 +272,11 @@ async def test_arxiv_url_dispatches_to_radar_fetcher(monkeypatch: pytest.MonkeyP
     )
     assert result.is_accessible is True
     assert result.adapter_source.title == "SWE-agent benchmark"
-    assert captured["config"] == {"maxResults": 5, "categories": [], "lookback_days": 365}
+    assert captured["config"] == {
+        "maxResults": 5,
+        "categories": ["cs.AI", "cs.CL", "cs.LG"],
+        "lookbackHours": 24 * 365,
+    }
 
 
 async def test_arxiv_url_without_match_returns_ARXIV_NO_MATCH(monkeypatch: pytest.MonkeyPatch) -> None:

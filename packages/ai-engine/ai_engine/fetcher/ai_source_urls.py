@@ -306,7 +306,17 @@ async def _fetch_via_arxiv_radar(
         log.warning("ai-engine.ai_source.arxiv_fetcher_unavailable", url=url)
         return await _fetch_via_safe_fetch(url, canonical, log, request_id)
 
-    candidates = await _arxiv_fetcher_fn({"maxResults": 5, "categories": [], "lookback_days": 365})
+    # Keep the direct-URL path broad enough to resolve older papers. Passing
+    # an explicit empty category list makes the radar fetcher reject the
+    # request, which previously produced unhandled background-task errors
+    # during enrichment.
+    candidates = await _arxiv_fetcher_fn(
+        {
+            "maxResults": 5,
+            "categories": ["cs.AI", "cs.CL", "cs.LG"],
+            "lookbackHours": 24 * 365,
+        }
+    )
     matched = next(
         (c for c in candidates if c.url == url or canonical in (_canonical_key(c.url),)),
         None,
