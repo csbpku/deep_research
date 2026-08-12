@@ -90,7 +90,9 @@ PAPER_PROFILE = ScoringProfile(
         "AI/ML research papers (arxiv papers, conference proceedings). "
         "Audience: AI application and platform engineers who need to decide "
         "what is worth reading or applying. Reward genuine novelty and depth, "
-        "but require evidence of relevance and practical transfer."
+        "but require evidence of relevance and practical transfer. "
+        "Lower tier_skim vs v1 (55→48) because applied papers often score "
+        "in the 48-54 range yet carry useful methods/code."
     ),
     weights={
         _DIM_INFO_INCREMENT: 25,
@@ -103,8 +105,8 @@ PAPER_PROFILE = ScoringProfile(
     },
     tier_collection=88,
     tier_deep_read=76,
-    tier_skim=55,
-    must_read_total=92,
+    tier_skim=48,
+    must_read_total=86,
     must_read_core_count=2,
 )
 
@@ -116,7 +118,10 @@ ENGINEERING_PROFILE = ScoringProfile(
         "infra, code-level tutorials). Audience: AI application developers, "
         "backend engineers and platform engineers. Reward actionability and "
         "direct relevance to building or operating AI applications; penalize "
-        "unrelated novelty and hobby projects."
+        "unrelated novelty and hobby projects. "
+        "Lower tier_skim vs v1 (50→42) so code tool releases, smaller "
+        "engineer-authored blogs, and devto articles that carry useful "
+        "patterns still surface in the radar."
     ),
     weights={
         _DIM_INFO_INCREMENT: 25,
@@ -129,8 +134,8 @@ ENGINEERING_PROFILE = ScoringProfile(
     },
     tier_collection=90,
     tier_deep_read=70,
-    tier_skim=50,
-    must_read_total=88,
+    tier_skim=42,
+    must_read_total=82,
     must_read_core_count=2,
 )
 
@@ -143,7 +148,9 @@ NEWS_PROFILE = ScoringProfile(
         "application developers, backend engineers and platform/infra "
         "engineers. Reward direct relevance to building, operating, and "
         "improving AI-powered products; penalize unrelated tech "
-        "curiosity, retro/hobby content, and non-applicable news."
+        "curiosity, retro/hobby content, and non-applicable news. "
+        "Lower tier_skim vs v1 (50→44) — product announcements and vendor "
+        "news often score 40-48 yet represent genuine signals for the audience."
     ),
     weights={
         _DIM_INFO_INCREMENT: 15,
@@ -156,8 +163,8 @@ NEWS_PROFILE = ScoringProfile(
     },
     tier_collection=82,
     tier_deep_read=68,
-    tier_skim=50,
-    must_read_total=85,
+    tier_skim=44,
+    must_read_total=79,
     must_read_core_count=1,
 )
 
