@@ -15,6 +15,7 @@ import { toApiErrorResponse } from '../../../../lib/errors';
 import { log, withRequestId } from '../../../../lib/log';
 import { getWebEnv } from '../../../../lib/env';
 import { fetchAiEngine } from '../../../../lib/ai-bff/fetch-ai-engine';
+import type { ResearchArtifact } from '@deep-research/shared';
 
 const IdParam = z.object({ jobId: z.string().uuid() });
 
@@ -94,6 +95,32 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     });
   }
   const up = fetched.body;
+  const artifactType = up.report_type === 'slides' ? 'slides' : 'markdown';
+  const artifact: ResearchArtifact | null = up.output_text
+    ? {
+        type: artifactType,
+        title: up.topic ?? 'AI 调研结果',
+        version: 1,
+        mimeType: 'text/markdown',
+        content: up.output_text,
+        payload: null,
+        sourceRefs: [],
+        sourceHash: null,
+        draftResearchId: up.draft_research_id ?? null,
+      }
+    : up.draft_research_id
+      ? {
+          type: artifactType,
+          title: up.topic ?? 'AI 调研草稿',
+          version: 1,
+          mimeType: 'text/markdown',
+          content: null,
+          payload: null,
+          sourceRefs: [],
+          sourceHash: null,
+          draftResearchId: up.draft_research_id,
+        }
+      : null;
   return NextResponse.json({
     jobId: up.job_id,
     status: up.status,
@@ -117,5 +144,6 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     createdAt: up.created_at ?? null,
     completedAt: up.completed_at ?? null,
     review: up.review ?? null,
+    artifact,
   });
 });

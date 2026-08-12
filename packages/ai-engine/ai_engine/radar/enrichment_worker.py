@@ -364,6 +364,7 @@ async def enrich_web_candidate(
         _extract_article_content,
         _is_low_quality_content,
     )
+    from ai_engine.markdown_pipeline import inspect_markdown, markdown_sha256
 
     current = await _fetch_enrichment_row(pool, summary_id)
     if not current:
@@ -402,6 +403,7 @@ async def enrich_web_candidate(
 
     payload: dict[str, Any] = {
         "provider": "web",
+        "extractorVersion": "trafilatura-markdown-v1",
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "finalUrl": doc.url if doc is not None else canonical_url,
         "finalIp": doc.final_ip if doc is not None else None,
@@ -409,6 +411,15 @@ async def enrich_web_candidate(
         "contentType": doc.content_type if doc is not None else None,
         "title": str(current.get("title") or "")[:300],
     }
+    quality = inspect_markdown(new_markdown)
+    payload.update({
+        "contentHash": markdown_sha256(new_markdown) if new_markdown else None,
+        "quality": quality.quality,
+        "warnings": list(quality.warnings),
+        "paragraphCount": quality.paragraph_count,
+        "headingCount": quality.heading_count,
+        "linkCount": quality.link_count,
+    })
     if doc is None:
         payload.update({"degraded": True, "reason": "cached_source"})
     payload = _trim_to_budget(payload)

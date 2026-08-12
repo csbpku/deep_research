@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import uuid
@@ -57,6 +58,7 @@ from ai_engine.fetcher.safe_fetch import (
     SafeFetchError,
     safe_fetch,
 )
+from ai_engine.markdown_pipeline import inspect_markdown, markdown_sha256, normalize_markdown
 
 logger = logging.getLogger("ai_engine.server.share")
 structlog.configure(
@@ -172,7 +174,7 @@ def html_to_markdown(html: str) -> str:
             favor_precision=True,
         )
         if extracted and len(extracted.strip()) >= 40:
-            return extracted.strip()
+            return normalize_markdown(extracted)
     except Exception:
         # Conversion is best-effort. The caller can still review a
         # conservative text representation when a page is malformed.
@@ -189,7 +191,7 @@ def html_to_markdown(html: str) -> str:
         .replace("&#39;", "'")
     )
     text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    return normalize_markdown(re.sub(r"\s+", " ", text).strip())
 
 
 # ─────────────── Result types ────────────────
@@ -286,6 +288,8 @@ async def _update_summary_with_fetched_content(
     summary_id: str,
     title: str,
     body_markdown: str,
+    original_markdown: str,
+    original_kind: str,
     content_sha256: str,
     tags: list[str],
     request_id: str | None,
@@ -294,6 +298,8 @@ async def _update_summary_with_fetched_content(
     sql = (
         'UPDATE "summaries" '
         'SET "title" = %s, "body" = %s, "contentSha256" = %s, "tags" = %s::text[], '
+        '"originalMarkdown" = %s, "originalKind" = %s, '
+        '"originalBytes" = %s, "originalSha256" = %s, "originalMeta" = %s::jsonb, '
         '"updatedAt" = now() '
         'WHERE "id" = %s AND "status" = \'pending_review\' '
         'RETURNING "id"'
@@ -303,6 +309,16 @@ async def _update_summary_with_fetched_content(
         body_markdown,
         content_sha256,
         tags,
+        original_markdown,
+        original_kind,
+        len(original_markdown.encode("utf-8")),
+        markdown_sha256(original_markdown),
+        json.dumps({
+            "provider": "web",
+            "extractorVersion": "trafilatura-markdown-v1",
+            "quality": inspect_markdown(original_markdown).quality,
+            "warnings": list(inspect_markdown(original_markdown).warnings),
+        }, ensure_ascii=False),
         summary_id,
     )
     async with pool.connection() as conn:
@@ -445,6 +461,8 @@ async def run_share_worker(
             summary_id=summary_id,
             title=title,
             body_markdown=body_md[:2000],
+            original_markdown=body_md[:65_536],
+            original_kind="web_share",
             content_sha256=body_sha,
             tags=[],
             request_id=request_id,

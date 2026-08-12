@@ -51,7 +51,7 @@ const SourceRefUuid = (literal: 'favorite' | 'research' | 'summary') => z.object
 export const CreateAiJobInput = z.object({
   topic: z.string().min(2).max(200),
   context: z.string().max(2000).optional(),                    // 用户手填上下文
-  reportType: z.enum(['research_report', 'summary_brief']).default('research_report'),
+  reportType: z.enum(['research_report', 'summary_brief', 'slides']).default('research_report'),
   sourcePolicy: z.enum([SOURCE_POLICY.PREFER_USER_SOURCES, SOURCE_POLICY.ONLY_USER_SOURCES])
     .default(SOURCE_POLICY.PREFER_USER_SOURCES),
   sourceRefs: z.array(z.discriminatedUnion('type', [

@@ -389,6 +389,13 @@ async def fetch_devto_candidates(
 ) -> list[RadarCandidate]:
     max_results = max(1, min(30, int(config.get("max_results", 30))))
     tags = list(config.get("tags", _DEVTO_TAGS))
+    raw_max_age = config.get("max_age_hours", 0)
+    max_age_hours = float(raw_max_age) if raw_max_age else 0.0
+    cutoff = (
+        datetime.now(timezone.utc).timestamp() - max_age_hours * 3600
+        if max_age_hours > 0
+        else None
+    )
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "deep-research-radar/0.1"})
     by_url: dict[str, tuple[RadarCandidate, int]] = {}
@@ -424,6 +431,8 @@ async def fetch_devto_candidates(
                         published = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
                     except ValueError:
                         pass
+                if cutoff is not None and published is not None and published.timestamp() < cutoff:
+                    continue
                 description = (item.get("description") or "").strip()[:500]
                 reactions = int(item.get("positive_reactions_count") or 0)
                 comments = int(item.get("comments_count") or 0)

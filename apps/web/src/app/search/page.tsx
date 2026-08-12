@@ -99,7 +99,7 @@ function SearchContent() {
     const base = row.type === 'radar'
       ? `/radar/${row.refId}`
       : row.type === 'summary'
-        ? `/summaries/${row.refId}`
+        ? `/radar/${row.refId}`
         : `/researches/${row.refId}`;
     const currentSearch = searchParams.toString();
     const returnTo = `/search${currentSearch ? `?${currentSearch}` : ''}`;

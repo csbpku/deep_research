@@ -10,14 +10,13 @@
 ### 当前能力
 
 1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号和用户分享发现内容，生成可追溯的轻量解读，支持筛选、反馈、正文下团队讨论和负向内容治理。
-2. **AI 雷达日报**：每天自动聚合当日高信号雷达候选，由 LLM 生成一篇跨来源总结文章（`digest://YYYY-MM-DD` 的发布摘要），含 TL;DR、分节叙事、重点与来源排名。
-3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
-4. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
-5. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
-6. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
-7. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
-8. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、失败任务入口、同步状态、日报重新生成、成员管理。
-9. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
+2. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
+3. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
+4. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
+5. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
+6. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
+7. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、失败任务入口、同步状态、成员管理。
+8. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
 
 ### 规划能力
 
@@ -100,7 +99,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 | 表 | 作用 |
 |---|---|
 | `users` | 成员、角色和禁用状态 |
-| `summaries` | 雷达候选、AI 雷达日报和用户分享 |
+| `summaries` | 雷达候选和用户分享 |
 | `researches` | 长文、精华和所有私有/公开草稿 |
 | `research_sources` | 调研挂载资料和来源引用 |
 | `ai_research_jobs` | AI 调研与轻量摘要任务 |
@@ -178,27 +177,33 @@ AI job 使用请求者 + `Idempotency-Key` 唯一约束。单 job 最长 5 分�
 
 ## 五、核心流程
 
-### 技术雷达与 AI 雷达日报
+### 技术雷达与主题刷新
 
 ```mermaid
 flowchart LR
     T["cron / admin 触发"]
     Sync["radar sync 抓取 + 多源去重"]
     Enrich["enrich 轻量解读 + 多维评分"]
-    Digest["LLM 聚合 → AI 雷达日报<br/>digest://YYYY-MM-DD"]
-    Store[("published summaries")]
+    Topics["主题候选聚合 + AI 综述"]
+    Store[("radar summaries + topics")]
 
-    T --> Sync --> Enrich --> Digest --> Store
+    T --> Sync --> Enrich --> Topics --> Store
 ```
 
-- 每次同步是 `sync → enrich → digest` 三段流水线；日报按 `digest://YYYY-MM-DD` 作为一条 published summary 落库，`digestMeta` 保存结构化文章（TL;DR、分节、重点、来源排名），前端直接渲染，不解析 Markdown。
-- 雷达候选与日报都复用 `summaries`：雷达候选为 `candidate`，日报为 `published` 的 `digest://*` 记录；不再维护一套平行的候选内容表。
-- 每条雷达内容保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分用于雷达排序和自动日报选材；Admin 不逐条批准雷达内容。
-- 来源包括预置 GitHub、arxiv、RSS、微信公众号、社区（Hacker News / Product Hunt / Reddit / Lobsters）等，Admin 可启停、手动同步、重试和重新生成日报；任一来源失败不阻断其他来源。
-- 日报候选上层最多取 40 条，且每个来源类别最多 5 条，避免单一来源挤占其他信号。
+- 每次同步是 `sync → enrich → topic refresh` 流水线；不生成日报或跨来源日报文章。
+- 雷达候选复用 `summaries`，主题使用 `topics/topic_candidates`；首页直接进入技术雷达，搜索统一进入雷达或调研详情。
+- 每条雷达内容保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分用于雷达排序；Admin 不逐条批准雷达内容。
+- 来源包括预置 GitHub、arxiv、RSS、微信公众号、社区（Hacker News / Product Hunt / Reddit / Lobsters）等，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
 - 普通成员可提交有用、不准确、我用过、收藏和建议调研；重复反馈幂等，反馈用于排序、调研决策和内容治理。
 - 每条内容保留 canonical URL、来源类型、发布时间和抓取时间。
 - 用户分享先进入 `share_submissions`，安全处理和人工审核后进入同一雷达候选池。
+
+正文展示约束：
+
+- 抓取正文先经过正文抽取、Markdown 转换和 deterministic normalizer，再保存为 `originalMarkdown`。
+- `originalSha256` 是正文版本锚点；翻译、AI 阅读和高亮结果必须携带对应 source hash，不能覆盖原文。
+- Web 端统一使用 `MarkdownContent` renderer；原始 HTML 默认跳过，URL 协议只允许 `http`、`https`、`mailto`。
+- 雷达详情公开读取；反馈、评论、AI 聊天和深入调研仍走登录权限。
 
 ### 文件导入
 
@@ -219,9 +224,9 @@ Confluence 导入当前未启用；数据库中的历史字段仅为兼容既有
 ### AI 调研
 
 ```text
-提交主题/指定资料 -> BFF 写 queued job 并在 2 秒内返回 id
+对话澄清主题/背景/资料/产物 -> BFF 写 queued job 并在 2 秒内返回 id
  -> worker: context -> plan -> search -> compress -> analyze -> write
- -> private AI draft -> 用户修改 -> published research
+ -> artifact(markdown|future slides) -> private AI draft -> 用户修改 -> published research
 ```
 
 - Context 目标 500-800 个中文字符，服务端执行 1,500 token 硬限并记录被截断槽位。
@@ -235,10 +240,10 @@ Confluence 导入当前未启用；数据库中的历史字段仅为兼容既有
 
 ```text
 雷达正文 -> 团队评论/@成员/回复 -> 站内通知 -> 成员提议沉淀 -> Admin 编辑提炼 -> published knowledge
-用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> radar candidate / AI 雷达日报
+用户分享 -> 安全抓取/轻量摘要 -> pending_review -> Admin 批准 -> radar candidate
 ```
 
-- 雷达采集结果默认对团队可见并参与自动日报选材；Admin 只做软屏蔽、恢复和异常巡检，不维护逐条批准队列。
+- 雷达采集结果默认对团队可见；Admin 只做软屏蔽、恢复和异常巡检，不维护逐条批准队列。
 - 用户分享仍需 Admin 批准；评论由成员明确“提议沉淀”后进入 Admin 待提炼队列，点赞不自动改变状态。
 - `@成员` 由前端选择器提交成员 UUID，服务端校验成员可用性并在同一事务内写 mention 与通知；“我的通知”只允许收件人读取和标记已读。
 - 审核记录 reviewer 和时间；精华必须能追溯到来源评论。

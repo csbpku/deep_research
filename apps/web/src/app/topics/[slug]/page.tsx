@@ -42,6 +42,7 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ sl
     synthesisPayload: true,
     synthesisErrorCode: true,
     synthesisErrorMessage: true,
+    lastSynthesisSuccessAt: true,
   });
   if (!topic) notFound();
 
@@ -110,6 +111,11 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ sl
               {topic.synthesisErrorCode ? (
                 <div className="space-y-2">
                   <p className="text-sm text-destructive">综述生成失败（{topic.synthesisErrorCode}）：{topic.synthesisErrorMessage}</p>
+                  {topic.lastSynthesisSuccessAt ? (
+                    <p className="text-xs text-muted-foreground">
+                      上次成功更新：{new Date(topic.lastSynthesisSuccessAt).toLocaleString('zh-CN')}
+                    </p>
+                  ) : null}
                   {user?.role === 'admin' ? (
                     <form action={`/api/topics/${topic.slug}/synthesis/retry`} method="post">
                       <Button type="submit" size="sm" variant="outline">

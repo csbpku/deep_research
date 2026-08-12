@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Footnotes in long-form essays</title>
+</head>
+<body>
+  <article>
+    <h1>The footnote problem in technical writing</h1>
+    <p>Footnotes are a venerable convention in academic writing, but in HTML they are routinely stripped or re-rooted to the end of the document.<sup id="fnref1"><a href="#fn1">1</a></sup> When extracting the body, we need to either keep them inline or rebuild a sensible footnote section.</p>
+    <h2>Why this matters</h2>
+    <p>Reader experience degrades when footnotes are silently dropped or duplicated into the body as parentheticals.</p>
+    <h2>Our approach</h2>
+    <p>We preserve footnote references inline during extraction and emit a final footnotes section, separated by a horizontal rule.</p>
+    <hr>
+    <ol class="footnotes">
+      <li id="fn1">First footnote: <a href="#fnref1">↩</a> The original W3C note is dated 1999.</li>
+      <li id="fn2">Second footnote: <a href="#fnref2">↩</a> See also the WHATWG blog for an updated rationale.</li>
+    </ol>
+  </article>
+</body>
+</html>

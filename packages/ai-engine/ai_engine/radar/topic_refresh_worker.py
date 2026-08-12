@@ -9,11 +9,13 @@ Admin-triggered endpoint.
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
 from ai_engine.radar.topic_clustering import is_metadata_tag
+from ai_engine.radar.topic_presets import load_topic_presets
 
 WINDOW_DAYS = 14
 ALLOWED_TIERS = frozenset({"skim", "deep_read"})
@@ -53,7 +55,48 @@ def _matches_topic(summary: dict[str, Any], anchors: set[str]) -> bool:
         for raw_tag in summary.get("tags") or []
         if not is_metadata_tag(str(raw_tag))
     }
-    return bool(tags & anchors)
+    haystack = " ".join([
+        str(summary.get("title") or "").casefold(),
+        str(summary.get("url") or "").casefold(),
+        " ".join(tags),
+    ])
+    return bool(tags & anchors) or any(anchor in haystack for anchor in anchors)
+
+
+async def ensure_topic_presets(pool: Any) -> int:
+    """Upsert operator-defined presets without touching existing candidates."""
+    presets = load_topic_presets()
+    created = 0
+    async with pool.connection() as conn:
+        for preset in presets:
+            result = await conn.execute(
+                """
+                INSERT INTO "topics"
+                  ("id", "slug", "name", "summary", "isPreset", "keywords", "refreshCron", "enabled",
+                   "aggregationWindowStart", "aggregationWindowEnd", "createdAt", "updatedAt")
+                VALUES (gen_random_uuid(), %s, %s, %s, true, %s::jsonb, %s, %s, now(), now(), now(), now())
+                ON CONFLICT ("slug") DO UPDATE SET
+                  "name" = EXCLUDED."name",
+                  "summary" = EXCLUDED."summary",
+                  "isPreset" = true,
+                  "keywords" = EXCLUDED."keywords",
+                  "refreshCron" = EXCLUDED."refreshCron",
+                  "enabled" = EXCLUDED."enabled",
+                  "updatedAt" = now()
+                RETURNING "id"
+                """,
+                (
+                    preset.slug,
+                    preset.name,
+                    preset.description or None,
+                    json.dumps(list(preset.keywords), ensure_ascii=False),
+                    preset.refresh_cron,
+                    preset.enabled,
+                ),
+            )
+            if await result.fetchone():
+                created += 1
+    return created
 
 
 def _tier(candidate_count: int) -> str:
@@ -83,20 +126,20 @@ async def refresh_existing_topics(
         topic_rows = await (
             await conn.execute(
                 """
-                SELECT t."id", t."name", s."tags"
+                SELECT t."id", t."name", t."keywords", t."enabled", s."tags"
                 FROM "topics" t
                 LEFT JOIN "topic_candidates" tc
                   ON tc."topicId" = t."id"
                 LEFT JOIN "summaries" s
                   ON s."id" = tc."summaryId"
-                GROUP BY t."id", t."name", s."id", s."tags"
+                GROUP BY t."id", t."name", t."keywords", t."enabled", s."id", s."tags"
                 """
             )
         ).fetchall()
         summary_rows = await (
             await conn.execute(
                 """
-                SELECT "id", "url", "originalKind", "tags"
+                SELECT "id", "title", "url", "originalKind", "tags"
                 FROM "summaries"
                 WHERE "status" IN ('candidate', 'published')
                   AND ("publishedAt" >= %s OR "createdAt" >= %s)
@@ -115,8 +158,13 @@ async def refresh_existing_topics(
             )
             if row["tags"]:
                 topic["rows"].append({"tags": list(row["tags"] or [])})
+            if row.get("keywords"):
+                try:
+                    topic["preset_keywords"] = set(json.loads(row["keywords"]) if isinstance(row["keywords"], str) else row["keywords"])
+                except (TypeError, json.JSONDecodeError):
+                    topic["preset_keywords"] = set()
         for topic in grouped.values():
-            topic["anchors"] = _topic_anchor_tags(topic["rows"], topic["name"])
+            topic["anchors"] = topic.get("preset_keywords") or _topic_anchor_tags(topic["rows"], topic["name"])
 
         refreshed = linked = removed = 0
         for topic_id, topic in grouped.items():

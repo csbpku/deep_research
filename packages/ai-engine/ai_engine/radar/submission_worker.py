@@ -37,7 +37,7 @@ from ai_engine.radar.enrichment_worker import (
 logger = logging.getLogger("ai_engine.radar.submission_worker")
 
 WORKER_ID = f"submission-{os.getpid()}"
-LEASE_SECONDS = int(os.environ.get("WORKER_LEASE_SECONDS", "60"))
+LEASE_SECONDS = int(os.environ.get("WORKER_LEASE_SECONDS", "1020"))
 MAX_ATTEMPTS = int(os.environ.get("WORKER_MAX_RETRIES", "3"))
 CONCURRENCY = int(os.environ.get("RADAR_SUBMISSION_CONCURRENCY", "2"))
 

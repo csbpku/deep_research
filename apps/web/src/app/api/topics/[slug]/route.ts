@@ -24,6 +24,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
     aggregationWindowEnd: true,
     lastSyncedAt: true,
     synthesisGeneratedAt: true,
+    lastSynthesisSuccessAt: true,
     synthesisModel: true,
     synthesisVersion: true,
     synthesisPayload: true,
@@ -70,6 +71,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
       aggregationWindowEnd: topic.aggregationWindowEnd.toISOString(),
       lastSyncedAt: topic.lastSyncedAt?.toISOString() ?? null,
       synthesisGeneratedAt: topic.synthesisGeneratedAt?.toISOString() ?? null,
+      lastSynthesisSuccessAt: topic.lastSynthesisSuccessAt?.toISOString() ?? null,
       followed: !!followed,
     },
     candidates: candidates.map((c) => ({

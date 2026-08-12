@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
  * 迁移前 radar / researches / ai-research / search / summaries 五个列表页
  * 各自内联写了一遍 h1 + 描述段。
  *
- * ⚠️ e2e 依赖 h1 可见 + 标题中的关键字（调研库 / 雷达 / 日报 / AI 调研），
+ * ⚠️ e2e 依赖 h1 可见 + 标题中的关键字（调研库 / 雷达 / AI 调研），
  * 迁移时不要改文案。
  */
 export function PageHeader({

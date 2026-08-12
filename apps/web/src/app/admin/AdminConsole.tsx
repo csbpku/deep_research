@@ -24,7 +24,6 @@ import {
   LoaderCircle,
   ListFilter,
   MessageSquare,
-  Newspaper,
   Pencil,
   Play,
   RefreshCw,
@@ -425,26 +424,9 @@ function DashboardTab() {
       return response.json();
     },
     onSuccess: () => {
-      setRadarActionMessage('雷达同步已提交，完成后将自动生成日报');
+      setRadarActionMessage('雷达同步已提交，完成后会刷新候选和主题状态');
       queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['admin-radar-runs'] });
-    },
-    onError: (error) => {
-      setRadarActionMessage((error as Error).message);
-    },
-  });
-  const digestMut = useMutation({
-    mutationFn: async () => {
-      const response = await fetch('/api/admin/radar/digest', { method: 'POST' });
-      if (response.status === 409) {
-        throw new Error('已有同步任务进行中，请等待完成后再试');
-      }
-      if (!response.ok) throw new Error('日报任务提交失败');
-      return response.json();
-    },
-    onSuccess: () => {
-      setRadarActionMessage('今日日报重新生成任务已提交');
-      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
     },
     onError: (error) => {
       setRadarActionMessage((error as Error).message);
@@ -640,22 +622,11 @@ function DashboardTab() {
               type="button"
               size="sm"
               className="w-full sm:w-auto"
-              disabled={syncMut.isPending || digestMut.isPending || syncInFlight}
+              disabled={syncMut.isPending || syncInFlight}
               onClick={() => syncMut.mutate()}
             >
               <RefreshCw className={cn('size-4', syncMut.isPending && 'animate-spin')} />
               启动今日同步
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="w-full sm:w-auto"
-              disabled={syncMut.isPending || digestMut.isPending || syncInFlight}
-              onClick={() => digestMut.mutate()}
-            >
-              <Newspaper className={cn('size-4', digestMut.isPending && 'animate-pulse')} />
-              重生成今日日报
             </Button>
           </div>
         </div>
@@ -670,7 +641,7 @@ function DashboardTab() {
             aria-live="polite"
           >
             <LoaderCircle className="size-3.5 animate-spin" />
-            当前同步正在运行，完成后会自动刷新状态并生成日报。
+            当前同步正在运行，完成后会自动刷新候选和主题状态。
           </div>
         ) : null}
         {runsQ.isLoading ? (
@@ -1985,7 +1956,7 @@ function CommentsTab() {
               {it.targetType === 'summary' && it.summary && (
                 <>
                   · 来自摘要:
-                  <Link href={`/summaries/${it.summary.id}`} className="text-primary hover:underline">
+                  <Link href={`/radar/${it.summary.id}`} className="text-primary hover:underline">
                     {it.summary.title}
                   </Link>
                 </>

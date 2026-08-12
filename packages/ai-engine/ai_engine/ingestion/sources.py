@@ -40,6 +40,7 @@ _ARXIV_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _ARXIV_MAX_RETRIES = 4
 _ARXIV_RETRY_DEFAULT_WAIT = 15.0  # seconds; arXiv asks clients to back off
 _ARXIV_MIN_REQUEST_INTERVAL = 3.0  # arXiv public API etiquette
+_ARXIV_RSS_BASE = "https://rss.arxiv.org/rss"
 
 
 async def fetch_rss_feeds(
@@ -197,6 +198,17 @@ async def fetch_arxiv(
                     "ai-engine.ingestion.arxiv_rate_limited",
                     extra={"categories": cats, "status": resp.status_code, "retry_after": retry_after_raw},
                 )
+                fallback = await _fetch_arxiv_rss_fallback(
+                    client=client,
+                    categories=cats,
+                    max_results=max_results,
+                )
+                if fallback:
+                    logger.warning(
+                        "ai-engine.ingestion.arxiv_api_rate_limited_rss_fallback",
+                        extra={"categories": cats, "results": len(fallback)},
+                    )
+                    return fallback
                 raise RuntimeError(f"arxiv_rate_limited:{resp.status_code}")
             break
 
@@ -273,6 +285,44 @@ async def fetch_arxiv(
         )
 
     return results
+
+
+async def _fetch_arxiv_rss_fallback(
+    *,
+    client: httpx.AsyncClient,
+    categories: list[str],
+    max_results: int,
+) -> list[dict[str, Any]]:
+    """Fallback to official arXiv RSS when the API rate-limits the client."""
+    results: list[dict[str, Any]] = []
+    per_category = max(1, max_results // max(1, len(categories)))
+    for category in categories:
+        try:
+            response = await client.get(f"{_ARXIV_RSS_BASE}/{category}")
+            response.raise_for_status()
+            for item in _parse_rss_xml_simple(response.text)[:per_category]:
+                url = str(item.get("link") or "").strip()
+                title = str(item.get("title") or "").strip()
+                if not url or not title:
+                    continue
+                if "/abs/" not in url:
+                    continue
+                arxiv_id = url.rsplit("/abs/", 1)[-1].split("v", 1)[0]
+                results.append({
+                    "title": title[:300],
+                    "url": f"https://arxiv.org/abs/{arxiv_id}",
+                    "snippet": str(item.get("description") or "")[:500],
+                    "content_origin": "rss",
+                    "source": "daily",
+                    "published_at": _normalize_date(str(item.get("pubDate") or "")),
+                    "tags": ["ai", "research", "arxiv"],
+                })
+        except Exception as exc:
+            logger.warning(
+                "ai-engine.ingestion.arxiv_rss_fallback_failed",
+                extra={"category": category, "error_type": type(exc).__name__},
+            )
+    return results[:max_results]
 
 
 # ─────────────── XML parsing helpers (no heavy lib dependency) ───────────────

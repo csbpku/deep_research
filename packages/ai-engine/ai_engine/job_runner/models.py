@@ -28,7 +28,7 @@ class JobLease:
     """Lease handle returned by `acquire_next_job`.
 
     The `expires_at` is computed by the store using
-    `WORKER_LEASE_SECONDS` (default 60 — see contracts/env-and-scripts.md §3).
+    `WORKER_LEASE_SECONDS` (default 1020 — longer than the 900s configured AI job budget).
     """
 
     job_id: str

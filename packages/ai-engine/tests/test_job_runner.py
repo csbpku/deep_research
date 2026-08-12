@@ -214,6 +214,30 @@ async def test_summary_brief_persists_inline_output_without_draft() -> None:
 
 
 @pytest.mark.asyncio
+async def test_slides_report_renders_as_slide_markdown_before_draft_creation() -> None:
+    store = InMemoryJobStore()
+    adapter = FakeAdapter(default_mode="success")
+    snap = make_job_snapshot(topic="Slides topic", report_type="slides")
+    await store.enqueue(snap)
+    captured: dict[str, str] = {}
+
+    async def draft_factory(snapshot, sources, body, review):  # type: ignore[no-untyped-def]
+        captured["body"] = body
+        return "draft-slides"
+
+    outcome = await run_one_available_job(
+        store=store,
+        adapter=adapter,
+        draft_factory=draft_factory,
+    )
+
+    assert outcome is not None
+    assert outcome.final_status == AI_JOB_STATUS["SUCCEEDED"]
+    assert outcome.draft_research_id == "draft-slides"
+    assert captured["body"].startswith("# Slides topic")
+
+
+@pytest.mark.asyncio
 async def test_run_one_available_job_returns_none_on_empty_queue() -> None:
     store = InMemoryJobStore()
     adapter = FakeAdapter()

@@ -271,8 +271,8 @@ describe('shapeSearchRow', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('detailHrefForSearchRow', () => {
-  it('summary → /summaries/[id]', () => {
-    expect(detailHrefForSearchRow('summary', 'abc')).toBe('/summaries/abc');
+  it('summary → /radar/[id]', () => {
+    expect(detailHrefForSearchRow('summary', 'abc')).toBe('/radar/abc');
   });
 
   it('long_research → /researches/[id]', () => {

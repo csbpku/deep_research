@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import Any
+
 import pytest
 
 from ai_engine.radar.topic_aggregation_worker import _topic_slug
@@ -11,7 +14,7 @@ from ai_engine.radar.topic_clustering import (
     title_concepts,
 )
 from ai_engine.radar.topic_proposal_worker import _clean_json, _prompt, _source_key
-from ai_engine.radar.topic_synthesis_worker import _parse_payload
+from ai_engine.radar.topic_synthesis_worker import _generate_for_topic, _parse_payload
 from ai_engine.radar.topic_refresh_worker import (
     _matches_topic,
     _source_key as _refresh_source_key,
@@ -177,3 +180,87 @@ def test_parse_payload_handles_plain_json() -> None:
 def test_parse_payload_raises_on_invalid() -> None:
     with pytest.raises(Exception):
         _parse_payload("not json at all { broken")
+
+
+@pytest.mark.asyncio
+async def test_topic_synthesis_failure_keeps_previous_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Cursor:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self.rows = rows
+
+        async def fetchone(self) -> dict[str, Any] | None:
+            return self.rows[0] if self.rows else None
+
+        async def fetchall(self) -> list[dict[str, Any]]:
+            return self.rows
+
+    class Connection:
+        def __init__(self) -> None:
+            self.sql: list[str] = []
+
+        async def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> Cursor:
+            self.sql.append(sql)
+            if 'FROM "topics"' in sql:
+                return Cursor([{"id": "topic-1", "name": "MCP", "synthesisErrorCode": None}])
+            if 'FROM "topic_candidates"' in sql:
+                return Cursor([{"id": "summary-1", "title": "MCP update", "interpretation": "signal", "tags": ["mcp"]}])
+            return Cursor([])
+
+    class Pool:
+        def __init__(self) -> None:
+            self.conn = Connection()
+
+        @asynccontextmanager
+        async def connection(self):  # type: ignore[no-untyped-def]
+            yield self.conn
+
+    async def fail_generate(**_: Any) -> Any:
+        raise RuntimeError("provider unavailable")
+
+    pool = Pool()
+    monkeypatch.setattr("ai_engine.radar.topic_synthesis_worker.generate_text", fail_generate)
+    assert await _generate_for_topic(pool, "topic-1") is False
+    failure_updates = [sql for sql in pool.conn.sql if 'UPDATE "topics"' in sql]
+    assert failure_updates
+    assert '"synthesisErrorCode"' in failure_updates[-1]
+    assert '"synthesisPayload"' not in failure_updates[-1]
+
+
+@pytest.mark.asyncio
+async def test_topic_synthesis_failure_preserves_last_success_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """失败路径不得覆盖 lastSynthesisSuccessAt；该列只在成功分支更新。"""
+
+    class Cursor:
+        async def fetchone(self) -> dict[str, Any] | None:
+            return {"id": "topic-1", "name": "MCP", "synthesisErrorCode": None}
+
+        async def fetchall(self) -> list[dict[str, Any]]:
+            return []
+
+    class Connection:
+        def __init__(self) -> None:
+            self.sql: list[str] = []
+
+        async def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> Cursor:
+            self.sql.append(sql)
+            return Cursor()
+
+    class Pool:
+        def __init__(self) -> None:
+            self.conn = Connection()
+
+        @asynccontextmanager
+        async def connection(self):  # type: ignore[no-untyped-def]
+            yield self.conn
+
+    async def fail_generate(**_: Any) -> Any:
+        raise RuntimeError("provider unavailable")
+
+    pool = Pool()
+    monkeypatch.setattr("ai_engine.radar.topic_synthesis_worker.generate_text", fail_generate)
+    assert await _generate_for_topic(pool, "topic-1") is False
+    failure_updates = [sql for sql in pool.conn.sql if 'UPDATE "topics"' in sql]
+    assert failure_updates
+    assert '"lastSynthesisSuccessAt"' not in failure_updates[-1]

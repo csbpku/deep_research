@@ -31,6 +31,7 @@ from ai_engine.adapters.base import (
     ResearchEngineAdapter,
     ResearchRequest,
 )
+from ai_engine.contracts.artifacts import ArtifactType, render_artifact_content
 from ai_engine.contracts.errors import AdapterError
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
@@ -281,8 +282,14 @@ async def run_once(
         # inline output on the job and never invokes the draft factory.
         if not terminal.output_text or not terminal.output_text.strip():
             raise ValueError("succeeded adapter result has no output_text")
+        artifact_type: ArtifactType = "slides" if snapshot.report_type == "slides" else "markdown"
+        artifact_content = render_artifact_content(
+            terminal.output_text.strip(),
+            artifact_type,
+            snapshot.topic,
+        )
         if snapshot.report_type == "summary_brief":
-            output_text = terminal.output_text.strip()
+            output_text = artifact_content
         elif draft_factory is None:
             from ai_engine.job_runner.db_store import _drafts_for_tests
             import uuid as _uuid
@@ -295,7 +302,7 @@ async def run_once(
             }
         else:
             draft_id = await draft_factory(
-                snapshot, sources_tuple, terminal.output_text, review_details
+                snapshot, sources_tuple, artifact_content, review_details
             )
             if not draft_id:
                 raise ValueError(

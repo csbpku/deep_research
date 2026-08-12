@@ -1,7 +1,5 @@
 import { getCurrentUser } from '@/lib/auth/session';
-import { DesktopSidebar } from './DesktopSidebar';
 import { Topbar } from './Topbar';
-import { SidebarNav } from './SidebarNav';
 // ⚠️ 必须从 server-safe 模块拿常量：从 './SidebarNav'（'use client'）拿会被 RSC
 // 按 ID 序列化（而不是按值），导致 `[...PRIMARY_NAV]` 在服务端拿到字符串，
 // 触发 "X is not iterable"。
@@ -10,7 +8,7 @@ import { ADMIN_NAV, PRIMARY_NAV, type NavItem } from './sidebar-nav-config';
 /**
  * AppShell —— 全站外壳（RSC）。
  *
- * 布局：左侧固定侧栏 240px（md 以下收进 Topbar 的 Sheet）+ 右侧顶栏 56px + 内容区。
+ * 布局：顶部主导航 + 内容区。
  * 内容区宽度由各页面自己用 `max-w-shell`（列表/控制台，1280px）或
  * `max-w-measure`（详情/长文，760px）决定，这里不设死。
  *
@@ -31,15 +29,9 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     : null;
 
   return (
-    <div className="flex min-h-screen">
-      {/* 桌面侧栏 */}
-      <DesktopSidebar items={navItems} />
-
-      {/* 主列 */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar navItems={navItems} user={navUser} />
-        <main className="flex-1 px-4 py-6 sm:px-6">{children}</main>
-      </div>
+    <div className="flex min-h-screen flex-col">
+      <Topbar navItems={navItems} user={navUser} />
+      <main className="min-w-0 flex-1 px-4 py-6 sm:px-6">{children}</main>
     </div>
   );
 }

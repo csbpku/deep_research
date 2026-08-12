@@ -150,7 +150,7 @@ export type RadarListQuery = z.infer<typeof RadarListQuery>;
 export const RadarIdParam = z.object({ id: z.string().uuid() });
 export type RadarIdParam = z.infer<typeof RadarIdParam>;
 
-/** /api/summaries/[id] 路径参数 */
+/** Summary/radar detail path parameter */
 export const SummaryIdParam = z.object({ id: z.string().uuid() });
 export type SummaryIdParam = z.infer<typeof SummaryIdParam>;
 
@@ -191,7 +191,7 @@ export type DeleteRadarFeedbackQuery = z.infer<typeof DeleteRadarFeedbackQuery>;
 /** 评论目标类型：summary / research，恰好一个非空（由 schema CHECK 保证） */
 export const COMMENT_TARGET_VALUES = ['summary', 'research'] as const;
 
-/** POST /api/summaries/[date]/comments 或 /api/researches/[id]/comments */
+/** POST /api/summaries/[id]/comments 或 /api/researches/[id]/comments */
 export const CreateCommentInput = z.object({
   body: z.string().trim().min(1, '评论不能为空').max(2000, '评论最多 2000 字'),
   parentId: z.string().uuid().optional(),

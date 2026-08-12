@@ -6,7 +6,6 @@ import {
   Flame,
   LayoutGrid,
   Library,
-  Newspaper,
   Radar,
   Search,
   Settings,
@@ -38,7 +37,6 @@ export {
  */
 const ICONS: Record<NavItemIconKey, LucideIcon> = {
   home: LayoutGrid,
-  digest: Newspaper,
   radar: Radar,
   // 调研库用书架图标：长期归档而非主动创造
   research: Library,
@@ -59,16 +57,24 @@ export function SidebarNav({
   items,
   onNavigate,
   collapsed = false,
+  horizontal = false,
 }: {
   items: NavItem[];
   /** 移动端 Sheet 里点击后收起 */
   onNavigate?: () => void;
   collapsed?: boolean;
+  horizontal?: boolean;
 }) {
   const pathname = usePathname() ?? '/';
 
   return (
-    <nav className="flex flex-col gap-0.5" aria-label="主导航">
+    <nav
+      className={cn(
+        'flex gap-0.5',
+        horizontal ? 'flex-row items-center' : 'flex-col',
+      )}
+      aria-label="主导航"
+    >
       {items.map((item) => {
         const Icon = ICONS[item.icon];
         const active = isNavActive(pathname, item.href);
@@ -80,14 +86,22 @@ export function SidebarNav({
             onClick={onNavigate}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              // 左侧 2px 高亮条：给 active 状态更强的视觉权重
-              'group relative flex items-center rounded-md py-2 text-[13px] transition-colors duration-150',
-              collapsed ? 'justify-center px-2' : 'gap-2.5 pl-3.5 pr-2.5',
+              'group relative flex items-center rounded-md text-[13px] transition-colors duration-150',
+              horizontal
+                ? 'h-9 shrink-0 gap-2 px-2.5'
+                : 'py-2',
+              !horizontal && (collapsed ? 'justify-center px-2' : 'gap-2.5 pl-3.5 pr-2.5'),
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              'before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors before:duration-150',
+              horizontal
+                ? 'after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent after:transition-colors after:duration-150'
+                : 'before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors before:duration-150',
               active
-                ? 'bg-accent font-medium text-accent-foreground before:bg-primary'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground hover:before:bg-muted-foreground/30',
+                ? horizontal
+                  ? 'bg-accent/70 font-medium text-accent-foreground after:bg-primary'
+                  : 'bg-accent font-medium text-accent-foreground before:bg-primary'
+                : horizontal
+                  ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground hover:before:bg-muted-foreground/30',
             )}
           >
             <Icon className="size-4 shrink-0" />

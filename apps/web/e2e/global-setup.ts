@@ -4,7 +4,7 @@
 //   - next dev 默认懒编译：第一次请求某个 route 时才编译
 //   - CI 用 2 worker 并行跑测试；同时请求未编译的 route 可能导致
 //     dev server 短暂 500 或响应丢失（cross-flows.spec.ts 出现过
-//     `/api/summaries` 500 但 server log 无对应 GET 的情况）
+//     某些懒编译的 API 首次请求偶发 500）
 //   - pre-warm 后所有 route 已编译好，所有测试拿到真实响应
 //
 // 注意：
@@ -15,8 +15,6 @@ const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
 
 const WARMUP_ENDPOINTS = [
   // 公共
-  '/api/summaries',
-  '/api/summaries/00000000-0000-4000-8000-000000000000',
   '/api/search?q=test',
   '/api/radar',
   '/api/radar-feedback',
@@ -31,7 +29,6 @@ const WARMUP_ENDPOINTS = [
   // UI 页面（用于 redirect 测试）
   '/admin',
   '/signin',
-  '/summaries',
   '/',
 ];
 

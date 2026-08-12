@@ -37,6 +37,7 @@ import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { reviewDisplayLabel, reviewDisplayStatus } from '@/lib/ai-review-ui';
+import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
 
 interface AiJobStatus {
   jobId: string;
@@ -61,6 +62,17 @@ interface AiJobStatus {
   createdAt: string | null;
   completedAt: string | null;
   review: ReviewDetails | null;
+  artifact: {
+    type: 'markdown' | 'slides' | 'table' | 'chart';
+    title: string;
+    version: number;
+    mimeType: string;
+    content: string | null;
+    payload: unknown | null;
+    sourceRefs: Array<{ type: string; value: string; title?: string | null }>;
+    sourceHash: string | null;
+    draftResearchId: string | null;
+  } | null;
 }
 
 interface ReviewClaim {
@@ -363,10 +375,17 @@ function StatusBody({ s }: { s: AiJobStatus }) {
         </div>
       ) : null}
 
-      {finalStatus === 'succeeded' && isBrief && s.outputText ? (
+      {finalStatus === 'succeeded' && isBrief && s.artifact?.type === 'markdown' && s.artifact.content ? (
         <section className="border-t border-border p-4" aria-label="轻量摘要结果">
-          <h3 className="mb-3 text-sm font-semibold">轻量摘要</h3>
-          <MarkdownPreview source={s.outputText} />
+          <h3 className="mb-3 text-sm font-semibold">{s.artifact.title}</h3>
+          <MarkdownPreview source={s.artifact.content} />
+        </section>
+      ) : null}
+
+      {finalStatus === 'succeeded' && s.artifact?.type === 'slides' && s.artifact.content ? (
+        <section className="border-t border-border p-4" aria-label="Slides 演示稿结果">
+          <h3 className="mb-3 text-sm font-semibold">{s.artifact.title}</h3>
+          <ArtifactPreview content={s.artifact.content} />
         </section>
       ) : null}
 

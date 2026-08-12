@@ -45,7 +45,7 @@ def _now() -> datetime:
 
 
 async def _acquire(pool: Any, worker_id: str) -> tuple[ShareLease, dict[str, Any]] | None:
-    lease_seconds = int(os.getenv("WORKER_LEASE_SECONDS", "60"))
+    lease_seconds = int(os.getenv("WORKER_LEASE_SECONDS", "1020"))
     heartbeat_seconds = float(os.getenv("WORKER_HEARTBEAT_SECONDS", "15"))
     now = _now()
     expiry = now + timedelta(seconds=lease_seconds)
@@ -75,7 +75,7 @@ async def _acquire(pool: Any, worker_id: str) -> tuple[ShareLease, dict[str, Any
 
 
 async def _heartbeat(pool: Any, lease: ShareLease) -> bool:
-    lease_seconds = int(os.getenv("WORKER_LEASE_SECONDS", "60"))
+    lease_seconds = int(os.getenv("WORKER_LEASE_SECONDS", "1020"))
     now = _now()
     expiry = now + timedelta(seconds=lease_seconds)
     async with pool.connection() as conn:

@@ -7,7 +7,7 @@ describe('isHttpUrl', () => {
     expect(isHttpUrl(url)).toBe(true);
   });
 
-  it.each(['digest://2026-08-05', 'javascript:alert(1)', '/relative', '', 'not a url'])(
+  it.each(['ftp://example.com/file', 'javascript:alert(1)', '/relative', '', 'not a url'])(
     'rejects non-web target %s',
     (url) => {
       expect(isHttpUrl(url)).toBe(false);

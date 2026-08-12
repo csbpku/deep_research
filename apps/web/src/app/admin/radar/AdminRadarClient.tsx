@@ -291,7 +291,7 @@ export default function AdminRadarClient() {
         open={!!dismissing}
         onOpenChange={(o) => !o && setDismissing(null)}
         title="屏蔽该雷达条目？"
-        description={dismissing ? <>条目：<strong className="font-medium text-foreground">{dismissing.title}</strong>。屏蔽后不会再出现在默认雷达和后续日报中，仍可在「已屏蔽」状态下恢复或审计。</> : undefined}
+        description={dismissing ? <>条目：<strong className="font-medium text-foreground">{dismissing.title}</strong>。屏蔽后不会再出现在默认雷达，仍可在「已屏蔽」状态下恢复或审计。</> : undefined}
         fields={[
           { kind: 'static', id: 'note', label: '说明', value: '该操作会写入 admin_actions 审计日志，已有评论和引用不会被物理删除。' },
         ]}

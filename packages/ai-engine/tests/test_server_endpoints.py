@@ -323,10 +323,12 @@ async def _make_quota_client(
             app.dependency_overrides.clear()
 
 
-async def test_submit_rejects_user_quota_exceeded() -> None:
+async def test_submit_rejects_user_quota_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
     """When the user has already used 5 of 5 (default BUDGET_USER_DAILY),
     a new submission returns 429 AI_QUOTA_EXCEEDED with ``scope='user'``.
     """
+    monkeypatch.setenv("BUDGET_USER_DAILY", "5")
+    monkeypatch.setenv("BUDGET_TEAM_DAILY", "20")
     async for client, _adapter in _make_quota_client(user_count=5, team_count=0):
         resp = await client.post(
             "/api/ai/jobs",
@@ -340,11 +342,13 @@ async def test_submit_rejects_user_quota_exceeded() -> None:
     assert body["detail"]["details"]["limit"] == 5
 
 
-async def test_submit_rejects_team_quota_exceeded() -> None:
+async def test_submit_rejects_team_quota_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
     """Team hard-cap of 20/day is independent of per-user cap. If the
     user still has budget but the team has used 20/20, reject with
     ``scope='team'``.
     """
+    monkeypatch.setenv("BUDGET_USER_DAILY", "5")
+    monkeypatch.setenv("BUDGET_TEAM_DAILY", "20")
     async for client, _adapter in _make_quota_client(user_count=0, team_count=20):
         resp = await client.post(
             "/api/ai/jobs",

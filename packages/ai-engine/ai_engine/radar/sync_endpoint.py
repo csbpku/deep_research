@@ -21,7 +21,6 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from ai_engine.adapters.base import ResearchEngineAdapter
-from ai_engine.radar.daily_digest import generate_daily_digest
 from ai_engine.radar.enrichment_worker import (
     _generate_web_highlights as _gen_highlights,
     run_enrichment_for_pending,
@@ -47,12 +46,6 @@ class RadarSyncAccepted(BaseModel):
     runId: str
     status: str = "queued"
     requestId: str
-
-
-class RadarDigestRegenerateBody(BaseModel):
-    target_date: date | None = Field(default=None, alias="targetDate")
-
-    model_config = {"populate_by_name": True}
 
 
 class RadarEnrichmentBody(BaseModel):
@@ -117,8 +110,8 @@ def _require_internal_token(request: Request) -> None:
 
     The token is configured identically in apps/web and ai-engine. Calls
     lacking the header (or with a wrong value) get 403 — preventing anonymous
-    operators on the internal Docker network from triggering sync / digest /
-    runs read endpoints.
+    operators on the internal Docker network from triggering sync or runs
+    read endpoints.
 
     ``RADAR_DISABLE_INTERNAL_TOKEN=1`` is honored for local dev only; tests
     that need to bypass must inject the dependency via FastAPI overrides.
@@ -301,15 +294,6 @@ async def _run_background(
             enrichment_elapsed_ms=pipeline_result.enrichment_elapsed_ms,
             enrichment_error=pipeline_result.enrichment_error,
         )
-        log.info(
-            "ai-engine.radar.digest_done",
-            request_id=request_id,
-            summary_id=pipeline_result.digest_summary_id,
-            candidate_count=pipeline_result.digest_candidate_count,
-            narrative_degraded=pipeline_result.digest_narrative_degraded,
-            elapsed_ms=pipeline_result.digest_elapsed_ms,
-            error=pipeline_result.digest_error,
-        )
         # Refresh only topics that already exist. New-topic proposal generation
         # is intentionally a separate Admin-triggered chain.
         try:
@@ -365,52 +349,7 @@ async def sync_radar(
     return RadarSyncAccepted(runId=accepted_id, requestId=request_id)
 
 
-@router.post(
-    "/digest/regenerate",
-    response_model=RadarSyncAccepted,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def regenerate_digest(
-    body: RadarDigestRegenerateBody,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    pool: Annotated[Any, Depends(_pool)],
-    _token: Annotated[None, Depends(_require_internal_token)] = None,
-) -> RadarSyncAccepted:
-    """Regenerate one digest without re-running source synchronization."""
-    request_id = str(getattr(request.state, "request_id", ""))
-    if await _has_active_run(pool):
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "RADAR_SYNC_ALREADY_RUNNING"},
-        )
-    lock = getattr(request.app.state, "radar_sync_lock", None)
-
-    async def _regenerate() -> None:
-        async def _run() -> None:
-            digest_date = body.target_date or datetime.now(
-                ZoneInfo("Asia/Shanghai")
-            ).date()
-            await generate_daily_digest(pool, target_date=digest_date)
-
-        try:
-            if lock is None:
-                await _run()
-            else:
-                async with lock:
-                    await _run()
-        except Exception as exc:
-            structlog.get_logger("ai_engine.radar").error(
-                "ai-engine.radar.digest_regenerate_failed",
-                request_id=request_id,
-                error_type=type(exc).__name__,
-            )
-
-    background_tasks.add_task(_regenerate)
-    return RadarSyncAccepted(runId=request_id, requestId=request_id)
-
-
-async def run_radar_daily_job(
+async def run_radar_sync_job(
     *,
     pool: Any,
     adapter: ResearchEngineAdapter,
@@ -418,7 +357,7 @@ async def run_radar_daily_job(
     request_id: str,
     lock: asyncio.Lock | None = None,
 ) -> None:
-    """Shared complete radar task used by cron and the host-level script."""
+    """Shared radar task used by the cron loop and host-level script."""
     await _run_background(
         pool=pool,
         adapter=adapter,
@@ -541,4 +480,4 @@ async def retry_sync(
     return RadarSyncAccepted(runId=run_id, requestId=request_id)
 
 
-__all__ = ["router", "run_radar_daily_job"]
+__all__ = ["router", "run_radar_sync_job"]

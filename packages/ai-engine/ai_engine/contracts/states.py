@@ -131,7 +131,7 @@ REPORT_TYPE: Final[dict[str, str]] = {
     "RESEARCH_REPORT": "research_report",
     "SUMMARY_BRIEF": "summary_brief",
 }
-ReportType = Literal["research_report", "summary_brief"]
+ReportType = Literal["research_report", "summary_brief", "slides"]
 
 # Helpers for partial-job rule (架构 §九 风险 10 / state-machines §1):
 # mid-failure with at least 3 sources → partial; otherwise failed.

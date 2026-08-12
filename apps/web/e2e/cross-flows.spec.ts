@@ -4,7 +4,6 @@
 // 而非浏览器渲染。这比真实 UI 串联更轻量，但能捕获路由间集成问题。
 //
 // 覆盖：
-//   - GET /api/summaries → GET /api/summaries/[id] 联动
 //   - GET /api/radar → GET /api/radar/[id] 联动
 //   - 公开 API 一致性（不需要 admin 权限的端点不应 401/403）
 
@@ -13,7 +12,6 @@ import { test, expect } from '@playwright/test';
 test.describe('Cross-module API consistency', () => {
   test('public APIs respond 2xx or 4xx (not 5xx) without auth', async ({ request }) => {
     const endpoints = [
-      '/api/summaries',
       '/api/search?q=test',
       '/api/radar',
       '/api/radar-feedback', // POST-only, but GET 应该 405
@@ -23,22 +21,6 @@ test.describe('Cross-module API consistency', () => {
       const res = await request.get(url);
       // 允许 200/400/404/405；不允许 500
       expect(res.status(), `${url} returned ${res.status()}`).toBeLessThan(500);
-    }
-  });
-
-  test('digest list and date detail both accessible', async ({ request }) => {
-    const listRes = await request.get('/api/summaries');
-    expect(listRes.status()).toBe(200);
-    const list = await listRes.json();
-    if (list.dates && list.dates.length > 0) {
-      const first = list.dates[0];
-      const detailRes = await request.get(`/api/summaries?date=${first.date}`);
-      expect(detailRes.status()).toBe(200);
-      const detail = await detailRes.json();
-      expect(detail.item.summaryId).toBe(first.summaryId);
-    } else {
-      // 空列表也 OK；只是没有日报可展开
-      test.skip();
     }
   });
 

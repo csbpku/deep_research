@@ -367,7 +367,7 @@ export function isoDateOf(d: Date): string {
 export async function aggregateFeedbacks(
   prisma: any,
   summaryIds: string[],
-  userId: string,
+  userId?: string | null,
 ): Promise<Map<string, { counts: RadarFeedbackCount; mine: RadarFeedbackType[] }>> {
   const result = new Map<string, { counts: RadarFeedbackCount; mine: RadarFeedbackType[] }>();
   for (const id of summaryIds) {
@@ -390,11 +390,12 @@ export async function aggregateFeedbacks(
     }
   }
 
-  const mine: Array<{ summaryId: string; feedbackType: string }> =
-    await prisma.radarFeedback.findMany({
-      where: { summaryId: { in: summaryIds }, userId },
-      select: { summaryId: true, feedbackType: true },
-    });
+  const mine: Array<{ summaryId: string; feedbackType: string }> = userId
+    ? await prisma.radarFeedback.findMany({
+        where: { summaryId: { in: summaryIds }, userId },
+        select: { summaryId: true, feedbackType: true },
+      })
+    : [];
   for (const row of mine) {
     const entry = result.get(row.summaryId);
     if (!entry) continue;

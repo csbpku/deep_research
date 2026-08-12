@@ -101,18 +101,6 @@ export function buildSearchSql(args: BuildSearchArgs): {
           ) >= 0.35
         )
       )
-      AND (
-        $2::text IS NOT NULL
-        OR sd.type::text <> 'summary'
-        OR NOT EXISTS (
-          SELECT 1
-          FROM summaries radar_summary
-          WHERE radar_summary.id = sd."refId"
-            AND radar_summary.source::text = 'daily'
-            AND radar_summary."syncRunId" IS NOT NULL
-        )
-      )
-
       UNION ALL
 
       SELECT
@@ -240,12 +228,12 @@ export function shapeSearchRow(row: {
 
 /**
  * 详情链接：根据 search_doc.type 决定指向哪个详情页。
- * - summary → /summaries/{refId}
+ * - summary → /radar/{refId}（摘要记录统一通过雷达详情展示）
  * - long_research / knowledge → /researches/{refId}
  */
 export function detailHrefForSearchRow(type: string, refId: string): string {
   if (type === 'radar') return `/radar/${refId}`;
-  if (type === 'summary') return `/summaries/${refId}`;
+  if (type === 'summary') return `/radar/${refId}`;
   return `/researches/${refId}`;
 }
 

@@ -129,7 +129,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         source: 'daily',
         syncRunId: { not: null },
         ...(dateBounds ? { updatedAt: dateBounds } : {}),
-        canonicalUrl: { not: { startsWith: 'digest://' } },
       },
       distinct: ['canonicalUrl'],
       select: { canonicalUrl: true, updatedAt: true },

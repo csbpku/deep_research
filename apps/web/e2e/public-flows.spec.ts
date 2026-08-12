@@ -3,7 +3,7 @@
 // 注意：Playwright + 真实 NextAuth 流程比较慢；本测试只验证：
 //   - /signin 页面存在
 //   - 未登录访问 /admin → 跳 /signin
-//   - 未登录访问 /summaries/[id] 等公开页 → 200
+//   - 未登录访问公开雷达页 → 200
 
 import { test, expect } from '@playwright/test';
 import { loginWithCredentials } from './fixtures';
@@ -20,11 +20,6 @@ test.describe('Public flows', () => {
     // Server-side redirect: 200 with /signin in URL, or 307 redirect chain
     await expect(page).toHaveURL(/\/signin/);
     expect(response?.status() ?? 200).toBeLessThan(500);
-  });
-
-  test('public /summaries page is reachable', async ({ page }) => {
-    const response = await page.goto('/summaries');
-    expect(response?.status()).toBe(200);
   });
 
   test('home / page is reachable', async ({ page }) => {
@@ -45,7 +40,7 @@ test.describe('Member radar to research flow', () => {
       role: 'member',
     });
 
-    const radarResponse = await page.request.get('/api/radar?quality=relevant&page=1&per_page=1');
+    const radarResponse = await page.request.get('/api/radar?quality=collection&page=1&per_page=1');
     expect(radarResponse.ok()).toBe(true);
     const radar = await radarResponse.json() as {
       items: Array<{ id: string; title: string; interpretation: string | null; url: string }>;
@@ -62,8 +57,8 @@ test.describe('Member radar to research flow', () => {
     await detailAction.click();
 
     await expect(page).toHaveURL(`/ai-research?seed=${candidate.id}`);
-    await expect(page.getByLabel(/^主题/)).toHaveValue(candidate.title.slice(0, 200));
-    await expect(page.getByLabel(/团队背景/)).toHaveValue(new RegExp(candidate.url.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
+    await expect(page.getByRole('textbox', { name: 'AI 调研对话输入' })).toBeVisible();
+    await expect(page.getByText(new RegExp(candidate.title.slice(0, 30), 'u'))).toBeVisible();
     await expect(page.getByText(candidate.title, { exact: true })).toBeVisible();
   });
 });

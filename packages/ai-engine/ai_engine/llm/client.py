@@ -34,7 +34,8 @@ def _llm_spec(tier: LlmTier, explicit: str | None) -> str:
         return explicit
     if tier == "light":
         return (
-            os.environ.get("BRIEF_LLM")
+            os.environ.get("FAST_LLM")
+            or os.environ.get("BRIEF_LLM")
             or os.environ.get("SMART_LLM")
             or "anthropic:claude-haiku-4-5"
         )

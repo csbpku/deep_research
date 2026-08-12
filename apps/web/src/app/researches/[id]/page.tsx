@@ -273,7 +273,7 @@ export default function ResearchDetailPage() {
                     <Link
                       href={
                         data.sourceComment.targetType === 'summary'
-                          ? `/summaries/${data.sourceComment.targetId}`
+                          ? `/radar/${data.sourceComment.targetId}`
                           : `/researches/${data.sourceComment.targetId}`
                       }
                       className="text-primary hover:underline"

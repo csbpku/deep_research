@@ -108,7 +108,6 @@ async def main() -> int:
             '   JOIN "radar_sources" s ON s."id" = r."sourceId" '
             '   WHERE r."id" = "summaries"."syncRunId" LIMIT 1) AS "sourceType" '
             'FROM "summaries" WHERE ' + eligibility
-            + 'AND "canonicalUrl" NOT LIKE \'digest://%%\' '
             + ('AND "summaryDate" = %s::date ' if args.date else '')
             + ('AND "summaryDate" < %s::date ' if args.before_date else '')
             + ('' if args.summary_id else '')

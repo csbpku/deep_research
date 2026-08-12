@@ -18,7 +18,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 
 interface Preferences {
-  defaultReportType?: 'research_report' | 'summary_brief';
+  defaultReportType?: 'research_report' | 'summary_brief' | 'slides';
   defaultSourcePolicy?: 'prefer_user_sources' | 'only_user_sources' | 'web_only';
   timezone?: string;
   notifyPrefs?: { commentReply?: boolean; shareApproved?: boolean; topicDigest?: boolean };
@@ -98,6 +98,7 @@ export function PreferencesForm({ userEmail }: { userEmail: string }) {
               <SelectItem value={ALL}>未设置</SelectItem>
               <SelectItem value="research_report">完整调研报告</SelectItem>
               <SelectItem value="summary_brief">摘要简报</SelectItem>
+              <SelectItem value="slides">Slides 演示稿</SelectItem>
             </SelectContent>
           </Select>
         </CardContent>

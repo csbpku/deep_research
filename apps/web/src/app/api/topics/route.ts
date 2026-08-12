@@ -22,6 +22,7 @@ export const GET = apiHandler<[NextRequest]>(async () => {
       sourceCount: true,
       lastSyncedAt: true,
       synthesisGeneratedAt: true,
+      lastSynthesisSuccessAt: true,
       synthesisErrorCode: true,
     },
   });
@@ -38,6 +39,7 @@ export const GET = apiHandler<[NextRequest]>(async () => {
       ...t,
       lastSyncedAt: t.lastSyncedAt?.toISOString() ?? null,
       synthesisGeneratedAt: t.synthesisGeneratedAt?.toISOString() ?? null,
+      lastSynthesisSuccessAt: t.lastSynthesisSuccessAt?.toISOString() ?? null,
       followed: followed.has(t.id),
     })),
   });

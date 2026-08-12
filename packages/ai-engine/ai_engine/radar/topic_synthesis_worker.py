@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 from ai_engine.llm.client import generate_text
+from ai_engine.knowledge.gbrain import build_gbrain_client
 
 logger = logging.getLogger("ai_engine.radar.topic_synthesis")
 
@@ -65,6 +66,19 @@ def _parse_payload(raw: str) -> dict[str, Any]:
     return json.loads(s)  # type: ignore[no-any-return]
 
 
+def _gbrain_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    content = value.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(item.get("text", "")).strip()
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+    ).strip()
+
+
 async def _generate_for_topic(pool: Any, topic_id: str) -> bool:
     """为一条 topic 生成综述；成功 → True，失败 → False（写 errorCode）。"""
     async with pool.connection() as conn:
@@ -105,6 +119,21 @@ async def _generate_for_topic(pool: Any, topic_id: str) -> bool:
         for r in rows
     ]
     prompt = _build_prompt(str(topic["name"]), candidates)
+    gbrain = build_gbrain_client()
+    if gbrain is not None:
+        try:
+            context = await gbrain.synthesize_topic(
+                f"主题：{topic['name']}\n请只提供与下列雷达候选相关的既有知识、冲突和证据缺口："
+                + "\n".join(str(c["title"]) for c in candidates[:10])
+            )
+            gbrain_context = _gbrain_text(context)
+            if gbrain_context:
+                prompt += f"\n\n## GBrain 既有知识（仅作辅助证据，不能覆盖候选）\n{gbrain_context[:6000]}"
+        except Exception as exc:
+            logger.warning(
+                "ai-engine.radar.topic_synthesis.gbrain_unavailable",
+                extra={"topic_id": topic_id, "error_type": type(exc).__name__},
+            )
 
     try:
         result = await asyncio.wait_for(
@@ -141,6 +170,7 @@ async def _generate_for_topic(pool: Any, topic_id: str) -> bool:
             UPDATE "topics"
             SET "synthesisPayload" = %s::jsonb,
                 "synthesisGeneratedAt" = now(),
+                "lastSynthesisSuccessAt" = now(),
                 "synthesisModel" = %s,
                 "synthesisVersion" = %s,
                 "synthesisErrorCode" = NULL,

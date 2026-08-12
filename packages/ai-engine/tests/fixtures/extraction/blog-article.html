@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Building a stateless MCP server with vector retrieval</title>
+</head>
+<body>
+  <article>
+    <header>
+      <h1>Building a stateless MCP server with vector retrieval</h1>
+      <p class="byline">By A. Researcher · 2026-07-21 · 8 min read</p>
+    </header>
+    <p>Model Context Protocol (MCP) servers traditionally hold session state in memory. This post walks through a stateless design that uses an external vector database for retrieval so the server can be scaled horizontally without sticky sessions.</p>
+    <h2>Why stateless?</h2>
+    <p>Stateful servers complicate deployment: rolling upgrades evict sessions, autoscaling needs warm pools, and observability becomes per-instance. Stateless servers trade a small retrieval latency for vastly simpler operations.</p>
+    <h2>Architecture</h2>
+    <p>The server holds three responsibilities: parse the incoming request, embed the query, and call the vector store. No conversation history lives in process memory.</p>
+    <h2>Retrieval trade-offs</h2>
+    <ul>
+      <li>Top-k recall is bounded by the vector store's ANN index.</li>
+      <li>Re-ranking can be done out-of-band with a cross-encoder.</li>
+      <li>Cold-start latency depends on the embedding model.</li>
+    </ul>
+    <h2>Results</h2>
+    <p>In a 1k-request/second benchmark on 8 vCPUs, p99 retrieval latency stayed under 80ms while the previous stateful design hit 320ms under the same load.</p>
+    <p>Code and benchmarks are available on <a href="https://github.com/example/stateless-mcp">GitHub</a>.</p>
+  </article>
+</body>
+</html>

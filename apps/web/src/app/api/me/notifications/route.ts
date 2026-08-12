@@ -42,10 +42,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       createdAt: item.createdAt.toISOString(),
       actor: item.actor,
       excerpt: item.sourceComment.body.slice(0, 180),
-      href: item.sourceComment.researchId
-        ? `/researches/${item.sourceComment.researchId}#discussion`
-        : item.sourceComment.summaryId
-          ? `${item.sourceComment.summary?.canonicalUrl.startsWith('digest://') ? '/summaries' : '/radar'}/${item.sourceComment.summaryId}#discussion`
+        href: item.sourceComment.researchId
+          ? `/researches/${item.sourceComment.researchId}#discussion`
+          : item.sourceComment.summaryId
+          ? `/radar/${item.sourceComment.summaryId}#discussion`
           : '/me?tab=notifications',
     })),
   });

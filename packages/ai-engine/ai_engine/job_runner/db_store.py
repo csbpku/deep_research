@@ -95,7 +95,7 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
         topic=str(row["topic"]),
         context=context_str,
         report_type=cast(
-            Literal["research_report", "summary_brief"],
+            Literal["research_report", "summary_brief", "slides"],
             str(row.get("reportType", "research_report")),
         ),
         source_policy=cast(
@@ -160,7 +160,7 @@ class DbJobStore(JobStore):
                 message="DbJobStore requires DATABASE_URL (env or constructor)",
             )
         self._lease_seconds = lease_seconds or int(
-            os.environ.get("WORKER_LEASE_SECONDS", "60")
+            os.environ.get("WORKER_LEASE_SECONDS", "1020")
         )
         self._heartbeat_seconds = heartbeat_seconds or int(
             os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")
@@ -315,10 +315,10 @@ class DbJobStore(JobStore):
         else:
             sql = (
                 f"INSERT INTO {t} "
-                f'("id", "requesterId", "topic", "context", "reportType", "sourcePolicy", '
+                f'("id", "requesterId", "topic", "context", "reportType", "artifactType", "sourcePolicy", '
                 f'"status", "currentStep", "attempts", "idempotencyKey", "sourceRefs", '
                 f'"partialSources", "failedSources", "updatedAt") '
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now()) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now()) "
                 f"ON CONFLICT (id) DO NOTHING"
             )
             ai_params: tuple[object, ...] = (
@@ -327,6 +327,7 @@ class DbJobStore(JobStore):
                 snapshot.topic,
                 snapshot.context,
                 snapshot.report_type,
+                "slides" if snapshot.report_type == "slides" else "markdown",
                 snapshot.source_policy,
                 "queued",
                 snapshot.current_step,

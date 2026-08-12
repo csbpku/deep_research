@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>acme/mcp-router — GitHub</title>
+</head>
+<body class="markdown-body">
+  <article class="markdown-body">
+    <h1>acme/mcp-router</h1>
+    <p>A lightweight MCP request router with pluggable backends.</p>
+    <h2>Features</h2>
+    <ul>
+      <li>Per-tool routing rules</li>
+      <li>Backend health checks</li>
+      <li>Request tracing</li>
+    </ul>
+    <h2>Install</h2>
+    <pre><code>npm install @acme/mcp-router</code></pre>
+    <h2>Usage</h2>
+    <pre><code>import { createRouter } from "@acme/mcp-router";
+const router = createRouter({ rules: [...] });
+await router.handle(request);</code></pre>
+    <h2>License</h2>
+    <p>MIT</p>
+  </article>
+</body>
+</html>

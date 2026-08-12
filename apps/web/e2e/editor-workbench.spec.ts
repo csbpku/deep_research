@@ -25,22 +25,16 @@ test.describe('Research editor workbench', () => {
       await page.goto(`/researches/${id}/edit`);
       await expect(page.getByLabel('正文 Markdown')).toBeVisible({ timeout: 15_000 });
       await expect(page.getByText('文章结构', { exact: true })).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByRole('tab', { name: '来源', exact: true })).toBeVisible();
+      await expect(page.getByRole('tab', { name: '来源与引用', exact: true })).toBeVisible();
       await expect(page.getByRole('tab', { name: 'AI 助手' })).toBeVisible();
       await expect(page.getByRole('tab', { name: '版本历史' })).toBeVisible();
-      await expect(page.getByRole('tab', { name: '文章信息' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: '发布准备' })).toBeVisible();
       await expect(page.getByRole('tab', { name: '讨论' })).toHaveCount(0);
       await expect(page.getByText('草稿', { exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: '收起总览导航' })).toBeVisible();
-      await page.getByRole('button', { name: '收起总览导航' }).click();
-      await expect(page.getByRole('button', { name: '展开总览导航' })).toBeVisible();
 
-      // All three desktop rails expose both pointer and keyboard resizing.
-      await page.getByRole('button', { name: '展开总览导航' }).click();
-      const shellResize = page.getByRole('separator', { name: '调整总览导航宽度' });
+      // The editor's two remaining desktop rails expose keyboard resizing.
       const outlineResize = page.getByRole('separator', { name: '调整文章结构栏宽度' });
       const toolsResize = page.getByRole('separator', { name: '调整研究工具栏宽度' });
-      await expect(shellResize).toBeVisible();
       await expect(outlineResize).toBeVisible();
       await expect(toolsResize).toBeVisible();
       await outlineResize.press('Home');
@@ -66,7 +60,7 @@ test.describe('Research editor workbench', () => {
       await expect(page.getByRole('button', { name: '研究工具' })).toBeVisible();
       await page.getByRole('button', { name: '研究工具' }).click();
       await expect(page.getByRole('button', { name: '关闭研究工具', exact: true })).toBeVisible();
-      await expect(page.getByRole('tab', { name: '来源', exact: true })).toBeVisible();
+      await expect(page.getByRole('tab', { name: '来源与引用', exact: true })).toBeVisible();
       await expect(page.getByRole('tab', { name: '讨论' })).toHaveCount(0);
     } finally {
       await page.request.delete(`/api/researches/${id}`).catch(() => undefined);

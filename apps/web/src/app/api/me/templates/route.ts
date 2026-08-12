@@ -14,7 +14,7 @@ const postSchema = z.object({
   title: z.string().min(1).max(200),
   topic: z.string().min(2).max(200),
   background: z.string().max(2000).optional(),
-  reportType: z.enum(['research_report', 'summary_brief']).default('research_report'),
+  reportType: z.enum(['research_report', 'summary_brief', 'slides']).default('research_report'),
   sourcePolicy: z
     .enum(['prefer_user_sources', 'only_user_sources', 'web_only'])
     .default('prefer_user_sources'),

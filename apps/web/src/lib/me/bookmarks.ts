@@ -25,12 +25,11 @@ const TARGET_LABELS: Record<string, string> = {
   summary: '摘要',
   research: '调研',
   knowledge: '精华',
-  daily_digest: '雷达日报',
 };
 
 export async function hydrateBookmarks(items: BookmarkRecord[]): Promise<BookmarkView[]> {
   const summaryIds = items
-    .filter((item) => ['radar_candidate', 'summary', 'daily_digest'].includes(item.targetType))
+    .filter((item) => ['radar_candidate', 'summary'].includes(item.targetType))
     .map((item) => item.targetId);
   const researchIds = items
     .filter((item) => ['research', 'knowledge'].includes(item.targetType))
@@ -54,14 +53,12 @@ export async function hydrateBookmarks(items: BookmarkRecord[]): Promise<Bookmar
   const researchTitles = new Map(researches.map((item) => [item.id, item.title]));
 
   return items.map((item) => {
-    const isSummary = ['radar_candidate', 'summary', 'daily_digest'].includes(item.targetType);
+    const isSummary = ['radar_candidate', 'summary'].includes(item.targetType);
     const title = (isSummary ? summaryTitles : researchTitles).get(item.targetId);
     const href = title
-      ? item.targetType === 'radar_candidate' || item.targetType === 'daily_digest'
+      ? item.targetType === 'radar_candidate' || item.targetType === 'summary'
         ? `/radar/${item.targetId}`
-        : item.targetType === 'summary'
-          ? `/summaries/${item.targetId}`
-          : `/researches/${item.targetId}`
+        : `/researches/${item.targetId}`
       : null;
     return {
       id: item.id,

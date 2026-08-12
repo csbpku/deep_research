@@ -89,14 +89,6 @@ async def main() -> int:
         print(f"  Tracked repos: {tracked}")
     if pipeline_result.enrichment_error:
         print(f"  Enrichment error: {pipeline_result.enrichment_error}")
-    print(
-        f"  Digest: {pipeline_result.digest_summary_id or 'none'}  "
-        f"candidates: {pipeline_result.digest_candidate_count}  "
-        f"degraded: {pipeline_result.digest_narrative_degraded}  "
-        f"elapsed: {pipeline_result.digest_elapsed_ms / 1000:.1f}s"
-    )
-    if pipeline_result.digest_error:
-        print(f"  Digest error: {pipeline_result.digest_error}")
     skip_existing = sum(r.skipped_existing for r in result.runs)
     skip_rule = sum(r.skipped_rule_noise for r in result.runs)
     skip_distilled = sum(r.skipped_distilled_noise for r in result.runs)

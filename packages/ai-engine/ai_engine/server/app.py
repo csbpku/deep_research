@@ -112,7 +112,7 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     share_worker_task: asyncio.Task[None] | None = None
     ai_job_worker_task: asyncio.Task[None] | None = None
     import_worker_task: asyncio.Task[None] | None = None
-    radar_daily_task: asyncio.Task[None] | None = None
+    radar_sync_task: asyncio.Task[None] | None = None
     submission_task: asyncio.Task[None] | None = None
     topic_proposal_task: asyncio.Task[None] | None = None
     topic_synth_task: asyncio.Task[None] | None = None
@@ -139,10 +139,10 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
                 _import_worker_loop(),
                 name="content-import-worker",
             )
-        if os.environ.get("RADAR_DAILY_CRON_ENABLED", "1") == "1":
-            radar_daily_task = asyncio.create_task(
-                _radar_daily_loop(app_instance),
-                name="radar-daily-cron",
+        if os.environ.get("RADAR_SYNC_CRON_ENABLED", "1") == "1":
+            radar_sync_task = asyncio.create_task(
+                _radar_sync_loop(app_instance),
+                name="radar-sync-cron",
             )
         # P1-B: submission worker
         if os.environ.get("SUBMISSION_WORKER_ENABLED", "1") == "1":
@@ -178,10 +178,10 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             import_worker_task.cancel()
             with suppress(asyncio.CancelledError):
                 await import_worker_task
-        if radar_daily_task is not None:
-            radar_daily_task.cancel()
+        if radar_sync_task is not None:
+            radar_sync_task.cancel()
             with suppress(asyncio.CancelledError):
-                await radar_daily_task
+                await radar_sync_task
         if submission_task is not None:
             submission_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -255,8 +255,13 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
                 )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.warning("ai-engine.worker.loop_failed", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "ai-engine.worker.loop_failed",
+                exc_info=True,
+                error_type=type(exc).__name__,
+                error_message=str(exc)[:300],
+            )
             await asyncio.sleep(1.0)
 
 
@@ -312,17 +317,17 @@ def _seconds_until_next_radar_window(
     return (target - now).total_seconds()
 
 
-async def _radar_daily_loop(app_instance: FastAPI) -> None:
-    """Daily radar pipeline: sync → enrichment → digest at 08:00 Asia/Shanghai.
+async def _radar_sync_loop(app_instance: FastAPI) -> None:
+    """Scheduled radar sync → enrichment at 08:00 Asia/Shanghai.
 
-    Controlled by ``RADAR_DAILY_CRON_ENABLED`` (default 1 when a real DB pool
-    is present) and ``RADAR_DAILY_CRON_TIME`` (default "08:00"). The shared
+    Controlled by ``RADAR_SYNC_CRON_ENABLED`` (default 1 when a real DB pool
+    is present) and ``RADAR_SYNC_CRON_TIME`` (default "08:00"). The shared
     ``radar_sync_lock`` prevents overlap with an admin-triggered sync.
     """
-    from ai_engine.radar.sync_endpoint import run_radar_daily_job
+    from ai_engine.radar.sync_endpoint import run_radar_sync_job
 
     log = structlog.get_logger("ai_engine.radar")
-    schedule = os.environ.get("RADAR_DAILY_CRON_TIME", "08:00")
+    schedule = os.environ.get("RADAR_SYNC_CRON_TIME", "08:00")
     tz = ZoneInfo("Asia/Shanghai")
     while True:
         try:
@@ -337,7 +342,7 @@ async def _radar_daily_loop(app_instance: FastAPI) -> None:
             await asyncio.sleep(3600.0)
             continue
         try:
-            await run_radar_daily_job(
+            await run_radar_sync_job(
                 pool=app_instance.state.db_pool,
                 adapter=app_instance.state.adapter,
                 triggered_by="cron",
@@ -1043,11 +1048,13 @@ async def _background_run(
                 current_step=outcome.current_step,
                 cost_cents=outcome.cost.cost_cents,
             )
-    except Exception:
+    except Exception as exc:
         log.exception(
             "ai-engine.background.unhandled",
             request_id=request_id,
             job_id=job_id,
+            error_type=type(exc).__name__,
+            error_message=str(exc)[:300],
         )
         # W2 review 修正:用 log.exception 已输出完整 traceback(JSON 渲染层
         # format_exc_info 链没装,但 stdlib logger 会写到 stderr 的 unhandled

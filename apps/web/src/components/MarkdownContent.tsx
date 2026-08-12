@@ -117,7 +117,7 @@ function prepareContent(content: string): string {
 }
 
 /**
- * MarkdownContent —— 已发布正文的渲染器（调研库详情、雷达详情、日报等）。
+ * MarkdownContent —— 已发布正文的渲染器（调研库详情、雷达详情等）。
  *
  * 排版交给 @tailwindcss/typography 的 `prose`，颜色由 globals.css 里的
  * `--tw-prose-*` token 覆盖（深浅色自动切换）。

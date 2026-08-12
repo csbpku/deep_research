@@ -374,7 +374,7 @@ def _seed_representative_data(admin_id: str, member_id: str) -> dict[str, str]:
                 ) VALUES (
                     %s, %s, 'Backup drill topic', 'Backup drill ctx',
                     'research_report', 'prefer_user_sources', 'succeeded',
-                    0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, %s, %s,
+                    0, '[{"type":"e2e-seed"}]'::jsonb, '[]'::jsonb, '[]'::jsonb, %s, %s,
                     now(), now()
                 )
                 """,
@@ -383,10 +383,10 @@ def _seed_representative_data(admin_id: str, member_id: str) -> dict[str, str]:
             cur.execute(
                 """
                 INSERT INTO radar_sources (
-                    id, name, type, url, "createdAt", "updatedAt"
+                    id, name, "sourceType", config, "createdAt", "updatedAt"
                 ) VALUES (
                     %s, 'Backup Drill Radar', 'rss',
-                    'https://e2e.local/backup-drill-rss', now(), now()
+                    '{}'::jsonb, now(), now()
                 )
                 """,
                 (radar_id,),
@@ -424,16 +424,19 @@ def _row_counts(pg_dsn: dict[str, str], dbname: str) -> dict[str, int]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT c.relname, c.reltuples::bigint
+                SELECT c.relname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE c.relkind = 'r'
                   AND n.nspname = 'public'
+                  AND c.relname <> '_prisma_migrations'
                 ORDER BY c.relname
                 """
             )
-            for name, n in cur.fetchall():
-                counts[name] = int(n)
+            for (name,) in cur.fetchall():
+                cur.execute(f'SELECT count(*) FROM "{name}"')
+                (count,) = cur.fetchone()
+                counts[name] = int(count)
     return counts
 
 

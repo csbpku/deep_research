@@ -16,13 +16,13 @@ import { RadarArxivPaperCard } from '../../../components/radar/RadarArxivPaperCa
 import { RadarRepoSummary } from '../../../components/radar/RadarRepoSummary';
 import { RadarGithubItemSummary } from '../../../components/radar/RadarGithubItemSummary';
 import { RadarArticleHighlights } from '../../../components/radar/RadarArticleHighlights';
+import { RadarReadingPanel } from '../../../components/radar/RadarReadingPanel';
 import type { RadarGithubItemMeta } from '../../../lib/radar/shape';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
 import { TIER_LABELS } from '../../../components/domain/ScoreBar';
-import MarkdownContent from '../../../components/MarkdownContent';
 import { Button } from '../../../components/ui/button';
 import { toApiHttpError } from '../../../lib/errors/api-error';
 import { retryOnceAi } from '../../../lib/errors/friendly';
@@ -52,6 +52,7 @@ interface RadarDetail {
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
   canManage: boolean;
+  isAuthenticated: boolean;
   // Phase 2A deep-dive: originalKind dispatches to a structured card;
   // originalMeta carries GitHub repo enrichment payload.
   originalKind: string | null;
@@ -144,15 +145,17 @@ export default function RadarDetailPage() {
 
   const d = q.data;
   const sourceLabel = formatSourceType(d.sourceType);
+  const readingBody = d.originalMarkdown ?? d.body ?? d.highlights?.summary ?? d.interpretation ?? d.excerpt;
+  const canInteract = Boolean(me.data?.id);
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-[1440px]">
       <div className="flex items-center gap-2">
         <BackToSearchButton />
         <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
       </div>
 
-      <div className="mt-5 grid gap-8 lg:grid-cols-[minmax(0,760px)_240px] lg:items-start">
+      <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-start">
       <article className="min-w-0 space-y-4 leading-7">
         <header className="flex flex-wrap items-center gap-2">
           <span
@@ -174,18 +177,20 @@ export default function RadarDetailPage() {
 
         <h1 className="text-3xl font-semibold leading-tight tracking-normal">{d.title}</h1>
 
-        <div className="flex items-center gap-2 lg:hidden" aria-label="文章操作">
-          <Button type="button" variant="outline" size="sm" onClick={() => setDrawerOpen(true)}>
-            <Sparkles className="size-3.5" />
-            与 AI 讨论
-          </Button>
-          <Button asChild type="button" variant="outline" size="sm">
-            <a href="#discussion">
-            <Users className="size-3.5" />
-            团队讨论
-            </a>
-          </Button>
-        </div>
+        {canInteract ? (
+          <div className="flex items-center gap-2 lg:hidden" aria-label="文章操作">
+            <Button type="button" variant="outline" size="sm" onClick={() => setDrawerOpen(true)}>
+              <Sparkles className="size-3.5" />
+              与 AI 讨论
+            </Button>
+            <Button asChild type="button" variant="outline" size="sm">
+              <a href="#discussion">
+              <Users className="size-3.5" />
+              团队讨论
+              </a>
+            </Button>
+          </div>
+        ) : null}
 
         {d.interpretation ? (
           <p
@@ -240,11 +245,13 @@ export default function RadarDetailPage() {
           <RadarArticleHighlights {...d.highlights} />
         ) : null}
 
-        {d.body && d.body !== d.interpretation && !(d.originalKind === 'github_repo' && !d.tags.includes('repo_digest')) ? (
-          <section className="my-8" aria-labelledby="radar-body-title">
-            <h2 id="radar-body-title" className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">正文</h2>
-            <MarkdownContent content={d.body} className="text-[15px] text-foreground" />
-          </section>
+        {readingBody && readingBody !== d.interpretation && !(d.originalKind === 'github_repo' && !d.tags.includes('repo_digest')) ? (
+          <RadarReadingPanel
+            summaryId={d.id}
+            title={d.title}
+            originalContent={readingBody}
+            highlights={d.highlights}
+          />
         ) : null}
 
         {(() => {
@@ -268,39 +275,55 @@ export default function RadarDetailPage() {
           );
         })()}
 
-        <div className="mt-6 flex flex-nowrap items-center gap-1 overflow-x-auto py-3">
-          <RadarFeedbackBar
-            summaryId={d.id}
-            initialCounts={d.feedbackCounts}
-            initialMine={d.myFeedbacks}
-            types={['useful', 'inaccurate']}
-            className="shrink-0 gap-1 py-0"
-          />
-          <Button asChild variant="outline" size="xs" className="ml-2 h-7 shrink-0 gap-1.5">
-            <Link href={`/ai-research?seed=${d.id}`} aria-label="深入调研">
-              <Workflow className="size-3.5" />
-              深入调研
-            </Link>
-          </Button>
-        </div>
+        {canInteract ? (
+          <div className="mt-6 flex flex-nowrap items-center gap-1 overflow-x-auto py-3">
+            <RadarFeedbackBar
+              summaryId={d.id}
+              initialCounts={d.feedbackCounts}
+              initialMine={d.myFeedbacks}
+              types={['useful', 'inaccurate']}
+              className="shrink-0 gap-1 py-0"
+            />
+            <Button asChild variant="outline" size="xs" className="ml-2 h-7 shrink-0 gap-1.5">
+              <Link href={`/ai-research?seed=${d.id}`} aria-label="深入调研">
+                <Workflow className="size-3.5" />
+                深入调研
+              </Link>
+            </Button>
+          </div>
+        ) : (
+          <p className="mt-6 border-y border-border py-3 text-xs text-muted-foreground">
+            <Link href="/signin" className="font-medium text-primary hover:underline">登录</Link>
+            {' '}后可收藏、反馈、评论和继续调研。
+          </p>
+        )}
 
         <div id="discussion" className="scroll-mt-20">
-          <CommentSection
-            targetType="summary"
-            targetId={d.id}
-            currentUserId={me.data?.id ?? null}
-            currentUserRole={me.data?.role ?? null}
-          />
+          {canInteract ? (
+            <CommentSection
+              targetType="summary"
+              targetId={d.id}
+              currentUserId={me.data?.id ?? null}
+              currentUserRole={me.data?.role ?? null}
+              content={readingBody}
+            />
+          ) : (
+            <div className="rounded-md border border-border bg-card p-4 text-sm text-muted-foreground">
+              登录后参与团队讨论。
+            </div>
+          )}
         </div>
 
-        <AskAiDrawer
-          summaryId={d.id}
-          summaryTitle={d.title}
-          summaryUrl={d.url}
-          open={drawerOpen}
-          onOpenChange={setDrawerOpen}
-          contextExcerpt={d.originalMarkdown ?? d.body ?? d.highlights?.summary ?? d.interpretation ?? d.excerpt}
-        />
+        {canInteract ? (
+          <AskAiDrawer
+            summaryId={d.id}
+            summaryTitle={d.title}
+            summaryUrl={d.url}
+            open={drawerOpen}
+            onOpenChange={setDrawerOpen}
+            contextExcerpt={readingBody}
+          />
+        ) : null}
       </article>
 
       <aside className="hidden space-y-3 lg:sticky lg:top-[72px] lg:block">
@@ -316,16 +339,24 @@ export default function RadarDetailPage() {
         <section className="rounded-lg border border-border bg-card p-4">
           <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">协作</h2>
           <p className="text-xs leading-relaxed text-muted-foreground">团队判断沉淀在正文下方；AI 对话作为当前文章的辅助工具。</p>
-          <Button asChild type="button" variant="outline" size="sm" className="mt-3 w-full">
-            <a href="#discussion">
-            <Users className="size-3.5" />
-            查看团队讨论
-            </a>
-          </Button>
-          <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={() => setDrawerOpen(true)}>
-            <Sparkles className="size-3.5" />
-            与 AI 讨论
-          </Button>
+          {canInteract ? (
+            <>
+              <Button asChild type="button" variant="outline" size="sm" className="mt-3 w-full">
+                <a href="#discussion">
+                <Users className="size-3.5" />
+                查看团队讨论
+                </a>
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={() => setDrawerOpen(true)}>
+                <Sparkles className="size-3.5" />
+                与 AI 讨论
+              </Button>
+            </>
+          ) : (
+            <Button asChild type="button" variant="outline" size="sm" className="mt-3 w-full">
+              <Link href="/signin">登录后参与讨论</Link>
+            </Button>
+          )}
           <a href={d.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted">
             <ExternalLink className="size-3.5" />
             打开原文

@@ -1,8 +1,6 @@
-// Unit tests: W2 BFF 路由 —— summaries / detail-read events / ai-research。
+// Unit tests: W2 BFF 路由 —— detail-read events / ai-research。
 //
 // 测试范围：
-//   - summaries 列表日期解析、空结果、bad date（成功 / 校验 / 空数据路径）
-//   - summaries 详情 404 / bad uuid 校验
 //   - detail-read 事件 401（未登录） / 双条件校验失败
 //   - ai-research POST 401（未登录）/ body 校验失败
 //   - ai-research GET 401（未登录）/ bad jobId
@@ -17,21 +15,6 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 // ──────────────────────────────────────────────────────────────────────
-// Summary BFF route.ts 测试（mock Prisma）
-// ──────────────────────────────────────────────────────────────────────
-
-describe('/api/summaries', () => {
-  it('rejects non-YYYY-MM-DD date param with 400', async () => {
-    // 内联验证 date regex
-    const raw = 'not-a-date';
-    expect(/^\d{4}-\d{2}-\d{2}$/u.test(raw)).toBe(false);
-  });
-
-  it('accepts valid YYYY-MM-DD', () => {
-    expect(/^\d{4}-\d{2}-\d{2}$/u.test('2026-07-21')).toBe(true);
-  });
-});
-
 describe('excerptOf', () => {
   const excerptOf = (body: string, max: number): string => {
     if (body.length <= max) return body;
@@ -210,6 +193,12 @@ describe('CreateAiJobInput validation', async () => {
       context: 'C'.repeat(2000),
     });
     expect(r.success).toBe(true);
+  });
+
+  it('accepts Slides as a first-class artifact request', () => {
+    const r = CreateAiJobInput.safeParse({ topic: 'OK', reportType: 'slides' });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.reportType).toBe('slides');
   });
 
   it('rejects context > 2000 chars', () => {

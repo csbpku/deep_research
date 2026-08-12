@@ -183,7 +183,7 @@ class InMemoryJobStore(JobStore):
       (raises `LeaseLostError`).
     """
 
-    lease_seconds: int = 60
+    lease_seconds: int = 1020
     heartbeat_seconds: int = 15
     _rows: dict[str, _Row] = field(default_factory=dict)
     _global_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -502,7 +502,7 @@ def build_store(
     chosen = (name or os.environ.get("JOB_RUNNER_BACKEND") or "memory").lower()
     if chosen == "memory":
         return InMemoryJobStore(
-            lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "60")),
+        lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "1020")),
             heartbeat_seconds=heartbeat_seconds
             or int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")),
         )
@@ -519,7 +519,7 @@ def build_store(
         table_name = os.environ.get("JOB_RUNNER_TABLE", AI_TABLE)
         return DbJobStore(
             table_name=table_name,
-            lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "60")),
+        lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "1020")),
             heartbeat_seconds=heartbeat_seconds
             or int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")),
         )

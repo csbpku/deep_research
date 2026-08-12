@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Verification Required</title>
+</head>
+<body>
+  <div class="cf-browser-verification">
+    <h1>Verifying your browser…</h1>
+    <p>This process is automatic. Your browser will redirect shortly.</p>
+    <p>Please wait while we verify your browser. This usually takes a few seconds.</p>
+    <noscript>
+      <p>Please enable JavaScript and reload the page to continue.</p>
+    </noscript>
+    <form action="/challenge" method="POST">
+      <input type="hidden" name="csrf" value="redacted">
+      <input type="submit" value="Verify">
+    </form>
+  </div>
+  <script src="/cdn-cgi/challenge-platform/h/b"></script>
+</body>
+</html>

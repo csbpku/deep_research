@@ -133,7 +133,7 @@ const config: Config = {
         shell: '1280px',
         // 中文长文阅读：35–45 字/行，行高 1.7。760 是舒适上限 (v6.4 fix: 原 640px 是真 bug)
         measure: '760px',
-        // 列表类路由 (雷达/日报/搜索) - 可选
+        // 列表类路由 (雷达/搜索) - 可选
         'content-list': 'var(--content-list)',
       },
 

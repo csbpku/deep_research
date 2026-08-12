@@ -1,12 +1,12 @@
-"""Run the full daily radar pipeline once: sync -> enrichment -> digest.
+"""Run the scheduled radar pipeline once: sync -> enrichment.
 
 Usage:
   cd packages/ai-engine
-  uv run python scripts/run_radar_daily_job.py
+  uv run python scripts/run_radar_sync.py
 
 For host-level cron (e.g. every day at 08:00 Asia/Shanghai):
   0 8 * * * cd /Users/shaobo.chen/deep_research/packages/ai-engine && \
-    .venv/bin/python scripts/run_radar_daily_job.py >> logs/radar-daily.log 2>&1
+    .venv/bin/python scripts/run_radar_sync.py >> logs/radar-sync.log 2>&1
 """
 # ruff: noqa: E402
 from __future__ import annotations
@@ -24,7 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 from ai_engine.adapters.base import build_adapter
 from ai_engine.job_runner.db_store import DbJobStore
-from ai_engine.radar.sync_endpoint import run_radar_daily_job
+from ai_engine.radar.sync_endpoint import run_radar_sync_job
 
 
 async def main() -> int:
@@ -36,7 +36,7 @@ async def main() -> int:
     await store.open()
     try:
         adapter = build_adapter()
-        await run_radar_daily_job(
+        await run_radar_sync_job(
             pool=store.pool,
             adapter=adapter,
             triggered_by="cron",

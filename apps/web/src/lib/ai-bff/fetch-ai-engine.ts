@@ -26,6 +26,10 @@ export interface FetchAiEngineOptions {
   context: string; // 例如 "ai.bff.status" / "ai.bff.list"
   /** Long-running reviewer calls can exceed the normal 5s polling budget. */
   timeoutMs?: number;
+  /** Additional service headers, e.g. the internal shared token. */
+  headers?: Record<string, string>;
+  /** Long-running prefetches should not submit the same expensive request twice. */
+  retry?: boolean;
 }
 
 export interface FetchAiEngineFailure {
@@ -68,7 +72,8 @@ export async function fetchAiEngine<T = unknown>(
   let upstreamRes: Response | null = null;
   let lastErr: unknown = null;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const maxAttempts = opts.retry === false ? 1 : 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? AI_ENGINE_TIMEOUT_MS);
@@ -76,6 +81,7 @@ export async function fetchAiEngine<T = unknown>(
         method,
         headers: {
           'x-request-id': opts.requestId,
+          ...opts.headers,
           ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -104,7 +110,7 @@ export async function fetchAiEngine<T = unknown>(
         url: opts.url,
       });
     }
-    if (attempt === 0) {
+    if (attempt === 0 && maxAttempts > 1) {
       await new Promise((r) => setTimeout(r, AI_ENGINE_RETRY_DELAY_MS));
     }
   }

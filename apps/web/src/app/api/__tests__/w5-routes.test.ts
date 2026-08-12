@@ -104,7 +104,6 @@ import { POST as adminRestore } from '../admin/radar/[id]/restore/route';
 import { POST as adminCreateResearch } from '../admin/radar/[id]/create-research/route';
 import { POST as adminRetry } from '../admin/radar/[id]/retry-interpretation/route';
 import { POST as adminRadarSync } from '../admin/radar/sync/route';
-import { POST as adminDigestRegenerate } from '../admin/radar/digest/route';
 import { GET as adminRadarRuns } from '../admin/radar/runs/route';
 import { POST as adminShareReview } from '../admin/shares/[id]/review/route';
 
@@ -230,16 +229,12 @@ describe('POST /api/admin/radar actions', () => {
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
-  it('forwards admin sync and digest regeneration independently', async () => {
+  it('forwards admin sync', async () => {
     const syncResponse = await adminRadarSync(
       new Request('http://localhost/api/admin/radar/sync', { method: 'POST' }) as never,
     );
-    const digestResponse = await adminDigestRegenerate(
-      new Request('http://localhost/api/admin/radar/digest', { method: 'POST' }) as never,
-    );
 
     expect(syncResponse.status).toBe(202);
-    expect(digestResponse.status).toBe(202);
     expect(mocks.fetch).toHaveBeenNthCalledWith(
       1,
       'http://localhost:4000/api/radar/sync',
@@ -248,14 +243,7 @@ describe('POST /api/admin/radar actions', () => {
         body: JSON.stringify({ triggeredBy: 'admin' }),
       }),
     );
-    expect(mocks.fetch).toHaveBeenNthCalledWith(
-      2,
-      'http://localhost:4000/api/radar/digest/regenerate',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({}),
-      }),
-    );
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -511,8 +499,37 @@ describe('GET /api/radar/[id]', () => {
     expect(body.sourceType).toBe('arxiv');
   });
 
+  it('allows anonymous radar detail reads without user feedback state', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(null);
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Public article', body: 'public body', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date('2026-07-21'),
+      publishedAt: null, createdAt: new Date(),
+      interpretation: 'cover', scoreReason: null, scoreVersion: null,
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      selectionReason: null, sortOrder: null, syncRunId: 'r',
+      source: 'daily', sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
+      shareSource: null,
+    });
+    mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+    mocks.radarFeedbackFindMany.mockResolvedValue([]);
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.body).toBe('public body');
+    expect(body.myFeedbacks).toEqual([]);
+    expect(body.isAuthenticated).toBe(false);
+    expect(mocks.radarFeedbackFindMany).not.toHaveBeenCalled();
+  });
+
   it('canManage=true for admin caller', async () => {
-    mocks.requireUser.mockResolvedValueOnce(ADMIN);
+    mocks.getCurrentUser.mockResolvedValueOnce(ADMIN);
     mocks.summaryFindUnique.mockResolvedValue({
       id: SUM_ID, title: 'A', body: 'a', url: 'u', tags: [], status: 'candidate',
       summaryDate: new Date(), publishedAt: null, createdAt: new Date(),

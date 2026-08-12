@@ -1,7 +1,7 @@
 // BFF handler: POST /api/admin/shares/[id]/review — Admin 批准/拒绝用户分享。
 //
 // 批准：share_submissions.status = 'approved'，并发布为可见的雷达 Summary。
-// 自动日报按统一评分与来源配额决定是否引用，无需 Admin 逐条选入。
+// 雷达列表按统一评分与来源规则排序，无需 Admin 逐条挑选。
 // 拒绝：share_submissions.status = 'rejected'，reviewer + reviewedAt 写审计。
 
 import { NextResponse } from 'next/server';

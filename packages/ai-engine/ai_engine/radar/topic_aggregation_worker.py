@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ai_engine.radar.topic_clustering import is_metadata_tag as _is_metadata_tag
+from ai_engine.radar.topic_refresh_worker import ensure_topic_presets
 
 logger = logging.getLogger("ai_engine.radar.topic_worker")
 
@@ -253,11 +254,11 @@ async def run_topic_aggregation(
 ) -> dict[str, int]:
     """Refresh existing topics; never create a topic or a proposal."""
     from ai_engine.radar.topic_refresh_worker import refresh_existing_topics
-
+    presets_created = await ensure_topic_presets(pool)
     result = await refresh_existing_topics(pool, now=now)
     logger.info("ai-engine.radar.topic.refresh_done", extra=result)
     return {
-        "topics_created": 0,
+        "topics_created": presets_created,
         "candidates_linked": result["candidates_linked"],
         "proposals_created": 0,
         "proposal_candidates_linked": 0,

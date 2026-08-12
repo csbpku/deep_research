@@ -3,7 +3,7 @@
 // 评论组件：列表 + 输入 + 嵌套回复 + 点赞 + 删除。
 //
 // 契约源：
-//   - /api/summaries/[id]/comments 或 /api/researches/[id]/comments
+//   - /api/summaries/[id]/comments（雷达摘要兼容路径）或 /api/researches/[id]/comments
 //   - /api/comments/[id]/star、/api/comments/[id]、/api/comments/my-stars
 //
 // 设计：

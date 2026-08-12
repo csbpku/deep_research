@@ -19,20 +19,17 @@ const CONTRACT_FAIL = (msg: string) =>
   new Error(`contract: ${msg} — UI 重设计可能丢失了关键 DOM 钩子`);
 
 test.describe('UI 重设计 · 契约守护', () => {
-  test('首页有品牌 h1「AI技术调研平台」', async ({ page }) => {
+  test('首页重定向到技术雷达', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('h1', { hasText: 'AI技术调研平台' })).toBeVisible();
+    await expect(page).toHaveURL(/\/radar$/);
+    await expect(page.locator('h1', { hasText: '技术雷达' })).toBeVisible();
   });
 
-  test('/researches 含 h1「调研库」与「新建」入口', async ({ page }) => {
+  test('/researches 含 h1「调研库」与内容入口', async ({ page }) => {
     await page.goto('/researches');
     await expect(page.locator('main h1', { hasText: '调研库' })).toBeVisible();
-    await expect(page.locator('a[href="/researches/new"]', { hasText: '新建' })).toBeVisible();
-  });
-
-  test('/summaries 含 h1「AI 雷达日报」', async ({ page }) => {
-    await page.goto('/summaries');
-    await expect(page.locator('main h1', { hasText: 'AI 雷达日报' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '开始 AI 调研' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /添加内容/ })).toBeVisible();
   });
 
   test('/radar 含 h1「技术雷达」与分页 nav', async ({ page }) => {
@@ -50,9 +47,8 @@ test.describe('UI 重设计 · 契约守护', () => {
   test('/ai-research 含 h1「AI 调研」与 data-ai-research-form', async ({ page }) => {
     await page.goto('/ai-research');
     await expect(page.locator('main h1', { hasText: 'AI 调研' })).toBeVisible();
-    // 提交按钮通过 button[type=submit] 兜底被业务 spec 用过
-    const submitButton = page.locator('button[type="submit"]').filter({ hasText: /提交|调研/ });
-    await expect(submitButton.first()).toBeVisible();
+    await expect(page.locator('[data-ai-research-form]')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'AI 调研对话输入' })).toBeVisible();
   });
 
   test('/signin 在未登录时仍含「登录」字样', async ({ browser }) => {
@@ -67,7 +63,7 @@ test.describe('UI 重设计 · 契约守护', () => {
   test('/admin 在 admin 角色下含控制台 nav，h1 含「Admin」', async ({ page }) => {
     // fixtures.ts 里默认登录的用户是 admin
     await page.goto('/admin');
-    const adminLink = page.locator('aside nav a[href="/admin"]');
+    const adminLink = page.locator('nav[aria-label="主导航"] a[href="/admin"]');
     await expect(adminLink).toBeVisible();
     await expect(page.locator('main h1', { hasText: /Admin 控制台|Admin/ })).toBeVisible();
   });
@@ -96,7 +92,7 @@ test.describe('UI 重设计 · 契约守护', () => {
 
   test('CommentSection 的 testid 可定位（即便 0 条评论）', async ({ page }) => {
     // 用一个会渲染 CommentSection 的固定路径：
-    // 详情页 (/summaries/[id] 与 /radar/[id]) 都需要真实数据，
+    // 雷达详情页需要真实数据，
     // 改用 admin radar 详情或 admin page，CommentSection 不一定在。
     // 这里只断言 CommentSection 这个文件里的 testid selector 在编译期内可解析：
     const found = await page.evaluate(() => {

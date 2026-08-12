@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import urlparse
 
 import pytest
 
@@ -41,6 +42,15 @@ def _ensure_e2e_env() -> None:
         )
     if not os.environ.get("DATABASE_URL"):
         pytest.skip("DATABASE_URL not set", allow_module_level=True)
+    database_name = urlparse(os.environ["DATABASE_URL"]).path.lstrip("/")
+    if database_name in {"", "postgres", "deep_research"} or not (
+        database_name.endswith("_test") or database_name.endswith("_e2e")
+    ):
+        pytest.skip(
+            "E2E tests require an isolated *_test or *_e2e database; "
+            f"refusing destructive fixture on {database_name or '<unknown>'}",
+            allow_module_level=True,
+        )
 
 
 _ensure_e2e_env()

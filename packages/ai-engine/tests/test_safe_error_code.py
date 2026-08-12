@@ -159,7 +159,7 @@ async def test_fetch_arxiv_sets_descriptive_user_agent() -> None:
     assert items, "expected at least one item from a valid Atom response"
 
 
-async def test_fetch_arxiv_raises_typed_errors_on_rate_limit() -> None:
+async def test_fetch_arxiv_raises_typed_errors_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     from ai_engine.ingestion.sources import fetch_arxiv
 
     response = httpx.Response(
@@ -171,6 +171,10 @@ async def test_fetch_arxiv_raises_typed_errors_on_rate_limit() -> None:
     transport = _StubTransport(response)
     from ai_engine.ingestion import sources as sources_mod
     original = sources_mod.httpx.AsyncClient
+    async def no_wait(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(sources_mod.asyncio, "sleep", no_wait)
     sources_mod.httpx.AsyncClient = lambda **kw: original(transport=transport, **kw)
     try:
         with pytest.raises(RuntimeError) as excinfo:

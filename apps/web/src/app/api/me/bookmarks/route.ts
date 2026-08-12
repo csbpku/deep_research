@@ -15,7 +15,7 @@ import { hydrateBookmarks } from '@/lib/me/bookmarks';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const postSchema = z.object({
-  targetType: z.enum(['radar_candidate', 'summary', 'research', 'knowledge', 'daily_digest']),
+  targetType: z.enum(['radar_candidate', 'summary', 'research', 'knowledge']),
   targetId: z.string().uuid(),
   note: z.string().max(500).optional(),
 });

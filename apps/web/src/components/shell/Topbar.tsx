@@ -1,7 +1,7 @@
 'use client';
 
-// Topbar —— 顶栏（56px）。
-// 左：移动端汉堡（打开侧栏 Sheet）。右：全局搜索 + AI 调研进行中指示器
+// Topbar —— 顶部主导航（56px）。
+// 桌面：品牌 + 主导航 + 全局搜索；移动：汉堡导航 + 品牌 + 工具。
 //   + 主题切换 + 用户菜单。
 //
 // user 与 navItems 都是 RSC 传下来的纯数据，Topbar 自身不查询 nav；只有
@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Menu, Search as SearchIcon } from 'lucide-react';
 
@@ -105,21 +105,6 @@ function GlobalSearchCommand() {
   );
 }
 
-function PageContext({ navItems }: { navItems: NavItem[] }) {
-  const pathname = usePathname();
-  const current = navItems.find((item) => (
-    item.href === '/'
-      ? pathname === '/'
-      : pathname === item.href || pathname.startsWith(`${item.href}/`)
-  ));
-  if (!current) return null;
-  return (
-    <span className="hidden shrink-0 border-r border-border pr-3 text-sm font-medium text-foreground lg:inline">
-      {current.label}
-    </span>
-  );
-}
-
 export function Topbar({
   navItems,
   user,
@@ -130,7 +115,12 @@ export function Topbar({
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
   return (
-    <header className="sticky top-0 z-40 flex h-topbar shrink-0 items-center gap-2 border-b border-border bg-background/85 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+    <header className="sticky top-0 z-40 flex h-topbar shrink-0 items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+      <Link href="/" className="hidden shrink-0 items-center gap-2 md:flex" aria-label="AI技术调研平台首页">
+        <BrandMark className="size-6" />
+        <span className="hidden text-sm font-semibold tracking-normal lg:inline">AI技术调研平台</span>
+      </Link>
+
       {/* 移动端侧栏 */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetTrigger asChild>
@@ -156,7 +146,10 @@ export function Topbar({
         <span className="truncate text-sm font-semibold tracking-normal">AI技术调研平台</span>
       </Link>
 
-      <PageContext navItems={navItems} />
+      <div className="hidden min-w-0 flex-1 overflow-x-auto md:block">
+        <SidebarNav items={navItems} horizontal />
+      </div>
+
       <GlobalSearchCommand />
 
       <div className="ml-auto flex shrink-0 items-center gap-1">

@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { prisma } from '../../../../lib/db';
 import { apiHandler } from '../../../../lib/api-handler';
-import { requireUser } from '../../../../lib/auth/session';
+import { getCurrentUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import { RadarIdParam } from '../../../../lib/schemas';
@@ -20,8 +20,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
-  const u = await requireUser(req);
-  if (u instanceof NextResponse) return u;
+  const u = await getCurrentUser();
 
   const parsed = RadarIdParam.safeParse(await ctx.params);
   if (!parsed.success) {
@@ -93,7 +92,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  const fbMap = await aggregateFeedbacks(prisma, [summary.id], u.id);
+  const fbMap = await aggregateFeedbacks(prisma, [summary.id], u?.id);
   const fb = fbMap.get(summary.id) ?? {
     counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
     mine: [],
@@ -106,6 +105,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       myFeedbacks: fb.mine,
       includeBody: true,
     }),
-    canManage: u.role === 'admin',
+    canManage: u?.role === 'admin',
+    isAuthenticated: Boolean(u),
   });
 });
