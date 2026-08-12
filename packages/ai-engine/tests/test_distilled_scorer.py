@@ -329,7 +329,7 @@ def test_direct_relevance_one_caps_high_quality_article() -> None:
     result = compute_score(parsed)
     assert result.total == 100.0
     assert result.ranking_score == 49.0
-    assert result.tier == TIER_NOISE
+    assert result.tier == TIER_SKIM
     assert result.must_read is False
 
 
@@ -451,7 +451,7 @@ def test_narrow_scope_caps_relevance_at_one() -> None:
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
     assert result.ranking_score == 49.0
-    assert result.tier == TIER_NOISE
+    assert result.tier == TIER_SKIM
     assert result.to_dict()["scopeBreadth"] == 0
 
 
@@ -463,7 +463,7 @@ def test_huggingface_model_source_is_narrow_even_if_llm_overrates() -> None:
     result = compute_score(parsed, source_type="huggingface_models")
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.tier == TIER_NOISE
+    assert result.tier == TIER_SKIM
 
 
 def test_single_model_single_hardware_asset_is_narrow_even_if_llm_overrates() -> None:
@@ -478,7 +478,7 @@ def test_single_model_single_hardware_asset_is_narrow_even_if_llm_overrates() ->
     )
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.tier == TIER_NOISE
+    assert result.tier == TIER_SKIM
 
 
 def test_voice_agent_tutorial_is_narrow_even_if_llm_overrates() -> None:
@@ -492,7 +492,7 @@ def test_voice_agent_tutorial_is_narrow_even_if_llm_overrates() -> None:
     )
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.tier == TIER_NOISE
+    assert result.tier == TIER_SKIM
 
 
 def test_practical_paper_with_measured_agent_eval_is_deep_read() -> None:
@@ -585,7 +585,7 @@ def test_legacy_result_without_direct_relevance_remains_compatible() -> None:
 
 
 def test_compute_score_all_max_paper() -> None:
-    """paper profile: must_read_total=85, core_count=2."""
+    """paper profile: must_read_total=86, core_count=2."""
     result = compute_score(_all_max_parsed(PAPER_PROFILE), profile=PAPER_PROFILE)
     assert result.total == 100.0
     assert result.tier == TIER_COLLECTION
@@ -630,22 +630,22 @@ def test_must_read_requires_high_core_and_total() -> None:
 
 
 def test_must_read_with_two_core_at_2_engineering() -> None:
-    """engineering profile: must_read_total=88, core_count=2.
+    """engineering profile: must_read_total=82, core_count=2.
 
-    A response with two core dims at 3 and one at 1 reaches ~87 under
+    A response with two core dims at 3 and one at 0 reaches ~75 under
     engineering weights — below must_read_total → not must_read.
     """
     parsed = _all_zero_parsed(
         **{
-            "信息增量": 3, "分析深度": 3, "可行动性": 1,
+            "信息增量": 3, "分析深度": 3, "可行动性": 0,
             "事实可信度": 3, "时效性": 3, "表达质量": 3, "综合信号": 3,
             "weak_point": "可行动性低",
         }
     )
     result = compute_score(parsed)
-    # engineering: 3*25/3 + 3*20/3 + 1*25/3 + 3*10/3 + 3*10/3 + 3*5/3 + 3*5/3
-    # = 25 + 20 + 8.33 + 10 + 10 + 5 + 5 = 83.33 → < 88
-    assert result.total < 88
+    # engineering: 3*25/3 + 3*20/3 + 0*25/3 + 3*10/3 + 3*10/3 + 3*5/3 + 3*5/3
+    # = 25 + 20 + 0 + 10 + 10 + 5 + 5 = 75.0 → < 82
+    assert result.total < 82
     assert result.must_read is False
 
 
