@@ -79,7 +79,7 @@ async def fetch_openreview(
             ],
             "query": "<full-text search term applied to all venues>",
             "maxResults": 30,
-            "maxAgeDays": 14,
+            "maxAgeDays": 400,           # NeurIPS to today is ~8 months; cover any conference round
             "limitPerVenue": 30,
         }
     """
