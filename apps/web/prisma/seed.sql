@@ -55,6 +55,11 @@ VALUES
   -- is fine for a daily cron; arxiv-mcp enrichment still runs downstream.
   ('a0000000-0000-0000-0000-000000000012', 'Hugging Face Daily Papers', 'huggingface_papers',
    '{"maxResults":20,"number_of_papers":50,"maxAgeHours":96,"minKeywordOverlap":0}'::jsonb,
+   true, now()),
+  -- PR3: OpenReview accepted papers — covers the venues that don't fully appear
+  -- on arXiv (NeurIPS / ICML / ICLR). Config drives which venues + search term.
+  ('a0000000-0000-0000-0000-000000000013', 'OpenReview Accepted Papers', 'openreview',
+   '{"venues":["NeurIPS.cc/2024/Conference","ICLR.cc/2025/Conference","ICML.cc/2024/Conference"],"query":"agent","maxResults":30,"maxAgeDays":14,"limitPerVenue":30}'::jsonb,
    true, now())
 ON CONFLICT DO NOTHING;
 

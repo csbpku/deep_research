@@ -13,6 +13,7 @@ from ai_engine.radar.github import fetch_github
 from ai_engine.radar.github_tracked import fetch_github_tracked
 from ai_engine.radar.huggingface_papers_fetcher import fetch_huggingface_papers
 from ai_engine.radar.models import RadarCandidate, RadarSource
+from ai_engine.radar.openreview_fetcher import fetch_openreview
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
 from ai_engine.radar.source_manager import fetch_source
@@ -689,4 +690,117 @@ async def test_hf_daily_papers_handles_non_list_response() -> None:
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
         items = await fetch_huggingface_papers({"maxResults": 5}, client=client)
+    assert items == []
+
+
+# PR3: OpenReview fetcher — multi-venue search + age gate + resilience.
+
+
+def _openreview_payload(*, fresh_days_ago: float) -> dict[str, Any]:
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    pdate_ms = now_ms - int(fresh_days_ago * 24 * 3600 * 1000)
+    return {
+        "count": 1,
+        "notes": [
+            {
+                "id": "note-1",
+                "forum": "forum-1",
+                "pdate": pdate_ms,
+                "mdate": pdate_ms,
+                "content": {
+                    "title": {"value": "SWE-agent: Agent-Computer Interfaces"},
+                    "abstract": {"value": "We present SWE-agent, a multi-turn LLM agent."},
+                    "keywords": {"value": ["agents", "software engineering"]},
+                    "venue": {"value": "NeurIPS 2024 oral"},
+                    "authors": {"value": [{"name": "Alice"}, {"name": "Bob"}]},
+                    "pdf": {"value": "https://openreview.net/pdf?id=forum-1"},
+                },
+            },
+        ],
+    }
+
+
+async def test_openreview_emits_canonical_forum_url() -> None:
+    """End-to-end: mock a single OpenReview hit and assert the candidate URL is a forum URL."""
+
+    payload = _openreview_payload(fresh_days_ago=3)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("invitation") == "NeurIPS.cc/2024/Conference/-/Submission"
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_openreview(
+            {
+                "venues": ["NeurIPS.cc/2024/Conference"],
+                "maxResults": 10,
+                "maxAgeDays": 14,
+                "limitPerVenue": 5,
+                "query": "agent",
+            },
+            client=client,
+        )
+    assert len(items) == 1
+    top = items[0]
+    assert top.url == "https://openreview.net/forum?id=forum-1"
+    assert "Alice, Bob" in top.snippet
+    assert "NeurIPS 2024 oral" in top.snippet
+    assert "software engineering" in top.snippet
+    assert "openreview" in top.tags
+    # The venue slug is the part before the first "/" of the venue id.
+    assert any(tag.startswith("neurips") for tag in top.tags)
+    assert top.content_origin == "api"
+
+
+async def test_openreview_drops_old_papers_via_age_gate() -> None:
+    """Papers older than ``maxAgeDays`` must be filtered out client-side."""
+
+    payload = _openreview_payload(fresh_days_ago=120)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_openreview(
+            {
+                "venues": ["NeurIPS.cc/2024/Conference"],
+                "maxResults": 10,
+                "maxAgeDays": 14,
+                "limitPerVenue": 5,
+                "query": "agent",
+            },
+            client=client,
+        )
+    assert items == []
+
+
+async def test_openreview_requires_venues_in_config() -> None:
+    """No venues configured means nothing returned — the fetcher does not invent venues."""
+
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"notes": []}))
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_openreview({"venues": []}, client=client)
+    assert items == []
+
+
+async def test_openreview_handles_non_list_notes_payload() -> None:
+    """Defensive: an unexpected payload shape must not crash the runner."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "service unavailable"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        items = await fetch_openreview(
+            {
+                "venues": ["NeurIPS.cc/2024/Conference"],
+                "maxResults": 5,
+                "maxAgeDays": 14,
+                "limitPerVenue": 5,
+                "query": "agent",
+            },
+            client=client,
+        )
     assert items == []
