@@ -251,6 +251,7 @@ async def _run_background(
     triggered_by: str,
     request_id: str,
     lock: asyncio.Lock | None = None,
+    source_ids: set[str] | None = None,
 ) -> None:
     log = structlog.get_logger("ai_engine.radar")
     try:
@@ -262,6 +263,7 @@ async def _run_background(
                 adapter=adapter,
                 distilled_scorer=score_with_llm,
                 monitor=monitor,
+                source_ids=source_ids,
             )
             return result, monitor
 

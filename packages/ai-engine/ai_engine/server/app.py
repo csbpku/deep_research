@@ -471,11 +471,29 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Log with full message + traceback so future regressions
+            # don't show up as a 5-line structlog entry with no context.
             log.warning(
                 "ai-engine.radar.tiered_job_failed",
                 error_type=type(exc).__name__,
+                error_message=str(exc)[:500],
                 sources=len(due_source_ids),
+                consecutive_failures=getattr(
+                    _radar_tiered_sync_loop, "_consecutive_failures", 0
+                ) + 1,
             )
+            log.error(
+                "ai-engine.radar.tiered_job_traceback",
+                exc_info=exc,
+            )
+            _radar_tiered_sync_loop._consecutive_failures = (
+                getattr(_radar_tiered_sync_loop, "_consecutive_failures", 0) + 1
+            )
+            if _radar_tiered_sync_loop._consecutive_failures >= 5:
+                log.error(
+                    "ai-engine.radar.tiered_job_persistent",
+                    note="5+ consecutive failures — investigate scheduler health",
+                )
 
 
 async def _radar_sync_loop(app_instance: FastAPI) -> None:
