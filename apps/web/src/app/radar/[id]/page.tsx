@@ -245,7 +245,7 @@ export default function RadarDetailPage() {
           <RadarArticleHighlights {...d.highlights} />
         ) : null}
 
-        {readingBody && readingBody !== d.interpretation && !(d.originalKind === 'github_repo' && !d.tags.includes('repo_digest')) ? (
+        {readingBody && readingBody !== d.interpretation && d.sourceType !== 'github_tracked' ? (
           <RadarReadingPanel
             summaryId={d.id}
             title={d.title}
