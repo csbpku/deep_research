@@ -132,11 +132,22 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const hash = sourceHash(content);
   const cached = readCache(summary.originalMeta, body.mode, body.language);
   if (cached?.sourceHash === hash) {
+    // M5: ai_reading 缓存的是结构化 JSON 字符串，返回时解析成 guide 对象；
+    // translate 缓存的是 markdown，直接返回 content。
+    let guide: unknown;
+    if (body.mode === 'ai_reading') {
+      try {
+        guide = JSON.parse(cached.content);
+      } catch {
+        guide = undefined;
+      }
+    }
     return NextResponse.json({
       mode: body.mode,
       language: body.language,
       sourceHash: hash,
-      content: cached.content,
+      content: body.mode === 'translate' ? cached.content : undefined,
+      guide: body.mode === 'ai_reading' ? guide : undefined,
       cached: true,
     });
   }
@@ -146,8 +157,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     : '生成一份面向工程师的 AI 阅读导读：先给出 3-5 条关键结论，再列出证据、限制和需要进一步验证的问题。只返回 Markdown，不要虚构原文没有的事实。';
 
   const env = getWebEnv();
+  // M5: ai_reading 走 operation=guide（结构化 JSON）；translate 仍走 rewrite（M6 再分块）。
+  const isGuide = body.mode === 'ai_reading';
   const result = await fetchAiEngine<{
     suggestion?: string;
+    guide?: {
+      summary?: string;
+      conclusions?: Array<{ claim?: string; evidence?: string }>;
+      limitations?: string[];
+      openQuestions?: string[];
+      highlights?: Array<{ quote?: string; rationale?: string }>;
+    } | null;
   }>({
     url: `${env.AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/research-assistant`,
     requestId,
@@ -156,26 +176,42 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     retry: false,
     headers: env.INTERNAL_SERVICE_TOKEN ? { 'x-internal-token': env.INTERNAL_SERVICE_TOKEN } : {},
     body: {
-      operation: body.mode === 'translate' ? 'rewrite' : 'summarize',
+      operation: isGuide ? 'guide' : 'rewrite',
       body: content.slice(0, 30_000),
       topic: summary.title,
-      instruction,
+      instruction: isGuide ? undefined : instruction,
     },
     context: `radar.${body.mode}`,
   });
-  if (!result.ok || !result.body.suggestion?.trim()) {
+
+  // ai_reading：guide 为结构化 JSON；若 LLM 解析失败（guide=null）则降级到 suggestion markdown。
+  if (!result.ok) {
     return toApiErrorResponse({
-      code: result.ok ? ERROR_CODES.AI_ENGINE_UNAVAILABLE : result.code,
-      message: result.ok ? 'AI 阅读结果为空' : result.message,
+      code: result.code,
+      message: result.message,
       requestId,
-      details: result.ok ? undefined : result.details,
+      details: result.details,
     });
   }
+
+  const guide = isGuide ? (result.body.guide ?? null) : null;
+  const suggestion = result.body.suggestion?.trim() ?? '';
+
+  if (isGuide ? !guide && !suggestion : !suggestion) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
+      message: 'AI 阅读结果为空',
+      requestId,
+    });
+  }
+
+  // 缓存：ai_reading 存结构化 JSON 字符串（guide 可用时），否则存 markdown。
+  const cachedContent = isGuide && guide ? JSON.stringify(guide) : suggestion;
 
   const entry: CacheEntry = {
     sourceHash: hash,
     language: body.language,
-    content: result.body.suggestion.trim(),
+    content: cachedContent,
     createdAt: new Date().toISOString(),
   };
   const meta = summary.originalMeta && typeof summary.originalMeta === 'object' && !Array.isArray(summary.originalMeta)
@@ -200,7 +236,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     mode: body.mode,
     language: body.language,
     sourceHash: hash,
-    content: entry.content,
+    content: isGuide ? undefined : cachedContent,
+    guide: isGuide ? (guide ?? undefined) : undefined,
     cached: false,
   });
 });

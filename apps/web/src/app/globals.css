@@ -105,6 +105,19 @@
     /* ---- 布局尺度（Data-Dense） ---- */
     --shell-sidebar: 240px;
     --shell-topbar: 56px;
+
+    /* ---- Radar 阅读面板设计 tokens（M1 新增，双栏阅读专用） ----
+       方向：研究论文 + 工程师工具 双调性。
+       冷米色纸感 + 深墨蓝单一强调色，避开默认的暖 cream + terracotta。
+       与上方的 shadcn HSL token 独立，仅阅读面板组件消费，不影响整站。 */
+    --ink-paper: #F8F7F2;        /* 顶 bar / Sheet 背景 */
+    --ink-page: #FFFFFF;         /* 双栏内容区（统一白） */
+    --ink-text: #1A1A1A;         /* 主文字 */
+    --ink-muted: #5C5C58;        /* 二级文字 */
+    --ink-faint: #9A9A93;        /* 三级（citation / 时间戳） */
+    --ink-rule: #E5E4DE;         /* hairline 分隔 */
+    --ink-accent: #1A3A6E;       /* 单一强调色（深墨蓝，替代 terracotta） */
+    --ink-highlight: #FFF5B0;    /* 高亮段背景（AI 回链命中） */
   }
 
   .dark {

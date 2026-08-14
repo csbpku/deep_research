@@ -121,6 +121,15 @@ const config: Config = {
           'Consolas',
           'monospace',
         ],
+        // M1 新增：阅读面板正文衬线（研究论文感）。Source Serif 4 若无则回退 Georgia，
+        // 两者在 macOS/Windows 均内置，不依赖外部字体 CDN，保持离线构建可用。
+        serif: [
+          'Source Serif 4',
+          'Source Serif Pro',
+          'Georgia',
+          'Cambria',
+          'serif',
+        ],
       },
 
       // Data-Dense 布局尺度
@@ -150,11 +159,16 @@ const config: Config = {
           '0%': { transform: 'translateX(-100%)' },
           '100%': { transform: 'translateX(400%)' },
         },
+        'sheet-slide-up': {
+          from: { transform: 'translateY(100%)', opacity: '0' },
+          to: { transform: 'translateY(0)', opacity: '1' },
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
         'indeterminate-bar': 'indeterminate-bar 1.4s ease-in-out infinite',
+        'sheet-slide-up': 'sheet-slide-up 0.3s ease-out',
       },
     },
   },

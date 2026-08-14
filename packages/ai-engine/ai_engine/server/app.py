@@ -825,7 +825,7 @@ class AssistantSelection(BaseModel):
 
 
 class ResearchAssistantBody(BaseModel):
-    operation: str = Field(pattern=r"^(rewrite|summarize|counterpoint|fact_check|conclusion_check)$")
+    operation: str = Field(pattern=r"^(rewrite|summarize|guide|counterpoint|fact_check|conclusion_check)$")
     body: str = Field(min_length=1, max_length=30000)
     selection: AssistantSelection | None = None
     instruction: str | None = Field(default=None, max_length=2000)
@@ -932,6 +932,44 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
             **metrics,
         )
         return {"operation": body.operation, "original": original, "suggestion": None, "rationale": reviewed.status, "claims": claims, "warnings": warnings, "request_id": request_id, "metrics": metrics}
+
+    # M5: 结构化 AI导读（radar 阅读面板）—— 强制 JSON 输出，json-repair 容错解析。
+    if body.operation == "guide":
+        from ai_engine.prompt import _RADAR_GUIDE_INSTRUCTION, _RADAR_GUIDE_SYSTEM
+
+        generated = await generate_text(
+            user_prompt=(
+                f"主题：{body.topic}\n原文：\n{context}\n\n{_RADAR_GUIDE_INSTRUCTION}"
+            ),
+            system_prompt=_RADAR_GUIDE_SYSTEM,
+            llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=1800, timeout=30.0,
+            disable_thinking=True,
+        )
+        metrics = {
+            "latency_ms": int((asyncio.get_event_loop().time() - started) * 1000),
+            "token_input_total": generated.input_tokens,
+            "token_output_total": generated.output_tokens,
+            "cost_cents": 0,
+        }
+        # json-repair 容错解析 LLM 输出；失败时降级返回空 guide（BFF 降级到 markdown）。
+        guide: dict[str, object] | None = None
+        try:
+            from json_repair import repair_json
+            guide = json.loads(repair_json(generated.text.strip()))
+            if not isinstance(guide, dict):
+                guide = None
+        except Exception:
+            guide = None
+        _safe_structlog(
+            structlog.get_logger("ai_engine.research_assistant"),
+            "info",
+            "research-assistant.completed",
+            request_id=request_id,
+            operation=body.operation,
+            guide_parsed=guide is not None,
+            **metrics,
+        )
+        return {"operation": body.operation, "original": original, "suggestion": None, "guide": guide, "rationale": _RADAR_GUIDE_INSTRUCTION, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
 
     prompts = {
         "rewrite": "改写这段文字，使其更清晰、准确、紧凑，保留原意。",

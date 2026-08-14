@@ -4,8 +4,8 @@ import { useParams, useSearchParams } from 'next/navigation';
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useState } from 'react';
-import { ExternalLink, Sparkles, Users, Workflow } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { ExternalLink, Sparkles, Workflow } from 'lucide-react';
 import { EmptyState } from '../../../components/EmptyState';
 import { CommentSection } from '../../../components/CommentSection';
 import { useCurrentUser } from '../../../lib/auth/client';
@@ -16,13 +16,14 @@ import { RadarArxivPaperCard } from '../../../components/radar/RadarArxivPaperCa
 import { RadarRepoSummary } from '../../../components/radar/RadarRepoSummary';
 import { RadarGithubItemSummary } from '../../../components/radar/RadarGithubItemSummary';
 import { RadarArticleHighlights } from '../../../components/radar/RadarArticleHighlights';
-import { RadarReadingPanel } from '../../../components/radar/RadarReadingPanel';
+import { RadarOriginalArticle } from '../../../components/radar/RadarOriginalArticle';
+import { RadarRightPanel } from '../../../components/radar/RadarRightPanel';
+import { ReadingProgressBar } from '../../../components/radar/ReadingProgressBar';
 import type { RadarGithubItemMeta } from '../../../lib/radar/shape';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
-import { TIER_LABELS } from '../../../components/domain/ScoreBar';
 import { Button } from '../../../components/ui/button';
 import { toApiHttpError } from '../../../lib/errors/api-error';
 import { retryOnceAi } from '../../../lib/errors/friendly';
@@ -98,6 +99,7 @@ export default function RadarDetailPage() {
   const returnQuery = searchParams.get('from');
   const backHref = returnQuery ? `/radar?${returnQuery}` : '/radar';
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const leftColRef = useRef<HTMLDivElement>(null);
   const me = useCurrentUser();
   const q = useQuery<RadarDetail>({
     queryKey: ['radar', params.id],
@@ -148,16 +150,31 @@ export default function RadarDetailPage() {
   const readingBody = d.originalMarkdown ?? d.body ?? d.highlights?.summary ?? d.interpretation ?? d.excerpt;
   const canInteract = Boolean(me.data?.id);
 
-  return (
-    <div className="mx-auto max-w-[1440px]">
-      <div className="flex items-center gap-2">
-        <BackToSearchButton />
-        <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
-      </div>
+  // M5: 高亮回链 —— 在左栏原文 DOM 中 fuzzy match quote 文本并滚动到它。
+  function handleHighlightClick(quote: string) {
+    const leftCol = leftColRef.current;
+    if (!leftCol || !quote) return;
+    const needle = quote.replace(/\s+/gu, ' ').trim().slice(0, 60);
+    const walker = document.createTreeWalker(leftCol, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (node.textContent && node.textContent.replace(/\s+/gu, ' ').includes(needle)) {
+        const el = node.parentElement;
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        break;
+      }
+    }
+  }
 
-      <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-start">
-      <article className="min-w-0 space-y-4 leading-7">
-        <header className="flex flex-wrap items-center gap-2">
+  return (
+    <div className="flex h-[calc(100vh-56px)] flex-col">
+      {/* 顶栏：返回 + 来源 badge + 阅读进度条 */}
+      <div className="relative flex items-center justify-between border-b border-border bg-background px-4 py-3">
+        <div className="flex items-center gap-2">
+          <BackToSearchButton />
+          <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 回到雷达列表</Link>
+        </div>
+        <div className="flex items-center gap-1.5">
           <span
             className="rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
             aria-label={sourceLabel.full}
@@ -170,201 +187,169 @@ export default function RadarDetailPage() {
               data-testid="original-kind-badge"
               className="rounded-full border border-primary/30 bg-accent px-2 py-0.5 text-[11px] text-accent-foreground"
             >
-              内容类型 {d.originalKind === 'arxiv' ? 'arXiv 论文' : d.originalKind}
+              {d.originalKind === 'arxiv' ? 'arXiv 论文' : d.originalKind}
             </span>
           ) : null}
-        </header>
+        </div>
+        <ReadingProgressBar scrollRef={leftColRef} />
+      </div>
 
-        <h1 className="text-3xl font-semibold leading-tight tracking-normal">{d.title}</h1>
+      {/* 双栏：左原文 55% / 右 AI 面板 45% */}
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[55fr_45fr]">
+        {/* 左栏：原文（独立滚动） */}
+        <div ref={leftColRef} className="min-w-0 overflow-y-auto border-r border-border bg-[var(--ink-page)] px-8 py-8">
+          <article className="mx-auto max-w-[65ch] space-y-4 leading-7">
+            <h1 className="font-serif text-3xl font-semibold leading-tight tracking-normal">{d.title}</h1>
 
-        {canInteract ? (
-          <div className="flex items-center gap-2 lg:hidden" aria-label="文章操作">
-            <Button type="button" variant="outline" size="sm" onClick={() => setDrawerOpen(true)}>
-              <Sparkles className="size-3.5" />
-              与 AI 讨论
-            </Button>
-            <Button asChild type="button" variant="outline" size="sm">
-              <a href="#discussion">
-              <Users className="size-3.5" />
-              团队讨论
-              </a>
-            </Button>
-          </div>
-        ) : null}
+            {canInteract ? (
+              <div className="flex items-center gap-2 lg:hidden" aria-label="文章操作">
+                <Button type="button" variant="outline" size="sm" onClick={() => setDrawerOpen(true)}>
+                  <Sparkles className="size-3.5" />
+                  与 AI 讨论
+                </Button>
+              </div>
+            ) : null}
 
-        {d.interpretation ? (
-          <p
-            className="rounded-md border-l-2 border-primary bg-accent/60 px-4 py-3 text-sm leading-7 text-foreground"
-          >
-            <span className="mr-1.5 text-xs font-medium text-muted-foreground">AI 一句话解读：</span>
-            {d.interpretation}
-          </p>
-        ) : null}
+            {d.interpretation ? (
+              <p className="rounded-md border-l-2 border-primary bg-accent/60 px-4 py-3 text-sm leading-7 text-foreground">
+                <span className="mr-1.5 text-xs font-medium text-muted-foreground">AI 一句话解读：</span>
+                {d.interpretation}
+              </p>
+            ) : null}
 
-        {d.distilledScore ? (
-          <div className="my-3">
-            <DistilledScorePanel score={d.distilledScore} />
-          </div>
-        ) : null}
+            {d.distilledScore ? (
+              <div className="my-3">
+                <DistilledScorePanel score={d.distilledScore} />
+              </div>
+            ) : null}
 
-        {!d.distilledScore && d.scoreReason ? (
-          <p className="mb-3 text-sm text-muted-foreground">
-            <strong>评分理由：</strong>
-            {d.scoreReason}
-          </p>
-        ) : null}
+            {!d.distilledScore && d.scoreReason ? (
+              <p className="mb-3 text-sm text-muted-foreground">
+                <strong>评分理由：</strong>
+                {d.scoreReason}
+              </p>
+            ) : null}
 
-        {d.selectionReason ? (
-          <p
-            className="my-2 rounded-md border-l-2 border-status-succeeded-fg bg-status-succeeded-bg px-3 py-2 text-sm text-status-succeeded-fg"
-          >
-            <strong>入选理由：</strong>
-            {d.selectionReason}
-            {d.sortOrder !== null ? `（#${d.sortOrder}）` : ''}
-          </p>
-        ) : null}
+            {d.selectionReason ? (
+              <p className="my-2 rounded-md border-l-2 border-status-succeeded-fg bg-status-succeeded-bg px-3 py-2 text-sm text-status-succeeded-fg">
+                <strong>入选理由：</strong>
+                {d.selectionReason}
+                {d.sortOrder !== null ? `（#${d.sortOrder}）` : ''}
+              </p>
+            ) : null}
 
-        {d.originalKind === 'github_repo' && (d.repoSummary || d.originalMeta) ? (
-          <RadarRepoSummary summary={d.repoSummary ?? d.interpretation ?? ''} meta={(d.originalMeta ?? null) as RepoMeta | null} />
-        ) : null}
+            {d.originalKind === 'github_repo' && (d.repoSummary || d.originalMeta) ? (
+              <RadarRepoSummary summary={d.repoSummary ?? d.interpretation ?? ''} meta={(d.originalMeta ?? null) as RepoMeta | null} />
+            ) : null}
 
-        {d.originalKind === 'arxiv' ? (
-          <RadarArxivPaperCard
-            meta={(d.originalMeta ?? {}) as { arxivId?: string; keyContributions?: string[]; sectionCount?: number }}
-            authors={d.authors}
-            tldr={d.tldr}
-            analysis={d.arxivAnalysis}
-          />
-        ) : null}
+            {d.originalKind === 'arxiv' ? (
+              <RadarArxivPaperCard
+                meta={(d.originalMeta ?? {}) as { arxivId?: string; keyContributions?: string[]; sectionCount?: number }}
+                authors={d.authors}
+                tldr={d.tldr}
+                analysis={d.arxivAnalysis}
+              />
+            ) : null}
 
-        {(d.originalKind === 'github_other' || d.originalKind === 'github_release') && d.githubItemMeta ? (
-          <RadarGithubItemSummary meta={d.githubItemMeta} />
-        ) : null}
+            {(d.originalKind === 'github_other' || d.originalKind === 'github_release') && d.githubItemMeta ? (
+              <RadarGithubItemSummary meta={d.githubItemMeta} />
+            ) : null}
 
-        {(d.originalKind === 'rss' || d.originalKind === 'web_share') && d.highlights ? (
-          <RadarArticleHighlights {...d.highlights} />
-        ) : null}
+            {(d.originalKind === 'rss' || d.originalKind === 'web_share') && d.highlights ? (
+              <RadarArticleHighlights {...d.highlights} />
+            ) : null}
 
-        {readingBody && readingBody !== d.interpretation && d.sourceType !== 'github_tracked' ? (
-          <RadarReadingPanel
-            summaryId={d.id}
-            title={d.title}
-            originalContent={readingBody}
-            highlights={d.highlights}
-          />
-        ) : null}
+            {readingBody && readingBody !== d.interpretation && d.sourceType !== 'github_tracked' ? (
+              <RadarOriginalArticle content={readingBody} highlights={d.highlights} />
+            ) : null}
 
-        {(() => {
-          const displayTags = d.tags.filter((t) => {
-            if (t === 'must_read' || t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
-            if (t === 'rss' || t === 'api' || t === 'web' || t === 'github' || t === 'tracked' || t === 'repo_digest') return false;
-            return true;
-          });
-          if (displayTags.length === 0) return null;
-          return (
-            <div className="my-2 flex flex-wrap gap-1.5">
-              {displayTags.map((t) => (
-                <span
-                  key={t}
-                  className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground"
-                >
-                  #{t}
-                </span>
-              ))}
+            {(() => {
+              const displayTags = d.tags.filter((t) => {
+                if (t === 'must_read' || t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
+                if (t === 'rss' || t === 'api' || t === 'web' || t === 'github' || t === 'tracked' || t === 'repo_digest') return false;
+                return true;
+              });
+              if (displayTags.length === 0) return null;
+              return (
+                <div className="my-2 flex flex-wrap gap-1.5">
+                  {displayTags.map((t) => (
+                    <span key={t} className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+                      #{t}
+                    </span>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {canInteract ? (
+              <div className="mt-6 flex flex-nowrap items-center gap-1 overflow-x-auto py-3">
+                <RadarFeedbackBar
+                  summaryId={d.id}
+                  initialCounts={d.feedbackCounts}
+                  initialMine={d.myFeedbacks}
+                  types={['useful', 'inaccurate']}
+                  className="shrink-0 gap-1 py-0"
+                />
+                <Button asChild variant="outline" size="xs" className="ml-2 h-7 shrink-0 gap-1.5">
+                  <Link href={`/ai-research?seed=${d.id}`} aria-label="深入调研">
+                    <Workflow className="size-3.5" />
+                    深入调研
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <p className="mt-6 border-y border-border py-3 text-xs text-muted-foreground">
+                <Link href="/signin" className="font-medium text-primary hover:underline">登录</Link>
+                {' '}后可收藏、反馈、评论和继续调研。
+              </p>
+            )}
+
+            <div id="discussion" className="scroll-mt-20">
+              {canInteract ? (
+                <CommentSection
+                  targetType="summary"
+                  targetId={d.id}
+                  currentUserId={me.data?.id ?? null}
+                  currentUserRole={me.data?.role ?? null}
+                  content={readingBody}
+                />
+              ) : (
+                <div className="rounded-md border border-border bg-card p-4 text-sm text-muted-foreground">
+                  登录后参与团队讨论。
+                </div>
+              )}
             </div>
-          );
-        })()}
-
-        {canInteract ? (
-          <div className="mt-6 flex flex-nowrap items-center gap-1 overflow-x-auto py-3">
-            <RadarFeedbackBar
-              summaryId={d.id}
-              initialCounts={d.feedbackCounts}
-              initialMine={d.myFeedbacks}
-              types={['useful', 'inaccurate']}
-              className="shrink-0 gap-1 py-0"
-            />
-            <Button asChild variant="outline" size="xs" className="ml-2 h-7 shrink-0 gap-1.5">
-              <Link href={`/ai-research?seed=${d.id}`} aria-label="深入调研">
-                <Workflow className="size-3.5" />
-                深入调研
-              </Link>
-            </Button>
-          </div>
-        ) : (
-          <p className="mt-6 border-y border-border py-3 text-xs text-muted-foreground">
-            <Link href="/signin" className="font-medium text-primary hover:underline">登录</Link>
-            {' '}后可收藏、反馈、评论和继续调研。
-          </p>
-        )}
-
-        <div id="discussion" className="scroll-mt-20">
-          {canInteract ? (
-            <CommentSection
-              targetType="summary"
-              targetId={d.id}
-              currentUserId={me.data?.id ?? null}
-              currentUserRole={me.data?.role ?? null}
-              content={readingBody}
-            />
-          ) : (
-            <div className="rounded-md border border-border bg-card p-4 text-sm text-muted-foreground">
-              登录后参与团队讨论。
-            </div>
-          )}
+          </article>
         </div>
 
-        {canInteract ? (
-          <AskAiDrawer
-            summaryId={d.id}
-            summaryTitle={d.title}
-            summaryUrl={d.url}
-            open={drawerOpen}
-            onOpenChange={setDrawerOpen}
-            contextExcerpt={readingBody}
-          />
-        ) : null}
-      </article>
-
-      <aside className="hidden space-y-3 lg:sticky lg:top-[72px] lg:block">
-        <section className="rounded-lg border border-border bg-card p-4">
-          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">证据卡</h2>
-          <dl className="grid gap-3 text-xs">
-            <div><dt className="text-muted-foreground">来源</dt><dd className="mt-0.5 font-medium">{sourceLabel.full}</dd></div>
-            <div><dt className="text-muted-foreground">最近同步</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(d.crawledAt).toISOString().slice(0, 10)}</dd></div>
-            <div><dt className="text-muted-foreground">阅读等级</dt><dd className="mt-0.5 font-medium">{d.distilledScore ? (TIER_LABELS[d.distilledScore.tier] ?? '待评估') : '待评估'}</dd></div>
-            <div><dt className="text-muted-foreground">团队价值</dt><dd className="mt-0.5 font-mono text-sm text-status-succeeded-fg">{d.distilledScore?.rankingScore ?? d.distilledScore?.effectiveTotal ?? '—'}</dd></div>
-          </dl>
-        </section>
-        <section className="rounded-lg border border-border bg-card p-4">
-          <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">协作</h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">团队判断沉淀在正文下方；AI 对话作为当前文章的辅助工具。</p>
-          {canInteract ? (
-            <>
-              <Button asChild type="button" variant="outline" size="sm" className="mt-3 w-full">
-                <a href="#discussion">
-                <Users className="size-3.5" />
-                查看团队讨论
-                </a>
-              </Button>
-              <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={() => setDrawerOpen(true)}>
+        {/* 右栏：AI 面板（独立滚动） */}
+        <div className="min-w-0 overflow-y-auto bg-[var(--ink-page)] px-6 py-8">
+          <RadarRightPanel summaryId={d.id} title={d.title} highlights={d.highlights} onHighlightClick={handleHighlightClick} />
+          <div className="mt-6 border-t border-border pt-4">
+            <a href={d.url} target="_blank" rel="noopener noreferrer" className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium hover:bg-muted">
+              <ExternalLink className="size-3.5" />
+              打开原文
+            </a>
+            {canInteract ? (
+              <Button type="button" variant="outline" size="sm" className="ml-2" onClick={() => setDrawerOpen(true)}>
                 <Sparkles className="size-3.5" />
                 与 AI 讨论
               </Button>
-            </>
-          ) : (
-            <Button asChild type="button" variant="outline" size="sm" className="mt-3 w-full">
-              <Link href="/signin">登录后参与讨论</Link>
-            </Button>
-          )}
-          <a href={d.url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-border text-xs font-medium hover:bg-muted">
-            <ExternalLink className="size-3.5" />
-            打开原文
-          </a>
-        </section>
-      </aside>
+            ) : null}
+          </div>
+        </div>
       </div>
 
+      {canInteract ? (
+        <AskAiDrawer
+          summaryId={d.id}
+          summaryTitle={d.title}
+          summaryUrl={d.url}
+          open={drawerOpen}
+          onOpenChange={setDrawerOpen}
+          contextExcerpt={readingBody}
+        />
+      ) : null}
     </div>
   );
 }
