@@ -37,6 +37,8 @@ interface ChatMessage {
   content: string;
   createdAt: string;
   latencyMs?: number | null;
+  // M7: 引用锚点。BFF publicChatMessage 把 sources_json 映射为 sources。
+  sources?: Array<{ quote?: string }> | null;
 }
 
 interface ChatSession {
@@ -453,6 +455,18 @@ export function AskAiDrawer({
                           className="text-sm leading-7"
                         />
                       </div>
+                      {m.sources && m.sources.length > 0 ? (
+                        <div className="mt-2 space-y-1.5">
+                          {m.sources.map((s, i) => (
+                            <div
+                              key={i}
+                              className="border-l-2 border-method-ai bg-accent/40 px-3 py-1.5 text-xs leading-5 text-muted-foreground"
+                            >
+                              ↗ {s.quote}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       {m.latencyMs ? (
                         <div className="mt-1.5 text-[11px] text-muted-foreground">
                           {m.latencyMs < 1000

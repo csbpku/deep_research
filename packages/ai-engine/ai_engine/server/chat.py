@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from typing import Annotated, Any, cast
 
@@ -269,7 +270,13 @@ async def _build_prompt(
         # default behaviour is to use the original when available).
         include_original=True,
     )
-    return built.system + "\n\n" + built.user, built.estimated_tokens
+    # M7: 引用锚点 —— 让模型在直接引用原文时用 [[cite]]...[[/cite]] 包裹，
+    # 前端解析后回链到左栏原文（fuzzy match）。不改变预算，只追加一句指令。
+    citation_hint = (
+        "\n\n引用纪律：当你直接引用原文中的句子来支撑回答时，用 [[cite]] 原文句子 [[/cite]] 包裹，"
+        "引文必须逐字复制原文。不要滥用引文，只在需要锚定证据时使用。"
+    )
+    return built.system + citation_hint + "\n\n" + built.user, built.estimated_tokens
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -527,11 +534,24 @@ async def append_message(
             # Do not persist or return an empty assistant bubble. An empty
             # model result is an upstream failure from the user's perspective.
             raise _http_error("AI_ENGINE_UNAVAILABLE", "AI 没有生成有效回答，请重试")
+
+        # M7: 解析 [[cite]]...[[/cite]] 引文锚点。逐字引用用于前端回链定位。
+        citations: list[dict[str, str]] = []
+        cleaned_content = content
+        cite_re = re.compile(r"\[\[cite\]\](.*?)\[\[/cite\]\]", re.DOTALL)
+        for match in cite_re.finditer(content):
+            quote = match.group(1).strip()
+            if quote:
+                citations.append({"quote": quote[:2000]})
+        if citations:
+            # 去掉 markdown 引文标记，让正文干净展示（引文在 sources_json 单独返回）。
+            cleaned_content = cite_re.sub(lambda m: m.group(1).strip(), content).strip()
     except AdapterError as exc:
         raise _http_error(exc.code, exc.message)
 
     # Insert assistant message
     cost_cents = int(getattr(brief.cost, "cost_cents", 0))
+    sources_json_str = json.dumps(citations) if citations else None
     async with pool.connection() as conn:
         async with conn.transaction():
             a_row = await (
@@ -539,11 +559,12 @@ async def append_message(
                     'INSERT INTO "ai_chat_messages" '
                     '("id", "sessionId", "role", "content", "sourcesJson", '
                     '"latencyMs", "tokensIn", "tokensOut", "costCents", "createdAt") '
-                    "VALUES (gen_random_uuid(), %s, 'assistant', %s, NULL, %s, %s, %s, %s, now()) "
+                    "VALUES (gen_random_uuid(), %s, 'assistant', %s, %s::jsonb, %s, %s, %s, %s, now()) "
                     'RETURNING "id", "createdAt"',
                     (
                         session_id,
-                        content[:50000],
+                        cleaned_content[:50000],
+                        sources_json_str,
                         latency_ms,
                         tokens_in_est,
                         int(getattr(brief.cost, "token_output_total", 0) or 0),
@@ -563,12 +584,13 @@ async def append_message(
         role="assistant",
         tokens_in=tokens_in_est,
         cost_cents=cost_cents,
+        citations=len(citations),
     )
     return ChatMessageOut(
         id=str(a_row["id"]),
         role=cast(AiChatRole, AI_CHAT_ROLE["ASSISTANT"]),
-        content=content,
-        sources_json=None,
+        content=cleaned_content,
+        sources_json=citations,
         latency_ms=latency_ms,
         tokens_in=tokens_in_est,
         tokens_out=int(getattr(brief.cost, "token_output_total", 0) or 0),
