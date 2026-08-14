@@ -26,6 +26,8 @@ interface RadarRightPanelProps {
 type TransformState = {
   content: string | null;
   guide: RadarGuide | null;
+  chunks: Array<{ index: number; content: string }> | null;
+  complete: boolean;
   loading: boolean;
   error: string | null;
 };
@@ -40,7 +42,7 @@ const MODES: Array<{ value: Mode; label: string; description: string }> = [
 /**
  * 右栏 AI 面板 —— tabs（AI导读 / 翻译）+ transform 调用 + 缓存。
  *
- * AI导读走结构化 guide（M5）；翻译仍是 markdown（M6 分块后改 chunks）。
+ * AI导读走结构化 guide（M5）；翻译走分块 chunks（M6）。
  */
 export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick, className }: RadarRightPanelProps) {
   const [mode, setMode] = useState<Mode>('ai_reading');
@@ -51,8 +53,9 @@ export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick
     const cacheKey = `${nextMode}:${requestedLanguage}`;
     setTransforms((current) => {
       const existing = current[cacheKey];
-      if (existing?.content || existing?.guide || existing?.loading) return current;
-      return { ...current, [cacheKey]: { content: null, guide: null, loading: true, error: null } };
+      const hasData = existing?.guide || existing?.content || existing?.chunks?.length;
+      if (hasData || existing?.loading) return current;
+      return { ...current, [cacheKey]: { content: null, guide: null, chunks: null, complete: false, loading: true, error: null } };
     });
 
     try {
@@ -64,9 +67,12 @@ export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick
       const body = (await response.json().catch(() => ({}))) as {
         content?: string;
         guide?: RadarGuide | null;
+        chunks?: Array<{ index: number; content: string }>;
+        complete?: boolean;
         message?: string;
       };
-      if (!response.ok || (nextMode === 'ai_reading' ? !body.guide : !body.content)) {
+      const hasData = nextMode === 'ai_reading' ? Boolean(body.guide || body.content) : Boolean(body.chunks?.length);
+      if (!response.ok || !hasData) {
         throw new Error(body.message ?? '生成阅读内容失败');
       }
       setTransforms((current) => ({
@@ -74,6 +80,8 @@ export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick
         [cacheKey]: {
           content: body.content ?? null,
           guide: body.guide ?? null,
+          chunks: body.chunks ?? null,
+          complete: body.complete ?? true,
           loading: false,
           error: null,
         },
@@ -84,6 +92,8 @@ export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick
         [cacheKey]: {
           content: null,
           guide: null,
+          chunks: null,
+          complete: false,
           loading: false,
           error: error instanceof Error ? error.message : '生成阅读内容失败',
         },
@@ -211,6 +221,18 @@ export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick
           ) : activeTransform?.error ? (
             <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
               {activeTransform.error}
+            </div>
+          ) : activeTransform?.chunks?.length ? (
+            <div>
+              <MarkdownContent
+                content={activeTransform.chunks.map((c) => c.content).join('\n\n')}
+                className="font-serif text-[15px] leading-[1.7] text-[var(--ink-text)]"
+              />
+              {!activeTransform.complete ? (
+                <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 font-sans text-xs text-amber-700">
+                  翻译不完整（部分段落翻译失败），已显示已完成的内容。
+                </p>
+              ) : null}
             </div>
           ) : activeTransform?.content ? (
             <MarkdownContent

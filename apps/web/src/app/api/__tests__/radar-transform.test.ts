@@ -86,7 +86,8 @@ describe('POST /api/radar/[id]/transform', () => {
     await expect(first.json()).resolves.toMatchObject({
       mode: 'translate',
       cached: false,
-      content: '# Translated\n\nTranslated content.',
+      chunks: [{ index: 0, content: '# Translated\n\nTranslated content.' }],
+      complete: true,
     });
     expect(mocks.fetchAiEngine).toHaveBeenCalledTimes(1);
     expect(mocks.summaryUpdate).toHaveBeenCalledTimes(1);
