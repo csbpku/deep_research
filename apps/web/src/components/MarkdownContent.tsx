@@ -23,7 +23,7 @@ function safeMarkdownUrl(value: string): string {
  * paragraphs from those wraps, so reflow that narrow case into readable
  * paragraphs while leaving real Markdown untouched.
  */
-function prepareContent(content: string): string {
+export function prepareContent(content: string): string {
   let source = content.replace(/\r\n?/g, '\n').trim();
   if (!source) return '';
 
@@ -51,7 +51,11 @@ function prepareContent(content: string): string {
   };
   source = source.split('\n').map((line) => rewriteReferenceLine(line.trim())).join('\n');
 
-  const hasMarkdownStructure = /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|>\s|```|\|.+\|)/m.test(source);
+  // M8: 扩大"已格式化 markdown"检测范围。行首标记（标题/列表/引用/代码块/表格）
+  // 需要锚定行首；行内标记（**bold** / *italic* / [link](url)）可出现在段落任意处，
+  // 单独匹配，避免纯加粗/链接段落被误走 reflow 启发式而排版失真。
+  const hasMarkdownStructure = /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|>\s|```|\|.+\|)/m.test(source)
+    || /\*\*|__|\*[^*\n]+\*|\[[^\]]+\]\([^)]+\)/.test(source);
   if (hasMarkdownStructure) return source;
 
   // Some web readers return the complete article as one line. Recover the
