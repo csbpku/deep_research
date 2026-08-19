@@ -61,6 +61,7 @@ import { cn } from '@/lib/utils';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
 import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
+import LlmUsageConsole from './llm-usage/LlmUsageConsole';
 
 export const ADMIN_TAB_KEYS = [
   'dashboard',
@@ -69,6 +70,7 @@ export const ADMIN_TAB_KEYS = [
   'topics',
   'shares',
   'comments',
+  'llm_usage',
   'users',
 ] as const;
 type Tab = typeof ADMIN_TAB_KEYS[number];
@@ -80,6 +82,7 @@ const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'topics', label: '主题提议', icon: Sparkles },
   { key: 'shares', label: '用户分享', icon: Link2 },
   { key: 'comments', label: '评论提名', icon: Lightbulb },
+  { key: 'llm_usage', label: 'LLM 用量', icon: DollarSign },
   { key: 'users', label: '成员', icon: User },
 ];
 
@@ -88,6 +91,18 @@ interface DashboardData {
   content: { newResearchesThisWeek: number };
   jobs: { submittedLast24h: number; failedLast24h: number; failedImportJobs: number };
   cost: { monthUsdCents: number; monthUsd: string };
+  // ADR 0010: 认知闭环 V2 关键产品事件计数（最近 7 天）
+  cognitionLoop: {
+    topicResearchStarted: number;
+    researchPlanConfirmed: number;
+    researchContextReused: number;
+    researchDraftOpened: number;
+    researchReopenedFromTopic: number;
+    topicIssueViewed: number;
+    topicViewedWithUnread: number;
+    topicFollowed: number;
+    topicUnfollowed: number;
+  };
   radar: {
     lastSync: null | {
       id: string;
@@ -123,6 +138,8 @@ interface DashboardData {
           existing: number;
           ruleNoise: number;
           distilledNoise: number;
+          unassessable: number;
+          hardVeto: number;
           conflict: number;
           other: number;
         };
@@ -148,6 +165,8 @@ interface DashboardData {
         skipReasons: {
           ruleNoise: number;
           distilledNoise: number;
+          unassessable: number;
+          hardVeto: number;
           lowQuality: number;
           pendingScore: number;
           other: number;
@@ -184,6 +203,12 @@ interface RadarRunStatus {
   errorMessage: string | null;
   createdAt: string;
   completedAt: string | null;
+}
+
+interface DisplayRadarRun extends RadarRunStatus {
+  attemptCount: number;
+  historicalFailureCount: number;
+  recovered: boolean;
 }
 
 interface RadarDiagnosticItem {
@@ -336,6 +361,7 @@ export default function AdminConsole() {
         )}
         {tab === 'shares' && <SharesTab />}
         {tab === 'comments' && <CommentsTab />}
+        {tab === 'llm_usage' && <LlmUsageConsole />}
         {tab === 'users' && <UsersTab />}
       </div>
     </div>
@@ -475,15 +501,27 @@ function DashboardTab() {
     }
     return totals;
   }, [runsQ.data]);
-  const displayRuns = useMemo(
-    () => latestRuns.map((run) => ({
-      ...run,
-      // The row represents the source's latest status, but its +N is the
-      // full selected-day total so the visible rows add up to dailyNew.
-      totalNew: dailyNewBySource.get(run.sourceId) ?? 0,
-    })),
-    [dailyNewBySource, latestRuns],
-  );
+  const displayRuns = useMemo<DisplayRadarRun[]>(() => {
+    const history = new Map<string, { attempts: number; failures: number }>();
+    for (const run of runsQ.data ?? []) {
+      const current = history.get(run.sourceId) ?? { attempts: 0, failures: 0 };
+      current.attempts += 1;
+      if (run.status === 'failed' || run.status === 'partial') current.failures += 1;
+      history.set(run.sourceId, current);
+    }
+    return latestRuns.map((run) => {
+      const sourceHistory = history.get(run.sourceId) ?? { attempts: 1, failures: 0 };
+      return {
+        ...run,
+        // The row represents the source's latest status, but its +N is the
+        // full selected-day total so the visible rows add up to dailyNew.
+        totalNew: dailyNewBySource.get(run.sourceId) ?? 0,
+        attemptCount: sourceHistory.attempts,
+        historicalFailureCount: sourceHistory.failures,
+        recovered: run.status === 'completed' && sourceHistory.failures > 0,
+      };
+    });
+  }, [dailyNewBySource, latestRuns, runsQ.data]);
   const dailyNew = useMemo(
     () => (runsQ.data ?? []).reduce((sum, run) => sum + run.totalNew, 0),
     [runsQ.data],
@@ -509,6 +547,7 @@ function DashboardTab() {
     return true;
   }), [runFilter, sortedRuns]);
   const attentionCount = runSummary.running + runSummary.partial + runSummary.failed;
+  const recoveredCount = displayRuns.filter((run) => run.recovered).length;
 
   if (q.isLoading) {
     return (
@@ -577,6 +616,55 @@ function DashboardTab() {
           hint="AI 调研"
           className="p-3"
         />
+      </div>
+
+      <div className="mb-4 rounded-md border border-border bg-card/50 p-3">
+        <header className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+          <Sparkles className="size-4 text-primary" /> 认知闭环 V2 · 近 7 天
+        </header>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          <StatCard
+            label={<span>专题被关注</span>}
+            value={d.cognitionLoop.topicFollowed}
+            hint={`取消 ${d.cognitionLoop.topicUnfollowed}`}
+            tone="primary"
+            className="p-2"
+          />
+          <StatCard
+            label={<span>专题深度查看</span>}
+            value={d.cognitionLoop.topicViewedWithUnread}
+            hint="含未读议题时"
+            tone={d.cognitionLoop.topicViewedWithUnread > 0 ? 'primary' : 'default'}
+            className="p-2"
+          />
+          <StatCard
+            label={<span>专题发起调研</span>}
+            value={d.cognitionLoop.topicResearchStarted}
+            tone="primary"
+            className="p-2"
+          />
+          <StatCard
+            label={<span>确认研究计划</span>}
+            value={d.cognitionLoop.researchPlanConfirmed}
+            hint={
+              d.cognitionLoop.topicResearchStarted > 0
+                ? `${Math.round(
+                    (d.cognitionLoop.researchPlanConfirmed /
+                      Math.max(1, d.cognitionLoop.topicResearchStarted)) *
+                      100,
+                  )}% 转化`
+                : '尚无样本'
+            }
+            className="p-2"
+          />
+          <StatCard
+            label={<span>复用上下文</span>}
+            value={d.cognitionLoop.researchContextReused}
+            hint="研究复用了历史上下文的次数"
+            tone={d.cognitionLoop.researchContextReused > 0 ? 'primary' : 'default'}
+            className="p-2"
+          />
+        </div>
       </div>
 
       <RadarMonitorPanel monitor={d.radar.monitor} generatedAt={d.generatedAt} />
@@ -657,7 +745,7 @@ function DashboardTab() {
             <div className="grid grid-cols-2 border-b border-border bg-muted/20 sm:grid-cols-3 xl:grid-cols-6">
               <RadarMetric label="信息源" value={latestRuns.length} />
               <RadarMetric label="完成" value={runSummary.completed} tone="success" />
-              <RadarMetric label="异常" value={attentionCount} tone={attentionCount > 0 ? 'danger' : 'default'} />
+              <RadarMetric label="当前异常" value={attentionCount} tone={attentionCount > 0 ? 'danger' : 'default'} />
               <RadarMetric label="今日新增" value={`+${dailyNew}`} tone="success" />
               <RadarMetric label="待评分" value={runSummary.pendingScore} tone={runSummary.pendingScore > 0 ? 'warning' : 'default'} />
               <RadarMetric label="待补全" value={runSummary.pendingEnrichment} tone={runSummary.pendingEnrichment > 0 ? 'warning' : 'default'} />
@@ -687,7 +775,8 @@ function DashboardTab() {
                 ))}
               </div>
               <span className="text-xs text-muted-foreground">
-                {visibleRuns.length} 个结果
+                {visibleRuns.length} 个结果 · 每个来源显示最近一次运行
+                {recoveredCount > 0 ? ` · ${recoveredCount} 个来源已恢复` : ''}
               </span>
             </div>
 
@@ -723,6 +812,15 @@ function DashboardTab() {
                       </td>
                       <td className="px-3 py-2.5">
                         <SyncStatusBadge status={run.status} />
+                        {run.recovered ? (
+                          <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                            已恢复 · 历史失败 {run.historicalFailureCount} 次
+                          </div>
+                        ) : run.attemptCount > 1 ? (
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            第 {run.attemptCount} 次运行
+                          </div>
+                        ) : null}
                         <div className="mt-1 font-mono text-[11px] tabular-nums text-muted-foreground">
                           {formatRunTime(run.completedAt ?? run.createdAt)}
                         </div>
@@ -821,7 +919,14 @@ function DashboardTab() {
                         {formatSourceType(run.sourceType).short} · {run.triggeredBy === 'cron' ? '定时' : '手动'} · {formatRunTime(run.completedAt ?? run.createdAt)}
                       </div>
                     </div>
-                    <SyncStatusBadge status={run.status} />
+                    <div className="text-right">
+                      <SyncStatusBadge status={run.status} />
+                      {run.recovered ? (
+                        <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                          已恢复 · 失败 {run.historicalFailureCount} 次
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
                     <div>
@@ -973,8 +1078,8 @@ function RadarMonitorPanel({
         <RadarMonitorSection title="阅读等级分布" hint={`${levelTotal} 条今日写入内容`}>
           <div className="space-y-2">
             {([
-              ['重点阅读', monitor.readingLevels.collection, 'bg-tier-collection'],
-              ['深度阅读', monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
+              ['核心材料', monitor.readingLevels.collection, 'bg-tier-collection'],
+              ['推荐精读', monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
               ['速览', monitor.readingLevels.skim, 'bg-tier-skim'],
               ['不推荐', monitor.readingLevels.noise, 'bg-tier-noise'],
               ['待评分', monitor.readingLevels.pending, 'bg-muted-foreground'],
@@ -1010,6 +1115,8 @@ function RadarMonitorPanel({
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>规则噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.ruleNoise}</strong></span>
             <span>评分噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.distilledNoise}</strong></span>
+            <span>不可评估 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.unassessable}</strong></span>
+            <span>硬否决 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.hardVeto}</strong></span>
             <span>抓取内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
             <span>待评分 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.pendingScore}</strong></span>
             <span>其他 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.other}</strong></span>
@@ -1059,7 +1166,7 @@ function RadarScoringRules() {
       <div className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold">评分与阅读等级规则</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          总分为 7 个维度的加权分数（0–100）。阅读等级按来源 profile 使用下表阈值；重点阅读还需要满足相关性和工程证据完整度，不是只看总分。
+          总分为 7 个维度的加权分数（0–100）。阅读等级按来源 profile 使用下表阈值；核心材料还需要满足相关性和工程证据完整度，不是只看总分。
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -1067,8 +1174,8 @@ function RadarScoringRules() {
           <thead className="border-b border-border bg-muted/20 text-muted-foreground">
             <tr>
               <th className="px-4 py-2 font-medium">评分 profile</th>
-              <th className="px-3 py-2 font-medium">重点阅读</th>
-              <th className="px-3 py-2 font-medium">深度阅读</th>
+              <th className="px-3 py-2 font-medium">核心材料</th>
+              <th className="px-3 py-2 font-medium">推荐精读</th>
               <th className="px-3 py-2 font-medium">速览</th>
               <th className="px-3 py-2 font-medium">不推荐</th>
             </tr>
@@ -1364,6 +1471,8 @@ function RadarGovernanceTab() {
               <SelectContent>
                 <SelectItem value="all">全部原因</SelectItem>
                 <SelectItem value="DISTILLED_NOISE">评分噪声</SelectItem>
+                <SelectItem value="DISTILLED_UNASSESSABLE">不可评估</SelectItem>
+                <SelectItem value="DISTILLED_HARD_VETO">硬否决</SelectItem>
                 <SelectItem value="RULE_NOISE">规则噪声</SelectItem>
                 <SelectItem value="LOW_QUALITY">内容不足</SelectItem>
                 <SelectItem value="PENDING_SCORE">待评分</SelectItem>
@@ -1542,8 +1651,8 @@ function GovernanceMetric({
 
 function readingTierLabel(tier: string): string {
   return {
-    collection: '重点阅读',
-    deep_read: '深度阅读',
+    collection: '核心材料',
+    deep_read: '推荐精读',
     skim: '速览',
     noise: '不推荐',
     pending: '待评分',

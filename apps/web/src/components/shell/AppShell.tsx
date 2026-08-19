@@ -1,4 +1,5 @@
 import { getCurrentUser } from '@/lib/auth/session';
+import { UnreadIssuesBanner } from './UnreadIssuesBanner';
 import { Topbar } from './Topbar';
 // ⚠️ 必须从 server-safe 模块拿常量：从 './SidebarNav'（'use client'）拿会被 RSC
 // 按 ID 序列化（而不是按值），导致 `[...PRIMARY_NAV]` 在服务端拿到字符串，
@@ -31,6 +32,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col">
       <Topbar navItems={navItems} user={navUser} />
+      <UnreadIssuesBanner />
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-6">{children}</main>
     </div>
   );

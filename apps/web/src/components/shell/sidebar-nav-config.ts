@@ -26,7 +26,7 @@ export interface NavItem {
 
 export const PRIMARY_NAV: NavItem[] = [
   { href: '/radar', label: '技术雷达', icon: 'radar' },
-  { href: '/topics', label: '热点主题', icon: 'topic' },
+  { href: '/topics', label: '技术专题', icon: 'topic' },
   { href: '/researches', label: '调研库', icon: 'research' },
   { href: '/ai-research', label: 'AI 调研', icon: 'aiResearch' },
 ];

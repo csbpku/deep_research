@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from ai_engine.llm.client import generate_text
+from psycopg.rows import dict_row
 
 logger = logging.getLogger("ai_engine.radar.topic_synthesis_v2")
 
@@ -188,6 +189,7 @@ def _normalize(
 
 async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         topic = await (
             await conn.execute(
                 'SELECT "id", "name", "tier" FROM "topics" WHERE "id" = %s',
@@ -221,6 +223,7 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
 
     new_hash = _hash_input(candidate_ids, candidate_titles, tier, window_first_seen)
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         prev = await (
             await conn.execute(
                 'SELECT "synthesisInputHash" FROM "topics" WHERE "id" = %s',
@@ -267,6 +270,7 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
 
 async def _mark_failed(pool: Any, topic_id: str, code: str, message: str) -> None:
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         await conn.execute(
             """
             UPDATE "topics"
@@ -283,6 +287,7 @@ async def _mark_failed(pool: Any, topic_id: str, code: str, message: str) -> Non
 async def _persist_payload(pool: Any, topic_id: str, payload: dict[str, Any]) -> None:
     synthesis_hash = str(payload.pop("_synthesisInputHash", ""))[:64] or None
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         await conn.execute(
             """
             UPDATE "topics"
@@ -311,6 +316,7 @@ async def _persist_payload(pool: Any, topic_id: str, payload: dict[str, Any]) ->
 async def _claim_topics(pool: Any, limit: int) -> list[str]:
     """挑选需要重新生成综述的 topic：input hash 已变 或 上次失败。"""
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         rows = await (
             await conn.execute(
                 """

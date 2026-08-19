@@ -27,15 +27,20 @@ interface PlanResponse {
   brief: {
     objective: Objective;
     question: string;
+    constraints?: string[];
+    questionsToAnswer?: string[];
+    comparisonOptions?: string[];
+    successCriteria?: string[];
+    contextRefs?: Array<{ type: 'url' | 'favorite' | 'research' | 'summary'; value: string; required: boolean }>;
     primaryTopicId?: string;
-    outputType: string;
-    sourcePolicy: string;
+    outputType: 'markdown' | 'slides';
+    sourcePolicy: 'prefer_user_sources' | 'only_user_sources';
   };
-  plan?: { summary: string; estimatedMinutes: number };
+  plan?: { summary: string; steps?: Array<{ title: string; detail?: string }>; estimatedMinutes: number };
   ready: boolean;
   missingFields: string[];
   suggestedTopics: Array<{ topicId: string; slug: string; name: string; confidence: number }>;
-  suggestedContext: Array<{ kind: string; id: string; title: string; snippet: string }>;
+  suggestedContext: Array<{ kind: 'research' | 'knowledge' | 'issue'; id: string; title: string; snippet: string }>;
 }
 
 interface BriefProps {
@@ -50,6 +55,18 @@ export interface BriefValue {
   primaryTopicId?: string;
   suggestedContextIds: string[];
   assistantMessage: string;
+  brief?: {
+    objective: Objective;
+    question: string;
+    constraints: string[];
+    questionsToAnswer: string[];
+    comparisonOptions: string[];
+    successCriteria: string[];
+    sourcePolicy: 'prefer_user_sources' | 'only_user_sources';
+    primaryTopicId?: string;
+    outputType: 'markdown' | 'slides';
+    contextRefs: Array<{ type: 'url' | 'favorite' | 'research' | 'summary'; value: string; required: boolean }>;
+  };
 }
 
 interface FetchState {
@@ -97,6 +114,18 @@ export function AiResearchBrief({ question, context, topicHint, onBriefReady }: 
           primaryTopicId: data.brief.primaryTopicId ?? topicHint,
           suggestedContextIds: [],
           assistantMessage: data.assistantMessage,
+          brief: {
+            objective: data.brief.objective,
+            question: data.brief.question,
+            constraints: data.brief.constraints ?? [],
+            questionsToAnswer: data.brief.questionsToAnswer ?? [],
+            comparisonOptions: data.brief.comparisonOptions ?? [],
+            successCriteria: data.brief.successCriteria ?? [],
+            sourcePolicy: data.brief.sourcePolicy ?? 'prefer_user_sources',
+            primaryTopicId: data.brief.primaryTopicId ?? topicHint,
+            outputType: data.brief.outputType ?? 'markdown',
+            contextRefs: [],
+          },
         });
       })
       .catch((err: unknown) => {
@@ -154,6 +183,18 @@ export function AiResearchBrief({ question, context, topicHint, onBriefReady }: 
       primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
       suggestedContextIds: ids,
       assistantMessage: plan!.assistantMessage,
+      brief: {
+        objective: plan!.brief.objective,
+        question: plan!.brief.question,
+        constraints: plan!.brief.constraints ?? [],
+        questionsToAnswer: plan!.brief.questionsToAnswer ?? [],
+        comparisonOptions: plan!.brief.comparisonOptions ?? [],
+        successCriteria: plan!.brief.successCriteria ?? [],
+        sourcePolicy: plan!.brief.sourcePolicy ?? 'prefer_user_sources',
+        primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
+        outputType: plan!.brief.outputType ?? 'markdown',
+        contextRefs: idsToContextRefs(ids, plan!.brief.contextRefs ?? []),
+      },
     });
   }
 
@@ -241,6 +282,16 @@ function translateMissing(field: string): string {
   return field;
 }
 
+
+/** 把 acceptedContextIds + plan.brief.contextRefs 合并成可发送的 contextRefs。 */
+function idsToContextRefs(
+  ids: string[],
+  fallback: Array<{ type: 'url' | 'favorite' | 'research' | 'summary'; value: string; required: boolean }>,
+): Array<{ type: 'url' | 'favorite' | 'research' | 'summary'; value: string; required: boolean }> {
+  if (ids.length === 0) return fallback;
+  const idSet = new Set(ids);
+  return fallback.filter((r) => r.type === 'url' || idSet.has(r.value));
+}
 function _IGNORE_FUNCTION_REFERENCES_FOR_TSC() {
   // 帮助 tsc 接受 IGNORE_PREFIX 字段在部分构建配置下不被误读
   return IGNORE_PREFIX;

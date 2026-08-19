@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_engine.llm.client import generate_text
+from psycopg.rows import dict_row
 
 logger = logging.getLogger("ai_engine.radar.topic_issue_worker")
 
@@ -62,6 +63,7 @@ async def _fetch_topic_inputs(
     pool: Any, topic_id: str, window_start: datetime
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         topic = await (
             await conn.execute(
                 'SELECT "id", "name", "tier" FROM "topics" WHERE "id" = %s',
@@ -212,6 +214,7 @@ def _normalize_issues(raw: dict[str, Any], valid_ids: set[str]) -> list[dict[str
 
 async def _existing_active_titles(pool: Any, topic_id: str) -> set[str]:
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         rows = await (
             await conn.execute(
                 'SELECT "title" FROM "topic_issues" WHERE "topicId" = %s AND "status" = %s',
@@ -239,6 +242,7 @@ async def _persist_issue(
     last_seen = max((r["addedAt"] for r in group_rows), default=datetime.now(UTC))
 
     async with pool.connection() as conn, conn.transaction():
+        conn.row_factory = dict_row
         existing = await (
             await conn.execute(
                 'SELECT "id" FROM "topic_issues" WHERE "topicId" = %s AND "title" = %s AND "status" = %s',
@@ -347,6 +351,7 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
 async def _claim_topics(pool: Any, limit: int) -> list[str]:
     """挑候选 topic：过去 14 天新增 candidate >= 3 或有 authoritative must-read。"""
     async with pool.connection() as conn:
+        conn.row_factory = dict_row
         rows = await (
             await conn.execute(
                 """

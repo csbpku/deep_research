@@ -45,6 +45,16 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     todayFailedDiagnostics,
     todayRadarAccepted,
     stuckRadarSources,
+    // ADR 0010: 认知闭环 V2 关键产品事件计数
+    topicResearchStarted7d,
+    researchPlanConfirmed7d,
+    researchContextReused7d,
+    researchDraftOpened7d,
+    researchReopenedFromTopic7d,
+    topicIssueViewed7d,
+    topicViewedWithUnread7d,
+    topicFollowed7d,
+    topicUnfollowed7d,
   ] = await Promise.all([
     prisma.shareSubmission.count({ where: { status: 'pending' } }),
     prisma.comment.count({ where: { promoteStatus: 'nominated' } }),
@@ -148,6 +158,16 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         lastSyncAt: true,
       } as unknown as never,
     }),
+    // ADR 0010: 认知闭环 V2 关键产品事件计数
+    prisma.productEvent.count({ where: { eventName: 'topic_research_started', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'research_plan_confirmed', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'research_context_reused', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'research_draft_opened', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'research_reopened_from_topic', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'topic_issue_viewed', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'topic_viewed_with_unread', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'topic_followed', occurredAt: { gte: sevenDaysAgo } } }),
+    prisma.productEvent.count({ where: { eventName: 'topic_unfollowed', occurredAt: { gte: sevenDaysAgo } } }),
   ]);
 
   const radarRunSummary = todayRadarRuns.reduce(
@@ -183,7 +203,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       new: 0,
       skipped: 0,
       failedItems: 0,
-      skipReasons: { existing: 0, ruleNoise: 0, distilledNoise: 0, conflict: 0, other: 0 },
+      skipReasons: { existing: 0, ruleNoise: 0, distilledNoise: 0, unassessable: 0, hardVeto: 0, conflict: 0, other: 0 },
       failures: [] as Array<{ code: string; count: number; sources: string[] }>,
     },
   );
@@ -236,18 +256,20 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     || candidate.distilledTier === 'skim',
   ).length;
   const todayGovernanceNoise = todayFilteredDiagnostics.filter(
-    (item) => item.reasonCode === 'DISTILLED_NOISE',
+    (item) => ['DISTILLED_NOISE', 'DISTILLED_UNASSESSABLE', 'DISTILLED_HARD_VETO'].includes(item.reasonCode),
   ).length;
   const governanceSkipReasons = todayFilteredDiagnostics.reduce(
     (counts, item) => {
       if (item.reasonCode === 'RULE_NOISE') counts.ruleNoise += 1;
       else if (item.reasonCode === 'DISTILLED_NOISE') counts.distilledNoise += 1;
+      else if (item.reasonCode === 'DISTILLED_UNASSESSABLE') counts.unassessable += 1;
+      else if (item.reasonCode === 'DISTILLED_HARD_VETO') counts.hardVeto += 1;
       else if (item.reasonCode === 'LOW_QUALITY') counts.lowQuality += 1;
       else if (item.reasonCode === 'PENDING_SCORE') counts.pendingScore += 1;
       else counts.other += 1;
       return counts;
     },
-    { ruleNoise: 0, distilledNoise: 0, lowQuality: 0, pendingScore: 0, other: 0 },
+    { ruleNoise: 0, distilledNoise: 0, unassessable: 0, hardVeto: 0, lowQuality: 0, pendingScore: 0, other: 0 },
   );
   const acceptedCanonicalUrls = new Set(todayRadarAccepted.map((item) => item.canonicalUrl));
   const failedCanonicalUrls = new Set(todayFailedDiagnostics.map((item) => item.canonicalUrl));
@@ -307,6 +329,18 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       monthUsdCents: monthAiCostCents._sum.costCents ?? 0,
       // 简单显示：cents 转 dollars（保留精度）
       monthUsd: ((monthAiCostCents._sum.costCents ?? 0) / 100).toFixed(2),
+    },
+    // ADR 0010: 认知闭环 V2 — 关键产品事件计数（最近 7 天）
+    cognitionLoop: {
+      topicResearchStarted: topicResearchStarted7d,
+      researchPlanConfirmed: researchPlanConfirmed7d,
+      researchContextReused: researchContextReused7d,
+      researchDraftOpened: researchDraftOpened7d,
+      researchReopenedFromTopic: researchReopenedFromTopic7d,
+      topicIssueViewed: topicIssueViewed7d,
+      topicViewedWithUnread: topicViewedWithUnread7d,
+      topicFollowed: topicFollowed7d,
+      topicUnfollowed: topicUnfollowed7d,
     },
     // 雷达最近同步状态
     radar: {

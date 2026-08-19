@@ -176,17 +176,40 @@ export function AiResearchConversation() {
     setError(null);
     setSubmitting(true);
     try {
+      // V2: 当页面已完成规划（brief 可用）时，提交 V2 入参；
+      // 否则回退到 V1 字段以保证老流程可用。
+      const submitBody = brief
+        ? {
+            brief: brief.brief
+              ? {
+                  ...brief.brief,
+                  question: brief.brief.question || topic.trim(),
+                  sourcePolicy: sourcePolicy as 'prefer_user_sources' | 'only_user_sources',
+                  outputType: (reportType === 'slides' ? 'slides' : 'markdown') as 'markdown' | 'slides',
+                }
+              : undefined,
+            topic: topic.trim(),
+            context: context.trim() || undefined,
+            reportType,
+            reportLength: reportType === 'summary_brief' ? 'brief' : reportType === 'slides' ? 'deep' : 'standard',
+            sourcePolicy,
+            sourceRefs,
+            primaryTopicId: brief.primaryTopicId,
+            idempotencyKey: crypto.randomUUID(),
+          }
+        : {
+            topic: topic.trim(),
+            context: context.trim() || undefined,
+            reportType,
+            sourcePolicy,
+            sourceRefs,
+            idempotencyKey: crypto.randomUUID(),
+          };
+
       const response = await fetch('/api/ai-research', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          topic: topic.trim(),
-          context: context.trim() || undefined,
-          reportType,
-          sourcePolicy,
-          sourceRefs,
-          idempotencyKey: crypto.randomUUID(),
-        }),
+        body: JSON.stringify(submitBody),
       });
       if (!response.ok) {
         setError(friendlyMessage(await toApiHttpError(response, '提交失败'), '提交失败，请稍后重试。'));

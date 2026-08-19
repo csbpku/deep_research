@@ -18,6 +18,7 @@ import os
 import sys
 
 import psycopg
+from psycopg_pool import AsyncConnectionPool
 from dotenv import load_dotenv
 
 logger = logging.getLogger("ai_engine.backfill_cognition_v2")
@@ -42,7 +43,8 @@ async def _run() -> int:
         await conn.commit()
         print("cleared synthesis hash + bumped version to v2")
 
-    pool = await psycopg.AsyncConnectionPool.connect(dsn, min_size=1, max_size=2)
+    pool = AsyncConnectionPool(dsn, min_size=1, max_size=2, open=False)
+    await pool.open()
     try:
         issue_stats = await run_topic_issue_worker(pool)
         synth_stats = await run_topic_synthesis_v2(pool)
