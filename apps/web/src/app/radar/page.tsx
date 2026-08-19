@@ -4,7 +4,7 @@
 //
 // 功能：
 //  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
-//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（重点阅读 / 深度阅读）
+//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（核心材料 / 推荐精读）
 //  - 分页（Pagination domain component）
 //  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
 
@@ -64,6 +64,14 @@ interface RadarCandidateListItem {
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
   commentCount: number;
+  topics: Array<{ id: string; slug: string; name: string; tier: string }>;
+  issues: Array<{
+    id: string;
+    title: string;
+    kind: 'event' | 'problem';
+    importanceScore: number;
+    topic: { id: string; slug: string; name: string };
+  }>;
 }
 
 interface RadarListResponse {
@@ -83,15 +91,17 @@ const SOURCE_TYPE_OPTIONS = [
 ];
 
 const QUALITY_OPTIONS = [
-  { value: 'collection', label: '重点阅读' },
-  { value: 'deep_read', label: '深度阅读' },
+  { value: 'collection', label: '核心材料' },
+  { value: 'deep_read', label: '推荐精读' },
   { value: 'skim', label: '速览' },
 ];
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 'all'] as const;
 type QualityValue = (typeof QUALITY_OPTIONS)[number]['value'];
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
-const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read'];
+// Default shows every tier above noise so the daily radar surfaces 30-70
+// items, not 0-4. Users can still narrow to collection/deep_read only.
+const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read', 'skim'];
 
 const DATE_OPTIONS = [
   { value: 'all', label: '全部时间' },

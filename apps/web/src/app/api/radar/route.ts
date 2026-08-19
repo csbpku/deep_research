@@ -20,6 +20,7 @@ import { RadarListQuery } from '../../../lib/schemas';
 import {
   aggregateFeedbacks,
   matchesQuery,
+  normalizeRadarQuery,
   shapeCandidate,
 } from '../../../lib/radar/shape';
 import { ERROR_CODES } from '@deep-research/shared/errors';
@@ -145,8 +146,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             {
               OR: [
                 { title: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+                { title: { contains: normalizeRadarQuery(q), mode: 'insensitive' as Prisma.QueryMode } },
+                { url: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
                 { interpretation: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
-                { tags: { has: q } },
+                { interpretation: { contains: normalizeRadarQuery(q), mode: 'insensitive' as Prisma.QueryMode } },
+                { tags: { hasSome: [q, normalizeRadarQuery(q)] } },
               ],
             },
           ]
@@ -197,6 +201,31 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           },
         },
         _count: { select: { comments: true } },
+        // ADR 0010: 雷达候选附带的专题与热点议题标签
+        topicLinks: {
+          select: {
+            topic: {
+              select: { id: true, slug: true, name: true, tier: true },
+            },
+          },
+          take: 6,
+        },
+        issueCandidates: {
+          where: { issue: { status: 'active' } },
+          select: {
+            issue: {
+              select: {
+                id: true,
+                title: true,
+                kind: true,
+                importanceScore: true,
+                topicId: true,
+                topic: { select: { id: true, slug: true, name: true } },
+              },
+            },
+          },
+          take: 6,
+        },
       },
     }),
     includeTotal ? prisma.summary.count({ where }) : Promise.resolve(null),
@@ -212,6 +241,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     matchesQuery({
       query: q && q.length > 0 ? q : undefined,
       title: it.title,
+      url: it.url,
       interpretation: it.interpretation,
       tags: it.tags,
     }),

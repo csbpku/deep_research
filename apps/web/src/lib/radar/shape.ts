@@ -73,6 +73,8 @@ export type RadarCandidateShape = {
   sections: Array<{ title: string; level: number; startOffset: number; page?: number }> | null;
   figures: Array<{ page: number; caption?: string; dataUrl?: string }> | null;
   authors: string[];
+  topics: Array<{ id: string; slug: string; name: string; tier: string }>;
+  issues: Array<{ id: string; title: string; kind: 'event' | 'problem'; importanceScore: number; topic: { id: string; slug: string; name: string } }>;
 };
 
 /** 列表默认反馈计数（避免每个候选都 groupBy 一次）。 */
@@ -121,6 +123,8 @@ export function shapeCandidate(input: {
       source: { sourceType: string; name: string } | null;
     } | null;
     _count?: { comments: number };
+    topicLinks?: Array<{ topic: { id: string; slug: string; name: string; tier: string } }>;
+    issueCandidates?: Array<{ issue: { id: string; title: string; kind: 'event' | 'problem'; importanceScore: number; topic: { id: string; slug: string; name: string } } }>;
   };
   feedbackCounts?: RadarFeedbackCount;
   myFeedbacks?: RadarFeedbackType[];
@@ -177,6 +181,8 @@ export function shapeCandidate(input: {
       ? (s.figures as Array<{ page: number; caption?: string; dataUrl?: string }>)
       : null,
     authors: Array.isArray(s.authors) ? s.authors : [],
+    topics: (s.topicLinks ?? []).map((tl) => tl.topic),
+    issues: (s.issueCandidates ?? []).map((ic) => ic.issue),
   };
 }
 
@@ -415,19 +421,35 @@ export function normalizeTags(tags: readonly string[]): string[] {
   return out;
 }
 
+/** Normalize common identifier separators so `foo-bar`, `foo_bar`, and
+ * `foo bar` are treated as the same search phrase. */
+export function normalizeRadarQuery(value: string): string {
+  return value.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+}
+
 /**
- * 过滤 query 是否匹配候选的 title / interpretation / tags。
- * 简单大小写不敏感 substring；不在 DB 做全文检索（W5 不开 search_docs 路径）。
+ * 过滤 query 是否匹配候选的 title / URL / interpretation / tags。
+ * 除大小写不敏感 substring 外，统一连字符、下划线和空格。
  */
 export function matchesQuery(input: {
   query: string | undefined;
   title: string;
+  url?: string;
   interpretation: string | null;
   tags: string[];
 }): boolean {
   if (!input.query || input.query.length === 0) return true;
   const q = input.query.toLowerCase();
+  const normalizedQuery = normalizeRadarQuery(input.query);
   if (input.title.toLowerCase().includes(q)) return true;
-  if (input.interpretation && input.interpretation.toLowerCase().includes(q)) return true;
-  return input.tags.some((t) => t.toLowerCase().includes(q));
+  if (input.url?.toLowerCase().includes(q)) return true;
+  if (normalizeRadarQuery(input.title).includes(normalizedQuery)) return true;
+  if (input.interpretation && (
+    input.interpretation.toLowerCase().includes(q)
+    || normalizeRadarQuery(input.interpretation).includes(normalizedQuery)
+  )) return true;
+  return input.tags.some((t) => (
+    t.toLowerCase().includes(q)
+    || normalizeRadarQuery(t).includes(normalizedQuery)
+  ));
 }

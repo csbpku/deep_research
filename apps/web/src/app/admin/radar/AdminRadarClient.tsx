@@ -50,6 +50,14 @@ interface RadarCandidateListItem {
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
   commentCount: number;
+  topics: Array<{ id: string; slug: string; name: string; tier: string }>;
+  issues: Array<{
+    id: string;
+    title: string;
+    kind: 'event' | 'problem';
+    importanceScore: number;
+    topic: { id: string; slug: string; name: string };
+  }>;
 }
 
 interface RadarListResponse {

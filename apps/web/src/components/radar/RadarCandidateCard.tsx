@@ -11,7 +11,7 @@ import { RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
-import { MessageSquare } from 'lucide-react';
+import { BookOpenCheck, MessageSquare, Sparkles } from 'lucide-react';
 import { CommentSection } from '@/components/CommentSection';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,14 @@ interface RadarCandidate {
   feedbackCounts: RadarFeedbackCounts;
   myFeedbacks: RadarFeedbackType[];
   commentCount: number;
+  topics: Array<{ id: string; slug: string; name: string; tier: string }>;
+  issues: Array<{
+    id: string;
+    title: string;
+    kind: 'event' | 'problem';
+    importanceScore: number;
+    topic: { id: string; slug: string; name: string };
+  }>;
 }
 
 interface RadarCandidateCardProps {
@@ -97,17 +105,18 @@ export function RadarCandidateCard({
   const isAdminQueue = Boolean(adminActions);
   const resolvedDetailHref = detailHref ?? `/radar/${candidate.id}`;
   const tier = candidate.distilledScore?.tier ?? null;
+  const contentPending = candidate.tags.includes('content_pending');
   const tierScore = candidate.distilledScore?.rankingScore
     ?? candidate.distilledScore?.effectiveTotal
     ?? candidate.distilledScore?.total
     ?? null;
   const tierLabel =
     tier === 'deep_read'
-        ? '深度阅读'
+        ? '推荐精读'
         : tier === 'skim'
-          ? '略读'
+          ? '速览'
         : tier === 'collection'
-          ? '重点阅读'
+          ? '核心材料'
           : tier === 'noise'
             ? '不推荐'
             : null;
@@ -130,6 +139,11 @@ export function RadarCandidateCard({
       <header className="flex flex-wrap items-center gap-2">
         <SourcePill sourceType={candidate.sourceType} />
         {isAdminQueue ? <StatusBadge kind="radar" value={candidate.status} /> : null}
+        {contentPending ? (
+          <span className="inline-flex items-center rounded-full border border-amber-300/70 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-100">
+            正文待补抓
+          </span>
+        ) : null}
         {isAdminQueue && candidate.sortOrder !== null ? (
           <span className="font-mono text-[11px] text-muted-foreground">#{candidate.sortOrder}</span>
         ) : null}
@@ -145,6 +159,36 @@ export function RadarCandidateCard({
         {candidate.title}
       </Link>
 
+      {candidate.topics.length > 0 || candidate.issues.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5 pt-1" aria-label="关联专题与议题">
+          {candidate.topics.map((t) => (
+            <Link
+              key={`topic-${t.id}`}
+              href={`/topics/${t.slug}`}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary"
+            >
+              <BookOpenCheck className="size-3" />
+              {t.name}
+            </Link>
+          ))}
+          {candidate.issues.slice(0, 2).map((iss) => (
+            <Link
+              key={`issue-${iss.id}`}
+              href={`/topics/${iss.topic.slug}`}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]',
+                iss.kind === 'event'
+                  ? 'border border-status-running-border bg-status-running-bg text-status-running-fg'
+                  : 'border border-status-failed-border bg-status-failed-bg text-status-failed-fg',
+              )}
+            >
+              <Sparkles className="size-3" />
+              {iss.title.slice(0, 30)}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
       {candidate.interpretation ? (
         <p className="line-clamp-2 text-sm leading-7 text-muted-foreground">
           <span className="mr-1.5 text-[11px] text-foreground/70">AI 解读：</span>
@@ -157,7 +201,9 @@ export function RadarCandidateCard({
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
-        {tierLabel ? (
+        {contentPending ? (
+          <span className="text-[11px] text-muted-foreground">完整正文后再评分</span>
+        ) : tierLabel ? (
           <span className={tierClass} title={tierLabel ?? undefined}>
             {tierLabel}
             {tierScore !== null ? (
