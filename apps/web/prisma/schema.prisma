@@ -326,6 +326,7 @@ model Summary {
   seedChatSessions   AiChatSession[]          @relation("summary_seed_chat")
   radarSubmission    RadarSubmission?         @relation("radar_submission_to_summary")
   topicLinks         TopicCandidate[]         @relation("topic_candidate_summary")
+  issueCandidates    TopicIssueCandidate[]    @relation("issue_candidate_summary")
   topicProposalLinks TopicProposalCandidate[]
 
   @@index([source, createdAt(sort: Desc)])
@@ -384,6 +385,7 @@ model Research {
   comments        Comment[]         @relation("comments_research")
   sourceAiJob     AiResearchJob?    @relation("ai_job_draft")
   sourceImportJob ContentImportJob? @relation("import_job_output")
+  researchTopics ResearchTopic[]
 
   @@index([type, publishedAt(sort: Desc)])
   @@index([authorId, status])
@@ -480,11 +482,18 @@ model AiResearchJob {
   outputText       String?   @db.Text
   // 生成的研究草稿 id
   draftResearchId  String?   @unique @db.Uuid
+  // ADR 0010: 调研目标
+  objective        String    @default("investigate") @db.VarChar(20)
+  brief            Json?     @db.JsonB
+  plan             Json?     @db.JsonB
+  // ADR 0010: 自动 / 手动关联到 Topic
+  primaryTopicId   String?   @db.Uuid
   createdAt        DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
 
   requester     User      @relation(fields: [requesterId], references: [id], onDelete: Restrict)
   draftResearch Research? @relation("ai_job_draft", fields: [draftResearchId], references: [id], onDelete: SetNull)
+  primaryTopic  Topic?    @relation("ai_job_primary_topic", fields: [primaryTopicId], references: [id], onDelete: SetNull)
 
   aiResearchSources AiResearchSource[]
 
@@ -495,6 +504,7 @@ model AiResearchJob {
   // @@unique([requesterId, idempotencyKey]) 改为 partial unique（idempotencyKey 非空）
   // 由 migrations/init_constraints 加，避免 PG 段 非 partial + partial unique 冲突
   @@index([requesterId, createdAt(sort: Desc)])
+  @@index([primaryTopicId, createdAt(sort: Desc)])
   @@map("ai_research_jobs")
 }
 
@@ -910,6 +920,62 @@ model AdminAction {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// 17a. topic_issues — 专题内短期事件 / 问题（ADR 0010）
+//  AI 在 Topic 内部聚类产生；用户只能关注 Topic，不能直接关注 Issue。
+// ─────────────────────────────────────────────────────────────────────
+model TopicIssue {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  topicId         String          @db.Uuid
+  kind            TopicIssueKind
+  status          TopicIssueStatus @default(active)
+  title           String          @db.VarChar(200)
+  proposition     String          @db.VarChar(1000)
+  summary         String?         @db.VarChar(2000)
+  importanceScore Float           @default(0)
+  firstSeenAt     DateTime        @default(now()) @db.Timestamptz(3)
+  lastSeenAt      DateTime        @default(now()) @db.Timestamptz(3)
+  synthesisPayload Json?          @db.JsonB
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @db.Timestamptz(3)
+
+  topic      Topic               @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  candidates TopicIssueCandidate[]
+
+  @@index([topicId, status, lastSeenAt(sort: Desc)])
+  @@index([topicId, importanceScore(sort: Desc)])
+  @@map("topic_issues")
+}
+
+model TopicIssueCandidate {
+  issueId        String   @db.Uuid
+  summaryId      String   @db.Uuid
+  relevanceScore Float?
+  addedAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  issue   TopicIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  summary Summary    @relation("issue_candidate_summary", fields: [summaryId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, summaryId])
+  @@index([summaryId])
+  @@map("topic_issue_candidates")
+}
+
+// ADR 0010: Research <-> Topic 多对多，研究发布时自动回流专题
+model ResearchTopic {
+  researchId   String                @db.Uuid
+  topicId      String                @db.Uuid
+  relationType ResearchTopicRelation @default(auto)
+  createdAt    DateTime              @default(now()) @db.Timestamptz(3)
+
+  research Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  topic    Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@id([researchId, topicId])
+  @@index([topicId, createdAt(sort: Desc)])
+  @@map("research_topics")
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // 18. ai_chat_sessions — Week 6 AI 多轮追问会话（架构 §六点一）
 //   每个 session 绑定一个用户 + 一篇种子摘要快照(seedSnapshot)。
 //   seedSummaryId nullable 以便后续支持 free-form 会话。
@@ -964,6 +1030,34 @@ model AiChatMessage {
 
   @@index([sessionId, createdAt(sort: Asc)])
   @@map("ai_chat_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 20. llm_usage_events — 每次模型调用的用量与降级审计
+// ─────────────────────────────────────────────────────────────────────
+
+model LlmUsageEvent {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  operation      String   @db.VarChar(120)
+  requestId      String?  @db.VarChar(128)
+  provider       String   @db.VarChar(32)
+  requestedModel String   @db.VarChar(160)
+  actualModel    String?  @db.VarChar(160)
+  fallbackModel  String?  @db.VarChar(160)
+  usedFallback   Boolean  @default(false)
+  status         String   @db.VarChar(16)
+  errorKind      String?  @db.VarChar(64)
+  errorMessage   String?  @db.VarChar(500)
+  inputTokens    Int?
+  outputTokens   Int?
+  costCents      Int?
+  latencyMs      Int?
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([operation, createdAt(sort: Desc)])
+  @@index([requestedModel, createdAt(sort: Desc)])
+  @@map("llm_usage_events")
 }
 
 // Phase 3: Radar deep-dive inline annotations (W3C Web Annotation aligned).
@@ -1116,6 +1210,23 @@ enum TopicTier {
   emerging
 }
 
+// ADR 0010: TopicIssue kind / status
+enum TopicIssueKind {
+  event
+  problem
+}
+
+enum TopicIssueStatus {
+  active
+  resolved
+  archived
+}
+
+enum ResearchTopicRelation {
+  auto
+  manual
+}
+
 enum TopicCandidateReason {
   auto
   admin_manual
@@ -1140,6 +1251,8 @@ model Topic {
   summary                String?   @db.VarChar(2000)
   tier                   TopicTier @default(emerging)
   candidateCount         Int       @default(0)
+  // ADR 0010: 上次生成综述时的候选数，用于检测增量输入变化
+  previousCandidateCount Int       @default(0)
   sourceCount            Int       @default(0)
   aggregationWindowStart DateTime  @db.Timestamptz(3)
   aggregationWindowEnd   DateTime  @db.Timestamptz(3)
@@ -1147,7 +1260,9 @@ model Topic {
   synthesisGeneratedAt   DateTime? @db.Timestamptz(3)
   lastSynthesisSuccessAt DateTime? @db.Timestamptz(3)
   synthesisModel         String?   @db.VarChar(64)
-  synthesisVersion       String?   @db.VarChar(16)
+  synthesisVersion       String?   @default("v2") @db.VarChar(16)
+  // ADR 0010: 综述输入 hash；变化时才重生成
+  synthesisInputHash     String?   @db.VarChar(64)
   synthesisPayload       Json?     @db.JsonB
   synthesisErrorCode     String?   @db.VarChar(64)
   synthesisErrorMessage  String?   @db.VarChar(500)
@@ -1160,6 +1275,9 @@ model Topic {
 
   candidates TopicCandidate[]
   followers  TopicFollow[]
+  issues     TopicIssue[]
+  researches ResearchTopic[]
+  aiJobs     AiResearchJob[] @relation("ai_job_primary_topic")
 
   @@index([tier, candidateCount(sort: Desc), updatedAt(sort: Desc)])
   @@index([aggregationWindowEnd(sort: Desc)])
@@ -1183,10 +1301,12 @@ model TopicCandidate {
 }
 
 model TopicFollow {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String   @db.Uuid
-  topicId   String   @db.Uuid
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @db.Uuid
+  topicId      String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  // ADR 0010: 用户上次进入专题详情时间，用于未读议题计数
+  lastViewedAt DateTime? @db.Timestamptz(3)
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)

@@ -1,32 +1,36 @@
-// BFF handler: 提交 AI 调研任务（架构 §七 POST /api/ai-research）。
+// BFF handler: POST /api/ai-research — 创建并提交 AI 调研任务。
 //
 // 契约源：
-//   - packages/shared/src/schemas.ts CreateAiJobInput
+//   - packages/shared/src/schemas.ts CreateAiJobInput / CreateAiJobInputV2
 //   - docs/contracts/api-schemas.md §路由前缀：/api/ai/* 由 web 反代 ai-engine
 //   - docs/contracts/error-codes.md §"AI 调研" 错误码（透传）
-//   - docs/contracts/metrics.md：ai_research_submitted 在提交事务写入（Week 5+ 在
-//     ai-engine worker 内写；本端 P0 不重复写，ai-engine 后续会接管）
 //
 // BFF 行为：
-//   1. requireUser（未登录 → 401 AUTH_NOT_AUTHENTICATED；满足验收 6）
-//   2. zod 解析 CreateAiJobInput
-//   3. server 端补 requester_id（不允许客户端传；当前 ai-engine SubmitAiJobBody 接受
-//      requester_id 字段，按 contracts/api-schemas.md Python 镜像约定存在）
-//   4. forward 到 AI_ENGINE_URL/api/ai/jobs（Fetch + 超时 + x-request-id 透传）
-//   5. 把 ai-engine 的 status_code + body 透回客户端；BFF 不消费业务字段
+//   1. requireUser
+//   2. 优先按 V2 入参解析（brief / objective / primaryTopicId），缺时回退 V1
+//   3. 持久化 AiResearchJob（含 objective / brief / primaryTopicId）
+//   4. 若 primaryTopicId 提供，自动 upsert TopicFollow（auto-on-research）
+//   5. 转发到 ai-engine 的 /api/ai/jobs（沿用旧 job_id + topic 串）
+//   6. 把 ai-engine 的 status + body 透回客户端
 //
-// 不在 BFF 做配额校验 —— 配额由 ai-engine 在 Week 5 落库时检查（架构 §九 风险 4）；
-// 本周 ai-engine 同步执行 fake adapter，配额不生效；用户契约由 ai-engine 错误码承担。
+// V2 不动 ai-engine，brief 仅作为本地元数据为后续 optimize /
+// 卡片展示做准备；研究真正执行仍由 GPT Researcher 跑。
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { CreateAiJobInput } from '@deep-research/shared/schemas';
+import {
+  CreateAiJobInput,
+  CreateAiJobInputV2,
+} from '@deep-research/shared/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
-import { apiHandler, parseBody } from '../../../lib/api-handler';
-import { requireUser } from '../../../lib/auth/session';
-import { toApiErrorResponse } from '../../../lib/errors';
-import { log, withRequestId, serializeError } from '../../../lib/log';
-import { getWebEnv } from '../../../lib/env';
+
+import { apiHandler, parseBody } from '@/lib/api-handler';
+import { requireUser } from '@/lib/auth/session';
+import { toApiErrorResponse } from '@/lib/errors';
+import { log, withRequestId } from '@/lib/log';
+import { getWebEnv } from '@/lib/env';
+import { prisma } from '@/lib/db';
+import { recordProductEvent } from '@/lib/product-events';
 
 const AI_ENGINE_TIMEOUT_MS = 10_000;
 
@@ -45,33 +49,144 @@ interface SubmitAiJobBodyOut {
   request_id?: string | null;
 }
 
+export const dynamic = 'force-dynamic';
+
+function briefFallbackTopic(
+  brief: { question: string } | undefined,
+  v1Topic: string | undefined,
+): string {
+  const candidate = (brief?.question ?? v1Topic ?? '').trim();
+  return candidate.slice(0, 200);
+}
+
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
   if (u instanceof NextResponse) return u;
 
-  const body = await parseBody(req, CreateAiJobInput);
-  if (body instanceof NextResponse) return body;
+  // V2 入参优先；缺 brief 时回退到 V1 输入。
+  let v2: ReturnType<typeof CreateAiJobInputV2.parse> | null = null;
+  let v1: ReturnType<typeof CreateAiJobInput.parse> | null = null;
 
-  // server-side override: requester_id = current user
-  // 不接受客户端传入的 requester_id；ai-engine 仍允许接收以便测试，但生产端 web 必须 override
-  const payload = {
-    job_id: cryptoUuid(),
+  const bodyText = await req.text();
+  let parsedAny: unknown;
+  try {
+    parsedAny = JSON.parse(bodyText);
+  } catch {
+    parsedAny = null;
+  }
+  if (parsedAny && typeof parsedAny === 'object' && 'brief' in (parsedAny as Record<string, unknown>)) {
+    const parsed = CreateAiJobInputV2.safeParse(parsedAny);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          code: 'VALIDATION_FAILED',
+          message: '创建调研请求校验失败',
+          details: parsed.error.flatten(),
+          requestId,
+        },
+        { status: 422 },
+      );
+    }
+    v2 = parsed.data;
+  } else {
+    const parsed = CreateAiJobInput.safeParse(parsedAny);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          code: 'VALIDATION_FAILED',
+          message: '创建调研请求校验失败',
+          details: parsed.error.flatten(),
+          requestId,
+        },
+        { status: 422 },
+      );
+    }
+    v1 = parsed.data;
+  }
+
+  const topic = briefFallbackTopic(v2?.brief, v1?.topic);
+  const reportType = v2?.reportType ?? v1?.reportType ?? 'research_report';
+  const sourcePolicy = v2?.sourcePolicy ?? v1?.sourcePolicy ?? 'prefer_user_sources';
+  const sourceRefs = v2?.sourceRefs ?? v1?.sourceRefs ?? [];
+  const objective = v2?.brief?.objective ?? (v1 ? 'investigate' : 'investigate');
+  const primaryTopicId = v2?.primaryTopicId ?? v2?.brief?.primaryTopicId ?? null;
+  const brief = v2?.brief ?? null;
+  const context = v2?.context ?? v1?.context ?? null;
+  const idempotencyKey = v2?.idempotencyKey ?? v1?.idempotencyKey ?? null;
+
+  // 1. 落库 AiResearchJob（先有 id，方便后续埋点 / 草稿关联）
+  let jobId: string;
+  try {
+    const job = await prisma.aiResearchJob.create({
+      data: {
+        requesterId: u.id,
+        topic,
+        context,
+        reportType,
+        sourcePolicy,
+        objective,
+        brief: brief ?? undefined,
+        primaryTopicId,
+        sourceRefs: sourceRefs,
+        partialSources: [],
+        failedSources: [],
+        idempotencyKey,
+      },
+      select: { id: true },
+    });
+    jobId = job.id;
+  } catch (err) {
+    log.error('ai.bff.create_job_failed', 'create failed', { requestId, userId: u.id, error: String(err) });
+    return NextResponse.json(
+      {
+        code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
+        message: '创建调研任务失败',
+        requestId,
+      },
+      { status: 503 },
+    );
+  }
+
+  // 2. 自动关注主专题（高置信匹配由 /api/ai-research/plan 提供）
+  if (primaryTopicId) {
+    const exists = await prisma.topic.findUnique({
+      where: { id: primaryTopicId },
+      select: { id: true, slug: true },
+    });
+    if (exists) {
+      await prisma.topicFollow.upsert({
+        where: { userId_topicId: { userId: u.id, topicId: exists.id } },
+        create: { userId: u.id, topicId: exists.id },
+        update: {},
+      });
+      await recordProductEvent({
+        userId: u.id,
+        eventType: 'topic_research_started',
+        targetType: 'topic',
+        targetId: exists.id,
+        metadata: { jobId, slug: exists.slug, objective },
+      });
+    }
+  }
+
+  // 3. 转发到 ai-engine（沿用旧 topic / context / reportType / sourcePolicy 语义）
+  const env = getWebEnv();
+  const url = `${env.AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/jobs`;
+  const upstreamPayload = {
+    job_id: jobId,
     requester_id: u.id,
-    topic: body.topic,
-    context: body.context ?? null,
-    report_type: body.reportType,
-    source_policy: body.sourcePolicy,
-    idempotency_key: body.idempotencyKey ?? null,
-    source_refs: body.sourceRefs.map((r) => ({
+    topic,
+    context: context ?? null,
+    report_type: reportType,
+    source_policy: sourcePolicy,
+    idempotency_key: idempotencyKey,
+    source_refs: sourceRefs.map((r) => ({
       type: r.type,
       value: r.value,
       required: r.required,
     })),
   };
-
-  const env = getWebEnv();
-  const url = `${env.AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/jobs`;
 
   let upstreamRes: Response;
   try {
@@ -79,38 +194,31 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     const timer = setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
     upstreamRes = await fetch(url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-request-id': requestId,
-      },
-      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+      body: JSON.stringify(upstreamPayload),
       signal: ac.signal,
+      cache: 'no-store',
     });
-    clearTimeout(timer);
   } catch (err) {
-    log.warn('ai.bff.submit', 'upstream fetch failed', {
-      requestId,
-      err: serializeError(err),
-      upstream: url,
-    });
+    log.error('ai.bff.upstream_unreachable', 'upstream unreachable', { requestId, jobId, error: String(err) });
     return toApiErrorResponse({
       code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
-      message: 'ai-engine 不可达',
+      message: 'AI engine 不可达',
       requestId,
     });
   }
 
   const upstreamBody = await upstreamRes.text();
+
   if (!upstreamRes.ok) {
     let parsed: { code?: string; message?: string; requestId?: string; details?: unknown } = {};
     try {
       parsed = JSON.parse(upstreamBody);
     } catch {
-      // upstream 返回了非 JSON（如 nginx 502）；归一化为 503
+      parsed = {};
     }
-    const code = (parsed.code as keyof typeof ERROR_CODES) ?? ERROR_CODES.AI_ENGINE_UNAVAILABLE;
     return toApiErrorResponse({
-      code,
+      code: (parsed.code as keyof typeof ERROR_CODES | undefined) ?? ERROR_CODES.AI_ENGINE_UNAVAILABLE,
       message: parsed.message ?? `ai-engine 返回 ${upstreamRes.status}`,
       requestId: parsed.requestId ?? requestId,
       details: parsed.details,
@@ -131,31 +239,31 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   log.info('ai.bff.submit', 'ok', {
     requestId,
     userId: u.id,
-    jobId: upstream.job_id,
-    reportType: body.reportType,
+    jobId,
+    reportType,
+    objective,
+    primaryTopicId,
   });
 
-  // 透传给前端：客户端拿到 jobId 后跳 /ai-research/[jobId] 然后 GET 轮询
   return NextResponse.json(
     {
-      jobId: upstream.job_id,
+      jobId,
       status: upstream.status,
       finalStatus: upstream.final_status ?? null,
       currentStep: upstream.current_step ?? null,
       sourcesCount: upstream.sources_count ?? 0,
+      objective,
+      primaryTopicId,
+      brief,
     },
     { status: upstreamRes.status },
   );
 });
 
-/** 不依赖 node:crypto 在 Edge runtime 的兼容性 —— 用 Web Crypto。 */
 function cryptoUuid(): string {
-  // Next.js 默认 node runtime；这里 node:crypto.randomUUID() 更直接
-  // 为避免 Edge 兼容隐患，用 Web Crypto 标准接口
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const g: any = globalThis;
+  // Web Crypto is universally available; v4-style fallback below for safety
+  const g = globalThis as unknown as { crypto?: { randomUUID?: () => string } };
   if (g.crypto?.randomUUID) return g.crypto.randomUUID();
-  // 兜底：v4 风格拼接
   const rnd = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0');
   return `${rnd()}${rnd()}-${rnd()}-4${rnd().slice(1)}-${rnd()}-${rnd()}${rnd()}${rnd()}`;
 }

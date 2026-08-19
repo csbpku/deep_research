@@ -43,6 +43,11 @@ export const ResearchListQuery = z.object({
   q: z.string().trim().max(200).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
+  // ADR 0010: 调研库 V2 筛选
+  topicId: z.string().uuid().optional(),
+  objective: z.enum(['explore', 'learn', 'investigate', 'decide']).optional(),
+  reviewStatus: z.string().max(32).optional(),
+  hasOpenClaims: z.coerce.boolean().optional(),
 });
 export type ResearchListQuery = z.infer<typeof ResearchListQuery>;
 
@@ -197,7 +202,7 @@ export const CreateCommentInput = z.object({
   parentId: z.string().uuid().optional(),
   mentionedUserIds: z.array(z.string().uuid()).max(10, '一次最多 @ 10 位成员').default([]),
   anchor: z.object({
-    quote: z.string().trim().min(1).max(4000),
+    quote: z.string().trim().min(1).max(12000),
     startOffset: z.number().int().min(0),
     endOffset: z.number().int().min(0),
     contentHash: z.string().regex(/^[a-f0-9]{64}$/u),

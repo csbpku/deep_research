@@ -136,3 +136,40 @@ ReportType = Literal["research_report", "summary_brief", "slides"]
 # Helpers for partial-job rule (架构 §九 风险 10 / state-machines §1):
 # mid-failure with at least 3 sources → partial; otherwise failed.
 PARTIAL_MIN_SOURCES: Final[int] = 3
+
+
+# ADR 0010: 研究目标 / 报告类型 / 专题 Issue
+RESEARCH_OBJECTIVE: Final[dict[str, str]] = {
+    "EXPLORE": "explore",
+    "LEARN": "learn",
+    "INVESTIGATE": "investigate",
+    "DECIDE": "decide",
+}
+ResearchObjective = Literal[
+    "explore", "learn", "investigate", "decide",
+]
+
+RESEARCH_OUTPUT_TYPE: Final[dict[str, str]] = {
+    "MARKDOWN": "markdown",
+    "SLIDES": "slides",
+}
+ResearchOutputType = Literal["markdown", "slides"]
+
+TOPIC_ISSUE_KIND: Final[dict[str, str]] = {
+    "EVENT": "event",
+    "PROBLEM": "problem",
+}
+TopicIssueKind = Literal["event", "problem"]
+
+TOPIC_ISSUE_STATUS: Final[dict[str, str]] = {
+    "ACTIVE": "active",
+    "RESOLVED": "resolved",
+    "ARCHIVED": "archived",
+}
+TopicIssueStatus = Literal["active", "resolved", "archived"]
+
+RESEARCH_TOPIC_RELATION: Final[dict[str, str]] = {
+    "AUTO": "auto",
+    "MANUAL": "manual",
+}
+ResearchTopicRelation = Literal["auto", "manual"]

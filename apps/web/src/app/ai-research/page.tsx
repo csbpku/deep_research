@@ -1,11 +1,11 @@
 'use client';
 
-// /ai-research —— 提交表单 + 调研历史。
+// /ai-research —— 对话式调研工作区 + 调研历史。
 //
 // ⚠️ e2e 契约：
 //   - form 上的 data-ai-research-form 属性
-//   - aria-label="资料类型"；URL 输入保留 aria-label="资料地址或 ID"
-//   - 提交按钮文案含「提交」；正文含 /AI 调研/
+//   - aria-label="AI 调研对话输入"
+//   - 正文含 /AI 调研/
 //   - LastSubmittedBanner 的 aria-label="关闭"
 
 import Link from 'next/link';
@@ -408,9 +408,9 @@ function AiResearchPageClient() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="AI 调研"
-        description="和 AI 一起定义问题、资料和产物，再启动可追踪的调研任务。"
+        description="先说问题；只有范围不明确时，AI 才会追问。准备好即可在当前工作区启动调研。"
       />
-      <div className="max-w-4xl">
+      <div className="max-w-6xl">
         <AiResearchConversation />
         <ResearchPipelineRail />
       </div>

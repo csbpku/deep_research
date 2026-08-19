@@ -46,7 +46,7 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ sl
   });
   if (!topic) notFound();
 
-  const [candidates, followed] = await Promise.all([
+  const [candidates, followed, issues, researchTopics] = await Promise.all([
     prisma.topicCandidate.findMany({
       where: { topicId: topic.id },
       orderBy: { addedAt: 'desc' },
@@ -68,8 +68,44 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ sl
       },
     }),
     user
-      ? prisma.topicFollow.findUnique({ where: { userId_topicId: { userId: user.id, topicId: topic.id } } })
+      ? prisma.topicFollow.findUnique({
+          where: { userId_topicId: { userId: user.id, topicId: topic.id } },
+          select: { id: true, lastViewedAt: true },
+        })
       : Promise.resolve(null),
+    prisma.topicIssue.findMany({
+      where: { topicId: topic.id, status: 'active' },
+      orderBy: [{ importanceScore: 'desc' }, { lastSeenAt: 'desc' }],
+      take: 12,
+      select: {
+        id: true,
+        title: true,
+        proposition: true,
+        kind: true,
+        importanceScore: true,
+        firstSeenAt: true,
+        lastSeenAt: true,
+        candidates: { select: { summaryId: true }, take: 5 },
+      },
+    }),
+    prisma.researchTopic.findMany({
+      where: { topicId: topic.id },
+      orderBy: { createdAt: 'desc' },
+      take: 12,
+      select: {
+        createdAt: true,
+        relationType: true,
+        research: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            publishedAt: true,
+            type: true,
+          },
+        },
+      },
+    }),
   ]);
 
   const tier = TIER_LABELS[topic.tier] ?? TIER_LABELS.emerging;
@@ -136,6 +172,94 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ sl
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">综述生成中…</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 热点议题 (V2) */}
+          <Card>
+            <CardContent className="p-4">
+              <h2 className="mb-2 flex items-center justify-between gap-1.5 text-sm font-semibold">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="size-4 text-primary" />
+                  热点议题（{issues.length}）
+                </span>
+                {followed?.lastViewedAt ? (
+                  <span className="text-[10px] text-muted-foreground">
+                    上次查看 {new Date(followed.lastViewedAt).toLocaleString('zh-CN')}
+                  </span>
+                ) : null}
+              </h2>
+              {issues.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  暂无活跃议题；AI 会在窗口内候选累计足够时自动生成。
+                </p>
+              ) : (
+                <ul className="grid list-none gap-2 p-0">
+                  {issues.map((issue) => (
+                    <li
+                      key={issue.id}
+                      className="rounded-md border border-border bg-card p-3"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Badge className={issue.kind === 'event' ? 'bg-status-running-bg text-status-running-fg' : 'bg-status-failed-bg text-status-failed-fg'}>
+                          {issue.kind === 'event' ? '事件' : '问题'}
+                        </Badge>
+                        <h3 className="text-sm font-medium">{issue.title}</h3>
+                        <span className="ml-auto text-[10px] text-muted-foreground">
+                          重要度 {Math.round(issue.importanceScore * 100)}%
+                        </span>
+                      </div>
+                      <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">
+                        {issue.proposition}
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                        <span>首发 {new Date(issue.firstSeenAt).toLocaleDateString('zh-CN')}</span>
+                        <span>·</span>
+                        <span>最近更新 {new Date(issue.lastSeenAt).toLocaleDateString('zh-CN')}</span>
+                        {issue.candidates.length > 0 ? (
+                          <>
+                            <span>·</span>
+                            <span>{issue.candidates.length} 个关联来源</span>
+                          </>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 相关研究 (V2) */}
+          <Card>
+            <CardContent className="p-4">
+              <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+                <FileText className="size-4 text-muted-foreground" />
+                相关研究（{researchTopics.length}）
+              </h2>
+              {researchTopics.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  还没有关于本专题的已发布研究；从专题发起 AI 调研时会在发布时自动回流。
+                </p>
+              ) : (
+                <ul className="grid list-none gap-2 p-0">
+                  {researchTopics.map((row) => (
+                    <li key={row.research.id} className="rounded-md border border-border bg-card p-3">
+                      <div className="flex items-center gap-1.5">
+                        <Link href={`/research/${row.research.id}`} className="text-sm font-medium hover:text-primary hover:underline">
+                          {row.research.title}
+                        </Link>
+                        {row.research.status === 'published' ? (
+                          <Badge className="bg-status-success-bg text-status-success-fg">已发布</Badge>
+                        ) : null}
+                        <span className="ml-auto text-[10px] text-muted-foreground">
+                          {new Date(row.createdAt).toLocaleDateString('zh-CN')}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               )}
             </CardContent>
           </Card>

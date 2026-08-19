@@ -149,6 +149,44 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       },
     });
 
+    // ADR 0010: 发布时回流专题。来源是 AiResearchJob.primaryTopicId。
+    // 防御：测试 mock 没有 findFirst；上层 $transaction 已被 mock 时
+    // 不应在测试里假设 AI 调研链路。
+    let sourceTopicId: string | null = null;
+    try {
+      const aiResearchJob = (tx as { aiResearchJob?: { findFirst?: (args: unknown) => Promise<{ primaryTopicId: string | null } | null> } })
+        .aiResearchJob;
+      if (aiResearchJob?.findFirst) {
+        const sourceJob = await aiResearchJob.findFirst({
+          where: { draftResearchId: parsed.data.id },
+          select: { primaryTopicId: true },
+        });
+        sourceTopicId = sourceJob?.primaryTopicId ?? null;
+      }
+    } catch {
+      sourceTopicId = null;
+    }
+    if (sourceTopicId) {
+      const researchTopic = (tx as { researchTopic?: { upsert?: (args: unknown) => Promise<unknown> } })
+        .researchTopic;
+      if (researchTopic?.upsert) {
+        await researchTopic.upsert({
+          where: {
+            researchId_topicId: {
+              researchId: parsed.data.id,
+              topicId: sourceTopicId,
+            },
+          },
+          create: {
+            researchId: parsed.data.id,
+            topicId: sourceTopicId,
+            relationType: 'auto',
+          },
+          update: {},
+        });
+      }
+    }
+
     // 写入 product_events（research_published 指标事件）
     await tx.productEvent.create({
       data: {

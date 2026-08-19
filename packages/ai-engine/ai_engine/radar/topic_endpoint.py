@@ -153,3 +153,73 @@ async def generate_topic_proposals(
 
 
 __all__ = ["router"]
+
+
+# ADR 0010: V2 endpoints
+
+class TopicSynthesizeV2Response(BaseModel):
+    processed: int
+    succeeded: int
+    failed: int
+    skipped: int
+
+
+class TopicIssueResponse(BaseModel):
+    processed: int
+    considered: int
+    created: int
+    skipped: int
+
+
+@router.post(
+    "/synthesize-v2",
+    response_model=TopicSynthesizeV2Response,
+    status_code=status.HTTP_200_OK,
+)
+async def synthesize_topics_v2(
+    request: Request,
+    pool: Any = Depends(_pool),
+    _token: None = Depends(_require_internal_token),
+) -> TopicSynthesizeV2Response:
+    """Manually trigger the V2 synthesis worker（hash-gated）。"""
+    from ai_engine.radar.topic_synthesis_v2 import run_topic_synthesis_v2
+
+    try:
+        result = await run_topic_synthesis_v2(pool)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail={"code": "TOPIC_SYNTHESIS_V2_FAILED"}
+        ) from exc
+    return TopicSynthesizeV2Response(
+        processed=result["processed"],
+        succeeded=result["succeeded"],
+        failed=result["failed"],
+        skipped=result.get("skipped", 0),
+    )
+
+
+@router.post(
+    "/issues/cluster",
+    response_model=TopicIssueResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def cluster_topic_issues(
+    request: Request,
+    pool: Any = Depends(_pool),
+    _token: None = Depends(_require_internal_token),
+) -> TopicIssueResponse:
+    """Run topic issue clustering pass for eligible topics."""
+    from ai_engine.radar.topic_issue_worker import run_topic_issue_worker
+
+    try:
+        result = await run_topic_issue_worker(pool)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail={"code": "TOPIC_ISSUE_FAILED"}
+        ) from exc
+    return TopicIssueResponse(
+        processed=result["processed"],
+        considered=result["considered"],
+        created=result["created"],
+        skipped=result["skipped"],
+    )

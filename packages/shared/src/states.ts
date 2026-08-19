@@ -130,3 +130,54 @@ export const AI_CHAT_ROLE = {
   ASSISTANT: 'assistant',
 } as const;
 export type AiChatRole = (typeof AI_CHAT_ROLE)[keyof typeof AI_CHAT_ROLE];
+
+// ADR 0010: 研究目标 / 报告类型 / 综述状态
+
+export const RESEARCH_OBJECTIVE = {
+  EXPLORE: 'explore',
+  LEARN: 'learn',
+  INVESTIGATE: 'investigate',
+  DECIDE: 'decide',
+} as const;
+export type ResearchObjective =
+  (typeof RESEARCH_OBJECTIVE)[keyof typeof RESEARCH_OBJECTIVE];
+
+export const RESEARCH_OUTPUT_TYPE = {
+  MARKDOWN: 'markdown',
+  SLIDES: 'slides',
+} as const;
+export type ResearchOutputType =
+  (typeof RESEARCH_OUTPUT_TYPE)[keyof typeof RESEARCH_OUTPUT_TYPE];
+
+export const TOPIC_ISSUE_KIND = {
+  EVENT: 'event',
+  PROBLEM: 'problem',
+} as const;
+export type TopicIssueKind =
+  (typeof TOPIC_ISSUE_KIND)[keyof typeof TOPIC_ISSUE_KIND];
+
+export const TOPIC_ISSUE_STATUS = {
+  ACTIVE: 'active',
+  RESOLVED: 'resolved',
+  ARCHIVED: 'archived',
+} as const;
+export type TopicIssueStatus =
+  (typeof TOPIC_ISSUE_STATUS)[keyof typeof TOPIC_ISSUE_STATUS];
+
+export const RESEARCH_TOPIC_RELATION = {
+  AUTO: 'auto',
+  MANUAL: 'manual',
+} as const;
+export type ResearchTopicRelation =
+  (typeof RESEARCH_TOPIC_RELATION)[keyof typeof RESEARCH_TOPIC_RELATION];
+
+// ADR 0010: 专题列表筛选
+export const TOPIC_LIST_FILTER = {
+  ALL: 'all',
+  HOT: 'hot',
+  WARMING: 'warming',
+  EMERGING: 'emerging',
+  FOLLOWED: 'followed',
+} as const;
+export type TopicListFilter =
+  (typeof TOPIC_LIST_FILTER)[keyof typeof TOPIC_LIST_FILTER];

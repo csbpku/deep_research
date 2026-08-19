@@ -102,6 +102,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     q: url.searchParams.get('q') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     limit: url.searchParams.get('limit') ?? undefined,
+    topicId: url.searchParams.get('topicId') ?? undefined,
+    objective: url.searchParams.get('objective') ?? undefined,
+    reviewStatus: url.searchParams.get('reviewStatus') ?? undefined,
+    hasOpenClaims: url.searchParams.get('hasOpenClaims') ?? undefined,
   });
   if (!parsed.success) {
     return toApiErrorResponse({
@@ -112,10 +116,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { type, scope, q, page, limit } = parsed.data;
+  const { type, scope, q, page, limit, topicId, objective, reviewStatus, hasOpenClaims } = parsed.data;
 
   // 安全规则：published scope 所有人可见；draft scope 仅 owner 自己可见
-  const where = researchListWhere(scope, u.id, type, q);
+  const where = researchListWhere({
+    scope, userId: u.id, type, query: q,
+    topicId, objective, reviewStatus, hasOpenClaims,
+  });
 
   const [items, total] = await Promise.all([
     prisma.research.findMany({

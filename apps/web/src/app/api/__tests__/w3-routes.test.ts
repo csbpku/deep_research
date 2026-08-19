@@ -39,7 +39,7 @@ vi.mock('node:fs/promises', () => ({
 
 import { POST as importPost } from '../imports/route';
 import { POST as researchPost } from '../researches/route';
-import { researchListWhere } from '../../../lib/research-list-where';
+import { researchListWhereLegacy } from '../../../lib/research-list-where';
 import { DELETE as researchDelete } from '../researches/[id]/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
 import { CreateResearchInput } from '../../../lib/schemas';
@@ -319,19 +319,19 @@ describe('DELETE /api/researches/[id]', () => {
 
 describe('GET /api/researches scope', () => {
   it('published scope never includes drafts', () => {
-    expect(researchListWhere('published', 'me')).toEqual({
+    expect(researchListWhereLegacy('published', 'me')).toEqual({
       AND: [{ status: { equals: 'published' } }],
     });
   });
 
   it('draft scope is owner-only', () => {
-    expect(researchListWhere('draft', 'me')).toEqual({
+    expect(researchListWhereLegacy('draft', 'me')).toEqual({
       AND: [{ authorId: 'me', status: { equals: 'draft' } }],
     });
   });
 
   it('mine scope keeps published and archived content owner-only', () => {
-    expect(researchListWhere('mine', 'me')).toEqual({
+    expect(researchListWhereLegacy('mine', 'me')).toEqual({
       AND: [
         {
           authorId: 'me',
@@ -342,7 +342,7 @@ describe('GET /api/researches scope', () => {
   });
 
   it('keeps the type filter alongside the scope', () => {
-    expect(researchListWhere('published', 'me', 'knowledge')).toEqual({
+    expect(researchListWhereLegacy('published', 'me', 'knowledge')).toEqual({
       AND: [
         { type: { equals: 'knowledge' } },
         { status: { equals: 'published' } },
@@ -351,7 +351,7 @@ describe('GET /api/researches scope', () => {
   });
 
   it('searches published research without weakening the scope filter', () => {
-    expect(researchListWhere('published', 'me', undefined, 'RAG')).toEqual({
+    expect(researchListWhereLegacy('published', 'me', undefined, 'RAG')).toEqual({
       AND: [
         { status: { equals: 'published' } },
         {
