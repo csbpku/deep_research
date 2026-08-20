@@ -837,15 +837,34 @@ async def enrich_github_candidate(
     payload = _build_meta_payload(repo_meta, tree, entry_points)
     payload = _trim_to_budget(payload)
 
-    # Zread is deliberately a separate best-effort step. It is keyed by the
-    # Git commit so ordinary enrichment retries do not regenerate the wiki.
+    # Zread is deliberately a separate best-effort step. Reuse the public
+    # Zread wiki first; only generate locally when the already-indexed public
+    # pages are unavailable. A remote cache is keyed by its indexed commit.
     zread_payload = existing_zread if (
         isinstance(existing_zread, dict)
-        and existing_zread.get("provider") == "zread-cli"
-        and head_sha
-        and existing_zread.get("commitSha") == head_sha
+        and (
+            existing_zread.get("provider") == "zread-remote"
+            and existing_zread.get("repoHeadSha") == head_sha
+            or (
+                existing_zread.get("provider") == "zread-cli"
+                and head_sha
+                and existing_zread.get("commitSha") == head_sha
+            )
+        )
         and isinstance(existing_zread.get("pages"), list)
     ) else None
+    if zread_payload is None:
+        try:
+            from ai_engine.radar.zread_remote import fetch_zread_wiki
+
+            zread_payload = await fetch_zread_wiki(owner=owner, repo=repo)
+            if isinstance(zread_payload, dict):
+                zread_payload["repoHeadSha"] = head_sha
+        except Exception as exc:  # noqa: BLE001 - optional enrichment must not block radar
+            logger.warning(
+                "ai-engine.radar.enrichment.zread_remote_failed",
+                extra={"summary_id": summary_id, "owner": owner, "repo": repo, "error": type(exc).__name__},
+            )
     if zread_payload is None and readme_text:
         # Persist readable content before the optional long-running Zread
         # process starts. This makes the detail page useful immediately and

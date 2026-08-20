@@ -31,6 +31,11 @@ FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓�
   （OpenAI 兼容）；模型名必须来自该端点实际支持的 `/models`，不要直接照抄
   `.env.example` 的示例值。
 
+GitHub Repo 的 Zread 文档按以下顺序获取：先读取 Zread 已经公开生成的页面并按
+索引 commit 缓存；远端没有可用页面时才运行本地 `zread generate`；CLI 也不可用时
+最后回退到该仓库的 GitHub README。README fallback 会显式标记为不完整，不会伪装成
+完整的项目文档。
+
 ## 目录
 
 ```text
