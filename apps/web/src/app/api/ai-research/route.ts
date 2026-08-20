@@ -170,6 +170,20 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     }
   }
 
+  // 2.5 V2 闭环埋点：用户带 contextRefs 提交 = 复用历史上下文
+  if (sourceRefs.length > 0 || (typeof context === 'string' && context.trim().length > 0)) {
+    await recordProductEvent({
+      userId: u.id,
+      eventType: 'research_context_reused',
+      targetType: 'ai_research_job',
+      targetId: jobId,
+      metadata: {
+        sourceRefCount: sourceRefs.length,
+        hasFreeTextContext: typeof context === 'string' && context.trim().length > 0,
+      },
+    }).catch(() => undefined);
+  }
+
   // 3. 转发到 ai-engine（沿用旧 topic / context / reportType / sourcePolicy 语义）
   const env = getWebEnv();
   const url = `${env.AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/jobs`;

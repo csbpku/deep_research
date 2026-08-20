@@ -242,6 +242,69 @@ describe('POST /api/ai-research — V2 brief forwarding', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────
+// /api/ai-research —— research_context_reused 事件
+// ───────────────────────────────────────────────────────────────────
+
+  it('V2 brief 带 contextRefs 时记 research_context_reused 事件', async () => {
+    const { POST } = await import('../ai-research/route');
+
+    mocks.aiJobCreate.mockResolvedValueOnce({ id: 'job-cr' });
+    mocks.topicFindUnique.mockResolvedValueOnce({ id: 'topic-cr', slug: 'rag' });
+    mocks.productEventCreate.mockResolvedValueOnce({ id: 'evt-a' });
+
+    const response = await POST(
+      req('http://localhost/api/ai-research', {
+        topic: 'GraphRAG 索引差异',
+        reportType: 'research_report',
+        sourcePolicy: 'prefer_user_sources',
+        primaryTopicId: '55555555-5555-4555-8555-555555555555',
+        brief: {
+          objective: 'investigate',
+          question: 'GraphRAG 索引差异',
+          constraints: [],
+          questionsToAnswer: [],
+          comparisonOptions: [],
+          successCriteria: [],
+          sourcePolicy: 'prefer_user_sources',
+          contextRefs: [],
+          outputType: 'markdown',
+        },
+        sourceRefs: [
+          { type: 'summary', value: '11111111-1111-4111-8111-111111111111', required: false },
+          { type: 'url', value: 'https://example.com/a', required: false },
+        ],
+      }) as never,
+    );
+
+    expect(response.status).toBe(202);
+    const emits = mocks.productEventCreate.mock.calls.map(
+      (call) => (call[0] as { data?: { eventName?: string } })?.data?.eventName,
+    );
+    expect(emits).toContain('research_context_reused');
+    expect(emits).toContain('topic_research_started');
+  });
+
+  it('V1/V2 都没带 sourceRefs/context 时不写 research_context_reused', async () => {
+    const { POST } = await import('../ai-research/route');
+
+    mocks.aiJobCreate.mockResolvedValueOnce({ id: 'job-noctx' });
+
+    const response = await POST(
+      req('http://localhost/api/ai-research', {
+        topic: '裸问题',
+        reportType: 'research_report',
+        sourcePolicy: 'prefer_user_sources',
+      }) as never,
+    );
+
+    expect(response.status).toBe(202);
+    const emits = mocks.productEventCreate.mock.calls.map(
+      (call) => (call[0] as { data?: { eventName?: string } })?.data?.eventName,
+    );
+    expect(emits).not.toContain('research_context_reused');
+  });
+
+// ───────────────────────────────────────────────────────────────────
 // /api/topics/[slug]/viewed —— lastViewedAt 推进 + 事件记录
 // ───────────────────────────────────────────────────────────────────
 

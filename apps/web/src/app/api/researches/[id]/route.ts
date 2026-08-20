@@ -13,6 +13,7 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { recordProductEvent } from '@/lib/product-events';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../../lib/db';
@@ -190,6 +191,36 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
         targetTitle,
       };
     }
+  }
+
+  // V2 闭环埋点：草稿被 owner 打开 / 从专题页面重新进入
+  if (research.status === RESEARCH_STATUS.DRAFT && research.authorId === u.id) {
+    await recordProductEvent({
+      userId: u.id,
+      eventType: 'research_draft_opened',
+      targetType: 'research',
+      targetId: research.id,
+      metadata: { authorRole: u.role },
+    }).catch(() => undefined);
+  }
+  const fromTopic = new URL(req.url).searchParams.get('fromTopic');
+  const referer = req.headers.get('referer') ?? '';
+  if (
+    !fromTopic &&
+    !/\/topics\/[^/?#]+/.test(referer)
+  ) {
+    // no-op
+  } else {
+    await recordProductEvent({
+      userId: u.id,
+      eventType: 'research_reopened_from_topic',
+      targetType: 'research',
+      targetId: research.id,
+      metadata: {
+        fromTopicId: fromTopic,
+        refererTopicSlug: (referer.match(/\/topics\/([^/?#]+)/) ?? [])[1] ?? null,
+      },
+    }).catch(() => undefined);
   }
 
   return NextResponse.json({
