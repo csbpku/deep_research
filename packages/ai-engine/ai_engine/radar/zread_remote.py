@@ -66,9 +66,10 @@ def _flight_markdown(html: str) -> str | None:
 
 
 def _page_refs(html: str, owner: str, repo: str) -> list[str]:
+    normalized = html.replace('\\"', '"')
     slugs: list[str] = []
     seen: set[str] = set()
-    for match in _PAGE_LINK.finditer(html):
+    for match in _PAGE_LINK.finditer(normalized):
         if match.group("owner") != owner or match.group("repo") != repo:
             continue
         slug = match.group("slug")
@@ -77,6 +78,15 @@ def _page_refs(html: str, owner: str, repo: str) -> list[str]:
             slugs.append(slug)
         if len(slugs) >= ZREAD_REMOTE_MAX_PAGES:
             break
+    # The page catalog is also embedded as JSON in the Next.js flight stream;
+    # it may not be rendered as hrefs in the raw response.
+    if len(slugs) < ZREAD_REMOTE_MAX_PAGES:
+        for slug in re.findall(r'"slug"\s*:\s*"([A-Za-z0-9][A-Za-z0-9_-]*)"', normalized):
+            if slug not in seen:
+                seen.add(slug)
+                slugs.append(slug)
+            if len(slugs) >= ZREAD_REMOTE_MAX_PAGES:
+                break
     return slugs
 
 
@@ -109,7 +119,7 @@ async def fetch_zread_wiki(
         root_html = await _get(client, base_url)
         if not root_html:
             return None
-        commit_match = _COMMIT.search(root_html)
+        commit_match = _COMMIT.search(root_html.replace('\\"', '"'))
         indexed_commit = commit_match.group(1) if commit_match else None
         slugs = _page_refs(root_html, owner, repo)
         if not slugs:

@@ -16,3 +16,8 @@ def test_page_refs_reads_zread_catalog_links() -> None:
         '<a href="/other/repo/ignored">Ignored</a>'
     )
     assert _page_refs(html, "owner", "repo") == ["1-overview", "2-quick-start"]
+
+
+def test_page_refs_reads_escaped_next_flight_catalog() -> None:
+    html = r'{"pages":[{"slug":"1-overview"},{"slug":"2-quick-start"}]}'
+    assert _page_refs(html, "owner", "repo") == ["1-overview", "2-quick-start"]
