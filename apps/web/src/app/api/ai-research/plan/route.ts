@@ -15,6 +15,7 @@ import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
 import type { ResearchBrief, ResearchPlan } from '@deep-research/shared/schemas';
 import type { ResearchObjective } from '@deep-research/shared/states';
+import { recordProductEvent } from '@/lib/product-events';
 
 const PlanInput = z.object({
   question: z.string().min(2).max(2000),
@@ -215,6 +216,21 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
   }
 
   const suggestedContext = await suggestContext(u.id, question);
+
+  // V2 闭环：plan 返回 ready=true = 调研计划已被用户确认到「可执行」状态
+  if (missingFields.length === 0) {
+    await recordProductEvent({
+      userId: u.id,
+      eventType: 'research_plan_confirmed',
+      targetType: 'research_brief',
+      targetId: undefined,
+      metadata: {
+        objective,
+        questionLength: question.length,
+        hasSuggestedContext: suggestedContext.length > 0,
+      },
+    }).catch(() => undefined);
+  }
 
   return NextResponse.json({
     assistantMessage:
