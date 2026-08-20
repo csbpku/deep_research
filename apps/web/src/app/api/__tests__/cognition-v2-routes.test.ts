@@ -649,3 +649,68 @@ describe('POST + DELETE /api/topics/[slug]/follow — V2 events', () => {
     );
   });
 });
+
+
+// ───────────────────────────────────────────────────────────────────
+// /api/topics/[slug]/issues —— 登录用户触发 topic_issue_viewed 埋点
+// ───────────────────────────────────────────────────────────────────
+
+describe('GET /api/topics/[slug]/issues — topic_issue_viewed event', () => {
+  it('登录用户请求 issues 时写入 topic_issue_viewed 事件', async () => {
+    const { GET } = await import('../topics/[slug]/issues/route');
+    // findTopicBySlugOrId 命中
+    mocks.topicFindUnique.mockResolvedValueOnce({ id: 'topic-xyz', slug: 'ai-agents' });
+    mocks.topicIssueFindMany.mockResolvedValueOnce([
+      {
+        id: 'i-1',
+        kind: 'event',
+        status: 'active',
+        title: '议题 1',
+        proposition: '…',
+        summary: null,
+        importanceScore: 0.5,
+        firstSeenAt: new Date(),
+        lastSeenAt: new Date(),
+        candidates: [],
+      },
+    ]);
+    // 已关注用户 lastViewedAt
+    mocks.topicFollowFindUnique.mockResolvedValueOnce({ lastViewedAt: new Date() });
+    mocks.productEventCreate.mockResolvedValueOnce({ id: 'evt-issue' });
+
+    const response = await GET(
+      new Request('http://localhost/api/topics/ai-agents/issues') as never,
+      { params: Promise.resolve({ slug: 'ai-agents' }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.productEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventName: 'topic_issue_viewed',
+          entityId: 'topic-xyz',
+          userId: USER.id,
+          metadata: expect.objectContaining({ slug: 'ai-agents', count: 1 }),
+        }),
+      }),
+    );
+  });
+
+  it('匿名用户只读，不写事件', async () => {
+    const { GET } = await import('../topics/[slug]/issues/route');
+    mocks.getCurrentUser.mockResolvedValueOnce(null);
+    mocks.topicFindUnique.mockResolvedValueOnce({ id: 'topic-xyz', slug: 'ai-agents' });
+    mocks.topicIssueFindMany.mockResolvedValueOnce([]);
+
+    const response = await GET(
+      new Request('http://localhost/api/topics/ai-agents/issues') as never,
+      { params: Promise.resolve({ slug: 'ai-agents' }) },
+    );
+
+    expect(response.status).toBe(200);
+    const emits = mocks.productEventCreate.mock.calls.filter(
+      (call) => (call[0] as { data?: { eventName?: string } })?.data?.eventName === 'topic_issue_viewed',
+    );
+    expect(emits).toHaveLength(0);
+  });
+});

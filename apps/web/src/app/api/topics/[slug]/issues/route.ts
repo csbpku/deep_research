@@ -10,6 +10,7 @@ import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { findTopicBySlugOrId } from '@/lib/topics';
+import { recordProductEvent } from '@/lib/product-events';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +33,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
     return NextResponse.json({ code: 'NOT_FOUND', message: 'topic 不存在' }, { status: 404 });
   }
 
-  const topic = await findTopicBySlugOrId(slug, { id: true });
+  const topic = await findTopicBySlugOrId(slug, { id: true, slug: true });
   if (!topic) {
     return NextResponse.json({ code: 'NOT_FOUND', message: 'topic 不存在' }, { status: 404 });
   }
@@ -82,6 +83,17 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
       select: { lastViewedAt: true },
     });
     lastViewedAt = follow?.lastViewedAt ?? null;
+  }
+
+  // V2 闭环埋点：进入「热点议题」时记录一次（默认 1 分钟内自动 dedupe）
+  if (user) {
+    await recordProductEvent({
+      userId: user.id,
+      eventType: 'topic_issue_viewed',
+      targetType: 'topic',
+      targetId: topic.id,
+      metadata: { slug: topic.slug, count: issues.length },
+    }).catch(() => undefined);
   }
 
   return NextResponse.json({
