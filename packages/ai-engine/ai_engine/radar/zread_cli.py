@@ -165,6 +165,21 @@ def _read_wiki(wiki_root: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
     }
 
 
+def _read_generated_wiki(wiki_dir: Path) -> tuple[list[dict[str, str]], dict[str, Any], bool]:
+    """Read the published Wiki, or drafts when generation failed mid-run.
+
+    Zread only updates ``wiki/current`` after the page phase completes. With
+    strict generation, a failed page therefore leaves useful pages under
+    ``wiki/drafts`` but no current pointer. Preserve those pages as a partial
+    result instead of falling back to README.
+    """
+    pages, completeness = _read_wiki(wiki_dir / "current")
+    if pages:
+        return pages, completeness, True
+    pages, completeness = _read_wiki(wiki_dir / "drafts")
+    return pages, completeness, False
+
+
 async def generate_zread_wiki(
     *,
     owner: str,
@@ -207,7 +222,7 @@ async def generate_zread_wiki(
             # Zread writes pages incrementally. Preserve the pages already
             # generated before the timeout instead of deleting the useful
             # partial document with the temporary checkout.
-            pages, completeness = _read_wiki(checkout / ".zread" / "wiki" / "current")
+            pages, completeness, _ = _read_generated_wiki(checkout / ".zread" / "wiki")
             if pages:
                 return {
                     "provider": "zread-cli",
@@ -226,7 +241,7 @@ async def generate_zread_wiki(
             raise
         if generate_code != 0:
             detail = (generate_err or generate_out).strip().replace("\n", " ")[-500:]
-            pages, completeness = _read_wiki(checkout / ".zread" / "wiki" / "current")
+            pages, completeness, _ = _read_generated_wiki(checkout / ".zread" / "wiki")
             if pages:
                 return {
                     "provider": "zread-cli",
@@ -244,13 +259,13 @@ async def generate_zread_wiki(
                 }
             raise RuntimeError(f"zread generate failed: {detail}")
 
-        pages, completeness = _read_wiki(checkout / ".zread" / "wiki" / "current")
+        pages, completeness, published = _read_generated_wiki(checkout / ".zread" / "wiki")
         if not pages:
             raise RuntimeError("zread generated no markdown pages")
 
         return {
             "provider": "zread-cli",
-            "status": "partial" if completeness["truncated"] else "complete",
+            "status": "complete" if published and not completeness["truncated"] else "partial",
             "repository": f"{owner}/{repo}",
             "commitSha": commit_sha,
             "branch": branch,
@@ -259,6 +274,7 @@ async def generate_zread_wiki(
             "expectedPageCount": completeness["expectedPageCount"],
             "truncated": completeness["truncated"],
             "truncatedPages": completeness["truncatedPages"],
+            **({} if published else {"error": "Zread did not publish a current Wiki; showing generated drafts"}),
             "pages": pages,
         }
 

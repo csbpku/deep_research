@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ai_engine.radar.zread_cli import _generate_command, _read_wiki
+from ai_engine.radar.zread_cli import _generate_command, _read_generated_wiki, _read_wiki
 
 
 def test_generate_command_is_strict() -> None:
@@ -30,3 +30,16 @@ def test_read_wiki_does_not_treat_pointer_as_page(tmp_path: Path) -> None:
 
     assert pages == []
     assert completeness["expectedPageCount"] == 0
+
+
+def test_read_generated_wiki_uses_drafts_before_current_is_published(tmp_path: Path) -> None:
+    wiki = tmp_path / ".zread" / "wiki"
+    drafts = wiki / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "1-overview.md").write_text("# Overview\n\nPartial page.", encoding="utf-8")
+
+    pages, completeness, published = _read_generated_wiki(wiki)
+
+    assert published is False
+    assert pages[0]["path"] == "1-overview.md"
+    assert completeness["expectedPageCount"] == 1
