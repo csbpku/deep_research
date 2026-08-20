@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => ({
   adminActionCreate: vi.fn(),
   researchTopicUpsert: vi.fn(),
   transaction: vi.fn(),
+  // follow route (delete) → reuse mocks.topicFollowUpsert for upsert
+  followTopicDeleteMany: vi.fn(),
 }));
 
 vi.mock('@/lib/api-handler', async (importOriginal) => ({
@@ -72,8 +74,9 @@ vi.mock('@/lib/db', () => ({
     },
     topicFollow: {
       upsert: mocks.topicFollowUpsert,
-      findMany: mocks.topicFollowFindMany,
+      deleteMany: mocks.followTopicDeleteMany,
       findUnique: mocks.topicFollowFindUnique,
+      findMany: mocks.topicFollowFindMany,
     },
     topicIssue: {
       findMany: mocks.topicIssueFindMany,
@@ -582,6 +585,66 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
       expect.objectContaining({
         where: { researchId_topicId: { researchId: '66666666-6666-4666-8666-666666666666', topicId: 'topic-source' } },
         create: expect.objectContaining({ relationType: 'auto' }),
+      }),
+    );
+  });
+});
+
+
+// ───────────────────────────────────────────────────────────────────
+// /api/topics/[slug]/follow —— V2 主题事件
+// ───────────────────────────────────────────────────────────────────
+
+describe('POST + DELETE /api/topics/[slug]/follow — V2 events', () => {
+  it('POST 关注时写入 topic_followed 事件', async () => {
+    const { POST } = await import('../topics/[slug]/follow/route');
+    // findTopicBySlugOrId -> prisma.topic.findUnique
+    mocks.topicFindUnique.mockResolvedValueOnce({ id: 'topic-xyz', slug: 'ai-agents' });
+    mocks.topicFollowUpsert.mockResolvedValueOnce({ id: 'follow-1', createdAt: new Date() });
+    mocks.productEventCreate.mockResolvedValueOnce({ id: 'evt-1' });
+
+    const response = await POST(
+      new Request('http://localhost/api/topics/ai-agents/follow', { method: 'POST' }) as never,
+      { params: Promise.resolve({ slug: 'ai-agents' }) },
+    );
+
+    expect(response.status).toBe(201);
+    expect(mocks.topicFollowUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_topicId: { userId: USER.id, topicId: 'topic-xyz' } },
+      }),
+    );
+    expect(mocks.productEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventName: 'topic_followed',
+          entityId: 'topic-xyz',
+          userId: USER.id,
+        }),
+      }),
+    );
+  });
+
+  it('DELETE 取关时写入 topic_unfollowed 事件', async () => {
+    const { DELETE } = await import('../topics/[slug]/follow/route');
+    mocks.topicFindUnique.mockResolvedValueOnce({ id: 'topic-xyz', slug: 'ai-agents' });
+    mocks.followTopicDeleteMany.mockResolvedValueOnce({ count: 1 });
+    mocks.productEventCreate.mockResolvedValueOnce({ id: 'evt-2' });
+
+    const response = await DELETE(
+      new Request('http://localhost/api/topics/ai-agents/follow', { method: 'DELETE' }) as never,
+      { params: Promise.resolve({ slug: 'ai-agents' }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.followTopicDeleteMany).toHaveBeenCalled();
+    expect(mocks.productEventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventName: 'topic_unfollowed',
+          entityId: 'topic-xyz',
+          userId: USER.id,
+        }),
       }),
     );
   });

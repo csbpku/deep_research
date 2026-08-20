@@ -9,6 +9,7 @@ import { findTopicBySlugOrId } from '@/lib/topics';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
+import { recordProductEvent } from '@/lib/product-events';
 
 async function resolveTopicId(slug: string): Promise<string | NextResponse> {
   const topic = await findTopicBySlugOrId(slug, { id: true });
@@ -34,6 +35,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ slug: string }>
     create: { userId: user.id, topicId },
     select: { id: true, createdAt: true },
   });
+  await recordProductEvent({
+    userId: user.id,
+    eventType: 'topic_followed',
+    targetType: 'topic',
+    targetId: topicId,
+    metadata: { slug },
+  }).catch(() => undefined);
   return NextResponse.json({ ok: true, id: created.id, followed: true, requestId }, { status: 201 });
 });
 
@@ -47,5 +55,12 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ slug: string 
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: 'topic 不存在', requestId });
   }
   const r = await prisma.topicFollow.deleteMany({ where: { userId: user.id, topicId } });
+  await recordProductEvent({
+    userId: user.id,
+    eventType: 'topic_unfollowed',
+    targetType: 'topic',
+    targetId: topicId,
+    metadata: { slug },
+  }).catch(() => undefined);
   return NextResponse.json({ ok: true, deleted: r.count, followed: false, requestId });
 });
