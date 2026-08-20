@@ -33,6 +33,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import structlog
+import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -116,6 +117,7 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     submission_task: asyncio.Task[None] | None = None
     topic_proposal_task: asyncio.Task[None] | None = None
     topic_synth_task: asyncio.Task[None] | None = None
+    topic_issue_task: asyncio.Task[None] | None = None
     # asyncio tasks can start immediately, so publish the adapter before any
     # worker reads app.state.adapter.
     app_instance.state.adapter = build_adapter()
@@ -163,6 +165,11 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
                 _topic_synthesis_loop(app_instance),
                 name="radar-topic-synthesis",
             )
+        if os.environ.get("TOPIC_ISSUE_ENABLED", "1") == "1":
+            topic_issue_task = asyncio.create_task(
+                _topic_issue_loop(app_instance),
+                name="radar-topic-issues",
+            )
     try:
         yield
     finally:
@@ -194,6 +201,10 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             topic_synth_task.cancel()
             with suppress(asyncio.CancelledError):
                 await topic_synth_task
+        if topic_issue_task is not None:
+            topic_issue_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await topic_issue_task
         if isinstance(store, DbJobStore):
             await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
@@ -541,20 +552,41 @@ async def _submission_worker_loop(app_instance: FastAPI) -> None:
 
 
 async def _topic_synthesis_loop(app_instance: FastAPI) -> None:
-    """P1-D: 每 5 分钟跑一次主题 AI 综述（默认）。"""
-    from ai_engine.radar.topic_synthesis_worker import run_topic_synthesis
+    """P1-D V2: 每 5 分钟跑一次 hash-gated 主题 AI 综述。"""
+    from ai_engine.radar.topic_synthesis_v2 import run_topic_synthesis_v2
 
     log = structlog.get_logger("ai_engine.radar.topic_synth")
     interval = float(os.environ.get("TOPIC_SYNTHESIS_INTERVAL_SECONDS", "300"))
     while True:
         try:
             await asyncio.sleep(interval)
-            await run_topic_synthesis(app_instance.state.db_pool)
+            await run_topic_synthesis_v2(app_instance.state.db_pool)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             log.warning(
                 "ai-engine.radar.topic_synth.loop_failed",
+                error_type=type(exc).__name__,
+            )
+            await asyncio.sleep(interval)
+
+
+async def _topic_issue_loop(app_instance: FastAPI) -> None:
+    """P1-D V2: periodically cluster eligible candidates into TopicIssue."""
+    from ai_engine.radar.topic_issue_worker import run_topic_issue_worker
+
+    log = structlog.get_logger("ai_engine.radar.topic_issue")
+    interval = float(os.environ.get("TOPIC_ISSUE_INTERVAL_SECONDS", "300"))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            result = await run_topic_issue_worker(app_instance.state.db_pool)
+            log.info("ai-engine.radar.topic_issue.done", **result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.topic_issue.loop_failed",
                 error_type=type(exc).__name__,
             )
             await asyncio.sleep(interval)
@@ -769,7 +801,7 @@ class SubmitAiJobBody(BaseModel):
     job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     requester_id: str = Field(default="00000000-0000-0000-0000-000000000001")
     topic: str = Field(min_length=2, max_length=200)
-    context: str | None = Field(default=None, max_length=2000)
+    context: str | None = Field(default=None, max_length=20000)
     report_type: ReportType = Field(default="research_report")
     # P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
     source_policy: SourcePolicy = Field(default="prefer_user_sources")
@@ -818,19 +850,20 @@ class ReviewResearchBody(BaseModel):
 
 
 class AssistantSelection(BaseModel):
-    quote: str = Field(min_length=1, max_length=4000)
+    quote: str = Field(min_length=1, max_length=12000)
     start_offset: int = Field(ge=0)
     end_offset: int = Field(ge=0)
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class ResearchAssistantBody(BaseModel):
-    operation: str = Field(pattern=r"^(rewrite|summarize|guide|counterpoint|fact_check|conclusion_check)$")
-    body: str = Field(min_length=1, max_length=30000)
+    operation: str = Field(pattern=r"^(explain|rewrite|summarize|guide|guide_section|guide_synthesis|counterpoint|fact_check|conclusion_check)$")
+    body: str = Field(min_length=1, max_length=256000)
     selection: AssistantSelection | None = None
     instruction: str | None = Field(default=None, max_length=2000)
     topic: str = Field(default="调研文章", max_length=300)
     sources: list[dict[str, object]] = Field(default_factory=list, max_length=100)
+    summary_id: str | None = Field(default=None, max_length=64, alias="summaryId")
 
 
 class CancelAiJobResponse(BaseModel):
@@ -888,15 +921,90 @@ class HealthResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _anythingllm_enabled_for(body: ResearchAssistantBody) -> bool:
+    """Enable the AnythingLLM experiment only for explicitly listed radar IDs."""
+    if body.operation not in {"guide", "guide_section", "guide_synthesis"} or not body.summary_id:
+        return False
+    if not os.environ.get("ANYTHINGLLM_URL", "").strip() or not os.environ.get("ANYTHINGLLM_API_KEY", "").strip():
+        return False
+    configured = {item.strip() for item in os.environ.get("ANYTHINGLLM_RADAR_IDS", "").split(",") if item.strip()}
+    return body.summary_id in configured
+
+
+def _extract_json_object(value: str) -> dict[str, object] | None:
+    """Remove reasoning wrappers and recover the first JSON object from a model response."""
+    cleaned = value.strip()
+    while "<think>" in cleaned and "</think>" in cleaned:
+        start = cleaned.find("<think>")
+        end = cleaned.find("</think>", start) + len("</think>")
+        cleaned = f"{cleaned[:start]}{cleaned[end:]}".strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        parsed = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def _anythingllm_guide(body: ResearchAssistantBody) -> dict[str, object] | None:
+    """Call AnythingLLM for the opt-in radar experiment; failures fall back upstream."""
+    base_url = os.environ.get("ANYTHINGLLM_URL", "").strip().rstrip("/")
+    api_key = os.environ.get("ANYTHINGLLM_API_KEY", "").strip()
+    workspace = os.environ.get("ANYTHINGLLM_WORKSPACE", "").strip()
+    if not base_url or not api_key or not workspace:
+        return None
+    if body.operation == "guide":
+        instruction = "只输出紧凑 JSON，不要输出<think>、解释或 Markdown。schema: {\"version\":2,\"summary\":\"一句话判断\",\"outline\":[{\"heading\":\"主题\",\"takeaway\":\"本部分说明\",\"quote\":\"该部分逐字原文短引\"}],\"keyTakeaways\":[{\"claim\":\"关键观点\",\"whyItMatters\":\"重要性\",\"evidence\":\"原文短引\"}]}。outline 最多 6 条，keyTakeaways 最多 3 条，每个 outline.quote 必须来自对应部分且不能重复 Abstract，证据必须来自原文。"
+    elif body.operation == "guide_section":
+        instruction = "只输出紧凑 JSON，不要输出<think>、解释或 Markdown。schema: {\"version\":2,\"outline\":[{\"heading\":\"本段主题\",\"takeaway\":\"本段说明\"}],\"keyTakeaways\":[{\"claim\":\"局部观点\",\"evidence\":\"原文短引\"}]}。"
+    else:
+        instruction = "只输出紧凑 JSON，不要输出<think>、解释或 Markdown。将这些分段笔记合并为 {\"version\":2,\"summary\":\"一句话判断\",\"outline\":[{\"heading\":\"主题\",\"takeaway\":\"说明\"}],\"keyTakeaways\":[{\"claim\":\"观点\",\"evidence\":\"引用\"}]}。"
+    prompt = f"主题：{body.topic}\n原文或分段笔记：\n{body.body}\n\n{instruction}"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{base_url}/api/v1/workspace/{workspace}/chat",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"message": prompt, "mode": "chat", "sessionId": f"radar-{body.summary_id}"},
+            )
+        if response.status_code >= 400:
+            return None
+        payload = response.json()
+        text = payload.get("textResponse") if isinstance(payload, dict) else None
+        return _extract_json_object(text) if isinstance(text, str) else None
+    except (httpx.HTTPError, ValueError, TypeError):
+        return None
+
+
 @app.post("/api/ai/research-assistant")
 async def research_assistant(body: ResearchAssistantBody, request: Request) -> dict[str, object]:
     """Small synchronous editor assistant; never mutates the research draft."""
     started = asyncio.get_event_loop().time()
     request_id = getattr(request.state, "request_id", None)
-    original = body.selection.quote if body.selection else body.body[:4000]
-    context = body.body[:30000]
+    original = body.selection.quote if body.selection else body.body[:12000]
+    # The web route already chunks long radar articles. Keep the engine-side
+    # fallback generous so a retry cannot fail merely because the article is
+    # larger than the old 60K ceiling.
+    context = body.body[:256000]
     warnings: list[str] = []
     claims: list[dict[str, object]] = []
+    if _anythingllm_enabled_for(body):
+        external_guide = await _anythingllm_guide(body)
+        if external_guide:
+            return {
+                "operation": body.operation,
+                "original": original,
+                "suggestion": json.dumps(external_guide, ensure_ascii=False),
+                "guide": external_guide,
+                "rationale": "anythingllm",
+                "claims": [],
+                "warnings": warnings,
+                "request_id": request_id,
+                "metrics": {"provider": "anythingllm"},
+            }
     if body.operation in {"fact_check", "conclusion_check"}:
         from ai_engine.reviewer import DefaultResearchReviewer
         sources: list[AdapterSource] = []
@@ -934,16 +1042,35 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
         return {"operation": body.operation, "original": original, "suggestion": None, "rationale": reviewed.status, "claims": claims, "warnings": warnings, "request_id": request_id, "metrics": metrics}
 
     # M5: 结构化 AI导读（radar 阅读面板）—— 强制 JSON 输出，json-repair 容错解析。
-    if body.operation == "guide":
-        from ai_engine.prompt import _RADAR_GUIDE_INSTRUCTION, _RADAR_GUIDE_SYSTEM
+    if body.operation in {"guide", "guide_section", "guide_synthesis"}:
+        from ai_engine.prompt import (
+            _RADAR_GUIDE_INSTRUCTION,
+            _RADAR_GUIDE_SECTION_INSTRUCTION,
+            _RADAR_GUIDE_SECTION_SYSTEM,
+            _RADAR_GUIDE_SYSTEM,
+            _RADAR_GUIDE_SYNTHESIS_INSTRUCTION,
+            _RADAR_GUIDE_SYNTHESIS_SYSTEM,
+        )
+
+        guide_instruction, guide_system = {
+            "guide": (_RADAR_GUIDE_INSTRUCTION, _RADAR_GUIDE_SYSTEM),
+            "guide_section": (_RADAR_GUIDE_SECTION_INSTRUCTION, _RADAR_GUIDE_SECTION_SYSTEM),
+            "guide_synthesis": (_RADAR_GUIDE_SYNTHESIS_INSTRUCTION, _RADAR_GUIDE_SYNTHESIS_SYSTEM),
+        }[body.operation]
+        # Structured reading output should have room for a complete map and
+        # evidence. The request/body limits remain the crash guard; this is
+        # no longer constrained to a short-summary budget.
+        max_tokens = 8192 if body.operation == "guide_synthesis" else 6000
 
         generated = await generate_text(
             user_prompt=(
-                f"主题：{body.topic}\n原文：\n{context}\n\n{_RADAR_GUIDE_INSTRUCTION}"
+                f"主题：{body.topic}\n原文：\n{context}\n\n{guide_instruction}"
             ),
-            system_prompt=_RADAR_GUIDE_SYSTEM,
-            llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=1800, timeout=30.0,
+            system_prompt=guide_system,
+            llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=max_tokens, timeout=45.0,
             disable_thinking=True,
+            operation=f"research_assistant.{body.operation}",
+            request_id=request_id,
         )
         metrics = {
             "latency_ms": int((asyncio.get_event_loop().time() - started) * 1000),
@@ -969,9 +1096,14 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
             guide_parsed=guide is not None,
             **metrics,
         )
-        return {"operation": body.operation, "original": original, "suggestion": None, "guide": guide, "rationale": _RADAR_GUIDE_INSTRUCTION, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
+        # Keep a usable markdown fallback when the model's JSON is malformed.
+        # The BFF can render this instead of turning a recoverable formatting
+        # problem into the generic "生成阅读内容失败" state.
+        suggestion = generated.text.strip() if guide is None else None
+        return {"operation": body.operation, "original": original, "suggestion": suggestion, "guide": guide, "rationale": guide_instruction, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
 
     prompts = {
+        "explain": "解释选中的术语或片段：先定义，再结合上下文说明其在本文中的具体含义、涉及的变量或机制，以及为什么重要；不要只说它是一个术语，不要泛泛而谈。",
         "rewrite": "改写这段文字，使其更清晰、准确、紧凑，保留原意。",
         "summarize": "把这段文字压缩成一段简洁摘要。",
         "counterpoint": "为这段文字补充一个有事实依据的反方观点。",
@@ -980,8 +1112,14 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
     generated = await generate_text(
         user_prompt=f"主题：{body.topic}\n上下文：{context}\n待处理文字：{original}\n要求：{instruction}",
         system_prompt="你是研究文章编辑助手。只返回建议文本，不要 Markdown 包装或解释。",
-        llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=1800, timeout=30.0,
+        # Translation is chunked by the BFF, but a full-fidelity rewrite can
+        # still be longer than a short editing response.  Keep enough output
+        # room and expose provider truncation so callers do not treat a
+        # partial translation as a successful one.
+        llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=1400 if body.operation == "explain" else 5000, timeout=30.0 if body.operation == "explain" else 60.0,
         disable_thinking=True,
+        operation=f"research_assistant.{body.operation}",
+        request_id=request_id,
     )
     metrics = {
         "latency_ms": int((asyncio.get_event_loop().time() - started) * 1000),
@@ -999,7 +1137,7 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
         operation=body.operation,
         **metrics,
     )
-    return {"operation": body.operation, "original": original, "suggestion": generated.text.strip(), "rationale": instruction, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
+    return {"operation": body.operation, "original": original, "suggestion": generated.text.strip(), "rationale": instruction, "claims": [], "warnings": warnings, "truncated": generated.truncated, "finishReason": generated.finish_reason, "request_id": request_id, "metrics": metrics}
 
 
 @app.post("/api/ai/review")

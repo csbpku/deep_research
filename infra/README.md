@@ -2,17 +2,19 @@
 
 该目录保存目标部署拓扑和运维脚本。Week 8 完成初版，可作为部署基线。
 
-## 当前状态（2026-07-28）
+## 当前状态（2026-08-20）
 
 - `docker-compose.yml`：四服务目标拓扑，含健康检查和卷挂载。
 - `nginx.conf`：Web/AI 反代、5 MB 上传、300 秒 AI 超时、JSON access log、健康路径 `/healthz` 和 `/ai-healthz`。
-- `pg-backup.sh`：每日 `pg_dump` + 7 天保留。
+- `pg-backup.sh`：定期 `pg_dump` + 保留最新 7 个备份文件（不是按天数清理）。
 - `pg-restore.sh`：恢复脚本，支持 `--yes` 强制覆盖；恢复后做行数校验。
 - `import-tmp-cleanup.sh`：24h 导入临时清理，默认 dry-run，加 `--apply` 才真删。
 - `web.Dockerfile`：Next.js 多阶段构建（deps → build → runner），内置 HEALTHCHECK。
 - `ai-engine.Dockerfile`：Python 3.11 + uv 多阶段构建，内置 HEALTHCHECK。
 - Web BFF 已实现 `/api/healthz` liveness 端点（`apps/web/src/app/api/healthz/route.ts`）。
 - AI engine `/healthz` 已存在（W1）。
+
+本地默认运行方式是原生 PostgreSQL + `pnpm dev:web` / `pnpm dev:ai`；Docker Compose 是独立的部署/恢复演练拓扑，不是本地默认依赖。
 
 ## 文件
 

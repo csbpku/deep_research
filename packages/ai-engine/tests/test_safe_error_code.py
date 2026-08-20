@@ -56,10 +56,14 @@ def test_safe_error_code_maps_httpx_timeout_to_url_fetch_timeout() -> None:
     assert _safe_error_code(httpx.ReadTimeout("read-timeout")) == "URL_FETCH_TIMEOUT"
 
 
-def test_safe_error_code_maps_network_to_url_fetch_blocked() -> None:
-    assert _safe_error_code(httpx.ConnectError("dns")) == "URL_FETCH_BLOCKED"
-    assert _safe_error_code(httpx.NetworkError("net")) == "URL_FETCH_BLOCKED"
-    assert _safe_error_code(httpx.RemoteProtocolError("proto")) == "URL_FETCH_BLOCKED"
+def test_safe_error_code_maps_network_to_url_fetch_network() -> None:
+    assert _safe_error_code(httpx.ConnectError("connect failed")) == "URL_FETCH_NETWORK"
+    assert _safe_error_code(httpx.NetworkError("net")) == "URL_FETCH_NETWORK"
+    assert _safe_error_code(httpx.RemoteProtocolError("proto")) == "URL_FETCH_NETWORK"
+
+
+def test_safe_error_code_keeps_security_block_distinct_from_network() -> None:
+    assert _safe_error_code(SafeFetchError("URL_FETCH_BLOCKED", "private target")) == "URL_FETCH_BLOCKED"
 
 
 def test_safe_error_code_maps_arxiv_timeout_to_worker_timeout() -> None:
@@ -73,12 +77,12 @@ def test_safe_error_code_maps_arxiv_rate_limited() -> None:
     assert _safe_error_code(RuntimeError("arxiv_rate_limited:429")) == "UPSTREAM_RATE_LIMITED"
 
 
-def test_safe_error_code_maps_arxiv_network_to_blocked() -> None:
-    assert _safe_error_code(RuntimeError("arxiv_network:ConnectError")) == "URL_FETCH_BLOCKED"
+def test_safe_error_code_maps_arxiv_network_to_network() -> None:
+    assert _safe_error_code(RuntimeError("arxiv_network:ConnectError")) == "URL_FETCH_NETWORK"
 
 
 def test_safe_error_code_maps_arxiv_http_error_to_blocked() -> None:
-    assert _safe_error_code(RuntimeError("arxiv_http_error:503")) == "URL_FETCH_BLOCKED"
+    assert _safe_error_code(RuntimeError("arxiv_http_error:503")) == "URL_FETCH_NETWORK"
 
 
 def test_safe_error_code_maps_arxiv_parse_to_validation_failed() -> None:

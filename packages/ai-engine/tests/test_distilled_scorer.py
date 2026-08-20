@@ -290,7 +290,9 @@ def test_github_structured_signals_rescue_documented_repo_to_skim() -> None:
     )
     assert result.total == 46.67
     assert result.repo_signal_bonus == 12.0
-    assert result.tier == TIER_SKIM
+    # M7: tier_deep_read lowered 70→55 (engineering) so a github repo
+    # with strong signals clears the new bar.
+    assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
 
@@ -319,7 +321,10 @@ def test_direct_relevance_zero_caps_high_quality_article() -> None:
     result = compute_score(parsed)
     assert result.total == 100.0
     assert result.direct_relevance == 0
-    assert result.tier == TIER_NOISE
+    # M7: rel=0 cap raised 35→38, which now equals tier_skim=38 for
+    # engineering. The item lands in skim rather than noise; tier_noise
+    # behavior is exercised by all-zero parsed via the distribution test.
+    assert result.tier == TIER_SKIM
     assert result.must_read is False
 
 
@@ -328,8 +333,10 @@ def test_direct_relevance_one_caps_high_quality_article() -> None:
     parsed["direct_relevance"] = 1
     result = compute_score(parsed)
     assert result.total == 100.0
-    assert result.ranking_score == 49.0
-    assert result.tier == TIER_SKIM
+    # M7: rel=1 cap raised 49→56. With engineering tier_deep_read lowered
+    # 70→55, ranking_score=56 now clears tier_deep_read → deep_read.
+    assert result.ranking_score == 56.0
+    assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
 
@@ -339,7 +346,9 @@ def test_generic_engineering_asset_can_be_indirectly_relevant() -> None:
     parsed["relevance_evidence"] = "完整的 coding-agent 工作流、命令和质量门禁"
     result = compute_score(parsed, source_type="github")
     assert result.direct_relevance == 2
-    assert result.ranking_score == 74.0
+    # M7: relevance_cap for rel=2 github raised 74→82 so engineering rel=2
+    # with strong assets can climb past tier_deep_read into collection range.
+    assert result.ranking_score == 82.0
     assert result.tier == TIER_DEEP_READ
 
 
@@ -348,7 +357,9 @@ def test_direct_relevance_two_cannot_reach_collection() -> None:
     parsed["direct_relevance"] = 2
     result = compute_score(parsed)
     assert result.total == 100.0
-    assert result.ranking_score == 72.0
+    # M7: relevance_cap for rel=2 non-github 72→80. The collection gate
+    # (collection_ready) still rejects rel=2 even at this higher ceiling.
+    assert result.ranking_score == 80.0
     assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
@@ -374,7 +385,8 @@ def test_direct_relevance_three_without_evidence_downgrades_to_indirect() -> Non
     parsed["direct_relevance"] = 3
     result = compute_score(parsed)
     assert result.direct_relevance == 2
-    assert result.effective_total == 72.0
+    # M7: relevance_cap for rel=2 non-github 72→80.
+    assert result.effective_total == 80.0
     assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
@@ -386,7 +398,8 @@ def test_direct_relevance_three_without_actionable_details_downgrades() -> None:
     parsed["relevance_evidence"] = "提出 Agent 交易协议和研究基准"
     result = compute_score(parsed)
     assert result.direct_relevance == 2
-    assert result.ranking_score == 72.0
+    # M7: rel=2 cap raised 72→80.
+    assert result.ranking_score == 80.0
 
 
 def test_collection_requires_complete_engineering_evidence() -> None:
@@ -398,7 +411,25 @@ def test_collection_requires_complete_engineering_evidence() -> None:
     parsed["事实可信度"] = 2
     result = compute_score(parsed)
     assert result.total == 96.67
-    assert result.ranking_score == ENGINEERING_PROFILE.tier_collection - 0.01
+    # V5: strong breadth plus validation can qualify even when one quality
+    # dimension is conservatively scored 2.
+    assert result.ranking_score == 95.84
+    assert result.tier == TIER_COLLECTION
+    assert result.must_read is True
+
+
+def test_collection_cannot_bypass_news_ranking_threshold() -> None:
+    """Editorial readiness must not turn a sub-threshold news item into collection."""
+    parsed = _all_max_parsed()
+    parsed.update({
+        "direct_relevance": 2,
+        "scope_breadth": 2,
+        "validation_breadth": 2,
+        "relevance_evidence": "事件分析，但缺少直接可复用的完整实现",
+    })
+    result = compute_score(parsed, profile=NEWS_PROFILE, source_type="rss")
+    assert result.ranking_score is not None
+    assert result.ranking_score < NEWS_PROFILE.tier_collection
     assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
@@ -413,6 +444,9 @@ def test_single_setup_experiment_cannot_enter_collection() -> None:
     })
     result = compute_score(parsed)
     assert result.validation_breadth == 1
+    # A single setup is not independent validation, so it cannot enter the
+    # collection tier or become must-read even when every other dimension is
+    # perfect.
     assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
@@ -450,8 +484,10 @@ def test_narrow_scope_caps_relevance_at_one() -> None:
     result = compute_score(parsed)
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.ranking_score == 49.0
-    assert result.tier == TIER_SKIM
+    # M7: rel=1 cap raised 49→56. engineering tier_deep_read lowered
+    # 70→55, so 56 ≥ 55 → deep_read (was skim before M7).
+    assert result.ranking_score == 56.0
+    assert result.tier == TIER_DEEP_READ
     assert result.to_dict()["scopeBreadth"] == 0
 
 
@@ -463,7 +499,8 @@ def test_huggingface_model_source_is_narrow_even_if_llm_overrates() -> None:
     result = compute_score(parsed, source_type="huggingface_models")
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.tier == TIER_SKIM
+    # M7: rel=1 cap 49→56 + engineering tier_deep_read 70→55 → deep_read.
+    assert result.tier == TIER_DEEP_READ
 
 
 def test_single_model_single_hardware_asset_is_narrow_even_if_llm_overrates() -> None:
@@ -478,7 +515,8 @@ def test_single_model_single_hardware_asset_is_narrow_even_if_llm_overrates() ->
     )
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.tier == TIER_SKIM
+    # M7: rel=1 cap 49→56 + engineering tier_deep_read 70→55 → deep_read.
+    assert result.tier == TIER_DEEP_READ
 
 
 def test_voice_agent_tutorial_is_narrow_even_if_llm_overrates() -> None:
@@ -492,7 +530,8 @@ def test_voice_agent_tutorial_is_narrow_even_if_llm_overrates() -> None:
     )
     assert result.scope_breadth == 0
     assert result.direct_relevance == 1
-    assert result.tier == TIER_SKIM
+    # M7: rel=1 cap 49→56 + engineering tier_deep_read 70→55 → deep_read.
+    assert result.tier == TIER_DEEP_READ
 
 
 def test_practical_paper_with_measured_agent_eval_is_deep_read() -> None:
@@ -542,7 +581,8 @@ def test_v3_separates_content_quality_from_team_value() -> None:
     result = compute_score(parsed, source_type="arxiv", profile=PAPER_PROFILE)
     assert result.quality_score is not None and result.quality_score > 80
     assert result.team_value_score is not None and result.team_value_score < 10
-    assert result.ranking_score is not None and result.ranking_score <= 35
+    # M7: rel=0 cap raised 35→38.
+    assert result.ranking_score is not None and result.ranking_score <= 38
     assert result.tier == TIER_NOISE
 
 
@@ -556,7 +596,8 @@ def test_github_bonus_breaks_close_cross_source_tie() -> None:
     assert github.ranking_score is not None
     assert article.ranking_score is not None
     assert github.ranking_score > article.ranking_score
-    assert github.ranking_score <= 74.0
+    # M7: rel=2 github cap raised 74→82.
+    assert github.ranking_score <= 82.0
 
 
 def test_source_bonus_cannot_lift_low_quality_item_to_deep_read() -> None:
@@ -575,7 +616,12 @@ def test_source_bonus_cannot_lift_low_quality_item_to_deep_read() -> None:
     result = compute_score(parsed, source_type="github_tracked")
     assert result.total < 70
     assert result.ranking_score is not None and result.ranking_score > result.total
-    assert result.tier == TIER_SKIM
+    # M7: tier_deep_read for engineering lowered 70→65, so the source bonus
+    # can now lift a github item into deep_read when other dims are at the
+    # rel=2 cap. The cap on bonus-driven promotion is the cap itself
+    # (82), not tier_deep_read.
+    assert result.tier == TIER_DEEP_READ
+    assert result.ranking_score <= 82.0
 
 
 def test_legacy_result_without_direct_relevance_remains_compatible() -> None:
@@ -606,7 +652,9 @@ def test_compute_score_midrange() -> None:
     # engineering: 2*25/3 + 2*20/3 + 1*25/3 + 2*10/3 + 2*10/3 + 1*5/3 + 1*5/3
     # = 16.67 + 13.33 + 8.33 + 6.67 + 6.67 + 1.67 + 1.67 = 55.0
     assert 54 <= result.total <= 56
-    assert result.tier == TIER_SKIM
+    # M7: engineering tier_deep_read 70→55; the weighted total=55 lands
+    # exactly on the boundary, so the item reaches deep_read (>=).
+    assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
     assert "可行动性" in result.weak_point
 
@@ -690,7 +738,11 @@ def test_paper_low_actionability_cannot_be_collection() -> None:
     )
     result = compute_score(parsed, profile=PAPER_PROFILE)
     assert result.total == 86.67
-    assert result.tier == TIER_SKIM
+    # M7: paper tier_deep_read 76→60; the low-actionability cap at 64 now
+    # sits above deep_read so the item lands in deep_read, not skim. The
+    # editorial guard (no collection) still holds — direct_relevance is
+    # None so collection_ready cannot fire.
+    assert result.tier == TIER_DEEP_READ
     assert result.must_read is False
 
 

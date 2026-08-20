@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
@@ -195,6 +195,27 @@ class FakeAdapter(ResearchEngineAdapter):
             was_running=was_running,
             job_id=job_id,
         )
+
+    async def stream_chat(
+        self,
+        request: ResearchRequest,
+        *,
+        on_delta: Callable[[str], Awaitable[None]],
+    ) -> AdapterStatus:
+        """M7 fake-side true-token streaming for SSE tests.
+
+        Submits via the existing ``submit`` path so the same status script
+        runs, then walks ``job.body`` in 8-char chunks and invokes
+        ``on_delta`` between yields. The terminal status is returned.
+        """
+        job_id = await self.submit(request)
+        job = self._require_job(job_id)
+        body = job.body or ""
+        chunk_size = 8
+        for i in range(0, len(body), chunk_size):
+            await on_delta(body[i : i + chunk_size])
+            await asyncio.sleep(0)
+        return await self.get_status(job_id)
 
     async def health(self) -> AdapterHealth:
         return AdapterHealth(

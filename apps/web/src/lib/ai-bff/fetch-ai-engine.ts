@@ -158,13 +158,28 @@ export async function fetchAiEngine<T = unknown>(
   const isInputError = upstreamRes.status === 400 || upstreamRes.status === 422;
   const code = (obj.code as ErrorCode) ?? (isInputError ? ERROR_CODES.VALIDATION_FAILED : ERROR_CODES.AI_ENGINE_UNAVAILABLE);
   const details = obj.details ?? (isInputError ? sanitizeUpstreamDetail(obj.detail) : undefined);
+  // FastAPI 的校验错误只在 detail[*].msg 里给具体原因，没有顶层 message。
+  // 用第一项的 msg 作为用户可见提示，避免出现「请重新选择文本」这种误导。
+  const detailMessage = isInputError ? firstDetailMessage(obj.detail) : undefined;
   return {
     ok: false,
     code,
     requestId: opts.requestId,
-    message: obj.message ?? (isInputError ? 'AI 请求参数不合法，请重新选择文本后重试' : FRIENDLY_UPSTREAM_DOWN),
+    message: obj.message ?? detailMessage ?? (isInputError ? 'AI 请求参数不合法，请重新选择文本后重试' : FRIENDLY_UPSTREAM_DOWN),
     ...(details === undefined ? {} : { details }),
   };
+}
+
+/** Pick the first FastAPI/Pydantic validation msg, if any. */
+function firstDetailMessage(detail: unknown): string | undefined {
+  if (!Array.isArray(detail)) return undefined;
+  for (const item of detail) {
+    if (item && typeof item === 'object' && typeof (item as { msg?: unknown }).msg === 'string') {
+      const msg = (item as { msg: string }).msg.trim();
+      if (msg) return msg.slice(0, 200);
+    }
+  }
+  return undefined;
 }
 
 /** Keep FastAPI validation details useful without exposing request contents. */

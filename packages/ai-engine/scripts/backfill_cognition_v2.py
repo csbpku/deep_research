@@ -53,7 +53,7 @@ async def _run() -> int:
 
     print(f"issue_worker: {issue_stats}")
     print(f"synthesis_v2: {synth_stats}")
-    return 0
+    return 1 if synth_stats["failed"] > 0 else 0
 
 
 if __name__ == "__main__":

@@ -220,7 +220,7 @@ async def enqueue_radar_enrichment(
     """Re-run deep-dive enrichment for candidates promoted by Admin."""
     summary_ids = tuple(dict.fromkeys(body.summary_ids))
 
-    async def _run() -> None:
+    async def _run_body() -> None:
         async with pool.connection() as conn:
             placeholders = ",".join(["%s"] * len(summary_ids))
             await conn.execute(
@@ -233,12 +233,41 @@ async def enqueue_radar_enrichment(
             pool,
             limit=len(summary_ids),
             summary_ids=summary_ids,
+            force=body.force,
         )
+        rescored = 0
+        if body.force and enriched > 0:
+            from ai_engine.radar.candidate_postprocessor import score_missing_candidates
+
+            rescored = await score_missing_candidates(
+                pool,
+                limit=len(summary_ids),
+                summary_ids=summary_ids,
+                rescore=True,
+            )
         structlog.get_logger("ai_engine.radar").info(
             "ai-engine.radar.promoted_enrichment_done",
             requested=len(summary_ids),
             enriched=enriched,
+            rescored=rescored,
         )
+    async def _run() -> None:
+        try:
+            await _run_body()
+        except Exception as exc:
+            structlog.get_logger("ai_engine.radar").warning(
+                "ai-engine.radar.enrichment_task_failed",
+                error_type=type(exc).__name__,
+            )
+        finally:
+            async with pool.connection() as conn:
+                placeholders = ",".join(["%s"] * len(summary_ids))
+                await conn.execute(
+                    'UPDATE "summaries" SET "tags" = array_remove("tags", \'migration_queued_v2\'), '
+                    '"updatedAt" = now() WHERE "id" IN (' + placeholders + ')',
+                    summary_ids,
+                )
+                await conn.commit()
 
     asyncio.create_task(_run())
     return {"status": "queued", "summaryIds": list(summary_ids)}

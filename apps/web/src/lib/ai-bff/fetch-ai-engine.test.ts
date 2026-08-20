@@ -15,7 +15,7 @@ describe('fetchAiEngine', () => {
     expect(result).toEqual(expect.objectContaining({
       ok: false,
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: 'AI 请求参数不合法，请重新选择文本后重试',
+      message: 'Field required',
       details: [{ location: ['body', 'selection'], message: 'Field required', type: 'missing' }],
     }));
   });

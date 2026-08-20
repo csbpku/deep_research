@@ -7,7 +7,9 @@
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/pnpm</string>
-    <string>dev:web</string>
+    <string>--dir</string>
+    <string>apps/web</string>
+    <string>start</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/shaobo.chen/deep_research</string>

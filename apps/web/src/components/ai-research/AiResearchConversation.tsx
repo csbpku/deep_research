@@ -230,7 +230,7 @@ export function AiResearchConversation() {
 
   return (
     <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm" aria-label="AI 调研对话">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-gradient-to-r from-primary/8 via-card to-card px-5 py-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-primary/[0.035] px-5 py-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="grid size-8 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm">
@@ -238,7 +238,7 @@ export function AiResearchConversation() {
             </span>
             <div>
               <h2 className="text-base font-semibold">调研对话</h2>
-              <p className="text-xs text-muted-foreground">从一个问题开始，按需补齐范围与资料。</p>
+              <p className="text-xs text-muted-foreground">先写问题，后面只补真正影响结论的条件。</p>
             </div>
           </div>
         </div>
@@ -247,9 +247,8 @@ export function AiResearchConversation() {
         </Badge>
       </header>
 
-      <div className="grid min-h-[560px] lg:grid-cols-[minmax(0,1fr)_280px]">
-        <div className="flex min-h-0 flex-col">
-          <div className="min-h-[390px] flex-1 space-y-5 overflow-y-auto px-5 py-6" aria-live="polite">
+      <div className="flex min-h-0 flex-col">
+          <div className="min-h-[250px] flex-1 space-y-5 overflow-y-auto px-5 py-5" aria-live="polite">
             {messages.map((message) => (
               <div key={message.id} className={cn('flex items-start gap-3', message.role === 'user' && 'flex-row-reverse')}>
                 <span className={cn(
@@ -307,6 +306,90 @@ export function AiResearchConversation() {
             </div>
           ) : null}
 
+          {canConfigure ? (
+            <aside className="border-t border-border bg-muted/15 px-5 py-4" aria-label="调研设置">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">研究参数</h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">可选。先确认问题，再决定产物和资料范围。</p>
+                </div>
+                <Button type="button" size="sm" onClick={() => void submit()} disabled={submitting}>
+                  {submitting ? <Loader2 className="animate-spin" /> : <Send />}
+                  {submitting ? '启动中…' : '开始调研'}
+                </Button>
+              </div>
+              <fieldset disabled={submitting} className="grid gap-4 md:grid-cols-[1.1fr_0.9fr_1.2fr] disabled:opacity-50">
+                <div className="space-y-2">
+                  <span className="text-xs font-medium">产物</span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {reportOptions.map((option) => {
+                      const Icon = option.icon;
+                      const selected = reportType === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setReportType(option.value)}
+                          className={cn(
+                            'rounded-lg border px-2 py-2 text-left transition-colors',
+                            selected ? 'border-primary bg-primary/8 text-primary' : 'border-border bg-card hover:bg-muted/60',
+                          )}
+                        >
+                          <span className="flex items-center gap-1.5 text-xs font-medium"><Icon className="size-3.5" />{option.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <span className="text-xs font-medium">资料范围</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button type="button" variant={sourcePolicy === 'prefer_user_sources' ? 'secondary' : 'outline'} size="xs" onClick={() => setSourcePolicy('prefer_user_sources')}>优先指定</Button>
+                    <Button type="button" variant={sourcePolicy === 'only_user_sources' ? 'secondary' : 'outline'} size="xs" onClick={() => setSourcePolicy('only_user_sources')}>只用指定</Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="conversation-source-url" className="text-xs font-medium">补充网页资料 <span className="font-normal text-muted-foreground">（可选）</span></label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="conversation-source-url"
+                      type="url"
+                      value={sourceDraft}
+                      onChange={(event) => setSourceDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          addSourceUrl();
+                        }
+                      }}
+                      placeholder="https://…"
+                      className="h-8 min-w-0 text-xs"
+                    />
+                    <Button type="button" variant="outline" size="icon-sm" onClick={addSourceUrl} aria-label="添加网页资料">
+                      <Link2 className="size-3.5" />
+                    </Button>
+                  </div>
+                  {sourceUrls.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {sourceUrls.map((url) => (
+                        <button
+                          key={url}
+                          type="button"
+                          onClick={() => setSourceUrls((current) => current.filter((value) => value !== url))}
+                          className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+                          title={`移除资料 ${url}`}
+                        >
+                          <span className="max-w-[180px] truncate">{url}</span>
+                          <X className="size-3 shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </fieldset>
+            </aside>
+          ) : null}
+
           <form data-ai-research-form onSubmit={handleMessageSubmit} className="border-t border-border bg-card p-4">
             <div className="rounded-xl border border-input bg-background shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
               <Textarea
@@ -328,94 +411,6 @@ export function AiResearchConversation() {
               </div>
             </div>
           </form>
-        </div>
-
-        <aside className="border-t border-border bg-muted/20 p-4 lg:border-l lg:border-t-0" aria-label="调研设置">
-          <div className="mb-4">
-            <h3 className="text-sm font-semibold">调研设置</h3>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">问题明确后可按需调整；不会打断对话。</p>
-          </div>
-
-          <fieldset disabled={!canConfigure || submitting} className="space-y-5 disabled:opacity-50">
-            <div className="space-y-2">
-              <span className="text-xs font-medium">产物</span>
-              <div className="space-y-2">
-                {reportOptions.map((option) => {
-                  const Icon = option.icon;
-                  const selected = reportType === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setReportType(option.value)}
-                      className={cn(
-                        'w-full rounded-lg border p-2.5 text-left transition-colors',
-                        selected ? 'border-primary bg-primary/8' : 'border-border bg-card hover:bg-muted/60',
-                      )}
-                    >
-                      <span className="flex items-center gap-2 text-xs font-medium"><Icon className="size-3.5" />{option.label}</span>
-                      <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{option.description}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <span className="text-xs font-medium">资料范围</span>
-              <div className="grid grid-cols-2 gap-2">
-                <Button type="button" variant={sourcePolicy === 'prefer_user_sources' ? 'secondary' : 'outline'} size="xs" onClick={() => setSourcePolicy('prefer_user_sources')}>
-                  优先指定资料
-                </Button>
-                <Button type="button" variant={sourcePolicy === 'only_user_sources' ? 'secondary' : 'outline'} size="xs" onClick={() => setSourcePolicy('only_user_sources')}>
-                  只用指定资料
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="conversation-source-url" className="text-xs font-medium">补充网页资料</label>
-              <div className="flex gap-2">
-                <Input
-                  id="conversation-source-url"
-                  type="url"
-                  value={sourceDraft}
-                  onChange={(event) => setSourceDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      addSourceUrl();
-                    }
-                  }}
-                  placeholder="https://…"
-                  className="h-8 min-w-0 text-xs"
-                />
-                <Button type="button" variant="outline" size="icon-sm" onClick={addSourceUrl} aria-label="添加网页资料">
-                  <Link2 className="size-3.5" />
-                </Button>
-              </div>
-              {sourceUrls.length > 0 ? (
-                <ul className="space-y-1.5">
-                  {sourceUrls.map((url) => (
-                    <li key={url} className="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1.5">
-                      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={url}>{url}</span>
-                      <button type="button" onClick={() => setSourceUrls((current) => current.filter((value) => value !== url))} className="text-muted-foreground hover:text-foreground" aria-label={`移除资料 ${url}`}>
-                        <X className="size-3.5" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-
-            {canConfigure ? (
-              <Button type="button" className="w-full" onClick={() => void submit()} disabled={submitting}>
-                {submitting ? <Loader2 className="animate-spin" /> : <Send />}
-                {submitting ? '启动中…' : '开始调研'}
-              </Button>
-            ) : null}
-          </fieldset>
-        </aside>
       </div>
     </section>
   );

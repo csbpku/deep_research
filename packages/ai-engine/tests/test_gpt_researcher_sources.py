@@ -7,16 +7,51 @@ tests pin the pure mapping so the DB CHECK (succeeded requires >=1 source)
 stops being hit with an empty array.
 """
 
+import asyncio
+
+import pytest
+
 from ai_engine.adapters.gpt_researcher import _collect_sources_from_research
 from ai_engine.adapters.gpt_researcher import (
     _append_references,
+    _Job,
+    GptResearcherAdapter,
     _report_needs_completion,
     _strip_reference_section,
     _resolved_internal_sources,
     _strip_overlap,
 )
-from ai_engine.adapters.base import AdapterSource
-from ai_engine.contracts.states import AI_JOB_STEP
+from ai_engine.adapters.base import AdapterSource, ResearchRequest
+from ai_engine.contracts.states import AI_JOB_STEP, AI_JOB_STATUS, SOURCE_POLICY
+
+
+@pytest.mark.asyncio
+async def test_adapter_deadline_marks_stuck_research_as_worker_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = GptResearcherAdapter(brief_llm="openai:test")
+    request = ResearchRequest(
+        job_id="stuck-research",
+        request_id="stuck-research",
+        topic="timeout test",
+        context=None,
+        report_type="research_report",
+        source_policy=SOURCE_POLICY["PREFER_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=(),
+        timeout_seconds=1,
+    )
+    job = _Job(request=request)
+    adapter._jobs[request.job_id] = job
+
+    async def stuck_run(self: GptResearcherAdapter, _job: _Job) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(GptResearcherAdapter, "_run_impl", stuck_run)
+
+    await adapter._run(job)
+    status = await adapter.get_status(request.job_id)
+
+    assert status.status == AI_JOB_STATUS["FAILED"]
+    assert status.error_code == "WORKER_TIMEOUT"
+    assert "1s timeout" in (status.error_message or "")
 
 
 def test_maps_captured_sources_with_title_and_snippet() -> None:

@@ -8,7 +8,12 @@ import logging
 import os
 from typing import Any, Awaitable, Callable
 
-from ai_engine.radar.distilled_scorer import DistilledScore, score_with_llm
+from ai_engine.radar.distilled_scorer import (
+    DistilledScore,
+    build_distilled_score_reason,
+    score_with_llm,
+)
+from ai_engine.radar.sync_runner import _is_low_quality_content
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 logger = logging.getLogger("ai_engine.radar.candidate_postprocessor")
@@ -37,6 +42,8 @@ async def score_missing_candidates(
     pool: Any,
     *,
     limit: int = 50,
+    summary_ids: tuple[str, ...] | None = None,
+    rescore: bool = False,
     concurrency: int | None = None,
     scorer: ScoreFn = score_with_llm,
 ) -> int:
@@ -48,16 +55,27 @@ async def score_missing_candidates(
     retry the real LLM score.
     """
     async with pool.connection() as conn:
+        summary_filter = ""
+        params: tuple[Any, ...] = ()
+        if summary_ids:
+            placeholders = ",".join(["%s"] * len(summary_ids))
+            summary_filter = f'AND s."id" IN ({placeholders}) '
+            params = summary_ids
+        score_filter = 's."distilledScore" IS NULL ' if not rescore else 'TRUE '
+        summary_filter = summary_filter.removeprefix('AND ')
+        where_prefix = 'WHERE ' + score_filter
+        if summary_filter:
+            where_prefix += 'AND ' + summary_filter
         rows = await (
             await conn.execute(
                 'SELECT s."id", s."title", s."body", s."url", '
-                's."publishedAt", s."originalMarkdown", '
+                's."publishedAt", s."originalMarkdown", s."tags", '
                 'COALESCE(rs."sourceType", CASE WHEN s."source" = \'user\' '
                 'THEN \'web_share\' ELSE \'rss\' END) AS "sourceType" '
                 'FROM "summaries" s '
                 'LEFT JOIN "radar_sync_runs" rr ON rr."id" = s."syncRunId" '
                 'LEFT JOIN "radar_sources" rs ON rs."id" = rr."sourceId" '
-                'WHERE s."distilledScore" IS NULL '
+                + where_prefix +
                 'AND ((s."source" = \'daily\' AND s."syncRunId" IS NOT NULL) '
                 'OR (s."source" = \'user\' AND s."status" IN '
                 '(\'candidate\', \'published\') AND EXISTS ('
@@ -65,7 +83,7 @@ async def score_missing_candidates(
                 'WHERE sh."publishedSummaryId" = s."id" '
                 'AND sh."status" = \'approved\'))) '
                 'ORDER BY s."createdAt" ASC LIMIT %s',
-                (max(1, limit),),
+                (*params, max(1, limit)),
             )
         ).fetchall()
 
@@ -85,6 +103,13 @@ async def score_missing_candidates(
             or row.get("title")
             or ""
         )
+        tags = row.get("tags") or []
+        if ("content_pending" in tags and not rescore) or _is_low_quality_content(content):
+            logger.info(
+                "ai-engine.radar.postprocess.score_deferred_incomplete_content",
+                extra={"summary_id": str(row["id"]), "source_type": source_type},
+            )
+            return None
         try:
             async with gate:
                 result = await scorer(
@@ -123,14 +148,15 @@ async def score_missing_candidates(
                 'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, "distilledTier" = %s, '
                 '"distilledMustRead" = %s, "distilledProfile" = %s, '
-                '"updatedAt" = now() WHERE "id" = %s '
-                'AND "distilledScore" IS NULL',
+                '"scoreReason" = %s, '
+                '"updatedAt" = now() WHERE "id" = %s',
                 (
                     json.dumps(result.to_dict(), ensure_ascii=False),
                     total,
                     result.tier,
                     result.must_read,
                     result.profile_id,
+                    build_distilled_score_reason(result),
                     summary_id,
                 ),
             )

@@ -15,9 +15,11 @@ from ai_engine.job_runner.db_store import DbJobStore
 from ai_engine.radar.distilled_scorer import (
     DistilledScore,
     ScoringMonitor,
+    build_distilled_score_reason,
     compute_score,
     score_with_llm,
 )
+from ai_engine.radar.sync_runner import _is_low_quality_content
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 _SOURCE_PROFILE: dict[str, str] = {
@@ -102,7 +104,7 @@ async def main() -> int:
     async with store.pool.connection() as conn:
         rows = await (await conn.execute(
             'SELECT "id", "title", "body", "url", "publishedAt", "syncRunId", '
-            '  "originalMarkdown", '
+            '  "originalMarkdown", "tags", '
             '  "distilledScore", "distilledProfile", '
             '  (SELECT s."sourceType" FROM "radar_sync_runs" r '
             '   JOIN "radar_sources" s ON s."id" = r."sourceId" '
@@ -127,17 +129,22 @@ async def main() -> int:
     concurrency = max(1, args.concurrency)
     score_gate = asyncio.Semaphore(concurrency)
 
-    async def score_row(raw: Any) -> tuple[dict[str, Any], DistilledScore]:
+    async def score_row(raw: Any) -> tuple[dict[str, Any], DistilledScore | None]:
         row = dict(raw)
         title = str(row["title"])
         body = str(row.get("originalMarkdown") or row.get("body") or title)
         source_type = str(row.get("sourceType") or "web_share")
 
+        if "content_pending" in (row.get("tags") or []) or _is_low_quality_content(body):
+            return row, None
+
         url = str(row.get("url", "") or "")
         profile, profile_id = profile_for_source_url(source_type, url)
         published_at = row.get("publishedAt")
         stored = row.get("distilledScore")
-        if args.recalibrate_only and isinstance(stored, dict):
+        if args.recalibrate_only:
+            if not isinstance(stored, dict):
+                return row, None
             dimensions = stored.get("dimensions")
             parsed = dict(dimensions) if isinstance(dimensions, dict) else {}
             parsed["directRelevance"] = stored.get("directRelevance")
@@ -170,6 +177,9 @@ async def main() -> int:
     monitor = ScoringMonitor()
     async with store.pool.connection() as conn:
         for scored, (row, result) in enumerate(scored_rows, start=1):
+            if result is None:
+                print(f"  [{scored:3d}] {str(row['title'])[:60]:<60s} | deferred: incomplete content")
+                continue
             monitor.record(result)
             await conn.execute(
                 'UPDATE "summaries" SET '
@@ -177,7 +187,8 @@ async def main() -> int:
                 '"distilledTotal" = %s, '
                 '"distilledTier" = %s, '
                 '"distilledMustRead" = %s, '
-                '"distilledProfile" = %s '
+                '"distilledProfile" = %s, '
+                '"scoreReason" = %s '
                 'WHERE "id" = %s',
                 (
                     json.dumps(result.to_dict(), ensure_ascii=False),
@@ -185,6 +196,7 @@ async def main() -> int:
                     result.tier,
                     result.must_read,
                     result.profile_id,
+                    build_distilled_score_reason(result),
                     row["id"],
                 ),
             )

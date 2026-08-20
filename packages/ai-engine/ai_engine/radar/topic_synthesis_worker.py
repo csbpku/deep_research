@@ -142,6 +142,7 @@ async def _generate_for_topic(pool: Any, topic_id: str) -> bool:
                 tier="light",
                 max_tokens=2048,
                 timeout=LLM_TIMEOUT_SECONDS,
+                operation="radar.topic_synthesis",
             ),
             timeout=LLM_TIMEOUT_SECONDS + 5,
         )

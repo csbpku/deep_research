@@ -11,7 +11,7 @@ import { log, serializeError } from './log';
 
 export const CHAT_READ_TIMEOUT_MS = 5_000;
 // LLM 追问端到端可能 10-20s；10s 会让 BFF 提前 abort，用户看到“ai-engine 不可达”
-export const CHAT_WRITE_TIMEOUT_MS = 30_000;
+export const CHAT_WRITE_TIMEOUT_MS = 150_000;
 
 export interface ChatSeedSnapshot {
   id: string;
@@ -21,11 +21,13 @@ export interface ChatSeedSnapshot {
   interpretation: string | null;
   summary_date: string;
   tags: string[];
+  authors: string[];
   // Phase 1 deep-dive: original source captured by radar sync. Null
   // for pre-Phase-0 rows; chat UI should hide the "AI 上下文：原文"
   // chip when both are null.
   original_markdown: string | null;
   original_kind: string | null;
+  reading_context: string | null;
 }
 
 export interface UpstreamChatMessage {
@@ -99,6 +101,43 @@ export async function fetchChatEngine(
     });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * M7 streaming variant — does NOT consume the response body. Returns the raw
+ * upstream ``Response`` so the caller can pipe its SSE body through. No
+ * timeout is applied: the LLM may take 10–30s and the SSE stream is meant
+ * to stay open until the upstream closes.
+ */
+export async function streamChatEngine(
+  url: string,
+  init: RequestInit,
+  requestId: string,
+  scope: string,
+): Promise<Response | NextResponse> {
+  try {
+    const res = await fetch(url, {
+      ...init,
+      headers: {
+        ...init.headers,
+        'x-request-id': requestId,
+        accept: 'text/event-stream',
+      },
+      // No signal — long-lived stream.
+    });
+    return res;
+  } catch (err) {
+    log.warn(scope, 'upstream SSE fetch failed', {
+      requestId,
+      err: serializeError(err),
+      upstream: url,
+    });
+    return toApiErrorResponse({
+      code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
+      message: 'ai-engine 不可达',
+      requestId,
+    });
   }
 }
 
@@ -180,8 +219,10 @@ export function publicChatSession(session: UpstreamChatSession) {
       interpretation: session.seed_snapshot.interpretation,
       summaryDate: session.seed_snapshot.summary_date,
       tags: session.seed_snapshot.tags,
+      authors: session.seed_snapshot.authors ?? [],
       originalMarkdown: session.seed_snapshot.original_markdown,
       originalKind: session.seed_snapshot.original_kind,
+      readingContext: session.seed_snapshot.reading_context,
     },
     ...(session.message_count !== undefined ? { messageCount: session.message_count } : {}),
     ...(session.messages

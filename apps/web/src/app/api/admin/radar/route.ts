@@ -19,6 +19,7 @@ import { RadarListQuery } from '../../../../lib/schemas';
 import {
   aggregateFeedbacks,
   matchesQuery,
+  normalizeRadarQuery,
   shapeCandidate,
 } from '../../../../lib/radar/shape';
 import { ERROR_CODES } from '@deep-research/shared/errors';
@@ -83,8 +84,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         ? [{
             OR: [
               { title: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
+              { title: { contains: normalizeRadarQuery(q), mode: 'insensitive' as Prisma.QueryMode } },
+              { url: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
               { interpretation: { contains: q, mode: 'insensitive' as Prisma.QueryMode } },
-              { tags: { has: q } },
+              { interpretation: { contains: normalizeRadarQuery(q), mode: 'insensitive' as Prisma.QueryMode } },
+              { tags: { hasSome: [q, normalizeRadarQuery(q)] } },
             ],
           }]
         : []),
@@ -142,6 +146,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     matchesQuery({
       query: q && q.length > 0 ? q : undefined,
       title: it.title,
+      url: it.url,
       interpretation: it.interpretation,
       tags: it.tags,
     }),

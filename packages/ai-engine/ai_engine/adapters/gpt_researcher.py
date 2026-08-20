@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Iterable, cast
@@ -57,6 +58,8 @@ from ai_engine.contracts.states import (
     AiJobStatus,
 )
 from ai_engine.fact_verifier import verify_github_star_claims
+from ai_engine.llm.client import is_quota_error, sanitize_llm_error
+from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.reviewer import DefaultResearchReviewer, ReviewResult
 
 # ── Import gpt-researcher with compatibility patches ──────────────
@@ -406,6 +409,7 @@ async def _repair_report_with_review(
             max_tokens=3000,
             timeout=60.0,
             disable_thinking=True,
+            operation="research.fact_repair",
         )
     except Exception:
         return None
@@ -754,6 +758,28 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         )
 
     async def _run(self, job: _Job) -> None:
+        """Run one job with a hard, adapter-owned deadline.
+
+        The DB runner's deadline is checked while polling this adapter. It
+        cannot protect us if the gpt-researcher task itself gets stuck inside
+        ``conduct_research`` or ``write_report``. Keep the deadline here too,
+        so a cancelled adapter task becomes a terminal status that the DB
+        runner can persist instead of leaving the lease in ``running``.
+        """
+        timeout_seconds = max(1, int(job.request.timeout_seconds))
+        try:
+            await asyncio.wait_for(
+                self._run_impl(job),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            await self._mark_failed(
+                job,
+                "WORKER_TIMEOUT",
+                f"research adapter exceeded {timeout_seconds}s timeout",
+            )
+
+    async def _run_impl(self, job: _Job) -> None:
         """Drive research: full gpt-researcher for research_report,
         lightweight single-LLM-call for summary_brief."""
         async with job.lock:
@@ -825,28 +851,71 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             complement = job.request.source_policy != "only_user_sources"
 
             step_capture = _StepCaptureLogHandler(job)
+            fallback_spec = os.environ.get("LLM_FALLBACK_LLM", "").strip()
+            model_sets = [(self._llm_spec, self._fast_llm, self._strategic_llm, False)]
+            if fallback_spec and fallback_spec != self._llm_spec:
+                model_sets.append((fallback_spec, fallback_spec, fallback_spec, True))
 
-            researcher = GPTResearcher(
-                query=query_for_researcher,
-                report_type="research_report",
-                report_source="web",
-                source_urls=source_urls or None,
-                complement_source_urls=complement if source_urls else False,
-                websocket=None,
-                log_handler=step_capture,
-                verbose=False,
-            )
+            researcher: Any | None = None
+            report = ""
+            for smart_llm, fast_llm, strategic_llm, used_fallback in model_sets:
+                os.environ["SMART_LLM"] = smart_llm
+                os.environ["FAST_LLM"] = fast_llm
+                os.environ["STRATEGIC_LLM"] = strategic_llm
+                started_at = time.monotonic()
+                candidate = GPTResearcher(
+                    query=query_for_researcher,
+                    report_type="research_report",
+                    report_source="web",
+                    source_urls=source_urls or None,
+                    complement_source_urls=complement if source_urls else False,
+                    websocket=None,
+                    log_handler=step_capture,
+                    verbose=False,
+                )
+                try:
+                    if job.cancel_event.is_set():
+                        return
+                    await candidate.conduct_research()
+                    if job.cancel_event.is_set():
+                        return
+                    report = await candidate.write_report()
+                except Exception as exc:
+                    if not used_fallback and fallback_spec and is_quota_error(exc):
+                        provider, _, model = smart_llm.partition(":")
+                        await record_llm_usage(
+                            LlmUsageAttempt(
+                                operation="research.gpt_researcher",
+                                request_id=job.request.request_id,
+                                provider=provider or "unknown",
+                                requested_model=model or smart_llm,
+                                fallback_model=fallback_spec,
+                                status="failed",
+                                error_kind="quota",
+                                error_message=sanitize_llm_error(exc),
+                                latency_ms=int((time.monotonic() - started_at) * 1000),
+                            )
+                        )
+                        continue
+                    raise
+                researcher = candidate
+                break
 
-            if job.cancel_event.is_set():
-                return
-
-            await researcher.conduct_research()
-
-            if job.cancel_event.is_set():
-                return
-
-            report = await researcher.write_report()
+            if researcher is None:
+                raise RuntimeError("gpt-researcher did not produce a report")
             cost_usd = researcher.get_costs()
+            provider, _, model = (fallback_spec if researcher is not None and smart_llm == fallback_spec else self._llm_spec).partition(":")
+            await record_llm_usage(
+                LlmUsageAttempt(
+                    operation="research.gpt_researcher",
+                    request_id=job.request.request_id,
+                    provider=provider or "unknown",
+                    requested_model=model or self._llm_spec,
+                    fallback_model=self._llm_spec if smart_llm == fallback_spec else fallback_spec or None,
+                    used_fallback=smart_llm == fallback_spec,
+                    cost_cents=round(cost_usd * 100) if cost_usd else 0,
+                )
+            )
             captured = (
                 list(researcher.get_research_sources())
                 if hasattr(researcher, "get_research_sources")
@@ -953,7 +1022,10 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
         Used by radar sync (``summary_brief``) and chat. Calls the shared
         provider-neutral client, bypassing gpt-researcher's heavy
-        planner-executor-publisher pipeline.
+        planner-executor-publisher pipeline. Chat is deliberately handled
+        as Q&A rather than as a summary: the chat prompt already contains
+        the full bounded reading context and must not be reduced to the
+        first 1,000 characters.
         """
         from ai_engine.llm.client import generate_text, sanitize_llm_error
         from ai_engine.fetcher.ai_source_urls import _fetch_user_url
@@ -988,28 +1060,44 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
         topic = job.request.topic
         context = (job.request.context or "").strip()
+        is_chat = job.request.request_id.startswith("chat-")
         src_lines = "\n".join(
             f"- {s.title or s.canonical_key}: {s.snippet or ''}"
             for s in job.sources
         ) if job.sources else ""
 
-        user_content = (
-            f"请用中文为以下内容写 2-4 句摘要，至少 120 个字符，保留关键事实，不要虚构。必须输出完整的句子，不能在半截处结束。\n\n"
-            f"标题: {topic}\n"
-        )
+        if is_chat:
+            user_content = (
+                "请直接回答用户最后的问题。你可以使用上下文中的完整原文、来源元数据和对话历史；"
+                "不要把回答局限为摘要，也不要因为摘要开头缺少信息就忽略原文后半部分。"
+                "如果原文确实没有答案，明确说明缺少哪一部分；如果能从原文找到答案，请给出具体事实，"
+                "必要时逐字引用原文。用中文回答，不要编造。\n\n"
+                f"标题: {topic}\n"
+            )
+        else:
+            user_content = (
+                f"请用中文为以下内容写 2-4 句摘要，至少 120 个字符，保留关键事实，不要虚构。必须输出完整的句子，不能在半截处结束。\n\n"
+                f"标题: {topic}\n"
+            )
         if context:
-            user_content += f"上下文: {context[:1000]}\n"
+            # _build_prompt already enforces the chat input budget. Applying
+            # another small prefix cap here was the reason chat could only
+            # see an article's abstract/opening paragraphs.
+            context_limit = 256000 if is_chat else 1000
+            user_content += f"上下文: {context[:context_limit]}\n"
         if src_lines:
             user_content += f"来源:\n{src_lines[:2000]}\n"
-        user_content += "\n摘要:"
+        user_content += "\n回答:" if is_chat else "\n摘要:"
 
         try:
             result = await generate_text(
                 llm_spec=self._brief_llm,
                 user_prompt=user_content,
-                max_tokens=1024,
+                max_tokens=8192 if is_chat else 1024,
                 timeout=60.0,
                 disable_thinking=True,
+                operation="chat.answer" if is_chat else "research.summary_brief",
+                request_id=job.request.request_id,
             )
             body = result.text
             if not body:

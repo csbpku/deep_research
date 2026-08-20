@@ -87,6 +87,23 @@ describe('matchesQuery', () => {
     })).toBe(true);
   });
 
+  it('matches repository identifiers across hyphens, spaces, and URL', () => {
+    expect(matchesQuery({
+      query: 'deepseek-harness',
+      title: 'DeepSeek Harness',
+      url: 'https://github.com/deepseek-ai/deepseek-harness',
+      interpretation: null,
+      tags: [],
+    })).toBe(true);
+    expect(matchesQuery({
+      query: 'github.com/deepseek-ai/deepseek-harness',
+      title: 'DeepSeek Harness',
+      url: 'https://github.com/deepseek-ai/deepseek-harness',
+      interpretation: null,
+      tags: [],
+    })).toBe(true);
+  });
+
   it('matches tags', () => {
     expect(matchesQuery({
       query: 'postgres',

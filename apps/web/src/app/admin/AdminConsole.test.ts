@@ -91,6 +91,7 @@ describe('AdminConsole tabs contract', () => {
       'topics',
       'shares',
       'comments',
+      'llm_usage',
       'users',
     ]);
   });

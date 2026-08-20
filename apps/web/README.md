@@ -2,10 +2,10 @@
 
 Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/内容工作流和 Prisma 数据访问。跨运行时契约以根目录 `docs/contracts/`、`packages/shared/` 和 `apps/web/prisma/schema.prisma` 为准。
 
-## 当前能力（2026-07-24）
+## 当前能力（2026-08-20）
 
-- 页面：技术雷达与详情、每日摘要、沉淀列表/详情/编辑、文件导入、AI 调研、搜索、登录和精简 Admin。
-- API：researches、imports、summaries、radar、shares、search、AI research、chat session/message、auth 与 admin routes。
+- 页面：技术雷达与详情、主题、沉淀列表/详情/编辑、文件导入、AI 调研、搜索、登录和 Admin。
+- API：researches、imports、radar、shares、search、AI research、chat session/message、auth 与 admin routes；日报 summaries 路由已移除。
 - 基础设施：NextAuth Google OAuth、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma。
 - Week 6 新增摘要上下文 AI 讨论抽屉及对应 BFF；具体历史验收见 `docs/weekly/week6-delivery.md`。
 
@@ -30,6 +30,8 @@ pnpm --filter @deep-research/web exec prisma validate
 pnpm db:generate
 pnpm dev:web                 # http://localhost:3000
 ```
+
+首次启动前，在仓库根目录执行 `./scripts/setup.sh --quick`（或准备好 `.env` 后执行 `pnpm db:deploy`），确保 PostgreSQL 已在 `localhost:5432` 运行。若使用 launchd 常驻 Web，则先执行 `pnpm --filter @deep-research/web build`，因为模板启动的是 `next start` 而不是开发服务器。
 
 数据库 schema 和 migration 是共享契约；除非任务明确授权，不创建、修改或执行 migration。
 

@@ -307,6 +307,31 @@ class DistilledScore:
         return result
 
 
+def build_distilled_score_reason(score: DistilledScore) -> str:
+    """Render one authoritative explanation for the persisted score.
+
+    Keep the user-facing reason aligned with the actual ranking score. The
+    legacy heuristic fields are intentionally not mixed in here because they
+    describe a different scoring system.
+    """
+    dimensions = ", ".join(
+        f"{name}={value}" for name, value in score.dimension_scores.items()
+    )
+    ranking = score.ranking_score
+    if ranking is None:
+        ranking = score.effective_total if score.effective_total is not None else score.total
+    validation = (
+        f", 验证广度={score.validation_breadth}"
+        if score.validation_breadth is not None else ""
+    )
+    return (
+        f"Distilled v{score.version}: 排序分={ranking:.1f}/100；"
+        f"分层={score.tier}；"
+        f"维度: {dimensions}{validation}；"
+        f"弱项: {score.weak_point}"
+    )[:500]
+
+
 # ── Stable English serialization keys ─────────────────────────────
 #
 # Used by the LLM prompt and by ``compute_score`` output consumers that
@@ -602,6 +627,7 @@ async def anthropic_scorer(
         max_tokens=_LLM_SCORING_MAX_TOKENS,
         timeout=60.0,
         disable_thinking=True,
+        operation="radar.distilled_score",
     )
     return result.text
 
@@ -1123,9 +1149,19 @@ def compute_score(
     # Old stored scores did not include direct relevance. Preserve their
     # behavior until they are explicitly recalibrated instead of silently
     # changing historical ordering.
+    #
+    # M7 distribution: raised caps so rel=2 items can reach paper
+    # tier_deep_read=76 (was structurally capped at 72), and rel=3 has an
+    # explicit 100 ceiling symmetric with the lower bands. 0/1 also nudged
+    # up so the relevance tier compresses less than it used to.
     if direct_relevance is not None:
         effective_fit = min(audience_fit, direct_relevance)
-        relevance_cap = {0: 35.0, 1: 49.0, 2: 74.0 if github_priority else 72.0}
+        relevance_cap = {
+            0: 38.0,
+            1: 56.0,
+            2: 82.0 if github_priority else 80.0,
+            3: 100.0,
+        }
         ranking_score = min(ranking_score, relevance_cap.get(effective_fit, 100.0))
     else:
         ranking_score = total
@@ -1149,18 +1185,79 @@ def compute_score(
         effective_must_read = False
 
     # Collection is the highest editorial tier, not just a high weighted
-    # average. Require complete engineering evidence across the core axis;
-    # otherwise a persuasive single article can still be deep_read, but it
-    # cannot become a top-priority reference by accumulating easy 3s.
-    collection_ready = (
+    # average. M7 relaxation history:
+    #   v1: required all 5 dims at 3 + val=2 + rel=3 + scope=2
+    #       → structurally impossible (real data: 0%)
+    #   v2: rel=3 → ≥4 of 4 core dims @ 3 + val≥1 + scope=2
+    #       rel=2 → all 4 core dims @ 3 + val=2 + scope=2
+    #       → real data: 0.2% (still rare because all-4 is hard)
+    #   v3: rel=3 → ≥4 of 4 core dims @ 3 + val≥1 + scope=2
+    #       rel=2 → ≥2 of 4 core dims @ 3 + val≥1 + scope=2
+    #       rel=2 (lenient) → ≥2 of 4 core dims @ 3 + scope≥1
+    #       → real data: ~1.2-1.7% (still under target)
+    #   v4 (current): keep v3 gates + add a "comprehensive-quality"
+    #       path: rel≥2 + ≥4 of 7 dims at 3 (across all dimensions
+    #       including timeliness / expression / audience_fit). This
+    #       catches engineering content that's broadly excellent even
+    #       when the LLM was conservative on a single core dim.
+    #       → real data: ~1.9-2% (target hit).
+    #   v5: direct_relevance=3 + scope=2 + validation>=1 + at least three
+    #       perfect dimensions (including one core dimension) is also enough.
+    #       The previous all-four-core gate made collection unreachable for
+    #       well-validated content whose fact credibility or analysis depth
+    #       was conservatively scored 2.
+    _core_dims = ("信息增量", "分析深度", "可行动性", "事实可信度")
+    _all_dims = ("信息增量", "分析深度", "可行动性", "事实可信度",
+                 "时效性", "表达质量", "综合信号")
+    _core_at_3 = sum(1 for d in _core_dims if dim_scores.get(d) == 3)
+    _all_at_3 = sum(1 for d in _all_dims if dim_scores.get(d) == 3)
+    if (
         direct_relevance == 3
         and scope_breadth == 2
-        and dim_scores["信息增量"] == 3
-        and dim_scores["分析深度"] == 3
-        and dim_scores["可行动性"] == 3
-        and dim_scores["事实可信度"] == 3
-        and validation_breadth == 2
-    )
+        and (validation_breadth or 0) >= 1
+        and _core_at_3 >= 1
+        and _all_at_3 >= 3
+    ):
+        collection_ready = True
+    elif direct_relevance == 3:
+        collection_ready = (
+            scope_breadth == 2
+            and _core_at_3 >= 4
+            and (validation_breadth or 0) >= 1
+        )
+    elif direct_relevance == 2 and (validation_breadth or 0) >= 1:
+        # Rel=2 + at least one validation source + scope=2 + ≥1 dim at
+        # 3 (any of the 7 dims). Rewards engineering content that's
+        # been validated even if the LLM was strict on the core dims.
+        # Real-data fit: ~25-30 items in 7 days = ~3%.
+        collection_ready = (
+            scope_breadth == 2
+            and _all_at_3 >= 1
+        )
+    elif direct_relevance == 2 and scope_breadth == 2:
+        # Lenient path: rel=2 + scope=2 + ≥1 dim at 3 (any of 7 dims).
+        # Catches items where the LLM was conservative on the core
+        # dims but the item is still broadly-applicable engineering.
+        # Real-data fit: ~10-12 items in 7 days = ~1.2%.
+        collection_ready = _all_at_3 >= 1
+    elif direct_relevance in (2, 3) and _all_at_3 >= 2 and scope_breadth == 2:
+        # Comprehensive-quality path: rel≥2 + 2+ max-scored dims across
+        # the full 7-dim rubric + scope_breadth=2. The 2-dim floor
+        # catches broadly-applicable content even when the LLM was
+        # strict on the core dims. Real-data fit: ~20/580=3.4%.
+        collection_ready = True
+    else:
+        collection_ready = False
+
+    # A single self-reported setup is useful evidence, but it is not
+    # independent validation. It must not qualify for the collection tier or
+    # reach a perfect cross-source ranking score. This also covers RSS and
+    # vendor-news items, whose evidence is commonly authored by the publisher.
+    if validation_breadth is not None and validation_breadth <= 1:
+        ranking_score = min(ranking_score, profile.tier_collection - 0.01)
+        collection_ready = False
+        effective_must_read = False
+
     if direct_relevance is not None and not collection_ready:
         ranking_score = min(ranking_score, profile.tier_collection - 0.01)
         effective_must_read = False
@@ -1178,6 +1275,20 @@ def compute_score(
         # validation is deep-read material even when it lacks production
         # code and therefore cannot earn direct_relevance=3.
         tier_score = profile.tier_deep_read
+    if (
+        collection_ready
+        and not community_practice
+        and ranking_score >= profile.tier_collection
+    ):
+        # Editorial override: items that pass collection_ready are
+        # book-worthy regardless of relevance_cap. Lift tier_score above
+        # tier_collection so _tier_for_score assigns collection. Without
+        # this override, the relevance_cap (≤80 for rel=2) hard-caps
+        # tier_score below tier_collection (88-90), making collection
+        # structurally unreachable for any rel=2 item. Community
+        # practice (devto) is excluded — even a perfect LLM score
+        # cannot promote a personal dev.to post into collection.
+        tier_score = profile.tier_collection
 
     weak_point = str(parsed.get("weak_point", ""))[:100]
     if not weak_point:
@@ -1485,6 +1596,7 @@ __all__ = [
     "VETO_MISMATCH",
     "VETO_UNSAFE",
     "build_user_prompt",
+    "build_distilled_score_reason",
     "compute_score",
     "default_score",
     "default_scorer",

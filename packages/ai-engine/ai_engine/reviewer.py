@@ -494,6 +494,7 @@ class DefaultResearchReviewer:
                 max_tokens=2400,
                 timeout=60.0,
                 disable_thinking=True,
+                operation="research.fact_review",
             )
             payload = _extract_json_object(generated.text)
             llm_result = _parse_review_payload(payload)

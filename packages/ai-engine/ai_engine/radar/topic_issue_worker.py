@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -79,7 +80,7 @@ async def _fetch_topic_inputs(
                        s."originalKind", s."url", s."distilledMustRead",
                        s."publishedAt", s."createdAt",
                        s."distilledTier",
-                       host(s."url") AS "sourceHost",
+                       split_part(regexp_replace(COALESCE(s."url", ''), '^https?://', ''), '/', 1) AS "sourceHost",
                        tc."addedAt"
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
@@ -168,17 +169,26 @@ def _build_issue_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
 
 
 def _parse_payload(raw: str) -> dict[str, Any]:
+    """Parse JSON despite common model wrappers, while rejecting truncation."""
     s = raw.strip()
-    if s.startswith("```"):
-        first = s.find("\n")
-        if first >= 0:
-            s = s[first + 1 :]
-        s = s.removesuffix("```")
-        s = s.strip()
-    data = json.loads(s)
-    if not isinstance(data, dict):
-        raise ValueError("payload not object")
-    return data
+    if not s:
+        raise ValueError("payload is empty")
+    candidates = [s]
+    fence = re.search(r"```(?:json)?\s*(.*?)```", s, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        candidates.insert(0, fence.group(1).strip())
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(s[start : end + 1])
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    raise ValueError("invalid or truncated JSON payload")
 
 
 def _normalize_issues(raw: dict[str, Any], valid_ids: set[str]) -> list[dict[str, Any]]:
@@ -313,8 +323,9 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
             generate_text(
                 user_prompt=_build_issue_prompt(topic["name"], new_rows),
                 tier="light",
-                max_tokens=1200,
+                max_tokens=2000,
                 timeout=LLM_TIMEOUT_SECONDS,
+                disable_thinking=True,
                 operation="radar.topic_issue_cluster",
             ),
             timeout=LLM_TIMEOUT_SECONDS + 5,

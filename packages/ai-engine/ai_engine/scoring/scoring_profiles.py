@@ -104,8 +104,8 @@ PAPER_PROFILE = ScoringProfile(
         _DIM_AUDIENCE_FIT: 10,
     },
     tier_collection=88,
-    tier_deep_read=76,
-    tier_skim=48,
+    tier_deep_read=60,
+    tier_skim=42,
     must_read_total=86,
     must_read_core_count=2,
 )
@@ -133,8 +133,8 @@ ENGINEERING_PROFILE = ScoringProfile(
         _DIM_AUDIENCE_FIT: 5,
     },
     tier_collection=90,
-    tier_deep_read=70,
-    tier_skim=42,
+    tier_deep_read=55,
+    tier_skim=38,
     must_read_total=82,
     must_read_core_count=2,
 )
@@ -162,8 +162,8 @@ NEWS_PROFILE = ScoringProfile(
         _DIM_AUDIENCE_FIT: 15,
     },
     tier_collection=82,
-    tier_deep_read=68,
-    tier_skim=44,
+    tier_deep_read=52,
+    tier_skim=38,
     must_read_total=79,
     must_read_core_count=1,
 )

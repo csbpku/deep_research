@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -25,7 +26,7 @@ logger = logging.getLogger("ai_engine.radar.topic_synthesis_v2")
 
 WORKER_ID = f"topic-synthesis-v2-{os.getpid()}"
 MAX_TOPICS_PER_RUN = 8
-LLM_TIMEOUT_SECONDS = 60.0
+LLM_TIMEOUT_SECONDS = 120.0
 SYNTHESIS_VERSION = "v2"
 
 MAX_REFERENCES = 12
@@ -71,8 +72,8 @@ def _build_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
         "- 客观、可追溯；不要捏造未在候选中出现的事实。",
         "- summaryIds 必须存在于候选列表中（UUID）。",
         "- openQuestions 仅列未在已有摘要中获得明确回答的争议点。",
-        "- sections 至少 1 段、最多 6 段；每段 80-200 字。",
-        "- references 保留 6-12 条最重要的来源摘要。",
+        "- sections 至少 1 段、最多 4 段；每段 40-120 字，保持简洁。",
+        "- references 保留 6-8 条最重要的来源摘要。",
         "",
         "候选：",
     ]
@@ -85,17 +86,28 @@ def _build_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
 
 
 def _parse_payload(raw: str) -> dict[str, Any]:
+    """Parse JSON despite common model wrappers, while rejecting truncation."""
     s = raw.strip()
-    if s.startswith("```"):
-        first = s.find("\n")
-        if first >= 0:
-            s = s[first + 1 :]
-        s = s.removesuffix("```")
-        s = s.strip()
-    data = json.loads(s)
-    if not isinstance(data, dict):
-        raise ValueError("payload not object")
-    return data
+    if not s:
+        raise ValueError("payload is empty")
+
+    candidates = [s]
+    fence = re.search(r"```(?:json)?\s*(.*?)```", s, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        candidates.insert(0, fence.group(1).strip())
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(s[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    raise ValueError("invalid or truncated JSON payload")
 
 
 def _normalize(
@@ -207,7 +219,7 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s
                 ORDER BY tc."addedAt" DESC
-                LIMIT 24
+                LIMIT 12
                 """,
                 (topic_id,),
             )
@@ -248,8 +260,9 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
             generate_text(
                 user_prompt=prompt,
                 tier="light",
-                max_tokens=2400,
+                max_tokens=5000,
                 timeout=LLM_TIMEOUT_SECONDS,
+                disable_thinking=True,
                 operation="radar.topic_synthesis_v2",
             ),
             timeout=LLM_TIMEOUT_SECONDS + 5,
@@ -265,6 +278,7 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
 
     payload = _normalize(raw, candidate_id_set)
     payload["_synthesisInputHash"] = new_hash
+    payload["_synthesisModel"] = result.requested_model
     return payload
 
 
@@ -286,6 +300,7 @@ async def _mark_failed(pool: Any, topic_id: str, code: str, message: str) -> Non
 
 async def _persist_payload(pool: Any, topic_id: str, payload: dict[str, Any]) -> None:
     synthesis_hash = str(payload.pop("_synthesisInputHash", ""))[:64] or None
+    synthesis_model = str(payload.pop("_synthesisModel", "unknown"))[:120] or "unknown"
     async with pool.connection() as conn:
         conn.row_factory = dict_row
         await conn.execute(
@@ -305,7 +320,7 @@ async def _persist_payload(pool: Any, topic_id: str, payload: dict[str, Any]) ->
             """,
             (
                 json.dumps(payload, ensure_ascii=False),
-                os.environ.get("LLM_MODEL", "unknown"),
+                synthesis_model,
                 SYNTHESIS_VERSION,
                 synthesis_hash,
                 topic_id,
@@ -328,6 +343,7 @@ async def _claim_topics(pool: Any, limit: int) -> list[str]:
                     t."synthesisErrorCode" IS NOT NULL
                     OR t."synthesisPayload" IS NULL
                     OR t."synthesisVersion" <> %s
+                    OR t."synthesisInputHash" IS NULL
                     OR t."previousCandidateCount" <> t."candidateCount"
                   )
                 ORDER BY t."updatedAt" ASC

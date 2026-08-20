@@ -147,6 +147,7 @@ async def _generate_and_persist(
             max_tokens=4096,
             timeout=90.0,
             disable_thinking=True,
+            operation="radar.topic_proposal",
         )
         payload = _clean_json(result.text)
     except Exception as exc:

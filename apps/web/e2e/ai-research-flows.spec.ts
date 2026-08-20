@@ -126,7 +126,7 @@ test.describe('AI Research parent (UI polish)', () => {
     });
     await page.goto('/ai-research');
     const input = page.getByRole('textbox', { name: 'AI 调研对话输入' });
-    await input.fill('测试失败用例');
+    await input.fill('评估 AI 调研请求失败时的重试体验');
     await page.getByRole('button', { name: '发送消息' }).click();
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();

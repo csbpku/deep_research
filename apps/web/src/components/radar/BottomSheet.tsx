@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-
 import { cn } from '@/lib/utils';
 
 type SheetState = 'closed' | 'open' | 'minimized';
@@ -24,8 +23,8 @@ interface BottomSheetProps {
 
 const MIN_WIDTH = 280;
 const MIN_HEIGHT = 200;
-const DEFAULT_WIDTH = '50%';
-const DEFAULT_HEIGHT = '70vh';
+const DEFAULT_WIDTH = 'min(420px, calc(100vw - 24px))';
+const DEFAULT_HEIGHT = '82vh';
 
 /**
  * 右下角浮窗 Sheet —— 可拖动（吸附顶/底）、可缩放（顶/左/角手柄）、可最小化。
@@ -48,6 +47,7 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const [minimized, setMinimized] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const restoredSize = useRef({ width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT });
   const dragState = useRef<{
     mode: 'drag' | ResizeMode;
     startX: number;
@@ -64,6 +64,23 @@ export function BottomSheet({
     setSnappedTop(false);
     onOpenChange(false);
   }, [onOpenChange]);
+
+  const minimize = useCallback(() => {
+    // The minimized state is represented by the persistent floating trigger,
+    // not by a narrow vertical strip attached to the right edge.
+    setMinimized(false);
+    setSnappedTop(false);
+    onOpenChange(false);
+  }, [onOpenChange]);
+
+  const restore = useCallback(() => {
+    const el = sheetRef.current;
+    if (el) {
+      el.style.width = restoredSize.current.width;
+      el.style.height = restoredSize.current.height;
+    }
+    setMinimized(false);
+  }, []);
 
   // 打开时重置尺寸/位置
   useEffect(() => {
@@ -193,14 +210,14 @@ export function BottomSheet({
   return (
     <div
       ref={sheetRef}
+      onMouseDown={onMouseDown}
       role="dialog"
       aria-modal={false}
       className={cn(
         'fixed bottom-0 right-0 z-[9990] flex flex-col',
-        'w-[50%] bg-[var(--ink-paper)] shadow-[0_-8px_24px_rgba(0,0,0,0.15)]',
+        'w-[42%] bg-[var(--ink-paper)] shadow-[0_-8px_24px_rgba(0,0,0,0.15)]',
         'rounded-tl-[16px]',
         'animate-[sheet-slide-up_0.3s_ease-out]',
-        'select-none',
         snappedTop && 'top-[50px] bottom-auto h-[calc(100vh-50px)]',
         minimized && 'w-10',
         className,
@@ -212,21 +229,24 @@ export function BottomSheet({
       {/* 缩放手柄 */}
       <div
         data-resize="top"
-        className="absolute top-[-4px] left-4 right-4 z-10 h-2 cursor-ns-resize hover:bg-[var(--ink-accent)]/30"
+        className="absolute top-[-7px] left-4 right-4 z-10 flex h-4 cursor-ns-resize items-start justify-center before:mt-1 before:h-1 before:w-12 before:rounded-full before:bg-[var(--ink-faint)]/60 hover:before:bg-[var(--ink-accent)]"
+        title="拖动调整高度"
       />
       <div
         data-resize="left"
-        className="absolute left-[-4px] top-4 bottom-4 z-10 w-2 cursor-ew-resize hover:bg-[var(--ink-accent)]/30"
+        className="absolute left-[-7px] top-4 bottom-4 z-10 w-4 cursor-ew-resize before:absolute before:left-1/2 before:top-1/2 before:h-12 before:w-1 before:-translate-x-1/2 before:-translate-y-1/2 before:rounded-full before:bg-[var(--ink-faint)]/60 hover:before:bg-[var(--ink-accent)]"
+        title="拖动调整宽度"
       />
       <div
         data-resize="corner"
-        className="absolute top-[-4px] left-[-4px] z-10 size-4 cursor-nwse-resize hover:bg-[var(--ink-accent)]/30"
+        className="absolute top-[-7px] left-[-7px] z-10 size-6 cursor-nwse-resize before:absolute before:left-1/2 before:top-1/2 before:size-2 before:-translate-x-1/2 before:-translate-y-1/2 before:rounded-full before:bg-[var(--ink-faint)]/70 hover:before:bg-[var(--ink-accent)]"
+        title="拖动调整宽高"
       />
 
       {minimized ? (
         <button
           type="button"
-          onClick={() => setMinimized(false)}
+          onClick={restore}
           className="flex flex-1 flex-col items-center justify-center gap-3 font-sans text-xs font-semibold text-[var(--ink-accent)]"
         >
           <span className="[writing-mode:vertical-rl] tracking-[0.08em]">{title}</span>
@@ -235,17 +255,16 @@ export function BottomSheet({
         <>
           <header
             data-sheet-header
-            onMouseDown={onMouseDown}
-            className="flex cursor-grab items-center gap-2.5 rounded-tl-[16px] border-b border-[var(--ink-rule)] bg-white px-5 py-3.5"
+            className="flex cursor-grab select-none items-center gap-2.5 rounded-tl-[16px] border-b border-[var(--ink-rule)] bg-white px-5 py-3.5"
           >
             <span className="cursor-grab select-none text-xl text-[var(--ink-faint)]">⠿</span>
             <h2 className="flex-1 font-sans text-[15px] font-semibold">{title}</h2>
             {subtitle ? (
-              <span className="font-sans text-xs text-[var(--ink-muted)]">{subtitle}</span>
+              <span className="hidden max-w-[28%] truncate font-sans text-xs text-[var(--ink-muted)] sm:inline">{subtitle}</span>
             ) : null}
             <button
               type="button"
-              onClick={() => setMinimized(true)}
+              onClick={minimize}
               className="rounded px-2 py-1.5 text-base text-[var(--ink-muted)] hover:bg-[var(--ink-paper)]"
               aria-label="最小化"
             >
@@ -261,7 +280,7 @@ export function BottomSheet({
             </button>
           </header>
 
-          <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
+          <div className="flex min-h-0 flex-1 overflow-hidden">{children}</div>
 
           {footer ? (
             <div className="flex flex-shrink-0 gap-2 border-t border-[var(--ink-rule)] bg-white px-6 py-3">

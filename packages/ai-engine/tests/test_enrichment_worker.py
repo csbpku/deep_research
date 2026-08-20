@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 from typing import Any
 
 import pytest
@@ -268,7 +269,11 @@ async def test_enrich_arxiv_uses_cached_abstract_when_pdf_is_too_large(
             "conclusion": "研究结论",
         }
 
+    async def no_html(arxiv_id: str) -> Any:
+        return None
+
     monkeypatch.setattr(ew, "_fetch_arxiv_pdf", oversized_pdf)
+    monkeypatch.setattr(ew, "_parse_arxiv_html_document", no_html)
     monkeypatch.setattr(ew, "_generate_arxiv_analysis", fake_analysis)
 
     result = await ew.enrich_arxiv_candidate(
@@ -278,9 +283,57 @@ async def test_enrich_arxiv_uses_cached_abstract_when_pdf_is_too_large(
     )
 
     assert result is not None
-    assert result["meta"]["degraded"] is True
-    assert result["meta"]["reason"] == "pdf_too_large"
+    meta = json.loads(pool.connection_value.updates[0][1][0])
+    assert meta["degraded"] is True
+    assert meta["reason"] == "pdf_too_large"
     assert result["analysis"]["method"] == "研究方法"
+
+
+async def test_enrich_arxiv_prefers_rendered_html_over_pdf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(row={
+        "id": "paper-html",
+        "title": "HTML paper",
+        "interpretation": "论文摘要",
+        "originalMarkdown": "旧正文",
+        "originalMeta": None,
+        "tldr": None,
+    })
+
+    html_result = (
+        "# Introduction\n\nA properly separated paragraph. " * 30,
+        [{"title": "Introduction", "level": 1, "startOffset": 0}],
+        ["Ada Lovelace"],
+        [],
+        "https://ar5iv.labs.arxiv.org/html/2608.02412",
+    )
+
+    async def fake_html(arxiv_id: str) -> Any:
+        assert arxiv_id == "2608.02412"
+        return html_result
+
+    async def unexpected_pdf(url: str) -> bytes:
+        raise AssertionError("HTML enrichment should not download the PDF")
+
+    async def fake_analysis(markdown: str, title: str) -> dict[str, str]:
+        return {"tldr": "HTML 总结"}
+
+    monkeypatch.setattr(ew, "_parse_arxiv_html_document", fake_html)
+    monkeypatch.setattr(ew, "_fetch_arxiv_pdf", unexpected_pdf)
+    monkeypatch.setattr(ew, "_generate_arxiv_analysis", fake_analysis)
+
+    result = await ew.enrich_arxiv_candidate(
+        pool,
+        summary_id="paper-html",
+        canonical_url="https://huggingface.co/papers/2608.02412",
+    )
+
+    assert result is not None
+    assert result["markdown"].startswith("# Introduction")
+    assert result["authors"] == ["Ada Lovelace"]
+    meta = json.loads(pool.connection_value.updates[0][1][1])
+    assert meta["extractorVersion"] == "arxiv-html-v1"
 
 
 async def test_run_enrichment_for_pending_dispatches_all_default_kinds(

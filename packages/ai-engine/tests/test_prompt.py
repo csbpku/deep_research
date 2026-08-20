@@ -222,18 +222,14 @@ def test_estimated_tokens_uses_4_char_heuristic() -> None:
     assert built.estimated_tokens < _MAX_INPUT_TOKENS
 
 
-def test_sources_used_tracks_dropped_sources() -> None:
-    """When the budget can't fit every source, the dropped ones are
-    absent from ``sources_used`` (so the BFF can show "more sources
-    truncated" if it wants to)."""
+def test_sources_used_keeps_sources_when_the_expanded_budget_allows_it() -> None:
+    """The expanded budget should not discard ordinary source material."""
     sources = [
         SourceSnippet(f"k{i}", f"T{i}", _long_text(2_000, prefix=f"s{i}-"))
         for i in range(50)
     ]
     built = build_research_prompt(topic="T", context=None, sources=sources)
-    assert len(built.sources_used) < len(sources), (
-        "expected budget pressure to drop at least one source"
-    )
+    assert set(built.sources_used) == {source.canonical_key for source in sources}
     assert all(k in {s.canonical_key for s in sources} for k in built.sources_used)
 
 
@@ -244,20 +240,43 @@ def test_empty_inputs_still_produce_a_usable_prompt() -> None:
     assert built.inferred is True
 
 
-def test_cap_is_exactly_1500_tokens_under_pressure() -> None:
-    """Regression: a previous version truncated the user text against
-    the raw 1500-token cap, which left room for the system prompt to
-    push the total over the limit. The cap must hold for the system
-    + user combined.
-    """
+def test_chat_prompt_can_use_expanded_repo_reading_budget() -> None:
+    source = "BEGIN-" + ("repo documentation " * 900) + "-END"
+    built = build_chat_prompt(
+        snapshot_body="brief",
+        snapshot_interpretation=None,
+        history=[],
+        user_msg="What does the repository do?",
+        original_markdown=source,
+        original_kind="github_repo",
+        max_input_tokens=6_000,
+    )
+    assert built.estimated_tokens <= 6_000
+    assert "BEGIN-" in built.user
+    assert "-END" in built.user
+
+
+def test_chat_prompt_keeps_latest_question_when_article_is_long() -> None:
+    built = build_chat_prompt(
+        snapshot_body="摘要",
+        snapshot_interpretation=None,
+        history=[],
+        user_msg="这篇文章的作者是谁？请根据原文回答。",
+        original_markdown="# Article\n\n" + ("正文内容。 " * 5_000),
+        original_kind="arxiv",
+        max_input_tokens=1_500,
+    )
+    assert "这篇文章的作者是谁？请根据原文回答。" in built.user
+    assert built.estimated_tokens <= 1_500
+
+
+def test_expanded_input_budget_still_holds_under_pressure() -> None:
+    """The provider-safe cap must hold without imposing the old 1500 limit."""
     sources = [SourceSnippet(f"k{i}", f"T{i}", "x" * 5000) for i in range(50)]
     built = build_research_prompt(
         topic="x" * 5000,
         context="y" * 5000,
         sources=sources,
     )
-    # Pin to exactly 1500 (or less if the inputs don't fully fill it).
     assert built.estimated_tokens <= _MAX_INPUT_TOKENS
-    assert built.estimated_tokens == _MAX_INPUT_TOKENS, (
-        f"expected hard cap reached (1500), got {built.estimated_tokens}"
-    )
+    assert built.estimated_tokens > 1500

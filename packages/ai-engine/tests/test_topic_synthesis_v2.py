@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 
 import pytest
@@ -60,6 +59,17 @@ def test_parse_v2_payload_handles_fenced_json() -> None:
     raw = "```json\n{\"tldr\":\"ok\",\"sections\":[],\"references\":[]}\n```"
     out = _parse_v2_payload(raw)
     assert out["tldr"] == "ok"
+
+
+def test_parse_v2_payload_handles_model_preamble() -> None:
+    raw = "Here is the JSON:\n{\"tldr\":\"ok\",\"sections\":[],\"references\":[]}\nDone."
+    out = _parse_v2_payload(raw)
+    assert out["tldr"] == "ok"
+
+
+def test_parse_v2_payload_rejects_truncated_json() -> None:
+    with pytest.raises(ValueError, match="invalid or truncated"):
+        _parse_v2_payload('{"tldr":"incomplete"')
 
 
 def test_normalize_drops_invalid_summary_ids() -> None:

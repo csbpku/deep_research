@@ -15,7 +15,9 @@ from ai_engine.radar.source_manager import fetch_source as dispatch_source
 from ai_engine.radar.sync_runner import (
     _NAV_NOISE_PATTERNS,
     _clean_content,
+    _can_use_candidate_metadata_fallback,
     _extract_article_content,
+    _can_use_github_repo_metadata_fallback,
     _finish_run,
     _generate_brief_with_retry,
     _is_low_quality_content,
@@ -771,6 +773,39 @@ def test_is_low_quality_content_detects_short_and_cloudflare_text() -> None:
     assert not _is_low_quality_content(
         "A real article about LLM agents with enough body text to summarize. " * 5
     )
+
+
+def test_github_repo_metadata_can_survive_blocked_detail_page() -> None:
+    source = RadarSource(
+        id="source-1",
+        name="GitHub Trending",
+        source_type="github_trending",
+        config={},
+    )
+    candidate = RadarCandidate(
+        title="owner/repo",
+        url="https://github.com/owner/repo",
+        snippet="A useful open-source project · Language: Python · Stars: 2,000 · +300 stars daily",
+        published_at=datetime.now(timezone.utc),
+        content_origin="web",
+    )
+    assert _can_use_candidate_metadata_fallback(source, candidate)
+    assert _can_use_github_repo_metadata_fallback(source, candidate)
+
+    rss_source = RadarSource(
+        id="source-rss",
+        name="RSS",
+        source_type="rss",
+        config={},
+    )
+    rss_candidate = RadarCandidate(
+        title="A useful article",
+        url="https://example.com/article",
+        snippet="A concise source-provided abstract about the article's main contribution.",
+        published_at=datetime.now(timezone.utc),
+        content_origin="rss",
+    )
+    assert _can_use_candidate_metadata_fallback(rss_source, rss_candidate)
 
 
 async def test_short_content_is_sent_to_governance_without_llm(monkeypatch: pytest.MonkeyPatch) -> None:

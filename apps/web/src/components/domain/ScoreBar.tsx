@@ -7,9 +7,9 @@ import { cn } from '@/lib/utils';
  * tier 枚举来自 packages/ai-engine/ai_engine/scoring（deep_read / skim / collection / noise）。
  */
 export const TIER_LABELS: Record<string, string> = {
-  deep_read: '深读',
+  deep_read: '推荐精读',
   skim: '速览',
-  collection: '重点阅读',
+  collection: '核心材料',
   noise: '不推荐',
 };
 

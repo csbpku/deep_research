@@ -1,251 +1,258 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Check, Languages, Loader2, Sparkles, Zap } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { BookmarkPlus, Copy, Download, Languages, Loader2, MessageCircle, Sparkles } from 'lucide-react';
 
-import MarkdownContent from '@/components/MarkdownContent';
-import { RadarAiReadingTab, type RadarGuide } from './RadarAiReadingTab';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
+import type { RadarGuide } from './RadarAiReadingTab';
 
-interface Highlights {
-  summary: string;
-  highlights: string[];
-  keyQuote: string | null;
+export interface ActiveRadarBlock {
+  index: number;
+  content: string;
+  blockCount?: number;
 }
 
 interface RadarRightPanelProps {
   summaryId: string;
-  title: string;
-  highlights: Highlights | null;
-  /** 点击高亮回链时触发（父组件滚动左栏原文） */
-  onHighlightClick?: (quote: string) => void;
+  onHighlightClick?: (quote: string, sourceBlockIndex?: number, anchorId?: string) => void;
+  canInteract?: boolean;
+  annotationRefreshKey?: number;
+  selectedQuote?: string | null;
+  onExplainSelection?: () => void;
+  onTranslateSelection?: () => void;
+  onAnnotateSelection?: () => void;
+  onCopySelection?: () => void;
+  onAskSelection?: () => void;
   className?: string;
 }
 
-type TransformState = {
-  content: string | null;
-  guide: RadarGuide | null;
-  chunks: Array<{ index: number; content: string }> | null;
-  complete: boolean;
-  loading: boolean;
-  error: string | null;
+type Coverage = {
+  sourceChars?: number;
+  processedChars?: number;
+  complete?: boolean;
+  outlineCount?: number;
+  resolvedOutlineCount?: number;
+};
+type MapState = { guide: RadarGuide | null; loading: boolean; error: string | null; cached: boolean; coverage: Coverage | null };
+type OutlineItem = { heading?: string; takeaway?: string; quote?: string; sourceBlockIndex?: number; anchorStatus?: 'resolved' | 'unresolved' };
+type Annotation = {
+  id: string;
+  quote: string;
+  body?: string | null;
+  createdAt?: string;
 };
 
-type Mode = 'ai_reading' | 'translate';
+/** The right rail is deliberately only a document map. The article remains the primary reading surface. */
+export function RadarRightPanel({ summaryId, onHighlightClick, canInteract = false, annotationRefreshKey = 0, selectedQuote, onExplainSelection, onTranslateSelection, onAnnotateSelection, onCopySelection, onAskSelection, className }: RadarRightPanelProps) {
+  const [mapState, setMapState] = useState<MapState>({ guide: null, loading: false, error: null, cached: false, coverage: null });
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const loadingRef = useRef(false);
 
-const MODES: Array<{ value: Mode; label: string; description: string }> = [
-  { value: 'ai_reading', label: 'AI导读', description: '结论、证据与待验证问题' },
-  { value: 'translate', label: '翻译', description: '保留结构的中文译文' },
-];
-
-/**
- * 右栏 AI 面板 —— tabs（AI导读 / 翻译）+ transform 调用 + 缓存。
- *
- * AI导读走结构化 guide（M5）；翻译走分块 chunks（M6）。
- */
-export function RadarRightPanel({ summaryId, title, highlights, onHighlightClick, className }: RadarRightPanelProps) {
-  const [mode, setMode] = useState<Mode>('ai_reading');
-  const [language, setLanguage] = useState('zh-CN');
-  const [transforms, setTransforms] = useState<Record<string, TransformState>>({});
-
-  const requestTransform = useCallback(async (nextMode: Mode, requestedLanguage: string) => {
-    const cacheKey = `${nextMode}:${requestedLanguage}`;
-    setTransforms((current) => {
-      const existing = current[cacheKey];
-      const hasData = existing?.guide || existing?.content || existing?.chunks?.length;
-      if (hasData || existing?.loading) return current;
-      return { ...current, [cacheKey]: { content: null, guide: null, chunks: null, complete: false, loading: true, error: null } };
-    });
-
+  const generateMap = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setMapState({ guide: null, loading: true, error: null, cached: false, coverage: null });
     try {
       const response = await fetch(`/api/radar/${summaryId}/transform`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode: nextMode, language: requestedLanguage }),
+        body: JSON.stringify({ mode: 'ai_reading', language: 'zh-CN' }),
       });
-      const body = (await response.json().catch(() => ({}))) as {
-        content?: string;
-        guide?: RadarGuide | null;
-        chunks?: Array<{ index: number; content: string }>;
-        complete?: boolean;
-        message?: string;
-      };
-      const hasData = nextMode === 'ai_reading' ? Boolean(body.guide || body.content) : Boolean(body.chunks?.length);
-      if (!response.ok || !hasData) {
-        throw new Error(body.message ?? '生成阅读内容失败');
-      }
-      setTransforms((current) => ({
-        ...current,
-        [cacheKey]: {
-          content: body.content ?? null,
-          guide: body.guide ?? null,
-          chunks: body.chunks ?? null,
-          complete: body.complete ?? true,
-          loading: false,
-          error: null,
-        },
-      }));
+      const body = (await response.json().catch(() => ({}))) as { guide?: RadarGuide | null; cached?: boolean; message?: string; coverage?: Coverage };
+      if (!response.ok || !body.guide) throw new Error(body.message ?? '文章地图暂时不可用');
+      setMapState({ guide: body.guide, loading: false, error: null, cached: body.cached === true, coverage: body.coverage ?? null });
     } catch (error) {
-      setTransforms((current) => ({
-        ...current,
-        [cacheKey]: {
-          content: null,
-          guide: null,
-          chunks: null,
-          complete: false,
-          loading: false,
-          error: error instanceof Error ? error.message : '生成阅读内容失败',
-        },
-      }));
+      setMapState({ guide: null, loading: false, error: error instanceof Error ? error.message : '文章地图暂时不可用', cached: false, coverage: null });
+    } finally {
+      loadingRef.current = false;
     }
   }, [summaryId]);
 
   useEffect(() => {
-    const warm = async () => {
-      await requestTransform('ai_reading', 'zh-CN');
-      await requestTransform('translate', 'zh-CN');
+    void generateMap();
+  }, [generateMap]);
+
+  useEffect(() => {
+    if (!canInteract) {
+      setAnnotations([]);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/radar/annotations?summaryId=${encodeURIComponent(summaryId)}&mine=true`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json() as Promise<{ annotations?: Annotation[] }>;
+      })
+      .then((body) => {
+        if (!cancelled) setAnnotations(body?.annotations ?? []);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
     };
-    const timer = window.setTimeout(warm, 80);
-    return () => window.clearTimeout(timer);
-  }, [requestTransform]);
+  }, [annotationRefreshKey, canInteract, summaryId]);
 
-  const activeKey = `${mode}:${language}`;
-  const activeTransform = transforms[activeKey];
-  const anyWarmup = Object.values(transforms).some((t) => t.loading);
-  const aiReady = Boolean(transforms['ai_reading:zh-CN']?.content);
-  const translationReady = Boolean(transforms['translate:zh-CN']?.content);
-
-  function selectMode(nextMode: Mode) {
-    setMode(nextMode);
-    void requestTransform(nextMode, language);
+  function exportAnnotations() {
+    if (!annotations.length) return;
+    const markdown = annotations.map((item) => {
+      const note = item.body?.trim() ? `\n\n${item.body.trim()}` : '';
+      return `> ${item.quote.replace(/\n/gu, '\n> ')}${note}`;
+    }).join('\n\n');
+    const blob = new Blob([`# 我的雷达批注\n\n${markdown}\n`], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `radar-${summaryId}-annotations.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
-  function changeLanguage(nextLanguage: string) {
-    setLanguage(nextLanguage);
-    if (mode === 'translate') void requestTransform('translate', nextLanguage);
-  }
+  const outline = mapState.guide?.outline ?? [];
+  // Keep the rail exclusively AI-generated. While the request is pending,
+  // do not fall back to the source headings — that makes the original TOC
+  // look like a generated map and creates two competing loading states.
+  const displayOutline = outline;
 
   return (
-    <div className={cn('flex h-full flex-col', className)}>
-      <div className="mb-4">
-        <h2 className="font-sans text-lg font-semibold">{title} — 阅读助手</h2>
-        <p className="mt-1 flex items-center gap-2 font-sans text-xs text-[var(--ink-muted)]" aria-live="polite">
-          {aiReady && translationReady ? (
-            <>
-              <Check className="size-3.5 text-[#1a6e3a]" /> AI导读与翻译已准备
-            </>
-          ) : anyWarmup ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin text-[var(--ink-accent)]" /> 正在准备阅读辅助
-            </>
-          ) : (
-            <>
-              <Zap className="size-3.5 text-[var(--ink-accent)]" /> 原文可立即阅读
-            </>
-          )}
-        </p>
-      </div>
-
-      <Tabs value={mode} onValueChange={(v) => selectMode(v as Mode)} className="flex-1">
-        <TabsList className="mb-4">
-          {MODES.map((item) => (
-            <TabsTrigger key={item.value} value={item.value}>
-              {item.value === 'translate' ? (
-                <Languages className="size-3.5" />
-              ) : (
-                <Sparkles className="size-3.5" />
-              )}
-              {item.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-
-        <TabsContent value="ai_reading" className="m-0">
-          {highlights ? (
-            <div className="mb-4 rounded-lg border border-[var(--ink-rule)] bg-white p-4">
-              <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{highlights.summary}</p>
-              {highlights.highlights.length > 0 ? (
-                <ul className="mt-3 space-y-2 font-serif text-sm leading-6 text-[var(--ink-muted)]">
-                  {highlights.highlights.map((item) => (
-                    <li key={item} className="border-l-2 border-[var(--ink-accent)] pl-3">{item}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
-
-          {activeTransform?.loading ? (
-            <div className="flex min-h-40 items-center justify-center gap-2 rounded-lg border border-[var(--ink-rule)] bg-white text-sm text-[var(--ink-muted)]">
-              <Loader2 className="size-4 animate-spin text-[var(--ink-accent)]" />
-              正在准备 AI 导读
-            </div>
-          ) : activeTransform?.error ? (
-            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-              {activeTransform.error}
-            </div>
-          ) : activeTransform?.guide ? (
-            <RadarAiReadingTab guide={activeTransform.guide} onHighlightClick={onHighlightClick} />
-          ) : activeTransform?.content ? (
-            <MarkdownContent
-              content={activeTransform.content}
-              className="font-serif text-[15px] leading-[1.7] text-[var(--ink-text)]"
-            />
-          ) : (
-            <div className="rounded-lg border border-[var(--ink-rule)] bg-white p-5 text-sm text-[var(--ink-muted)]">
-              暂无可展示内容。
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="translate" className="m-0">
-          <label className="mb-4 flex items-center gap-2 font-sans text-xs text-[var(--ink-muted)]">
-            <Languages className="size-3.5" />
-            <select
-              value={language}
-              onChange={(e) => changeLanguage(e.target.value)}
-              className="h-8 rounded-md border border-[var(--ink-rule)] bg-white px-2 text-xs"
-              aria-label="翻译目标语言"
-            >
-              <option value="zh-CN">简体中文</option>
-              <option value="en">English</option>
-              <option value="ja">日本語</option>
-            </select>
-          </label>
-
-          {activeTransform?.loading ? (
-            <div className="flex min-h-40 items-center justify-center gap-2 rounded-lg border border-[var(--ink-rule)] bg-white text-sm text-[var(--ink-muted)]">
-              <Loader2 className="size-4 animate-spin text-[var(--ink-accent)]" />
-              正在翻译
-            </div>
-          ) : activeTransform?.error ? (
-            <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-              {activeTransform.error}
-            </div>
-          ) : activeTransform?.chunks?.length ? (
-            <div>
-              <MarkdownContent
-                content={activeTransform.chunks.map((c) => c.content).join('\n\n')}
-                className="font-serif text-[15px] leading-[1.7] text-[var(--ink-text)]"
-              />
-              {!activeTransform.complete ? (
-                <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 font-sans text-xs text-amber-700">
-                  翻译不完整（部分段落翻译失败），已显示已完成的内容。
+    <aside className={cn('flex h-full min-h-0 flex-col', className)} aria-label="文章地图">
+      <div className="mb-5 flex items-start justify-between gap-3">
+        <div>
+          <p className="font-sans text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读导航</p>
+          <h2 className="mt-1 font-sans text-lg font-semibold text-[var(--ink-text)]">文章地图</h2>
+          <p className="mt-1 max-w-[30ch] text-xs leading-5 text-[var(--ink-muted)]">原文是主阅读区；点击有可靠引用的条目可回到原文位置。</p>
+          {!mapState.loading && !mapState.error && mapState.guide ? (
+            <div className="mt-2 space-y-1 text-[10px] text-[var(--ink-faint)]">
+              <p>{mapState.cached ? '已使用本地缓存' : '刚刚生成并已缓存'}</p>
+              {mapState.coverage ? (
+                <p>
+                  结构分析 {mapState.coverage.complete === false ? '部分覆盖' : '完整'}
+                  {typeof mapState.coverage.outlineCount === 'number'
+                    ? ` · 回链 ${mapState.coverage.resolvedOutlineCount ?? 0}/${mapState.coverage.outlineCount}`
+                    : ''}
                 </p>
               ) : null}
             </div>
-          ) : activeTransform?.content ? (
-            <MarkdownContent
-              content={activeTransform.content}
-              className="font-serif text-[15px] leading-[1.7] text-[var(--ink-text)]"
-            />
-          ) : (
-            <div className="rounded-lg border border-[var(--ink-rule)] bg-white p-5 text-sm text-[var(--ink-muted)]">
-              暂无可展示内容。
+          ) : null}
+        </div>
+        <Sparkles className="mt-1 size-4 shrink-0 text-[var(--ink-accent)]" aria-hidden />
+      </div>
+
+      {mapState.loading ? <Loading label="正在生成 AI 文章地图" /> : null}
+      {mapState.error ? (
+        <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-800">
+          {mapState.error}
+          <button type="button" onClick={() => void generateMap()} className="mt-2 block font-medium underline">重试</button>
+        </div>
+      ) : null}
+
+      {selectedQuote ? (
+        <div className="mb-4 border-y border-[var(--ink-rule)] py-3">
+          <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
+            <Sparkles className="size-3" />
+            当前选中文本
+          </div>
+          <p className="line-clamp-3 font-serif text-xs leading-5 text-[var(--ink-muted)]">{selectedQuote}</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button type="button" onClick={onExplainSelection} className="inline-flex items-center gap-1 border border-[var(--ink-accent)]/35 px-2 py-1 text-[11px] font-medium text-[var(--ink-accent)] hover:bg-[var(--ink-accent)]/[0.06]">
+              <Sparkles className="size-3" />解释
+            </button>
+            <button type="button" onClick={onTranslateSelection} className="inline-flex items-center gap-1 border border-amber-300 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-50">
+              <Languages className="size-3" />翻译
+            </button>
+            <button type="button" onClick={onAskSelection} className="inline-flex items-center gap-1 border border-method-ai/35 px-2 py-1 text-[11px] font-medium text-method-ai hover:bg-method-ai/10">
+              <MessageCircle className="size-3" />问 AI
+            </button>
+            <button type="button" onClick={onAnnotateSelection} className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-2 py-1 text-[11px] font-medium text-[var(--ink-text)] hover:bg-[var(--ink-page)]">
+              <BookmarkPlus className="size-3" />批注
+            </button>
+            <button type="button" onClick={onCopySelection} className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-2 py-1 text-[11px] font-medium text-[var(--ink-text)] hover:bg-[var(--ink-page)]">
+              <Copy className="size-3" />复制
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {!mapState.loading && !mapState.error && !displayOutline.length ? (
+        <div className="rounded-lg border border-dashed border-[var(--ink-rule)] bg-white/60 p-4">
+          <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">文章地图暂时没有可展示的结构。</p>
+          <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">AI 已自动尝试生成；如果文章缺少清晰章节，可直接按左侧原文阅读。</p>
+        </div>
+      ) : null}
+
+      {displayOutline.length ? (
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+          <p className="mb-2 text-[11px] text-[var(--ink-muted)]">
+            基于全文生成 · {outline.length} 个部分
+          </p>
+          {displayOutline.map((item, index) => (
+            <div
+              key={`${item.heading ?? 'section'}-${index}`}
+              role={item.anchorStatus !== 'unresolved' && item.quote ? 'button' : undefined}
+              tabIndex={item.anchorStatus !== 'unresolved' && item.quote ? 0 : undefined}
+              className={cn(
+                'border-b border-[var(--ink-rule)] px-1 py-3 transition-colors',
+                item.anchorStatus !== 'unresolved' && item.quote
+                  ? 'cursor-pointer hover:bg-[var(--ink-accent)]/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40'
+                  : 'opacity-80',
+              )}
+              onClick={() => item.anchorStatus !== 'unresolved' && item.quote ? onHighlightClick?.(item.quote, item.sourceBlockIndex) : undefined}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  if (item.anchorStatus !== 'unresolved' && item.quote) {
+                    onHighlightClick?.(item.quote, item.sourceBlockIndex);
+                  }
+                }
+              }}
+            >
+              <div className="flex gap-2.5">
+                <span className="font-mono text-[10px] text-[var(--ink-accent)]">{String(index + 1).padStart(2, '0')}</span>
+                <div className="min-w-0">
+                  <p className="font-sans text-xs font-semibold text-[var(--ink-text)]">{item.heading || `部分 ${index + 1}`}</p>
+                  {item.takeaway ? <p className="mt-1 font-serif text-xs leading-5 text-[var(--ink-muted)]">{item.takeaway}</p> : null}
+                  {item.anchorStatus === 'unresolved' || !item.quote ? (
+                    <span className="mt-1 block text-[11px] text-[var(--ink-faint)]">暂无精确原文位置</span>
+                  ) : (
+                    <span className="mt-1 block text-[11px] text-[var(--ink-accent)]">回到原文 ↗</span>
+                  )}
+                </div>
+              </div>
             </div>
-          )}
-        </TabsContent>
-      </Tabs>
-    </div>
+          ))}
+        </div>
+      ) : null}
+
+      {canInteract && annotations.length ? (
+        <details className="mt-5 border-t border-[var(--ink-rule)] pt-3">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-semibold text-[var(--ink-text)] [&::-webkit-details-marker]:hidden">
+            <span>我的批注 · {annotations.length}</span>
+            <button
+              type="button"
+              onClick={(event) => { event.preventDefault(); exportAnnotations(); }}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--ink-accent)] hover:underline"
+            >
+              <Download className="size-3" />导出 Markdown
+            </button>
+          </summary>
+          <div className="mt-3 space-y-2">
+            {annotations.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onHighlightClick?.(item.quote)}
+                className="block w-full border-l-2 border-[var(--ink-accent)]/60 bg-[var(--ink-page)] px-3 py-2 text-left text-xs leading-5 text-[var(--ink-muted)] hover:text-[var(--ink-accent)]"
+              >
+                <span className="block font-serif">“{item.quote}”</span>
+                {item.body ? <span className="mt-1 block text-[11px] text-[var(--ink-faint)]">{item.body}</span> : null}
+              </button>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </aside>
   );
+}
+
+function Loading({ label }: { label: string }) {
+  return <div className="flex items-center gap-2 rounded-md border border-[var(--ink-rule)] bg-white px-3 py-3 text-xs text-[var(--ink-muted)]"><Loader2 className="size-3.5 animate-spin text-[var(--ink-accent)]" />{label}</div>;
 }

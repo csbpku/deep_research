@@ -14,7 +14,7 @@ import { withRequestId } from '../../../../lib/log';
 const CreateAnnotationInput = z.object({
   summaryId: z.string().uuid(),
   kind: z.enum(['highlight', 'comment', 'highlight_comment']),
-  quote: z.string().min(1).max(4000),
+  quote: z.string().min(1).max(12000),
   startOffset: z.number().int().min(0),
   endOffset: z.number().int().min(0),
   body: z.string().max(2000).optional(),
@@ -72,6 +72,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   const url = new URL(req.url);
   const summaryId = url.searchParams.get('summaryId');
+  const mineOnly = url.searchParams.get('mine') === 'true';
   if (!summaryId) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
@@ -87,10 +88,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             a."createdAt"::text, u.name AS author_name,
             (SELECT count(*) FROM radar_annotation_stars s WHERE s."annotationId" = a.id)::int AS stars
       FROM radar_annotations a JOIN users u ON u.id = a."authorId"
-      WHERE a."summaryId" = $1
+      WHERE a."summaryId" = $1 ${mineOnly ? 'AND a."authorId" = $2' : ''}
       ORDER BY a."createdAt" DESC
       LIMIT 200`,
-    summaryId,
+    ...(mineOnly ? [summaryId, user.id] : [summaryId]),
   );
   return NextResponse.json({ annotations });
 });

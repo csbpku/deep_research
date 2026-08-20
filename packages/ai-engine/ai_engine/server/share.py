@@ -156,12 +156,18 @@ def _strip_dangerous_html(text: str) -> str:
 def html_to_markdown(html: str) -> str:
     """Convert fetched HTML to safe, structured Markdown.
 
-    Trafilatura is the primary converter because it preserves article
-    structure (headings, paragraphs, links, lists and tables). The
-    lightweight text fallback remains deliberately conservative for
-    malformed pages or when extraction returns no usable content.
+    A structure-preserving DOM converter is preferred for article pages.
+    Trafilatura remains a fallback for malformed or unusual pages.
     """
     safe = _strip_dangerous_html(html)
+    try:
+        from ai_engine.radar.structured_html import structured_html_to_markdown
+
+        structured = structured_html_to_markdown(safe)
+        if len(structured.strip()) >= 40:
+            return normalize_markdown(structured)
+    except Exception:
+        pass
     try:
         import trafilatura
 
@@ -315,7 +321,7 @@ async def _update_summary_with_fetched_content(
         markdown_sha256(original_markdown),
         json.dumps({
             "provider": "web",
-            "extractorVersion": "trafilatura-markdown-v1",
+            "extractorVersion": "structured-dom-markdown-v1",
             "quality": inspect_markdown(original_markdown).quality,
             "warnings": list(inspect_markdown(original_markdown).warnings),
         }, ensure_ascii=False),
@@ -461,7 +467,7 @@ async def run_share_worker(
             summary_id=summary_id,
             title=title,
             body_markdown=body_md[:2000],
-            original_markdown=body_md[:65_536],
+            original_markdown=body_md[:256 * 1024],
             original_kind="web_share",
             content_sha256=body_sha,
             tags=[],

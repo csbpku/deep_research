@@ -8,7 +8,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
 import { getCurrentUser } from '@/lib/auth/session';
-import { TopicsFilter, TOPICS_FILTERS, type TopicFilterKey } from './TopicsFilter';
+import { TopicsFilter } from './TopicsFilter';
+import { parseTopicFilter, type TopicFilterKey } from './topic-filter-options';
 
 type IconComponent = React.ComponentType<{ className?: string }>;
 
@@ -18,16 +19,11 @@ const TIER_LABELS: Record<string, { label: string; cls: string; Icon: IconCompon
   emerging: { label: '新出现', cls: 'bg-muted text-muted-foreground', Icon: Compass },
 };
 
-function parseFilter(value: string | null | undefined): TopicFilterKey {
-  const match = (TOPICS_FILTERS as readonly { key: TopicFilterKey }[]).find((f) => f.key === value);
-  return match?.key ?? "all";
-}
-
 export const dynamic = 'force-dynamic';
 
 export default async function TopicsPage({ searchParams }: { searchParams: Promise<{ filter?: string }> }) {
   const sp = await searchParams;
-  const filter = parseFilter(sp.filter);
+  const filter = parseTopicFilter(sp.filter);
   const user = await getCurrentUser();
 
   const tierFilter = filter === 'hot' || filter === 'warming' || filter === 'emerging'

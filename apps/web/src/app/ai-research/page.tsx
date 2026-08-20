@@ -408,49 +408,13 @@ function AiResearchPageClient() {
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="AI 调研"
-        description="先说问题；只有范围不明确时，AI 才会追问。准备好即可在当前工作区启动调研。"
+        description="把一个需要判断的问题交给 AI，补充必要背景后直接开始。"
       />
       <div className="max-w-6xl">
         <AiResearchConversation />
-        <ResearchPipelineRail />
       </div>
       <AiResearchHistory />
     </div>
-  );
-}
-
-function ResearchPipelineRail() {
-  const steps = [
-    ['1', '规划研究问题', '拆分背景、约束和验证方向', '提交后开始'],
-    ['2', '检索与抓取', '优先处理指定资料，再补充外部来源', '待开始'],
-    ['3', '压缩证据', '合并相似结论并保留来源链路', '待开始'],
-    ['4', '分析与对比', '形成可执行的取舍和风险判断', '待开始'],
-    ['5', '写作草稿', '生成可编辑的团队私有草稿', '待开始'],
-    ['6', '事实审核', '核验高风险事实、引用和来源冲突', '待开始'],
-  ];
-  return (
-    <section className="mt-3 rounded-xl border border-border/80 bg-card/70 px-4 py-3" aria-label="调研流程预览">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <h2 className="text-xs font-semibold text-foreground">调研链路</h2>
-          <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">6 steps</span>
-        </div>
-        <p className="text-[11px] text-muted-foreground">启动后自动推进，完成时结果回到当前工作区</p>
-      </div>
-      <ol className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {steps.map(([number, title, description, state]) => (
-          <li key={number} className="group flex min-w-0 items-center gap-2 rounded-lg border border-border/70 bg-background/70 px-2.5 py-2">
-            <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">
-              {number}
-            </span>
-            <span className="min-w-0">
-              <strong className="block truncate text-[11px] font-medium text-foreground" title={title}>{title}</strong>
-              <span className="block truncate text-[10px] text-muted-foreground" title={`${description} · ${state}`}>{state}</span>
-            </span>
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }
 

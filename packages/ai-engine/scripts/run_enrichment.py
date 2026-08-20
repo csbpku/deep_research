@@ -4,6 +4,7 @@ Usage:
   cd packages/ai-engine
   uv run python scripts/run_enrichment.py --limit 50
   uv run python scripts/run_enrichment.py --kind github_repo arxiv rss web_share
+  uv run python scripts/run_enrichment.py --summary-id <uuid>
 """
 # ruff: noqa: E402
 from __future__ import annotations
@@ -30,6 +31,7 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description="Run radar enrichment")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--kind", nargs="*", default=list(DEFAULT_ENRICHMENT_KINDS))
+    parser.add_argument("--summary-id", action="append", default=[])
     args = parser.parse_args()
 
     dsn = os.environ.get(
@@ -48,6 +50,8 @@ async def main() -> int:
             store.pool,
             limit=args.limit,
             source_kinds=tuple(args.kind),
+            summary_ids=tuple(args.summary_id) or None,
+            force=bool(args.summary_id),
         )
         print(f"本次成功 enrichment: {enriched}")
         after = await _pending_counts(store, tuple(args.kind))

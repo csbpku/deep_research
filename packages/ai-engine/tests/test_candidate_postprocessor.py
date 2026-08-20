@@ -43,7 +43,7 @@ async def test_score_missing_candidates_scores_approved_share_content() -> None:
         "body": "short summary",
         "url": "https://example.com/article",
         "publishedAt": None,
-        "originalMarkdown": "full fetched article",
+        "originalMarkdown": "full fetched article with enough technical detail " * 12,
         "sourceType": "web_share",
     }])
     calls: list[tuple[str, str, str | None]] = []
@@ -64,7 +64,7 @@ async def test_score_missing_candidates_scores_approved_share_content() -> None:
     )
 
     assert scored == 1
-    assert calls == [("Shared article", "full fetched article", "web_share")]
+    assert calls == [("Shared article", "full fetched article with enough technical detail " * 12, "web_share")]
     select_sql = pool.connection_value.executions[0][0]
     assert '"share_submissions"' in select_sql
     update_sql, update_params = pool.connection_value.executions[1]

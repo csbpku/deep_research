@@ -166,6 +166,8 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
       return { message: 'URL 在抓取黑名单中' };
     case ERROR_CODES.URL_FETCH_DNS:
       return { message: '目标网站域名解析失败', hint: '可能是临时网络故障，请稍后重试。' };
+    case ERROR_CODES.URL_FETCH_NETWORK:
+      return { message: '目标网站连接失败', hint: '可能是外网连接、TLS 或上游服务暂时异常，请稍后重试。' };
     case ERROR_CODES.URL_FETCH_TIMEOUT:
       return { message: '抓取超时' };
     case ERROR_CODES.URL_FETCH_TOO_LARGE:

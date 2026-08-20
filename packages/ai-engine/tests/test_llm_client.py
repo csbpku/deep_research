@@ -130,6 +130,54 @@ async def test_generate_text_reuses_client(
     assert constructed == 1
 
 
+async def test_generate_text_falls_back_after_quota_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_models: list[str] = []
+    audit_events: list[object] = []
+
+    class QuotaError(Exception):
+        status_code = 429
+
+    class Messages:
+        async def create(self, **kwargs: object) -> object:
+            model = str(kwargs["model"])
+            captured_models.append(model)
+            if model == "MiniMax-M3":
+                raise QuotaError("quota exceeded")
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="fallback ok")],
+                usage=SimpleNamespace(input_tokens=7, output_tokens=3),
+                model="deepseek-v4-flash",
+                stop_reason="end_turn",
+            )
+
+    class Client:
+        def __init__(self, **_: object) -> None:
+            self.messages = Messages()
+
+    async def record(event: object) -> None:
+        audit_events.append(event)
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", Client)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", record)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_FALLBACK_LLM", "anthropic:deepseek-v4-flash")
+
+    result = await generate_text(
+        llm_spec="anthropic:MiniMax-M3",
+        user_prompt="hello",
+        operation="test.fallback",
+    )
+
+    assert result.text == "fallback ok"
+    assert captured_models == ["MiniMax-M3", "deepseek-v4-flash"]
+    assert len(audit_events) == 2
+    assert getattr(audit_events[0], "status") == "failed"
+    assert getattr(audit_events[0], "error_kind") == "quota"
+    assert getattr(audit_events[1], "used_fallback") is True
+
+
 async def test_generate_text_limits_global_concurrency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

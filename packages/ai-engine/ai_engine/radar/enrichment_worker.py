@@ -2,8 +2,9 @@
 
 Phase 2A: enrich GitHub repo candidates with file tree + entry points +
 repo metadata by calling GitHub's REST API.
-Phase 2B: enrich arxiv paper candidates with PDF-parsed structure
-(sections + figures) + LLM-generated TL;DR.
+Phase 2B: enrich arxiv paper candidates with HTML-first structure
+(sections + figures) + LLM-generated TL;DR. PDF parsing is retained as a
+fallback for papers without a usable rendered HTML page.
 
 Design points:
 - Failures are isolated per candidate; one repo's 404/timeout does not
@@ -13,9 +14,9 @@ Design points:
 - We never call ``safe_fetch`` against api.github.com: HTTPS+443 + JSON
   content-type is already in the allow-list; using httpx directly keeps
   the failure modes easy to read.
-- arxiv PDF fetch goes through ``safe_fetch`` (SSRF defense is required
-  for arbitrary URLs). pymupdf parses the PDF inline; figures are
-  extracted but not persisted as base64 in P0 (only metadata).
+- arXiv HTML is fetched from ar5iv/arXiv first. This preserves paragraph,
+  section, link, table, and math boundaries. PDF parsing is a fallback only;
+  its text extraction is inherently lossy for multi-column papers.
 - Output JSON shape is intentionally small (≤16KB) so Postgres TOAST
   isn't triggered and the BFF can ship it inline.
 """
@@ -45,6 +46,9 @@ logger = logging.getLogger("ai_engine.radar.enrichment_worker")
 TREE_NODE_MAX = 200
 # Cap JSONB payload to ~16KB (well under Postgres TOAST).
 ORIGINAL_META_MAX_BYTES = 16_000
+README_MAX_CHARS = 120_000
+ARXIV_MARKDOWN_MAX_BYTES = 256 * 1024
+ENRICHMENT_VERSION = "2.0"
 
 # Files we mark as "key" in the file tree renderer.
 _KEY_FILES = frozenset({
@@ -227,6 +231,7 @@ def _github_item_meta(
             break
     payload: dict[str, Any] = {
         "provider": "github_item",
+        "enrichmentVersion": ENRICHMENT_VERSION,
         "kind": kind,
         "owner": owner,
         "repo": repo,
@@ -352,6 +357,7 @@ async def enrich_web_candidate(
     *,
     summary_id: str,
     canonical_url: str,
+    force: bool = False,
 ) -> dict[str, Any] | None:
     """Enrich rss/web_share candidates with fresh page metadata + markdown.
 
@@ -371,7 +377,7 @@ async def enrich_web_candidate(
         return None
     existing_markdown = _strip_nul(str(current.get("originalMarkdown") or ""))
     existing_meta = current.get("originalMeta")
-    if (
+    if not force and (
         isinstance(existing_meta, dict)
         and existing_meta.get("provider") == "web"
         and isinstance(current.get("highlights"), dict)
@@ -391,7 +397,7 @@ async def enrich_web_candidate(
         fetched_markdown = _strip_nul(
             _extract_article_content(html, canonical_url, "web")
         )
-        fetched_markdown = fetched_markdown[: 64 * 1024]
+        fetched_markdown = fetched_markdown[:ARXIV_MARKDOWN_MAX_BYTES]
 
     new_markdown = existing_markdown
     if fetched_markdown and not _is_low_quality_content(fetched_markdown):
@@ -403,7 +409,8 @@ async def enrich_web_candidate(
 
     payload: dict[str, Any] = {
         "provider": "web",
-        "extractorVersion": "trafilatura-markdown-v1",
+        "enrichmentVersion": ENRICHMENT_VERSION,
+        "extractorVersion": "structured-dom-markdown-v2",
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "finalUrl": doc.url if doc is not None else canonical_url,
         "finalIp": doc.final_ip if doc is not None else None,
@@ -558,6 +565,24 @@ async def _fetch_repo_meta(
     }
 
 
+async def _fetch_repo_head_sha(
+    client: httpx.AsyncClient, owner: str, repo: str, branch: str,
+) -> str | None:
+    """Fetch the branch head so Zread generation can be cached by commit."""
+    try:
+        resp = await client.get(
+            f"{_GITHUB_API}/repos/{owner}/{repo}/commits/{quote(branch, safe='')}",
+            headers=_github_headers(os.environ.get("GH_TOKEN")),
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            return None
+        value = resp.json().get("sha")
+        return str(value) if value else None
+    except (httpx.HTTPError, ValueError, TypeError):
+        return None
+
+
 async def _fetch_repo_tree(
     client: httpx.AsyncClient, owner: str, repo: str, default_branch: str
 ) -> list[dict[str, Any]]:
@@ -602,8 +627,9 @@ async def _fetch_repo_readme(
     """Fetch README markdown (best-effort, returns None on any failure).
 
     Reads `https://api.github.com/repos/{owner}/{repo}/readme` which returns
-    base64-encoded markdown. Decoded + truncated to 8KB before being fed
-    to the LLM — enough for module grouping, doesn't blow context.
+    base64-encoded Markdown. Preserve the full README up to an explicit
+    high ceiling for the reader fallback; prompt construction applies its
+    own provider-safe budget separately.
     """
     try:
         resp = await client.get(
@@ -624,7 +650,7 @@ async def _fetch_repo_readme(
         content_b64 = data.get("content", "")
         import base64 as _b64
         decoded = _b64.b64decode(content_b64).decode("utf-8", errors="replace")
-        return decoded[:8192]
+        return decoded[:README_MAX_CHARS]
     except Exception as exc:
         logger.warning(
             "ai-engine.radar.enrichment.github_readme_decode_failed",
@@ -749,6 +775,7 @@ def _build_meta_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "provider": "github",
+        "enrichmentVersion": ENRICHMENT_VERSION,
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "tree": _classify_tree(tree),
         "entryPoints": entry_points,
@@ -791,10 +818,14 @@ async def enrich_github_candidate(
     if not parsed:
         return None
     owner, repo = parsed
+    current = await _fetch_enrichment_row(pool, summary_id)
+    existing_meta = current.get("originalMeta") if isinstance(current, dict) else None
+    existing_zread = existing_meta.get("zread") if isinstance(existing_meta, dict) else None
 
     async with httpx.AsyncClient() as client:
         repo_meta = await _fetch_repo_meta(client, owner, repo)
         default_branch = (repo_meta or {}).get("defaultBranch") or "main"
+        head_sha = await _fetch_repo_head_sha(client, owner, repo, default_branch)
         tree = await _fetch_repo_tree(client, owner, repo, default_branch)
         readme_text = await _fetch_repo_readme(client, owner, repo, default_branch)
         key_files = await _fetch_key_files(
@@ -805,6 +836,122 @@ async def enrich_github_candidate(
     entry_points = _detect_entry_points(tree)
     payload = _build_meta_payload(repo_meta, tree, entry_points)
     payload = _trim_to_budget(payload)
+
+    # Zread is deliberately a separate best-effort step. It is keyed by the
+    # Git commit so ordinary enrichment retries do not regenerate the wiki.
+    zread_payload = existing_zread if (
+        isinstance(existing_zread, dict)
+        and existing_zread.get("provider") == "zread-cli"
+        and head_sha
+        and existing_zread.get("commitSha") == head_sha
+        and isinstance(existing_zread.get("pages"), list)
+    ) else None
+    if zread_payload is None and readme_text:
+        # Persist readable content before the optional long-running Zread
+        # process starts. This makes the detail page useful immediately and
+        # survives a provider quota error, process restart, or interruption.
+        payload["zread"] = {
+            "provider": "github-readme-fallback",
+            "status": "generating",
+            "repository": f"{owner}/{repo}",
+            "commitSha": head_sha,
+            "branch": default_branch,
+            "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pageCount": 1,
+            "expectedPageCount": 1,
+            "truncated": False,
+            "truncatedPages": [],
+            "fallback": True,
+            "pages": [{
+                "path": "README.md",
+                "title": f"{owner}/{repo} README",
+                "content": readme_text[:README_MAX_CHARS],
+            }],
+        }
+        async with pool.connection() as conn:
+            await conn.execute(
+                'UPDATE "summaries" SET "originalMeta" = %s::jsonb, "updatedAt" = now() WHERE "id" = %s',
+                (json.dumps(payload, ensure_ascii=False), summary_id),
+            )
+            await conn.commit()
+    if zread_payload is None:
+        try:
+            from ai_engine.radar.zread_cli import generate_zread_wiki
+
+            zread_payload = await generate_zread_wiki(
+                owner=owner,
+                repo=repo,
+                branch=default_branch,
+                commit_sha=head_sha,
+            )
+        except Exception as exc:  # noqa: BLE001 - optional enrichment must not block radar
+            error_message = str(exc).strip().replace("\n", " ")[-500:] or type(exc).__name__
+            zread_payload = {
+                "provider": "zread-cli",
+                "status": "failed",
+                "repository": f"{owner}/{repo}",
+                "commitSha": head_sha,
+                "branch": default_branch,
+                "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "error": error_message,
+            }
+            logger.warning(
+                "ai-engine.radar.enrichment.zread_cli_failed",
+                extra={"summary_id": summary_id, "owner": owner, "repo": repo, "error": error_message},
+            )
+    # A high-value Repo must still have readable content when Zread is
+    # unavailable or times out before writing its first page. README is the
+    # authoritative GitHub source fallback; it is explicitly marked partial
+    # so the UI never presents it as a complete generated wiki.
+    if zread_payload is None and readme_text:
+        zread_payload = {
+            "provider": "github-readme-fallback",
+            "status": "partial",
+            "repository": f"{owner}/{repo}",
+            "commitSha": head_sha,
+            "branch": default_branch,
+            "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "error": "Zread unavailable; showing GitHub README fallback",
+            "pageCount": 1,
+            "expectedPageCount": 1,
+            "truncated": False,
+            "truncatedPages": [],
+            "fallback": True,
+            "pages": [{
+                "path": "README.md",
+                "title": f"{owner}/{repo} README",
+                "content": readme_text[:README_MAX_CHARS],
+            }],
+        }
+    elif isinstance(zread_payload, dict) and zread_payload.get("status") == "failed" and readme_text:
+        zread_payload = {
+            **zread_payload,
+            "status": "partial",
+            "provider": "github-readme-fallback",
+            "fallback": True,
+            "pageCount": 1,
+            "expectedPageCount": 1,
+            "pages": [{
+                "path": "README.md",
+                "title": f"{owner}/{repo} README",
+                "content": readme_text[:README_MAX_CHARS],
+            }],
+        }
+    elif (
+        zread_payload is None
+        and isinstance(payload.get("zread"), dict)
+        and payload["zread"].get("provider") == "github-readme-fallback"
+    ):
+        # The README request may fail on a retry, but an earlier fallback is
+        # still readable. Do not leave a stale "generating" marker after the
+        # worker has finished.
+        payload["zread"] = {
+            **payload["zread"],
+            "status": "partial",
+            "error": "Zread unavailable; retained existing GitHub README fallback",
+        }
+    if zread_payload is not None:
+        payload["zread"] = zread_payload
 
     # Phase 2D: AI-written summary (500 words, styled after deepwiki.com's
     # Overview + What Is sections). Best-effort, doesn't break meta write.
@@ -841,7 +988,7 @@ async def enrich_github_candidate(
             ),
         )
     logger.info(
-        "ai-engine.radar.enrichment.github_done",
+            "ai-engine.radar.enrichment.github_done",
         extra={
             "summary_id": summary_id,
             "owner": owner,
@@ -849,6 +996,7 @@ async def enrich_github_candidate(
             "tree_count": len(tree),
             "entry_points": len(entry_points),
             "has_repo_summary": repo_summary is not None,
+            "has_zread": bool(zread_payload),
             "payload_bytes": len(json.dumps(payload, ensure_ascii=False).encode("utf-8")),
         },
     )
@@ -861,7 +1009,7 @@ async def enrich_github_candidate(
 
 
 _ARXIV_ID_RE = _re_arxiv.compile(
-    r"(?:arxiv\.org/(?:abs|pdf)/|abs/)?([0-9]{4}\.[0-9]{4,6}(?:v[0-9]+)?)"
+    r"(?:arxiv\.org/(?:abs|html|pdf)/|huggingface\.co/papers/|abs/)?([0-9]{4}\.[0-9]{4,6}(?:v[0-9]+)?)"
 )
 
 
@@ -869,6 +1017,188 @@ def _parse_arxiv_id(url: str) -> str | None:
     """Extract arxiv id like 2401.12345 from a paper URL."""
     m = _ARXIV_ID_RE.search(url or "")
     return m.group(1) if m else None
+
+
+async def _fetch_arxiv_html(arxiv_id: str) -> tuple[str, str] | None:
+    """Fetch a rendered arXiv document, preferring ar5iv over arXiv HTML."""
+    urls = (
+        f"https://ar5iv.labs.arxiv.org/html/{arxiv_id}",
+        f"https://arxiv.org/html/{arxiv_id}",
+        f"https://arxiv.org/html/{arxiv_id}v1",
+    )
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        follow_redirects=True,
+        headers={"User-Agent": "deep-research-radar-enrichment/1.0"},
+    ) as client:
+        for url in urls:
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                if "html" not in content_type and not response.text.lstrip().startswith("<"):
+                    continue
+                final_path = urlsplit(str(response.url)).path.lower()
+                # arXiv may redirect an unavailable HTML rendering to the
+                # abstract page. That page is useful metadata, but must not
+                # be mistaken for the paper body.
+                if "/html/" not in final_path or len(response.text.strip()) < 1000:
+                    continue
+                return response.text, str(response.url)
+            except (httpx.HTTPError, UnicodeError) as exc:
+                logger.info(
+                    "ai-engine.radar.enrichment.arxiv_html_fetch_failed",
+                    extra={"arxiv_id": arxiv_id, "url": url, "error": type(exc).__name__},
+                )
+    return None
+
+
+def _arxiv_html_authors(html: str) -> list[str]:
+    """Read citation_author metadata before falling back to the author block."""
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        authors: list[str] = []
+        for node in soup.select('meta[name="citation_author"]'):
+            value = str(node.get("content") or "").strip()
+            if value and value not in authors:
+                authors.append(value)
+        if authors:
+            return authors
+        for node in soup.select(".ltx_authors .ltx_personname, .authors"):
+            value = " ".join(node.get_text(" ", strip=True).split())
+            if value and value not in authors:
+                authors.append(value)
+        return authors
+    except Exception:
+        return []
+
+
+def _sections_from_markdown(markdown: str) -> list[dict[str, Any]]:
+    """Create lightweight section anchors from headings in rendered HTML."""
+    sections: list[dict[str, Any]] = []
+    offset = 0
+    for line in markdown.splitlines():
+        match = _re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if match:
+            sections.append({
+                "title": match.group(2)[:200],
+                "level": min(len(match.group(1)), 3),
+                "startOffset": offset,
+            })
+        offset += len(line) + 1
+    return sections[:100]
+
+
+def _clean_arxiv_html_markdown(markdown: str, paper_title: str) -> str:
+    """Remove arXiv front-matter artifacts emitted by DOM extractors.
+
+    arXiv HTML contains machine-readable title/logo/resource and affiliation
+    nodes before the actual document title. Some HTML-to-Markdown extractors
+    flatten those custom nodes into visible text, which makes the reader see
+    implementation metadata before the paper and also pollutes article-map
+    anchors. Keep the first real title heading as the document start and drop
+    repeated affiliation placeholders.
+    """
+    value = markdown.strip()
+    if paper_title:
+        title_pattern = _re.compile(
+            r"(?m)^#{1,6}\s+" + _re.escape(paper_title).replace(r"\ ", r"\s+") + r"\s*$",
+            _re.IGNORECASE,
+        )
+        title_match = title_pattern.search(value)
+        if title_match:
+            value = value[title_match.start():]
+
+    lines = value.splitlines()
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if _re.match(r"^(?:Affiliation:\s*\[|\\(?:titlelogo|contribution|resource)\b)", stripped):
+            continue
+        cleaned.append(line)
+    value = "\n".join(cleaned)
+    value = _re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
+async def _parse_arxiv_html_document(
+    arxiv_id: str,
+) -> tuple[str, list[dict[str, Any]], list[str], list[dict[str, Any]], str] | None:
+    """Return clean Markdown and metadata from ar5iv/arXiv HTML."""
+    fetched = await _fetch_arxiv_html(arxiv_id)
+    if fetched is None:
+        return None
+    html, source_url = fetched
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        # trafilatura intentionally drops MathML. Preserve the TeX source as
+        # readable inline/display math so the reader never sees blank
+        # equations or flattened table-like math fragments.
+        for math_node in soup.select("math"):
+            tex_node = math_node.select_one('annotation[encoding="application/x-tex"]')
+            tex = str(math_node.get("alttext") or (tex_node.get_text() if tex_node else "")).strip()
+            if not tex:
+                continue
+            if str(math_node.get("display") or "").lower() == "block":
+                replacement = f"\n\n$$\n{tex}\n$$\n\n"
+            else:
+                replacement = f" ${tex}$ "
+            math_node.replace_with(replacement)
+
+        # Reuse the project's HTML → Markdown pipeline. Unlike PDF text
+        # extraction, this retains paragraph and heading boundaries.
+        from ai_engine.radar.sync_runner import _extract_article_content
+
+        markdown = _extract_article_content(str(soup), source_url, "arxiv").strip()
+        # GFM's table normalizer can expose MathML display equations as a
+        # one-row table (`| | $$...$$ | | (1) |`). Restore them to a normal
+        # display-math block before ReactMarkdown sees the source.
+        markdown = _re.sub(
+            r"\|\s*\|\s*(\$\$.*?\$\$)\s*\|\s*\|\s*(\(\d+\))\s*\|",
+            r"\n\n\1\n\n\2",
+            markdown,
+            flags=_re.DOTALL,
+        )
+    except Exception as exc:
+        logger.info(
+            "ai-engine.radar.enrichment.arxiv_html_parse_failed",
+            extra={"arxiv_id": arxiv_id, "error": type(exc).__name__},
+        )
+        return None
+    # A full paper should contain more than the abstract page. Short papers
+    # still pass when they have multiple rendered headings/paragraphs.
+    if len(markdown) < 5000 or len(_sections_from_markdown(markdown)) < 2:
+        return None
+    # Some arXiv renderings expose the document title/author block both in
+    # the front matter and in the extracted article body. Remove the repeated
+    # block between the second title and the first numbered section.
+    try:
+        from bs4 import BeautifulSoup
+
+        title_node = BeautifulSoup(html, "html.parser").select_one("h1.ltx_title_document")
+        paper_title = " ".join(title_node.get_text(" ", strip=True).split()) if title_node else ""
+        markdown = _clean_arxiv_html_markdown(markdown, paper_title)
+        if paper_title:
+            title_pattern = _re.compile(_re.escape(paper_title).replace(r"\ ", r"\s+"), _re.IGNORECASE)
+            matches = list(title_pattern.finditer(markdown))
+            if len(matches) > 1:
+                next_section = _re.search(r"\n#{1,6}\s+\d+(?:\.\d+)*\s+", markdown[matches[1].end():])
+                if next_section:
+                    end = matches[1].end() + next_section.start()
+                    markdown = (markdown[:matches[1].start()] + markdown[end:]).strip()
+    except Exception:
+        pass
+    return (
+        markdown[:ARXIV_MARKDOWN_MAX_BYTES],
+        _sections_from_markdown(markdown),
+        _arxiv_html_authors(html),
+        [],
+        source_url,
+    )
 
 
 def _strip_latex_commands(text: str) -> str:
@@ -1065,15 +1395,10 @@ def _parse_arxiv_pdf(
                 body_parts.append(clean)
                 offset += len(clean) + 1  # +1 for newline
 
-        # Stop at page 10 to bound parsing cost.
-        if page_idx >= 9:
-            body_parts.append("\n\n[后续 10+ 页内容已截断]")
-            break
-
     doc.close()
     markdown = "\n\n".join(body_parts)
-    if len(markdown) > 64 * 1024:
-        markdown = markdown[: 64 * 1024]
+    if len(markdown) > ARXIV_MARKDOWN_MAX_BYTES:
+        markdown = markdown[:ARXIV_MARKDOWN_MAX_BYTES]
     # doc.close() omitted — pymupdf documents get GC'd; explicit close
     # races with code that still references the doc (e.g. figures loop).
     return markdown, sections, authors, figures
@@ -1134,6 +1459,7 @@ async def _generate_arxiv_analysis(
             user_prompt=user_prompt,
             max_tokens=4096,
             disable_thinking=True,
+            operation="radar.enrichment.arxiv_analysis",
         )
         text = result.text
         if not text:
@@ -1223,7 +1549,7 @@ async def _generate_repo_summary(
     )
     user_prompt = (
         f"仓库: {owner}/{repo}\n\n"
-        f"README:\n{readme[:4000]}\n\n"
+        f"README:\n{readme[:12000]}\n\n"
         f"关键源码:\n{chr(10).join(src_fragments[:3])}\n\n"
         "请输出一段 400-600 字的项目概述，不要 markdown 列表或文件路径。"
         "自然语言，5-6 个短段落，每段 1-3 句话。"
@@ -1236,6 +1562,7 @@ async def _generate_repo_summary(
             user_prompt=user_prompt,
             max_tokens=4096,
             disable_thinking=True,
+            operation="radar.enrichment.repo_summary",
         )
         text = result.text
         if not text:
@@ -1254,8 +1581,8 @@ async def enrich_arxiv_candidate(
 
     Pipeline:
     1. Parse arxiv id from URL
-    2. Fetch PDF via safe_fetch
-    3. Parse with pymupdf → markdown + sections
+    2. Fetch and parse ar5iv/arXiv HTML
+    3. Fall back to PDF parsing only when rendered HTML is unavailable
     4. Generate TL;DR via BRIEF_LLM
     5. Persist originalMarkdown + sections + tldr + figures + authors
     """
@@ -1267,34 +1594,41 @@ async def enrich_arxiv_candidate(
         )
         return None
 
-    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
-    try:
-        pdf_bytes = await _fetch_arxiv_pdf(pdf_url)
-    except Exception as exc:
-        logger.warning(
-            "ai-engine.radar.enrichment.arxiv_pdf_fetch_failed",
-            extra={"summary_id": summary_id, "arxiv_id": arxiv_id, "error": type(exc).__name__},
-        )
-        return await _enrich_arxiv_from_cached_abstract(
-            pool,
-            summary_id=summary_id,
-            arxiv_id=arxiv_id,
-            reason="pdf_fetch_failed",
-        )
+    html_result = await _parse_arxiv_html_document(arxiv_id)
+    source_url = f"https://arxiv.org/abs/{arxiv_id}"
+    extraction_method = "arxiv-html-v1"
+    if html_result is not None:
+        markdown, sections, authors, figures, source_url = html_result
+    else:
+        pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+        try:
+            pdf_bytes = await _fetch_arxiv_pdf(pdf_url)
+        except Exception as exc:
+            logger.warning(
+                "ai-engine.radar.enrichment.arxiv_pdf_fetch_failed",
+                extra={"summary_id": summary_id, "arxiv_id": arxiv_id, "error": type(exc).__name__},
+            )
+            return await _enrich_arxiv_from_cached_abstract(
+                pool,
+                summary_id=summary_id,
+                arxiv_id=arxiv_id,
+                reason="html_and_pdf_fetch_failed",
+            )
 
-    if len(pdf_bytes) > 8 * 1024 * 1024:
-        logger.warning(
-            "ai-engine.radar.enrichment.arxiv_pdf_too_large",
-            extra={"summary_id": summary_id, "arxiv_id": arxiv_id, "bytes": len(pdf_bytes)},
-        )
-        return await _enrich_arxiv_from_cached_abstract(
-            pool,
-            summary_id=summary_id,
-            arxiv_id=arxiv_id,
-            reason="pdf_too_large",
-        )
+        if len(pdf_bytes) > 8 * 1024 * 1024:
+            logger.warning(
+                "ai-engine.radar.enrichment.arxiv_pdf_too_large",
+                extra={"summary_id": summary_id, "arxiv_id": arxiv_id, "bytes": len(pdf_bytes)},
+            )
+            return await _enrich_arxiv_from_cached_abstract(
+                pool,
+                summary_id=summary_id,
+                arxiv_id=arxiv_id,
+                reason="pdf_too_large",
+            )
 
-    markdown, sections, authors, figures = _parse_arxiv_pdf(pdf_bytes)
+        markdown, sections, authors, figures = _parse_arxiv_pdf(pdf_bytes)
+        extraction_method = "arxiv-pdf-fallback-v1"
     if not markdown:
         logger.warning(
             "ai-engine.radar.enrichment.arxiv_pdf_empty",
@@ -1331,6 +1665,9 @@ async def enrich_arxiv_candidate(
     # Update DB row
     meta_payload = {
         "provider": "arxiv",
+        "enrichmentVersion": ENRICHMENT_VERSION,
+        "sourceUrl": source_url,
+        "extractorVersion": extraction_method,
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "arxivId": arxiv_id,
         "sectionCount": len(sections),
@@ -1407,6 +1744,7 @@ async def _enrich_arxiv_from_cached_abstract(
     )[:500]
     meta_payload = {
         "provider": "arxiv",
+        "enrichmentVersion": ENRICHMENT_VERSION,
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "arxivId": arxiv_id,
         "sectionCount": 0,
@@ -1451,6 +1789,8 @@ async def run_enrichment_for_pending(
     sync_run_ids: tuple[str, ...] | None = None,
     summary_ids: tuple[str, ...] | None = None,
     concurrency: int | None = None,
+    force: bool = False,
+    item_timeout: float | None = None,
 ) -> int:
     """Find candidates that need enrichment and process them.
 
@@ -1481,18 +1821,27 @@ async def run_enrichment_for_pending(
             'AND sh."status" = \'approved\')) '
         )
         params = (*params, *sync_run_ids)
+    enrichment_need = (
+        'TRUE '
+        if force
+        else '(("originalKind" IN (\'rss\', \'web_share\') AND "highlights" IS NULL) '
+             # GitHub sync can persist a lightweight repository snapshot before
+             # the deep enrichment stage.  Do not mistake that snapshot for a
+             # completed enrichment: it has no v2 marker and no Zread pages.
+             'OR ("originalKind" = \'github_repo\' AND ('
+             '"originalMeta" IS NULL '
+             'OR COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\' '
+             'OR COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') NOT IN (\'complete\', \'partial\')'
+             ')) '
+             'OR ("originalKind" NOT IN (\'rss\', \'web_share\', \'github_repo\') '
+             'AND "originalMeta" IS NULL)) '
+    )
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
                 'SELECT "id", "canonicalUrl", "originalKind" FROM "summaries" '
                 f'WHERE "originalKind" IN ({placeholders}) '
-                'AND (('
-                '"originalKind" IN (\'rss\', \'web_share\') '
-                'AND "highlights" IS NULL'
-                ') OR ('
-                '"originalKind" NOT IN (\'rss\', \'web_share\') '
-                'AND "originalMeta" IS NULL'
-                ')) '
+                f'AND {enrichment_need}'
                 'AND ("syncRunId" IS NOT NULL OR EXISTS ('
                 'SELECT 1 FROM "share_submissions" sh '
                 'WHERE sh."publishedSummaryId" = "summaries"."id" '
@@ -1515,6 +1864,15 @@ async def run_enrichment_for_pending(
         concurrency
         or int(os.environ.get("RADAR_ENRICHMENT_CONCURRENCY", "2")),
     )
+    effective_item_timeout = None if item_timeout == 0 else item_timeout
+    if effective_item_timeout is None and item_timeout != 0:
+        try:
+            effective_item_timeout = max(
+                30.0,
+                float(os.environ.get("RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS", "600")),
+            )
+        except ValueError:
+            effective_item_timeout = 600.0
     semaphore = asyncio.Semaphore(enrichment_concurrency)
 
     async def _enrich_one(summary_id: str, url: str, kind: str) -> bool:
@@ -1534,9 +1892,26 @@ async def run_enrichment_for_pending(
                         pool, summary_id=summary_id, canonical_url=url,
                     )
                 elif kind in ("rss", "web_share"):
-                    payload = await enrich_web_candidate(
-                        pool, summary_id=summary_id, canonical_url=url,
-                    )
+                    if force:
+                        payload = await enrich_web_candidate(
+                            pool, summary_id=summary_id, canonical_url=url, force=True,
+                        )
+                    else:
+                        payload = await enrich_web_candidate(
+                            pool, summary_id=summary_id, canonical_url=url,
+                        )
+                if payload:
+                    async with pool.connection() as conn:
+                        await conn.execute(
+                            'UPDATE "summaries" SET "tags" = array_remove('
+                            'array_remove("tags", \'content_pending\'), '
+                            '\'github_content_pending\'), "updatedAt" = now() '
+                            'WHERE "id" = %s',
+                            (summary_id,),
+                        )
+                        commit = getattr(conn, "commit", None)
+                        if commit is not None:
+                            await commit()
                 return bool(payload)
             except Exception as exc:
                 logger.warning(
@@ -1550,8 +1925,27 @@ async def run_enrichment_for_pending(
                 )
                 return False
 
+    async def _bounded_enrich(summary_id: str, url: str, kind: str) -> bool:
+        try:
+            if effective_item_timeout is None:
+                return await _enrich_one(summary_id, url, kind)
+            return await asyncio.wait_for(
+                _enrich_one(summary_id, url, kind),
+                timeout=effective_item_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "ai-engine.radar.enrichment.item_timeout",
+                extra={
+                    "summary_id": summary_id,
+                    "kind": kind,
+                    "timeout_seconds": effective_item_timeout,
+                },
+            )
+            return False
+
     outcomes = await asyncio.gather(
-        *(_enrich_one(summary_id, url, kind) for summary_id, url, kind in candidates)
+        *(_bounded_enrich(summary_id, url, kind) for summary_id, url, kind in candidates)
     )
     return sum(outcomes)
 
@@ -1593,7 +1987,7 @@ async def _generate_web_highlights(
     )
     user_prompt = (
         f"标题: {title}\n\n"
-        f"正文 (前 4000 字):\n{markdown[:4000]}\n\n"
+        f"正文 (前 12000 字):\n{markdown[:12000]}\n\n"
         "请按以下 JSON 格式输出 (不要 markdown 代码块、不要多余解释):\n"
         "{\n"
         '  "summary": "一句话总结全文，不超过 150 字",\n'
@@ -1610,6 +2004,7 @@ async def _generate_web_highlights(
             user_prompt=user_prompt,
             max_tokens=2048,
             disable_thinking=True,
+            operation="radar.enrichment.article_highlights",
         )
         body = result.text
         # Extract JSON from response (handle potential markdown fences)

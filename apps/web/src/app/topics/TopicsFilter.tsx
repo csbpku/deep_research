@@ -9,6 +9,7 @@ import { Compass, Flame, Sparkles, Star, TrendingUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
+import { type TopicFilterKey } from './topic-filter-options';
 
 export const TOPICS_FILTERS = [
   { key: 'all', label: '全部专题', Icon: Compass },
@@ -17,8 +18,6 @@ export const TOPICS_FILTERS = [
   { key: 'emerging', label: '新出现', Icon: Sparkles },
   { key: 'followed', label: '我的关注', Icon: Star },
 ] as const;
-
-export type TopicFilterKey = (typeof TOPICS_FILTERS)[number]['key'];
 
 interface Props {
   unreadByFilter: Partial<Record<TopicFilterKey, number>>;

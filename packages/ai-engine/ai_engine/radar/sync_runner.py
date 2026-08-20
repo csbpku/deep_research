@@ -40,9 +40,10 @@ SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
 DistilledScorerFn = Callable[..., Awaitable[Any]]
 EmbeddingScorerFn = Any  # BatchEmbeddingScorer or None
 
-# Phase 0 deep-dive: original markdown is capped to 64KB to keep Postgres
-# rows under the TOAST threshold and chat prompt snapshot under 50KB.
-ORIGINAL_MARKDOWN_MAX_BYTES = 65_536
+# Preserve long-form papers and articles. Prompt construction applies its own
+# token budget later; truncating the stored source here destroys the reader's
+# ability to inspect the complete document.
+ORIGINAL_MARKDOWN_MAX_BYTES = 256 * 1024
 MIN_BRIEF_OUTPUT_CHARS = 120
 
 # Feature flag: when false, sync behaves as Week 9 (no capture, no UI).
@@ -123,7 +124,7 @@ def _classify_original_kind(source_type: str, url: str) -> str:
     prose blogs) so we need a richer discriminator.
     """
     u = (url or "").lower()
-    if "arxiv.org/abs/" in u or source_type == "arxiv":
+    if "arxiv.org/abs/" in u or "huggingface.co/papers/" in u or source_type in ("arxiv", "huggingface_papers"):
         return "arxiv"
     if source_type in ("github", "github_trending") or "github.com" in u:
         if "/releases/tag/" in u:
@@ -137,6 +138,31 @@ def _classify_original_kind(source_type: str, url: str) -> str:
     if source_type == "rss" or source_type == "devto":
         return "rss"
     return "web_share"
+
+
+def _arxiv_id_from_url(url: str) -> str | None:
+    """Extract a modern arXiv identifier from arXiv or HF Daily Papers URLs."""
+    import re as _re
+
+    match = _re.search(
+        r"(?:arxiv\.org/(?:abs|html)/|huggingface\.co/papers/)([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)",
+        (url or "").lower(),
+    )
+    return match.group(1) if match else None
+
+
+def _preferred_document_urls(url: str, source_type: str) -> list[str]:
+    """Prefer rendered arXiv HTML while retaining a safe source fallback."""
+    arxiv_id = _arxiv_id_from_url(url)
+    if not arxiv_id and source_type not in ("arxiv", "huggingface_papers"):
+        return [url]
+    candidates = [
+        f"https://ar5iv.labs.arxiv.org/html/{arxiv_id}" if arxiv_id else "",
+        f"https://arxiv.org/html/{arxiv_id}" if arxiv_id else "",
+        f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else "",
+        url,
+    ]
+    return list(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 @dataclass(slots=True, frozen=True)
@@ -196,7 +222,8 @@ def _safe_error_code(exc: BaseException) -> str:
     - ``asyncio.TimeoutError`` / ``TimeoutError`` → ``WORKER_TIMEOUT``
     - ``ValueError`` → ``VALIDATION_FAILED``
     - ``httpx.HTTPError`` → ``URL_FETCH_TIMEOUT`` (TimeoutException) or
-      ``URL_FETCH_BLOCKED`` (everything else — DNS, connect, TLS, protocol)
+      ``URL_FETCH_NETWORK`` (connect, TLS, protocol; security policy
+      rejections are surfaced by ``SafeFetchError`` as BLOCKED)
     - ``RuntimeError`` raised by ``ingestion.sources.fetch_arxiv`` (prefix
       ``arxiv_*``) → specific codes so dashboards can split transport
       failures from rate-limit hits and parse errors
@@ -218,9 +245,9 @@ def _safe_error_code(exc: BaseException) -> str:
         return "URL_FETCH_TIMEOUT"
     if isinstance(exc, (_httpx.ConnectError, _httpx.ConnectTimeout,
                         _httpx.NetworkError, _httpx.RemoteProtocolError)):
-        return "URL_FETCH_BLOCKED"
+        return "URL_FETCH_NETWORK"
     if isinstance(exc, _httpx.HTTPError):
-        return "URL_FETCH_BLOCKED"
+        return "URL_FETCH_NETWORK"
     # fetch_arxiv classifies its own failures with leading ``arxiv_*`` tags.
     msg = str(exc) or ""
     if msg.startswith("arxiv_"):
@@ -234,9 +261,9 @@ def _safe_error_code(exc: BaseException) -> str:
         if tag == "arxiv_too_large":
             return "URL_FETCH_TOO_LARGE"
         if tag == "arxiv_network":
-            return "URL_FETCH_BLOCKED"
+            return "URL_FETCH_NETWORK"
         if tag in {"arxiv_http_error", "arxiv_decode_failed"}:
-            return "URL_FETCH_BLOCKED"
+            return "URL_FETCH_NETWORK"
         if tag in {"arxiv_parse_failed", "arxiv_empty_response"}:
             # Body-level failures: most likely upstream schema change.
             return "VALIDATION_FAILED"
@@ -309,6 +336,51 @@ def _can_use_snippet_fallback(source: RadarSource, candidate: RadarCandidate) ->
     )
 
 
+def _can_use_candidate_metadata_fallback(
+    source: RadarSource,
+    candidate: RadarCandidate,
+) -> bool:
+    """Keep a source candidate when its detail page is incomplete.
+
+    A source adapter's title/snippet is still useful evidence for a later
+    retry. It must not be passed to the final relevance scorer as if it were
+    the full article, but it should remain visible as a pending candidate.
+    Verification shells and empty snippets stay in governance instead.
+    """
+    del source  # reserved for source-specific policies as adapters evolve
+    snippet = candidate.snippet.strip()
+    if len(snippet) < 20:
+        return False
+    lowered = snippet.lower()
+    return not any(
+        marker in lowered
+        for marker in (
+            *_LOW_QUALITY_MARKERS,
+            "prove your humanity",
+            "complete the challenge",
+            "all rights reserved",
+        )
+    )
+
+
+def _can_use_github_repo_metadata_fallback(
+    source: RadarSource,
+    candidate: RadarCandidate,
+) -> bool:
+    """Keep GitHub repo candidates when the detail page is blocked.
+
+    GitHub Trending already gives us a meaningful repository description,
+    stars and language. A failed fetch of github.com should not discard that
+    source-level signal; it should enter the candidate queue with the
+    metadata clearly treated as a fallback context.
+    """
+    return (
+        source.source_type in {"github", "github_trending"}
+        and _classify_original_kind(source.source_type, candidate.url) == "github_repo"
+        and _can_use_candidate_metadata_fallback(source, candidate)
+    )
+
+
 def _best_content_body(
     interpretation: str,
     markdown: str,
@@ -366,32 +438,44 @@ async def _fetch_document_with_content_retries(
     domain: str,
 ) -> tuple[FetchedDocument, str]:
     """Fetch and extract a page, retrying successful-but-empty responses once."""
-    for attempt in range(RADAR_CONTENT_RETRIES + 1):
-        fetched = await _with_transport_retries(
-            lambda: document_fetcher(url),
-            run_id=run_id,
-            source_id=source_id,
-            domain=domain,
-        )
-        raw_html = fetched.content.decode("utf-8", errors="replace")
-        markdown = _extract_article_content(raw_html, url, source_type)
-        if not _is_low_quality_content(markdown) or attempt >= RADAR_CONTENT_RETRIES:
-            return fetched, markdown
-        wait_seconds = RADAR_CONTENT_RETRY_BACKOFF_SECONDS * (attempt + 1)
-        logger.warning(
-            "ai-engine.radar.content_retry",
-            extra={
-                "request_id": run_id,
-                "source_id": source_id,
-                "domain": domain,
-                "attempt": attempt + 1,
-                "wait_seconds": wait_seconds,
-                "status": fetched.status,
-                "content_length": len(markdown),
-            },
-        )
-        if wait_seconds:
-            await asyncio.sleep(wait_seconds)
+    last_error: Exception | None = None
+    for document_url in _preferred_document_urls(url, source_type):
+        for attempt in range(RADAR_CONTENT_RETRIES + 1):
+            try:
+                fetched = await _with_transport_retries(
+                    lambda: document_fetcher(document_url),
+                    run_id=run_id,
+                    source_id=source_id,
+                    domain=domain,
+                )
+            except Exception as exc:
+                last_error = exc
+                # A rendered arXiv mirror can be unavailable for a new or
+                # malformed paper; continue to arXiv HTML/abstract/original.
+                break
+            raw_html = fetched.content.decode("utf-8", errors="replace")
+            markdown = _extract_article_content(raw_html, document_url, source_type)
+            if not _is_low_quality_content(markdown) or attempt >= RADAR_CONTENT_RETRIES:
+                return fetched, markdown
+            wait_seconds = RADAR_CONTENT_RETRY_BACKOFF_SECONDS * (attempt + 1)
+            logger.warning(
+                "ai-engine.radar.content_retry",
+                extra={
+                    "request_id": run_id,
+                    "source_id": source_id,
+                    "domain": domain,
+                    "attempt": attempt + 1,
+                    "wait_seconds": wait_seconds,
+                    "status": fetched.status,
+                    "content_length": len(markdown),
+                },
+            )
+            if wait_seconds:
+                await asyncio.sleep(wait_seconds)
+        if last_error is None:
+            continue
+    if last_error is not None:
+        raise last_error
     raise RuntimeError("content retry loop exhausted")
 
 
@@ -515,7 +599,7 @@ async def _existing_candidate(pool: Any, canonical_url: str) -> dict[str, Any] |
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                'SELECT "id", "body", "originalMarkdown" FROM "summaries" '
+                'SELECT "id", "body", "originalMarkdown", "tags" FROM "summaries" '
                 'WHERE "canonicalUrl" = %s '
                 "AND \"status\" <> 'archived' LIMIT 1",
                 (canonical_url,),
@@ -577,7 +661,9 @@ async def _retry_existing_summary_content(
             '"interpretation" = %s, "originalMarkdown" = %s, '
             '"originalFetchedAt" = now(), "originalBytes" = %s, '
             '"originalSha256" = %s, "summaryDate" = CURRENT_DATE, '
-            '"publishedAt" = %s, "syncRunId" = %s, "updatedAt" = now() '
+            '"publishedAt" = %s, "syncRunId" = %s, '
+            '"tags" = array_remove(array_remove("tags", \'github_content_pending\'), \'content_pending\'), '
+            '"updatedAt" = now() '
             'WHERE "id" = %s',
             (
                 candidate.title[:300], body, interpretation or None,
@@ -927,18 +1013,12 @@ async def _insert_candidate(
 
 
 def _build_score_reason(score: Any, distilled: Any | None) -> str:
-    """Combine heuristic score reason with Distilled dimensions."""
-    parts = [score.reason]
+    """Return the reason for the score that the UI actually displays."""
     if distilled is not None and not distilled.is_default:
-        dim_str = ", ".join(
-            f"{k}={v}" for k, v in distilled.dimension_scores.items()
-        )
-        parts.append(
-            f"Distilled: {distilled.total:.1f}/100 "
-            f"({distilled.tier}, must_read={distilled.must_read}); "
-            f"维度: {dim_str}; 弱项: {distilled.weak_point}"
-        )
-    return " | ".join(parts)[:500]
+        from ai_engine.radar.distilled_scorer import build_distilled_score_reason
+
+        return build_distilled_score_reason(distilled)
+    return str(score.reason or "")[:500]
 
 
 _NAV_NOISE_PATTERNS = [
@@ -1130,6 +1210,15 @@ def _extract_article_content(html: str, url: str, source_type: str) -> str:
     # intact. If extraction fails, source-specific parsers below still provide
     # safe fallbacks for arXiv and GitHub.
     try:
+        from ai_engine.radar.structured_html import structured_html_to_markdown
+
+        structured = structured_html_to_markdown(html, url)
+        if len(structured.strip()) >= 200:
+            return normalize_markdown(structured)[:ORIGINAL_MARKDOWN_MAX_BYTES]
+    except Exception as exc:  # structure recovery is an enhancement, never a sync blocker
+        logger.debug("structured HTML extraction failed", extra={"url": url[:2048], "error": str(exc)})
+
+    try:
         import trafilatura
 
         extracted = trafilatura.extract(
@@ -1317,7 +1406,7 @@ async def _run_source(
                     if existing is not None:
                         existing_id = str(existing["id"])
                         if _needs_content_retry(existing):
-                            await _retry_existing_summary_content(
+                            content_recovered = await _retry_existing_summary_content(
                                 pool,
                                 summary_id=existing_id,
                                 candidate=raw_candidate,
@@ -1329,11 +1418,17 @@ async def _run_source(
                                 adapter=adapter,
                                 timeout_seconds=generation_timeout_seconds,
                             )
+                        else:
+                            content_recovered = False
                         is_github_repo = (
                             _classify_original_kind(source.source_type, normalized.url)
                             == "github_repo"
                         )
-                        if is_github_repo:
+                        metadata_pending = any(
+                            tag in (existing.get("tags") or [])
+                            for tag in ("github_content_pending", "content_pending")
+                        )
+                        if is_github_repo and (not metadata_pending or content_recovered):
                             await _refresh_existing_github_summary(
                                 pool,
                                 summary_id=existing_id,
@@ -1429,7 +1524,10 @@ async def _run_source(
                                 domain=document_host,
                             )
                         except Exception as fetch_exc:
-                            if _can_use_snippet_fallback(source, raw_candidate):
+                            if (
+                                _can_use_snippet_fallback(source, raw_candidate)
+                                or _can_use_candidate_metadata_fallback(source, raw_candidate)
+                            ):
                                 fallback_count += 1
                                 markdown = raw_candidate.snippet.strip()[:8000]
                                 fetched = _snippet_document(
@@ -1453,6 +1551,7 @@ async def _run_source(
                     # Tracked-repo digests are structured API data: always run
                     # the per-repo LLM summary over the combined activity rather
                     # than treating a short digest as a low-quality scrape.
+                    metadata_only_fallback = False
                     low_quality = (
                         repo_activity is None and _is_low_quality_content(raw_content)
                     )
@@ -1471,8 +1570,19 @@ async def _run_source(
                         # ``_insert_candidate`` falls through to ``markdown``
                         # (not the snippet) when building the summary body.
                         snippet_clean = normalized.snippet.strip()
-                        if len(snippet_clean) >= 200 and not any(
-                            m in snippet_clean.lower() for m in _LOW_QUALITY_MARKERS
+                        use_metadata_fallback = _can_use_candidate_metadata_fallback(
+                            source, raw_candidate
+                        )
+                        metadata_only_fallback = use_metadata_fallback
+                        if (
+                            use_metadata_fallback
+                            or (
+                                len(snippet_clean) >= 200
+                                and not any(
+                                    m in snippet_clean.lower()
+                                    for m in _LOW_QUALITY_MARKERS
+                                )
+                            )
                         ):
                             logger.info(
                                 "ai-engine.radar.low_quality_page_use_snippet",
@@ -1481,6 +1591,7 @@ async def _run_source(
                                     "source_id": source.id,
                                     "title": normalized.title[:200],
                                     "url": normalized.url[:2048],
+                                    "metadata_only": use_metadata_fallback,
                                 },
                             )
                             # A sufficiently long source snippet is an explicit
@@ -1574,7 +1685,11 @@ async def _run_source(
                             )
                     # Distilled 7-dimension LLM scoring (Stage 2)
                     distilled_result = None
-                    if distilled_scorer is not None and brief is not None:
+                    if (
+                        distilled_scorer is not None
+                        and brief is not None
+                        and not metadata_only_fallback
+                    ):
                         from ai_engine.scoring.scoring_profiles import profile_for_source
 
                         profile, _ = profile_for_source(source.source_type)
@@ -1616,6 +1731,10 @@ async def _run_source(
                                 markdown=markdown,
                             )
                     extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
+                    if metadata_only_fallback:
+                        extra_tags_list.append("content_pending")
+                        if source.source_type in {"github", "github_trending"}:
+                            extra_tags_list.append("github_content_pending")
                     # Persist every scored result, including tier=noise. The
                     # public radar/search surfaces apply the quality gate;
                     # Admin governance keeps the diagnostic for review.
@@ -1633,6 +1752,15 @@ async def _run_source(
                                 "url": normalized.url[:2048],
                             },
                         )
+                        dimension_scores = getattr(distilled_result, "dimension_scores", {}) or {}
+                        if getattr(distilled_result, "veto", None):
+                            noise_reason_code = "DISTILLED_HARD_VETO"
+                        elif dimension_scores and all(
+                            value == 0 for value in dimension_scores.values()
+                        ):
+                            noise_reason_code = "DISTILLED_UNASSESSABLE"
+                        else:
+                            noise_reason_code = "DISTILLED_NOISE"
                         await _record_sync_diagnostic(
                             pool,
                             source=source,
@@ -1640,7 +1768,7 @@ async def _run_source(
                             candidate=raw_candidate,
                             canonical_url=normalized.canonical_url,
                             kind="filtered",
-                            reason_code="DISTILLED_NOISE",
+                            reason_code=noise_reason_code,
                             reason_message=getattr(distilled_result, "weak_point", None),
                             distilled=distilled_result,
                             body=_best_content_body(
@@ -1952,6 +2080,14 @@ async def run_radar_pipeline(
             )
             if attempt < RADAR_ENRICHMENT_RETRIES:
                 await asyncio.sleep(2.0 * (attempt + 1))
+        # Enrichment can replace a pending/short source capture with the real
+        # article. Only score after that replacement; otherwise the fallback
+        # snippet can be incorrectly persisted as tier=noise.
+        if enriched_count > 0:
+            await score_missing_candidates(
+                pool,
+                limit=max(20, enriched_count),
+            )
         enrichment_error = None
     except Exception as exc:
         enriched_count = 0

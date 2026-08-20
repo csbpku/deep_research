@@ -71,6 +71,11 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       figures: true,
       authors: true,
       sharedBy: { select: { id: true, name: true } },
+      topicLinks: {
+        select: {
+          topic: { select: { id: true, slug: true, name: true, tier: true } },
+        },
+      },
       syncRun: {
         select: {
           id: true,

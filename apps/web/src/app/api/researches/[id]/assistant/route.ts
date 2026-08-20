@@ -13,7 +13,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const Input = z.object({
   operation: z.enum(['rewrite', 'summarize', 'counterpoint', 'fact_check', 'conclusion_check']),
-  selection: z.object({ quote: z.string().min(1).max(4000), startOffset: z.number().int().min(0), endOffset: z.number().int().min(0), contentHash: z.string().regex(/^[a-f0-9]{64}$/u) }).optional(),
+  selection: z.object({ quote: z.string().min(1).max(12000), startOffset: z.number().int().min(0), endOffset: z.number().int().min(0), contentHash: z.string().regex(/^[a-f0-9]{64}$/u) }).optional(),
   instruction: z.string().max(2000).optional(),
 });
 

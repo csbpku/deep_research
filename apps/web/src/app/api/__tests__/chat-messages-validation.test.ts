@@ -21,7 +21,7 @@ describe('POST /api/chat/sessions/[id]/messages validation', () => {
       new Request(`http://localhost/api/chat/sessions/${SESSION_ID}/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: 'x'.repeat(4001) }),
+        body: JSON.stringify({ content: 'x'.repeat(32001) }),
       }) as never,
       { params: Promise.resolve({ id: SESSION_ID }) },
     );
@@ -29,6 +29,6 @@ describe('POST /api/chat/sessions/[id]/messages validation', () => {
 
     expect(response.status).toBe(400);
     expect(payload.message).toBe('请检查必填项和输入格式');
-    expect(payload.details.fieldErrors.content[0]).toBe('提问最多 4000 字');
+    expect(payload.details.fieldErrors.content[0]).toBe('提问最多 32000 字');
   });
 });

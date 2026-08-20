@@ -12,7 +12,7 @@
 **核心能力**
 
 - **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选，每条附 LLM 轻量解读与多维内容评分：7 个维度（受众匹配、信息增量、分析深度、可行动性等）每维 0–3 分，加权总分 0–100，并归入深入阅读 / 略读 / 收藏等层级。
-- **AI 雷达日报**：每天自动聚合当日高信号雷达候选，由 LLM 生成一篇跨来源总结文章（含 TL;DR、分节叙事、重点与来源排名），作为一条 `digest://YYYY-MM-DD` 的发布摘要。
+- **技术雷达**：持续发现、评分和增强高信号候选；当前同步链路为 `sync → enrich → topic refresh`，不再生成独立的跨来源日报文章。
 - **沉淀库**：长文与讨论精华共用同一结构，支持草稿 / 发布 / 全文搜索 / 修改审计。
 - **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
 - **AI 调研**：给一个主题，启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），用户必须实际修改过才能发布。
@@ -27,13 +27,12 @@
 ```mermaid
 flowchart LR
     subgraph Web["apps/web · Next.js 15"]
-        UI["页面 / 雷达 / 日报 / 沉淀"]
+        UI["页面 / 雷达 / 主题 / 沉淀"]
         BFF["BFF + NextAuth + Prisma"]
     end
 
     subgraph Engine["packages/ai-engine · FastAPI + Python"]
         Radar["雷达同步 sync → 增强 enrich"]
-        Digest["日报生成 digest"]
         Research["AI 调研 5 步流水线"]
         Worker["导入 / 分享 worker"]
         Adapter["ResearchEngineAdapter"]
@@ -48,16 +47,14 @@ flowchart LR
     UI --> BFF
     BFF --> DB
     BFF <--> Engine
-    Radar --> Digest
-    Digest --> DB
     Research --> Adapter
     Worker --> Adapter
     Adapter --> DB
     DB <--> Nginx
 ```
 
-- **`apps/web/`** —— 用户能看到的：登录、雷达列表、AI 雷达日报、沉淀详情 / 编辑、文件导入、管理员控制台。
-- **`packages/ai-engine/`** —— 后台长任务：雷达同步 → 增强 → 日报、调研 5 步流水线、文件导入转换、分享提交、SSRF-safe URL fetch、Tavily retriever。
+- **`apps/web/`** —— 用户能看到的：登录、技术雷达、主题、沉淀详情 / 编辑、文件导入、管理员控制台。
+- **`packages/ai-engine/`** —— 后台长任务：雷达同步 → 增强 → 主题刷新、AI 调研 5 步流水线、文件导入转换、分享提交、SSRF-safe URL fetch、Tavily retriever。
 - **`packages/shared/`** —— TypeScript ↔ Python 镜像的 Zod schema、错误码、状态枚举；跨语言双方向只读，改动走独立 PR。
 - **`infra/`** —— `docker-compose.yml` + nginx + 多阶段 Dockerfile + `pg-backup.sh` / `pg-restore.sh` / `import-tmp-cleanup.sh`。
 
@@ -70,12 +67,18 @@ flowchart LR
 如果希望关闭终端后仍保持本地 Web 和 AI engine 运行，可安装仓库中的 launchd 模板：
 
 ```bash
+# 先完成依赖、环境文件、数据库 migration，并生成 production build
+./scripts/setup.sh --quick
+pnpm --filter @deep-research/web build
+
 mkdir -p ~/Library/LaunchAgents
 cp infra/launchd/com.deep-research.web.plist ~/Library/LaunchAgents/
 cp infra/launchd/com.deep-research.ai.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.deep-research.web.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.deep-research.ai.plist
 ```
+
+模板中的 `WorkingDirectory` 和 Node/uv 路径是本机模板值；如果仓库目录、Homebrew 路径或 Python 虚拟环境不同，先修改 plist。launchd Web 使用 `next start`，代码变更后需要重新执行 `pnpm --filter @deep-research/web build`，再重启 Web job。
 
 停止托管服务：
 
@@ -123,9 +126,18 @@ pnpm dev:web     # → http://localhost:3000
 pnpm dev:ai      # → http://localhost:4000
 ```
 
+首次启动或切换分支后，可显式复核数据库与服务：
+
+```bash
+pnpm db:deploy
+pnpm db:generate
+curl -fsS http://localhost:3000/api/healthz
+curl -fsS http://localhost:4000/healthz
+```
+
 启用真实登录前，先在 Google OAuth 控制台登记回调 URL，确认 `ALLOWED_EMAIL_DOMAINS` 包含登录邮箱域名。`--quick` 生成的配置不会注册 Google provider，登录页会提示 OAuth 未配置。`BOOTSTRAP_ADMIN_EMAIL` 可在首次启动时幂等创建/提升初始 Admin；也可稍后由已有 Admin 在成员管理中调整角色。
 
-未配置 Google OAuth 时，仍可免登录浏览首页、日报、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
+未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
 选择真实 LLM provider 后，setup 询问兼容协议、Base URL 和 API key，并请求 `${BASE_URL}/models` 让你选择模型；也可以在接口不支持 `/models` 时手动输入模型 ID。支持 Anthropic-compatible（例如 cc-switch，默认本机端口 `15721`）和 OpenAI-compatible（例如 ais-switch `15722`、vibeproxy `8318`）。重跑 setup 时保留已有 key/URL 作为默认值。Docker 模式会把本机代理地址自动改为容器可访问的 `host.docker.internal`；VPS 模式默认使用 DeepSeek 官方 API，不依赖本机代理。模型会写入 `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM`，也可之后编辑 `packages/ai-engine/.env`（本地）或根目录 `.env`（Docker/VPS）。
 

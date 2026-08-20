@@ -6,7 +6,7 @@
 //
 // ⚠️ e2e 契约：data-testid="arxiv-paper-card"
 
-import { FileText, Lightbulb, Microscope, Sparkles, Target, TrendingUp } from 'lucide-react';
+import { ExternalLink, FileText, Lightbulb, Microscope, Sparkles, Target, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 interface ArxivAnalysis {
@@ -50,6 +50,10 @@ function buildAnalysisBlocks(analysis: ArxivAnalysis | null): AnalysisBlock[] {
 export function RadarArxivPaperCard({ meta, authors, tldr, analysis }: Props) {
   const blocks = buildAnalysisBlocks(analysis);
 
+  // Do not reserve a large “论文解读” card when the optional LLM analysis
+  // failed. The source article and article map remain available below.
+  if (!tldr && !analysis) return null;
+
   return (
     <section data-testid="arxiv-paper-card" className="my-5 rounded-lg bg-muted/30 px-4 py-4">
       <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -59,6 +63,26 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis }: Props) {
         </h2>
         {formatAuthors(authors) ? <span className="text-xs text-muted-foreground">{formatAuthors(authors)}</span> : null}
         {meta.arxivId ? <span className="font-mono text-[11px] text-muted-foreground">arXiv:{meta.arxivId}</span> : null}
+        {meta.arxivId ? (
+          <span className="ml-auto flex items-center gap-2 text-[11px]">
+            <a
+              href={`https://arxiv.org/html/${meta.arxivId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+            >
+              <ExternalLink className="size-3" />HTML
+            </a>
+            <a
+              href={`https://arxiv.org/pdf/${meta.arxivId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+            >
+              PDF
+            </a>
+          </span>
+        ) : null}
       </div>
 
       {/* TL;DR */}
@@ -90,12 +114,6 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis }: Props) {
         </div>
       )}
 
-      {/* Empty-state fallback —— LLM 还没产出解读。 */}
-      {blocks.length === 0 && !tldr && (
-        <div className="border-l-2 border-border pl-3 text-sm text-muted-foreground">
-          论文解读尚未生成
-        </div>
-      )}
     </section>
   );
 }

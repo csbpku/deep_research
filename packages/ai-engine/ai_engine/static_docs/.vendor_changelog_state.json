@@ -1,9 +1,0 @@
-{
-  "anthropic": [
-    "https://docs.anthropic.com/en/release-notes#marketing-post"
-  ],
-  "openai": [
-    "https://example.com/changelog#gpt-5-model-launch",
-    "https://example.com/changelog#responses-api-additions"
-  ]
-}
