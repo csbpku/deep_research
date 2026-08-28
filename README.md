@@ -11,11 +11,11 @@
 
 **核心能力**
 
-- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选，每条附 LLM 轻量解读与多维内容评分：7 个维度（受众匹配、信息增量、分析深度、可行动性等）每维 0–3 分，加权总分 0–100，并归入深入阅读 / 略读 / 收藏等层级。
-- **技术雷达**：持续发现、评分和增强高信号候选；当前同步链路为 `sync → enrich → topic refresh`，不再生成独立的跨来源日报文章。
+- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选；同步链路为 `sync → enrich → topic refresh`。每条候选附 LLM 轻量解读与多维内容评分（7 个维度每维 0–3 分，加权总分 0–100），归入深入阅读 / 略读 / 收藏等层级；GitHub 仓库候选按 Distilled 层级统一生成 Zread 项目文档，详情页提供「刷新文档」入口（强制重取，失败保留旧缓存）。
+- **技术专题**：关注长期专题后自动聚合热点议题，生成带可点击引用的综述（tldr / keyChanges / subtopics / openQuestions）；发布调研自动回流专题，`/me/topics` 汇总未读议题与最近研究。
 - **沉淀库**：长文与讨论精华共用同一结构，支持草稿 / 发布 / 全文搜索 / 修改审计。
 - **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
-- **AI 调研**：给一个主题，启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），用户必须实际修改过才能发布。
+- **AI 调研**：对话澄清主题/背景/资料与产物类型，自动推断 objective 并给出 Research Brief 与可复用上下文；启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），草稿必须实际修改过才能发布。
 - **团队讨论 + Admin**：团队讨论常驻雷达正文下方，支持 @成员、回复通知和“我的通知”；成员可把高价值评论提议沉淀为知识卡片。Admin 对雷达做软屏蔽/恢复，而非逐条审批，并处理分享审核、评论提炼、同步状态和失败任务。
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
 - **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、Docker Compose 部署脚手架。
@@ -32,7 +32,7 @@ flowchart LR
     end
 
     subgraph Engine["packages/ai-engine · FastAPI + Python"]
-        Radar["雷达同步 sync → 增强 enrich"]
+        Radar["雷达同步 sync → 增强 enrich<br/>→ 主题刷新 topic refresh"]
         Research["AI 调研 5 步流水线"]
         Worker["导入 / 分享 worker"]
         Adapter["ResearchEngineAdapter"]
@@ -139,7 +139,7 @@ curl -fsS http://localhost:4000/healthz
 
 未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
-选择真实 LLM provider 后，setup 询问兼容协议、Base URL 和 API key，并请求 `${BASE_URL}/models` 让你选择模型；也可以在接口不支持 `/models` 时手动输入模型 ID。支持 Anthropic-compatible（例如 cc-switch，默认本机端口 `15721`）和 OpenAI-compatible（例如 ais-switch `15722`、vibeproxy `8318`）。重跑 setup 时保留已有 key/URL 作为默认值。Docker 模式会把本机代理地址自动改为容器可访问的 `host.docker.internal`；VPS 模式默认使用 DeepSeek 官方 API，不依赖本机代理。模型会写入 `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM`，也可之后编辑 `packages/ai-engine/.env`（本地）或根目录 `.env`（Docker/VPS）。
+选择真实 LLM 时，setup 默认提供 MiniMax 主模型 + DeepSeek fallback 的直连模式；两者使用独立的 API key 和 Base URL。也可以选择本地兼容 proxy：Anthropic-compatible（例如 cc-switch，默认本机端口 `15721`）或 OpenAI-compatible（例如 ais-switch / vibeproxy）。运行时只认三层 canonical 路由：`RESEARCH_LLM`、`UTILITY_LLM`、`FALLBACK_LLM`；旧的 `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM` 仅作为 gpt-researcher 兼容镜像。直连模式使用 `MINIMAX_*` / `DEEPSEEK_*` profile，旧的 `ANTHROPIC_*` / `OPENAI_*` 变量继续用于 proxy 和兼容配置。
 
 ### 本地 Docker
 
@@ -199,12 +199,12 @@ curl -fsS https://research.example.com/ai-healthz
 | `packages/ai-engine/` | FastAPI + `gpt-researcher` 适配 + radar / import worker + SSRF-safe fetch |
 | `packages/shared/` | 跨 runtime 的 Zod schema、错误码、状态枚举（双方只读） |
 | `infra/` | `docker-compose.yml`、nginx、Dockerfile、`pg-backup.sh`、`pg-restore.sh` |
-| `docs/` | 公开技术文档：`ARCHITECTURE.md`（见下） |
+| `docs/` | 入库的仅 `ARCHITECTURE.md`；其余是本地开发知识层（进度看 `docs/PROJECT_STATUS.md` 等），不入 git |
 | `scripts/` | 仓库根 helper：`setup.sh`、`cost_extrapolation.py`、`test-local-env.sh` |
 
 ## 当前状态
 
-技术方案、数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
+技术方案、数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)；最新进度、测试基线与 follow-up 见 `docs/PROJECT_STATUS.md`（本地知识层）。本 README 只维护现状，不记录演进过程。
 
 ## 贡献
 

@@ -34,11 +34,11 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 ## Current State
 
 - **入口文档**：[`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) — 当前进度、测试指标、follow-up bug、文档地图。
-- As of 2026-08-20, Weeks 1–13 and cognition-loop V2 implementation are complete. Trial freeze (W10–13) done; Go/Adjust/Stop evidence still pending.
-- AI engine: `GptResearcherAdapter` is primary (ADR 0004 复评通过), `FakeAdapter` is the test/CI fallback. LLM slots use `<provider>:<model>` (`SMART_LLM`, `STRATEGIC_LLM`, `FAST_LLM`, `BRIEF_LLM`); `scripts/setup.sh` discovers `/models` and writes the selected model to all four slots, while `--quick`/fake uses `anthropic:deepseek-v4-flash`. Heavy calls prefer `*_HEAVY` credentials and fall back to the light pair; `LLM_FALLBACK_LLM` handles quota/rate-limit fallback. `adapters/claude.py`（`ClaudeAdapter`）已从 `build_adapter` 工厂移除但文件仍在仓库（dead code，候选清理）。只有 `RETRIEVER=tavily` 时才需要 `TAVILY_API_KEY`。
+- As of 2026-08-27: Weeks 1–13 / P1 / cognition-loop V2 已交付；2026-08-26 完成 GitHub curated 雷达链路收口。本地 `main` 工作树含未提交 draft（AI 调研对话流、LLM usage/resilience、Zread 刷新等），最新事实以 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 顶部条目为准。
+- AI engine: `GptResearcherAdapter` is primary (ADR 0004 复评通过), `FakeAdapter` is the test/CI fallback. Canonical LLM slots 是 `<provider>:<model>` 形式的 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM`（fallback 兼容读取旧名 `LLM_FALLBACK_LLM`；`SMART_LLM` 等旧槽位仅作 gpt-researcher 兼容镜像，派生逻辑见 `ai_engine/llm/config.py`）；`scripts/setup.sh` discovers `/models` and writes the selected model to the canonical slots, while `--quick`/fake uses `anthropic:deepseek-v4-flash`. Heavy calls prefer `*_HEAVY` credentials and fall back to the light pair. 只有 `RETRIEVER=tavily` 时才需要 `TAVILY_API_KEY`。
 - Week 9 交付详见 `docs/weekly/week9-delivery.md`。
 - P1 已交付：研究文章三栏工作台（版本/大纲/AI 助手/AI 校核/引用/锚定评论）、雷达讨论与治理（@成员/站内通知、软屏蔽/恢复）、Confluence 导入框架（代码完成，OAuth 需外部凭据验收）、AI 事实核验与结论审查；日报生成链路已删除。
-- 雷达详情当前为“原文 + 阅读动作栏”：文章地图只允许严格正文 block 回链，选中文本支持解释/翻译/问 AI/批注/复制引用；HTML 正文图片会保留为安全 HTTPS 图片并懒加载。当前本地数据库中 enrichment 迁移 67/67 完成，文章地图 v4 缓存 63/67，4 条待预热。
+- 雷达详情当前为“原文 + 阅读动作栏”：文章地图只允许严格正文 block 回链，选中文本支持解释/翻译/问 AI/批注/复制引用；HTML 正文图片会保留为安全 HTTPS 图片并懒加载。enrichment 迁移与文章地图缓存的实测数字不在此维护快照，以 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 对应条目为准。
 - 部署脚手架 `infra/` 已就绪，Docker Compose 镜像构建及备份恢复演练已完成。
 - 本地运行：`launchd` 模板（`infra/launchd/`）支持常驻 AI engine（uvicorn 直接运行，无 `--reload`）和 Next.js 服务。
 - **测试指标**（2026-08-06 实测）：Web 单测 383 ✅、Web E2E 33 passed/2 skipped ✅、Python 全量测试 443 passed/1 skipped ✅、typecheck + ruff 全绿、mypy 66 files 0 issues ✅。详见 PROJECT_STATUS.md。

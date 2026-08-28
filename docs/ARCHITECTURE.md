@@ -1,7 +1,7 @@
 # AI技术调研平台 · 架构方案
 
-> 版本：v3.8 · 2026-08-06
-> 本文件描述当前系统架构、数据模型、安全边界与部署拓扑。
+> 版本：v3.9 · 2026-08-27
+> 本文件描述当前系统架构、数据模型、安全边界与部署拓扑；只记录现状，不写演进过程。
 
 ---
 
@@ -9,20 +9,20 @@
 
 ### 当前能力
 
-1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号和用户分享发现内容，生成可追溯的轻量解读，支持筛选、反馈、正文下团队讨论和负向内容治理。
-2. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索和修改审计。
-3. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
-4. **AI 调研**：异步生成参考草稿，用户实际修改后才能发布；可从雷达候选发起。
-5. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
-6. **用户分享**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池。
-7. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、失败任务入口、同步状态、成员管理。
-8. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
+1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；`sync → enrich → topic refresh` 流水线产出轻量解读与多维评分；GitHub 仓库候选按 Distilled 层级生成 Zread 项目文档，详情页提供「刷新文档」入口（强制重取，失败保留旧缓存）。
+2. **技术专题**：关注专题后自动聚合热点议题，生成带可点击引用的综述（内容 hash 变化触发重算）；发布调研自动回流专题；专题页四标签：概览 / 热点议题 / 相关研究 / 来源。
+3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索、版本审计与恢复、AI Diff 建议与事实核验、三栏研究工作台。
+4. **AI 调研**：对话澄清主题/背景/资料/产物类型，规则推断 objective 并返回 Research Brief 与匹配上下文；异步流水线生成参考草稿，用户实际修改后才能发布。
+5. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
+6. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
+7. **用户分享与主动提交**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池；成员也可直接向雷达提交 URL/文件候选。
+8. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、成员管理、同步状态与失败任务入口、LLM 用量审计、专题提案审批。
+9. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
 
 ### 规划能力
 
 - 外部知识库导入（包括 Confluence）暂不启用，待确认稳定的企业授权方案后再规划。
-- 热点主题、跨模块热门 Top 5、专家自动关联和复杂统计图表。
-- SSE、版本历史 UI、详细统计、机器评分排序、AI critic 和多 LLM 路由。
+- 跨模块热门 Top 5、专家自动关联、复杂统计图表和 AI critic。
 - Prometheus/Grafana、Vault/SOPS 等增强运维能力。
 
 ### 不做
@@ -72,8 +72,8 @@ flowchart LR
 - 编辑器：react-md-editor。
 - Auth：NextAuth.js + Google OAuth。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
-- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。
-- 数据源：Tavily、arxiv、GitHub；arxiv MCP 仅在原生 API 不够时启用。
+- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计。
+- 数据源：Tavily、arxiv（可选 MCP）、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；可选只读 sidecar：AnythingLLM 雷达/聊天集成、GBrain MCP 知识检索。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
 
 ### 部署拓扑
@@ -117,6 +117,15 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 | `radar_sources` | 预置 GitHub/arxiv/RSS 源、启停状态和抓取配置 |
 | `radar_sync_runs` | 每次同步的来源级结果、失败码、token 与成本 |
 | `radar_feedback` | 有用、不准确、我用过、收藏和建议调研；用户维度幂等 |
+| `radar_submissions` | 成员主动提交的 URL/文件雷达候选及审核链 |
+| `radar_sync_diagnostics` | 来源级诊断与失败分类记录 |
+| `topics` / `topic_candidates` | 长期技术专题与其聚合候选 |
+| `research_topics` / `topic_issues` / `topic_issue_candidates` | 专题综述（V2 payload + 可点击引用）、热点议题与聚类候选 |
+| `topic_follows` / `topic_proposals` / `topic_proposal_candidates` | 专题关注（lastViewedAt 未读推进）与 review-only 提案 |
+| `ai_chat_sessions` / `ai_chat_messages` | 雷达/调研侧个人即时问答会话 |
+| `llm_usage_events` | 共享 LLM 调用用量审计 |
+| `user_bookmarks` / `research_templates` | 用户收藏与调研模板 |
+| `radar_tracked_repos` / `radar_github_activities` / `radar_github_signals` | 历史 GitHub tracked/activity 链路遗留表：行数据保留供审计，运行时不再读写 |
 
 ### 核心关系
 
@@ -191,6 +200,7 @@ flowchart LR
 ```
 
 - 每次同步是 `sync → enrich → topic refresh` 流水线；不生成日报或跨来源日报文章。
+- GitHub curated 即普通 `github` source（repos 模式）：每个 repo 一个候选，完成一次 Distilled 评分后按 collection/deep_read/skim/noise 进入对应治理路径；collection/deep_read 候选由 enrichment 生成 Zread 项目文档缓存，详情页统一走「刷新文档」，强制重取失败时保留旧缓存。
 - 雷达候选复用 `summaries`，主题使用 `topics/topic_candidates`；首页直接进入技术雷达，搜索统一进入雷达或调研详情。
 - 每条雷达内容保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分用于雷达排序；Admin 不逐条批准雷达内容。
 - 来源包括预置 GitHub、arxiv、RSS、微信公众号、社区（Hacker News / Product Hunt / Reddit / Lobsters）等，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
@@ -300,6 +310,11 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | `POST /api/admin/radar/{id}/dismiss` | Admin-only；软屏蔽雷达条目并写审计 |
 | `POST /api/admin/radar/{id}/restore` | Admin-only；恢复软屏蔽条目并写审计 |
 | `POST /api/admin/reviews/{id}` | Admin-only；明确批准或拒绝并写审计 |
+| `POST /api/ai-research/plan` | 规则推断 objective、返回 Research Brief 与匹配专题/建议上下文 |
+| `POST /api/topics/synthesize-v2` | hash-gated 重建专题 V2 综述（含可点击引用） |
+| `GET/PATCH /api/topics/{slug}/follow` / `/viewed` / `/issues`；`GET /api/me/topics` | 关注、未读推进、议题读取与我的专题聚合 |
+| `POST /api/radar/{id}/refresh` | 强制重取 Zread 文档缓存，失败保留旧缓存 |
+| `GET /api/admin/llm-usage` | Admin 查询 LLM 用量审计汇总 |
 
 错误响应使用稳定业务码和 `request_id`，不把供应商错误、prompt、access token、API key 或 secret 直接返回前端。
 

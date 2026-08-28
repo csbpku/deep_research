@@ -16,17 +16,20 @@ FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓�
 
 ### LLM 配置真相源
 
-- 模型槽位统一使用 `<provider>:<model>`：`SMART_LLM`（重型研究）、
-  `STRATEGIC_LLM`（策略步骤）、`FAST_LLM`（快速子查询）和 `BRIEF_LLM`
-  （摘要、评分、聊天）。未设置时，重型默认
-  `anthropic:claude-haiku-4-5`；轻型调用按
-  `FAST_LLM → BRIEF_LLM → SMART_LLM` 回退。
+- 运行时只配置三层 `<provider>:<model>` 路由：`RESEARCH_LLM`（完整调研）、
+  `UTILITY_LLM`（评分、摘要、审核、聊天）和 `FALLBACK_LLM`（统一备用）。
+  `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM` 仅作为
+  gpt-researcher 兼容镜像，不应再作为业务模块的配置入口。
 - `scripts/setup.sh` 会按兼容端点的 `/models` 返回值选择模型，接口不可发现时
   允许手动输入，并把所选模型写入四个槽位。`--quick`/fake 模式会写入
   `anthropic:deepseek-v4-flash`，但不会发起真实 LLM 调用。
-- `ANTHROPIC_*` / `OPENAI_*` 提供对应 provider 的凭证和 base URL；重型研究
-  优先使用对应的 `*_HEAVY` 配置，未设置时回退到普通配置。`LLM_FALLBACK_LLM`
-  是额度/限流时的共享备用模型。
+- `MINIMAX_*` / `DEEPSEEK_*` 提供直连 profile；`ANTHROPIC_*` /
+  `OPENAI_*` 继续保留给本地兼容 proxy 或其他兼容端点。重型研究优先使用
+  对应的 `*_HEAVY` 配置，未设置时回退到普通配置。`LLM_FALLBACK_LLM`
+  仅为旧配置兼容别名。
+- 每个模型遵循“主模型 → 同模型重试 → fallback → fallback 重试”的顺序；
+  endpoint 连续失败会熔断，冷却后半开探测。若业务最终使用规则/原文/默认分数，
+  会以 `status=degraded` 写入审计。
 - 本地部署可使用 cc-switch（Anthropic 兼容）、ais-switch 或 vibeproxy
   （OpenAI 兼容）；模型名必须来自该端点实际支持的 `/models`，不要直接照抄
   `.env.example` 的示例值。
@@ -34,7 +37,9 @@ FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓�
 GitHub Repo 的 Zread 文档按以下顺序获取：先读取 Zread 已经公开生成的页面并按
 索引 commit 缓存；远端没有可用页面时才运行本地 `zread generate`；CLI 也不可用时
 最后回退到该仓库的 GitHub README。README fallback 会显式标记为不完整，不会伪装成
-完整的项目文档。
+完整的项目文档。enrichment dispatch 同时持有 PostgreSQL advisory lock，避免
+手工脚本、定时同步和详情页刷新跨进程重复启动 CLI；partial/fallback 结果会按
+`RADAR_GITHUB_ENRICHMENT_RETRY_SECONDS`（默认 2 小时）再次尝试。
 
 ## 目录
 
