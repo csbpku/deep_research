@@ -33,6 +33,14 @@ function isArxivSourceUrl(url: string | null | undefined): boolean {
   return /(?:arxiv\.org\/(?:abs|html|pdf)\/|huggingface\.co\/papers\/)[^/?#\s]+/u.test(value);
 }
 
+function isRepoActivityDigestUrl(url: string | null | undefined): boolean {
+  try {
+    return new URL(String(url ?? '').trim()).searchParams.has('digest');
+  } catch {
+    return false;
+  }
+}
+
 function needsMigration(summary: {
   tags: string[];
   distilledTier: string | null;
@@ -45,6 +53,12 @@ function needsMigration(summary: {
   highlights: unknown;
 }): boolean {
   if (summary.tags.includes(MIGRATION_TAG)) return false;
+  if (
+    summary.originalKind === 'github_repo'
+    && isRepoActivityDigestUrl(summary.canonicalUrl)
+  ) {
+    return false;
+  }
 
   // Older radar rows were ingested before HF Daily Papers/arXiv URLs were
   // classified. Correct the discriminator even when their old enrichment is

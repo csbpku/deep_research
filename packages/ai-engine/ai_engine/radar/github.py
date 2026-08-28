@@ -8,15 +8,13 @@ pipeline.
 from __future__ import annotations
 
 import os
-import hashlib
-import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
-from ai_engine.radar.models import RadarCandidate, RepoSnapshot
+from ai_engine.radar.models import RadarCandidate
 
 _GITHUB_API = "https://api.github.com"
 
@@ -51,18 +49,6 @@ def _repo_candidate(repo: Mapping[str, Any]) -> RadarCandidate | None:
     snippet = str(description or "").strip()
     if isinstance(stars, int):
         snippet = f"{snippet}\nGitHub stars: {stars}".strip()
-    snapshot_payload = json.dumps(dict(repo), sort_keys=True, ensure_ascii=False)
-    snapshot = RepoSnapshot(
-        owner_repo=str(name).lower(),
-        description=str(description or "") or None,
-        stars=stars if isinstance(stars, int) else None,
-        forks=(int(repo["forks_count"]) if isinstance(repo.get("forks_count"), int) else None),
-        open_issues=(int(repo["open_issues_count"]) if isinstance(repo.get("open_issues_count"), int) else None),
-        default_branch=str(repo.get("default_branch") or "") or None,
-        pushed_at=str(repo.get("pushed_at") or "") or None,
-        github_updated_at=str(repo.get("updated_at") or "") or None,
-        sha256=hashlib.sha256(snapshot_payload.encode("utf-8")).hexdigest(),
-    )
     return RadarCandidate(
         title=name[:300],
         url=url,
@@ -76,7 +62,6 @@ def _repo_candidate(repo: Mapping[str, Any]) -> RadarCandidate | None:
             "forks": int(repo["forks_count"]) if isinstance(repo.get("forks_count"), int) else None,
             "openIssues": int(repo["open_issues_count"]) if isinstance(repo.get("open_issues_count"), int) else None,
         },
-        repo_snapshot=snapshot,
     )
 
 
@@ -113,8 +98,8 @@ async def fetch_github(
     """
 
     mode = str(config.get("type") or "trending").lower()
-    if mode not in {"trending", "stars", "releases"}:
-        raise ValueError("GitHub source type must be trending, stars, or releases")
+    if mode not in {"trending", "stars", "releases", "repos"}:
+        raise ValueError("GitHub source type must be trending, stars, releases, or repos")
 
     orgs = [str(item).strip() for item in config.get("orgs", []) if str(item).strip()]
     repos = [str(item).strip() for item in config.get("repos", []) if str(item).strip()]
@@ -122,7 +107,11 @@ async def fetch_github(
         raise ValueError("GitHub source requires at least one org or repo")
 
     owns_client = client is None
-    http_client = client or httpx.AsyncClient(timeout=timeout, headers=_headers(token or os.getenv("GH_TOKEN")))
+    http_client = client or httpx.AsyncClient(
+        timeout=timeout,
+        headers=_headers(token or os.getenv("GH_TOKEN")),
+        follow_redirects=True,
+    )
     candidates: list[RadarCandidate] = []
     try:
         for org in orgs:

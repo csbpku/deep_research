@@ -81,6 +81,20 @@ function sourceHash(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
+function stripEchoedAssistantPrompt(value: string): string {
+  const source = value.trim();
+  const envelopeLabels = source.match(/^(?:主题|上下文|待处理文字|要求)[：:]/gmu) ?? [];
+  if (envelopeLabels.length < 2 || !/^待处理文字[：:]/mu.test(source)) return source;
+  const selected = source.match(
+    /(?:^|\n)待处理文字[：:]\s*([\s\S]*?)(?=\n要求[：:]|$)/u,
+  )?.[1]?.trim();
+  if (selected) return selected;
+  const context = source.match(
+    /(?:^|\n)上下文[：:]\s*([\s\S]*?)(?=\n待处理文字[：:]|\n要求[：:]|$)/u,
+  )?.[1]?.trim();
+  return context || source;
+}
+
 // Translation output is usually close to the source length. Keep input
 // chunks small enough that a complete translation fits the model output
 // budget; a successful HTTP response is not proof of a complete response.
@@ -232,6 +246,24 @@ function resolveGuideAnchors(guide: RadarGuideV2, content: string): {
 }
 
 function normalizeGuide(value: unknown): RadarGuideV2 | null {
+  if (typeof value === 'string') {
+    const cleaned = value
+      .replace(/^```(?:json)?\s*/iu, '')
+      .replace(/\s*```$/u, '')
+      .trim();
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return normalizeGuide(JSON.parse(cleaned.slice(start, end + 1)));
+      } catch {
+        // The engine's json-repair is the first line of defense. This
+        // browser-side recovery handles fenced/annotated JSON that still
+        // arrives as suggestion text.
+      }
+    }
+    return null;
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const legacyConclusions = Array.isArray(raw.conclusions) ? raw.conclusions : [];
@@ -289,6 +321,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       originalMeta: true,
       source: true,
       syncRunId: true,
+      distilledTier: true,
       shareSource: { select: { status: true } },
     },
   });
@@ -297,6 +330,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     || (summary.source === 'user' && summary.shareSource?.status === 'approved')
   );
   if (!visible) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '雷达候选不存在',
+      requestId,
+    });
+  }
+  if (
+    user?.role !== 'admin'
+    && summary.distilledTier !== 'collection'
+    && summary.distilledTier !== 'deep_read'
+  ) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',
@@ -433,10 +477,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     if (!result.ok) {
       return toApiErrorResponse({ code: result.code, message: result.message, requestId, details: result.details });
     }
-    if (!result.body.suggestion?.trim()) {
+    const suggestion = result.body.suggestion
+      ? stripEchoedAssistantPrompt(result.body.suggestion)
+      : '';
+    if (!suggestion) {
       return toApiErrorResponse({ code: ERROR_CODES.AI_ENGINE_UNAVAILABLE, message: '解释结果为空，请重试', requestId });
     }
-    return NextResponse.json({ mode: body.mode, language: body.language, content: result.body.suggestion.trim(), selected: true, promptLabel: '术语定义 + 原文上下文 + 在本文中的作用' });
+    return NextResponse.json({ mode: body.mode, language: body.language, content: suggestion, selected: true, promptLabel: '术语定义 + 原文上下文 + 在本文中的作用' });
   }
 
   // ── translate：分块翻译（M6） ──
@@ -447,20 +494,32 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     const failedChunkIndexes: number[] = [];
     const truncatedChunkIndexes: number[] = [];
     const results = await Promise.all(chunks.map(async (chunk, i) => {
-      const r = await fetchAiEngine<{ suggestion?: string; truncated?: boolean; finishReason?: string }>({
+      let r = await fetchAiEngine<{ suggestion?: string; truncated?: boolean; finishReason?: string }>({
         url: aiEngineUrl,
         requestId,
         method: 'POST',
         timeoutMs: 120_000,
         retry: false,
         headers,
-        body: { operation: 'rewrite', body: chunk, topic: summary.title, instruction },
+        body: { operation: 'translate', body: chunk, topic: summary.title, instruction },
         context: `radar.translate.chunk.${i}`,
       });
+      if (!r.ok && r.message.includes('String should match pattern')) {
+        r = await fetchAiEngine<{ suggestion?: string; truncated?: boolean; finishReason?: string }>({
+          url: aiEngineUrl,
+          requestId,
+          method: 'POST',
+          timeoutMs: 120_000,
+          retry: false,
+          headers,
+          body: { operation: 'rewrite', body: chunk, topic: summary.title, instruction },
+          context: `radar.translate.chunk.${i}.compat`,
+        });
+      }
       if (!r.ok || !r.body.suggestion?.trim() || r.body.truncated === true) {
         return { index: i, failed: true, truncated: r.ok && r.body.truncated === true };
       }
-      const translatedContent = r.body.suggestion.trim();
+      const translatedContent = stripEchoedAssistantPrompt(r.body.suggestion);
       return { index: i, failed: false, truncated: false, content: translatedContent, sourceChars: chunk.length, translatedChars: translatedContent.length };
     }));
     for (const result of results) {
@@ -537,7 +596,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       url: aiEngineUrl,
       requestId,
       method: 'POST',
-      timeoutMs: 120_000,
+      timeoutMs: 180_000,
       retry: false,
       headers,
       body: { operation: 'guide', body: guideChunks[0], topic: summary.title, summaryId: summary.id },
@@ -546,7 +605,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     if (!result.ok) {
       return toApiErrorResponse({ code: result.code, message: result.message, requestId, details: result.details });
     }
-    guide = normalizeGuide(result.body.guide);
+    guide = normalizeGuide(result.body.guide ?? result.body.suggestion);
     suggestion = result.body.suggestion?.trim() ?? '';
   } else {
     for (let i = 0; i < guideChunks.length; i++) {
@@ -554,7 +613,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         url: aiEngineUrl,
         requestId,
         method: 'POST',
-        timeoutMs: 120_000,
+        timeoutMs: 180_000,
         retry: false,
         headers,
         body: { operation: 'guide_section', body: guideChunks[i], topic: summary.title, summaryId: summary.id },
@@ -597,7 +656,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         url: aiEngineUrl,
         requestId,
         method: 'POST',
-        timeoutMs: 120_000,
+        timeoutMs: 180_000,
         retry: false,
         headers,
         body: { operation: 'guide_synthesis', body: synthesisBody, topic: summary.title, summaryId: summary.id },

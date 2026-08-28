@@ -26,18 +26,18 @@ VALUES
    '{"feedUrl": "https://hnrss.org/frontpage", "maxResults": 20, "maxAgeHours": 24}'::jsonb,
    true, now()),
 
-  -- 4 — WeWe RSS 微信公众号 (needs localhost:4001 WeWe service)
+  -- 4 — WeWe RSS 微信公众号 (disabled until the upstream account is re-authenticated)
   ('a0000000-0000-0000-0000-000000000004', 'WeWe RSS 微信公众号', 'rss',
    '{"feedUrl": "http://localhost:4001/feeds/all.rss?limit=5", "localPort": 4001, "maxResults": 5, "maxAgeHours": 24, "applyAiFilter": false, "allowLocalhost": true}'::jsonb,
-   true, now()),
+   false, now()),
 
-  -- 5 — GitHub Tracked Repos (32 repos, 2d lookback, issues/PRs/releases)
+  -- 5 — GitHub Curated Repositories (one scored candidate per repo)
   -- Trimmed 2026-08: removed openwork (stale), agent-protocol (stagnant),
   -- smol-course (educational), openvino+onnxruntime (low signal for AI devs),
   -- vllm/sglang duplicates, claude-sdk (duplicate of claude-code signal),
   -- switched llama3 → llama-models (umbrella repo with broader signal).
-  ('a0000000-0000-0000-0000-000000000005', 'GitHub Tracked Repos (curated)', 'github_tracked',
-   '{"repos": ["anthropics/claude-code", "openai/codex", "google-gemini/gemini-cli", "Aider-AI/aider", "All-Hands-AI/OpenHands", "cline/cline", "block/goose", "continuedev/continue", "langchain-ai/langgraph", "The-Pocket/PocketFlow", "microsoft/autogen", "crewAIInc/crewAI", "vllm-project/vllm", "BerriAI/litellm", "ollama/ollama", "huggingface/transformers", "sgl-project/sglang", "langchain-ai/langchain", "run-llama/llama_index", "comfyanonymous/ComfyUI", "openai/gpt-oss", "meta-llama/llama-models", "moonshotai/Kimi-K3", "QwenLM/Qwen3", "deepseek-ai/DeepSeek-V3", "mistralai/mistral-inference", "ggerganov/llama.cpp", "unslothai/unsloth", "huggingface/diffusers", "huggingface/peft", "huggingface/trl", "meta-llama/llama-cookbook"], "include_prs": true, "lookback_days": 2, "include_issues": true, "paginated_repos": ["vllm-project/vllm", "BerriAI/litellm", "ollama/ollama", "huggingface/transformers", "sgl-project/sglang", "langchain-ai/langchain", "run-llama/llama_index", "ggerganov/llama.cpp"], "include_releases": true, "max_items_per_repo": 15}'::jsonb,
+  ('a0000000-0000-0000-0000-000000000005', 'GitHub Curated Repositories', 'github',
+   '{"mode": "repos", "type": "repos", "pollingIntervalMinutes": 720, "repos": ["anthropics/claude-code", "openai/codex", "google-gemini/gemini-cli", "Aider-AI/aider", "All-Hands-AI/OpenHands", "cline/cline", "block/goose", "continuedev/continue", "langchain-ai/langgraph", "The-Pocket/PocketFlow", "microsoft/autogen", "crewAIInc/crewAI", "vllm-project/vllm", "BerriAI/litellm", "ollama/ollama", "huggingface/transformers", "sgl-project/sglang", "langchain-ai/langchain", "run-llama/llama_index", "comfyanonymous/ComfyUI", "openai/gpt-oss", "meta-llama/llama-models", "moonshotai/Kimi-K3", "QwenLM/Qwen3", "deepseek-ai/DeepSeek-V3", "mistralai/mistral-inference", "ggerganov/llama.cpp", "unslothai/unsloth", "huggingface/diffusers", "huggingface/peft", "huggingface/trl", "meta-llama/llama-cookbook"]}'::jsonb,
    true, now()),
 
   -- 6 — Reddit AI Communities (original 3 subs)
@@ -50,9 +50,9 @@ VALUES
    '{"max_results": 20, "max_age_hours": 24}'::jsonb,
    true, now()),
 
-  -- 8 — Dev.to AI (5 tags, 24h window, AI-keyword filter)
+  -- 8 — Dev.to AI (engineering-focused tags, lower daily volume)
   ('a0000000-0000-0000-0000-000000000008', 'Dev.to AI', 'devto',
-   '{"tags": ["ai", "llm", "machinelearning", "openai", "langchain"], "max_results": 30, "max_age_hours": 24}'::jsonb,
+   '{"tags": ["llm", "openai", "langchain"], "max_results": 10, "max_age_hours": 24}'::jsonb,
    true, now()),
 
   -- 9 — Hugging Face Trending Models (likes7d sort, 30 max)
@@ -75,15 +75,15 @@ VALUES
    '{"maxResults": 20, "maxAgeHours": 96, "number_of_papers": 50, "minKeywordOverlap": 0}'::jsonb,
    true, now()),
 
-  -- 13 — OpenReview accepted papers (4 venues, 400d window, term=agent)
+  -- 13 — OpenReview accepted papers (paused: repeated polling produced no scored output)
   ('a0000000-0000-0000-0000-000000000013', 'OpenReview Accepted Papers', 'openreview',
    '{"query": "agent", "venues": ["NeurIPS.cc/2025/Conference", "NeurIPS.cc/2024/Conference", "ICLR.cc/2025/Conference", "ICML.cc/2024/Conference"], "maxAgeDays": 400, "maxResults": 40, "limitPerVenue": 20}'::jsonb,
-   true, now()),
+   false, now()),
 
-  -- 14 — Hacker News AI Stories (Algolia, keyword search, 48h window, minPoints=2)
+  -- 14 — Hacker News AI Stories (paused: no fetched/scored output)
   ('a0000000-0000-0000-0000-000000000014', 'Hacker News AI Stories (Algolia)', 'hn_algolia',
    '{"query": "AI OR LLM OR agent OR chatgpt OR claude OR gemini", "maxResults": 30, "maxAgeHours": 48, "minPoints": 2, "minComments": 0, "tags": "story"}'::jsonb,
-   true, now()),
+   false, now()),
 
   -- 15 — Google DeepMind Blog (RSS, 72h window)
   ('a0000000-0000-0000-0000-000000000015', 'Google DeepMind Blog', 'vendor_news',
@@ -100,10 +100,10 @@ VALUES
    '{"vendor": "huggingface_blog", "max_age_hours": 96}'::jsonb,
    true, now()),
 
-  -- 18 — Reddit AI Communities expanded (6 subs)
+  -- 18 — Reddit AI Communities expanded (paused: duplicate scope and persistent low quality)
   ('a0000000-0000-0000-0000-000000000018', 'Reddit AI Communities (expanded)', 'reddit',
    '{"subreddits": ["programming", "MachineLearning", "LocalLLaMA", "singularity", "ChatGPT", "StableDiffusion"], "max_age_hours": 24, "max_per_subreddit": 10}'::jsonb,
-   true, now()),
+   false, now()),
 
   -- 19 — OpenAI Changelog (anchor-extractor + legacy title_pattern fallback)
   ('a0000000-0000-0000-0000-000000000019', 'OpenAI Changelog', 'vendor_changelog',
@@ -115,14 +115,14 @@ VALUES
    '{"vendor": "anthropic", "sources": ["https://docs.anthropic.com/en/release-notes/"], "max_entries": 30, "allow_path_regex": "/release-notes/"}'::jsonb,
    true, now()),
 
-  -- 21 — Product Hunt AI Tools (GraphQL, needs PRODUCTHUNT_API_TOKEN)
+  -- 21 — Product Hunt AI Tools (paused: sustained noise with no high-priority output)
   ('a0000000-0000-0000-0000-000000000021', 'Product Hunt AI Tools', 'producthunt',
    '{"fetch_count": 60, "max_results": 20, "max_age_hours": 48}'::jsonb,
-   true, now()),
+   false, now()),
 
-  -- 22 — 量子位 (QbitAI) RSS (72h window, no AI filter)
+  -- 22 — 量子位 (QbitAI) RSS (72h window, AI-filtered, lower volume)
   ('a0000000-0000-0000-0000-000000000022', '量子位 (QbitAI)', 'rss',
-   '{"feedUrl": "https://www.qbitai.com/feed", "maxResults": 20, "maxAgeHours": 72, "applyAiFilter": false}'::jsonb,
+   '{"feedUrl": "https://www.qbitai.com/feed", "maxResults": 10, "maxAgeHours": 72, "applyAiFilter": true}'::jsonb,
    true, now())
 
 ON CONFLICT (id) DO UPDATE SET

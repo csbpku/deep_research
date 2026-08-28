@@ -1,15 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, ChevronRight, ExternalLink, FileCode2, GitBranch, GitCommitHorizontal, MessageCircle, Sparkles } from 'lucide-react';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Code2, ExternalLink, Eye, FileCode2, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
+
 import MarkdownContent from '../MarkdownContent';
+import { cn } from '@/lib/utils';
+import { decodeRadarTextEscapes, radarBlockId, splitRadarReadingBlocks } from './radar-reading-blocks';
+import { highlightAnnotationQuotes } from './RadarOriginalArticle';
+import { repoSummariesOverlap } from './RadarRepoSummary';
 
 export const ZREAD_SAMPLE_URL = 'https://github.com/deepseek-ai/deepseek-harness';
 
 /** Repo reading mode is intentionally limited to GitHub repositories. */
 export function isZreadRepository(url: string): boolean {
   try {
-    return new URL(url).hostname === 'github.com';
+    const parsed = new URL(url);
+    return parsed.hostname === 'github.com' && !parsed.searchParams.has('digest');
   } catch {
     return false;
   }
@@ -22,11 +28,24 @@ interface Page {
   path?: string;
   title?: string;
   content?: string;
+  group?: string;
+  section?: string;
+  sourceRefs?: Array<{ path: string; line?: number }>;
 }
+
+interface SourceReference {
+  path: string;
+  line?: number;
+}
+
+type SourceViewMode = 'source' | 'preview';
+type SourceRenderKind = 'html' | 'markdown' | 'unsupported';
 
 interface Props {
   repositoryUrl: string;
   leftColRef: React.RefObject<HTMLDivElement | null>;
+  aiBrief?: string | null;
+  projectSummary?: string | null;
   meta: {
     language?: string | null;
     defaultBranch?: string | null;
@@ -35,7 +54,7 @@ interface Props {
     lastPushedAt?: string | null;
     description?: string | null;
     zread?: {
-      provider?: 'zread-cli' | 'github-readme-fallback' | string;
+      provider?: 'zread-remote' | 'zread-cli' | 'github-readme-fallback' | string;
       status?: 'queued' | 'generating' | 'partial' | 'complete' | 'failed';
       commitSha?: string | null;
       generatedAt?: string | null;
@@ -45,8 +64,11 @@ interface Props {
       pages?: Page[];
     } | null;
   } | null;
-  onOpenChat?: (quote?: string, prompt?: string) => void;
+  onRefresh?: () => Promise<void> | void;
   onRetry?: () => Promise<void> | void;
+  annotations?: Array<{ id: string; quote: string }>;
+  selectedAnnotationId?: string | null;
+  onAnnotationClick?: (annotationId: string) => void;
 }
 
 function formatCount(value: number | null | undefined): string | null {
@@ -55,47 +77,295 @@ function formatCount(value: number | null | undefined): string | null {
 }
 
 function resolveRepoReferences(markdown: string, repositoryUrl: string, ref: string): string {
-  // Zread emits source references such as `README.md#L1-L15`. Without a
-  // repository base these become links inside the radar app, so resolve them
-  // to the exact GitHub tree used for this generated document.
   return markdown.replace(/\]\((?!https?:\/\/|mailto:|#)([^)\s]+)\)/gu, (_match, href: string) => {
     const [path, fragment] = href.split('#', 2);
-    const target = `${repositoryUrl.replace(/\/$/u, '')}/blob/${ref}/${path}`;
+    const target = `${repositoryUrl.replace(/\/$/u, '')}/blob/${ref}/${path.replace(/^\/+/u, '')}`;
     return `](${target}${fragment ? `#${fragment}` : ''})`;
   });
 }
 
-export function RadarZreadDocument({ repositoryUrl, leftColRef, meta, onOpenChat, onRetry }: Props) {
-  const cachedPages = (meta?.zread?.pages ?? []).filter((page) => page.content?.trim());
-  const hasCachedWiki = (meta?.zread?.provider === 'zread-cli' || meta?.zread?.provider === 'github-readme-fallback') && cachedPages.length > 0;
-  const isReadmeFallback = meta?.zread?.provider === 'github-readme-fallback' || meta?.zread?.fallback === true;
+function repoFileUrl(repositoryUrl: string, ref: string, path?: string, line?: number): string {
+  if (!path) return repositoryUrl;
+  return `${repositoryUrl.replace(/\/$/u, '')}/blob/${ref}/${path.replace(/^\/+/u, '')}${line ? `#L${line}` : ''}`;
+}
+
+function repoTreeUrl(repositoryUrl: string, ref: string): string {
+  return `${repositoryUrl.replace(/\/$/u, '')}/tree/${ref}`;
+}
+
+function rawRepoFileUrl(repositoryUrl: string, ref: string, path: string): string {
+  const parsed = new URL(repositoryUrl);
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  return `https://raw.githubusercontent.com/${segments.slice(0, 2).join('/')}/${encodeURIComponent(ref)}/${path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')}`;
+}
+
+function sourceRenderKind(path: string): SourceRenderKind {
+  const normalized = path.split('?', 1)[0]?.toLowerCase() ?? '';
+  if (/\.(?:html?|xhtml|svg)$/u.test(normalized)) return 'html';
+  if (/\.(?:md|mdx)$/u.test(normalized)) return 'markdown';
+  return 'unsupported';
+}
+
+function cleanDisplayText(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/gu, '')
+    .trim();
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/"/gu, '&quot;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;');
+}
+
+function htmlPreviewDocument(content: string, baseUrl: string): string {
+  const base = `<base href="${escapeHtmlAttribute(baseUrl)}">`;
+  const style = `
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 1.25rem; font: 14px/1.7 system-ui, -apple-system, sans-serif; color: #252525; background: #fff; }
+      @media (prefers-color-scheme: dark) {
+        body { color: #e8e8e8; background: #1b1b1b; }
+      }
+      img, svg, video { max-width: 100%; height: auto; }
+      pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
+      pre { padding: .75rem; border-radius: .5rem; background: rgba(127,127,127,.12); }
+      table { max-width: 100%; border-collapse: collapse; overflow: auto; display: block; }
+      th, td { border: 1px solid rgba(127,127,127,.35); padding: .35rem .55rem; text-align: left; }
+    </style>
+  `;
+  if (/<html(?:\s|>)/iu.test(content)) {
+    if (/<head(?:\s|>)/iu.test(content)) {
+      return content.replace(/<head(?:\s|>)/iu, (match) => `${match}${base}${style}`);
+    }
+    return content.replace(/<html(?:\s|>)/iu, (match) => `${match}<head>${base}${style}</head>`);
+  }
+  return `<!doctype html><html><head><meta charset="utf-8">${base}${style}</head><body>${content}</body></html>`;
+}
+
+function githubRepositoryKey(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'github.com') return null;
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 2) return null;
+    return segments.slice(0, 2).map((segment) => decodeURIComponent(segment).replace(/\.git$/u, '')).join('/');
+  } catch {
+    return null;
+  }
+}
+
+function sourceReferenceFromGithubLink(
+  href: string,
+  repositoryUrl: string,
+  ref: string,
+): SourceReference | null {
+  try {
+    const parsed = new URL(href);
+    if (parsed.hostname !== 'github.com' || githubRepositoryKey(href) !== githubRepositoryKey(repositoryUrl)) return null;
+    const segments = parsed.pathname.split('/').filter(Boolean).map((segment) => decodeURIComponent(segment));
+    const kindIndex = segments.findIndex((segment) => segment === 'blob');
+    if (kindIndex < 2 || kindIndex + 2 >= segments.length) return null;
+
+    const currentRefMarker = `/blob/${ref}/`;
+    const decodedPath = parsed.pathname.split('/').map((segment) => decodeURIComponent(segment)).join('/');
+    const markerIndex = decodedPath.indexOf(currentRefMarker);
+    const path = markerIndex >= 0
+      ? decodedPath.slice(markerIndex + currentRefMarker.length)
+      : segments.slice(kindIndex + 2).join('/');
+    if (!path) return null;
+
+    const lineMatch = parsed.hash.match(/^#L(\d+)/u);
+    return { path, line: lineMatch ? Number(lineMatch[1]) : undefined };
+  } catch {
+    return null;
+  }
+}
+
+function isGithubRepositoryTreeLink(href: string, repositoryUrl: string): boolean {
+  try {
+    const parsed = new URL(href);
+    if (parsed.hostname !== 'github.com' || githubRepositoryKey(href) !== githubRepositoryKey(repositoryUrl)) return false;
+    return parsed.pathname.split('/').filter(Boolean)[2] === 'tree';
+  } catch {
+    return false;
+  }
+}
+
+export const RadarZreadDocument = memo(function RadarZreadDocument({
+  repositoryUrl,
+  leftColRef,
+  aiBrief,
+  meta,
+  projectSummary,
+  onRefresh,
+  onRetry,
+  annotations = [],
+  selectedAnnotationId,
+  onAnnotationClick,
+}: Props) {
+  const cachedPages = useMemo(
+    () => (meta?.zread?.pages ?? []).filter((page) => page.content?.trim()),
+    [meta?.zread?.pages],
+  );
+  const provider = meta?.zread?.provider;
+  const hasCachedWiki = (
+    provider === 'zread-remote'
+    || provider === 'zread-cli'
+    || provider === 'github-readme-fallback'
+  ) && cachedPages.length > 0;
+  const isReadmeFallback = provider === 'github-readme-fallback' || meta?.zread?.fallback === true;
   const status = meta?.zread?.status ?? 'queued';
-  const cacheStatus = status === 'partial' ? '部分完成' : status === 'complete' ? '已完成' : status === 'failed' ? '生成失败' : status === 'generating' ? '生成中' : '尚未生成';
+  const cacheStatus = status === 'partial'
+    ? '部分完成'
+    : status === 'complete'
+      ? '已完成'
+      : status === 'failed'
+        ? '生成失败'
+        : status === 'generating'
+          ? '生成中'
+          : '尚未生成';
   const cachedPageLabel = meta?.zread?.expectedPageCount
     ? `${cachedPages.length}/${meta.zread.expectedPageCount} 页`
     : `${cachedPages.length} 页`;
-  const displayCommit = meta?.zread?.commitSha || '未生成';
+  const displayCommit = meta?.zread?.commitSha || meta?.defaultBranch || '未生成';
   const displayGeneratedAt = meta?.zread?.generatedAt?.slice(0, 10) || '—';
+  const providerLabel = isReadmeFallback
+    ? 'GitHub README'
+    : provider === 'zread-remote'
+      ? 'Zread'
+      : provider === 'zread-cli'
+        ? 'Zread CLI（历史缓存）'
+        : '项目文档';
   const zreadUrl = repositoryUrl.replace(/^https?:\/\/github\.com\//u, 'https://zread.ai/').replace(/\/$/u, '');
-  const [activeId, setActiveId] = useState('zread-overview');
-  const [selectionPrompt, setSelectionPrompt] = useState<{ top: number; left: number; quote: string } | null>(null);
+  const [activeId, setActiveId] = useState('repo-doc-page-0');
   const [retrying, setRetrying] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [sourcePreview, setSourcePreview] = useState<SourceReference | null>(null);
+  const [sourceContent, setSourceContent] = useState('');
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [sourceViewMode, setSourceViewMode] = useState<SourceViewMode>('source');
+  const [sourceListOpen, setSourceListOpen] = useState(false);
+  const sourceDetailsRef = useRef<HTMLDetailsElement>(null);
+  const ref = meta?.zread?.commitSha || meta?.defaultBranch || 'main';
 
-  const items = useMemo(() => (
-    hasCachedWiki
-      ? cachedPages.map((page, index) => ({
-          id: index === 0 ? 'zread-overview' : `zread-page-${index}`,
-          label: page.title || `文档 ${index + 1}`,
-          icon: index === 0 ? BookOpen : FileCode2,
-        }))
-      : []
-  ), [cachedPages, hasCachedWiki]);
+  const pages = useMemo(() => {
+    let blockIndex = 0;
+    return cachedPages.map((page, pageIndex) => {
+      const blocks = splitRadarReadingBlocks(page.content ?? '').map((content) => ({
+        content,
+        blockIndex: blockIndex++,
+      }));
+      return {
+        ...page,
+        path: page.path ? decodeRadarTextEscapes(page.path) : page.path,
+        title: page.title ? decodeRadarTextEscapes(page.title) : page.title,
+        group: page.group ? decodeRadarTextEscapes(page.group) : page.group,
+        section: page.section ? decodeRadarTextEscapes(page.section) : page.section,
+        id: `repo-doc-page-${pageIndex}`,
+        blocks,
+      };
+    });
+  }, [cachedPages]);
+
+  const groupedPages = useMemo(() => {
+    const groups = new Map<string, Map<string, Array<(typeof pages)[number]>>>();
+    for (const page of pages) {
+      // Zread calls its top-level buckets "section" (Get Started/Buzz/
+      // Deep Dive) and the nested buckets "group" (Hooks/Adapters/etc.).
+      const groupName = page.section?.trim() || '项目文档';
+      const sectionName = page.group?.trim() || '';
+      const sections = groups.get(groupName) ?? new Map<string, Array<(typeof pages)[number]>>();
+      const sectionPages = sections.get(sectionName) ?? [];
+      sectionPages.push(page);
+      sections.set(sectionName, sectionPages);
+      groups.set(groupName, sections);
+    }
+    return [...groups.entries()].map(([group, sections]) => ({ group, sections: [...sections.entries()] }));
+  }, [pages]);
+
+  const sourceRefs = useMemo(() => {
+    const seen = new Set<string>();
+    const refs = pages.flatMap((page) => {
+      const structured = (page.sourceRefs ?? []).map((source) => ({
+        ...source,
+        path: source.path.split('?', 1)[0] ?? source.path,
+      }));
+      const fromContent = [...(page.content ?? '').matchAll(
+        /https?:\/\/github\.com\/[^/\s)]+\/[^/\s)]+\/blob\/[^/\s)]+\/([^)\s#]+)(?:#L(\d+)(?:-L\d+)?)?/gu,
+      )].map((match) => ({
+        path: (match[1] ?? '').split('?', 1)[0] ?? '',
+        line: match[2] ? Number(match[2]) : undefined,
+      }));
+      return [...structured, ...fromContent];
+    });
+    return refs
+      .filter((source) => source.path?.trim())
+      .filter((source) => {
+        const key = `${source.path}:${source.line ?? ''}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => a.path.localeCompare(b.path) || (a.line ?? 0) - (b.line ?? 0));
+  }, [pages]);
+
+  useEffect(() => {
+    if (!sourcePreview) {
+      setSourceContent('');
+      setSourceError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setSourceLoading(true);
+    setSourceError(null);
+    fetch(rawRepoFileUrl(repositoryUrl, ref, sourcePreview.path), {
+      signal: controller.signal,
+      cache: 'force-cache',
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`源码读取失败（${response.status}）`);
+        return response.text();
+      })
+      .then((content) => {
+        if (!controller.signal.aborted) setSourceContent(content);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setSourceContent('');
+          setSourceError(error instanceof Error ? error.message : '源码读取失败');
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSourceLoading(false);
+      });
+    return () => controller.abort();
+  }, [ref, repositoryUrl, sourcePreview]);
+
+  useEffect(() => {
+    setSourceViewMode('source');
+  }, [sourcePreview?.path]);
+
+  useEffect(() => {
+    if (!sourceListOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      sourceDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sourceListOpen]);
 
   useEffect(() => {
     const root = leftColRef.current;
     if (!root) return;
-    const sections = items
-      .map((item) => document.getElementById(item.id))
+    const sections = pages
+      .map((page) => document.getElementById(page.id))
       .filter((section): section is HTMLElement => Boolean(section));
     if (!sections.length || typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver(
@@ -109,28 +379,18 @@ export function RadarZreadDocument({ repositoryUrl, leftColRef, meta, onOpenChat
     );
     sections.forEach((section) => observer.observe(section));
     return () => observer.disconnect();
-  }, [items, leftColRef]);
+  }, [leftColRef, pages]);
 
-  function handleSelection() {
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
-      setSelectionPrompt(null);
-      return;
-    }
-    const range = selection.getRangeAt(0);
-    const article = document.querySelector('[data-zread-article]');
-    if (!article?.contains(range.commonAncestorContainer)) {
-      setSelectionPrompt(null);
-      return;
-    }
-    const quote = selection.toString().trim().slice(0, 12000);
-    const rect = range.getBoundingClientRect();
-    setSelectionPrompt({
-      quote,
-      top: Math.max(64, rect.top - 44),
-      left: Math.min(Math.max(16, rect.left + rect.width / 2 - 58), window.innerWidth - 132),
-    });
-  }
+  useEffect(() => {
+    const root = leftColRef.current?.querySelector<HTMLElement>('[data-zread-article]');
+    if (!root) return;
+    highlightAnnotationQuotes(root, annotations, { selectedAnnotationId, onAnnotationClick });
+    return () => {
+      root.querySelectorAll<HTMLElement>('.radar-user-annotation').forEach((mark) => {
+        mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
+      });
+    };
+  }, [annotations, leftColRef, onAnnotationClick, pages, selectedAnnotationId]);
 
   async function retryGeneration() {
     if (!onRetry || retrying) return;
@@ -142,124 +402,372 @@ export function RadarZreadDocument({ repositoryUrl, leftColRef, meta, onOpenChat
     }
   }
 
+  async function refreshDocument() {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      await onRefresh();
+    } catch (error) {
+      setRefreshError(error instanceof Error ? error.message : '项目文档刷新失败');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  function handleDocumentLinkClick(href: string, event: React.MouseEvent<HTMLAnchorElement>) {
+    const source = sourceReferenceFromGithubLink(href, repositoryUrl, ref);
+    if (source) {
+      event.preventDefault();
+      setSourcePreview(source);
+      return;
+    }
+    if (isGithubRepositoryTreeLink(href, repositoryUrl)) {
+      event.preventDefault();
+      setSourceListOpen(true);
+    }
+  }
+
+  const summary = cleanDisplayText(projectSummary);
+  const brief = cleanDisplayText(aiBrief);
+  const description = cleanDisplayText(meta?.description);
+  const showBrief = Boolean(brief && (!summary || !repoSummariesOverlap(brief, summary)));
+  const overview = summary || (showBrief ? brief : description);
+  const overviewLabel = summary
+    ? '项目解读'
+    : showBrief
+      ? 'AI 一句话解读'
+      : description
+        ? '项目简介'
+        : '项目文档';
+
   return (
-    <div ref={leftColRef} className="min-h-0 flex-1 overflow-y-auto bg-[#f5f7f9]" onMouseUp={handleSelection}>
-      <div className="mx-auto max-w-[1480px] px-3 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
-        <header className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_20px_60px_-40px_rgba(15,23,42,0.55)]">
-          <div className="relative overflow-hidden bg-[#101923] px-5 py-7 text-white sm:px-8 lg:px-10 lg:py-9">
-            <div className="absolute -right-16 -top-24 size-72 rounded-full bg-cyan-400/10 blur-3xl" aria-hidden />
-            <div className="relative flex flex-wrap items-start justify-between gap-6">
-              <div className="min-w-0">
-                <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-cyan-300">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-2.5 py-1"><span className="size-1.5 rounded-full bg-cyan-300" />GitHub Repo reader</span>
-                  <span className="text-slate-500">·</span>
-                  <span className="text-slate-400">{cacheStatus}</span>
-                </div>
-                <h1 className="break-words text-2xl font-semibold tracking-[-0.03em] sm:text-3xl lg:text-[2.1rem]">{repositoryUrl.replace(/^https?:\/\/github\.com\//u, '').replace(/\/$/u, '')}</h1>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">{meta?.description || '项目原文、结构和代码文档集中在这里阅读。AI 只在你需要时介入，不额外铺一层摘要。'}</p>
+    <section data-testid="repo-document" className="mb-8">
+      <div className="mb-7 border-y border-[var(--ink-rule)] py-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{overviewLabel}</p>
+            {overview ? (
+              <p className="mt-2 max-w-3xl font-serif text-sm leading-6 text-[var(--ink-muted)]">{overview}</p>
+            ) : null}
+            {showBrief && summary ? (
+              <div className="mt-3 max-w-3xl rounded-md border-l-2 border-[var(--ink-accent)] bg-[var(--ink-paper)]/70 px-3 py-2.5">
+                <p className="mb-1 text-[11px] font-medium text-[var(--ink-muted)]">AI 一句话解读</p>
+                <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{brief}</p>
               </div>
-              <div className="flex flex-wrap gap-2 text-[11px] font-mono text-slate-400">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900/50 px-2.5 py-1"><GitCommitHorizontal className="size-3" />{displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</span>
-                <span className="rounded-full border border-slate-700 bg-slate-900/50 px-2.5 py-1">{cachedPageLabel}</span>
-              </div>
-            </div>
-            <details className="relative mt-6 max-w-3xl text-xs text-slate-400">
-              <summary className="cursor-pointer list-none text-slate-300 hover:text-white">查看项目元数据</summary>
-              <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-                {meta?.language ? <span>{meta.language}</span> : null}
-                {meta?.defaultBranch ? <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{meta.defaultBranch}</span> : null}
-                {formatCount(meta?.stars) ? <span>★ {formatCount(meta?.stars)}</span> : null}
-                {formatCount(meta?.forks) ? <span>⑂ {formatCount(meta?.forks)} forks</span> : null}
-                <span>生成于 {displayGeneratedAt}</span>
-              </div>
-            </details>
+            ) : null}
           </div>
-
-          {status === 'partial' ? (
-            <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs leading-5 text-amber-900 sm:px-8">
-              <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-              <span>当前是部分缓存（{cachedPageLabel}）。未生成的章节不会被 AI 假装成已读；后台会在 commit 不变时继续补齐。</span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-[var(--ink-muted)]">
+              <span>{cachedPageLabel}</span>
+              <span>{providerLabel}</span>
             </div>
-          ) : status === 'failed' ? (
-            <div className="flex items-start gap-2 border-b border-rose-200 bg-rose-50 px-5 py-3 text-xs leading-5 text-rose-900 sm:px-8">
-              <span className="mt-1 size-2 shrink-0 rounded-full bg-rose-500" />
-              <div>
-                <p><strong>Zread 文档生成失败。</strong>{meta?.zread?.error || '后台没有生成可用页面，当前只保留 GitHub 元数据。'}</p>
-                {onRetry ? (
-                  <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-2 rounded border border-rose-300 bg-white px-2 py-1 font-medium text-rose-800 hover:bg-rose-100 disabled:opacity-50">
-                    {retrying ? '正在重新投递…' : '重试生成'}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ) : isReadmeFallback ? (
-            <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3 text-xs leading-5 text-amber-900 sm:px-8">
-              <Sparkles className="mt-0.5 size-3.5 shrink-0" />
-              <span>当前展示 GitHub README fallback；Zread Wiki 尚未生成完整内容。{meta?.zread?.error ? ` ${meta.zread.error}` : ''}</span>
-            </div>
-          ) : null}
-
-          <div className={hasCachedWiki ? 'grid lg:grid-cols-[240px_minmax(0,1fr)]' : 'block'}>
-            {hasCachedWiki ? <aside className="border-b border-slate-200 bg-slate-50/90 p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-7rem)] lg:self-start lg:overflow-y-auto lg:border-b-0 lg:border-r lg:p-5">
-              <div className="mb-3 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">文档目录</div>
-              <nav className="flex gap-1 overflow-x-auto lg:block" aria-label="项目文档导航">
-                {items.map(({ id, label, icon: Icon }) => (
-                  <a key={id} href={`#${id}`} aria-current={activeId === id ? 'location' : undefined} className={`group flex shrink-0 items-center gap-2 rounded-xl px-2.5 py-2.5 text-xs transition-colors lg:w-full ${activeId === id ? 'bg-white font-semibold text-slate-950 shadow-sm ring-1 ring-slate-200' : 'text-slate-600 hover:bg-white/80 hover:text-slate-950'}`}>
-                    <Icon className={`size-3.5 ${activeId === id ? 'text-cyan-700' : 'text-slate-400 group-hover:text-cyan-700'}`} aria-hidden />
-                    <span className="truncate">{label}</span>
-                    <ChevronRight className={`ml-auto hidden size-3 lg:block ${activeId === id ? 'text-cyan-600' : 'text-slate-300'}`} aria-hidden />
-                  </a>
-                ))}
-              </nav>
-              <div className="mt-6 hidden border-t border-slate-200 pt-5 lg:block">
-                <p className="px-2 text-[11px] leading-5 text-slate-500">原文是主阅读区。选中一段文字后，可以直接让 AI 解释、翻译或继续追问。</p>
-                {onOpenChat ? <button type="button" onClick={() => onOpenChat()} className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 hover:text-cyan-900"><MessageCircle className="size-3.5" />与 AI 讨论</button> : null}
-                <a href={zreadUrl} target="_blank" rel="noreferrer" className="mt-2 flex items-center gap-1.5 px-2 text-xs font-medium text-slate-500 hover:text-slate-900"><ExternalLink className="size-3" />在 Zread 中打开</a>
-              </div>
-            </aside> : null}
-
-            <article data-zread-article className="min-w-0 bg-white px-5 py-8 sm:px-10 sm:py-10 lg:px-16 lg:py-12">
-              {hasCachedWiki ? (
-                <div className="max-w-3xl text-[15px] leading-8 text-slate-700">
-                  {cachedPages.map((page, index) => (
-                    <section key={`${page.path ?? 'page'}-${index}`} id={index === 0 ? 'zread-overview' : `zread-page-${index}`} className="mb-16 scroll-mt-6 last:mb-0">
-                      <div className="mb-5 flex flex-wrap items-center gap-3 border-b border-slate-100 pb-3">
-                        <span className="font-mono text-[11px] font-medium text-cyan-700">{page.path ?? `wiki/page-${index + 1}.md`}</span>
-                        <span className="text-[11px] text-slate-400">第 {index + 1} 页</span>
-                      </div>
-                      <h2 className="mb-6 text-2xl font-semibold tracking-[-0.025em] text-slate-950 sm:text-[1.7rem]">{page.title || `Zread 文档 ${index + 1}`}</h2>
-                      <MarkdownContent content={resolveRepoReferences(page.content ?? '', repositoryUrl, meta?.zread?.commitSha || meta?.defaultBranch || 'main')} />
-                    </section>
-                  ))}
-                </div>
-              ) : (
-                <div className="max-w-2xl rounded-2xl border border-slate-200 bg-slate-50 px-6 py-8 text-[15px] leading-7 text-slate-700">
-                  <p className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-cyan-700">Zread project reader</p>
-                  <h2 className="mb-3 text-xl font-semibold tracking-tight text-slate-950">{status === 'failed' ? '暂时没有项目文档' : status === 'generating' ? '正在生成项目文档' : '项目文档尚未生成'}</h2>
-                  <p>{status === 'failed' ? '这次生成没有成功，因此不展示假目录或不完整的正文。修复后台配置后，可按当前 commit 重试。' : '后台会按仓库 commit 生成并缓存 Zread 页面；完成后这里会出现真实目录和正文。'}</p>
-                  {meta?.zread?.error ? <p className="mt-3 rounded-lg bg-white px-3 py-2 text-xs text-rose-700">原因：{meta.zread.error}</p> : null}
-                  {status === 'failed' && onRetry ? (
-                    <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-4 rounded-md bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-800 disabled:opacity-50">
-                      {retrying ? '正在重新投递…' : '重试生成项目文档'}
-                    </button>
-                  ) : null}
-                </div>
-              )}
-            </article>
-          </div>
-        </header>
-        <p className="mx-auto mt-3 max-w-5xl px-1 text-[11px] leading-5 text-slate-500">{isReadmeFallback ? 'GitHub README fallback' : 'Zread CLI'} · {cacheStatus}{hasCachedWiki ? ` · ${cachedPageLabel}` : ''} · commit {displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</p>
-      </div>
-
-      {selectionPrompt && onOpenChat ? (
-        <div className="fixed z-[9980]" style={{ top: selectionPrompt.top, left: selectionPrompt.left }}>
-          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-950/15">
-            <button type="button" onClick={() => { onOpenChat(selectionPrompt.quote, '请解释我选中的这段内容，说明它在当前项目中的作用，并指出必要的上下文。'); setSelectionPrompt(null); }} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"><Sparkles className="size-3.5" />解释</button>
-            <button type="button" onClick={() => { onOpenChat(selectionPrompt.quote, '请将我选中的内容翻译成简体中文，保留代码、专有名词、文件名和链接。'); setSelectionPrompt(null); }} className="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">翻译</button>
-            <button type="button" onClick={() => { onOpenChat(selectionPrompt.quote); setSelectionPrompt(null); }} className="rounded-lg px-2.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">问 AI</button>
+            {onRefresh ? (
+              <button
+                type="button"
+                onClick={() => void refreshDocument()}
+                disabled={refreshing}
+                className="inline-flex items-center gap-1.5 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
+              >
+                <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+                {refreshing ? '刷新中…' : '刷新文档'}
+              </button>
+            ) : null}
           </div>
         </div>
+        {refreshError ? (
+          <p role="alert" className="mt-3 text-xs text-rose-700 dark:text-rose-300">
+            {refreshError}，已保留上次文档。
+          </p>
+        ) : null}
+        <details className="mt-3 text-[11px] text-[var(--ink-faint)]">
+          <summary className="cursor-pointer select-none hover:text-[var(--ink-accent)]">来源与仓库信息</summary>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+            {meta?.language ? <span>{meta.language}</span> : null}
+            {meta?.defaultBranch ? <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{meta.defaultBranch}</span> : null}
+            {formatCount(meta?.stars) ? <span>★ {formatCount(meta?.stars)}</span> : null}
+            {formatCount(meta?.forks) ? <span>⑂ {formatCount(meta?.forks)} forks</span> : null}
+            <span>缓存于 {displayGeneratedAt}</span>
+            <span className="inline-flex items-center gap-1"><GitCommitHorizontal className="size-3" />commit {displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</span>
+          </div>
+        </details>
+      </div>
+
+      {status === 'partial' || isReadmeFallback ? (
+        <div className="mb-7 flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/20 dark:text-amber-100">
+          <Sparkles className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            {isReadmeFallback
+              ? '当前仅展示 GitHub README；Zread 没有可用的完整项目文档。'
+              : `当前项目文档为部分缓存（${cachedPageLabel}），未覆盖的章节不会被标记为已读。`}
+            {meta?.zread?.error ? ` ${meta.zread.error}` : ''}
+          </span>
+        </div>
       ) : null}
-    </div>
+
+      {status === 'failed' ? (
+        <div className="mb-7 rounded-md border border-rose-300/60 bg-rose-50 px-4 py-3 text-xs leading-5 text-rose-900 dark:border-rose-700/50 dark:bg-rose-950/20 dark:text-rose-100">
+          <p><strong>项目文档生成失败。</strong>{meta?.zread?.error || '当前没有可展示的项目正文。'}</p>
+          {onRetry ? (
+            <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-2 border border-rose-300 bg-background px-2 py-1 font-medium hover:bg-rose-100 disabled:opacity-50">
+              {retrying ? '正在重新投递…' : '重试抓取'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {hasCachedWiki ? (
+        <div className="lg:grid lg:grid-cols-[220px_28px_minmax(0,1fr)] lg:items-start">
+          <nav className="sticky top-5 hidden h-[calc(100dvh-12rem)] max-h-[calc(100dvh-12rem)] overscroll-contain overflow-y-auto pr-2 lg:block" aria-label="项目文档目录">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-accent)]">文档目录</p>
+            <div className="space-y-3 border-l border-[var(--ink-rule)] pl-3">
+              {groupedPages.map(({ group, sections }) => (
+                <details key={group} open>
+                  <summary className="cursor-pointer py-1 text-[11px] font-semibold text-[var(--ink-text)]">{group}</summary>
+                  <div className="mt-1 space-y-2">
+                    {sections.map(([section, sectionPages]) => (
+                      <div key={section || 'default'}>
+                        {section ? <p className="px-1 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--ink-faint)]">{section}</p> : null}
+                        <ol className="space-y-0.5">
+                          {sectionPages.map((page, index) => (
+                            <li key={page.id}>
+                              <a
+                                href={`#${page.id}`}
+                                aria-current={activeId === page.id ? 'location' : undefined}
+                                className={cn(
+                                  'flex items-start gap-2 py-1 text-xs leading-5 transition-colors',
+                                  activeId === page.id
+                                    ? 'font-semibold text-[var(--ink-accent)]'
+                                    : 'text-[var(--ink-muted)] hover:text-[var(--ink-accent)]',
+                                )}
+                              >
+                                <FileCode2 className="mt-0.5 size-3 shrink-0" />
+                                <span>{page.title || page.path || `文档 ${index + 1}`}</span>
+                              </a>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+          </nav>
+          <div className="hidden min-h-[520px] border-x border-[var(--ink-rule)] lg:block" aria-hidden />
+          <div className="min-w-0 lg:pl-8">
+            <details
+              className="mb-6 overflow-y-auto overscroll-contain rounded-lg border border-[var(--ink-rule)] lg:hidden"
+              style={{ maxHeight: '60dvh' }}
+            >
+              <summary className="cursor-pointer px-3 py-2.5 text-xs font-semibold text-[var(--ink-text)]">文档目录</summary>
+              <div className="space-y-3 border-t border-[var(--ink-rule)] px-3 py-2">
+                {groupedPages.map(({ group, sections }) => (
+                  <details key={group} open>
+                    <summary className="cursor-pointer py-1 text-xs font-semibold text-[var(--ink-text)]">{group}</summary>
+                    <div className="mt-1 space-y-2 pl-2">
+                      {sections.map(([section, sectionPages]) => (
+                        <div key={section || 'default'}>
+                          {section ? <p className="py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--ink-faint)]">{section}</p> : null}
+                          <ol>
+                            {sectionPages.map((page, index) => (
+                              <li key={page.id}>
+                                <a href={`#${page.id}`} className="block py-1.5 text-xs text-[var(--ink-muted)] hover:text-[var(--ink-accent)]">
+                                  {page.title || page.path || `文档 ${index + 1}`}
+                                </a>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            </details>
+
+            <div data-zread-article data-radar-reading-body="true" className="reading-workbench-markdown text-[16px] text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20">
+              {pages.map((page, pageIndex) => (
+                <section key={page.id} id={page.id} className="mb-14 scroll-mt-6 last:mb-0">
+                  <div className="mb-4 flex items-center justify-end border-b border-[var(--ink-rule)] pb-2">
+                    <span className="text-[10px] text-[var(--ink-faint)]">第 {pageIndex + 1} 页</span>
+                  </div>
+                  <h2 className="mb-5 font-serif text-2xl font-semibold leading-tight text-[var(--ink-text)]">
+                    {page.title || `项目文档 ${pageIndex + 1}`}
+                  </h2>
+                  {page.blocks.map((block) => (
+                    <section
+                      key={radarBlockId(block.blockIndex)}
+                      id={radarBlockId(block.blockIndex)}
+                      data-radar-block="true"
+                      data-radar-block-index={block.blockIndex}
+                      className="group relative -mx-3 scroll-mt-6 rounded-md px-3 py-2 transition-colors"
+                    >
+                      <MarkdownContent
+                        content={resolveRepoReferences(block.content, repositoryUrl, ref)}
+                        className="text-[16px] text-[var(--ink-text)]"
+                        onLinkClick={handleDocumentLinkClick}
+                      />
+                    </section>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="max-w-2xl border-l-2 border-[var(--ink-rule)] py-2 pl-4 text-sm leading-7 text-[var(--ink-muted)]">
+          <h2 className="font-serif text-lg font-semibold text-[var(--ink-text)]">
+            {status === 'generating' ? '正在抓取项目文档' : '暂时没有项目文档'}
+          </h2>
+          <p className="mt-1">
+            {status === 'generating'
+              ? '后台正在读取现有 Zread 页面；若不可用，将回退到 GitHub README。'
+              : '没有找到可用的 Zread 页面或 README，因此这里不展示推测生成的目录。'}
+          </p>
+          {onRetry ? (
+            <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-3 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] hover:bg-muted disabled:opacity-50">
+              {retrying ? '正在重新投递…' : '重新抓取'}
+            </button>
+          ) : null}
+        </div>
+      )}
+
+      {hasCachedWiki && sourceRefs.length ? (
+        <details
+          ref={sourceDetailsRef}
+          open={sourceListOpen}
+          onToggle={(event) => setSourceListOpen(event.currentTarget.open)}
+          className="mt-7 border-y border-[var(--ink-rule)] py-3"
+        >
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-semibold text-[var(--ink-text)]">
+            <span className="inline-flex items-center gap-2"><FileCode2 className="size-3.5 text-[var(--ink-accent)]" />Source · 查看引用源码</span>
+            <span className="text-[10px] font-normal text-[var(--ink-faint)]">固定到 commit {ref.slice(0, 8)}</span>
+          </summary>
+          <div className="mt-3 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+            {sourceRefs.map((source) => (
+              <button
+                type="button"
+                key={`${source.path}:${source.line ?? ''}`}
+                onClick={() => setSourcePreview(source)}
+                className="truncate rounded px-2 py-1.5 text-left font-mono text-[11px] text-[var(--ink-muted)] hover:bg-muted hover:text-[var(--ink-accent)]"
+              >
+                {source.path}{source.line ? ` · L${source.line}` : ''}
+              </button>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {sourcePreview ? (
+        <aside
+          data-testid="radar-source-preview"
+          aria-label={`源码预览：${sourcePreview.path}`}
+          className="fixed inset-y-16 right-4 z-[9975] flex w-[min(620px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+        >
+          <header className="flex shrink-0 items-center gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
+            <FileCode2 className="size-4 shrink-0 text-primary" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate font-mono text-xs font-semibold text-foreground">{sourcePreview.path}</h2>
+              <p className="mt-0.5 text-[10px] text-muted-foreground">
+                commit {ref.slice(0, 8)}
+                {sourcePreview.line ? ` · 引用行 L${sourcePreview.line}` : ''}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center rounded-md border border-border p-0.5" role="group" aria-label="源码查看方式">
+              <button
+                type="button"
+                aria-pressed={sourceViewMode === 'source'}
+                onClick={() => setSourceViewMode('source')}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] transition-colors',
+                  sourceViewMode === 'source' ? 'bg-muted font-semibold text-foreground' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Code2 className="size-3" />源码
+              </button>
+              <button
+                type="button"
+                aria-pressed={sourceViewMode === 'preview'}
+                disabled={sourceRenderKind(sourcePreview.path) === 'unsupported'}
+                onClick={() => setSourceViewMode('preview')}
+                title={sourceRenderKind(sourcePreview.path) === 'unsupported' ? '该文件类型暂不支持渲染预览' : '渲染预览'}
+                className={cn(
+                  'inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] transition-colors',
+                  sourceViewMode === 'preview' ? 'bg-muted font-semibold text-foreground' : 'text-muted-foreground hover:text-foreground',
+                  sourceRenderKind(sourcePreview.path) === 'unsupported' && 'cursor-not-allowed opacity-40',
+                )}
+              >
+                <Eye className="size-3" />渲染预览
+              </button>
+            </div>
+            <button
+              type="button"
+              aria-label="关闭源码预览"
+              onClick={() => setSourcePreview(null)}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          </header>
+          <div className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3">
+            {sourceLoading ? (
+              <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />正在读取引用源码…
+              </div>
+            ) : sourceError ? (
+              <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                {sourceError}
+              </div>
+            ) : sourceViewMode === 'preview' ? (
+              sourceRenderKind(sourcePreview.path) === 'html' ? (
+                <iframe
+                  title={`渲染预览：${sourcePreview.path}`}
+                  sandbox=""
+                  referrerPolicy="no-referrer"
+                  srcDoc={htmlPreviewDocument(sourceContent, `${rawRepoFileUrl(repositoryUrl, ref, sourcePreview.path).replace(/\/[^/]+$/u, '/')}`)}
+                  className="min-h-[calc(100dvh-11rem)] w-full rounded-md border border-border bg-background"
+                />
+              ) : sourceRenderKind(sourcePreview.path) === 'markdown' ? (
+                <div className="rounded-md bg-background p-5">
+                  <MarkdownContent content={sourceContent} compact className="text-sm" />
+                </div>
+              ) : (
+                <div className="rounded-md border border-border bg-background p-4 text-xs leading-5 text-muted-foreground">
+                  该文件类型暂不支持渲染预览，请切换回源码查看。
+                </div>
+              )
+            ) : (
+              <pre className="min-w-max font-mono text-[12px] leading-5 text-foreground">
+                {sourceContent.split('\n').map((line, index) => {
+                  const lineNumber = index + 1;
+                  const active = lineNumber === sourcePreview.line;
+                  return (
+                    <code
+                      key={lineNumber}
+                      data-source-line={lineNumber}
+                      className={cn('block px-2', active && 'rounded-sm bg-amber-200/70 dark:bg-amber-900/40')}
+                    >
+                      <span className="mr-4 inline-block w-10 select-none text-right text-muted-foreground/60">{lineNumber}</span>
+                      {line || ' '}
+                    </code>
+                  );
+                })}
+              </pre>
+            )}
+          </div>
+        </aside>
+      ) : null}
+
+      <div className="mt-7 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--ink-rule)] pt-3 text-[10px] text-[var(--ink-faint)]">
+        <span>{providerLabel} · {cacheStatus}</span>
+        <span>commit {displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</span>
+        {provider === 'zread-remote' ? (
+          <a href={zreadUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--ink-accent)] hover:underline">
+            查看 Zread 来源 <ExternalLink className="size-3" />
+          </a>
+        ) : null}
+      </div>
+    </section>
   );
-}
+});

@@ -18,6 +18,76 @@ import { RadarIdParam } from '../../../../lib/schemas';
 import { aggregateFeedbacks, shapeCandidate } from '../../../../lib/radar/shape';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
+type SourceOutlineItem = { heading: string; level: number };
+
+function sourceOutlineFromMarkdown(markdown: string | null, title: string): SourceOutlineItem[] {
+  if (!markdown) return [];
+  const result: SourceOutlineItem[] = [];
+  let inFence = false;
+  for (const line of markdown.replace(/\r\n?/gu, '\n').split('\n')) {
+    if (/^\s*(```|~~~)/u.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const heading = line.match(/^(#{2,6})\s+(.+?)\s*#*\s*$/u);
+    if (!heading) continue;
+    const label = heading[2]!
+      .replace(/[*_`]/gu, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/gu, '$1')
+      .trim();
+    if (!label || label === title.trim() || result.some((item) => item.heading === label)) continue;
+    result.push({ heading: label, level: heading[1]!.length });
+  }
+  return result.slice(0, 64);
+}
+
+function sourceOutlineFromSections(value: unknown, title: string): SourceOutlineItem[] {
+  if (!Array.isArray(value)) return [];
+  const result: SourceOutlineItem[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const raw = item as Record<string, unknown>;
+    const heading = typeof raw.title === 'string' ? raw.title.trim() : '';
+    const level = typeof raw.level === 'number' ? Math.max(2, Math.min(6, raw.level)) : 2;
+    if (!heading || heading === title.trim() || result.some((entry) => entry.heading === heading)) continue;
+    result.push({ heading, level });
+  }
+  return result.slice(0, 64);
+}
+
+function sourceOutlineFromRepoMeta(value: unknown): SourceOutlineItem[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const zread = (value as Record<string, unknown>).zread;
+  if (!zread || typeof zread !== 'object' || Array.isArray(zread)) return [];
+  const pages = (zread as Record<string, unknown>).pages;
+  if (!Array.isArray(pages)) return [];
+  const result: SourceOutlineItem[] = [];
+  for (const page of pages) {
+    if (!page || typeof page !== 'object' || Array.isArray(page)) continue;
+    const heading = typeof (page as Record<string, unknown>).title === 'string'
+      ? ((page as Record<string, unknown>).title as string).trim()
+      : '';
+    if (heading && !result.some((entry) => entry.heading === heading)) result.push({ heading, level: 2 });
+  }
+  return result.slice(0, 64);
+}
+
+function buildSourceOutline(summary: {
+  title: string;
+  originalKind?: string | null;
+  originalMarkdown?: string | null;
+  originalMeta?: unknown;
+  sections?: unknown;
+}): SourceOutlineItem[] {
+  const fromSections = sourceOutlineFromSections(summary.sections, summary.title);
+  if (fromSections.length) return fromSections;
+  const fromRepo = summary.originalKind === 'github_repo'
+    ? sourceOutlineFromRepoMeta(summary.originalMeta)
+    : [];
+  return fromRepo.length ? fromRepo : sourceOutlineFromMarkdown(summary.originalMarkdown ?? null, summary.title);
+}
+
 export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const u = await getCurrentUser();
@@ -52,6 +122,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       timelinessScore: true,
       sourceQualityScore: true,
       distilledScore: true,
+      distilledTier: true,
       selectionReason: true,
       sortOrder: true,
       syncRunId: true,
@@ -103,13 +174,44 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     mine: [],
   };
 
+  const shaped = shapeCandidate({
+    summary,
+    feedbackCounts: fb.counts,
+    myFeedbacks: fb.mine,
+    includeBody: true,
+  });
+  const tier = summary.distilledTier ?? shaped.distilledScore?.tier ?? null;
+  if ((tier === 'noise' || tier === null) && u?.role !== 'admin') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '雷达候选不存在',
+      requestId,
+    });
+  }
+
+  // A skim is a summary surface by contract. Do not expose historical deep
+  // enrichment or full source text even if old rows still contain it.
+  const responseCandidate = tier === 'skim'
+    ? {
+        ...shaped,
+        body: null,
+        originalKind: null,
+        originalMarkdown: null,
+        originalMeta: null,
+        githubItemMeta: null,
+        repoSummary: null,
+        highlights: null,
+        arxivAnalysis: null,
+        tldr: null,
+        sections: null,
+        figures: null,
+        authors: [],
+      }
+    : shaped;
+
   return NextResponse.json({
-    ...shapeCandidate({
-      summary,
-      feedbackCounts: fb.counts,
-      myFeedbacks: fb.mine,
-      includeBody: true,
-    }),
+    ...responseCandidate,
+    sourceOutline: tier === 'skim' ? buildSourceOutline(summary) : null,
     canManage: u?.role === 'admin',
     isAuthenticated: Boolean(u),
   });
