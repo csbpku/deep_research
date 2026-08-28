@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import httpx
-import pytest
 
 from ai_engine.radar.semantic_scholar import (
     extract_arxiv_id,

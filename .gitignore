@@ -92,7 +92,9 @@ apps/web/playwright-report/
 /.lima-native/
 /.limactl
 /.omo/
-.vendor_news_state.json
+
+# AI engine 运行时状态（vendor changelog/news、sitemap watcher 的游标文件）
+packages/ai-engine/ai_engine/static_docs/
 
 # 本地生成的日报导出（正式内容通过数据库/应用管理）
 /digest-*.md

@@ -13,7 +13,7 @@ Plus a few additional safety checks (canonical_key, no-query logging,
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 import pytest
@@ -230,11 +230,9 @@ async def test_ai_source_404_response_is_inaccessible(
 
 
 # P1.7: arxiv URL detection + dispatch to radar arxiv_fetcher.
-import asyncio as _asyncio
 
 
 def test_looks_like_arxiv_matches_canonical_and_pdf_urls() -> None:
-    from ai_engine.fetcher.ai_source_urls import _looks_like_arxiv
 
     assert _looks_like_arxiv("https://arxiv.org/abs/2608.10720")
     assert _looks_like_arxiv("https://arxiv.org/pdf/2608.10720")

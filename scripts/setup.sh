@@ -119,10 +119,17 @@ read_env_value() {
 load_existing_llm_models() {
   local env_file="${1:-packages/ai-engine/.env}"
   [[ -f "$env_file" ]] || env_file="packages/ai-engine/.env"
+  RESEARCH_LLM_VAL="$(read_env_value "$env_file" RESEARCH_LLM)"
+  UTILITY_LLM_VAL="$(read_env_value "$env_file" UTILITY_LLM)"
+  FALLBACK_LLM_VAL="$(read_env_value "$env_file" FALLBACK_LLM)"
   SMART_LLM_VAL="$(read_env_value "$env_file" SMART_LLM)"
   FAST_LLM_VAL="$(read_env_value "$env_file" FAST_LLM)"
   STRATEGIC_LLM_VAL="$(read_env_value "$env_file" STRATEGIC_LLM)"
   BRIEF_LLM_VAL="$(read_env_value "$env_file" BRIEF_LLM)"
+  LLM_FALLBACK_LLM_VAL="$(read_env_value "$env_file" LLM_FALLBACK_LLM)"
+  RESEARCH_LLM_VAL="${RESEARCH_LLM_VAL:-$SMART_LLM_VAL}"
+  UTILITY_LLM_VAL="${UTILITY_LLM_VAL:-$BRIEF_LLM_VAL}"
+  FALLBACK_LLM_VAL="${FALLBACK_LLM_VAL:-$LLM_FALLBACK_LLM_VAL}"
 }
 
 load_existing_llm_config() {
@@ -132,6 +139,12 @@ load_existing_llm_config() {
   ANTHROPIC_BASE_URL_VAL="$(read_env_value "$env_file" ANTHROPIC_BASE_URL)"
   OPENAI_KEY="$(read_env_value "$env_file" OPENAI_API_KEY)"
   OPENAI_BASE_URL_VAL="$(read_env_value "$env_file" OPENAI_BASE_URL)"
+  MINIMAX_KEY="$(read_env_value "$env_file" MINIMAX_API_KEY)"
+  [[ -n "$MINIMAX_KEY" ]] || MINIMAX_KEY="$(read_env_value "$env_file" minimax_api_key)"
+  MINIMAX_BASE_URL_VAL="$(read_env_value "$env_file" MINIMAX_BASE_URL)"
+  DEEPSEEK_KEY="$(read_env_value "$env_file" DEEPSEEK_API_KEY)"
+  [[ -n "$DEEPSEEK_KEY" ]] || DEEPSEEK_KEY="$(read_env_value "$env_file" deepseek_api_key)"
+  DEEPSEEK_BASE_URL_VAL="$(read_env_value "$env_file" DEEPSEEK_BASE_URL)"
 }
 
 prompt_secret_keep() {
@@ -205,9 +218,9 @@ configure_llm_provider() {
       "Anthropic-compatible API" \
       "Fake adapter (no LLM calls — UI walkthrough only)"
   else
-    prompt_choice "Choose LLM provider:" LLM_CHOICE \
-      "Anthropic-compatible API (cc-switch / Anthropic / DeepSeek)" \
-      "OpenAI-compatible API (ais-switch / vibeproxy / OpenAI)" \
+    prompt_choice "Choose LLM connection mode:" LLM_CHOICE \
+      "Direct provider APIs (MiniMax primary + DeepSeek fallback)" \
+      "Local compatible proxy (cc-switch / ais-switch / vibeproxy)" \
       "Fake adapter (no LLM calls — UI walkthrough only)"
   fi
 
@@ -221,12 +234,21 @@ configure_llm_provider() {
         OPENAI_BASE_URL_VAL="$LLM_BASE_URL_VAL"
         ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
       else
-        LLM_PROTOCOL_VAL="anthropic"
-        LLM_BASE_URL_VAL="${ANTHROPIC_BASE_URL_VAL:-}"
-        prompt "LLM base URL (include /v1 when required; local cc-switch: http://localhost:15721)" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
-        prompt_secret_keep "LLM API key" "$ANTHROPIC_KEY" ANTHROPIC_KEY
-        ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL_VAL"
-        OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
+        ADAPTER_VAL="gpt_researcher"
+        MINIMAX_BASE_URL_VAL="${MINIMAX_BASE_URL_VAL:-https://api.minimaxi.com/v1}"
+        DEEPSEEK_BASE_URL_VAL="${DEEPSEEK_BASE_URL_VAL:-https://api.deepseek.com/v1}"
+        prompt "MiniMax base URL" "$MINIMAX_BASE_URL_VAL" MINIMAX_BASE_URL_VAL
+        prompt_secret_keep "MiniMax API key" "$MINIMAX_KEY" MINIMAX_KEY
+        prompt "DeepSeek base URL" "$DEEPSEEK_BASE_URL_VAL" DEEPSEEK_BASE_URL_VAL
+        prompt_secret_keep "DeepSeek API key" "$DEEPSEEK_KEY" DEEPSEEK_KEY
+        RESEARCH_LLM_VAL="minimax:MiniMax-M3"
+        UTILITY_LLM_VAL="minimax:MiniMax-M3"
+        FALLBACK_LLM_VAL="deepseek:deepseek-v4-flash"
+        SMART_LLM_VAL="$RESEARCH_LLM_VAL"
+        FAST_LLM_VAL="$RESEARCH_LLM_VAL"
+        STRATEGIC_LLM_VAL="$RESEARCH_LLM_VAL"
+        BRIEF_LLM_VAL="$UTILITY_LLM_VAL"
+        return 0
       fi
       ;;
     2)
@@ -238,22 +260,37 @@ configure_llm_provider() {
         ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL_VAL"
         OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
       else
-        LLM_PROTOCOL_VAL="openai"
-        LLM_BASE_URL_VAL="${OPENAI_BASE_URL_VAL:-}"
-        prompt "LLM base URL (include /v1 when required; ais-switch: http://localhost:15722/v1)" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
-        prompt_secret_keep "LLM API key" "$OPENAI_KEY" OPENAI_KEY
-        OPENAI_BASE_URL_VAL="$LLM_BASE_URL_VAL"
-        ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
+        prompt_choice "Choose local proxy protocol:" PROXY_PROTOCOL_CHOICE \
+          "Anthropic-compatible (cc-switch, default port 15721)" \
+          "OpenAI-compatible (ais-switch / vibeproxy)"
+        if [[ "$PROXY_PROTOCOL_CHOICE" == "1" ]]; then
+          LLM_PROTOCOL_VAL="anthropic"
+          LLM_BASE_URL_VAL="${ANTHROPIC_BASE_URL_VAL:-http://localhost:15721}"
+          prompt "Proxy base URL" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
+          prompt_secret_keep "Proxy API key" "$ANTHROPIC_KEY" ANTHROPIC_KEY
+          ANTHROPIC_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+          OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
+        else
+          LLM_PROTOCOL_VAL="openai"
+          LLM_BASE_URL_VAL="${OPENAI_BASE_URL_VAL:-http://localhost:8318/v1}"
+          prompt "Proxy base URL" "$LLM_BASE_URL_VAL" LLM_BASE_URL_VAL
+          prompt_secret_keep "Proxy API key" "$OPENAI_KEY" OPENAI_KEY
+          OPENAI_BASE_URL_VAL="$LLM_BASE_URL_VAL"
+          ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
+        fi
       fi
       ;;
     3)
       ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""
       OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""
       ADAPTER_VAL="fake"
-      SMART_LLM_VAL="anthropic:deepseek-v4-flash"
-      FAST_LLM_VAL="$SMART_LLM_VAL"
-      STRATEGIC_LLM_VAL="$SMART_LLM_VAL"
-      BRIEF_LLM_VAL="$SMART_LLM_VAL"
+      RESEARCH_LLM_VAL="anthropic:deepseek-v4-flash"
+      UTILITY_LLM_VAL="$RESEARCH_LLM_VAL"
+      SMART_LLM_VAL="$RESEARCH_LLM_VAL"
+      FAST_LLM_VAL="$RESEARCH_LLM_VAL"
+      STRATEGIC_LLM_VAL="$RESEARCH_LLM_VAL"
+      BRIEF_LLM_VAL="$UTILITY_LLM_VAL"
+      FALLBACK_LLM_VAL=""
       return 0
       ;;
   esac
@@ -261,10 +298,13 @@ configure_llm_provider() {
   ADAPTER_VAL="gpt_researcher"
   select_llm_model "$LLM_PROTOCOL_VAL" "$LLM_BASE_URL_VAL" "${ANTHROPIC_KEY:-$OPENAI_KEY}" "$existing_model" \
     || fail "No LLM model selected"
-  SMART_LLM_VAL="${LLM_PROTOCOL_VAL}:${SELECTED_LLM_MODEL}"
-  FAST_LLM_VAL="$SMART_LLM_VAL"
-  STRATEGIC_LLM_VAL="$SMART_LLM_VAL"
-  BRIEF_LLM_VAL="$SMART_LLM_VAL"
+  RESEARCH_LLM_VAL="${LLM_PROTOCOL_VAL}:${SELECTED_LLM_MODEL}"
+  UTILITY_LLM_VAL="$RESEARCH_LLM_VAL"
+  SMART_LLM_VAL="$RESEARCH_LLM_VAL"
+  FAST_LLM_VAL="$RESEARCH_LLM_VAL"
+  STRATEGIC_LLM_VAL="$RESEARCH_LLM_VAL"
+  BRIEF_LLM_VAL="$UTILITY_LLM_VAL"
+  FALLBACK_LLM_VAL="${LLM_FALLBACK_LLM_VAL:-}"
 }
 
 detect_and_recommend() {
@@ -409,10 +449,19 @@ ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_VAL}
 OPENAI_API_KEY=${OPENAI_KEY}
 OPENAI_BASE_URL=${OPENAI_BASE_URL_VAL}
+MINIMAX_API_KEY=${MINIMAX_KEY}
+MINIMAX_BASE_URL=${MINIMAX_BASE_URL_VAL}
+DEEPSEEK_API_KEY=${DEEPSEEK_KEY}
+DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL_VAL}
+RESEARCH_LLM=${RESEARCH_LLM_VAL}
+UTILITY_LLM=${UTILITY_LLM_VAL}
+FALLBACK_LLM=${FALLBACK_LLM_VAL}
+# Legacy mirrors; runtime resolution prefers RESEARCH/UTILITY/FALLBACK.
 SMART_LLM=${SMART_LLM_VAL}
 FAST_LLM=${FAST_LLM_VAL}
 STRATEGIC_LLM=${STRATEGIC_LLM_VAL}
 BRIEF_LLM=${BRIEF_LLM_VAL}
+LLM_FALLBACK_LLM=${FALLBACK_LLM_VAL:-${LLM_FALLBACK_LLM_VAL:-}}
 
 # Search
 TAVILY_API_KEY=${TAVILY_KEY}
@@ -819,6 +868,8 @@ else
   PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
   EMAIL_DOMAINS="gmail.com"
   ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""; OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""; ADAPTER_VAL="fake"
+  MINIMAX_KEY=""; MINIMAX_BASE_URL_VAL=""; DEEPSEEK_KEY=""; DEEPSEEK_BASE_URL_VAL=""
+  FALLBACK_LLM_VAL=""
   TAVILY_KEY=""; RETRIEVER_VAL="tavily"
   GOOGLE_ID=""; GOOGLE_SECRET=""
   load_existing_llm_config "packages/ai-engine/.env"
@@ -865,11 +916,19 @@ ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
 ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_VAL}
 OPENAI_API_KEY=${OPENAI_KEY}
 OPENAI_BASE_URL=${OPENAI_BASE_URL_VAL}
-ANTHROPIC_MODEL=${SMART_LLM_VAL#*:}
+MINIMAX_API_KEY=${MINIMAX_KEY}
+MINIMAX_BASE_URL=${MINIMAX_BASE_URL_VAL}
+DEEPSEEK_API_KEY=${DEEPSEEK_KEY}
+DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL_VAL}
+RESEARCH_LLM=${RESEARCH_LLM_VAL}
+UTILITY_LLM=${UTILITY_LLM_VAL}
+FALLBACK_LLM=${FALLBACK_LLM_VAL}
+# Legacy mirrors; runtime resolution prefers RESEARCH/UTILITY/FALLBACK.
 SMART_LLM=${SMART_LLM_VAL}
 FAST_LLM=${FAST_LLM_VAL}
 STRATEGIC_LLM=${STRATEGIC_LLM_VAL}
 BRIEF_LLM=${BRIEF_LLM_VAL}
+LLM_FALLBACK_LLM=${FALLBACK_LLM_VAL:-${LLM_FALLBACK_LLM_VAL:-}}
 RETRIEVER=${RETRIEVER_VAL}
 GH_TOKEN=
 WORKER_LEASE_SECONDS=60

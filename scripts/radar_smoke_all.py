@@ -66,15 +66,11 @@ SMOKE_MATRIX: list[dict[str, Any]] = [
         "config": {},
     },
     {
-        "label": "GitHub Tracked Repos (github_tracked)",
-        "fetcher_name": "github_tracked",
+        "label": "GitHub Curated Repositories (github/repos)",
+        "fetcher_name": "github",
         "config": {
+            "type": "repos",
             "repos": ["anthropics/claude-code", "openai/codex", "google-gemini/gemini-cli"],
-            "lookback_days": 1,
-            "max_items_per_repo": 5,
-            "include_issues": True,
-            "include_prs": True,
-            "include_releases": True,
         },
     },
     {

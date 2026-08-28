@@ -149,7 +149,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: deep_research_test_py
+          POSTGRES_DB: deep_research_e2e
         ports:
           - 5432:5432
         options: >-
@@ -159,7 +159,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deep_research_test_py
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deep_research_e2e
       E2E: "1"
       AI_ENGINE_ADAPTER: fake
       JOB_RUNNER_BACKEND: db
@@ -190,7 +190,7 @@ jobs:
       - name: Python unit tests
         working-directory: packages/ai-engine
         # 排除 e2e（CI 上一条 step 单独跑）和 requires_db（需要专用 test DB，本 step
-        # 复用 deep_research_test_py 跑 e2e 后已 truncate，跑 requires_db 会踩到别的状态；
+        # 复用 deep_research_e2e 跑 e2e 后已 truncate，跑 requires_db 会踩到别的状态；
         # 真要跑 requires_db 在本地 `uv run pytest -m requires_db`）。
         run: E2E=0 uv run pytest -q -m "not e2e and not requires_db"
         timeout-minutes: 5
