@@ -134,29 +134,33 @@ def _require_internal_token(request: Request) -> None:
         )
 
 
-async def _has_active_run(pool: Any) -> bool:
-    """Return True if any radar_sync_runs row is currently ``running``.
-
-    Used by POST /sync and POST /digest/regenerate to refuse double-triggering
-    while a previous batch is still in flight (P1-A2 防重复). ``running`` rows
-    with a stale lease are not cleaned here — that's the reaper's job; the
-    Admin console surfaces their age separately.
-    """
+async def reap_stale_radar_runs(pool: Any) -> int:
+    """Fail radar runs whose lease expired or predates lease support."""
     async with pool.connection() as conn:
-        # radar_sync_runs is a batch table, not a DbJobStore queue, so the
-        # generic worker reaper cannot recover rows left behind by a process
-        # restart. Reap only rows with no lease/heartbeat and a conservative
-        # age threshold before enforcing the active-run guard.
-        await conn.execute(
+        rows = await (
+            await conn.execute(
             'UPDATE "radar_sync_runs" SET "status" = \'failed\', '
             '"errorCode" = \'STALE_RUN_REAPED\', '
             '"errorMessage" = \'reaped stale running radar run\', '
             '"completedAt" = now(), "elapsedMs" = '
-            '(EXTRACT(EPOCH FROM (now() - "createdAt")) * 1000)::int '
+            '(EXTRACT(EPOCH FROM (now() - "createdAt")) * 1000)::int, '
+            '"lockedBy" = NULL, "leaseExpiresAt" = NULL, "heartbeatAt" = NULL '
             'WHERE "status" = \'running\' '
-            'AND "heartbeatAt" IS NULL AND "leaseExpiresAt" IS NULL '
-            'AND "createdAt" < now() - interval \'15 minutes\''
-        )
+            'AND ('
+            '  "leaseExpiresAt" < now() '
+            '  OR ("leaseExpiresAt" IS NULL '
+            '      AND "createdAt" < now() - interval \'15 minutes\')'
+            ') RETURNING "id"'
+            )
+        ).fetchall()
+        await conn.commit()
+    return len(rows)
+
+
+async def _has_active_run(pool: Any) -> bool:
+    """Return True after reaping expired or legacy running rows."""
+    await reap_stale_radar_runs(pool)
+    async with pool.connection() as conn:
         row = await (
             await conn.execute(
                 'SELECT 1 FROM "radar_sync_runs" '
@@ -217,18 +221,10 @@ async def enqueue_radar_enrichment(
     pool: Any = Depends(_pool),
     _token: None = Depends(_require_internal_token),
 ) -> dict[str, Any]:
-    """Re-run deep-dive enrichment for candidates promoted by Admin."""
+    """Queue explicit deep-dive enrichment for selected radar candidates."""
     summary_ids = tuple(dict.fromkeys(body.summary_ids))
 
     async def _run_body() -> None:
-        async with pool.connection() as conn:
-            placeholders = ",".join(["%s"] * len(summary_ids))
-            await conn.execute(
-                'UPDATE "summaries" SET "originalMeta" = NULL, "highlights" = NULL, '
-                '"updatedAt" = now() WHERE "id" IN (' + placeholders + ')',
-                summary_ids,
-            )
-            await conn.commit()
         enriched = await run_enrichment_for_pending(
             pool,
             limit=len(summary_ids),
@@ -246,7 +242,7 @@ async def enqueue_radar_enrichment(
                 rescore=True,
             )
         structlog.get_logger("ai_engine.radar").info(
-            "ai-engine.radar.promoted_enrichment_done",
+            "ai-engine.radar.manual_enrichment_done",
             requested=len(summary_ids),
             enriched=enriched,
             rescored=rescored,
@@ -312,11 +308,6 @@ async def _run_background(
             distilled_default=monitor.default_count,
             must_read=monitor.must_read_count,
             alerts=alerts,
-        )
-        log.info(
-            "ai-engine.radar.tracked_repo_done",
-            request_id=request_id,
-            **pipeline_result.tracked_repo_result,
         )
         log.info(
             "ai-engine.radar.enrich_done",
@@ -390,6 +381,12 @@ async def run_radar_sync_job(
     source_ids: set[str] | None = None,
 ) -> None:
     """Shared radar task used by the cron loop and host-level script."""
+    if await _has_active_run(pool):
+        structlog.get_logger("ai_engine.radar").info(
+            "ai-engine.radar.sync_skipped_active_run",
+            request_id=request_id,
+        )
+        return
     await _run_background(
         pool=pool,
         adapter=adapter,
@@ -513,4 +510,4 @@ async def retry_sync(
     return RadarSyncAccepted(runId=run_id, requestId=request_id)
 
 
-__all__ = ["router", "run_radar_sync_job"]
+__all__ = ["router", "reap_stale_radar_runs", "run_radar_sync_job"]

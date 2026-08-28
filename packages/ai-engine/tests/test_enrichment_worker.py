@@ -36,6 +36,8 @@ class _Connection:
 
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
         self.executions.append((sql, params))
+        if "pg_try_advisory_lock" in sql:
+            return _Cursor(row={"acquired": True})
         if "SELECT" in sql and "canonicalUrl" in sql:
             return _Cursor(rows=self.rows)
         if "SELECT" in sql and "originalMarkdown" in sql:
@@ -75,6 +77,56 @@ def _clean_article() -> str:
     )
 
 
+def test_unwrap_arxiv_equation_tables() -> None:
+    markdown = "\n".join([
+        "|  | $\\displaystyle P_{d}$ | $\\displaystyle=\\{p_{1},\\ldots,p_{m}\\},$ |  | (1) |",
+        "| --- | --- | --- | --- | --- |",
+        "|  | $\\displaystyle P$ | $\\displaystyle=\\bigcup_{d\\in\\mathcal{D}}\\mathcal{P}_{d}.$ |  |  |",
+    ])
+
+    normalized = ew._unwrap_arxiv_equation_tables(markdown)
+
+    assert "| --- |" not in normalized
+    assert "$$\n" in normalized
+    assert "\\tag{1}" in normalized
+    assert "\\bigcup" in normalized
+
+
+def test_drops_empty_arxiv_table_shell() -> None:
+    normalized = ew._unwrap_arxiv_equation_tables("|  |\n| --- |\n\n![Figure](https://example.com/figure.png)")
+
+    assert "| --- |" not in normalized
+    assert "![Figure]" in normalized
+
+
+def test_clean_arxiv_html_markdown_repairs_template_placeholders() -> None:
+    cleaned = ew._clean_arxiv_html_markdown(
+        "推荐五款最值得买的 s；推荐深圳最值得去的五家 s；Recommend the top five most worth-buying s",
+        "",
+    )
+
+    assert "推荐五款最值得买的 [产品]" in cleaned
+    assert "推荐深圳最值得去的五家 [商家]" in cleaned
+    assert "Recommend the top five most worth-buying [product]" in cleaned
+    assert "worth-buying s" not in cleaned
+
+
+def test_clean_arxiv_html_markdown_removes_model_instruction_artifact() -> None:
+    cleaned = ew._clean_arxiv_html_markdown(
+        "## Appendix A Prompt\n\n"
+        "{{ content | trim }} You FIRST think about the reasoning process as an "
+        "internal monologue and then provide the final answer. The reasoning "
+        "process MUST BE enclosed within <think> </think> tags. The final answer "
+        "MUST BE put in \\boxed {}.\n\n"
+        "## Appendix B\n\nThe paper continues here.",
+        "",
+    )
+
+    assert "FIRST think" not in cleaned
+    assert "{{ content" not in cleaned
+    assert "The paper continues here." in cleaned
+
+
 def test_parse_github_item_url() -> None:
     assert ew._parse_github_item_url(
         "https://github.com/acme/agent/issues/42"
@@ -88,6 +140,48 @@ def test_parse_github_item_url() -> None:
     assert ew._parse_github_item_url("https://github.com/acme/agent") is None
     assert ew._parse_github_item_url("https://example.com/x") is None
     assert ew._parse_github_item_url("") is None
+
+
+def test_repo_activity_digest_url_detection() -> None:
+    assert ew._is_repo_activity_digest_url(
+        "https://github.com/acme/agent?digest=2026-08-21"
+    )
+    assert not ew._is_repo_activity_digest_url(
+        "https://github.com/acme/agent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_web_highlights_have_deterministic_fallback_on_llm_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_generate(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(ew, "generate_text", fail_generate)
+    result = await ew._generate_web_highlights(
+        "第一段是足够长的正文内容，用于保留真实来源信息并提供可读的回退摘要。\n\n"
+        "第二段继续说明实现方式、限制和实际影响，避免在模型失败时丢失所有信息。\n\n"
+        "第三段给出结果和后续方向，内容来自原文而不是模型臆测。",
+        "测试文章",
+    )
+
+    assert result is not None
+    assert result["fallback"] is True
+    assert len(result["highlights"]) == 3
+
+
+async def test_enrich_github_candidate_skips_repo_activity_digest() -> None:
+    pool = _Pool(row=None)
+
+    result = await ew.enrich_github_candidate(
+        pool,
+        summary_id="digest-1",
+        canonical_url="https://github.com/acme/agent?digest=2026-08-21",
+    )
+
+    assert result is None
+    assert pool.connection_value.executions == []
 
 
 def test_github_item_meta_includes_bounded_body_and_comment_previews() -> None:
@@ -245,6 +339,191 @@ async def test_enrich_web_candidate_uses_clean_cached_content_on_fetch_failure(
     assert len(pool.connection_value.updates) == 1
 
 
+def test_zread_scoring_markdown_prefers_all_remote_pages_over_readme() -> None:
+    markdown = ew._zread_scoring_markdown(
+        {
+            "pages": [
+                {
+                    "path": "1-overview",
+                    "title": "Overview",
+                    "content": "Project overview and architecture.",
+                },
+                {
+                    "path": "2-installation",
+                    "title": "Installation",
+                    "content": "Detailed installation instructions.",
+                },
+            ],
+        },
+        "# README\nFallback only",
+    )
+
+    assert "# Overview" in markdown
+    assert "# Installation" in markdown
+    assert "Fallback only" not in markdown
+
+
+def test_scrub_zread_payload_decodes_nested_unicode_escapes() -> None:
+    payload = ew._scrub_zread_payload({
+        "pages": [{
+            "title": r"Extensibility \u0026 Protocol",
+            "section": "Deep Dive",
+            "content": r"Use \u003ccomponent\u003e here.",
+        }],
+    })
+
+    assert payload["pages"][0]["title"] == "Extensibility & Protocol"
+    assert payload["pages"][0]["content"] == "Use <component> here."
+
+
+async def test_enrich_github_candidate_persists_zread_pages_as_original_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [
+        {
+            "path": "1-overview",
+            "title": "Overview",
+            "content": "OpenViking architecture and context database. " * 30,
+        },
+        {
+            "path": "2-installation",
+            "title": "Installation",
+            "content": "OpenViking installation and deployment guide. " * 30,
+        },
+    ]
+    pool = _Pool(row={
+        "id": "repo-1",
+        "title": "volcengine/OpenViking",
+        "interpretation": "repo",
+        "originalMarkdown": "old readme",
+        "originalMeta": {
+            "zread": {
+                "provider": "zread-remote",
+                "repoHeadSha": "abc123",
+                "commitSha": "indexed456",
+                "parserVersion": 4,
+                "status": "complete",
+                "pageCount": 2,
+                "expectedPageCount": 2,
+                "pages": pages,
+            },
+        },
+        "tldr": None,
+        "highlights": None,
+        "repoSummary": None,
+    })
+
+    async def fake_repo_meta(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"defaultBranch": "main", "stars": 10_000}
+
+    async def fake_head(*args: Any, **kwargs: Any) -> str:
+        return "abc123"
+
+    async def fake_tree(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return [{"path": "README.md", "type": "blob", "size": 100}]
+
+    async def fake_readme(*args: Any, **kwargs: Any) -> str:
+        return "# README\nFallback only"
+
+    async def fake_key_files(*args: Any, **kwargs: Any) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setenv("ZREAD_CLI_ENABLED", "0")
+    monkeypatch.setenv("GITHUB_REPO_SUMMARY_LLM_ENABLED", "0")
+    monkeypatch.setattr(ew, "_fetch_repo_meta", fake_repo_meta)
+    monkeypatch.setattr(ew, "_fetch_repo_head_sha", fake_head)
+    monkeypatch.setattr(ew, "_fetch_repo_tree", fake_tree)
+    monkeypatch.setattr(ew, "_fetch_repo_readme", fake_readme)
+    monkeypatch.setattr(ew, "_fetch_key_files", fake_key_files)
+
+    result = await ew.enrich_github_candidate(
+        pool,
+        summary_id="repo-1",
+        canonical_url="https://github.com/volcengine/OpenViking",
+    )
+
+    assert result is not None
+    sql, params = pool.connection_value.updates[-1]
+    assert '"originalMarkdown" = %s' in sql
+    assert "OpenViking architecture" in params[1]
+    assert "OpenViking installation" in params[1]
+    assert "Fallback only" not in params[1]
+
+
+async def test_enrich_github_candidate_uses_cli_for_remote_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(row={
+        "id": "repo-partial",
+        "title": "acme/agent",
+        "interpretation": "repo",
+        "originalMarkdown": "old",
+        "originalMeta": None,
+        "tldr": None,
+        "highlights": None,
+        "repoSummary": None,
+    })
+
+    async def fake_repo_meta(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"defaultBranch": "main"}
+
+    async def fake_head(*args: Any, **kwargs: Any) -> str:
+        return "head123"
+
+    async def fake_tree(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    async def fake_readme(*args: Any, **kwargs: Any) -> str:
+        return "# README\nFallback only"
+
+    async def fake_key_files(*args: Any, **kwargs: Any) -> dict[str, str]:
+        return {}
+
+    async def fake_remote(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "provider": "zread-remote",
+            "status": "partial",
+            "pageCount": 1,
+            "expectedPageCount": 2,
+            "pages": [{"path": "1-overview.md", "content": "Remote page"}],
+        }
+
+    async def fake_cli(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "provider": "zread-cli",
+            "status": "complete",
+            "pageCount": 2,
+            "expectedPageCount": 2,
+            "pages": [{
+                "path": "1-overview.md",
+                "section": "Get Started",
+                "content": "Complete page",
+            }],
+        }
+
+    from ai_engine.radar import zread_cli, zread_remote
+
+    monkeypatch.setenv("ZREAD_CLI_ENABLED", "1")
+    monkeypatch.setenv("GITHUB_REPO_SUMMARY_LLM_ENABLED", "0")
+    monkeypatch.setattr(ew, "_fetch_repo_meta", fake_repo_meta)
+    monkeypatch.setattr(ew, "_fetch_repo_head_sha", fake_head)
+    monkeypatch.setattr(ew, "_fetch_repo_tree", fake_tree)
+    monkeypatch.setattr(ew, "_fetch_repo_readme", fake_readme)
+    monkeypatch.setattr(ew, "_fetch_key_files", fake_key_files)
+    monkeypatch.setattr(zread_remote, "fetch_zread_wiki", fake_remote)
+    monkeypatch.setattr(zread_cli, "generate_zread_wiki", fake_cli)
+
+    result = await ew.enrich_github_candidate(
+        pool,
+        summary_id="repo-partial",
+        canonical_url="https://github.com/acme/agent",
+    )
+
+    assert result is not None
+    assert result["zread"]["provider"] == "zread-cli"
+    assert result["zread"]["pages"][0]["section"] == "Get Started"
+
+
 async def test_enrich_arxiv_uses_cached_abstract_when_pdf_is_too_large(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -341,12 +620,24 @@ async def test_run_enrichment_for_pending_dispatches_all_default_kinds(
 ) -> None:
     kinds = ("github_repo", "arxiv", "github_other", "github_release", "rss", "web_share")
     pool = _Pool(rows=[
-        {"id": f"id-{kind}", "canonicalUrl": f"https://example.com/{kind}", "originalKind": kind}
+        {
+            "id": f"id-{kind}",
+            "canonicalUrl": f"https://example.com/{kind}",
+            "originalKind": kind,
+            "distilledTier": "deep_read",
+        }
         for kind in kinds
     ])
     calls: list[str] = []
 
-    async def fake_enrich(pool: Any, *, summary_id: str, canonical_url: str) -> dict[str, Any]:
+    async def fake_enrich(
+        pool: Any,
+        *,
+        summary_id: str,
+        canonical_url: str,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        del force
         calls.append(summary_id.removeprefix("id-"))
         return {"ok": True}
 
@@ -368,6 +659,7 @@ async def test_run_enrichment_for_pending_filters_current_sync_runs(
             "id": "id-rss",
             "canonicalUrl": "https://example.com/rss",
             "originalKind": "rss",
+            "distilledTier": "collection",
         },
     ])
 
@@ -390,18 +682,80 @@ async def test_run_enrichment_for_pending_filters_current_sync_runs(
     )
 
     assert succeeded == 1
-    sql, params = pool.connection_value.executions[0]
+    sql, params = next(
+        execution
+        for execution in pool.connection_value.executions
+        if "canonicalUrl" in execution[0]
+    )
+    assert '"distilledTier" IN (\'collection\', \'deep_read\')' in sql
     assert '"syncRunId" IN (%s,%s)' in sql
     assert '"share_submissions"' in sql
     assert params == ("rss", "run-a", "run-b", 10)
+
+
+async def test_github_failed_zread_uses_retry_backoff_in_automatic_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ew, "GITHUB_ENRICHMENT_RETRY_SECONDS", 604800)
+    pool = _Pool(rows=[])
+
+    succeeded = await ew.run_enrichment_for_pending(
+        pool,
+        limit=10,
+        source_kinds=("github_repo",),
+        sync_run_ids=("run-a",),
+    )
+
+    assert succeeded == 0
+    sql, params = next(
+        execution
+        for execution in pool.connection_value.executions
+        if "canonicalUrl" in execution[0]
+    )
+    assert "NOT IN ('complete', 'partial', 'failed')" in sql
+    assert "'generatedAt'" in sql
+    assert "make_interval(secs => 604800)" in sql
+    assert params == ("github_repo", "run-a", 10)
+
+
+async def test_force_enrichment_bypasses_github_failure_backoff() -> None:
+    pool = _Pool(rows=[])
+
+    succeeded = await ew.run_enrichment_for_pending(
+        pool,
+        limit=10,
+        source_kinds=("github_repo",),
+        summary_ids=("repo-1",),
+        force=True,
+    )
+
+    assert succeeded == 0
+    sql, params = next(
+        execution
+        for execution in pool.connection_value.executions
+        if "canonicalUrl" in execution[0]
+    )
+    assert "AND TRUE" in sql
+    assert "'generatedAt'" not in sql
+    assert params == ("github_repo", "repo-1", 10)
 
 
 async def test_run_enrichment_for_pending_isolates_exceptions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pool = _Pool(rows=[
-        {"id": "id-a", "canonicalUrl": "https://example.com/a", "originalKind": "rss"},
-        {"id": "id-b", "canonicalUrl": "https://example.com/b", "originalKind": "web_share"},
+        {
+            "id": "id-a",
+            "canonicalUrl": "https://example.com/a",
+            "originalKind": "rss",
+            "distilledTier": "deep_read",
+        },
+        {
+            "id": "id-b",
+            "canonicalUrl": "https://example.com/b",
+            "originalKind": "web_share",
+            "distilledTier": "collection",
+        },
     ])
 
     async def failing(pool: Any, *, summary_id: str, canonical_url: str) -> dict[str, Any]:

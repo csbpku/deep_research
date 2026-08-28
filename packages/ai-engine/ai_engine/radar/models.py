@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 SourceType = Literal[
-    "github", "github_trending", "github_tracked", "arxiv", "rss",
+    "github", "github_trending", "arxiv", "rss",
     "hackernews", "reddit", "lobsters", "devto",
     "producthunt", "sitemap_watch", "vendor_guides", "wechat",
     "github_topic_search", "huggingface_models", "huggingface_papers",
@@ -42,14 +42,16 @@ class RadarCandidate:
     # Keep this JSON-like so source fetchers can add fields without a schema
     # migration; the persisted score contains the final audited snapshot.
     repo_signals: dict[str, Any] = field(default_factory=dict)
+    source_diagnostic: tuple[str, str] | None = None
+    # Legacy fields kept only so historical fixtures and old serialized
+    # candidates remain readable. No active source populates or consumes them.
     repo_activity: "RepoActivity | None" = None
     repo_snapshot: "RepoSnapshot | None" = None
-    source_diagnostic: tuple[str, str] | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class RepoSnapshot:
-    """Mutable metadata for a GitHub repository."""
+    """Legacy tracked-repo snapshot DTO; not used by the active pipeline."""
 
     owner_repo: str
     description: str | None = None
@@ -64,7 +66,7 @@ class RepoSnapshot:
 
 @dataclass(slots=True, frozen=True)
 class RepoActivityItem:
-    """One issue/PR/release inside a tracked-repo daily digest."""
+    """Legacy tracked-repo activity DTO; not used by the active pipeline."""
 
     kind: Literal["issue", "pr", "release"]
     number: str
@@ -83,7 +85,7 @@ class RepoActivityItem:
 
 @dataclass(slots=True, frozen=True)
 class RepoActivity:
-    """Structured recent activity for one tracked GitHub repo."""
+    """Legacy tracked-repo activity DTO; not used by the active pipeline."""
 
     repo: str
     issues: tuple[RepoActivityItem, ...] = field(default_factory=tuple)

@@ -52,6 +52,8 @@ from ai_engine.scoring.scoring_profiles import (
     ScoringProfile,
     active_profile,
 )
+from ai_engine.llm.config import resolve_spec
+from ai_engine.llm.usage_audit import record_llm_degraded
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
 
@@ -244,6 +246,7 @@ class DistilledScore:
     quality_score: float | None = None    # source-neutral content quality
     team_value_score: float | None = None # expected usefulness to the target team
     ranking_score: float | None = None    # final cross-source ordering score
+    tier_score: float | None = None       # score actually used to assign the reading tier
     source_bonus: float = 0.0             # small, explicit product-priority adjustment
     repo_signal_bonus: float = 0.0        # bounded GitHub evidence calibration
     repo_signals: dict[str, Any] = field(default_factory=dict)
@@ -298,6 +301,8 @@ class DistilledScore:
             result["teamValueScore"] = self.team_value_score
         if self.ranking_score is not None:
             result["rankingScore"] = self.ranking_score
+        if self.tier_score is not None:
+            result["tierScore"] = self.tier_score
         if self.source_bonus:
             result["sourceBonus"] = self.source_bonus
         if self.repo_signal_bonus:
@@ -310,22 +315,26 @@ class DistilledScore:
 def build_distilled_score_reason(score: DistilledScore) -> str:
     """Render one authoritative explanation for the persisted score.
 
-    Keep the user-facing reason aligned with the actual ranking score. The
-    legacy heuristic fields are intentionally not mixed in here because they
-    describe a different scoring system.
+    Keep the user-facing reason aligned with the score that actually assigned
+    the reading tier. Ranking score remains available for ordering diagnostics.
     """
     dimensions = ", ".join(
         f"{name}={value}" for name, value in score.dimension_scores.items()
     )
+    tier_score = score.tier_score if score.tier_score is not None else score.total
     ranking = score.ranking_score
-    if ranking is None:
-        ranking = score.effective_total if score.effective_total is not None else score.total
+    ranking_text = (
+        f"；排序分={ranking:.1f}/100"
+        if ranking is not None and ranking != tier_score
+        else ""
+    )
     validation = (
         f", 验证广度={score.validation_breadth}"
         if score.validation_breadth is not None else ""
     )
     return (
-        f"Distilled v{score.version}: 排序分={ranking:.1f}/100；"
+        f"Distilled v{score.version}: 分层分={tier_score:.1f}/100"
+        f"{ranking_text}；"
         f"分层={score.tier}；"
         f"维度: {dimensions}{validation}；"
         f"弱项: {score.weak_point}"
@@ -607,11 +616,7 @@ async def anthropic_scorer(
 """
     from ai_engine.llm.client import generate_text
 
-    llm_spec = (
-        os.environ.get("BRIEF_LLM")
-        or os.environ.get("SMART_LLM")
-        or "anthropic:claude-haiku-4-5"
-    )
+    llm_spec = resolve_spec("utility")
     result = await generate_text(
         llm_spec=llm_spec,
         system_prompt=SYSTEM_PROMPT,
@@ -712,13 +717,29 @@ def _coerce_bool(value: Any) -> bool:
 
 
 def _parse_llm_response(raw: str) -> dict[str, Any]:
-    """Parse LLM JSON response, stripping markdown fences if present."""
+    """Parse JSON from provider responses, including reasoning wrappers.
+
+    Some OpenAI-compatible reasoning models return a ``<think>`` block before
+    the requested JSON even when thinking is disabled.  That block is not part
+    of the scoring contract and must be removed before decoding.
+    """
     text = raw.strip()
+    text = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.I | re.S)
     if text.startswith("```"):
         lines = text.split("\n")
         lines = [ln for ln in lines if not ln.strip().startswith("```")]
         text = "\n".join(lines).strip()
-    result: dict[str, Any] = json.loads(text)
+    try:
+        result: dict[str, Any] = json.loads(text)
+    except json.JSONDecodeError:
+        # Be tolerant of a short provider preamble while still requiring a
+        # complete JSON object; malformed/truncated responses remain errors
+        # and continue through the normal retry/fallback path.
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        result = json.loads(text[start : end + 1])
     return result
 
 
@@ -785,6 +806,65 @@ def _normalize_hard_veto(parsed: dict[str, Any]) -> str | None:
         if candidate in {VETO_MISMATCH, VETO_UNSAFE}:
             return candidate
     return None
+
+
+_MISMATCH_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.+-]{2,}", re.IGNORECASE)
+_MISMATCH_STOPWORDS = frozenset({
+    "about", "after", "agent", "agents", "from", "github", "into", "latest",
+    "model", "models", "project", "repo", "repository", "that", "their", "this",
+    "using", "with",
+})
+
+
+def _mismatch_veto_refuted(
+    *,
+    evidence_text: str | None,
+    source_type: str | None,
+    url: str | None,
+) -> bool:
+    """Return True when source evidence contradicts a mismatch hard veto.
+
+    A hard zero is only appropriate for a severe title/body mismatch. Long
+    documents with an exact project/title token overlap are not severe
+    mismatches, even if an LLM mistakes navigation, license, or security
+    sections for the whole document.
+    """
+    title, separator, body = (evidence_text or "").partition("\n")
+    if not separator or len(body.strip()) < 1_000:
+        return False
+
+    normalized_title = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    normalized_body = re.sub(r"[^a-z0-9]+", " ", body.lower())
+    if len(normalized_title) >= 8 and f" {normalized_title} " in f" {normalized_body} ":
+        return True
+
+    title_tokens = {
+        token.lower()
+        for token in _MISMATCH_TOKEN_RE.findall(title)
+        if token.lower() not in _MISMATCH_STOPWORDS and not token.isdigit()
+    }
+    body_tokens = {token.lower() for token in _MISMATCH_TOKEN_RE.findall(body)}
+
+    normalized_source = (source_type or "").strip().lower()
+    if normalized_source.startswith("github") or "github.com" in (url or "").lower():
+        try:
+            parts = [
+                part for part in urlsplit(url or "").path.strip("/").split("/")
+                if part
+            ]
+        except ValueError:
+            parts = []
+        if len(parts) >= 2:
+            repo_token = parts[1].removesuffix(".git").lower()
+            if len(repo_token) >= 3 and repo_token in body_tokens:
+                return True
+            title_tokens.add(repo_token)
+
+    if not title_tokens:
+        return False
+    overlap = title_tokens & body_tokens
+    required = 1 if len(title_tokens) == 1 else 2
+    return len(overlap) >= required and len(overlap) / len(title_tokens) >= 0.35
 
 
 def _normalize_direct_relevance(parsed: dict[str, Any]) -> int | None:
@@ -912,8 +992,6 @@ def _source_priority_bonus(source_type: str | None) -> float:
     irrelevant content because relevance caps are applied afterwards.
     """
     normalized = (source_type or "").strip().lower()
-    if normalized == "github_tracked":
-        return 4.0
     if normalized.startswith("github"):
         return 3.0
     if normalized in {"rss", "devto", "vendor_news"}:
@@ -996,6 +1074,12 @@ def compute_score(
     risk_flag = _normalize_risk_flag(parsed)
     repost_flag = _normalize_repost_flag(parsed)
     hard_veto = _normalize_hard_veto(parsed)
+    if hard_veto == VETO_MISMATCH and _mismatch_veto_refuted(
+        evidence_text=evidence_text,
+        source_type=source_type,
+        url=url,
+    ):
+        hard_veto = None
     direct_relevance = _normalize_direct_relevance(parsed)
     relevance_evidence = _normalize_relevance_evidence(parsed)
     scope_breadth = _normalize_scope_breadth(parsed)
@@ -1037,6 +1121,7 @@ def compute_score(
             quality_score=0.0,
             team_value_score=0.0,
             ranking_score=0.0,
+            tier_score=0.0,
             weak_point=str(hard_veto),
             veto=str(hard_veto),
             risk_flag=None,
@@ -1310,6 +1395,7 @@ def compute_score(
         quality_score=quality_score,
         team_value_score=team_value_score,
         ranking_score=round(ranking_score, 2),
+        tier_score=round(tier_score, 2),
         source_bonus=source_bonus,
         repo_signal_bonus=repo_signal_bonus,
         repo_signals=dict(structured_signals or {}),
@@ -1336,6 +1422,7 @@ def default_score(profile: ScoringProfile | None = None) -> DistilledScore:
         quality_score=0.0,
         team_value_score=0.0,
         ranking_score=0.0,
+        tier_score=0.0,
         weak_point="default fallback (no LLM)",
         veto=None,
         risk_flag=None,
@@ -1402,21 +1489,23 @@ async def score_with_llm(
     Passes source_type / url / published_at to the LLM prompt so the
     scorer has temporal and source context.
 
-    Retries up to _LLM_MAX_RETRIES times on failure, with _LLM_RETRY_DELAY
-    seconds between attempts. Falls back to default_score() only if all
-    retries are exhausted.
+    The production scorer delegates transport retry and model fallback to
+    ``llm.client.generate_text``. Keeping another retry loop here would
+    repeat the complete primary/fallback route and amplify outages. A custom
+    scorer remains retryable for test and extension compatibility.
     """
     profile = profile or active_profile()
+    llm_spec = resolve_spec("utility")
     if scorer is None:
         from ai_engine.llm.client import llm_is_configured
 
-        llm_spec = (
-            os.environ.get("BRIEF_LLM")
-            or os.environ.get("SMART_LLM")
-            or "anthropic:claude-haiku-4-5"
-        )
         if not llm_is_configured(llm_spec):
             logger.debug("distilled_scorer.fallback: selected LLM is not configured")
+            await record_llm_degraded(
+                operation="radar.distilled_score",
+                primary_model=llm_spec,
+                reason="primary_not_configured",
+            )
             return default_score(profile)
         # Use anthropic_scorer with full context
         async def _contextual_scorer(t: str, c: str) -> str:
@@ -1432,13 +1521,17 @@ async def score_with_llm(
     else:
         active_scorer = scorer
 
+    # ``anthropic_scorer`` already calls generate_text(), whose single retry
+    # policy is: primary -> primary retry -> fallback -> fallback retry.
+    # Do not wrap that complete route in another production retry loop.
+    outer_retry_enabled = scorer is not None
     attempt = 0
     while True:
         try:
             async with _score_semaphore():
                 raw = await active_scorer(title, content)
             parsed = _parse_llm_response(raw)
-            return compute_score(
+            result = compute_score(
                 parsed,
                 profile=profile,
                 source_type=source_type,
@@ -1446,12 +1539,72 @@ async def score_with_llm(
                 url=url,
                 structured_signals=structured_signals,
             )
+            if (
+                _normalize_hard_veto(parsed) == VETO_MISMATCH
+                and result.veto is None
+                and result.total == 0
+            ):
+                correction = (
+                    "[评分纠错] 确定性检查发现标题、来源与长正文存在明确重合。"
+                    "除非正文实际属于另一个主题，否则不得使用 "
+                    "title_content_mismatch；请重新阅读全文并返回完整七维评分。\n\n"
+                )
+                async with _score_semaphore():
+                    corrected_raw = await active_scorer(title, correction + content)
+                corrected = _parse_llm_response(corrected_raw)
+                corrected_result = compute_score(
+                    corrected,
+                    profile=profile,
+                    source_type=source_type,
+                    evidence_text=f"{title}\n{content}",
+                    url=url,
+                    structured_signals=structured_signals,
+                )
+                if (
+                    _normalize_hard_veto(corrected) == VETO_MISMATCH
+                    and corrected_result.veto is None
+                    and corrected_result.total == 0
+                ):
+                    logger.warning(
+                        "distilled_scorer.unverified_mismatch_not_persisted",
+                        extra={"source_type": source_type, "url": url},
+                    )
+                    await record_llm_degraded(
+                        operation="radar.distilled_score",
+                        primary_model=llm_spec,
+                        reason="unverified_mismatch",
+                    )
+                    return default_score(profile)
+                return corrected_result
+            return result
         except Exception as exc:
             rate_limited = _is_rate_limit_error(exc)
+            if not outer_retry_enabled:
+                logger.warning(
+                    "distilled_scorer.fallback",
+                    extra={
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:200],
+                        "attempts": 1,
+                        "rate_limited": rate_limited,
+                        "retry_owner": "llm_client",
+                    },
+                )
+                await record_llm_degraded(
+                    operation="radar.distilled_score",
+                    primary_model=llm_spec,
+                    reason="llm_failed_after_unified_route",
+                )
+                return default_score(profile)
             max_retries = (
                 _LLM_RATE_LIMIT_MAX_RETRIES if rate_limited else _LLM_MAX_RETRIES
             )
             if attempt >= max_retries:
+                failure_reason = (
+                    "invalid_json_response"
+                    if isinstance(exc, json.JSONDecodeError)
+                    else "llm_failed_after_retries"
+                )
                 logger.warning(
                     "distilled_scorer.fallback",
                     extra={
@@ -1460,6 +1613,11 @@ async def score_with_llm(
                         "attempts": attempt + 1,
                         "rate_limited": rate_limited,
                     },
+                )
+                await record_llm_degraded(
+                    operation="radar.distilled_score",
+                    primary_model=llm_spec,
+                    reason=failure_reason,
                 )
                 break
             delay = (

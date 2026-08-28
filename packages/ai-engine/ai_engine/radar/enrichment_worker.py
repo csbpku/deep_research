@@ -17,8 +17,8 @@ Design points:
 - arXiv HTML is fetched from ar5iv/arXiv first. This preserves paragraph,
   section, link, table, and math boundaries. PDF parsing is a fallback only;
   its text extraction is inherently lossy for multi-column papers.
-- Output JSON shape is intentionally small (≤16KB) so Postgres TOAST
-  isn't triggered and the BFF can ship it inline.
+- Repository metadata stays bounded for inline delivery; Zread pages are
+  retained as the complete generated document and may use Postgres TOAST.
 """
 
 from __future__ import annotations
@@ -31,15 +31,27 @@ import os
 import re as _re
 import re as _re_arxiv
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 import httpx
 
 from ai_engine.fetcher.safe_fetch import safe_fetch
 from ai_engine.llm.client import generate_text
+from ai_engine.llm.config import resolve_spec
+from ai_engine.radar.distilled_scorer import _parse_llm_response
 
 logger = logging.getLogger("ai_engine.radar.enrichment_worker")
+
+# A sync run and a detail-page retry may share the same process and database.
+# The process-local lock below protects the common in-process case.  The
+# PostgreSQL advisory lock in ``_cross_process_enrichment_lock`` protects the
+# more important case where a manual script and uvicorn run in different
+# processes.
+_ENRICHMENT_RUN_LOCK = asyncio.Lock()
+_ENRICHMENT_ADVISORY_LOCK_KEYS = (2147483629, 20260827)
 
 # Cap tree nodes to keep payloads bounded; 200 is the gpt-researcher
 # recommendation and matches Phase 2A design.
@@ -47,8 +59,15 @@ TREE_NODE_MAX = 200
 # Cap JSONB payload to ~16KB (well under Postgres TOAST).
 ORIGINAL_META_MAX_BYTES = 16_000
 README_MAX_CHARS = 120_000
-ARXIV_MARKDOWN_MAX_BYTES = 256 * 1024
+# Inline SVG figures are base64-encoded for the safe Markdown renderer. Keep
+# enough room for a full paper plus its vector figures; generic web content
+# retains the smaller limit in sync_runner.
+ARXIV_MARKDOWN_MAX_BYTES = 512 * 1024
 ENRICHMENT_VERSION = "2.0"
+GITHUB_ENRICHMENT_RETRY_SECONDS = max(
+    3_600,
+    int(os.environ.get("RADAR_GITHUB_ENRICHMENT_RETRY_SECONDS", "7200")),
+)
 
 # Files we mark as "key" in the file tree renderer.
 _KEY_FILES = frozenset({
@@ -265,7 +284,8 @@ async def _fetch_enrichment_row(pool: Any, summary_id: str) -> dict[str, Any]:
         row = await (
             await conn.execute(
                 'SELECT "id", "title", "interpretation", "originalMarkdown", '
-                '"originalMeta", "tldr", "highlights" FROM "summaries" WHERE "id" = %s',
+                '"originalMeta", "tldr", "highlights", "repoSummary" '
+                'FROM "summaries" WHERE "id" = %s',
                 (summary_id,),
             )
         ).fetchone()
@@ -277,8 +297,39 @@ async def _fetch_enrichment_row(pool: Any, summary_id: str) -> dict[str, Any]:
         keys = (
             "id", "title", "interpretation",
             "originalMarkdown", "originalMeta", "tldr", "highlights",
+            "repoSummary",
         )
         return dict(zip(keys, row))
+
+
+async def _downgrade_empty_web_candidate(pool: Any, summary_id: str) -> None:
+    """Keep an unextractable page as a summary-only skim candidate.
+
+    A deep-read tier is a claim that the source body was available.  If both
+    the cached and freshly fetched markdown are empty or bot shells, retaining
+    ``deep_read`` makes the UI promise content it cannot render and causes the
+    scheduler to retry the same impossible work forever.  Preserve the
+    interpretation, mark the row pending for admin diagnostics, and make the
+    public contract honest: skim exposes the summary only.
+    """
+    from ai_engine.radar.sync_runner import _is_low_quality_content
+
+    current = await _fetch_enrichment_row(pool, summary_id)
+    markdown = _strip_nul(str(current.get("originalMarkdown") or ""))
+    if markdown.strip() and not _is_low_quality_content(markdown):
+        return
+    async with pool.connection() as conn:
+        await conn.execute(
+            'UPDATE "summaries" SET '
+            '"distilledTier" = \'skim\', '
+            '"distilledMustRead" = false, '
+            '"tags" = CASE WHEN \'content_pending\' = ANY('
+            'COALESCE("tags", ARRAY[]::text[])) THEN "tags" '
+            'ELSE array_append(COALESCE("tags", ARRAY[]::text[]), '
+            '\'content_pending\') END, '
+            '"updatedAt" = now() WHERE "id" = %s',
+            (summary_id,),
+        )
 
 
 async def enrich_github_item_candidate(
@@ -407,6 +458,21 @@ async def enrich_web_candidate(
         ):
             new_markdown = fetched_markdown
 
+    # A successful HTTP response is not the same as usable article content.
+    # Do not persist an enrichmentVersion marker for an empty page shell: that
+    # would make the scheduler believe enrichment is complete forever.
+    if not new_markdown.strip() or _is_low_quality_content(new_markdown):
+        logger.warning(
+            "ai-engine.radar.enrichment.web_content_unusable",
+            extra={
+                "summary_id": summary_id,
+                "url": canonical_url,
+                "had_existing_markdown": bool(existing_markdown.strip()),
+                "fetched": doc is not None,
+            },
+        )
+        return None
+
     payload: dict[str, Any] = {
         "provider": "web",
         "enrichmentVersion": ENRICHMENT_VERSION,
@@ -486,6 +552,34 @@ def _strip_nul(value: str) -> str:
     return value.replace("\x00", "")
 
 
+_ZREAD_UNICODE_ESCAPE = _re.compile(r"\\+u([0-9a-fA-F]{4})")
+
+
+def _decode_zread_text(value: str) -> str:
+    """Decode nested literal unicode escapes in Zread text before storage."""
+    decoded = value
+    for _ in range(3):
+        repaired = _ZREAD_UNICODE_ESCAPE.sub(
+            lambda match: chr(int(match.group(1), 16)),
+            decoded,
+        )
+        if repaired == decoded:
+            break
+        decoded = repaired
+    return _strip_nul(decoded)
+
+
+def _scrub_zread_payload(obj: Any) -> Any:
+    """Normalize all string leaves in a Zread payload before persistence."""
+    if isinstance(obj, str):
+        return _decode_zread_text(obj)
+    if isinstance(obj, dict):
+        return {key: _scrub_zread_payload(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_zread_payload(value) for value in obj]
+    return obj
+
+
 def _scrub_dict_strings(obj: Any) -> Any:
     """Recursively scrub NUL bytes from string leaves inside a dict/list
     tree (used for ``sections`` payloads).
@@ -514,6 +608,14 @@ def _parse_repo_path(url: str) -> tuple[str, str] | None:
     if not m:
         return None
     return m.group(1), m.group(2)
+
+
+def _is_repo_activity_digest_url(url: str) -> bool:
+    """Return True for tracked-repo daily digest pseudo-pages."""
+    try:
+        return bool(parse_qs(urlsplit(url.strip()).query).get("digest"))
+    except (AttributeError, ValueError):
+        return False
 
 
 def _github_headers(token: str | None) -> dict[str, str]:
@@ -803,17 +905,55 @@ def _trim_to_budget(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _zread_scoring_markdown(
+    zread_payload: dict[str, Any] | None,
+    readme_text: str | None,
+) -> str:
+    """Build the authoritative GitHub reader/scoring body.
+
+    Public Zread pages are preferred and kept in page order. README is only
+    used when no readable Zread page exists.
+    """
+    parts: list[str] = []
+    pages = zread_payload.get("pages") if isinstance(zread_payload, dict) else None
+    if isinstance(pages, list):
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            content = _strip_nul(str(page.get("content") or "")).strip()
+            if not content:
+                continue
+            title = _strip_nul(str(page.get("title") or page.get("path") or "")).strip()
+            path = _strip_nul(str(page.get("path") or "")).strip()
+            heading = title or path
+            block = f"# {heading}\n\n" if heading else ""
+            if path and path != heading:
+                block += f"_Source: {path}_\n\n"
+            parts.append(block + content)
+    markdown = "\n\n---\n\n".join(parts).strip()
+    if not markdown and readme_text:
+        markdown = _strip_nul(readme_text).strip()
+    return markdown[:ARXIV_MARKDOWN_MAX_BYTES]
+
+
 async def enrich_github_candidate(
     pool: Any,
     *,
     summary_id: str,
     canonical_url: str,
+    force: bool = False,
 ) -> dict[str, Any] | None:
     """Enrich one GitHub repo candidate; returns the persisted meta or None.
 
     Returns None when the URL isn't a repo URL or enrichment failed.
     Caller is responsible for catching all exceptions (we log + return None).
     """
+    if _is_repo_activity_digest_url(canonical_url):
+        logger.info(
+            "ai-engine.radar.enrichment.github_digest_skipped",
+            extra={"summary_id": summary_id, "url": canonical_url},
+        )
+        return None
     parsed = _parse_repo_path(canonical_url)
     if not parsed:
         return None
@@ -822,7 +962,7 @@ async def enrich_github_candidate(
     existing_meta = current.get("originalMeta") if isinstance(current, dict) else None
     existing_zread = existing_meta.get("zread") if isinstance(existing_meta, dict) else None
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         repo_meta = await _fetch_repo_meta(client, owner, repo)
         default_branch = (repo_meta or {}).get("defaultBranch") or "main"
         head_sha = await _fetch_repo_head_sha(client, owner, repo, default_branch)
@@ -841,18 +981,29 @@ async def enrich_github_candidate(
     # Zread wiki first; only generate locally when the already-indexed public
     # pages are unavailable. A remote cache is keyed by its indexed commit.
     zread_payload = existing_zread if (
+        not force
+        and
         isinstance(existing_zread, dict)
         and (
             existing_zread.get("provider") == "zread-remote"
             and existing_zread.get("repoHeadSha") == head_sha
-            or (
-                existing_zread.get("provider") == "zread-cli"
-                and head_sha
-                and existing_zread.get("commitSha") == head_sha
-            )
+            and existing_zread.get("commitSha")
+            and existing_zread.get("parserVersion") == 4
         )
         and isinstance(existing_zread.get("pages"), list)
+        and (
+            existing_zread.get("status") == "complete"
+            or (
+                int(existing_zread.get("pageCount") or 0)
+                >= int(existing_zread.get("expectedPageCount") or 0)
+            )
+        )
     ) else None
+    # Remote retrieval and local generation are separate providers. Disabling
+    # the CLI must never disable fetching an already-published Zread wiki.
+    zread_cli_enabled = os.environ.get("ZREAD_CLI_ENABLED", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
     if zread_payload is None:
         try:
             from ai_engine.radar.zread_remote import fetch_zread_wiki
@@ -865,55 +1016,58 @@ async def enrich_github_candidate(
                 "ai-engine.radar.enrichment.zread_remote_failed",
                 extra={"summary_id": summary_id, "owner": owner, "repo": repo, "error": type(exc).__name__},
             )
-    if zread_payload is None and readme_text:
-        # Persist readable content before the optional long-running Zread
-        # process starts. This makes the detail page useful immediately and
-        # survives a provider quota error, process restart, or interruption.
-        payload["zread"] = {
-            "provider": "github-readme-fallback",
-            "status": "generating",
-            "repository": f"{owner}/{repo}",
-            "commitSha": head_sha,
-            "branch": default_branch,
-            "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "pageCount": 1,
-            "expectedPageCount": 1,
-            "truncated": False,
-            "truncatedPages": [],
-            "fallback": True,
-            "pages": [{
-                "path": "README.md",
-                "title": f"{owner}/{repo} README",
-                "content": readme_text[:README_MAX_CHARS],
-            }],
-        }
-        async with pool.connection() as conn:
-            await conn.execute(
-                'UPDATE "summaries" SET "originalMeta" = %s::jsonb, "updatedAt" = now() WHERE "id" = %s',
-                (json.dumps(payload, ensure_ascii=False), summary_id),
+    remote_payload = (
+        zread_payload
+        if isinstance(zread_payload, dict)
+        and zread_payload.get("provider") == "zread-remote"
+        else None
+    )
+    remote_page_count = int((remote_payload or {}).get("pageCount") or 0)
+    remote_expected_page_count = int((remote_payload or {}).get("expectedPageCount") or 0)
+    remote_complete = bool(
+        remote_payload
+        and (
+            remote_payload.get("status") == "complete"
+            or (
+                remote_page_count > 0
+                and remote_page_count >= remote_expected_page_count
             )
-            await conn.commit()
-    if zread_payload is None:
+        )
+    )
+    # A remote catalog with missing pages is not a usable document. Try the
+    # local generator for both "remote unavailable" and "remote partial";
+    # retain the remote partial only when the CLI cannot produce anything.
+    if zread_cli_enabled and not remote_complete:
         try:
             from ai_engine.radar.zread_cli import generate_zread_wiki
 
-            zread_payload = await generate_zread_wiki(
+            cli_payload = await generate_zread_wiki(
                 owner=owner,
                 repo=repo,
                 branch=default_branch,
                 commit_sha=head_sha,
             )
+            if isinstance(cli_payload, dict) and cli_payload.get("pages"):
+                zread_payload = cli_payload
+            elif remote_payload is not None:
+                zread_payload = remote_payload
         except Exception as exc:  # noqa: BLE001 - optional enrichment must not block radar
             error_message = str(exc).strip().replace("\n", " ")[-500:] or type(exc).__name__
-            zread_payload = {
-                "provider": "zread-cli",
-                "status": "failed",
-                "repository": f"{owner}/{repo}",
-                "commitSha": head_sha,
-                "branch": default_branch,
-                "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "error": error_message,
-            }
+            if remote_payload is not None:
+                zread_payload = {
+                    **remote_payload,
+                    "error": f"Zread CLI fallback failed; retained remote partial: {error_message}",
+                }
+            else:
+                zread_payload = {
+                    "provider": "zread-cli",
+                    "status": "failed",
+                    "repository": f"{owner}/{repo}",
+                    "commitSha": head_sha,
+                    "branch": default_branch,
+                    "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "error": error_message,
+                }
             logger.warning(
                 "ai-engine.radar.enrichment.zread_cli_failed",
                 extra={"summary_id": summary_id, "owner": owner, "repo": repo, "error": error_message},
@@ -922,7 +1076,19 @@ async def enrich_github_candidate(
     # unavailable or times out before writing its first page. README is the
     # authoritative GitHub source fallback; it is explicitly marked partial
     # so the UI never presents it as a complete generated wiki.
-    if zread_payload is None and readme_text:
+    if (
+        zread_payload is None
+        and isinstance(existing_zread, dict)
+        and isinstance(existing_zread.get("pages"), list)
+        and existing_zread.get("pages")
+    ):
+        # A transient Zread refresh failure must not destroy a previously
+        # usable wiki by replacing it with a one-page README fallback.
+        payload["zread"] = {
+            **existing_zread,
+            "error": "Zread refresh unavailable; retained the previous cached wiki",
+        }
+    elif zread_payload is None and readme_text:
         zread_payload = {
             "provider": "github-readme-fallback",
             "status": "partial",
@@ -970,12 +1136,19 @@ async def enrich_github_candidate(
             "error": "Zread unavailable; retained existing GitHub README fallback",
         }
     if zread_payload is not None:
-        payload["zread"] = zread_payload
+        # Normalize provider output at the persistence boundary. Remote
+        # Next.js flight data and local CLI drafts can each add another
+        # escaping layer; keeping this here prevents a later refresh from
+        # reintroducing visible ``\uXXXX`` text after a historical backfill.
+        payload["zread"] = _scrub_zread_payload(zread_payload)
 
     # Phase 2D: AI-written summary (500 words, styled after deepwiki.com's
     # Overview + What Is sections). Best-effort, doesn't break meta write.
-    repo_summary: str | None = None
-    if readme_text:
+    repo_summary = str(current.get("repoSummary") or "").strip() or None
+    repo_summary_llm_enabled = os.environ.get(
+        "GITHUB_REPO_SUMMARY_LLM_ENABLED", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if readme_text and repo_summary_llm_enabled:
         try:
             repo_summary = await _generate_repo_summary(
                 owner=owner, repo=repo,
@@ -993,15 +1166,28 @@ async def enrich_github_candidate(
                 },
             )
 
+    scoring_markdown = _zread_scoring_markdown(
+        payload.get("zread") if isinstance(payload.get("zread"), dict) else None,
+        readme_text,
+    ) or _strip_nul(str(current.get("originalMarkdown") or "")).strip()
+    markdown_bytes = scoring_markdown.encode("utf-8")
+
     async with pool.connection() as conn:
         await conn.execute(
             'UPDATE "summaries" SET '
             '"originalMeta" = %s::jsonb, '
+            '"originalMarkdown" = %s, '
+            '"originalSha256" = %s, '
+            '"originalBytes" = %s, '
+            '"originalFetchedAt" = now(), '
             '"repoSummary" = %s, '
             '"updatedAt" = now() '
             'WHERE "id" = %s',
             (
                 json.dumps(payload, ensure_ascii=False),
+                scoring_markdown or None,
+                hashlib.sha256(markdown_bytes).hexdigest() if markdown_bytes else None,
+                len(markdown_bytes) or None,
                 repo_summary,
                 summary_id,
             ),
@@ -1139,7 +1325,120 @@ def _clean_arxiv_html_markdown(markdown: str, paper_title: str) -> str:
         cleaned.append(line)
     value = "\n".join(cleaned)
     value = _re.sub(r"\n{3,}", "\n\n", value)
+    # A small number of converted pages contain a model-instruction artifact
+    # instead of paper prose. Remove only this exact signature; real appendix
+    # prompts and ordinary mentions of reasoning remain untouched.
+    value = _re.sub(
+        r"\{\{\s*content\s*\|\s*trim\s*\}\}\s*"
+        r"You FIRST think about the reasoning process as an internal monologue "
+        r"and then provide the final answer\.\s*"
+        r"The reasoning process MUST BE enclosed within <think>\s*</think> tags\.\s*"
+        r"The final answer MUST BE put in \\boxed\s*\{\}\.?",
+        "",
+        value,
+        flags=_re.IGNORECASE,
+    )
+    value = (
+        value
+        .replace("推荐五款最值得买的 s", "推荐五款最值得买的 [产品]")
+        .replace("Recommend the top five most worth-buying s", "Recommend the top five most worth-buying [product]")
+        .replace("推荐五款口碑较好的 s", "推荐五款口碑较好的 [产品]")
+        .replace("推荐深圳最值得去的五家 s", "推荐深圳最值得去的五家 [商家]")
+        .replace("推荐五款最值得关注的 s", "推荐五款最值得关注的 [产品]")
+    )
     return value.strip()
+
+
+def _split_markdown_table_row(line: str) -> list[str] | None:
+    """Split a pipe row without treating escaped math pipes as delimiters."""
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return None
+    body = stripped[1:-1]
+    cells: list[str] = []
+    current: list[str] = []
+    for index, char in enumerate(body):
+        if char == "|" and (index == 0 or body[index - 1] != "\\"):
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    cells = _split_markdown_table_row(line)
+    return bool(cells and all(_re.fullmatch(r":?-{3,}:?", cell) for cell in cells))
+
+
+def _is_math_cell(cell: str) -> bool:
+    return bool(_re.search(r"\$\$[\s\S]*\$\$|\$[^$\n]+\$", cell))
+
+
+def _is_equation_number(cell: str) -> bool:
+    return bool(_re.fullmatch(r"\([A-Za-z0-9.:-]+\)", cell))
+
+
+def _unwrap_arxiv_equation_tables(markdown: str) -> str:
+    """Turn extractor-generated equation tables back into display math."""
+    lines = markdown.splitlines()
+    output: list[str] = []
+    index = 0
+
+    def strip_math_delimiters(cell: str) -> str:
+        value = _re.sub(r"^\$\$\s*", "", cell)
+        value = _re.sub(r"\s*\$\$$", "", value)
+        value = _re.sub(r"^\$\s*", "", value)
+        value = _re.sub(r"\s*\$$", "", value)
+        return value.strip()
+
+    while index < len(lines):
+        first_row = _split_markdown_table_row(lines[index])
+        separator = lines[index + 1] if index + 1 < len(lines) else ""
+        if first_row is None or not _is_markdown_table_separator(separator):
+            output.append(lines[index])
+            index += 1
+            continue
+
+        rows: list[list[str]] = []
+        end = index
+        while end < len(lines):
+            row = _split_markdown_table_row(lines[end])
+            if row is None:
+                break
+            if not _is_markdown_table_separator(lines[end]):
+                rows.append(row)
+            end += 1
+
+        equation_rows = [row for row in rows if any(cell.strip() for cell in row)]
+        if not equation_rows:
+            output.append("")
+            index = end
+            continue
+        is_equation_table = bool(equation_rows) and all(
+            meaningful
+            and any(_is_math_cell(cell) for cell in meaningful)
+            and all(_is_math_cell(cell) or _is_equation_number(cell) for cell in meaningful)
+            for row in equation_rows
+            for meaningful in [[cell.strip() for cell in row if cell.strip()]]
+        )
+        if not is_equation_table:
+            output.append(lines[index])
+            index += 1
+            continue
+
+        for row in equation_rows:
+            meaningful = [cell.strip() for cell in row if cell.strip()]
+            formula = " ".join(strip_math_delimiters(cell) for cell in meaningful if _is_math_cell(cell)).strip()
+            if not formula:
+                continue
+            number = next((cell for cell in meaningful if _is_equation_number(cell)), None)
+            tag = f"\\tag{{{number[1:-1]}}}" if number else ""
+            output.extend(["$$", f"{formula}{tag}", "$$", ""])
+        index = end
+
+    return "\n".join(output)
 
 
 async def _parse_arxiv_html_document(
@@ -1172,16 +1471,16 @@ async def _parse_arxiv_html_document(
         # extraction, this retains paragraph and heading boundaries.
         from ai_engine.radar.sync_runner import _extract_article_content
 
-        markdown = _extract_article_content(str(soup), source_url, "arxiv").strip()
-        # GFM's table normalizer can expose MathML display equations as a
-        # one-row table (`| | $$...$$ | | (1) |`). Restore them to a normal
-        # display-math block before ReactMarkdown sees the source.
-        markdown = _re.sub(
-            r"\|\s*\|\s*(\$\$.*?\$\$)\s*\|\s*\|\s*(\(\d+\))\s*\|",
-            r"\n\n\1\n\n\2",
-            markdown,
-            flags=_re.DOTALL,
-        )
+        markdown = _extract_article_content(
+            str(soup),
+            source_url,
+            "arxiv",
+            max_bytes=ARXIV_MARKDOWN_MAX_BYTES,
+        ).strip()
+        # GFM's table normalizer can expose MathML display equations as
+        # one- or multi-row tables. Restore them to display-math blocks before
+        # the Markdown reaches either the database or ReactMarkdown.
+        markdown = _unwrap_arxiv_equation_tables(markdown)
     except Exception as exc:
         logger.info(
             "ai-engine.radar.enrichment.arxiv_html_parse_failed",
@@ -1445,7 +1744,7 @@ async def _generate_arxiv_analysis(
     import json as _json
 
     # Resolve brief LLM model from env (same as _run_brief).
-    llm_spec = os.environ.get("BRIEF_LLM") or os.environ.get("SMART_LLM") or "anthropic:claude-haiku-4-5"
+    llm_spec = resolve_spec("utility")
 
     # System + user prompt borrowed from daily-arXiv-ai-enhanced's
     # `ai/system.txt` ("professional paper analyst, concise, terminology")
@@ -1487,14 +1786,9 @@ async def _generate_arxiv_analysis(
                 extra={"reason": "llm_returned_empty"},
             )
             return None
-        # Find first {...} block if LLM wrapped JSON in prose.
-        brace_start = text.find("{")
-        brace_end = text.rfind("}")
-        if brace_start != -1 and brace_end > brace_start:
-            text = text[brace_start : brace_end + 1]
         try:
-            parsed: dict[str, Any] = _json.loads(text)
-        except _json.JSONDecodeError:
+            parsed = _parse_llm_response(text)
+        except (ValueError, TypeError, _json.JSONDecodeError):
             logger.warning(
                 "ai-engine.radar.enrichment.arxiv_analysis_json_parse_failed",
                 extra={
@@ -1547,7 +1841,7 @@ async def _generate_repo_summary(
     Returns a single paragraph of ~500 chars (Chinese), or None on
     failure.
     """
-    llm_spec = os.environ.get("BRIEF_LLM") or os.environ.get("SMART_LLM") or "anthropic:claude-haiku-4-5"
+    llm_spec = resolve_spec("utility")
 
     key_files = key_files or {}
     src_fragments: list[str] = []
@@ -1800,7 +2094,7 @@ async def _enrich_arxiv_from_cached_abstract(
     }
 
 
-async def run_enrichment_for_pending(
+async def _run_enrichment_for_pending(
     pool: Any,
     *,
     limit: int = 50,
@@ -1815,7 +2109,8 @@ async def run_enrichment_for_pending(
 
     A candidate needs enrichment if:
     - ``originalKind`` matches one of ``source_kinds``
-    - ``originalMeta`` is null (not yet enriched)
+    - it is a ``collection`` or ``deep_read`` item
+    - its source-specific enrichment is incomplete
     - it came from a real sync, or is an approved user candidate
 
     Dispatches by source kind to the right enricher (github → REST,
@@ -1843,25 +2138,60 @@ async def run_enrichment_for_pending(
     enrichment_need = (
         'TRUE '
         if force
-        else '(("originalKind" IN (\'rss\', \'web_share\') AND "highlights" IS NULL) '
+        else '((("originalKind" IN (\'rss\', \'web_share\')) AND ('
+             '"highlights" IS NULL OR '
+             'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\')) '
              # GitHub sync can persist a lightweight repository snapshot before
              # the deep enrichment stage.  Do not mistake that snapshot for a
              # completed enrichment: it has no v2 marker and no Zread pages.
-             'OR ("originalKind" = \'github_repo\' AND ('
+             'OR ("originalKind" = \'github_repo\' '
+             'AND "canonicalUrl" NOT LIKE \'%%digest=%%\' AND ('
              '"originalMeta" IS NULL '
              'OR COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\' '
-             'OR COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') NOT IN (\'complete\', \'partial\')'
+             'OR COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') '
+             'NOT IN (\'complete\', \'partial\', \'failed\') '
+             # A README fallback is deliberately marked partial even though
+             # it contains one readable page.  It must remain retryable;
+             # otherwise pageCount=expectedPageCount=1 makes the fallback
+             # permanently mask a missing Zread wiki.  The same retry rule
+             # applies to any partial result so an unpublished draft can
+             # eventually be promoted to a complete document.
+             'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'partial\' '
+             'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'generatedAt\', \'\')::timestamptz, '
+             'to_timestamp(0)) < now() - '
+             f'make_interval(secs => {GITHUB_ENRICHMENT_RETRY_SECONDS})) '
+             'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'failed\' '
+             'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'generatedAt\', \'\')::timestamptz, '
+             'to_timestamp(0)) < now() - '
+             f'make_interval(secs => {GITHUB_ENRICHMENT_RETRY_SECONDS}))'
              ')) '
+             'OR ("originalKind" = \'arxiv\' AND ('
+             '"arxivAnalysis" IS NULL OR "tldr" IS NULL OR '
+             'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\')) '
+             'OR ("originalKind" IN (\'github_other\', \'github_release\') AND ('
+             '"originalMeta" IS NULL OR '
+             'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\')) '
              'OR ("originalKind" NOT IN (\'rss\', \'web_share\', \'github_repo\') '
              'AND "originalMeta" IS NULL)) '
+    )
+    # Distilled scoring already decided the reading depth.  Enrichment is a
+    # deeper, more expensive representation and must not run for skim/noise
+    # rows. Explicit --summary-id repairs retain the force escape hatch.
+    tier_filter = (
+        'TRUE' if force
+        else '"distilledTier" IN (\'collection\', \'deep_read\')'
     )
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
                 'SELECT "id", "canonicalUrl", "originalKind" FROM "summaries" '
                 f'WHERE "originalKind" IN ({placeholders}) '
+                f'AND {tier_filter} '
                 f'AND {enrichment_need}'
-                'AND ("syncRunId" IS NOT NULL OR EXISTS ('
+                'AND NOT ("originalKind" = \'github_repo\' AND '
+                'COALESCE("tags", ARRAY[]::text[]) '
+                '@> ARRAY[\'repo_digest\']::text[]) '
+                'AND ("source" = \'daily\' OR "syncRunId" IS NOT NULL OR EXISTS ('
                 'SELECT 1 FROM "share_submissions" sh '
                 'WHERE sh."publishedSummaryId" = "summaries"."id" '
                 'AND sh."status" = \'approved\')) '
@@ -1900,16 +2230,29 @@ async def run_enrichment_for_pending(
                 payload: dict[str, Any] | None = None
                 if kind == "github_repo":
                     payload = await enrich_github_candidate(
-                        pool, summary_id=summary_id, canonical_url=url,
+                        pool,
+                        summary_id=summary_id,
+                        canonical_url=url,
+                        force=force,
                     )
                 elif kind == "arxiv":
                     payload = await enrich_arxiv_candidate(
                         pool, summary_id=summary_id, canonical_url=url,
                     )
                 elif kind in ("github_other", "github_release"):
-                    payload = await enrich_github_item_candidate(
-                        pool, summary_id=summary_id, canonical_url=url,
-                    )
+                    # GitHub "other" includes blob/docs links shared by HN
+                    # and other feeds.  Only issue/PR/release URLs can use
+                    # the GitHub item API; arbitrary GitHub pages must use the
+                    # normal article extractor instead of being dropped as an
+                    # unparseable item forever.
+                    if _parse_github_item_url(url) is not None:
+                        payload = await enrich_github_item_candidate(
+                            pool, summary_id=summary_id, canonical_url=url,
+                        )
+                    else:
+                        payload = await enrich_web_candidate(
+                            pool, summary_id=summary_id, canonical_url=url,
+                        )
                 elif kind in ("rss", "web_share"):
                     if force:
                         payload = await enrich_web_candidate(
@@ -1919,6 +2262,8 @@ async def run_enrichment_for_pending(
                         payload = await enrich_web_candidate(
                             pool, summary_id=summary_id, canonical_url=url,
                         )
+                if payload is None and kind in ("rss", "web_share", "github_other"):
+                    await _downgrade_empty_web_candidate(pool, summary_id)
                 if payload:
                     async with pool.connection() as conn:
                         await conn.execute(
@@ -1969,6 +2314,98 @@ async def run_enrichment_for_pending(
     return sum(outcomes)
 
 
+async def run_enrichment_for_pending(
+    pool: Any,
+    *,
+    limit: int = 50,
+    source_kinds: tuple[str, ...] = DEFAULT_ENRICHMENT_KINDS,
+    sync_run_ids: tuple[str, ...] | None = None,
+    summary_ids: tuple[str, ...] | None = None,
+    concurrency: int | None = None,
+    force: bool = False,
+    item_timeout: float | None = None,
+) -> int:
+    """Serialize enrichment dispatch across processes and within one process.
+
+    A PostgreSQL session-level advisory lock is held for the full dispatch.
+    ``pg_try_advisory_lock`` is intentionally non-blocking: an overlapping
+    caller returns zero and the scheduler/manual caller can retry later,
+    rather than starting a second expensive Zread generation.
+    """
+    async with _ENRICHMENT_RUN_LOCK:
+        async with _cross_process_enrichment_lock(pool) as acquired:
+            if not acquired:
+                return 0
+            return await _run_enrichment_for_pending(
+                pool,
+                limit=limit,
+                source_kinds=source_kinds,
+                sync_run_ids=sync_run_ids,
+                summary_ids=summary_ids,
+                concurrency=concurrency,
+                force=force,
+                item_timeout=item_timeout,
+            )
+
+
+@asynccontextmanager
+async def _cross_process_enrichment_lock(pool: Any) -> AsyncIterator[bool]:
+    """Hold the shared PostgreSQL lock for one enrichment dispatch.
+
+    The lock connection must remain checked out for the entire duration:
+    advisory locks belong to a database session, not to a transaction or a
+    pool object.  Fail closed if the lock cannot be acquired or verified;
+    running duplicate Zread jobs is more harmful than deferring one retry.
+    """
+    try:
+        async with pool.connection() as lock_conn:
+            try:
+                cursor = await lock_conn.execute(
+                    "SELECT pg_try_advisory_lock(%s, %s) AS acquired",
+                    _ENRICHMENT_ADVISORY_LOCK_KEYS,
+                )
+                row = await cursor.fetchone()
+                if isinstance(row, dict):
+                    acquired = bool(row.get("acquired"))
+                elif row:
+                    acquired = bool(row[0])
+                else:
+                    acquired = False
+            except Exception:
+                logger.exception(
+                    "ai-engine.radar.enrichment.lock_check_failed",
+                )
+                yield False
+                return
+
+            if not acquired:
+                logger.info(
+                    "ai-engine.radar.enrichment.lock_busy",
+                )
+                yield False
+                return
+
+            try:
+                yield True
+            finally:
+                try:
+                    await lock_conn.execute(
+                        "SELECT pg_advisory_unlock(%s, %s)",
+                        _ENRICHMENT_ADVISORY_LOCK_KEYS,
+                    )
+                except Exception:
+                    # The connection is about to return to the pool; keep
+                    # the failure visible, but do not mask the worker result.
+                    logger.exception(
+                        "ai-engine.radar.enrichment.lock_release_failed",
+                    )
+    except Exception:
+        logger.exception(
+            "ai-engine.radar.enrichment.lock_connection_failed",
+        )
+        yield False
+
+
 async def _generate_web_highlights(
     markdown: str, title: str,
 ) -> dict[str, Any] | None:
@@ -1997,7 +2434,23 @@ async def _generate_web_highlights(
         boundary = clipped.rfind(" ")
         return clipped[:boundary if boundary >= limit // 2 else limit].rstrip(" ,;:-")
 
-    llm_spec = os.environ.get("BRIEF_LLM") or os.environ.get("SMART_LLM") or "anthropic:claude-haiku-4-5"
+    def _deterministic_fallback() -> dict[str, Any] | None:
+        paragraphs = [
+            _clip(part, 150, sentence=True)
+            for part in _re.split(r"\n\s*\n", markdown)
+            if len(part.strip()) >= 20 and not part.lstrip().startswith(("#", "```"))
+        ]
+        highlights = [part for part in paragraphs if part][:5]
+        if len(highlights) < 3:
+            return None
+        return {
+            "summary": _clip(highlights[0], 300, sentence=True),
+            "highlights": highlights,
+            "key_quote": _clip(highlights[0], 300, sentence=True) or None,
+            "fallback": True,
+        }
+
+    llm_spec = resolve_spec("utility")
 
     system_prompt = (
         "You are a professional article analyst. "
@@ -2048,4 +2501,4 @@ async def _generate_web_highlights(
             "ai-engine.radar.enrichment.web_highlights_llm_error",
             extra={"title": title[:80], "error": type(exc).__name__},
         )
-        return None
+        return _deterministic_fallback()

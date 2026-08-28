@@ -13,7 +13,7 @@ from ai_engine.server.app import (
 def test_default_tier_map_covers_every_active_source_type() -> None:
     """Every sourceType that the platform ships in seed.sql has a tier."""
     expected = {
-        "github", "github_trending", "github_tracked", "arxiv", "rss",
+        "github", "github_trending", "arxiv", "rss",
         "hackernews", "hn_algolia", "reddit", "lobsters", "devto",
         "producthunt", "vendor_news", "vendor_changelog",
         "github_topic_search", "huggingface_models", "huggingface_papers",
@@ -33,7 +33,6 @@ def test_default_tier_map_covers_every_active_source_type() -> None:
         ("arxiv", 60),
         ("huggingface_models", 120),
         ("reddit", 120),
-        ("github_tracked", 720),
         ("sitemap_watch", 360),
     ],
 )

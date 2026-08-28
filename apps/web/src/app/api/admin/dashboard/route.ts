@@ -203,7 +203,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       new: 0,
       skipped: 0,
       failedItems: 0,
-      skipReasons: { existing: 0, ruleNoise: 0, distilledNoise: 0, unassessable: 0, hardVeto: 0, conflict: 0, other: 0 },
+      skipReasons: { existing: 0, ruleNoise: 0, distilledNoise: 0, unassessable: 0, hardVeto: 0, contentFetchFailed: 0, conflict: 0, other: 0 },
       failures: [] as Array<{ code: string; count: number; sources: string[] }>,
     },
   );
@@ -264,12 +264,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       else if (item.reasonCode === 'DISTILLED_NOISE') counts.distilledNoise += 1;
       else if (item.reasonCode === 'DISTILLED_UNASSESSABLE') counts.unassessable += 1;
       else if (item.reasonCode === 'DISTILLED_HARD_VETO') counts.hardVeto += 1;
+      else if (item.reasonCode === 'CONTENT_FETCH_FAILED') counts.contentFetchFailed += 1;
       else if (item.reasonCode === 'LOW_QUALITY') counts.lowQuality += 1;
       else if (item.reasonCode === 'PENDING_SCORE') counts.pendingScore += 1;
       else counts.other += 1;
       return counts;
     },
-    { ruleNoise: 0, distilledNoise: 0, unassessable: 0, hardVeto: 0, lowQuality: 0, pendingScore: 0, other: 0 },
+    { ruleNoise: 0, distilledNoise: 0, unassessable: 0, hardVeto: 0, contentFetchFailed: 0, lowQuality: 0, pendingScore: 0, other: 0 },
   );
   const acceptedCanonicalUrls = new Set(todayRadarAccepted.map((item) => item.canonicalUrl));
   const failedCanonicalUrls = new Set(todayFailedDiagnostics.map((item) => item.canonicalUrl));

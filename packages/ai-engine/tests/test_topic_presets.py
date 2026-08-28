@@ -4,7 +4,15 @@ from ai_engine.radar.topic_presets import DEFAULT_TOPIC_PRESETS, load_topic_pres
 def test_default_topic_presets_are_stable_and_non_empty() -> None:
     presets = load_topic_presets()
     assert presets == DEFAULT_TOPIC_PRESETS
-    assert {preset.slug for preset in presets} >= {"ai-agents", "rag-retrieval", "mcp-protocols"}
+    assert {preset.slug for preset in presets} == {
+        "ai-agents",
+        "rag-retrieval",
+        "mcp-protocols",
+        "ai-safety-governance",
+        "ai-coding-tools",
+        "llm-evaluation",
+        "multimodal-ai",
+    }
 
 
 def test_topic_presets_accept_operator_json(monkeypatch) -> None:  # type: ignore[no-untyped-def]

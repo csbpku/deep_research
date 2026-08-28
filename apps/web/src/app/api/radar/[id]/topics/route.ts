@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { apiHandler, parseBody } from '@/lib/api-handler';
-import { requireUser } from '@/lib/auth/session';
+import { requireAdmin } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
@@ -16,7 +16,7 @@ const AddTopicInput = z.object({
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
-  const user = await requireUser(req);
+  const user = await requireAdmin(req);
   if (user instanceof NextResponse) return user;
 
   const parsedId = RadarIdParam.safeParse(await ctx.params);

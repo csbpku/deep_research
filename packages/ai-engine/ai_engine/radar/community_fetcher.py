@@ -185,6 +185,7 @@ _REDDIT_UA = (
 
 def _parse_reddit_rss(xml_text: str, sub: str, max_per: int, cutoff_ts: float) -> list[RadarCandidate]:
     import re as _re
+    import html as _html
     from email.utils import parsedate_to_datetime
     candidates: list[RadarCandidate] = []
     entries = _re.findall(r"<entry>(.*?)</entry>", xml_text, _re.DOTALL)
@@ -203,6 +204,17 @@ def _parse_reddit_rss(xml_text: str, sub: str, max_per: int, cutoff_ts: float) -
         item_url = (link_m.group(1) if link_m else "").strip()
         if not item_url:
             continue
+        content_m = (
+            _re.search(r"<content[^>]*>(.*?)</content>", entry, _re.DOTALL)
+            or _re.search(r"<description[^>]*>(.*?)</description>", entry, _re.DOTALL)
+        )
+        snippet = f"Reddit r/{sub}"
+        if content_m:
+            raw_content = _html.unescape(content_m.group(1))
+            raw_content = _re.sub(r"<[^>]+>", " ", raw_content)
+            raw_content = " ".join(raw_content.split())
+            if len(raw_content) >= 40:
+                snippet = raw_content[:2_000]
         published = None
         if published_m:
             raw_date = published_m.group(1).strip()
@@ -217,7 +229,7 @@ def _parse_reddit_rss(xml_text: str, sub: str, max_per: int, cutoff_ts: float) -
             continue
         candidates.append(RadarCandidate(
             title=title, url=item_url,
-            snippet=f"Reddit r/{sub}",
+            snippet=snippet,
             published_at=published, content_origin="rss",
             tags=("reddit", f"r/{sub}"),
             source_quality_hint=0.75,

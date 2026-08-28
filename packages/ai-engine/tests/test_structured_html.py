@@ -1,3 +1,5 @@
+from base64 import b64decode
+
 from ai_engine.radar.structured_html import structured_html_to_markdown
 
 
@@ -45,3 +47,79 @@ def test_preserves_safe_article_images_with_absolute_urls() -> None:
     markdown = structured_html_to_markdown(html, "https://example.com/posts/one")
     assert "![系统架构图](https://example.com/media/diagram.png)" in markdown
     assert "不应保留" not in markdown
+
+
+def test_drops_missing_arxiv_image_src_without_using_page_url() -> None:
+    html = """
+    <article>
+      <figure id="S5.F1">
+        <img src="" class="ltx_missing ltx_missing_image" alt="Refer to caption">
+        <figcaption>Figure 1: A figure unavailable in the HTML rendering.</figcaption>
+      </figure>
+      <p>正文足够长，确保这个节点被识别为文章正文。这里补充缺失图形的上下文，确认抽取器会保留图注而不会把页面地址误当图片地址。</p>
+    </article>
+    """
+
+    markdown = structured_html_to_markdown(html, "https://arxiv.org/html/2608.20280")
+
+    assert "Figure 1: A figure unavailable in the HTML rendering." in markdown
+    assert "![Refer to caption](https://arxiv.org/html/2608.20280)" not in markdown
+
+
+def test_preserves_arxiv_inline_svg_figures_as_sanitized_images() -> None:
+    html = """
+    <article>
+      <figure id="A1.F12">
+        <svg class="ltx_picture" viewBox="0 0 20 20" onload="alert(1)">
+          <path d="M0 0" style="fill:url(https://evil.example/x)"></path>
+          <foreignObject style="font-size:10pt"><span class="ltx_text">推荐五款最值得</span></foreignObject>
+          <foreignObject><span class="ltx_text">$16$ \\Delta \\times 2 \\to 72.9% \\tau \\blacksquare</span></foreignObject>
+          <script>alert(1)</script>
+        </svg>
+        <figcaption>Figure 12: Pipeline overview.</figcaption>
+      </figure>
+      <p>正文足够长，确保这个节点被识别为文章正文。这里补充图形、章节和引用的上下文，确认结构化抽取不会丢失 arXiv 的内嵌矢量图。</p>
+    </article>
+    """
+
+    markdown = structured_html_to_markdown(html, "https://arxiv.org/html/2606.13610v2")
+    data_url = next(
+        part.split(")", 1)[0]
+        for part in markdown.split("](")
+        if part.startswith("data:image/svg+xml;base64,")
+    )
+    payload = b64decode(data_url.split("#", 1)[0].split(",", 1)[1]).decode("utf-8")
+
+    assert "![图形](data:image/svg+xml;base64," in markdown
+    assert "#A1.F12)" in markdown
+    assert "Figure 12: Pipeline overview." in markdown
+    assert 'xmlns="http://www.w3.org/2000/svg"' in payload
+    assert 'viewBox="0 0 20 20"' in payload
+    assert "font-size:7.20pt" in payload
+    assert "推荐五款最值得买的 [产品]" in payload
+    assert "$16$" not in payload
+    assert "16 Δ × 2 → 72.9% τ ■" in payload
+    assert 'xmlns="http://www.w3.org/1999/xhtml"' in payload
+    assert "foreignObject" in payload
+    assert "<script" not in payload
+    assert "onload" not in payload
+    assert "evil.example" not in payload
+
+
+def test_flattens_colspan_group_headers_without_corrupting_table_columns() -> None:
+    html = """
+    <article>
+      <table>
+        <tr><td></td><td colspan="2">Closed-Source</td><td colspan="2">Open-Weights</td></tr>
+        <tr><td>Model</td><td>A</td><td>B</td><td>C</td><td>D</td></tr>
+        <tr><td>Score</td><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+      </table>
+      <p>正文足够长，确保这个节点被识别为文章正文。这里补充表格结构和分组表头的上下文，确认宽表抽取不会生成错误的空白列。</p>
+    </article>
+    """
+
+    markdown = structured_html_to_markdown(html)
+
+    assert "*Closed-Source / Open-Weights*" in markdown
+    assert "| Model | A | B | C | D |" in markdown
+    assert "|  | Closed-Source | Open-Weights |  |  |" not in markdown

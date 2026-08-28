@@ -57,6 +57,7 @@ beforeEach(() => {
     originalMeta: null,
     source: 'daily',
     syncRunId: 'run-1',
+    distilledTier: 'deep_read',
     shareSource: null,
   });
   mocks.summaryUpdate.mockImplementation(async ({ data }: { data: { originalMeta: unknown } }) => {
@@ -68,6 +69,7 @@ beforeEach(() => {
       originalMeta: data.originalMeta,
       source: 'daily',
       syncRunId: 'run-1',
+      distilledTier: 'deep_read',
       shareSource: null,
     });
     return {};
@@ -151,6 +153,30 @@ describe('POST /api/radar/[id]/transform', () => {
     expect(updateCall.data?.originalMeta?.readingCache).not.toHaveProperty('ai_reading:v2:zh-CN');
   });
 
+  it('recovers a fenced JSON guide returned as suggestion text', async () => {
+    mocks.fetchAiEngine.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        suggestion: [
+          '```json',
+          '{"version":2,"summary":"恢复后的导读","outline":[{"heading":"第一部分","quote":"Long source content."}]}',
+          '```',
+        ].join('\n'),
+      },
+    });
+
+    const response = await POST(request('ai_reading'), { params: Promise.resolve({ id: SUMMARY_ID }) });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      guide: {
+        summary: '恢复后的导读',
+        outline: [{ heading: '第一部分', anchorStatus: 'resolved', sourceBlockIndex: 1 }],
+      },
+    });
+    expect(mocks.summaryUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it('continues long-guide sections after an intermediate section failure', async () => {
     const longBody = Array.from({ length: 250_000 }, (_, i) => i % 97 === 0 ? '\n## Section\n' : 'x').join('');
     mocks.summaryFindUnique.mockResolvedValue({
@@ -161,6 +187,7 @@ describe('POST /api/radar/[id]/transform', () => {
       originalMeta: null,
       source: 'daily',
       syncRunId: 'run-1',
+      distilledTier: 'deep_read',
       shareSource: null,
     });
     mocks.fetchAiEngine.mockImplementation(async ({ context }: { context: string }) => {
@@ -179,14 +206,72 @@ describe('POST /api/radar/[id]/transform', () => {
     expect(mocks.fetchAiEngine.mock.calls.some(([call]) => String(call.context).endsWith('section.1'))).toBe(true);
   });
 
+  it('hides skim transforms from regular users', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUMMARY_ID,
+      title: 'Skim article',
+      body: 'summary',
+      originalMarkdown: '# Full source',
+      originalMeta: null,
+      source: 'daily',
+      syncRunId: 'run-1',
+      distilledTier: 'skim',
+      shareSource: null,
+    });
+
+    const response = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
+
+    expect(response.status).toBe(404);
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+  });
+
+  it('hides noise transforms from regular users', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUMMARY_ID,
+      title: 'Noise',
+      body: 'noise',
+      originalMarkdown: '# Noise',
+      originalMeta: null,
+      source: 'daily',
+      syncRunId: 'run-1',
+      distilledTier: 'noise',
+      shareSource: null,
+    });
+
+    const response = await POST(request('ai_reading'), { params: Promise.resolve({ id: SUMMARY_ID }) });
+
+    expect(response.status).toBe(404);
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+  });
+
   it('translates only the selected passage without writing it into the article cache', async () => {
     const response = await POST(request('translate', 'Only this paragraph'), { params: Promise.resolve({ id: SUMMARY_ID }) });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ selected: true, complete: true, chunks: [{ index: 0 }] });
     expect(mocks.summaryUpdate).not.toHaveBeenCalled();
     expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
-      body: expect.objectContaining({ body: 'Only this paragraph' }),
+      body: expect.objectContaining({ operation: 'translate', body: 'Only this paragraph' }),
     }));
+  });
+
+  it('strips an echoed editor prompt from a selected translation', async () => {
+    mocks.fetchAiEngine.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        suggestion: [
+          '主题：公开雷达',
+          '上下文：最终的兼容性分数由两个层级加权得到。',
+          '待处理文字：最终的兼容性分数由两个层级加权得到。',
+          '要求：完整翻译输入内容。',
+        ].join('\n'),
+      },
+    });
+    const response = await POST(request('translate', 'The compatibility score uses two layers.'), { params: Promise.resolve({ id: SUMMARY_ID }) });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      chunks: [{ content: '最终的兼容性分数由两个层级加权得到。' }],
+    });
   });
 
   it('explains a selected passage directly instead of running a generic guide', async () => {

@@ -19,6 +19,7 @@ import {
   parseHighlights,
   parseArxivAnalysis,
   parseGithubItemMeta,
+  shapeCandidate,
 } from './shape';
 
 describe('excerptOf', () => {
@@ -146,6 +147,7 @@ describe('parseDistilledScore', () => {
       quality_score: 88,
       team_value_score: 66,
       ranking_score: 74,
+      tier_score: 68,
       source_bonus: 8,
       tier: 'collection',
       must_read: true,
@@ -170,6 +172,7 @@ describe('parseDistilledScore', () => {
 
     expect(score?.total).toBe(90);
     expect(score?.rankingScore).toBe(74);
+    expect(score?.tierScore).toBe(68);
     expect(score?.qualityScore).toBe(88);
     expect(score?.teamValueScore).toBe(66);
     expect(score?.sourceBonus).toBe(8);
@@ -242,6 +245,40 @@ describe('parseGithubItemMeta', () => {
 
   it('rejects unrelated metadata', () => {
     expect(parseGithubItemMeta({ provider: 'github', kind: 'issue' })).toBeNull();
+  });
+});
+
+describe('shapeCandidate', () => {
+  it('does not expose legacy GitHub activity data in the detail payload', () => {
+    const shaped = shapeCandidate({
+      summary: {
+        id: 'summary-1',
+        title: 'Repo',
+        body: 'Body',
+        url: 'https://github.com/acme/repo',
+        tags: [],
+        status: 'candidate',
+        summaryDate: new Date('2026-08-26T00:00:00Z'),
+        publishedAt: null,
+        createdAt: new Date('2026-08-26T00:00:00Z'),
+        interpretation: null,
+        scoreReason: null,
+        scoreVersion: null,
+        relevanceScore: null,
+        timelinessScore: null,
+        sourceQualityScore: null,
+        distilledScore: null,
+        selectionReason: null,
+        sortOrder: null,
+        syncRunId: null,
+        originalMeta: {
+          zread: { status: 'complete' },
+          githubUpdates: { items: [{ title: 'legacy activity' }] },
+        },
+      },
+    });
+
+    expect(shaped.originalMeta).toEqual({ zread: { status: 'complete' } });
   });
 });
 

@@ -7,6 +7,7 @@ to the reader and to the generated article map.
 
 from __future__ import annotations
 
+import base64
 import re
 from html import unescape
 from typing import Any
@@ -55,11 +56,142 @@ def _image_url(node: Tag, base_url: str | None) -> str:
     if not raw:
         srcset = str(node.get("srcset") or "").strip()
         raw = srcset.split(",", 1)[0].strip().split(" ", 1)[0] if srcset else ""
+    if not raw:
+        return ""
     value = urljoin(base_url or "", raw)
     return value if urlparse(value).scheme in {"http", "https"} else ""
 
 
-def _inline(node: Any, base_url: str | None = None) -> str:
+def _clean_svg_text(value: str) -> str:
+    """Turn arXiv's math-marked chart labels into readable SVG text."""
+    cleaned = unescape(value)
+    cleaned = re.sub(r"\$(.*?)\$", r"\1", cleaned)
+    cleaned = re.sub(r"\\(?:text|mathrm|mathbf|mathit)\{([^{}]*)\}", r"\1", cleaned)
+    replacements = (
+        (r"\\Delta", "Δ"),
+        (r"\\alpha", "α"),
+        (r"\\beta", "β"),
+        (r"\\gamma", "γ"),
+        (r"\\lambda", "λ"),
+        (r"\\mu", "μ"),
+        (r"\\omega", "ω"),
+        (r"\\pi", "π"),
+        (r"\\rho", "ρ"),
+        (r"\\sigma", "σ"),
+        (r"\\tau", "τ"),
+        (r"\\infty", "∞"),
+        (r"\\blacksquare", "■"),
+        (r"\\emptyset", "∅"),
+        (r"\\times", "×"),
+        (r"\\sim", "∼"),
+        (r"\\to", "→"),
+        (r"\\langle", "‹"),
+        (r"\\rangle", "›"),
+        (r"\\dots|\\ldots", "…"),
+        (r"\\cdots", "⋯"),
+        (r"\\cdot", "·"),
+        (r"\\approx", "≈"),
+        (r"\\propto", "∝"),
+        (r"\\in", "∈"),
+        (r"\\notin", "∉"),
+        (r"\\left|\\right", ""),
+        (r"\\left|", ""),
+        (r"\\right|", ""),
+        (r"\\left", ""),
+        (r"\\right", ""),
+        (r"\\pm", "±"),
+        (r"\\leq?", "≤"),
+        (r"\\geq?", "≥"),
+        (r"\\%", "%"),
+        (r"\\,", " "),
+        (r"\\;", " "),
+        (r"\\!", ""),
+        (r"\\quad", "  "),
+        (r"\\qquad", "    "),
+    )
+    for pattern, replacement in replacements:
+        cleaned = re.sub(pattern, replacement, cleaned)
+    cleaned = cleaned.replace(r"\{", "{").replace(r"\}", "}")
+    cleaned = re.sub(r"\{([^{}]*)\}", r"\1", cleaned)
+    return cleaned
+
+
+def _svg_data_url(node: Tag, figure_id: str = "") -> str:
+    """Serialize an arXiv chart SVG as a sanitized image data URL."""
+    classes = node.get("class")
+    if not isinstance(classes, list) or "ltx_picture" not in classes:
+        return ""
+
+    # Work on a detached copy so the source tree remains available to the
+    # surrounding figure/caption extraction.
+    try:
+        copy = BeautifulSoup(str(node), "html5lib").find("svg")
+    except Exception:
+        copy = BeautifulSoup(str(node), "xml").find("svg")
+    if not isinstance(copy, Tag):
+        return ""
+    copy["xmlns"] = "http://www.w3.org/2000/svg"
+    has_link_attribute = any(
+        attribute.lower() in {"xlink:href", "href"}
+        for tag in [copy, *copy.find_all(True)]
+        for attribute in tag.attrs
+    )
+    if has_link_attribute:
+        copy["xmlns:xlink"] = "http://www.w3.org/1999/xlink"
+    # arXiv uses XHTML nodes inside foreignObject for axis labels and
+    # annotations. Once the SVG is loaded as a standalone image, those nodes
+    # need their own namespace or Chromium renders only the vector shapes.
+    for foreign_object in (
+        tag for tag in copy.find_all(True) if tag.name.lower() == "foreignobject"
+    ):
+        # ar5iv emits the figure in TeX coordinates but leaves its XHTML
+        # labels at the source 10pt size. As a standalone image Chromium does
+        # not apply the page-level figure scale, so dense labels collide. The
+        # PDF rendering uses roughly 72% of that size; carry that correction
+        # into the self-contained SVG instead.
+        style = str(foreign_object.get("style") or "")
+        foreign_object["style"] = re.sub(
+            r"font-size:\s*([\d.]+)pt",
+            lambda match: f"font-size:{float(match.group(1)) * 0.72:.2f}pt",
+            style,
+            flags=re.IGNORECASE,
+        )
+        for child in foreign_object.find_all(True, recursive=False):
+            child["xmlns"] = "http://www.w3.org/1999/xhtml"
+        for text_node in foreign_object.find_all(string=True):
+            text_node.replace_with(_clean_svg_text(str(text_node)))
+    for tag in copy.find_all(["script", "iframe", "object", "embed"]):
+        tag.decompose()
+    for tag in [copy, *copy.find_all(True)]:
+        for attribute in list(tag.attrs):
+            lowered = attribute.lower()
+            raw = str(tag.attrs[attribute])
+            if lowered.startswith("on"):
+                del tag.attrs[attribute]
+            elif lowered in {"href", "xlink:href"} and not raw.lstrip().startswith("#"):
+                del tag.attrs[attribute]
+            elif lowered == "style" and "url(" in raw.lower():
+                del tag.attrs[attribute]
+    # ar5iv's converted Figure 12 drops the tail of the user-query label
+    # while the surrounding prose and the PDF retain the full placeholder.
+    # Repair this confirmed conversion artifact only for that figure.
+    if figure_id == "A1.F12":
+        for text_node in copy.find_all(string=lambda value: value and "推荐五款最值得" in value):
+            text_node.replace_with(str(text_node).replace("推荐五款最值得", "推荐五款最值得买的 [产品]"))
+        for text_node in copy.find_all(string=lambda value: value and "Recommend the top 5 …" in value):
+            text_node.replace_with(
+                str(text_node).replace("Recommend the top 5 …", "Recommend the top five most worth-buying [product]")
+            )
+    encoded = base64.b64encode(str(copy).encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
+def _figure_fragment(value: Any) -> str:
+    figure_id = str(value or "").strip()
+    return f"#{figure_id}" if re.fullmatch(r"[A-Za-z]\d+\.F\d+", figure_id) else ""
+
+
+def _inline(node: Any, base_url: str | None = None, figure_id: str = "") -> str:
     if isinstance(node, Comment):
         return ""
     if isinstance(node, NavigableString):
@@ -67,8 +199,12 @@ def _inline(node: Any, base_url: str | None = None) -> str:
     if not isinstance(node, Tag):
         return ""
     name = node.name.lower()
-    if name in {"script", "style", "svg", "button", "input"}:
+    if name in {"script", "style", "button", "input"}:
         return ""
+    if name == "svg":
+        src = _svg_data_url(node, figure_id)
+        src += _figure_fragment(figure_id)
+        return f"![图形]({src})" if src else ""
     if name == "br":
         return "\n"
     if name == "a":
@@ -77,6 +213,7 @@ def _inline(node: Any, base_url: str | None = None) -> str:
         return f"[{label}]({href})" if label and href else label
     if name == "img":
         src = _image_url(node, base_url)
+        src += _figure_fragment(figure_id)
         alt = _clean_inline(str(node.get("alt") or node.get("title") or "图片"))
         return f"![{alt}]({src})" if src else ""
     if name == "code" and node.parent and node.parent.name != "pre":
@@ -130,9 +267,19 @@ def _render(node: Any, level: int = 0, base_url: str | None = None) -> str:
         return "\n".join(f"> {line}" for line in text.splitlines()) + "\n\n" if text else ""
     if name == "table":
         rows: list[list[str]] = []
-        for row in node.find_all("tr"):
+        group_heading = ""
+        source_rows = node.find_all("tr")
+        for row_index, row in enumerate(source_rows):
             cells = [_clean_inline(_inline(cell, base_url)) for cell in row.find_all(["th", "td"], recursive=False)]
             if cells:
+                has_colspan = any(
+                    str(cell.get("colspan") or "1").isdigit()
+                    and int(str(cell.get("colspan") or "1")) > 1
+                    for cell in row.find_all(["th", "td"], recursive=False)
+                )
+                if row_index == 0 and has_colspan and len(source_rows) > 1:
+                    group_heading = " / ".join(cell for cell in cells if cell)
+                    continue
                 rows.append(cells)
         if not rows:
             return ""
@@ -140,12 +287,18 @@ def _render(node: Any, level: int = 0, base_url: str | None = None) -> str:
         rows = [row + [""] * (width - len(row)) for row in rows]
         output = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join(["---"] * width) + " |"]
         output.extend("| " + " | ".join(row) + " |" for row in rows[1:])
-        return "\n".join(output) + "\n\n"
+        prefix = f"*{group_heading}*\n\n" if group_heading else ""
+        return prefix + "\n".join(output) + "\n\n"
     if name == "figure":
         image = node.find("img")
-        if not isinstance(image, Tag):
+        svg = node.find("svg", class_="ltx_picture")
+        if not isinstance(image, Tag) and not isinstance(svg, Tag):
             return _render_children(node, base_url)
-        image_markdown = _inline(image, base_url)
+        image_markdown = _inline(
+            image if isinstance(image, Tag) else svg,
+            base_url,
+            str(node.get("id") or ""),
+        )
         caption_node = node.find("figcaption")
         caption = _clean_inline(caption_node.get_text(" ", strip=True)) if isinstance(caption_node, Tag) else ""
         return f"{image_markdown}\n\n*{caption}*\n\n" if image_markdown and caption else f"{image_markdown}\n\n"
@@ -180,7 +333,9 @@ def _compact(markdown: str) -> str:
 
 def structured_html_to_markdown(html: str, base_url: str | None = None) -> str:
     """Return structured Markdown, or an empty string when no article exists."""
-    soup = BeautifulSoup(html, "html.parser")
+    # html5lib keeps SVG's case-sensitive names (viewBox, foreignObject) so
+    # extracted arXiv figures remain valid when serialized as image data URLs.
+    soup = BeautifulSoup(html, "html5lib")
     root: Tag | None = None
     for selector in _ROOT_SELECTORS:
         candidate = soup.select_one(selector)

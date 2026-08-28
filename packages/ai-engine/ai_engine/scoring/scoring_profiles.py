@@ -238,7 +238,6 @@ _SOURCE_PROFILE_MAP: dict[str, str] = {
     "openreview": PROFILE_PAPER,               # Top-venue papers → research quality
     "github": PROFILE_ENGINEERING,
     "github_trending": PROFILE_ENGINEERING,
-    "github_tracked": PROFILE_ENGINEERING,
     "github_topic_search": PROFILE_ENGINEERING,
     "huggingface_models": PROFILE_ENGINEERING,
     "devto": PROFILE_ENGINEERING,

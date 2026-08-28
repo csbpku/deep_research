@@ -193,7 +193,7 @@ def _assert_within_target(label: str, buckets: list[str]) -> None:
 
 
 def test_engineering_profile_distribution() -> None:
-    buckets = _population(ENGINEERING_PROFILE, "github_tracked", seed=42)
+    buckets = _population(ENGINEERING_PROFILE, "github", seed=42)
     _assert_within_target("engineering", buckets)
 
 
@@ -237,7 +237,7 @@ def test_profile_for_source_url_dispatches_to_expected_profile() -> None:
         "arxiv": "paper",
         "huggingface_papers": "paper",
         "openreview": "paper",
-        "github_tracked": "engineering",
+        "github": "engineering",
         "devto": "engineering",
         "rss": "news",
         "vendor_news": "news",

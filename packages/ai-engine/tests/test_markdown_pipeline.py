@@ -15,6 +15,21 @@ def test_normalize_markdown_closes_unmatched_fence() -> None:
     assert normalize_markdown("```python\nprint('ok')").endswith("```")
 
 
+def test_normalize_markdown_repairs_missing_table_separator() -> None:
+    source = (
+        "#### **Table 1**| **Model** | **Score** |\n"
+        "| Falcon | 0.66 |\n"
+        "| Chronos | 0.71 |"
+    )
+    assert normalize_markdown(source) == (
+        "#### **Table 1**\n\n"
+        "| **Model** | **Score** |\n"
+        "| --- | --- |\n"
+        "| Falcon | 0.66 |\n"
+        "| Chronos | 0.71 |"
+    )
+
+
 def test_markdown_hash_uses_canonical_representation() -> None:
     assert markdown_sha256("a\r\n\r\nb\n") == markdown_sha256("a\n\nb")
 

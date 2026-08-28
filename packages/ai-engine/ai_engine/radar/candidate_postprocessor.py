@@ -13,7 +13,8 @@ from ai_engine.radar.distilled_scorer import (
     build_distilled_score_reason,
     score_with_llm,
 )
-from ai_engine.radar.sync_runner import _is_low_quality_content
+from ai_engine.radar.sync_runner import _scoreability
+from ai_engine.radar.sync_runner import _shell_content_label
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 logger = logging.getLogger("ai_engine.radar.candidate_postprocessor")
@@ -25,7 +26,6 @@ _SOURCE_PROFILE: dict[str, str] = {
     "github": "engineering",
     "github_trending": "engineering",
     "github_topic_search": "engineering",
-    "github_tracked": "engineering",
     "devto": "engineering",
     "producthunt": "engineering",
     "rss": "news",
@@ -93,7 +93,9 @@ async def score_missing_candidates(
         or int(os.environ.get("RADAR_SCORING_CONCURRENCY", "5")),
     ))
 
-    async def _score(raw: Any) -> tuple[str, DistilledScore] | None:
+    async def _score(
+        raw: Any,
+    ) -> tuple[str, DistilledScore | None, str | None, str | None] | None:
         row = dict(raw)
         source_type = str(row.get("sourceType") or "web_share")
         profile, _ = profile_for_source_url(source_type, str(row.get("url") or ""))
@@ -103,13 +105,19 @@ async def score_missing_candidates(
             or row.get("title")
             or ""
         )
-        tags = row.get("tags") or []
-        if ("content_pending" in tags and not rescore) or _is_low_quality_content(content):
+        shell_label = _shell_content_label(content)
+        scoreability = _scoreability(content)
+        if scoreability is None:
             logger.info(
                 "ai-engine.radar.postprocess.score_deferred_incomplete_content",
                 extra={"summary_id": str(row["id"]), "source_type": source_type},
             )
-            return None
+            return str(row["id"]), None, None, shell_label
+        if scoreability == "limited":
+            logger.info(
+                "ai-engine.radar.postprocess.score_limited_content",
+                extra={"summary_id": str(row["id"]), "source_type": source_type},
+            )
         try:
             async with gate:
                 result = await scorer(
@@ -128,7 +136,7 @@ async def score_missing_candidates(
             return None
         if result.is_default:
             return None
-        return str(row["id"]), result
+        return str(row["id"]), result, scoreability, shell_label
 
     results = await asyncio.gather(*(_score(row) for row in rows))
     persisted = 0
@@ -136,19 +144,81 @@ async def score_missing_candidates(
         for scored in results:
             if scored is None:
                 continue
-            summary_id, result = scored
+            summary_id, result, scoreability, shell_label = scored
+            if result is None:
+                pending_reason = (
+                    "抓取失败: "
+                    + shell_label
+                    + " | 待重新抓取"
+                    if shell_label
+                    else None
+                )
+                await conn.execute(
+                    'UPDATE "summaries" SET '
+                    '"tags" = CASE '
+                    'WHEN \'content_pending\' = ANY('
+                    'COALESCE("tags", ARRAY[]::text[])) '
+                    'AND \'fetch_failed_shell\' = ANY('
+                    'COALESCE("tags", ARRAY[]::text[])) '
+                    'THEN COALESCE("tags", ARRAY[]::text[]) '
+                    'WHEN \'content_pending\' = ANY('
+                    'COALESCE("tags", ARRAY[]::text[])) '
+                    'THEN array_append(COALESCE("tags", ARRAY[]::text[]), '
+                    '\'fetch_failed_shell\') '
+                    'WHEN \'fetch_failed_shell\' = ANY('
+                    'COALESCE("tags", ARRAY[]::text[])) '
+                    'THEN array_append(COALESCE("tags", ARRAY[]::text[]), '
+                    '\'content_pending\') '
+                    'ELSE array_append('
+                    'array_append(COALESCE("tags", ARRAY[]::text[]), '
+                    '\'content_pending\'), \'fetch_failed_shell\') END, '
+                    '"distilledScore" = NULL, "distilledTotal" = NULL, '
+                    '"distilledTier" = NULL, "distilledMustRead" = false, '
+                    '"distilledProfile" = NULL, "scoreReason" = %s, '
+                    '"updatedAt" = now() WHERE "id" = %s',
+                    (pending_reason, summary_id),
+                )
+                continue
             total = (
-                result.ranking_score
-                if result.ranking_score is not None
-                else result.effective_total
-                if result.effective_total is not None
+                result.tier_score
+                if result.tier_score is not None
                 else result.total
             )
+            score_reason = build_distilled_score_reason(result)
+            if scoreability == "limited":
+                score_reason = (
+                    "低置信度初筛：正文不足1000字符，仅用于排序和是否值得继续抓取。"
+                    + score_reason
+                )[:500]
+            if shell_label:
+                score_reason = (
+                    "抓取失败: "
+                    + shell_label
+                    + " | "
+                    + (score_reason or "")
+                )[:500]
+            if shell_label:
+                tags_sql = (
+                    "CASE WHEN 'fetch_failed_shell' = ANY("
+                    'COALESCE("tags", ARRAY[]::text[])) '
+                    "THEN array_remove(COALESCE(\"tags\", ARRAY[]::text[]), "
+                    "'content_pending') "
+                    "ELSE array_append("
+                    "array_remove(COALESCE(\"tags\", ARRAY[]::text[]), "
+                    "'content_pending'), 'fetch_failed_shell') END"
+                )
+            else:
+                tags_sql = (
+                    "array_remove("
+                    "array_remove(COALESCE(\"tags\", ARRAY[]::text[]), "
+                    "'content_pending'), 'fetch_failed_shell')"
+                )
             await conn.execute(
                 'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, "distilledTier" = %s, '
                 '"distilledMustRead" = %s, "distilledProfile" = %s, '
                 '"scoreReason" = %s, '
+                '"tags" = ' + tags_sql + ', '
                 '"updatedAt" = now() WHERE "id" = %s',
                 (
                     json.dumps(result.to_dict(), ensure_ascii=False),
@@ -156,7 +226,7 @@ async def score_missing_candidates(
                     result.tier,
                     result.must_read,
                     result.profile_id,
-                    build_distilled_score_reason(result),
+                    score_reason,
                     summary_id,
                 ),
             )

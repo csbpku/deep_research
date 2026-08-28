@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import socket
 
+import psycopg
 import httpx
 import pytest
 
@@ -48,6 +49,10 @@ def test_safe_error_code_maps_dns_resolution_failure() -> None:
     assert _safe_error_code(socket.gaierror("dns")) == "URL_FETCH_DNS"
 
 
+def test_safe_error_code_keeps_database_outage_distinct() -> None:
+    assert _safe_error_code(psycopg.OperationalError("failed to resolve host")) == "DATABASE_UNAVAILABLE"
+
+
 def test_safe_error_code_maps_httpx_timeout_to_url_fetch_timeout() -> None:
     # httpx.TimeoutException is a strict subclass of httpx.HTTPError,
     # so the order of isinstance checks matters. The fix must classify
@@ -60,6 +65,16 @@ def test_safe_error_code_maps_network_to_url_fetch_network() -> None:
     assert _safe_error_code(httpx.ConnectError("connect failed")) == "URL_FETCH_NETWORK"
     assert _safe_error_code(httpx.NetworkError("net")) == "URL_FETCH_NETWORK"
     assert _safe_error_code(httpx.RemoteProtocolError("proto")) == "URL_FETCH_NETWORK"
+
+
+def test_safe_error_code_maps_github_rate_limit_403_to_upstream_rate_limited() -> None:
+    response = httpx.Response(
+        403,
+        headers={"x-ratelimit-remaining": "0"},
+        request=httpx.Request("GET", "https://api.github.com/repos/acme/agent"),
+    )
+    error = httpx.HTTPStatusError("API rate limit exceeded", request=response.request, response=response)
+    assert _safe_error_code(error) == "UPSTREAM_RATE_LIMITED"
 
 
 def test_safe_error_code_keeps_security_block_distinct_from_network() -> None:

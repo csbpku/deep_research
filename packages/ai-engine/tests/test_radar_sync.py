@@ -10,23 +10,35 @@ import pytest
 
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
-from ai_engine.radar.models import RadarCandidate, RadarSource, RepoActivity, RepoActivityItem, RepoSnapshot
+from ai_engine.radar.models import RadarCandidate, RadarSource, RepoSnapshot
 from ai_engine.radar.source_manager import fetch_source as dispatch_source
 from ai_engine.radar.sync_runner import (
     _NAV_NOISE_PATTERNS,
+    _BriefGenerationError,
+    _build_score_reason,
     _clean_content,
     _can_use_candidate_metadata_fallback,
+    _content_fetch_failure_reason,
+    _create_run,
     _extract_article_content,
     _can_use_github_repo_metadata_fallback,
     _finish_run,
     _generate_brief_with_retry,
     _is_low_quality_content,
+    _is_fetch_failure_shell,
+    _preferred_document_urls,
+    _safe_error_code,
+    _scoreability,
+    _shell_content_label,
+    _strip_reasoning_markup,
     RadarSyncResult,
     SourceRunResult,
     run_radar_pipeline,
+    _retryable_latest_source_ids,
     run_radar_sync,
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
+from ai_engine.radar.distilled_scorer import compute_score
 
 
 class _Cursor:
@@ -103,66 +115,6 @@ def _candidate(url: str = "https://example.com/item") -> RadarCandidate:
     )
 
 
-def _repo_digest_candidate() -> RadarCandidate:
-    """One tracked repo carrying issues/PRs/releases from the last 24h."""
-    activity = RepoActivity(
-        repo="acme/agent",
-        issues=(
-            RepoActivityItem(
-                kind="issue",
-                number="42",
-                title="Fix agent crash on retries",
-                url="https://github.com/acme/agent/issues/42",
-                state="open",
-                author="alice",
-                comments=5,
-                labels=("bug",),
-                created_at="2026-07-30T12:00:00Z",
-                updated_at="2026-07-30T12:00:00Z",
-                body="Agent crash repro and proposed fix.",
-            ),
-        ),
-        prs=(
-            RepoActivityItem(
-                kind="pr",
-                number="101",
-                title="Add MCP tool registry",
-                url="https://github.com/acme/agent/pull/101",
-                state="open",
-                author="bob",
-                comments=3,
-                created_at="2026-07-30T13:00:00Z",
-                updated_at="2026-07-30T13:00:00Z",
-                body="Adds registry with tool schemas.",
-            ),
-        ),
-        releases=(
-            RepoActivityItem(
-                kind="release",
-                number="v2.0",
-                title="v2.0",
-                url="https://github.com/acme/agent/releases/tag/v2.0",
-                state="published",
-                author="alice",
-                created_at="2026-07-30T14:00:00Z",
-                updated_at="2026-07-30T14:00:00Z",
-                published_at="2026-07-30T14:00:00Z",
-                body="Release with new agent runtime.",
-            ),
-        ),
-    )
-    return RadarCandidate(
-        title="acme/agent 24h GitHub 动态",
-        url="https://github.com/acme/agent?digest=2026-07-31",
-        snippet="acme/agent 24h GitHub 动态",
-        published_at=datetime.now(timezone.utc),
-        content_origin="api",
-        tags=("github", "tracked", "acme/agent", "repo_digest"),
-        source_quality_hint=0.90,
-        repo_activity=activity,
-    )
-
-
 def _document(url: str = "https://example.com/item") -> FetchedDocument:
     body = (
         "A new study on hierarchical planning in LLM agents with "
@@ -212,8 +164,36 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "仅用于排序，不自动发布" in params[15]
 
 
-async def test_existing_github_repo_refreshes_snapshot_before_deduplication() -> None:
+async def test_create_run_initializes_lease_and_heartbeat() -> None:
+    pool = _Pool([])
+    source = RadarSource(
+        id="source-1",
+        name="RSS",
+        source_type="rss",
+        config={},
+    )
+
+    run_id = await _create_run(pool, source, "cron")
+
+    sql, params = next(
+        item
+        for item in pool.connection_value.executions
+        if 'INSERT INTO "radar_sync_runs"' in item[0]
+    )
+    assert '"lockedBy", "heartbeatAt", "leaseExpiresAt"' in sql
+    assert params[:3] == (run_id, "source-1", "cron")
+    assert params[3] == f"radar:{run_id}"
+    assert isinstance(params[4], int)
+    assert params[4] >= 60
+
+
+async def test_existing_github_repo_is_deduplicated_without_tracked_repo_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.radar import enrichment_worker
+
     pool = _Pool([_source("github-source", "github")])
+    enrichment_calls: list[str] = []
     snapshot = RepoSnapshot(
         owner_repo="acme/agent",
         description="Updated description",
@@ -234,6 +214,14 @@ async def test_existing_github_repo_refreshes_snapshot_before_deduplication() ->
             repo_snapshot=snapshot,
         )]
 
+    async def unexpected_inline_enrichment(*args: Any, **kwargs: Any) -> None:
+        enrichment_calls.append(str(kwargs.get("summary_id", "")))
+
+    monkeypatch.setattr(
+        enrichment_worker,
+        "enrich_github_candidate",
+        unexpected_inline_enrichment,
+    )
     pool.connection_value.canonical_urls.add("https://github.com/acme/agent")
     result = await run_radar_sync(
         pool,
@@ -244,12 +232,13 @@ async def test_existing_github_repo_refreshes_snapshot_before_deduplication() ->
     )
 
     assert result.runs[0].skipped_existing == 1
-    update = next(
-        item for item in pool.connection_value.executions
-        if 'UPDATE "radar_tracked_repos" SET' in item[0]
+    assert not any(
+        'radar_tracked_repos' in sql
+        or 'radar_github_activities' in sql
+        or 'radar_github_signals' in sql
+        for sql, _params in pool.connection_value.executions
     )
-    assert update[1][0] == "Updated description"
-    assert update[1][1:4] == (123, 45, 6)
+    assert enrichment_calls == []
 
 
 async def test_sync_duplicate_canonical_url_rerun_does_not_insert() -> None:
@@ -301,6 +290,146 @@ async def test_sync_tracks_default_score_as_fallback_and_keeps_pending_row() -> 
         'INSERT INTO "radar_sync_diagnostics"' in sql
         and params[13] == "PENDING_SCORE"
         for sql, params in pool.connection_value.executions
+    )
+
+
+async def test_sync_scores_limited_abstract_instead_of_default() -> None:
+    pool = _Pool([_source()])
+    content_calls: list[str] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate()]
+
+    async def abstract_document(url: str, **kwargs: Any) -> FetchedDocument:
+        body = (
+            "A focused abstract about hierarchical LLM agents with "
+            "retrieval-augmented generation. It reports sparse and dense "
+            "retrieval results, structured prompting, token budgets, and "
+            "production deployment tradeoffs. "
+        ) * 3
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=f"<html><body><p>{body}</p></body></html>".encode(),
+            content_type="text/html",
+            elapsed_ms=5,
+            redirect_count=0,
+        )
+
+    async def score_abstract(
+        title: str,
+        content: str,
+        **kwargs: Any,
+    ) -> Any:
+        content_calls.append(content)
+        return compute_score(
+            {
+                "信息增量": 1,
+                "分析深度": 1,
+                "可行动性": 1,
+                "事实可信度": 1,
+                "时效性": 1,
+                "表达质量": 1,
+                "综合信号": 1,
+                "direct_relevance": 1,
+                "relevance_evidence": "abstract covers retrieval and agents",
+            },
+            source_type="rss",
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=abstract_document,
+        distilled_scorer=score_abstract,
+    )
+
+    assert result.runs[0].total_new == 1
+    assert len(content_calls) == 1
+    assert 300 <= len(content_calls[0]) < 1000
+    assert not any(
+        "PENDING_SCORE" in sql
+        for sql, _params in pool.connection_value.executions
+    )
+    insert_sql, insert_params = next(
+        item
+        for item in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in item[0]
+    )
+    assert "低置信度初筛" in insert_params[15]
+
+
+async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() -> None:
+    """A blocked repo page must not bypass the repo's tier decision."""
+    pool = _Pool([_source("github-source", "github")])
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [
+            RadarCandidate(
+                title="acme/agent",
+                url="https://github.com/acme/agent",
+                snippet="An agent runtime with durable workflows and CLI tooling.",
+                content_origin="api",
+                tags=("github", "repository"),
+                repo_signals={"stars": 1200, "forks": 80, "openIssues": 4},
+            )
+        ]
+
+    async def blocked_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=b"<html><body>Just a moment</body></html>",
+            content_type="text/html",
+            elapsed_ms=1,
+            redirect_count=0,
+        )
+
+    async def score_repo(
+        title: str,
+        content: str,
+        **kwargs: Any,
+    ) -> Any:
+        calls.append((title, content, kwargs))
+        return compute_score(
+            {
+                "信息增量": 1,
+                "分析深度": 1,
+                "可行动性": 1,
+                "事实可信度": 1,
+                "时效性": 1,
+                "表达质量": 1,
+                "综合信号": 1,
+                "direct_relevance": 1,
+                "relevance_evidence": "仓库描述包含运行时和 CLI",
+            },
+            source_type="github",
+            structured_signals=kwargs.get("structured_signals"),
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"github": fetcher},
+        document_fetcher=blocked_fetch,
+        distilled_scorer=score_repo,
+    )
+
+    assert result.runs[0].total_new == 1
+    assert len(calls) == 1
+    assert "acme/agent" in calls[0][1]
+    assert calls[0][2]["structured_signals"]["stars"] == 1200
+    assert not any(
+        'PENDING_SCORE' in sql
+        for sql, _params in pool.connection_value.executions
     )
 
 
@@ -388,7 +517,6 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from ai_engine.radar import enrichment_worker, sync_runner
-    from ai_engine.radar import tracked_repo_manager
 
     pool = _Pool([_source("source-1", "rss")])
     sync_result = RadarSyncResult(
@@ -413,26 +541,11 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
     async def fake_sync(pool: Any, **kwargs: Any) -> RadarSyncResult:
         return sync_result
 
-    async def fake_tracked(
-        pool: Any,
-        recent_run_ids: dict[str, str],
-        *,
-        fallback_to_latest: bool,
-    ) -> dict[str, int]:
-        captured["tracked_ids"] = recent_run_ids
-        captured["fallback"] = fallback_to_latest
-        return {"signals": 0}
-
     async def fake_enrichment(pool: Any, **kwargs: Any) -> int:
         captured["enrichment"] = kwargs
         return 2
 
     monkeypatch.setattr(sync_runner, "run_radar_sync", fake_sync)
-    monkeypatch.setattr(
-        tracked_repo_manager,
-        "run_tracked_repo_postprocessing",
-        fake_tracked,
-    )
     monkeypatch.setattr(
         enrichment_worker,
         "run_enrichment_for_pending",
@@ -441,8 +554,6 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
     result = await run_radar_pipeline(pool, triggered_by="admin")
 
     assert result.enriched_count == 2
-    assert captured["tracked_ids"] == {"rss": "run-1"}
-    assert captured["fallback"] is False
     assert captured["enrichment"] == {
         "limit": 2,
         "sync_run_ids": ("run-1",),
@@ -468,6 +579,35 @@ async def test_source_failure_does_not_block_other_source() -> None:
     assert result.runs[1].total_new == 1
 
 
+def test_source_retry_uses_latest_result_per_source() -> None:
+    completed = SourceRunResult(
+        run_id="run-2",
+        source_id="source-1",
+        status="completed",
+        total_fetched=1,
+        total_new=1,
+        total_skipped=0,
+        total_failed=0,
+        token_input_total=0,
+        token_output_total=0,
+        cost_usd=0,
+    )
+    failed = SourceRunResult(
+        run_id="run-1",
+        source_id="source-1",
+        status="failed",
+        total_fetched=0,
+        total_new=0,
+        total_skipped=0,
+        total_failed=1,
+        token_input_total=0,
+        token_output_total=0,
+        cost_usd=0,
+        error_code="UPSTREAM_RATE_LIMITED",
+    )
+    assert _retryable_latest_source_ids([failed, completed]) == set()
+
+
 async def test_candidate_safe_fetch_failure_makes_run_partial() -> None:
     pool = _Pool([_source()])
 
@@ -488,7 +628,7 @@ async def test_candidate_safe_fetch_failure_makes_run_partial() -> None:
     assert result.runs[0].error_code == "URL_FETCH_BLOCKED"
     finish = next(
         params for sql, params in pool.connection_value.executions
-        if 'UPDATE "radar_sync_runs" SET' in sql
+        if 'UPDATE "radar_sync_runs" SET "status" = %s' in sql
     )
     assert "SafeFetchError/URL_FETCH_BLOCKED@example.com x1" in str(finish[10])
 
@@ -583,67 +723,6 @@ async def test_generate_failure_isolated_from_next_candidate() -> None:
     assert result.runs[0].total_failed == 0
     assert result.runs[0].fallback_count >= 1
     assert result.runs[0].total_new == 2
-
-
-async def test_github_tracked_repo_digest_uses_one_combined_activity_brief() -> None:
-    """A tracked repo is summarized once over its combined activity.
-
-    Regression: the generic sync path used to fetch the repo HTML page and
-    feed the README to the brief LLM, ignoring ``repo_activity`` entirely.
-    The digest branch must skip HTML fetching and pass issues/PRs/releases
-    together to exactly one per-repo brief call.
-    """
-    pool = _Pool([_source("tracked-1", "github_tracked")])
-
-    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
-        return [_repo_digest_candidate()]
-
-    fetched_urls: list[str] = []
-
-    async def no_html_fetch(url: str, **kwargs: Any) -> FetchedDocument:
-        fetched_urls.append(url)
-        return _document(url)
-
-    brief_items: list[dict[str, Any]] = []
-
-    async def record_brief(
-        adapter: Any, item: dict[str, Any], canonical: str, **kwargs: Any
-    ) -> Any:
-        brief_items.append(item)
-        from ai_engine.ingestion.pipeline import _generate_brief
-
-        return await _generate_brief(adapter, item, canonical, **kwargs)
-
-    result = await run_radar_sync(
-        pool,
-        triggered_by="admin",
-        adapter=FakeAdapter(),
-        fetchers={"github_tracked": fetcher},
-        document_fetcher=no_html_fetch,
-        generate_brief=record_brief,
-    )
-    run = result.runs[0]
-    assert run.status == "completed"
-    assert run.total_new == 1
-    assert run.fallback_count == 0
-    assert fetched_urls == []
-    assert len(brief_items) == 1
-    context = brief_items[0]["snippet"]
-    assert "# acme/agent" in context
-    assert "Fix agent crash on retries" in context
-    assert "Add MCP tool registry" in context
-    assert "v2.0" in context
-    assert "README" not in context
-
-    insert = next(
-        item
-        for item in pool.connection_value.executions
-        if 'INSERT INTO "summaries"' in item[0]
-    )
-    _, params = insert
-    assert params[23].startswith("# acme/agent")
-    assert "Add MCP tool registry" in params[23]
-    assert params[24] == "github_repo"
 
 
 async def test_sync_rejects_invalid_trigger() -> None:
@@ -751,6 +830,13 @@ def test_clean_content_threshold_after_cleaning() -> None:
     assert _clean_content(body) == ""
 
 
+def test_strip_reasoning_markup_before_persisting_brief() -> None:
+    assert _strip_reasoning_markup(
+        "<think>internal reasoning</think>\n这是最终摘要。"
+    ) == "这是最终摘要。"
+    assert _strip_reasoning_markup("<think>truncated reasoning") == ""
+
+
 def test_nav_noise_patterns_list_is_non_empty() -> None:
     # 防止有人意外清空列表导致退化为恒等
     assert len(_NAV_NOISE_PATTERNS) >= 5
@@ -808,6 +894,82 @@ def test_github_repo_metadata_can_survive_blocked_detail_page() -> None:
     assert _can_use_candidate_metadata_fallback(rss_source, rss_candidate)
 
 
+def test_safe_error_code_preserves_explicit_brief_error() -> None:
+    error = _BriefGenerationError(
+        "UPSTREAM_RATE_LIMITED",
+        "provider rejected the request",
+    )
+    assert _safe_error_code(error) == "UPSTREAM_RATE_LIMITED"
+
+
+async def test_producthunt_metadata_survives_failed_brief() -> None:
+    pool = _Pool([_source("producthunt-1", "producthunt")])
+    candidate = RadarCandidate(
+        title="Useful developer tool",
+        url="https://www.producthunt.com/posts/useful-tool",
+        snippet="A focused developer tool that helps teams inspect and debug AI workflows.",
+        published_at=datetime.now(timezone.utc),
+        content_origin="api",
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def failed_brief(
+        adapter: Any,
+        item: dict[str, Any],
+        canonical: str,
+        **kwargs: Any,
+    ) -> Any:
+        del adapter, item, canonical, kwargs
+        return type(
+            "Brief",
+            (),
+            {
+                "status": AI_JOB_STATUS["FAILED"],
+                "output_text": None,
+                "error_code": "AI_ENGINE_UNAVAILABLE",
+                "error_message": "HTTP 502 proxy_error",
+                "cost": type(
+                    "Cost",
+                    (),
+                    {
+                        "token_input_total": 0,
+                        "token_output_total": 0,
+                        "cost_cents": 0.0,
+                    },
+                )(),
+            },
+        )()
+
+    async def blocked(url: str, **kwargs: Any) -> FetchedDocument:
+        del url, kwargs
+        raise SafeFetchError(
+            "URL_FETCH_BLOCKED",
+            "Product Hunt returned HTTP 403",
+            host="www.producthunt.com",
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="cron",
+        adapter=FakeAdapter(),
+        fetchers={"producthunt": fetcher},
+        document_fetcher=blocked,
+        generate_brief=failed_brief,
+    )
+
+    run = result.runs[0]
+    assert run.status == "completed"
+    assert run.total_failed == 0
+    assert run.total_new == 1
+    assert run.fallback_count >= 2
+    assert any(
+        'INSERT INTO "summaries"' in sql
+        for sql, _ in pool.connection_value.executions
+    )
+
+
 async def test_short_content_is_sent_to_governance_without_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     import ai_engine.radar.sync_runner as sync_runner
 
@@ -855,6 +1017,24 @@ async def test_short_content_is_sent_to_governance_without_llm(monkeypatch: pyte
         and params[13] == "LOW_QUALITY"
         for sql, params in pool.connection_value.executions
     )
+
+
+def test_content_fetch_failure_reason_only_matches_explicit_shells() -> None:
+    assert _content_fetch_failure_reason("Reddit", "reddit") == "reddit_empty_detail"
+    assert _content_fetch_failure_reason(
+        "Reddit - Prove your humanity", "reddit"
+    ) == "bot_challenge"
+    assert _content_fetch_failure_reason(
+        "Enable JavaScript and cookies to continue", "vendor_news"
+    ) == "javascript_or_cloudflare_challenge"
+    assert _content_fetch_failure_reason(
+        "A short but real release note.", "vendor_news"
+    ) is None
+    assert _content_fetch_failure_reason(
+        "Mark by Airtop Meet Mark. Promoted",
+        "producthunt",
+        "Some Other Product",
+    ) == "producthunt_wrong_page_shell"
 
 
 async def test_content_retry_recovers_from_empty_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -938,7 +1118,7 @@ async def test_cloudflare_content_is_sent_to_governance(monkeypatch: pytest.Monk
     assert run.total_new == 0
     assert any(
         'INSERT INTO "radar_sync_diagnostics"' in sql
-        and params[13] == "LOW_QUALITY"
+        and params[13] == "CONTENT_FETCH_FAILED"
         for sql, params in pool.connection_value.executions
     )
 
@@ -958,6 +1138,68 @@ def test_extract_article_content_preserves_structure_with_trafilatura() -> None:
     assert "## Method" in result
     assert "- One item" in result
     assert "[source link](https://example.com)" in result
+
+
+def test_preferred_document_urls_prefers_arxiv_native_html() -> None:
+    urls = _preferred_document_urls(
+        "https://arxiv.org/abs/2608.26094",
+        "arxiv",
+    )
+    assert urls[0] == "https://arxiv.org/html/2608.26094"
+    assert urls[1] == "https://ar5iv.labs.arxiv.org/html/2608.26094"
+
+
+def test_scoreability_allows_limited_abstract_content() -> None:
+    assert _scoreability("x" * 600) == "limited"
+    assert _scoreability("x" * 299) is None
+    assert _scoreability("x" * 1200) == "full"
+
+
+def test_shell_content_label_classifies_known_shells() -> None:
+    assert _shell_content_label("Reddit - Prove your humanity\nWe\u2019re committed") == "\u53cd\u722c\u9a8c\u8bc1\u9875"
+    assert _shell_content_label("OpenReview\n# Verifying your browser") == "\u53cd\u722c\u9a8c\u8bc1\u9875"
+    assert _shell_content_label("Enable JavaScript and cookies to continue.") == "\u53cd\u722c\u9a8c\u8bc1\u9875"
+    assert _shell_content_label("Mark by AirtopMeet Mark. Vibe automation for marketers.Promoted") == "\u63a8\u5e7f/\u91cd\u5b9a\u5411\u9875"
+    assert _shell_content_label("Wispr Flow: Dictation That Works EverywhereStop typing") == "\u63a8\u5e7f/\u91cd\u5b9a\u5411\u9875"
+    assert _shell_content_label("<p>Article URL: <a href='https://example.com'>https://example.com</a></p> <p>Comments URL: <a href='https://news.ycombinator.com/item?id=1'>https://news.ycombinator.com/item?id=1</a></p>") == "\u4ec5\u62ff\u5230\u8bc4\u8bba\u58f3"
+    assert _shell_content_label("\u672a\u627e\u5230\u9875\u9762 \u2013 \u91cf\u5b50\u4f4d 404") == "\u6e90\u7ad9 404"
+    assert _shell_content_label("Lobste.rs score: 4 | comments: 2") == "\u53ea\u6709 Lobsters \u8bc4\u5206\u58f3"
+    assert _shell_content_label("A substantive technical write-up about RAG agents and retrieval pipelines with examples.") is None
+
+
+def test_is_fetch_failure_shell_matches_label() -> None:
+    assert _is_fetch_failure_shell("Reddit - Prove your humanity") is True
+    assert _is_fetch_failure_shell("A real engineering article with enough content to summarize.") is False
+
+
+def test_build_score_reason_prefixes_shell_label() -> None:
+    reason = _build_score_reason(
+        score=type("S", (), {"reason": "Distilled v4.7: noise"})(),
+        distilled=None,
+        markdown="Reddit - Prove your humanity\nWe\u2019re committed",
+    )
+    assert reason.startswith("\u6293\u53d6\u5931\u8d25: \u53cd\u722c\u9a8c\u8bc1\u9875 | ")
+    assert "Distilled v4.7" in reason
+
+
+def test_build_score_reason_combines_limited_and_shell_prefix() -> None:
+    from ai_engine.radar.distilled_scorer import compute_score
+    distilled = compute_score(
+        {
+            "信息增量": 1, "分析深度": 1, "可行动性": 1,
+            "事实可信度": 1, "时效性": 1, "表达质量": 1, "综合信号": 1,
+            "direct_relevance": 1, "relevance_evidence": "short note",
+        },
+        source_type="rss",
+    )
+    reason = _build_score_reason(
+        score=type("S", (), {"reason": "Distilled v4.7: noise"})(),
+        distilled=distilled,
+        limited_score=True,
+        markdown="Lobste.rs score: 2 | comments: 1",
+    )
+    assert "\u6293\u53d6\u5931\u8d25: \u53ea\u6709 Lobsters \u8bc4\u5206\u58f3" in reason
+    assert "\u4f4e\u7f6e\u4fe1\u5ea6\u521d\u7b5b" in reason
 
 
 async def test_generate_brief_with_retry_retries_429(monkeypatch: pytest.MonkeyPatch) -> None:

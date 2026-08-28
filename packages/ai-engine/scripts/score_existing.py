@@ -25,7 +25,6 @@ from ai_engine.scoring.scoring_profiles import profile_for_source_url
 _SOURCE_PROFILE: dict[str, str] = {
     "arxiv": "paper",
     "github": "engineering",
-    "github_tracked": "engineering",
     "github_trending": "engineering",
     "github_topic_search": "engineering",
     "huggingface_models": "engineering",
@@ -192,7 +191,7 @@ async def main() -> int:
                 'WHERE "id" = %s',
                 (
                     json.dumps(result.to_dict(), ensure_ascii=False),
-                    result.effective_total if result.effective_total is not None else result.total,
+                    result.tier_score if result.tier_score is not None else result.total,
                     result.tier,
                     result.must_read,
                     result.profile_id,

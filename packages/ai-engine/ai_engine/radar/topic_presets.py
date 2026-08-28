@@ -22,6 +22,10 @@ DEFAULT_TOPIC_PRESETS: tuple[TopicPreset, ...] = (
     TopicPreset("AI Agents", "ai-agents", "Agent frameworks, runtimes and production patterns.", ("agent", "agents", "agentic"), "06:00"),
     TopicPreset("RAG 与检索", "rag-retrieval", "Retrieval, reranking, vector databases and knowledge systems.", ("rag", "retrieval", "rerank", "vector database"), "06:00"),
     TopicPreset("MCP 与 Agent 协议", "mcp-protocols", "Model Context Protocol and interoperable agent tools.", ("mcp", "model context protocol"), "06:00"),
+    TopicPreset("AI 安全与治理", "ai-safety-governance", "Security, safety, identity and governance for AI systems and agents.", ("security", "prompt injection", "guardrail", "sandbox", "jailbreak", "red team", "identity"), "06:00"),
+    TopicPreset("AI 编程与开发工具", "ai-coding-tools", "Coding agents, developer tools and AI-assisted software engineering.", ("coding agent", "code agent", "copilot", "codex", "claude code", "cursor", "developer tool", "software engineer"), "06:00"),
+    TopicPreset("LLM 评测与可靠性", "llm-evaluation", "Evaluation, benchmarks, observability and reliability for language models.", ("eval", "evaluation", "benchmark", "observability", "tracing", "reliability", "quality"), "06:00"),
+    TopicPreset("多模态 AI", "multimodal-ai", "Vision, image, video, audio and speech models and applications.", ("multimodal", "vision-language", "image generation", "video generation", "speech", "ocr", "audio-language"), "06:00"),
 )
 
 

@@ -17,6 +17,42 @@ from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
 DEFAULT_MAX_AGE_HOURS = 24 * 30
 WEWE_CONTENT_MAX_CHARS = 64_000
+_HN_SHELL_PATTERN = re.compile(
+    r"article url:.*?comments url:.*?(?:points|#\s*comments)",
+    re.IGNORECASE | re.DOTALL,
+)
+_HN_POINTS_RE = re.compile(r"points:\s*(\d+)", re.IGNORECASE)
+_HN_COMMENTS_COUNT_RE = re.compile(r"#\s*comments:\s*(\d+)", re.IGNORECASE)
+_HN_CREATOR_RE = re.compile(
+    r"dc:creator[^>]*>\s*<!\[CDATA\[(.*?)\]\]>", re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_hn_rss_shell(description: str) -> bool:
+    """Detect the HN submission shell that hnrss.org emits in <description>.
+
+    hnrss.org puts the canonical article URL in <link> but repeats the
+    ``Article URL / Comments URL / Points / # Comments`` template inside
+    <description>. Saving the raw template as the radar body would later
+    look like a successful fetch when in reality we only saw the comment
+    shell, so collapse it to a single metadata line.
+    """
+    return bool(_HN_SHELL_PATTERN.search(description or ""))
+
+
+def _clean_hn_rss_description(description: str) -> str:
+    """Collapse an HN submission shell to a one-line metadata snippet."""
+    points = _HN_POINTS_RE.search(description or "")
+    comments = _HN_COMMENTS_COUNT_RE.search(description or "")
+    creator = _HN_CREATOR_RE.search(description or "")
+    parts: list[str] = ["HN submission"]
+    if points:
+        parts.append(f"{points.group(1)} points")
+    if comments:
+        parts.append(f"{comments.group(1)} comments")
+    if creator:
+        parts.append(f"by {creator.group(1).strip()}")
+    return " | ".join(parts)
 
 
 def _clean_wewe_content(value: str) -> str:
@@ -139,6 +175,8 @@ async def fetch_rss_candidates(
             if is_wewe
             else raw_description[:2000]
         )
+        if not is_wewe and _is_hn_rss_shell(description):
+            description = _clean_hn_rss_description(description)
         if apply_ai_filter:
             # Check title + description (case-insensitive regex)
             if not _is_ai_related(f"{title}\n{description}"):

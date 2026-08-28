@@ -33,6 +33,7 @@ export type RadarCandidateShape = {
   title: string;
   excerpt: string;
   body: string | null;
+  tier: string | null;
   url: string;
   sourceType: string | null;
   syncRunId: string | null;
@@ -82,6 +83,12 @@ export function emptyFeedbackCounts(): RadarFeedbackCount {
   return { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 };
 }
 
+function sanitizeOriginalMeta(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { githubUpdates: _legacyGithubUpdates, ...current } = value as Record<string, unknown>;
+  return current;
+}
+
 /** 从 raw prisma 行做类型对齐；返回可序列化对象。 */
 export function shapeCandidate(input: {
   summary: {
@@ -102,6 +109,7 @@ export function shapeCandidate(input: {
     timelinessScore: number | null;
     sourceQualityScore: number | null;
     distilledScore: unknown;
+    distilledTier?: string | null;
     selectionReason: string | null;
     sortOrder: number | null;
     syncRunId: string | null;
@@ -142,6 +150,7 @@ export function shapeCandidate(input: {
     title: s.title,
     excerpt: excerptOf(s.body, 280),
     body: input.includeBody === false ? null : s.body,
+    tier: s.distilledTier ?? distilledScore?.tier ?? null,
     url: s.url,
     sourceType: s.syncRun?.source?.sourceType ?? (s.source === 'user' ? 'web_share' : null),
     syncRunId: s.syncRunId,
@@ -168,7 +177,7 @@ export function shapeCandidate(input: {
     commentCount: s._count?.comments ?? 0,
     originalKind: s.originalKind ?? null,
     originalMarkdown: s.originalMarkdown ?? null,
-    originalMeta: s.originalMeta ?? null,
+    originalMeta: sanitizeOriginalMeta(s.originalMeta ?? null),
     githubItemMeta,
     repoSummary: s.repoSummary ?? null,
     highlights,
@@ -294,6 +303,7 @@ export function parseDistilledScore(value: unknown): DistilledScore | null {
     qualityScore: raw.qualityScore ?? raw.quality_score,
     teamValueScore: raw.teamValueScore ?? raw.team_value_score,
     rankingScore: raw.rankingScore ?? raw.ranking_score,
+    tierScore: raw.tierScore ?? raw.tier_score,
     sourceBonus: raw.sourceBonus ?? raw.source_bonus,
     tier: raw.tier,
     mustRead: raw.mustRead ?? raw.must_read,

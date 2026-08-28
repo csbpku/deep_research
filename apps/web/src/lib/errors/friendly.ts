@@ -110,6 +110,8 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
     // AI
     case ERROR_CODES.AI_ENGINE_UNAVAILABLE:
       return { message: 'AI 调研服务暂时不可用', hint: '已自动重试一次，可能正在恢复中。' };
+    case ERROR_CODES.DATABASE_UNAVAILABLE:
+      return { message: '数据服务暂时不可用', hint: '同步任务会在依赖恢复后继续。' };
     case ERROR_CODES.AI_QUOTA_EXCEEDED:
       return { message: '今日 AI 调研配额已用完', hint: '明天再试，或联系 Admin 调整预算。' };
     case ERROR_CODES.AI_INVALID_SOURCE_POLICY:

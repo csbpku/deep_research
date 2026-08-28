@@ -217,6 +217,23 @@ def _extract_article_text(html: str) -> str:
     return "\n".join(lines)
 
 
+def _is_protection_shell(text: str) -> bool:
+    lowered = " ".join((text or "").split()).lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "enable javascript and cookies to continue",
+            "checking your browser before accessing",
+            "prove your humanity",
+            "complete the challenge",
+            "attention required! | cloudflare",
+            "performance & security by cloudflare",
+            "challenge-platform",
+            "cf-chl-",
+        )
+    )
+
+
 def _parse_rss_items(xml: str) -> dict[str, dict[str, str]]:
     """Parse RSS <item> elements, return {url: {title, description, pubDate}}."""
     results: dict[str, dict[str, str]] = {}
@@ -337,11 +354,13 @@ async def check_and_fetch_vendor_news(
                 resp = await http.get(url)
                 resp.raise_for_status()
                 text = _extract_article_text(resp.text)
-                if len(text) < 100:
+                if len(text) < 100 or _is_protection_shell(text):
                     # HTML extraction failed (JS-required pages like OpenAI).
                     # Fall back to RSS <description> if available.
                     meta = rss_metadata.get(url, {})
                     desc = meta.get("description", "").strip()
+                    if _is_protection_shell(desc):
+                        desc = ""
                     rss_title = meta.get("title", "").strip()
                     if rss_title or desc:
                         title = rss_title or _infer_title(desc, url)
@@ -372,6 +391,8 @@ async def check_and_fetch_vendor_news(
                 meta = rss_metadata.get(url, {})
                 rss_title = meta.get("title", "").strip()
                 desc = meta.get("description", "").strip()
+                if _is_protection_shell(desc):
+                    desc = ""
                 if rss_title or desc:
                     title = rss_title or _infer_title(desc, url)
                     snippet = desc[:500] if desc else title

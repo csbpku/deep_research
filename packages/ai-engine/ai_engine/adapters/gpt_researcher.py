@@ -58,7 +58,18 @@ from ai_engine.contracts.states import (
     AiJobStatus,
 )
 from ai_engine.fact_verifier import verify_github_star_claims
-from ai_engine.llm.client import is_quota_error, sanitize_llm_error
+from ai_engine.llm.client import (
+    _credentials,
+    _parse_spec,
+    is_retryable_llm_error,
+    sanitize_llm_error,
+)
+from ai_engine.llm.config import (
+    fallback_spec as configured_fallback_spec,
+    resolve_route,
+    resolve_spec,
+    resolve_wire_spec,
+)
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 from ai_engine.reviewer import DefaultResearchReviewer, ReviewResult
 
@@ -404,7 +415,9 @@ async def _repair_report_with_review(
                 "你是调研报告修订 Agent。只能依据审核意见和给定来源修改报告，"
                 "无法确认的事实必须删除或标记为未核实。只输出修订后的报告正文。"
             ),
-            llm_spec=os.environ.get("FACT_REPAIR_LLM"),
+            llm_spec=resolve_spec(
+                "utility", explicit=os.environ.get("FACT_REPAIR_LLM")
+            ),
             tier="light",
             max_tokens=3000,
             timeout=60.0,
@@ -655,19 +668,13 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             )
         # Heavy tier — gpt-researcher pipeline (SMART/STRATEGIC slots
         # default to llm_spec; FAST slot defaults to BRIEF_LLM for cost).
-        self._llm_spec = llm_spec or os.environ.get(
-            "SMART_LLM", "anthropic:claude-haiku-4-5"
-        )
+        self._llm_spec = llm_spec or resolve_spec("research", tier="heavy")
         # Light tier — brief summaries, distilled scorer, chat.
-        self._brief_llm = brief_llm or os.environ.get(
-            "BRIEF_LLM", self._llm_spec
-        )
+        self._brief_llm = brief_llm or resolve_spec("utility")
         # Per-slot models for gpt-researcher; FAST defaults to brief
         # (cheap, fast subqueries) unless explicitly overridden.
-        self._fast_llm = os.environ.get("FAST_LLM", self._brief_llm)
-        self._strategic_llm = os.environ.get(
-            "STRATEGIC_LLM", self._llm_spec
-        )
+        self._fast_llm = self._llm_spec
+        self._strategic_llm = self._llm_spec
         self._jobs: dict[str, _Job] = {}
         self._global_lock = asyncio.Lock()
 
@@ -851,7 +858,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             complement = job.request.source_policy != "only_user_sources"
 
             step_capture = _StepCaptureLogHandler(job)
-            fallback_spec = os.environ.get("LLM_FALLBACK_LLM", "").strip()
+            fallback_spec = configured_fallback_spec()
             model_sets = [(self._llm_spec, self._fast_llm, self._strategic_llm, False)]
             if fallback_spec and fallback_spec != self._llm_spec:
                 model_sets.append((fallback_spec, fallback_spec, fallback_spec, True))
@@ -859,9 +866,27 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             researcher: Any | None = None
             report = ""
             for smart_llm, fast_llm, strategic_llm, used_fallback in model_sets:
-                os.environ["SMART_LLM"] = smart_llm
-                os.environ["FAST_LLM"] = fast_llm
-                os.environ["STRATEGIC_LLM"] = strategic_llm
+                route = resolve_route(
+                    "research", spec=smart_llm, tier="heavy"
+                )
+                os.environ["SMART_LLM"] = route.wire_spec
+                os.environ["FAST_LLM"] = resolve_wire_spec(
+                    "research", explicit=fast_llm, tier="heavy"
+                )
+                os.environ["STRATEGIC_LLM"] = resolve_wire_spec(
+                    "research", explicit=strategic_llm, tier="heavy"
+                )
+                os.environ[f"{route.protocol.upper()}_API_KEY"] = (
+                    route.api_key
+                    or f"sk-placeholder-for-{route.vendor}-compatible-proxy"
+                )
+                if route.base_url:
+                    os.environ[f"{route.protocol.upper()}_BASE_URL"] = route.base_url
+                provider, model = _parse_spec(smart_llm)
+                key, base_url = _credentials(provider, "heavy", model)
+                os.environ[f"{provider.upper()}_API_KEY"] = key
+                if base_url:
+                    os.environ[f"{provider.upper()}_BASE_URL"] = base_url
                 started_at = time.monotonic()
                 candidate = GPTResearcher(
                     query=query_for_researcher,
@@ -881,7 +906,11 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                         return
                     report = await candidate.write_report()
                 except Exception as exc:
-                    if not used_fallback and fallback_spec and is_quota_error(exc):
+                    if (
+                        not used_fallback
+                        and fallback_spec
+                        and is_retryable_llm_error(exc)
+                    ):
                         provider, _, model = smart_llm.partition(":")
                         await record_llm_usage(
                             LlmUsageAttempt(
@@ -935,7 +964,9 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             async with job.lock:
                 job.review_phase = "reviewing"
             reviewer = DefaultResearchReviewer(
-                llm_spec=os.environ.get("FACT_REVIEWER_LLM")
+                llm_spec=resolve_spec(
+                    "utility", explicit=os.environ.get("FACT_REVIEWER_LLM")
+                )
             )
             review_result = ReviewResult("review_unavailable")
             for review_attempt in range(1, 3):

@@ -81,12 +81,6 @@ async def main() -> int:
         f"  Enriched: {pipeline_result.enriched_count}  "
         f"elapsed: {pipeline_result.enrichment_elapsed_ms / 1000:.1f}s"
     )
-    if pipeline_result.tracked_repo_result:
-        tracked = ", ".join(
-            f"{key}={value}"
-            for key, value in sorted(pipeline_result.tracked_repo_result.items())
-        )
-        print(f"  Tracked repos: {tracked}")
     if pipeline_result.enrichment_error:
         print(f"  Enrichment error: {pipeline_result.enrichment_error}")
     skip_existing = sum(r.skipped_existing for r in result.runs)

@@ -24,6 +24,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
@@ -60,6 +61,8 @@ from ai_engine.job_runner.store import (
 )
 from ai_engine.job_runner.models import JobSnapshot
 from ai_engine.llm.client import generate_text
+from ai_engine.llm.config import config_snapshot, resolve_spec
+from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 
 load_dotenv()
 
@@ -118,6 +121,7 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     topic_proposal_task: asyncio.Task[None] | None = None
     topic_synth_task: asyncio.Task[None] | None = None
     topic_issue_task: asyncio.Task[None] | None = None
+    llm_recovery_task: asyncio.Task[None] | None = None
     # asyncio tasks can start immediately, so publish the adapter before any
     # worker reads app.state.adapter.
     app_instance.state.adapter = build_adapter()
@@ -145,6 +149,11 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             radar_sync_task = asyncio.create_task(
                 _radar_sync_loop(app_instance),
                 name="radar-sync-cron",
+            )
+        if os.environ.get("LLM_RECOVERY_ENABLED", "1") == "1":
+            llm_recovery_task = asyncio.create_task(
+                _llm_recovery_loop(app_instance),
+                name="llm-recovery",
             )
         # P1-B: submission worker
         if os.environ.get("SUBMISSION_WORKER_ENABLED", "1") == "1":
@@ -205,6 +214,10 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             topic_issue_task.cancel()
             with suppress(asyncio.CancelledError):
                 await topic_issue_task
+        if llm_recovery_task is not None:
+            llm_recovery_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await llm_recovery_task
         if isinstance(store, DbJobStore):
             await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
@@ -333,8 +346,9 @@ def _seconds_until_next_radar_window(
 # radar_sources.config["pollingIntervalMinutes"] when set, otherwise the
 # tier default applies. ``hot`` is reserved for sources that benefit from
 # sub-hour freshness (HN Algolia, vendor news, vendor changelogs);
-# ``mid`` covers arXiv + community feeds; ``daily`` covers curated
-# tracked-repo digests whose content only changes a few times a week.
+# ``mid`` covers arXiv + community feeds; curated GitHub repositories are
+# intentionally polled less often because their detail view has an explicit
+# Zread refresh action.
 _RADAR_DEFAULT_TIER_MINUTES: dict[str, int] = {
     "hackernews": 30,
     "hn_algolia": 30,
@@ -350,7 +364,6 @@ _RADAR_DEFAULT_TIER_MINUTES: dict[str, int] = {
     "reddit": 120,
     "github": 30,
     "github_trending": 30,
-    "github_tracked": 720,        # curated list, daily is fine
     "github_topic_search": 120,
     "producthunt": 240,
     "sitemap_watch": 360,
@@ -394,8 +407,13 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
     tick_seconds = max(15.0, float(os.environ.get("RADAR_TICK_SECONDS", "60")))
     daily_full_sync_time = os.environ.get("RADAR_SYNC_CRON_TIME", "08:00")
     tz = ZoneInfo("Asia/Shanghai")
-    last_daily_full_sync = datetime.now(tz) - timedelta(days=2)
+    # Do not force a full sweep on every process restart. launchd can restart
+    # the worker during a dependency outage; initializing this two days in the
+    # past multiplied every restart into another full source fan-out. Each
+    # source's persisted lastSyncAt still determines whether it is due.
+    last_daily_full_sync = datetime.now(tz)
     last_run_at_per_source: dict[str, datetime] = {}
+    consecutive_failures = 0
 
     while True:
         try:
@@ -479,6 +497,7 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
                 source_ids=set(due_source_ids),
                 lock=getattr(app_instance.state, "radar_sync_lock", None),
             )
+            consecutive_failures = 0
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -489,18 +508,14 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
                 error_type=type(exc).__name__,
                 error_message=str(exc)[:500],
                 sources=len(due_source_ids),
-                consecutive_failures=getattr(
-                    _radar_tiered_sync_loop, "_consecutive_failures", 0
-                ) + 1,
+                consecutive_failures=consecutive_failures + 1,
             )
             log.error(
                 "ai-engine.radar.tiered_job_traceback",
                 exc_info=exc,
             )
-            _radar_tiered_sync_loop._consecutive_failures = (
-                getattr(_radar_tiered_sync_loop, "_consecutive_failures", 0) + 1
-            )
-            if _radar_tiered_sync_loop._consecutive_failures >= 5:
+            consecutive_failures += 1
+            if consecutive_failures >= 5:
                 log.error(
                     "ai-engine.radar.tiered_job_persistent",
                     note="5+ consecutive failures — investigate scheduler health",
@@ -518,6 +533,84 @@ async def _radar_sync_loop(app_instance: FastAPI) -> None:
     old name is preserved so historical ``lifespan`` callers stay valid.
     """
     await _radar_tiered_sync_loop(app_instance)
+
+
+async def _llm_recovery_loop(app_instance: FastAPI) -> None:
+    """Retry recoverable radar work after a temporary local/network outage.
+
+    A provider outage is not a content-quality decision.  The radar pipeline
+    therefore leaves score/enrichment work retryable, and this loop revisits a
+    bounded batch on a fixed cadence instead of waiting for the next source
+    publication.  The existing workers own the quality gates and per-call
+    retry/fallback policy.
+    """
+    from ai_engine.radar.candidate_postprocessor import score_missing_candidates
+    from ai_engine.radar.enrichment_worker import run_enrichment_for_pending
+
+    interval = max(
+        300.0,
+        float(os.environ.get("LLM_RECOVERY_INTERVAL_SECONDS", "7200")),
+    )
+    limit = max(1, int(os.environ.get("LLM_RECOVERY_LIMIT", "50")))
+    log = structlog.get_logger("ai_engine.llm_recovery")
+    log.info(
+        "ai-engine.llm_recovery.started",
+        interval_seconds=interval,
+        limit=limit,
+    )
+
+    while True:
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.llm_recovery.sleep_failed",
+                error_type=type(exc).__name__,
+            )
+            continue
+
+        try:
+            lock = getattr(app_instance.state, "radar_sync_lock", None)
+            if lock is None:
+                raise RuntimeError("radar sync lock is not initialized")
+            async with lock:
+                scored = await score_missing_candidates(
+                    app_instance.state.db_pool,
+                    limit=limit,
+                )
+                enriched = await run_enrichment_for_pending(
+                    app_instance.state.db_pool,
+                    limit=limit,
+                )
+                rescored = (
+                    await score_missing_candidates(
+                        app_instance.state.db_pool,
+                        limit=limit,
+                    )
+                    if enriched > 0
+                    else 0
+                )
+            log.info(
+                "ai-engine.llm_recovery.completed",
+                interval_seconds=interval,
+                limit=limit,
+                scored=scored,
+                enriched=enriched,
+                rescored=rescored,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A failed recovery tick must not kill the permanent scheduler.
+            # The next fixed interval is the next bounded retry opportunity.
+            log.warning(
+                "ai-engine.llm_recovery.failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc)[:500],
+                interval_seconds=interval,
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -640,11 +733,15 @@ app = FastAPI(
 
 from ai_engine.radar.sync_endpoint import router as radar_router  # noqa: E402
 from ai_engine.radar.topic_endpoint import router as topic_router  # noqa: E402
-from ai_engine.server.chat import router as chat_router  # noqa: E402
+from ai_engine.server.chat import _anythingllm_usage, router as chat_router  # noqa: E402
+from ai_engine.server.research_chat import router as research_chat_router  # noqa: E402
 
 app.include_router(radar_router)
 app.include_router(topic_router)
 app.include_router(chat_router)
+app.include_router(research_chat_router)
+
+logger.info("ai-engine.llm.routes", extra={"routes": config_snapshot()})
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -857,7 +954,7 @@ class AssistantSelection(BaseModel):
 
 
 class ResearchAssistantBody(BaseModel):
-    operation: str = Field(pattern=r"^(explain|rewrite|summarize|guide|guide_section|guide_synthesis|counterpoint|fact_check|conclusion_check)$")
+    operation: str = Field(pattern=r"^(explain|translate|rewrite|summarize|guide|guide_section|guide_synthesis|counterpoint|fact_check|conclusion_check)$")
     body: str = Field(min_length=1, max_length=256000)
     selection: AssistantSelection | None = None
     instruction: str | None = Field(default=None, max_length=2000)
@@ -933,11 +1030,7 @@ def _anythingllm_enabled_for(body: ResearchAssistantBody) -> bool:
 
 def _extract_json_object(value: str) -> dict[str, object] | None:
     """Remove reasoning wrappers and recover the first JSON object from a model response."""
-    cleaned = value.strip()
-    while "<think>" in cleaned and "</think>" in cleaned:
-        start = cleaned.find("<think>")
-        end = cleaned.find("</think>", start) + len("</think>")
-        cleaned = f"{cleaned[:start]}{cleaned[end:]}".strip()
+    cleaned = _strip_reasoning_blocks(value)
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start < 0 or end <= start:
@@ -949,13 +1042,38 @@ def _extract_json_object(value: str) -> dict[str, object] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-async def _anythingllm_guide(body: ResearchAssistantBody) -> dict[str, object] | None:
+def _strip_reasoning_blocks(value: str) -> str:
+    """Remove provider reasoning markup before it reaches a reader.
+
+    Reasoning models are not fully consistent: some emit a closed ``<think>``
+    block, while truncated responses may omit the closing tag.  The latter
+    must not leak internal reasoning into the user-facing suggestion.
+    """
+    cleaned = str(value or "").strip()
+    cleaned = re.sub(
+        r"<think[^>]*>.*?</think[^>]*>",
+        "",
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    cleaned = re.sub(
+        r"<think[^>]*>[\s\S]*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned
+
+
+async def _anythingllm_guide(
+    body: ResearchAssistantBody,
+) -> tuple[dict[str, object] | None, int | None, int | None, str | None]:
     """Call AnythingLLM for the opt-in radar experiment; failures fall back upstream."""
     base_url = os.environ.get("ANYTHINGLLM_URL", "").strip().rstrip("/")
     api_key = os.environ.get("ANYTHINGLLM_API_KEY", "").strip()
     workspace = os.environ.get("ANYTHINGLLM_WORKSPACE", "").strip()
     if not base_url or not api_key or not workspace:
-        return None
+        return None, None, None, None
     if body.operation == "guide":
         instruction = "只输出紧凑 JSON，不要输出<think>、解释或 Markdown。schema: {\"version\":2,\"summary\":\"一句话判断\",\"outline\":[{\"heading\":\"主题\",\"takeaway\":\"本部分说明\",\"quote\":\"该部分逐字原文短引\"}],\"keyTakeaways\":[{\"claim\":\"关键观点\",\"whyItMatters\":\"重要性\",\"evidence\":\"原文短引\"}]}。outline 最多 6 条，keyTakeaways 最多 3 条，每个 outline.quote 必须来自对应部分且不能重复 Abstract，证据必须来自原文。"
     elif body.operation == "guide_section":
@@ -971,12 +1089,15 @@ async def _anythingllm_guide(body: ResearchAssistantBody) -> dict[str, object] |
                 json={"message": prompt, "mode": "chat", "sessionId": f"radar-{body.summary_id}"},
             )
         if response.status_code >= 400:
-            return None
+            return None, None, None, None
         payload = response.json()
         text = payload.get("textResponse") if isinstance(payload, dict) else None
-        return _extract_json_object(text) if isinstance(text, str) else None
+        if not isinstance(payload, dict) or not isinstance(text, str):
+            return None, None, None, None
+        tokens_in, tokens_out, actual_model = _anythingllm_usage(payload)
+        return _extract_json_object(text), tokens_in, tokens_out, actual_model
     except (httpx.HTTPError, ValueError, TypeError):
-        return None
+        return None, None, None, None
 
 
 @app.post("/api/ai/research-assistant")
@@ -992,8 +1113,20 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
     warnings: list[str] = []
     claims: list[dict[str, object]] = []
     if _anythingllm_enabled_for(body):
-        external_guide = await _anythingllm_guide(body)
+        external_guide, tokens_in, tokens_out, actual_model = await _anythingllm_guide(body)
         if external_guide:
+            await record_llm_usage(
+                LlmUsageAttempt(
+                    operation=f"research_assistant.{body.operation}.anythingllm",
+                    request_id=request_id,
+                    provider="anythingllm",
+                    requested_model=actual_model or "workspace-default",
+                    actual_model=actual_model,
+                    input_tokens=tokens_in,
+                    output_tokens=tokens_out,
+                    latency_ms=int((asyncio.get_event_loop().time() - started) * 1000),
+                )
+            )
             return {
                 "operation": body.operation,
                 "original": original,
@@ -1003,7 +1136,11 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
                 "claims": [],
                 "warnings": warnings,
                 "request_id": request_id,
-                "metrics": {"provider": "anythingllm"},
+                "metrics": {
+                    "provider": "anythingllm",
+                    "token_input_total": tokens_in,
+                    "token_output_total": tokens_out,
+                },
             }
     if body.operation in {"fact_check", "conclusion_check"}:
         from ai_engine.reviewer import DefaultResearchReviewer
@@ -1017,7 +1154,11 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
                     snippet=_json_str(raw.get("description")),
                     score=None, step_captured=cast("Any", AI_JOB_STEP["SEARCH"]), is_accessible=True,
                 ))
-        reviewed = await DefaultResearchReviewer(llm_spec=os.environ.get("FACT_REVIEWER_LLM")).review(
+        reviewed = await DefaultResearchReviewer(
+            llm_spec=resolve_spec(
+                "utility", explicit=os.environ.get("FACT_REVIEWER_LLM")
+            )
+        ).review(
             original if body.operation == "fact_check" else context, tuple(sources), body.topic,
         )
         for claim in reviewed.claims:
@@ -1067,7 +1208,10 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
                 f"主题：{body.topic}\n原文：\n{context}\n\n{guide_instruction}"
             ),
             system_prompt=guide_system,
-            llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=max_tokens, timeout=45.0,
+            llm_spec=resolve_spec(
+                "utility", explicit=os.environ.get("RESEARCH_ASSISTANT_LLM")
+            ),
+            tier="light", max_tokens=max_tokens, timeout=45.0,
             disable_thinking=True,
             operation=f"research_assistant.{body.operation}",
             request_id=request_id,
@@ -1099,24 +1243,33 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
         # Keep a usable markdown fallback when the model's JSON is malformed.
         # The BFF can render this instead of turning a recoverable formatting
         # problem into the generic "生成阅读内容失败" state.
-        suggestion = generated.text.strip() if guide is None else None
+        suggestion = _strip_reasoning_blocks(generated.text) if guide is None else None
         return {"operation": body.operation, "original": original, "suggestion": suggestion, "guide": guide, "rationale": guide_instruction, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
 
     prompts = {
         "explain": "解释选中的术语或片段：先定义，再结合上下文说明其在本文中的具体含义、涉及的变量或机制，以及为什么重要；不要只说它是一个术语，不要泛泛而谈。",
+        "translate": "完整翻译输入内容，保留专有名词、标题、列表、表格、代码块、链接和段落结构。",
         "rewrite": "改写这段文字，使其更清晰、准确、紧凑，保留原意。",
         "summarize": "把这段文字压缩成一段简洁摘要。",
         "counterpoint": "为这段文字补充一个有事实依据的反方观点。",
     }
     instruction = body.instruction or prompts[body.operation]
+    is_translation = body.operation == "translate"
     generated = await generate_text(
-        user_prompt=f"主题：{body.topic}\n上下文：{context}\n待处理文字：{original}\n要求：{instruction}",
-        system_prompt="你是研究文章编辑助手。只返回建议文本，不要 Markdown 包装或解释。",
+        user_prompt=original if is_translation else f"主题：{body.topic}\n上下文：{context}\n待处理文字：{original}\n要求：{instruction}",
+        system_prompt=(
+            f"你是专业翻译助手。{instruction}只返回翻译结果，不要重复输入、任务说明或提示词。"
+            if is_translation
+            else "你是研究文章编辑助手。只返回建议文本，不要 Markdown 包装或解释。"
+        ),
         # Translation is chunked by the BFF, but a full-fidelity rewrite can
         # still be longer than a short editing response.  Keep enough output
         # room and expose provider truncation so callers do not treat a
         # partial translation as a successful one.
-        llm_spec=os.environ.get("RESEARCH_ASSISTANT_LLM"), tier="light", max_tokens=1400 if body.operation == "explain" else 5000, timeout=30.0 if body.operation == "explain" else 60.0,
+        llm_spec=resolve_spec(
+            "utility", explicit=os.environ.get("RESEARCH_ASSISTANT_LLM")
+        ),
+        tier="light", max_tokens=1400 if body.operation == "explain" else 5000, timeout=30.0 if body.operation == "explain" else 60.0,
         disable_thinking=True,
         operation=f"research_assistant.{body.operation}",
         request_id=request_id,
@@ -1137,7 +1290,7 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
         operation=body.operation,
         **metrics,
     )
-    return {"operation": body.operation, "original": original, "suggestion": generated.text.strip(), "rationale": instruction, "claims": [], "warnings": warnings, "truncated": generated.truncated, "finishReason": generated.finish_reason, "request_id": request_id, "metrics": metrics}
+    return {"operation": body.operation, "original": original, "suggestion": _strip_reasoning_blocks(generated.text), "rationale": instruction, "claims": [], "warnings": warnings, "truncated": generated.truncated, "finishReason": generated.finish_reason, "request_id": request_id, "metrics": metrics}
 
 
 @app.post("/api/ai/review")
@@ -1172,7 +1325,9 @@ async def review_research(body: ReviewResearchBody, request: Request) -> dict[st
             )
         )
     result = await DefaultResearchReviewer(
-        llm_spec=os.environ.get("FACT_REVIEWER_LLM"),
+        llm_spec=resolve_spec(
+            "utility", explicit=os.environ.get("FACT_REVIEWER_LLM")
+        ),
     ).review(body.report, tuple(sources), body.topic)
     return {
         "review": result.to_dict(),

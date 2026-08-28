@@ -71,9 +71,17 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     includeTotal,
     includeFeedback,
   } = parsed.data;
-  const qualityValues = Array.isArray(quality) ? quality : [quality];
+  const requestedQualityValues = Array.isArray(quality) ? quality : [quality];
+  // Noise is an admin/audit state, never a member-facing radar state.
+  // Keep the explicit noise filter available to Admin tools, but do not let
+  // it leak into the public list through quality=all or admin_promoted.
+  const qualityValues = u?.role === 'admin'
+    ? requestedQualityValues
+    : requestedQualityValues.filter((value) => value !== 'noise');
   const sourceTypes = Array.isArray(sourceType) ? sourceType : sourceType ? [sourceType] : [];
-  const qualityWhere = qualityValues.includes('all')
+  const qualityWhere = qualityValues.length === 0 && requestedQualityValues.some(Boolean)
+    ? { id: { in: [] } } satisfies Prisma.SummaryWhereInput
+    : qualityValues.includes('all')
     ? null
     : {
         OR: [
@@ -84,7 +92,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             ? [{ distilledTier: { in: qualityValues.filter((value): value is 'collection' | 'deep_read' | 'skim' | 'noise' => ['collection', 'deep_read', 'skim', 'noise'].includes(value)) } }]
             : []),
           ...(qualityValues.includes('pending') ? [{ distilledTier: null }] : []),
-          { tags: { has: 'admin_promoted' } },
         ],
       } satisfies Prisma.SummaryWhereInput;
   if ((status === SUMMARY_STATUS.REJECTED || status === SUMMARY_STATUS.ARCHIVED) && u?.role !== 'admin') {
@@ -134,6 +141,15 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           }]
         : []),
       ...(qualityWhere ? [qualityWhere] : []),
+      // Public radar contains only scored, reader-facing tiers. Noise and
+      // pending/unscored rows remain available to Admin governance tools.
+      ...(u?.role !== 'admin'
+        ? [{ distilledTier: { in: ['collection', 'deep_read', 'skim'] } }]
+        : []),
+      // Recent repository activity is rendered inside the project reader.
+      // Keep legacy daily digest rows out of the main stream so one repo has
+      // one durable entry instead of a new card every sync.
+      { NOT: { tags: { has: 'repo_digest' } } },
       ...(dateFrom
         ? [{
             // “今天/近 N 天”按入库时间筛选，和 Admin 的“今日写入”保持一致。
@@ -188,6 +204,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         timelinessScore: true,
         sourceQualityScore: true,
         distilledScore: true,
+        distilledTier: true,
         selectionReason: true,
         sortOrder: true,
         syncRunId: true,

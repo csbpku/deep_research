@@ -291,6 +291,11 @@ describe('GET /api/radar', () => {
     const r = await radarList(new Request('http://localhost/api/radar') as never);
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ items: [], total: 0 });
+    expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([{ distilledTier: { in: ['collection', 'deep_read', 'skim'] } }]),
+      }),
+    }));
   });
 
   it('returns 400 on invalid query params', async () => {
@@ -309,6 +314,25 @@ describe('GET /api/radar', () => {
     expect(r.status).toBe(200);
     expect(body.items).toEqual([]);
     expect(body.total).toBe(0);
+  });
+
+  it('does not turn a public noise-only filter into an unfiltered query', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+
+    const response = await radarList(
+      new Request('http://localhost/api/radar?quality=noise') as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          { id: { in: [] } },
+          { distilledTier: { in: ['collection', 'deep_read', 'skim'] } },
+        ]),
+      }),
+    }));
   });
 
   it('maps grouped radar categories to source filters', async () => {
@@ -363,6 +387,7 @@ describe('GET /api/radar', () => {
       relevanceScore: 0.91,
       timelinessScore: 0.83,
       sourceQualityScore: 0.76,
+      distilledTier: 'deep_read',
       selectionReason: null,
       sortOrder: null,
       syncRunId: 'run-1',
@@ -459,6 +484,7 @@ describe('GET /api/radar/[id]', () => {
       scoreReason: null, scoreVersion: null, relevanceScore: null,
       timelinessScore: null, sourceQualityScore: null, selectionReason: null,
       sortOrder: null, syncRunId: null, source: 'user', sharedBy: { id: MEMBER.id, name: 'M' },
+      distilledTier: 'deep_read',
       syncRun: null, shareSource: { status: 'approved' },
     });
     mocks.radarFeedbackGroupBy.mockResolvedValue([]);
@@ -482,6 +508,7 @@ describe('GET /api/radar/[id]', () => {
       publishedAt: null, createdAt: new Date(),
       interpretation: 'cover', scoreReason: 'high', scoreVersion: 'v1',
       relevanceScore: 0.9, timelinessScore: 0.8, sourceQualityScore: 0.7,
+      distilledTier: 'deep_read',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
       syncRun: { id: 'r', completedAt: new Date(), source: { sourceType: 'arxiv', name: 'arXiv' } },
@@ -507,6 +534,7 @@ describe('GET /api/radar/[id]', () => {
       publishedAt: null, createdAt: new Date(),
       interpretation: 'cover', scoreReason: null, scoreVersion: null,
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
       syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
@@ -528,6 +556,85 @@ describe('GET /api/radar/[id]', () => {
     expect(mocks.radarFeedbackFindMany).not.toHaveBeenCalled();
   });
 
+  it('redacts deep enrichment from skim detail responses', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(MEMBER);
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Skim article', body: 'summary body', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
+      interpretation: 'short AI summary', scoreReason: 'skim', scoreVersion: 'v4',
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      selectionReason: null, sortOrder: null, syncRunId: 'r', source: 'daily',
+      distilledTier: 'skim',
+      originalKind: 'arxiv', originalMarkdown: '# Full paper',
+      originalMeta: { enrichmentVersion: '2.0' }, repoSummary: 'deep repo summary',
+      highlights: { summary: 'deep highlights' }, arxivAnalysis: { tldr: 'deep analysis' },
+      tldr: 'paper tldr', sections: [{ title: 'Intro', level: 1, startOffset: 0 }],
+      figures: [{ page: 1 }], authors: ['Author'], sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'arxiv', name: 'arXiv' } },
+      shareSource: null,
+    });
+    mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+    mocks.radarFeedbackFindMany.mockResolvedValue([]);
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.interpretation).toBe('short AI summary');
+    expect(body.body).toBeNull();
+    expect(body.originalKind).toBeNull();
+    expect(body.originalMarkdown).toBeNull();
+    expect(body.repoSummary).toBeNull();
+    expect(body.highlights).toBeNull();
+    expect(body.arxivAnalysis).toBeNull();
+    expect(body.sections).toBeNull();
+    expect(body.figures).toBeNull();
+    expect(body.authors).toEqual([]);
+    expect(body.sourceOutline).toEqual([{ heading: 'Intro', level: 2 }]);
+  });
+
+  it('returns 404 for an unscored detail to regular members', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(MEMBER);
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Pending', body: 'pending', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
+      interpretation: 'pending summary', scoreReason: null, scoreVersion: null,
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: null, selectionReason: null, sortOrder: null, syncRunId: 'r', source: 'daily',
+      sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
+      shareSource: null,
+    });
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it('hides noise detail from non-admin users', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(MEMBER);
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Noise', body: 'noise', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
+      interpretation: 'noise summary', scoreReason: null, scoreVersion: null,
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      selectionReason: null, sortOrder: null, syncRunId: 'r', source: 'daily',
+      distilledTier: 'noise', sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
+      shareSource: null,
+    });
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    expect(response.status).toBe(404);
+  });
+
   it('canManage=true for admin caller', async () => {
     mocks.getCurrentUser.mockResolvedValueOnce(ADMIN);
     mocks.summaryFindUnique.mockResolvedValue({
@@ -535,6 +642,7 @@ describe('GET /api/radar/[id]', () => {
       summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
       interpretation: null, scoreReason: null, scoreVersion: null,
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
       syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'R' } },

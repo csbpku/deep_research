@@ -28,6 +28,7 @@ from ai_engine.radar.distilled_scorer import (
     compute_score,
     default_score,
     default_scorer,
+    _parse_llm_response,
     score_with_llm,
 )
 from ai_engine.scoring.scoring_profiles import (
@@ -46,6 +47,16 @@ from ai_engine.scoring.scoring_profiles import (
 
 class _RateLimitError(RuntimeError):
     status_code = 429
+
+
+def test_parse_llm_response_strips_reasoning_wrapper() -> None:
+    raw = (
+        "<think>Need to inspect the article before scoring.</think>\n"
+        "```json\n"
+        '{"信息增量": 2, "弱项": "验证不足"}\n'
+        "```"
+    )
+    assert _parse_llm_response(raw) == {"信息增量": 2, "弱项": "验证不足"}
 
 
 # ── Fixtures ──────────────────────────────────────────────────────
@@ -290,6 +301,8 @@ def test_github_structured_signals_rescue_documented_repo_to_skim() -> None:
     )
     assert result.total == 46.67
     assert result.repo_signal_bonus == 12.0
+    assert result.tier_score == 57.16
+    assert result.to_dict()["tierScore"] == 57.16
     # M7: tier_deep_read lowered 70→55 (engineering) so a github repo
     # with strong signals clears the new bar.
     assert result.tier == TIER_DEEP_READ
@@ -311,6 +324,7 @@ def test_compute_score_all_max_engineering() -> None:
     result = compute_score(_all_max_parsed())
     assert result.total == 100.0
     assert result.tier == TIER_COLLECTION
+    assert result.tier_score == 100.0
     assert result.must_read is True
     assert result.profile_id == PROFILE_ENGINEERING
 
@@ -589,9 +603,9 @@ def test_v3_separates_content_quality_from_team_value() -> None:
 def test_github_bonus_breaks_close_cross_source_tie() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 2
-    github = compute_score(parsed, source_type="github_tracked")
+    github = compute_score(parsed, source_type="github")
     article = compute_score(parsed, source_type="rss")
-    assert github.source_bonus == 4.0
+    assert github.source_bonus == 3.0
     assert article.source_bonus == 1.0
     assert github.ranking_score is not None
     assert article.ranking_score is not None
@@ -613,7 +627,7 @@ def test_source_bonus_cannot_lift_low_quality_item_to_deep_read() -> None:
             "direct_relevance": 2,
         }
     )
-    result = compute_score(parsed, source_type="github_tracked")
+    result = compute_score(parsed, source_type="github")
     assert result.total < 70
     assert result.ranking_score is not None and result.ranking_score > result.total
     # M7: tier_deep_read for engineering lowered 70→65, so the source bonus
@@ -784,6 +798,24 @@ def test_hard_veto_title_content_mismatch() -> None:
     assert result.suspected_repost is False
 
 
+def test_hard_veto_title_content_mismatch_is_ignored_for_aligned_long_repo() -> None:
+    parsed = _all_max_parsed()
+    parsed["veto"] = VETO_MISMATCH
+    content = (
+        "OpenViking is a context database for AI agents. "
+        "This document explains the OpenViking architecture, installation, "
+        "storage model, indexing pipeline, tests, and deployment. "
+    ) * 12
+    result = compute_score(
+        parsed,
+        source_type="github_repo",
+        evidence_text=f"volcengine/OpenViking\n{content}",
+        url="https://github.com/volcengine/OpenViking",
+    )
+    assert result.veto is None
+    assert result.total > 0
+
+
 def test_hard_veto_unsafe_content() -> None:
     parsed = _all_max_parsed()
     parsed["veto"] = VETO_UNSAFE
@@ -938,6 +970,7 @@ def test_weak_point_auto_generated_when_empty() -> None:
 def test_default_score() -> None:
     result = default_score()
     assert result.total == 0.0
+    assert result.tier_score == 0.0
     assert result.tier == TIER_NOISE
     assert result.is_default is True
     assert result.must_read is False
@@ -955,6 +988,7 @@ async def test_score_with_llm_no_api_key_returns_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When no ANTHROPIC_API_KEY is set, returns default score."""
+    monkeypatch.setenv("UTILITY_LLM", "anthropic:test-model")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     result = await score_with_llm("title", "content")
@@ -1006,6 +1040,7 @@ async def test_anthropic_scorer_substitutes_placeholder_for_empty_key(
         messages = _Messages()
 
     monkeypatch.setattr("anthropic.AsyncAnthropic", _Client)
+    monkeypatch.setenv("UTILITY_LLM", "anthropic:claude-haiku-4-5")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:15721")
 
@@ -1026,12 +1061,64 @@ async def test_score_with_llm_custom_scorer() -> None:
     assert result.is_default is False
 
 
+async def test_score_with_llm_retries_unverified_mismatch_once() -> None:
+    calls: list[str] = []
+
+    async def mock_scorer(title: str, content: str) -> str:
+        calls.append(content)
+        if len(calls) == 1:
+            parsed = _all_zero_parsed()
+            parsed["veto"] = VETO_MISMATCH
+            return json.dumps(parsed)
+        return json.dumps(_all_max_parsed())
+
+    content = (
+        "OpenViking provides a context database, indexing pipeline, "
+        "retrieval API, deployment guide, architecture, and tests. "
+    ) * 15
+    result = await score_with_llm(
+        "volcengine/OpenViking",
+        content,
+        scorer=mock_scorer,
+        source_type="github_repo",
+        url="https://github.com/volcengine/OpenViking",
+    )
+
+    assert len(calls) == 2
+    assert calls[1].startswith("[评分纠错]")
+    assert result.veto is None
+    assert result.total > 0
+
+
 async def test_score_with_llm_scorer_exception_returns_default() -> None:
     async def bad_scorer(title: str, content: str) -> str:
         raise RuntimeError("LLM unavailable")
 
     result = await score_with_llm("title", "content", scorer=bad_scorer)
     assert result.is_default is True
+
+
+async def test_default_score_path_does_not_wrap_unified_llm_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default scorer owns no second retry loop around generate_text."""
+    from ai_engine.radar import distilled_scorer
+
+    calls = {"count": 0}
+
+    async def failing_anthropic_scorer(title: str, content: str, **kwargs: object) -> str:
+        calls["count"] += 1
+        raise _RateLimitError("429 too many requests")
+
+    monkeypatch.setenv("UTILITY_LLM", "openai:test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(distilled_scorer, "anthropic_scorer", failing_anthropic_scorer)
+    monkeypatch.setattr(distilled_scorer, "_LLM_RATE_LIMIT_DELAY", 0.01)
+
+    result = await distilled_scorer.score_with_llm("title", "content")
+
+    assert result.is_default is True
+    assert calls["count"] == 1
 
 
 async def test_score_with_llm_strips_markdown_fences() -> None:

@@ -10,14 +10,18 @@ import pytest
 
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
+from ai_engine.radar.community_fetcher import _parse_reddit_rss
 from ai_engine.radar.github import fetch_github
-from ai_engine.radar.github_tracked import fetch_github_tracked
 from ai_engine.radar.hn_algolia_fetcher import fetch_hn_algolia
 from ai_engine.radar.huggingface_papers_fetcher import fetch_huggingface_papers
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.openreview_fetcher import fetch_openreview
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.rss_fetcher import fetch_rss_candidates
+from ai_engine.radar.rss_fetcher import (
+    _clean_hn_rss_description,
+    _is_hn_rss_shell,
+)
 from ai_engine.radar.source_manager import fetch_source
 from ai_engine.radar.vendor_changelog_fetcher import fetch_vendor_changelog
 from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
@@ -25,13 +29,13 @@ from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 
 RSS_XML = b"""<?xml version="1.0"?><rss><channel><item>
 <title>Agent release</title><link>https://example.com/agent</link>
-<description>LLM agent update</description><pubDate>Wed, 22 Jul 2026 12:00:00 GMT</pubDate>
+<description>LLM agent update</description><pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate>
 </item></channel></rss>"""
 
 WEWE_RSS_XML = """<?xml version="1.0"?><rss><channel><item>
 <title><![CDATA[中文 AI 工程实践]]></title><link>https://mp.weixin.qq.com/s/example</link>
 <content:encoded><![CDATA[<p>这是一篇公众号全文内容，包含 RAG 和 Agent 工程实践。</p>]]></content:encoded>
-<pubDate>Wed, 22 Jul 2026 12:00:00 GMT</pubDate>
+<pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate>
 </item></channel></rss>""".encode()
 
 BLOGGER_ATOM_XML = b"""<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'>
@@ -124,6 +128,61 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     assert items[0].content_origin == "rss"
 
 
+def test_reddit_rss_keeps_post_body_when_json_fallback_is_unavailable() -> None:
+    xml = """<?xml version="1.0"?><feed><entry>
+    <title>Technical LLM post</title>
+    <link href="https://www.reddit.com/r/LocalLLaMA/comments/abc/post/"/>
+    <content type="html">&lt;p&gt;A real post body with enough technical detail about
+    quantization, inference throughput, memory usage, and deployment tradeoffs.&lt;/p&gt;</content>
+    <published>2026-08-25T01:00:00Z</published>
+    </entry></feed>"""
+    items = _parse_reddit_rss(xml, "LocalLLaMA", 10, 0)
+    assert len(items) == 1
+    assert "quantization" in items[0].snippet
+
+
+async def test_hn_rss_shell_is_collapsed_into_metadata_snippet() -> None:
+    hn_xml = b"""<?xml version='1.0'?><rss version='2.0' xmlns:dc='http://purl.org/dc/elements/1.1/'><channel>
+    <item><title><![CDATA[Judge Rules Trump's Blacklisting of Anthropic]]></title>
+    <link>https://www.nytimes.com/2026/08/27/technology/anthropic-government-blacklisting-ruling.html</link>
+    <description><![CDATA[
+    <p>Article URL: <a href='https://www.nytimes.com/2026/08/27/technology/anthropic-government-blacklisting-ruling.html'>https://www.nytimes.com/2026/08/27/technology/anthropic-government-blacklisting-ruling.html</a></p>
+    <p>Comments URL: <a href='https://news.ycombinator.com/item?id=49473522'>https://news.ycombinator.com/item?id=49473522</a></p>
+    <p>Points: 85</p>
+    <p># Comments: 27</p>
+    ]]></description>
+    <dc:creator><![CDATA[jbegley]]></dc:creator>
+    <pubDate>Fri, 28 Aug 2026 02:03:38 +0000</pubDate>
+    </item></channel></rss>"""
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(hn_xml, url=url)
+
+    items = await fetch_rss_candidates(
+        {"feedUrl": "https://hnrss.org/frontpage", "maxResults": 5},
+        fetcher=fake_fetch,
+    )
+    assert len(items) == 1
+    # canonical URL is still the article, not the HN comments URL
+    assert items[0].url == "https://www.nytimes.com/2026/08/27/technology/anthropic-government-blacklisting-ruling.html"
+    # description was collapsed to a clean metadata line, not the HN shell
+    assert "Article URL:" not in items[0].snippet
+    assert "Comments URL:" not in items[0].snippet
+    assert "85 points" in items[0].snippet
+    assert "27 comments" in items[0].snippet
+
+
+def test_is_hn_rss_shell_detects_submission_template() -> None:
+    shell = "<p>Article URL: <a href='https://x.com/'>x</a></p><p>Comments URL: <a href='https://news.ycombinator.com/item?id=1'>hn</a></p><p>Points: 12</p>"
+    assert _is_hn_rss_shell(shell) is True
+    assert _is_hn_rss_shell("a normal article body with enough text") is False
+
+
+def test_clean_hn_rss_description_extracts_metadata() -> None:
+    shell = "<p>Article URL: <a href='https://x.com/'>x</a></p><p>Comments URL: <a href='https://news.ycombinator.com/item?id=1'>hn</a></p><p>Points: 42</p><p># Comments: 9</p>"
+    assert _clean_hn_rss_description(shell) == "HN submission | 42 points | 9 comments"
+
+
 async def test_wewe_feed_refreshes_before_reading_feed() -> None:
     calls: list[str] = []
 
@@ -206,7 +265,7 @@ async def test_rss_fetcher_cleans_wewe_html_instead_of_passing_page_shell() -> N
     <title><![CDATA[正文测试]]></title><link>https://mp.weixin.qq.com/s/example2</link>
     <content:encoded><![CDATA[<html><head><script>window.pageData = 'noise';</script></head>
     <body><div id="js_content"><p>{article}</p></div></body></html>]]></content:encoded>
-    <pubDate>Wed, 22 Jul 2026 12:00:00 GMT</pubDate>
+    <pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate>
     </item></channel></rss>""".encode()
 
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
@@ -243,7 +302,7 @@ async def test_rss_fetcher_prefers_atom_article_link_over_comments_feed() -> Non
 
 
 async def test_rss_fetcher_default_age_gate_drops_archive_items() -> None:
-    old = RSS_XML.replace(b"Wed, 22 Jul 2026 12:00:00 GMT", b"Wed, 22 Jul 2020 12:00:00 GMT")
+    old = RSS_XML.replace(b"Tue, 25 Aug 2026 12:00:00 GMT", b"Wed, 22 Jul 2020 12:00:00 GMT")
 
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
         return _doc(old)
@@ -362,159 +421,6 @@ def _github_release(tag: str, published_at: str) -> dict[str, Any]:
     }
 
 
-async def test_github_tracked_ordinary_repo_fetches_single_pull_page() -> None:
-    pull_requests: list[dict[str, Any]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/pulls"):
-            pull_requests.append(request.url.params["page"])
-            return httpx.Response(200, json=[_github_pr()])
-        if request.url.path.endswith("/issues"):
-            return httpx.Response(200, json=[])
-        if request.url.path.endswith("/releases"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(404)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        items = await fetch_github_tracked(
-            {
-                "repos": ["acme/agent"],
-                "lookback_days": 7,
-                "max_items_per_repo": 50,
-                "paginated_repos": [],
-            },
-            client=client,
-        )
-    assert pull_requests == ["1"]
-    assert len(items) == 1
-
-
-async def test_github_tracked_caps_total_per_repo_across_types() -> None:
-    issues = [_github_issue(i, _github_iso(1)) for i in range(10)]
-    prs = [_github_pr(_github_iso(2)) for _ in range(10)]
-    releases = [_github_release(f"v1.{i}", _github_iso(3)) for i in range(10)]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/issues"):
-            return httpx.Response(200, json=issues)
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=prs)
-        if request.url.path.endswith("/releases"):
-            return httpx.Response(200, json=releases)
-        return httpx.Response(404)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        items = await fetch_github_tracked(
-            {
-                "repos": ["acme/agent"],
-                "lookback_days": 7,
-                "max_items_per_repo": 15,
-                "paginated_repos": [],
-            },
-            client=client,
-        )
-
-    # One repo digest candidate; inside the activity, issues come first,
-    # then PRs, and releases fall outside the per-repo cap.
-    assert len(items) == 1
-    activity = items[0].repo_activity
-    assert activity is not None
-    assert activity.item_count == 15
-    assert [it.title for it in activity.issues] == [f"issue-{i}" for i in range(10)]
-    assert [it.title for it in activity.prs] == ["PR title"] * 5
-    assert activity.releases == ()
-
-
-async def test_github_tracked_releases_respect_lookback() -> None:
-    releases = [
-        _github_release("v1.0", _github_iso(10)),
-        _github_release("v2.0", _github_iso(1)),
-    ]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/issues"):
-            return httpx.Response(200, json=[])
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        if request.url.path.endswith("/releases"):
-            return httpx.Response(200, json=releases)
-        return httpx.Response(404)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        items = await fetch_github_tracked(
-            {
-                "repos": ["acme/agent"],
-                "lookback_days": 7,
-                "max_items_per_repo": 50,
-                "paginated_repos": [],
-            },
-            client=client,
-        )
-
-    assert [it.title for it in items] == ["acme/agent 24h GitHub 动态"]
-    assert [it.number for it in items[0].repo_activity.releases] == ["v2.0"]
-
-
-async def test_github_tracked_paginated_repo_walks_up_to_five_pages() -> None:
-    pull_requests: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/pulls"):
-            page = request.url.params["page"]
-            pull_requests.append(page)
-            return httpx.Response(200, json=[_github_pr() for _ in range(100)])
-        if request.url.path.endswith("/issues"):
-            return httpx.Response(200, json=[])
-        if request.url.path.endswith("/releases"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(404)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        items = await fetch_github_tracked(
-            {
-                "repos": ["acme/agent"],
-                "lookback_days": 7,
-                "max_items_per_repo": 50,
-                "paginated_repos": ["ACME/Agent/"],
-            },
-            client=client,
-        )
-    assert pull_requests == ["1", "2", "3", "4", "5"]
-    assert len(items) == 1
-    assert len(items[0].repo_activity.prs) == 20
-
-
-async def test_github_tracked_paginated_repo_stops_at_stale_page() -> None:
-    pull_requests: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/pulls"):
-            page = request.url.params["page"]
-            pull_requests.append(page)
-            if page == "2":
-                return httpx.Response(200, json=[_github_pr("2026-01-01T00:00:00Z")])
-            return httpx.Response(200, json=[_github_pr() for _ in range(100)])
-        if request.url.path.endswith("/issues"):
-            return httpx.Response(200, json=[])
-        if request.url.path.endswith("/releases"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(404)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        items = await fetch_github_tracked(
-            {
-                "repos": ["acme/agent"],
-                "lookback_days": 7,
-                "max_items_per_repo": 50,
-                "paginated_repos": ["acme/agent"],
-            },
-            client=client,
-        )
-    assert pull_requests == ["1", "2"]
-    assert len(items) == 1
-    assert len(items[0].repo_activity.prs) == 20
-
-
 async def test_github_rejects_invalid_repo_config() -> None:
     with pytest.raises(ValueError, match="owner/name"):
         await fetch_github({"repos": ["invalid"], "type": "stars"})
@@ -563,7 +469,6 @@ def test_rss_fetcher_allow_localhost_passes_flag() -> None:
         received_kwargs.update(kwargs)
         return _doc()
 
-    import asyncio
     asyncio.run(fetch_rss_candidates(
         {"feedUrl": "http://localhost:4001/feeds/test.rss", "maxResults": 5},
         fetcher=fake_fetch,
@@ -582,7 +487,6 @@ def test_rss_fetcher_allow_localhost_from_config() -> None:
         received_kwargs.update(kwargs)
         return _doc()
 
-    import asyncio
     asyncio.run(fetch_rss_candidates(
         {
             "feedUrl": "http://localhost:4001/feeds/test.rss",
@@ -945,8 +849,6 @@ async def test_hn_algolia_enforces_min_points_and_min_comments() -> None:
 # P1.11: Vendor changelog fetcher — title regex + statefile dedupe.
 
 
-import tempfile
-
 VENDOR_CHANGELOG_HTML = """
 <html><body>
 <h2>2026-08-10 — gpt-5 model launch</h2>
@@ -995,8 +897,6 @@ async def test_vendor_changelog_extracts_h2_titles_and_dedupes(tmp_path, monkeyp
 
 
 async def test_vendor_changelog_applies_path_filter(tmp_path) -> None:
-    state_file = tmp_path / "vendor_changelog_state.json"
-
     html = """
     <body>
     <h2>Marketing post</h2><p>Should be filtered out by the path regex.</p>
@@ -1070,8 +970,6 @@ async def test_vendor_changelog_falls_back_to_title_pattern_when_no_anchor() -> 
     </body>
     """
     import httpx
-    import asyncio
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=html.encode())
 
