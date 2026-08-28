@@ -8,6 +8,56 @@ import pytest
 from ai_engine.llm.client import generate_text
 
 
+@pytest.fixture(autouse=True)
+def isolate_llm_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must not inherit the developer's real provider configuration."""
+    for name in (
+        "RESEARCH_LLM",
+        "UTILITY_LLM",
+        "FALLBACK_LLM",
+        "MINIMAX_BASE_URL",
+        "DEEPSEEK_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+async def test_direct_model_profile_uses_its_own_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Completions:
+        async def create(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+                model="MiniMax-M3",
+            )
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    monkeypatch.setenv("minimax_api_key", "direct-minimax-key")
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    result = await generate_text(
+        llm_spec="minimax:MiniMax-M3",
+        user_prompt="hello",
+    )
+
+    assert result.provider == "minimax"
+    assert captured["client"] == {
+        "api_key": "direct-minimax-key",
+        "base_url": "https://api.minimaxi.com/v1",
+    }
+
+
 async def test_generate_text_uses_anthropic_compatible_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -171,11 +221,66 @@ async def test_generate_text_falls_back_after_quota_error(
     )
 
     assert result.text == "fallback ok"
-    assert captured_models == ["MiniMax-M3", "deepseek-v4-flash"]
-    assert len(audit_events) == 2
+    assert captured_models == [
+        "MiniMax-M3",
+        "MiniMax-M3",
+        "deepseek-v4-flash",
+    ]
+    assert len(audit_events) == 3
     assert getattr(audit_events[0], "status") == "failed"
     assert getattr(audit_events[0], "error_kind") == "quota"
-    assert getattr(audit_events[1], "used_fallback") is True
+    assert getattr(audit_events[-1], "used_fallback") is True
+
+
+async def test_generate_text_falls_back_after_provider_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_models: list[str] = []
+    audit_events: list[object] = []
+
+    class ProviderError(Exception):
+        status_code = 502
+
+    class Messages:
+        async def create(self, **kwargs: object) -> object:
+            model = str(kwargs["model"])
+            captured_models.append(model)
+            if model == "MiniMax-M3":
+                raise ProviderError(
+                    "proxy_error: upstream request failed: client error (Connect)"
+                )
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="fallback ok")],
+                usage=SimpleNamespace(input_tokens=7, output_tokens=3),
+                model="deepseek-v4-flash",
+                stop_reason="end_turn",
+            )
+
+    class Client:
+        def __init__(self, **_: object) -> None:
+            self.messages = Messages()
+
+    async def record(event: object) -> None:
+        audit_events.append(event)
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", Client)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", record)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_FALLBACK_LLM", "anthropic:deepseek-v4-flash")
+
+    result = await generate_text(
+        llm_spec="anthropic:MiniMax-M3",
+        user_prompt="hello",
+    )
+
+    assert result.text == "fallback ok"
+    assert result.requested_model == "deepseek-v4-flash"
+    assert captured_models == [
+        "MiniMax-M3",
+        "MiniMax-M3",
+        "deepseek-v4-flash",
+    ]
+    assert getattr(audit_events[-1], "used_fallback") is True
 
 
 async def test_generate_text_limits_global_concurrency(
@@ -217,3 +322,19 @@ async def test_generate_text_limits_global_concurrency(
     ))
 
     assert max_active == 2
+
+
+async def test_endpoint_circuit_opens_after_configured_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.llm import client
+
+    client._circuit_failures.clear()
+    monkeypatch.setenv("LLM_CIRCUIT_ENABLED", "true")
+    monkeypatch.setenv("LLM_CIRCUIT_FAILURE_THRESHOLD", "1")
+    monkeypatch.setenv("LLM_CIRCUIT_COOLDOWN_SECONDS", "60")
+
+    state = await client._circuit_failure("https://primary.example/v1", retryable=True)
+
+    assert state == "open"
+    assert await client._circuit_is_open("https://primary.example/v1") is True

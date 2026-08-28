@@ -35,6 +35,7 @@ os.environ.setdefault(
 # setdefault would silently flip the unit suite onto DbJobStore.
 os.environ["JOB_RUNNER_BACKEND"] = "memory"
 os.environ["AI_ENGINE_ADAPTER"] = "fake"  # tests always use fake adapter
+os.environ["LLM_CIRCUIT_ENABLED"] = "false"
 
 # Clear the vendor fetchers' statefiles before the test session so dedupe
 # tests do not see URLs left behind by prior runs. Each test that wants

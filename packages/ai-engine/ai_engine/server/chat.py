@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import re
+import time
 import uuid
 from typing import Annotated, Any, AsyncIterator, cast
 
@@ -36,6 +37,7 @@ from ai_engine.contracts.states import (
     AiChatRole,
     AiChatSessionStatus,
 )
+from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -55,21 +57,37 @@ _CHAT_INPUT_TOKENS = int(os.environ.get("RADAR_CHAT_INPUT_TOKENS", "60000"))
 
 
 def _anythingllm_chat_enabled(snapshot: dict[str, Any]) -> bool:
-    """Enable AnythingLLM only for explicitly configured radar summaries."""
+    """Enable AnythingLLM when configured, with an optional radar allowlist."""
     base_url = os.environ.get("ANYTHINGLLM_URL", "").strip()
     api_key = os.environ.get("ANYTHINGLLM_API_KEY", "").strip()
+    workspace = os.environ.get("ANYTHINGLLM_WORKSPACE", "").strip()
+    if not base_url or not api_key or not workspace:
+        return False
+    if os.environ.get("ANYTHINGLLM_ENABLED", "true").strip().lower() in {"0", "false", "no"}:
+        return False
     configured = {
         item.strip()
         for item in os.environ.get("ANYTHINGLLM_RADAR_IDS", "").split(",")
         if item.strip()
     }
-    return bool(base_url and api_key and str(snapshot.get("id") or "") in configured)
+    return not configured or str(snapshot.get("id") or "") in configured
 
 
 def _clean_model_text(value: Any) -> str:
     """Remove DeepSeek reasoning blocks before showing an answer to readers."""
     text = str(value or "").strip()
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = re.sub(
+        r"<think[^>]*>.*?</think[^>]*>",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return re.sub(
+        r"<think[^>]*>[\s\S]*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def _anythingllm_sources(payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -87,12 +105,38 @@ def _anythingllm_sources(payload: dict[str, Any]) -> list[dict[str, str]]:
     return result
 
 
+def _anythingllm_usage(payload: dict[str, Any]) -> tuple[int | None, int | None, str | None]:
+    """Extract usage across AnythingLLM response versions when available."""
+    usage = payload.get("usage") or payload.get("metrics") or payload.get("tokenUsage")
+    if not isinstance(usage, dict):
+        usage = payload
+
+    def pick(*names: str) -> int | None:
+        for name in names:
+            value = usage.get(name)
+            if isinstance(value, (int, float)) and value >= 0:
+                return int(value)
+        return None
+
+    return (
+        pick("prompt_tokens", "input_tokens", "promptTokens", "inputTokens"),
+        pick("completion_tokens", "output_tokens", "completionTokens", "outputTokens"),
+        str(
+            payload.get("model")
+            or payload.get("modelName")
+            or (usage.get("model") if isinstance(usage, dict) else "")
+            or ""
+        )
+        or None,
+    )
+
+
 async def _anythingllm_chat(
     snapshot: dict[str, Any],
     prompt: str,
     *,
     session_id: str,
-) -> tuple[str, list[dict[str, str]]]:
+) -> tuple[str, list[dict[str, str]], int | None, int | None, str | None]:
     """Ask the configured AnythingLLM workspace and return text + sources.
 
     This is deliberately a small adapter boundary. The rest of the chat
@@ -120,10 +164,16 @@ async def _anythingllm_chat(
         data = response.json()
     if not isinstance(data, dict):
         raise ValueError("AnythingLLM 返回格式无效")
-    text = _clean_model_text(data.get("text") or data.get("response") or data.get("message"))
+    text = _clean_model_text(
+        data.get("textResponse")
+        or data.get("text")
+        or data.get("response")
+        or data.get("message")
+    )
     if not text:
         raise ValueError("AnythingLLM 返回空回答")
-    return text, _anythingllm_sources(data)
+    input_tokens, output_tokens, actual_model = _anythingllm_usage(data)
+    return text, _anythingllm_sources(data), input_tokens, output_tokens, actual_model
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -390,6 +440,35 @@ async def create_session(
     if summary is None:
         raise _http_error("AI_CHAT_SEED_NOT_FOUND", "种子摘要不存在")
 
+    # A radar discussion is one conversation per user and seed. Re-opening
+    # the drawer must restore the existing transcript instead of creating an
+    # unreachable duplicate session every time.
+    async with pool.connection() as conn:
+        existing = await (
+            await conn.execute(
+                'SELECT "id", "createdAt" FROM "ai_chat_sessions" '
+                'WHERE "userId" = %s AND "seedSummaryId" = %s AND "status" = \'active\' '
+                'ORDER BY "updatedAt" DESC LIMIT 1',
+                (body.user_id, body.seed_summary_id),
+            )
+        ).fetchone()
+    if existing is not None:
+        logger.info(
+            "ai-engine.chat.session_reused",
+            request_id=request_id,
+            user_id=body.user_id,
+            session_id=str(existing["id"]),
+        )
+        return CreateChatSessionResponse(
+            session_id=str(existing["id"]),
+            status=cast(AiChatSessionStatus, AI_CHAT_SESSION_STATUS["ACTIVE"]),
+            created_at=existing["createdAt"].isoformat(),
+            seed_snapshot=ChatSeedSnapshot.model_validate(
+                (await get_session(request, pool, str(existing["id"]))).seed_snapshot
+            ),
+            message_count=await _count_messages(pool, str(existing["id"])),
+        )
+
     snapshot: dict[str, object] = {
         "id": str(summary["id"]),
         "title": summary["title"] or "",
@@ -605,11 +684,32 @@ async def append_message(
     started = time.monotonic()
     brief: Any = None
     anything_sources: list[dict[str, str]] = []
+    anything_tokens_in: int | None = None
+    anything_tokens_out: int | None = None
+    anything_model: str | None = None
     try:
         if _anythingllm_chat_enabled(snapshot):
             try:
-                content, anything_sources = await _anythingllm_chat(snapshot, prompt, session_id=session_id)
+                (
+                    content,
+                    anything_sources,
+                    anything_tokens_in,
+                    anything_tokens_out,
+                    anything_model,
+                ) = await _anythingllm_chat(snapshot, prompt, session_id=session_id)
                 logger.info("ai-engine.chat.anythingllm", session_id=session_id)
+                await record_llm_usage(
+                    LlmUsageAttempt(
+                        operation="chat.anythingllm",
+                        request_id=request_id,
+                        provider="anythingllm",
+                        requested_model=anything_model or "workspace-default",
+                        actual_model=anything_model,
+                        input_tokens=anything_tokens_in,
+                        output_tokens=anything_tokens_out,
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                    )
+                )
             except Exception as exc:
                 logger.warning("ai-engine.chat.anythingllm_fallback", session_id=session_id, error=str(exc))
                 content = ""
@@ -648,6 +748,12 @@ async def append_message(
 
     # Insert assistant message
     cost_cents = int(getattr(getattr(brief, "cost", None), "cost_cents", 0))
+    tokens_out = (
+        anything_tokens_out
+        if anything_tokens_out is not None
+        else int(getattr(getattr(brief, "cost", None), "token_output_total", 0) or 0)
+    )
+    tokens_in = anything_tokens_in if anything_tokens_in is not None else tokens_in_est
     sources_json_str = json.dumps(citations) if citations else None
     async with pool.connection() as conn:
         async with conn.transaction():
@@ -663,8 +769,8 @@ async def append_message(
                         cleaned_content[:100000],
                         sources_json_str,
                         latency_ms,
-                        tokens_in_est,
-                        int(getattr(getattr(brief, "cost", None), "token_output_total", 0) or 0),
+                        tokens_in,
+                        tokens_out,
                         cost_cents,
                     ),
                 )
@@ -679,7 +785,7 @@ async def append_message(
         request_id=request_id,
         session_id=session_id,
         role="assistant",
-        tokens_in=tokens_in_est,
+        tokens_in=tokens_in,
         cost_cents=cost_cents,
         citations=len(citations),
     )
@@ -689,8 +795,8 @@ async def append_message(
         content=cleaned_content,
         sources_json=citations,
         latency_ms=latency_ms,
-        tokens_in=tokens_in_est,
-        tokens_out=int(getattr(getattr(brief, "cost", None), "token_output_total", 0) or 0),
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
         cost_cents=cost_cents,
         created_at=a_row["createdAt"].isoformat(),
     )
@@ -785,20 +891,72 @@ def _parse_citations(
 ) -> tuple[str, list[dict[str, str]]]:
     """Extract ``[[cite]]...[[/cite]]`` quotes from a complete assistant body.
 
-    Returns ``(cleaned_content, citations)``. When no citations are found,
-    the content is returned unchanged. Markers are stripped from the cleaned
-    content but the quotes themselves stay inline so the user sees them.
+    Returns ``(cleaned_content, citations)``. Markers are stripped from the
+    cleaned content unconditionally — balanced or not — so raw ``[[cite]]``
+    syntax never leaks to the client; the quoted text itself stays inline.
+
+    The model does not always balance its markers. Captures that contain
+    nested ``[[cite]]`` / ``[[/cite]]`` or span multiple paragraphs are the
+    model emitting a malformed span, so they are skipped rather than surfaced
+    as a garbage citation.
     """
     cite_re = re.compile(r"\[\[cite\]\](.*?)\[\[/cite\]\]", re.DOTALL)
     citations: list[dict[str, str]] = []
     for match in cite_re.finditer(content):
         quote = match.group(1).strip()
-        if quote:
-            citation = {"quote": quote[:2000]}
-            citation.update(_citation_location(quote, snapshot))
-            citations.append(citation)
-    cleaned = cite_re.sub(lambda m: m.group(1).strip(), content).strip() if citations else content
+        if not quote:
+            continue
+        # Malformed spans: nested markers or multi-paragraph blobs are not
+        # verifiable quotes — skip them instead of capturing a huge span.
+        if "[[cite" in quote or "[[/cite" in quote:
+            continue
+        if "\n\n" in quote:
+            continue
+        citation = {"quote": quote[:2000]}
+        citation.update(_citation_location(quote, snapshot))
+        citations.append(citation)
+
+    # Strip every marker (balanced or not) so raw syntax never leaks.
+    cleaned = re.sub(r"\[\[cite\]\]", "", content)
+    cleaned = re.sub(r"\[\[/cite\]\]", "", cleaned)
+    cleaned = cleaned.strip()
     return cleaned, citations
+
+
+async def _collect_adapter_chunks(
+    adapter: ResearchEngineAdapter,
+    req: ResearchRequest,
+) -> list[str]:
+    """Buffer adapter output until terminal status, reasoning markup included.
+
+    Both the true-token ``stream_chat`` path and the poll-diff fallback
+    return here, so the caller can clean ``<think>`` blocks before any
+    text is emitted to the client.
+    """
+    full_chunks: list[str] = []
+
+    async def q_delta(chunk: str) -> None:
+        full_chunks.append(chunk)
+
+    if hasattr(adapter, "stream_chat"):
+        await adapter.stream_chat(req, on_delta=q_delta)
+    else:
+        # Approach A: poll-diff fallback.
+        await adapter.submit(req)
+        prev_len = 0
+        deadline = time.monotonic() + req.timeout_seconds
+        while True:
+            if time.monotonic() >= deadline:
+                raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 超时")
+            status = await adapter.get_status(req.job_id)
+            text = status.output_text or ""
+            if len(text) > prev_len:
+                full_chunks.append(text[prev_len:])
+                prev_len = len(text)
+            if status.status in {"succeeded", "failed", "partial", "cancelled"}:
+                break
+            await asyncio.sleep(0.1)
+    return full_chunks
 
 
 @router.post("/sessions/{session_id}/messages/stream")
@@ -823,8 +981,6 @@ async def append_message_stream(
         event: done       data: {"message_id": "...", "content": "...", ...}
         event: error      data: {"code": "...", "message": "..."}
     """
-    import time
-
     request_id = getattr(request.state, "request_id", "")
 
     # ── Pre-flight: same as the polling route ─────────────────────────
@@ -925,12 +1081,30 @@ async def append_message_stream(
         # behavior; a failure falls through to the original adapter stream.
         if _anythingllm_chat_enabled(snapshot):
             try:
-                anything_text, anything_sources = await _anythingllm_chat(
+                (
+                    anything_text,
+                    anything_sources,
+                    anything_tokens_in,
+                    anything_tokens_out,
+                    anything_model,
+                ) = await _anythingllm_chat(
                     snapshot, prompt, session_id=session_id
                 )
                 cleaned, citations = _parse_citations(anything_text, snapshot)
                 citations = _enrich_citations(anything_sources, snapshot) + citations
                 latency_ms = int((time.monotonic() - started_at) * 1000)
+                await record_llm_usage(
+                    LlmUsageAttempt(
+                        operation="chat.anythingllm.stream",
+                        request_id=request_id,
+                        provider="anythingllm",
+                        requested_model=anything_model or "workspace-default",
+                        actual_model=anything_model,
+                        input_tokens=anything_tokens_in,
+                        output_tokens=anything_tokens_out,
+                        latency_ms=latency_ms,
+                    )
+                )
                 if citations:
                     yield _sse_frame("citations", json.dumps({"citations": citations}, ensure_ascii=False))
                 async with pool.connection() as conn:
@@ -943,7 +1117,10 @@ async def append_message_stream(
                                 "VALUES (gen_random_uuid(), %s, 'assistant', %s, %s::jsonb, %s, %s, %s, %s, now()) "
                                 'RETURNING "id", "createdAt"',
                                 (session_id, cleaned[:100000], json.dumps(citations) if citations else None,
-                                 latency_ms, tokens_in_est, 0, 0),
+                                latency_ms,
+                                anything_tokens_in if anything_tokens_in is not None else tokens_in_est,
+                                anything_tokens_out if anything_tokens_out is not None else 0,
+                                0),
                             )
                         ).fetchone()
                         await conn.execute(
@@ -954,59 +1131,22 @@ async def append_message_stream(
                 yield _sse_frame("done", json.dumps({
                     "session_id": session_id, "message_id": str(a_row["id"]),
                     "content": cleaned, "sources": citations, "latency_ms": latency_ms,
-                    "tokens_in": tokens_in_est, "tokens_out": 0, "cost_cents": 0,
+                    "tokens_in": anything_tokens_in if anything_tokens_in is not None else tokens_in_est,
+                    "tokens_out": anything_tokens_out if anything_tokens_out is not None else 0,
+                    "cost_cents": 0,
                     "created_at": a_row["createdAt"].isoformat(),
                 }, ensure_ascii=False))
                 return
             except Exception as exc:
                 logger.warning("ai-engine.chat.anythingllm_stream_fallback", session_id=session_id, error=str(exc))
 
-        # Producer/consumer: feeder pushes chunks into ``queue``; this
-        # generator drains the queue and yields delta frames between polls.
-        # Chunks are also assembled into ``full_chunks`` for citation parsing
-        # after the feeder terminates.
-        full_chunks: list[str] = []
-        queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=128)
-
-        async def feeder() -> None:
-            async def q_delta(chunk: str) -> None:
-                await queue.put(chunk)
-
-            try:
-                if hasattr(adapter, "stream_chat"):
-                    await adapter.stream_chat(req, on_delta=q_delta)
-                else:
-                    # Approach A: poll-diff fallback.
-                    await adapter.submit(req)
-                    prev_len = 0
-                    deadline = time.monotonic() + req.timeout_seconds
-                    while True:
-                        if time.monotonic() >= deadline:
-                            raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 超时")
-                        status = await adapter.get_status(req.job_id)
-                        text = status.output_text or ""
-                        if len(text) > prev_len:
-                            await q_delta(text[prev_len:])
-                            prev_len = len(text)
-                        if status.status in {"succeeded", "failed", "partial", "cancelled"}:
-                            break
-                        await asyncio.sleep(0.1)
-            finally:
-                await queue.put(None)
-
-        feeder_task = asyncio.create_task(feeder())
-
-        while True:
-            item = await queue.get()
-            if item is None:
-                break
-            full_chunks.append(item)
-            yield _sse_frame("delta", json.dumps(item, ensure_ascii=False))
-
-        # Drain feeder exceptions / final status.
+        # Buffer the whole response before emitting anything: reasoning
+        # models can still publish `<think>` blocks even with thinking
+        # disabled, and single-call adapters only publish the final body.
+        # The client gets one cleaned delta and paces it locally.
         final_status: Any = None
         try:
-            await feeder_task
+            full_chunks = await _collect_adapter_chunks(adapter, req)
         except AdapterError as exc:
             yield _sse_frame(
                 "error",
@@ -1042,9 +1182,8 @@ async def append_message_stream(
             )
             return
 
-        # Assemble + parse citations.
-        full_text = "".join(full_chunks) or (final_status.output_text or "")
-        full_text = full_text.strip()
+        # Assemble + clean + parse citations before any text reaches the UI.
+        full_text = _clean_model_text("".join(full_chunks) or (final_status.output_text or ""))
         if not full_text:
             yield _sse_frame(
                 "error",
@@ -1052,11 +1191,19 @@ async def append_message_stream(
             )
             return
         cleaned, citations = _parse_citations(full_text, snapshot)
+        if not cleaned:
+            yield _sse_frame(
+                "error",
+                json.dumps({"code": "AI_ENGINE_UNAVAILABLE", "message": "AI 没有生成有效回答，请重试"}, ensure_ascii=False),
+            )
+            return
 
         latency_ms = int((time.monotonic() - started_at) * 1000)
         cost_cents = int(getattr(final_status.cost, "cost_cents", 0))
         tokens_out = int(getattr(final_status.cost, "token_output_total", 0) or 0)
         sources_json_str = json.dumps(citations) if citations else None
+
+        yield _sse_frame("delta", json.dumps(cleaned, ensure_ascii=False))
 
         if citations:
             yield _sse_frame(
