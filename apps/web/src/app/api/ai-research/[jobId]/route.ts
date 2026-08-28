@@ -69,7 +69,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   // 避免把「该 job 存在」这一事实泄露出去。
   const job = await prisma.aiResearchJob.findUnique({
     where: { id: parsed.data.jobId },
-    select: { requesterId: true },
+    select: { requesterId: true, conversation: true },
   });
   if (job === null || job.requesterId !== u.id) {
     return toApiErrorResponse({
@@ -144,6 +144,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     createdAt: up.created_at ?? null,
     completedAt: up.completed_at ?? null,
     review: up.review ?? null,
+    conversation: Array.isArray(job.conversation) ? job.conversation : [],
     artifact,
   });
 });

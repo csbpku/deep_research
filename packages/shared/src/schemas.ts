@@ -18,6 +18,7 @@ export const DistilledScoreSchema = z.object({
   qualityScore: z.number().min(0).max(100).optional(),
   teamValueScore: z.number().min(0).max(100).optional(),
   rankingScore: z.number().min(0).max(100).optional(),
+  tierScore: z.number().min(0).max(100).optional(),
   sourceBonus: z.number().min(0).max(20).optional(),
   tier: DistilledTierSchema,
   mustRead: z.boolean(),
@@ -48,6 +49,12 @@ const SourceRefUuid = (literal: 'favorite' | 'research' | 'summary') => z.object
 });
 
 /** 提交 AI 调研任务（架构 §十三） */
+const AiResearchConversationMessage = z.object({
+  id: z.string().max(160),
+  role: z.enum(['user', 'assistant']),
+  content: z.string().max(4000),
+});
+
 export const CreateAiJobInput = z.object({
   topic: z.string().min(2).max(200),
   context: z.string().max(2000).optional(),                    // 用户手填上下文
@@ -71,6 +78,8 @@ export const CreateAiJobInput = z.object({
     SourceRefUuid('summary'),
   ])).max(10).default([]),
   idempotencyKey: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  conversation: z.array(AiResearchConversationMessage).max(100).optional(),
 });
 export type CreateAiJobInput = z.infer<typeof CreateAiJobInput>;
 
@@ -219,6 +228,8 @@ export const CreateAiJobInputV2 = z.object({
   ])).max(10).default([]),
   idempotencyKey: z.string().uuid().optional(),
   primaryTopicId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  conversation: z.array(AiResearchConversationMessage).max(100).optional(),
 });
 export type CreateAiJobInputV2 = z.infer<typeof CreateAiJobInputV2>;
 

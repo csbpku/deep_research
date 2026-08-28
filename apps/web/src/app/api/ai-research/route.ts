@@ -114,6 +114,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const brief = v2?.brief ?? null;
   const context = v2?.context ?? v1?.context ?? null;
   const idempotencyKey = v2?.idempotencyKey ?? v1?.idempotencyKey ?? null;
+  const conversationId = v2?.conversationId ?? v1?.conversationId ?? null;
+  const conversation = v2?.conversation ?? v1?.conversation ?? [];
 
   // 1. 落库 AiResearchJob（先有 id，方便后续埋点 / 草稿关联）
   let jobId: string;
@@ -132,6 +134,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         partialSources: [],
         failedSources: [],
         idempotencyKey,
+        conversation,
       },
       select: { id: true },
     });
@@ -258,6 +261,21 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     objective,
     primaryTopicId,
   });
+
+  // 绑定持久化对话：任务创建成功后把 jobId 写回会话，
+  // 任务页与 follow-up 追问都能从会话恢复完整历史。
+  if (conversationId) {
+    const conversationRow = await prisma.aiResearchConversation.findUnique({
+      where: { id: conversationId },
+      select: { userId: true, jobId: true },
+    });
+    if (conversationRow && conversationRow.userId === u.id && !conversationRow.jobId) {
+      await prisma.aiResearchConversation.update({
+        where: { id: conversationId },
+        data: { jobId },
+      });
+    }
+  }
 
   return NextResponse.json(
     {

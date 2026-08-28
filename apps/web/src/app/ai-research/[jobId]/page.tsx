@@ -21,7 +21,6 @@ import {
 
 import { EmptyState } from '@/components/EmptyState';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
-import { SectionCard } from '@/components/domain/SectionCard';
 import {
   progressPct as progressPctShared,
   stepIndex as stepIndexShared,
@@ -38,6 +37,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { reviewDisplayLabel, reviewDisplayStatus } from '@/lib/ai-review-ui';
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
+import { ResearchChatPanel } from '@/components/ai-research/ResearchChatPanel';
+import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
 
 interface AiJobStatus {
   jobId: string;
@@ -62,6 +63,7 @@ interface AiJobStatus {
   createdAt: string | null;
   completedAt: string | null;
   review: ReviewDetails | null;
+  conversation: Array<{ id: string; role: 'user' | 'assistant'; content: string }>;
   artifact: {
     type: 'markdown' | 'slides' | 'table' | 'chart';
     title: string;
@@ -125,6 +127,7 @@ type StepState = 'done' | 'current' | 'error' | 'waiting';
  */
 export default function AiJobStatusPage() {
   const params = useParams<{ jobId: string }>();
+  const queryClient = useQueryClient();
   const q = useQuery<AiJobStatus>({
     queryKey: ['ai-job', params.jobId],
     queryFn: async () => {
@@ -145,10 +148,72 @@ export default function AiJobStatusPage() {
     refetchIntervalInBackground: false,
   });
 
+  // 轮询是可靠兜底；SSE 让详情页在步骤和来源变化时立即更新。
+  useEffect(() => {
+    const status = q.data?.finalStatus ?? q.data?.status;
+    if (!q.data || (status && TERMINAL.has(status))) return;
+    const controller = new AbortController();
+    let cancelled = false;
+
+    async function consumeProgress() {
+      try {
+        const response = await fetch(`/api/ai-research/${params.jobId}/stream`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) return;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!cancelled) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            // SSE 帧可能含 event:/data:/id:/retry: 多行;这里只关心 event 名 + data 载荷,
+            // event 行缺失时默认 'progress'(与上游约定一致)。
+            const lines = frame.split('\n');
+            let eventName = 'progress';
+            const dataLine = lines.find((item) => item.startsWith('data: '));
+            const eventLine = lines.find((item) => item.startsWith('event: '));
+            if (eventLine) eventName = eventLine.slice(7).trim();
+            if (!dataLine) continue;
+            try {
+              const payload = JSON.parse(dataLine.slice(6)) as Partial<AiJobStatus>;
+              queryClient.setQueryData<AiJobStatus>(
+                ['ai-job', params.jobId],
+                (old) => (old ? { ...old, ...payload, lastEvent: eventName } : old),
+              );
+            } catch (err) {
+              // 单帧解析失败不影响后续帧 —— 仅记一条 warn,保留兜底轮询
+              if (typeof console !== 'undefined') {
+                console.warn('[ai-research SSE] failed to parse frame', { eventName, err });
+              }
+            }
+          }
+        }
+      } catch {
+        // 保留轮询作为 SSE 不可用时的兜底路径。
+      }
+    }
+
+    void consumeProgress();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [params.jobId, q.data?.finalStatus, q.data?.status, queryClient]);
+
   return (
     <div className="mx-auto max-w-shell">
       <PageHeader
-        title={q.isError ? '无法加载调研' : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
+        title={
+          <span aria-live="polite" aria-atomic="true">
+            {q.isError ? '无法加载调研' : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
+          </span>
+        }
         description={
           q.data
             ? `${q.data.reportType === 'summary_brief' ? '轻量摘要' : '研究报告'} · ${q.data.topic ?? '本次调研'}`
@@ -234,12 +299,20 @@ function StatusBody({ s }: { s: AiJobStatus }) {
   const finalStatus = s.finalStatus;
   const isTerminal = !!(finalStatus && TERMINAL.has(finalStatus));
 
-  // 实时计时 —— 终态自动停止,避免后台 1Hz tick 浪费。
+  // 实时计时 —— 终态停止;长任务(>5min)降级到 30s tick,避免低端机浪费
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (isTerminal) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
+    const startedAt = Date.now();
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    function schedule() {
+      const ageMs = Date.now() - startedAt;
+      intervalId = setInterval(() => setNow(Date.now()), ageMs > 5 * 60_000 ? 30_000 : 1000);
+    }
+    schedule();
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [isTerminal]);
 
   const pct = progressPctShared(s);
@@ -256,93 +329,89 @@ function StatusBody({ s }: { s: AiJobStatus }) {
       : (s.currentStep ?? s.errorStage ?? null);
   const activeIdx = stepIndexShared(effectiveStep);
 
+  const conversationQuery = useQuery<AiResearchConversationDetail | null>({
+    queryKey: ['ai-research-conversation', s.jobId],
+    queryFn: async () => {
+      const r = await fetch(`/api/ai-research/conversations/by-job/${encodeURIComponent(s.jobId)}`, { cache: 'no-store' });
+      if (r.status === 404) return null;
+      if (!r.ok) throw await toApiHttpError(r, '加载对话失败');
+      return await r.json() as AiResearchConversationDetail;
+    },
+    retry: retryOnceAi,
+    refetchOnWindowFocus: false,
+  });
+
+  // 旧任务没有持久化会话时，用 job 里的 conversation 快照补建一条，
+  // 保证完成后仍然可以继续追问。
+  const [conversationEnsureTried, setConversationEnsureTried] = useState(false);
+  useEffect(() => {
+    if (conversationQuery.data !== null || conversationEnsureTried) return;
+    setConversationEnsureTried(true);
+    void fetch('/api/ai-research/conversations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: s.topic ?? 'AI 调研',
+        jobId: s.jobId,
+        messages: s.conversation.map(({ role, content }) => ({ role, content })),
+      }),
+    })
+      .then(async (response) => {
+        if (response.ok) await conversationQuery.refetch();
+      })
+      .catch(() => undefined);
+  }, [conversationQuery.data, conversationEnsureTried, s.conversation, s.jobId, s.topic]);
+
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border p-4">
-        <div className="min-w-0">
-          <p className="mb-2 text-xs font-medium text-muted-foreground">执行状态</p>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {s.review?.status ? (
-              <span
-                className={cn(
-                  'rounded-full px-2 py-0.5 font-medium',
-                  s.review.status === 'blocked'
-                    ? 'bg-status-failed-bg text-status-failed-fg'
-                    : s.review.status === 'passed'
-                      ? 'bg-status-succeeded-bg text-status-succeeded-fg'
-                      : 'bg-status-partial-bg text-status-partial-fg',
-                )}
-              >
-                {statusLabel}
-              </span>
-            ) : (
+    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div className="border-b border-border px-5 py-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
               <StatusBadge kind="job" value={statusLabel} label={statusLabel} />
-            )}
-            {reviewInProgress || reviewCompleted ? (
-              <span className="font-mono">步骤 事实审核 ({isBrief ? '5/5' : '6/6'})</span>
-            ) : activeIdx >= 0 ? (
-              <span className="font-mono">
-                步骤 {STEPS[activeIdx].label} ({activeIdx + 1}/{STEPS.length})
+              <span className="text-xs text-muted-foreground tabular-nums" aria-label={`已耗时 ${elapsed}`}>
+                <span aria-hidden="true">已耗时 {elapsed}</span>
               </span>
-            ) : null}
-            <span>已耗时 {elapsed}</span>
-            {!isTerminal ? (
-              <span>{isBrief ? '完成后在本页显示摘要' : '完成后可打开私有草稿'}</span>
-            ) : null}
-          </div>
-        </div>
-        <div className="shrink-0 text-right">
-          <div className="font-mono text-3xl font-bold leading-none tabular-nums text-primary">
-            {pct}%
-          </div>
-          <div className="mt-1 text-xs text-muted-foreground">{terminalCaption(s)}</div>
-        </div>
-      </div>
-
-      {/* Progress bar */}
-      <div className="border-b border-border px-4 pb-4">
-        <Progress value={Math.min(100, Math.max(0, pct))} />
-      </div>
-
-      <div className="space-y-4 p-4">
-        <SectionCard
-          tone="muted"
-          title="调研流程"
-          icon={ListChecks}
-          actions={
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {isBrief ? '5 个步骤' : '6 个步骤'}
-            </span>
-          }
-          bodyClassName="space-y-3"
-        >
-          <p className="text-xs text-muted-foreground">
-            {isBrief ? '轻量摘要在写作后直接返回结果。' : '报告生成完成后，自动进入事实审核。'}
-          </p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-            {STEPS.map((step, idx) => (
-              <StepCard
-                key={step.key}
-                step={step}
-                state={stepState(s, idx)}
-                count={countForStep(s, step.key)}
-              />
-            ))}
-            {!isBrief ? (
-              <StepCard
-                step={REVIEW_STEP}
-                state={reviewStepState(s)}
-                count={reviewStepCount(s.review)}
-              />
-            ) : null}
-          </div>
-          {!isBrief ? (
-            <div className="border-t border-border pt-3">
-              <ReviewPanel review={s.review} draftResearchId={s.draftResearchId} />
             </div>
-          ) : null}
-        </SectionCard>
+            <h2 className="mt-3 text-xl font-semibold tracking-tight">
+              {isTerminal ? (finalStatus === 'succeeded' ? '研究完成' : '研究已结束') : '正在建立证据链'}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground" aria-live="polite" aria-atomic="true">
+              {reviewInProgress ? '报告已写成，正在核验关键事实。' : reviewCompleted ? '事实核验已完成，下面可以查看结果。' : `${activeIdx >= 0 ? STEPS[activeIdx].label : '准备研究'} · ${s.sourcesCount} 条来源`}
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="font-mono text-2xl font-semibold tabular-nums text-primary">{pct}%</div>
+            <div className="mt-1 text-xs text-muted-foreground">{terminalCaption(s)}</div>
+          </div>
+        </div>
+        <Progress value={Math.min(100, Math.max(0, pct))} className="mt-5 h-1.5" />
+      </div>
+
+      <div className="p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold">研究过程</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">按时间顺序记录研究如何得出结论。</p>
+          </div>
+          {!isTerminal ? <span className="text-xs text-primary">实时更新中</span> : null}
+        </div>
+        <div className="relative ml-1 border-l border-border pl-6">
+          {STEPS.map((step, idx) => (
+            <TimelineStep key={step.key} step={step} state={stepState(s, idx)} count={countForStep(s, step.key)} />
+          ))}
+          {!isBrief ? <TimelineStep step={REVIEW_STEP} state={reviewStepState(s)} count={reviewStepCount(s.review)} last /> : null}
+        </div>
+        {!isBrief && (s.review || isTerminal) ? (
+          <details className="mt-5 rounded-xl border border-border bg-muted/20 px-4 py-3">
+            <summary className="cursor-pointer text-sm font-medium">事实审核摘要</summary>
+            <div className="pt-3"><ReviewPanel review={s.review} draftResearchId={s.draftResearchId} /></div>
+          </details>
+        ) : null}
+        <ResearchChatPanel
+          conversation={conversationQuery.data ?? null}
+          canAsk={isTerminal && finalStatus === 'succeeded'}
+        />
       </div>
 
       {/* 诊断详情 —— 默认折叠；步骤状态已显示在流程卡片内 */}
@@ -437,11 +506,6 @@ function ReviewPanel({
   const params = useParams<{ jobId: string }>();
   const claims = Array.isArray(review?.claims) ? review.claims : [];
   const displayStatus = reviewDisplayStatus(review);
-  const statusClass = displayStatus === 'passed'
-    ? 'text-status-succeeded-fg'
-    : displayStatus === 'blocked'
-      ? 'text-status-failed-fg'
-      : 'text-status-partial-fg';
 
   const queryClient = useQueryClient();
   const [reReviewing, setReReviewing] = useState(false);
@@ -500,7 +564,23 @@ function ReviewPanel({
           <p className="text-xs text-muted-foreground">只在发现风险时展开具体声明。</p>
         </div>
         <div className="flex items-center gap-2">
-          <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', statusClass)}>{reviewDisplayLabel(review)}</span>
+          {(() => {
+            /* review 状态 → job kind 映射:已通过=succeeded,需要修订=partial,阻止发布=failed,审核中=running */
+            const reviewKind = (() => {
+              switch (displayStatus) {
+                case 'passed': return 'succeeded';
+                case 'needs_revision': return 'partial';
+                case 'blocked': return 'failed';
+                case 'reviewing': return 'running';
+                default: return null;
+              }
+            })();
+            return reviewKind ? (
+              <StatusBadge kind="job" value={reviewKind} label={reviewDisplayLabel(review)} />
+            ) : (
+              <StatusBadge kind="job" value="queued" label={reviewDisplayLabel(review)} />
+            );
+          })()}
           {canReReview ? (
             <Button type="button" variant="outline" size="xs" onClick={() => void reReview()} disabled={reReviewing}>
               <RotateCw className={cn('size-3', reReviewing && 'animate-spin')} />
@@ -638,14 +718,6 @@ function countForStep(s: AiJobStatus, stepKey: string): string | null {
   return null;
 }
 
-/** 步骤状态 → token 化配色。 */
-const STEP_CLASSES: Record<StepState, string> = {
-  done: 'border-status-succeeded-fg/30 bg-status-succeeded-bg text-status-succeeded-fg',
-  current: 'border-status-running-fg/30 bg-status-running-bg text-status-running-fg',
-  error: 'border-status-failed-fg/30 bg-status-failed-bg text-status-failed-fg',
-  waiting: 'border-border bg-card text-muted-foreground',
-};
-
 const STEP_LABELS: Record<StepState, string> = {
   done: '完成',
   current: '当前步骤',
@@ -653,31 +725,45 @@ const STEP_LABELS: Record<StepState, string> = {
   waiting: '等待中',
 };
 
-function StepCard({
+function TimelineStep({
   step,
   state,
   count,
+  last = false,
 }: {
   step: ProcessStep;
   state: StepState;
   count: string | null;
+  last?: boolean;
 }) {
   const Icon = step.icon;
+  const dotClass = {
+    done: 'border-status-succeeded-fg bg-status-succeeded-fg text-white',
+    current: 'border-primary bg-primary text-primary-foreground shadow-[0_0_0_4px_hsl(var(--primary)/.12)]',
+    error: 'border-status-failed-fg bg-status-failed-fg text-white',
+    waiting: 'border-border bg-card text-muted-foreground',
+  }[state];
+  /* 三态 label 让屏幕阅读器读出当前步骤的状态(色弱/单视觉用户也能感知) */
+  const stateLabel = { done: '已完成', current: '进行中', error: '失败', waiting: '等待' }[state];
   return (
-    <div className={cn('min-w-0 rounded-md border p-2.5', STEP_CLASSES[state])}>
-      <div className="flex items-center gap-1.5">
-        <Icon aria-hidden className="size-3.5 shrink-0" />
-        <span className="text-xs font-semibold">{step.label}</span>
+    <div className={cn('relative pb-5', last && 'pb-0')}>
+      <span
+        className={cn('absolute -left-[2.05rem] top-0 grid size-5 place-items-center rounded-full border-2', dotClass)}
+        role="img"
+        aria-label={`${step.label}:${stateLabel}`}
+      >
+        <Icon aria-hidden className="size-2.5" />
+      </span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className={cn('text-sm font-medium', state === 'waiting' && 'text-muted-foreground')}>{step.label}</span>
+        <span className={cn('text-[11px]', state === 'current' ? 'text-primary' : state === 'error' ? 'text-status-failed-fg' : 'text-muted-foreground')}>
+          {STEP_LABELS[state]}
+        </span>
+        {count ? <span className="truncate text-[11px] text-muted-foreground" title={count}>{count}</span> : null}
       </div>
-      <div className="mt-1 text-xs opacity-85">{STEP_LABELS[state]}</div>
-      {count ? (
-        <div className="mt-1 truncate text-xs" title={count}>
-          {count}
-        </div>
-      ) : null}
-      <div className="mt-1 truncate text-[10px] opacity-60" title={step.desc}>
+      <p className="mt-1 text-xs text-muted-foreground" title={step.desc}>
         {step.desc}
-      </div>
+      </p>
     </div>
   );
 }
@@ -707,10 +793,15 @@ function JobStatusDisclosure({
   elapsed: string;
 }) {
   const [open, setOpen] = useState(false);
-  const summary =
-    `${elapsed} · ${s.partialSourcesCount}/${s.sourcesCount} 资料` +
-    (s.currentStep ? ` · 当前 ${stepLabel(s.currentStep)}` : '') +
-    (s.costCents > 0 ? ` · $${(s.costCents / 100).toFixed(2)}` : '');
+  const summary = `${elapsed} · ${s.partialSourcesCount}/${s.sourcesCount} 资料` + (s.currentStep ? ` · 当前 ${stepLabel(s.currentStep)}` : '') + (s.costCents > 0 ? ` · $${(s.costCents / 100).toFixed(2)}` : '');
+
+  // dl 列表:每个数据单独 dt/dd + title,屏幕阅读器和鼠标 hover 都能看到完整字段
+  const summaryParts = [
+    { term: '已耗时', value: elapsed },
+    { term: '已抓取', value: `${s.partialSourcesCount}/${s.sourcesCount}` },
+    ...(s.currentStep ? [{ term: '当前步骤', value: stepLabel(s.currentStep) }] : []),
+    ...(s.costCents > 0 ? [{ term: '成本', value: `$${(s.costCents / 100).toFixed(2)}` }] : []),
+  ];
 
   return (
     <div className="border-t border-border">
@@ -718,6 +809,7 @@ function JobStatusDisclosure({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        aria-controls="job-status-details"
         className="flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2 text-left transition-colors duration-150 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -731,7 +823,12 @@ function JobStatusDisclosure({
         <span className="truncate font-mono text-xs text-muted-foreground">{summary}</span>
       </button>
       {open && (
-        <div className="grid gap-x-4 gap-y-2 border-t border-border bg-muted/40 px-4 py-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        <div
+          id="job-status-details"
+          role="region"
+          aria-label="诊断详情"
+          className="grid gap-x-4 gap-y-2 border-t border-border bg-muted/40 px-4 py-3 text-xs sm:grid-cols-2 lg:grid-cols-3"
+        >
           <DetailRow label="正在处理" value={stepLabel(s.currentStep)} />
           <DetailRow label="已抓取总数" value={String(s.sourcesCount)} mono />
           <DetailRow label="已抓取" value={String(s.partialSourcesCount)} mono />

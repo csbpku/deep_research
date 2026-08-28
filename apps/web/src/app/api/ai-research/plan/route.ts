@@ -236,7 +236,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
     assistantMessage:
       objective === 'explore'
         ? '这是快速概览，可以直接启动。'
-        : `判断为「${objective}」类调研。请确认研究计划后启动。`,
+        : missingFields.length === 0
+          ? `判断为「${objective}」类调研。研究计划已生成，可以直接启动。`
+          : `判断为「${objective}」类调研。建议补充：${missingFields.map((field) => field).join('、')}；也可以直接开始，AI 会按现有范围执行。`,
     brief,
     plan,
     ready: missingFields.length === 0,

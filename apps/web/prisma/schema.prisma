@@ -206,6 +206,7 @@ model User {
   sharesReviewed        ShareSubmission[]  @relation("share_reviewer")
   radarFeedback         RadarFeedback[]
   chatSessions          AiChatSession[]
+  aiResearchConversations AiResearchConversation[]
   radarSubmissions      RadarSubmission[]  @relation("radar_submission_submitter")
   bookmarks             UserBookmark[]
   researchTemplates     ResearchTemplate[]
@@ -270,7 +271,7 @@ model Summary {
   scoreVersion       String?  @db.VarChar(16) // Stage 1 评分版本号
   scoreReason        String?  @db.VarChar(500) // 评分可读理由
   distilledScore     Json?    @db.JsonB // Distilled v2 完整结构化评分
-  distilledTotal     Float? // Distilled 加权总分 0..100
+  distilledTotal     Float? // Distilled 分层分 0..100（与 distilledTier 判定一致）
   distilledTier      String?  @db.VarChar(16)
   distilledMustRead  Boolean?
   distilledProfile   String?  @db.VarChar(16)
@@ -486,6 +487,7 @@ model AiResearchJob {
   objective        String    @default("investigate") @db.VarChar(20)
   brief            Json?     @db.JsonB
   plan             Json?     @db.JsonB
+  conversation     Json      @default("[]") @db.JsonB
   // ADR 0010: 自动 / 手动关联到 Topic
   primaryTopicId   String?   @db.Uuid
   createdAt        DateTime  @default(now()) @db.Timestamptz(3)
@@ -494,6 +496,7 @@ model AiResearchJob {
   requester     User      @relation(fields: [requesterId], references: [id], onDelete: Restrict)
   draftResearch Research? @relation("ai_job_draft", fields: [draftResearchId], references: [id], onDelete: SetNull)
   primaryTopic  Topic?    @relation("ai_job_primary_topic", fields: [primaryTopicId], references: [id], onDelete: SetNull)
+  researchConversation AiResearchConversation? @relation("ai_research_job_conversation")
 
   aiResearchSources AiResearchSource[]
 
@@ -528,6 +531,42 @@ model AiResearchSource {
   @@unique([jobId, canonicalKey])
   @@index([jobId])
   @@map("ai_research_sources")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 5b. ai_research_conversations — AI 调研的持久化对话（ChatGPT 风格）
+//  一个调研任务最多对应一个会话；任务创建前的规划对话也先落库，
+//  刷新 / 重新打开都能恢复。任务完成后通过 follow-up 端点继续追问。
+// ─────────────────────────────────────────────────────────────────────
+
+model AiResearchConversation {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  jobId     String?  @unique @db.Uuid
+  title     String   @db.VarChar(200)
+  status    String   @default("active") @db.VarChar(24)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user     User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job      AiResearchJob?                 @relation("ai_research_job_conversation", fields: [jobId], references: [id], onDelete: SetNull)
+  messages AiResearchConversationMessage[]
+
+  @@index([userId, updatedAt(sort: Desc)])
+  @@map("ai_research_conversations")
+}
+
+model AiResearchConversationMessage {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId String   @db.Uuid
+  role           String   @db.VarChar(16)
+  content        String   @db.Text
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  conversation AiResearchConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt(sort: Asc)])
+  @@map("ai_research_conversation_messages")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1052,6 +1091,13 @@ model LlmUsageEvent {
   outputTokens   Int?
   costCents      Int?
   latencyMs      Int?
+  primaryModel   String?  @db.VarChar(160)
+  fallbackReason String?  @db.VarChar(120)
+  attemptCount   Int      @default(1)
+  finalModel     String?  @db.VarChar(160)
+  degraded       Boolean  @default(false)
+  endpoint       String?  @db.VarChar(300)
+  circuitState   String?  @db.VarChar(16)
   createdAt      DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt(sort: Desc)])

@@ -8,9 +8,11 @@
 //   - 正文含 /AI 调研/
 //   - LastSubmittedBanner 的 aria-label="关闭"
 
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 
 import {
   AlertTriangle,
@@ -43,6 +45,7 @@ import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi } from '@/lib/errors/friendly';
 import { AiResearchConversation } from '@/components/ai-research/AiResearchConversation';
+import { AiResearchConversationSidebar } from '@/components/ai-research/AiResearchConversationSidebar';
 
 // ─── 调研历史 ───
 
@@ -78,11 +81,12 @@ const REPORT_TYPE_LABEL: Record<string, string> = {
 };
 
 const STEP_LABEL: Record<string, string> = {
-  plan: '规划',
-  search: '检索资料',
-  compress: '整理证据',
-  analyze: '分析',
-  write: '撰写报告',
+  plan: '规划研究问题',
+  search: '检索与抓取',
+  compress: '压缩证据',
+  analyze: '分析与对比',
+  write: '写作草稿',
+  review: '事实审核',
 };
 
 /** mockup tab → server-side status filter. 已发布在客户端二次过滤。 */
@@ -167,6 +171,10 @@ function AiResearchHistory() {
   const [filter, setFilter] = useState<HistoryFilter>('all');
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const router = useRouter();
+  // 当用户从其他页(例如 /ai-research/[jobId])通过 #research-history 锚链接
+  // 跳到这里时,给标题加视觉高亮与 aria-current,告知"你正在查看历史区"。
+  const [highlighted, setHighlighted] = useState(false);
 
   const q = useQuery<{ items: HistoryItem[]; total: number }>({
     queryKey: ['ai-research-jobs', filter],
@@ -199,6 +207,25 @@ function AiResearchHistory() {
     cancelled: allItems.filter((it) => it.status === 'cancelled').length,
   };
 
+  // 高亮锚点 #research-history:hash 变化时点亮标题,3 秒后自动熄灭,
+  // 既给屏幕阅读器一个明确的当前位置信号,又不长期残留视觉噪音。
+  useEffect(() => {
+    function check() {
+      if (typeof window === 'undefined') return;
+      setHighlighted(window.location.hash === '#research-history');
+    }
+    check();
+    window.addEventListener('hashchange', check);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (window.location.hash === '#research-history') {
+      timer = setTimeout(() => setHighlighted(false), 3000);
+    }
+    return () => {
+      window.removeEventListener('hashchange', check);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
   async function rerun(item: HistoryItem) {
     // v0 重跑：POST 一条同样的 topic（不带 sourceRefs，避免被截断）。
     // idempotencyKey 必须不同——用户视角是"新发起一次"。
@@ -225,7 +252,7 @@ function AiResearchHistory() {
       const data = (await r.json()) as { jobId: string };
       writeLastSubmitted(data.jobId, item.topic);
       q.refetch(); // 立刻把新行刷到表格
-      window.location.href = `/ai-research/${data.jobId}`;
+      router.push(`/ai-research/${data.jobId}`);
     } finally {
       setRerunning(null);
     }
@@ -236,9 +263,18 @@ function AiResearchHistory() {
       <LastSubmittedBanner />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <FolderOpen className="size-4 text-muted-foreground" />
+        <h2
+          aria-current={highlighted ? 'location' : undefined}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-semibold transition-colors',
+            highlighted && 'bg-primary/10 text-primary ring-1 ring-primary/30',
+          )}
+        >
+          <FolderOpen className="size-4" />
           调研历史
+          {highlighted ? (
+            <span className="sr-only">(当前位置)</span>
+          ) : null}
         </h2>
         <div className="flex flex-wrap gap-1">
           {FILTERS.map((f) => (
@@ -274,7 +310,7 @@ function AiResearchHistory() {
                 <TableHead className="w-32 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody aria-live="polite" aria-busy={q.isFetching}>
               {[0, 1, 2, 3, 4].map((i) => (
                 <TableRow key={i} className="hover:bg-transparent">
                   <TableCell>
@@ -325,7 +361,7 @@ function AiResearchHistory() {
                 <TableHead className="w-32 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
-            <TableBody>
+            <TableBody aria-live="polite" aria-busy={q.isFetching}>
               {filteredItems.map((item) => {
                 const badgeValue = historyBadgeValue(item);
                 const isInFlight = item.status === 'queued' || item.status === 'running';
@@ -337,9 +373,18 @@ function AiResearchHistory() {
                 return (
                   <TableRow
                     key={item.jobId}
-                    className="cursor-pointer"
-                    onClick={() => {
-                      window.location.href = `/ai-research/${item.jobId}`;
+                    className="cursor-pointer focus-within:bg-muted/30"
+                    onClick={(e) => {
+                      // 排除点击 button 的冒泡(打开/重新运行按钮自身处理)
+                      const target = e.target as HTMLElement;
+                      if (target.closest('button, a')) return;
+                      router.push(`/ai-research/${item.jobId}`);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !(e.target as HTMLElement).closest('button, a')) {
+                        e.preventDefault();
+                        router.push(`/ai-research/${item.jobId}`);
+                      }
                     }}
                   >
                     <TableCell>
@@ -404,14 +449,19 @@ function AiResearchHistory() {
 // 把 AiResearchHistory 挂到对话工作区下面。
 
 function AiResearchPageClient() {
+  const searchParams = useSearchParams();
+  const conversationId = searchParams.get('conversation');
   return (
     <div className="mx-auto max-w-shell">
       <PageHeader
         title="AI 调研"
-        description="把一个需要判断的问题交给 AI，补充必要背景后直接开始。"
+        description="把一个需要判断的问题交给 AI，对话会保存为可继续的研究会话。"
       />
-      <div className="max-w-6xl">
-        <AiResearchConversation />
+      <div className="grid items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+        <AiResearchConversationSidebar activeConversationId={conversationId} />
+        <div className="min-w-0">
+          <AiResearchConversation conversationId={conversationId} />
+        </div>
       </div>
       <AiResearchHistory />
     </div>

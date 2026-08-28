@@ -1,7 +1,8 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Clock3, ExternalLink, Loader2 } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { AlertTriangle, Check, CheckCircle2, Clock3, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
@@ -37,6 +38,7 @@ interface InlineJob {
 }
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
+const STEP_ORDER = ['plan', 'search', 'compress', 'analyze', 'write'] as const;
 const STEP_LABELS: Record<string, string> = {
   plan: '规划问题',
   search: '检索资料',
@@ -55,7 +57,38 @@ function labelForStatus(status: string): string {
   return status;
 }
 
+/** 横向阶段 stepper：plan → search → compress → analyze → write。 */
+function StepStepper({ currentStep, succeeded }: { currentStep: string | null; succeeded: boolean }) {
+  const activeIndex = currentStep ? STEP_ORDER.indexOf(currentStep as (typeof STEP_ORDER)[number]) : -1;
+  return (
+    <ol className="flex flex-wrap items-center gap-1.5" aria-label="调研步骤">
+      {STEP_ORDER.map((key, index) => {
+        const state = succeeded || (activeIndex >= 0 && index < activeIndex) ? 'done' : index === activeIndex ? 'active' : 'todo';
+        return (
+          <li key={key} className="flex items-center gap-1.5">
+            {index > 0 ? <span className="mx-0.5 h-px w-3 bg-border" aria-hidden /> : null}
+            <span
+              className={cn(
+                'flex size-5 items-center justify-center rounded-full text-[10px] font-medium leading-none',
+                state === 'done' && 'bg-status-succeeded-bg text-status-succeeded-fg',
+                state === 'active' && 'bg-primary text-primary-foreground',
+                state === 'todo' && 'bg-muted text-muted-foreground/70',
+              )}
+            >
+              {state === 'done' ? <Check className="size-3" /> : index + 1}
+            </span>
+            <span className={cn('text-[11px]', state === 'active' ? 'font-medium text-foreground' : state === 'done' ? 'text-muted-foreground' : 'text-muted-foreground/60')}>
+              {STEP_LABELS[key]}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
+  const queryClient = useQueryClient();
   const query = useQuery<InlineJob>({
     queryKey: ['inline-ai-research', jobId],
     queryFn: async () => {
@@ -69,6 +102,56 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
       return status && TERMINAL.has(status) ? false : 5_000;
     },
   });
+
+  const liveStatus = query.data?.finalStatus ?? query.data?.status;
+  const liveTerminal = !!liveStatus && TERMINAL.has(liveStatus);
+
+  useEffect(() => {
+    if (liveTerminal) return;
+    const controller = new AbortController();
+    let cancelled = false;
+
+    async function consumeProgress() {
+      try {
+        const response = await fetch(`/api/ai-research/${jobId}/stream`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) return;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!cancelled) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            const dataLine = frame.split('\n').find((line) => line.startsWith('data: '));
+            if (!dataLine) continue;
+            const payload = JSON.parse(dataLine.slice(6)) as Partial<InlineJob> & { finalStatus?: string | null };
+            if (payload.status === 'failed' || payload.finalStatus === 'failed') {
+              queryClient.invalidateQueries({ queryKey: ['inline-ai-research', jobId] });
+            }
+            queryClient.setQueryData<InlineJob>(['inline-ai-research', jobId], (old) => {
+              if (!old) return old;
+              return { ...old, ...payload };
+            });
+          }
+        }
+      } catch {
+        // Polling remains active as the durable fallback when SSE is unavailable.
+      }
+    }
+
+    void consumeProgress();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [jobId, liveTerminal, queryClient]);
 
   if (query.isLoading) {
     return (
@@ -118,25 +201,32 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         </Link>
       </header>
 
-      <div className="space-y-3 p-4">
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>{job.currentStep ? STEP_LABELS[job.currentStep] ?? job.currentStep : '准备中'}</span>
+      <div className="space-y-4 p-4">
+        <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} />
+
+        <div className="flex items-center justify-end text-xs text-muted-foreground">
           <span className="font-mono tabular-nums">{pct}%</span>
         </div>
         <Progress value={pct} />
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-          <Metric label="已抓取来源" value={job.sourcesCount} />
-          <Metric label="部分来源" value={job.partialSourcesCount} />
-          <Metric label="失败来源" value={job.failedSourcesCount} />
-          <Metric label="产物" value={job.reportType === 'slides' ? 'Slides' : job.reportType === 'summary_brief' ? '简报' : '研究稿'} />
-        </div>
 
-        {!terminal ? (
-          <p className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />
-            你可以留在这里继续看进度，完成后结果会直接出现在下方。
-          </p>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+            来源 <span className="ml-1 font-mono tabular-nums text-foreground">{job.sourcesCount}</span>
+          </span>
+          {job.partialSourcesCount > 0 ? (
+            <span className="inline-flex items-center rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-[11px] text-warning-fg">
+              部分 <span className="ml-1 font-mono tabular-nums">{job.partialSourcesCount}</span>
+            </span>
+          ) : null}
+          {job.failedSourcesCount > 0 ? (
+            <span className="inline-flex items-center rounded-full border border-destructive/25 bg-destructive/5 px-2 py-0.5 text-[11px] text-destructive">
+              失败 <span className="ml-1 font-mono tabular-nums">{job.failedSourcesCount}</span>
+            </span>
+          ) : null}
+          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+            {job.reportType === 'slides' ? '演示稿' : job.reportType === 'summary_brief' ? '简报' : '研究稿'}
+          </span>
+        </div>
 
         {status === 'failed' ? (
           <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm text-destructive">
@@ -149,11 +239,11 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
             {job.artifact.type === 'slides' ? (
               <ArtifactPreview content={job.artifact.content} />
             ) : (
-              <MarkdownPreview source={job.artifact.content} className="max-h-[520px] bg-card" />
+              <MarkdownPreview source={job.artifact.content} className="max-h-[720px] bg-card" />
             )}
           </div>
         ) : status === 'succeeded' && job.outputText ? (
-          <MarkdownPreview source={job.outputText} className="max-h-[520px] bg-card" />
+          <MarkdownPreview source={job.outputText} className="max-h-[720px] bg-card" />
         ) : null}
 
         {status === 'succeeded' && job.draftResearchId ? (
@@ -163,14 +253,5 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         ) : null}
       </div>
     </section>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className={cn('rounded-lg border border-border bg-card px-3 py-2')}>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-foreground">{value}</p>
-    </div>
   );
 }
