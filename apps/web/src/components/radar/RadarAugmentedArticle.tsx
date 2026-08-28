@@ -1,6 +1,7 @@
 'use client';
 
 import MarkdownContent from '@/components/MarkdownContent';
+import { ListChecks } from 'lucide-react';
 import type { RadarGuide } from './RadarAiReadingTab';
 import { normalizeRadarQuote, radarBlockId, splitRadarReadingBlocks } from './radar-reading-blocks';
 
@@ -53,8 +54,14 @@ export function RadarAugmentedArticle({ content, guide, onQuoteClick }: RadarAug
                     {item.claim ? <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{item.claim}</p> : null}
                     {item.whyItMatters ? <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">为什么重要：{item.whyItMatters}</p> : null}
                     {item.evidence ? (
-                      <button type="button" onClick={() => onQuoteClick?.(item.evidence!)} className="mt-1.5 text-left text-[11px] font-medium text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40">
-                        查看依据 ↗
+                      <button
+                        type="button"
+                        onClick={() => onQuoteClick?.(item.evidence!)}
+                        aria-label="查看 AI 依据（滚动到证据来源）"
+                        className="mt-1.5 inline-flex items-center gap-0.5 text-left text-[11px] font-medium text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+                      >
+                        <ListChecks className="size-3" aria-hidden />
+                        查看依据
                       </button>
                     ) : null}
                   </div>

@@ -14,7 +14,9 @@ describe('MarkdownPreview', () => {
 
     expect(html).toContain('<h1>Title</h1>');
     expect(html).toContain('<table>');
-    expect(html).toContain('const value = 1;');
+    // 共享渲染器对代码块做 highlight.js 高亮，纯文本被拆进 span
+    expect(html).toContain('class="hljs language-ts"');
+    expect(html).toContain('value');
   });
 
   it('does not render unsafe HTML or URL protocols', () => {

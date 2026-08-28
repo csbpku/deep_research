@@ -1,7 +1,7 @@
 'use client';
 
 import type { DistilledScore } from '@deep-research/shared/schemas';
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
 import {
@@ -30,7 +30,7 @@ interface Props {
 export function DistilledScorePanel({ score, compact = false }: Props) {
   const tierVisual = tierClasses(score.tier);
   const tierLabel = TIER_LABELS[score.tier] ?? score.tier;
-  const displayScore = score.rankingScore ?? score.effectiveTotal ?? score.total;
+  const displayScore = score.tierScore ?? score.total;
 
   if (compact) {
     return (
@@ -59,7 +59,7 @@ export function DistilledScorePanel({ score, compact = false }: Props) {
 
 function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: DistilledScore; tierVisual: ReturnType<typeof tierClasses>; tierLabel: string }) {
   const [open, setOpen] = useState(false);
-  const displayScore = score.rankingScore ?? score.effectiveTotal ?? score.total;
+  const displayScore = score.tierScore ?? score.total;
 
   return (
     <div className="rounded-lg bg-muted/30 px-4">
@@ -95,15 +95,15 @@ function ScoreDetails({ score, tierVisual, tierLabel }: { score: DistilledScore;
         <span className={`font-medium ${tierVisual.text}`}>{tierLabel}{score.mustRead ? ' · 必读' : ''}</span>
         <span className="text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
       </div>
-      {score.rankingScore !== undefined ? (
+      {score.tierScore !== undefined || score.rankingScore !== undefined ? (
         <div className="grid grid-cols-3 gap-2 border-b border-border pb-2 text-center">
           <div>
-            <div className="font-mono text-sm font-semibold tabular-nums">{score.rankingScore}</div>
-            <div className="text-[11px] text-muted-foreground">排序分</div>
+            <div className="font-mono text-sm font-semibold tabular-nums">{score.tierScore ?? score.total}</div>
+            <div className="text-[11px] text-muted-foreground">分层分</div>
           </div>
           <div>
-            <div className="font-mono text-sm font-semibold tabular-nums">{score.teamValueScore ?? '-'}</div>
-            <div className="text-[11px] text-muted-foreground">团队价值</div>
+            <div className="font-mono text-sm font-semibold tabular-nums">{score.rankingScore ?? '-'}</div>
+            <div className="text-[11px] text-muted-foreground">排序分</div>
           </div>
           <div>
             <div className="font-mono text-sm font-semibold tabular-nums">{score.qualityScore ?? score.total}</div>

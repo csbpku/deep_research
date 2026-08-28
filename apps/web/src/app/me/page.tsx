@@ -7,6 +7,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { hydrateBookmarks } from '@/lib/me/bookmarks';
+import { PageHeader } from '@/components/domain/PageHeader';
 import { MeWorkspace } from './MeWorkspace';
 
 export default async function MePage() {
@@ -37,12 +38,10 @@ export default async function MePage() {
 
   return (
     <div className="mx-auto max-w-shell">
-      <header className="mb-4">
-        <h1 className="text-xl font-semibold tracking-normal">我的</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          草稿、收藏、调研模板、团队通知与个性化设置。
-        </p>
-      </header>
+      <PageHeader
+        title="我的"
+        description="草稿、收藏、调研模板、团队通知与个性化设置。"
+      />
       <MeWorkspace
         userEmail={user.email}
         initial={{

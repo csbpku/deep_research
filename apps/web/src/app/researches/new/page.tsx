@@ -35,7 +35,10 @@ export default function NewResearchPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (window.location.hash === '#blank') setMode('create');
+    // 读 ?mode=blank 而非 hash —— hash 会污染浏览器历史且无法 SSR 友好。
+    // /researches 的 DropdownMenu 现在通过 router.push('/researches/new?mode=blank') 触发。
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('mode') === 'blank') setMode('create');
   }, []);
 
   const tags = tagsInput
@@ -44,12 +47,17 @@ export default function NewResearchPage() {
     .filter(Boolean);
 
   const handleSave = useCallback(async () => {
+    // 标题不能为空:不静默填默认值,给用户明确反馈
+    if (!title.trim()) {
+      setError('请输入标题');
+      return;
+    }
     setError('');
     setSaving(true);
     try {
       const payload = {
-        title: title || '未命名调研库',
-        body: body || '# 开始编写...',
+        title: title.trim(),
+        body: body.trim() || '# 开始编写...',
         background: background || null,
         conclusion: conclusion || null,
         risks: risks || null,
@@ -93,10 +101,11 @@ export default function NewResearchPage() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
+          {/* 两张选择卡样式对齐:同高度、同渐变、同焦点环;区别只在 hover 着色 */}
           <button
             type="button"
             onClick={() => setMode('create')}
-            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-accent/25 p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:to-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-accent/25 p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:to-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <div className="flex items-center gap-2">
               <FilePlus2 className="size-4 text-primary" />
@@ -109,7 +118,7 @@ export default function NewResearchPage() {
 
           <Link
             href="/researches/import"
-            className="flex min-h-56 flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-muted/45 p-6 transition-colors duration-200 hover:border-primary/40 hover:to-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-accent/25 p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:to-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <div className="flex items-center gap-2">
               <Upload className="size-4 text-primary" />
@@ -127,18 +136,24 @@ export default function NewResearchPage() {
   return (
     <div className="mx-auto max-w-measure">
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold tracking-normal">新建调研</h1>
+        <h1 className="text-xl font-semibold tracking-normal">新建调研 · 编写正文</h1>
         <Button type="button" variant="outline" size="sm" onClick={() => setMode('pick')}>
-          返回
+          取消选择
         </Button>
       </div>
 
       {error && (
         <div
           role="alert"
-          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+          aria-live="assertive"
+          className="mb-3 flex items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
         >
-          {error}
+          <span>{error}</span>
+          {error !== '请输入标题' ? (
+            <Button type="button" size="xs" variant="outline" onClick={() => void handleSave()} disabled={saving}>
+              重试
+            </Button>
+          ) : null}
         </div>
       )}
 
@@ -219,7 +234,17 @@ export default function NewResearchPage() {
       </div>
 
       <div className="mt-5 flex justify-end gap-2 border-t border-border pt-4">
-        <Button type="button" variant="outline" onClick={() => router.push('/researches')}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            // dirty 时确认,避免未保存内容丢失
+            const dirty = title.trim() || body.trim() || background || conclusion || risks;
+            if (!dirty || window.confirm('取消后未保存的内容会丢失,确认离开?')) {
+              router.push('/researches');
+            }
+          }}
+        >
           取消
         </Button>
         <Button type="button" onClick={handleSave} disabled={saving}>

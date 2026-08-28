@@ -66,16 +66,22 @@
     /* ---- 领域语义：AI 调研 job 状态 ---- */
     --status-queued-bg: 48 96% 89%;
     --status-queued-fg: 32 81% 27%;
+    --status-queued-border: 38 92% 60%;
     --status-running-bg: 214 95% 93%;
     --status-running-fg: 224 76% 38%;
+    --status-running-border: 214 80% 60%;
     --status-succeeded-bg: 141 79% 90%;
     --status-succeeded-fg: 143 64% 22%;
+    --status-succeeded-border: 141 60% 40%;
     --status-failed-bg: 0 93% 94%;
     --status-failed-fg: 0 70% 38%;
+    --status-failed-border: 0 70% 50%;
     --status-cancelled-bg: 210 40% 94%;
     --status-cancelled-fg: 215 19% 35%;
+    --status-cancelled-border: 215 25% 60%;
     --status-partial-bg: 48 96% 89%;
     --status-partial-fg: 32 81% 27%;
+    --status-partial-border: 38 92% 60%;
 
     /* ---- 领域语义：雷达候选生命周期 ---- */
     --radar-candidate-bg: 55 97% 88%;
@@ -95,6 +101,20 @@
     --tier-skim: 38 92% 40%;
     --tier-noise: 215 16% 56%;
     --score-track: 214 32% 91%;
+
+    /* 主题热度（topic tier —— 不与 score tier 共享语义） */
+    --tier-hot-fg: 14 90% 42%;        /* 橙红 = "热度",绝不与 status-failed 红混淆 */
+    --tier-hot-bg: 14 95% 92%;
+    --tier-warming-fg: 32 95% 38%;    /* 琥珀 = "升温" */
+    --tier-warming-bg: 32 95% 90%;
+    --tier-emerging-fg: 158 64% 32%;  /* 翠绿 = "新出现" */
+    --tier-emerging-bg: 158 64% 92%;
+
+    /* ---- 警示色：原 raw amber palette 的收敛点 ---- */
+    --warning: 32 95% 50%;             /* 同 status-partial 主色 */
+    --warning-bg: 38 95% 92%;
+    --warning-border: 38 92% 60%;
+    --warning-fg: 32 81% 27%;
 
     /* ---- 领域语义：创作方式 ---- */
     --method-manual: 215 19% 38%;
@@ -179,6 +199,18 @@
     --tier-skim: 43 96% 68%;
     --tier-noise: 215 16% 55%;
     --score-track: 217 25% 27%;
+
+    --tier-hot-fg: 14 95% 72%;
+    --tier-hot-bg: 14 60% 22%;
+    --tier-warming-fg: 32 95% 72%;
+    --tier-warming-bg: 32 50% 22%;
+    --tier-emerging-fg: 158 60% 70%;
+    --tier-emerging-bg: 158 45% 18%;
+
+    --warning: 32 95% 62%;
+    --warning-bg: 32 50% 20%;
+    --warning-border: 32 60% 40%;
+    --warning-fg: 32 95% 78%;
 
     --method-manual: 215 20% 70%;
     --method-ai: 263 80% 78%;
@@ -368,9 +400,8 @@
   }
 
   .reading-workbench-markdown :where(table) {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
+    width: max-content;
+    min-width: 100%;
     white-space: nowrap;
   }
 

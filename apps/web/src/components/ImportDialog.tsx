@@ -60,6 +60,9 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   const [draftBody, setDraftBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  /* 轮询已开始时间(用于"已等待 X 秒"提示 + 30s 后的黄色警告) */
+  const [pollingStartedAt, setPollingStartedAt] = useState<number>(0);
+  const [now, setNow] = useState<number>(() => Date.now());
   const inputRef = useRef<HTMLInputElement>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollDeadline = useRef<number>(0);
@@ -70,6 +73,13 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
   }, []);
+
+  /* 轮询期间 1Hz tick 计时,超 30s 黄色提示 */
+  useEffect(() => {
+    if (phase !== 'polling') return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [phase]);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -101,6 +111,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
         setJob(data);
         setPhase('polling');
         pollDeadline.current = Date.now() + POLL_TIMEOUT_MS;
+        setPollingStartedAt(Date.now());
         schedulePoll(data.jobId);
       } catch (e) {
         setError(e instanceof Error ? e.message : '上传失败');
@@ -190,8 +201,9 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   const handleViewDraft = useCallback(() => {
+    /* 跳到编辑器而非只读详情 —— 导入后用户预期继续编辑 */
     if (job?.outputResearchId) {
-      router.push(`/researches/${job.outputResearchId}`);
+      router.push(`/researches/${job.outputResearchId}/edit`);
     }
   }, [job, router]);
 
@@ -202,9 +214,12 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           <DialogTitle>从文件导入</DialogTitle>
         </DialogHeader>
 
-        {/* 拖拽区 */}
+        {/* 拖拽区 —— 键盘可达(Enter/Space 触发文件选择),role="button" + tabIndex */}
         {phase === 'idle' && (
           <div
+            role="button"
+            tabIndex={0}
+            aria-label="选择要导入的文件（也可拖入）"
             onDragOver={(e) => {
               e.preventDefault();
               setDragOver(true);
@@ -212,8 +227,14 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             onClick={() => inputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                inputRef.current?.click();
+              }
+            }}
             className={cn(
-              'cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors duration-200',
+              'cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               dragOver ? 'border-primary bg-accent/40' : 'border-border bg-card hover:bg-muted/40',
             )}
           >
@@ -240,10 +261,17 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             <div className="mb-3 flex items-center gap-3">
               <Loader2 className="size-4 animate-spin text-primary" />
               <span className="text-sm text-muted-foreground">
-                {phase === 'uploading' ? '上传中…' : `转换中… (${job.status})`}
+                {phase === 'uploading'
+                  ? '上传中…'
+                  : `转换中… (${job.status}) · 已等待 ${Math.max(1, Math.round((now - pollingStartedAt) / 1000))} 秒`}
               </span>
             </div>
             <ProgressBar />
+            {phase === 'polling' && now - pollingStartedAt > 30_000 ? (
+              <p className="mt-2 rounded border border-warning-border bg-warning-bg px-2 py-1 text-[11px] text-warning-fg">
+                已等待超过 30 秒,通常是文档较大或外部 LLM 排队;任务仍在后台,可关闭对话框稍后回来。
+              </p>
+            ) : null}
             {job.filename && (
               <p className="mt-2 font-mono text-xs text-muted-foreground">{job.filename}</p>
             )}

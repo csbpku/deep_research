@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { Crosshair } from 'lucide-react';
 
 export interface RadarGuide {
   version?: 2 | 4;
@@ -86,8 +87,14 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
                   <div className="font-sans text-xs font-semibold text-[var(--ink-text)]">{item.heading || `部分 ${i + 1}`}</div>
                   {item.takeaway ? <p className="mt-1 font-serif text-xs leading-5 text-[var(--ink-muted)]">{item.takeaway}</p> : null}
                   {item.quote ? (
-                    <button type="button" onClick={() => onHighlightClick?.(item.quote!, item.sourceBlockIndex, guide.outline?.length)} className="mt-1 text-[11px] text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40">
-                      查看原文 ↗
+                    <button
+                      type="button"
+                      onClick={() => onHighlightClick?.(item.quote!, item.sourceBlockIndex, guide.outline?.length)}
+                      aria-label={`跳到原文:${item.heading ?? `部分 ${i + 1}`}`}
+                      className="mt-1 inline-flex items-center gap-0.5 text-[11px] text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+                    >
+                      <Crosshair className="size-3" aria-hidden />
+                      查看原文
                     </button>
                   ) : null}
                 </div>

@@ -52,16 +52,22 @@ const config: Config = {
         status: {
           'queued-bg': 'hsl(var(--status-queued-bg))',
           'queued-fg': 'hsl(var(--status-queued-fg))',
+          'queued-border': 'hsl(var(--status-queued-border))',
           'running-bg': 'hsl(var(--status-running-bg))',
           'running-fg': 'hsl(var(--status-running-fg))',
+          'running-border': 'hsl(var(--status-running-border))',
           'succeeded-bg': 'hsl(var(--status-succeeded-bg))',
           'succeeded-fg': 'hsl(var(--status-succeeded-fg))',
+          'succeeded-border': 'hsl(var(--status-succeeded-border))',
           'failed-bg': 'hsl(var(--status-failed-bg))',
           'failed-fg': 'hsl(var(--status-failed-fg))',
+          'failed-border': 'hsl(var(--status-failed-border))',
           'cancelled-bg': 'hsl(var(--status-cancelled-bg))',
           'cancelled-fg': 'hsl(var(--status-cancelled-fg))',
+          'cancelled-border': 'hsl(var(--status-cancelled-border))',
           'partial-bg': 'hsl(var(--status-partial-bg))',
           'partial-fg': 'hsl(var(--status-partial-fg))',
+          'partial-border': 'hsl(var(--status-partial-border))',
         },
 
         /* ---- 领域语义色：雷达候选生命周期 ---- */
@@ -85,6 +91,10 @@ const config: Config = {
           collection: 'hsl(var(--tier-collection))',
           noise: 'hsl(var(--tier-noise))',
           track: 'hsl(var(--score-track))',
+          /* 主题热度（topic hot/warming/emerging）—— 不与 score tier 混用 */
+          hot: 'hsl(var(--tier-hot-fg))',
+          warming: 'hsl(var(--tier-warming-fg))',
+          emerging: 'hsl(var(--tier-emerging-fg))',
         },
 
         /* ---- 领域语义色：创作方式 ---- */
@@ -93,6 +103,14 @@ const config: Config = {
           ai: 'hsl(var(--method-ai))',
           file: 'hsl(var(--method-file))',
           import: 'hsl(var(--method-import))',
+        },
+
+        /* ---- 警示/高亮色：原各处裸 amber palette 的收敛点 ---- */
+        warning: {
+          DEFAULT: 'hsl(var(--warning))',
+          bg: 'hsl(var(--warning-bg))',
+          border: 'hsl(var(--warning-border))',
+          fg: 'hsl(var(--warning-fg))',
         },
       },
 

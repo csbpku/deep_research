@@ -1,21 +1,36 @@
 // /me/topics — 当前用户关注的技术专题（ADR 0010 升级：未读议题 + 最近变化）。
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft, BookOpenCheck, Compass, Pin, Sparkles, TrendingUp } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, Compass, Sparkles, TrendingUp } from 'lucide-react';
 
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { PageHeader } from '@/components/domain/PageHeader';
+import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/EmptyState';
 
 type IconComponent = React.ComponentType<{ className?: string }>;
-const TIER_LABELS: Record<string, { label: string; cls: string; Icon: IconComponent }> = {
-  hot: { label: '热门', cls: 'bg-status-failed-bg text-status-failed-fg', Icon: TrendingUp },
-  warming: { label: '升温', cls: 'bg-status-running-bg text-status-running-fg', Icon: Sparkles },
-  emerging: { label: '新出现', cls: 'bg-muted text-muted-foreground', Icon: Compass },
+/** Tier icon 与颜色 —— 颜色由 StatusBadge kind="topicTier" 统一管理 */
+const TIER_ICONS: Record<string, IconComponent> = {
+  hot: TrendingUp,
+  warming: Sparkles,
+  emerging: Compass,
 };
+
+/** 相对时间格式：避免全 `toLocaleString` 在数据密集页视觉拥挤 */
+function formatRelative(iso: string | Date): string {
+  const d = typeof iso === 'string' ? new Date(iso) : iso;
+  const diff = Date.now() - d.getTime();
+  const minute = 60_000, hour = 3_600_000, day = 86_400_000;
+  if (diff < minute) return '刚刚';
+  if (diff < hour) return `${Math.floor(diff / minute)} 分钟前`;
+  if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
+  if (diff < 30 * day) return `${Math.floor(diff / day)} 天前`;
+  return d.toLocaleDateString('zh-CN');
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -31,14 +46,19 @@ export default async function MyTopicsPage() {
   if (follows.length === 0) {
     return (
       <div className="mx-auto max-w-shell">
-        <Link href="/me" className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-3" />
-          返回我的
-        </Link>
-        <PageHeader title="我的技术专题" description="长期关注的技术对象；新出现的热点议题会出现在这里。" />
+        <Button asChild variant="ghost" size="sm" className="mb-2 -ml-2">
+          <Link href="/me">
+            <ArrowLeft className="size-3.5" />
+            返回我的
+          </Link>
+        </Button>
+        <PageHeader
+          title="我的技术专题"
+          description="长期关注的技术对象（专题 = 把同一类技术话题聚合到一起的卡片，例如「LLM 评估」「RAG 架构」）；新出现的热点议题会出现在这里。"
+        />
         <EmptyState
           title="还没有关注"
-          description="到 /topics 浏览后点击关注；专题内的热点议题会自动聚合并按未读顺序展示。"
+          description="到「专题列表」浏览并点击任一专题的关注按钮；专题内的热点议题会自动聚合并按未读顺序展示。"
           action={
             <Link href="/topics" className="text-sm text-primary hover:underline">
               去专题列表 →
@@ -96,10 +116,12 @@ export default async function MyTopicsPage() {
 
   return (
     <div className="mx-auto max-w-shell">
-      <Link href="/me" className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-3" />
-        返回我的
-      </Link>
+      <Button asChild variant="ghost" size="sm" className="mb-2 -ml-2">
+        <Link href="/me">
+          <ArrowLeft className="size-3.5" />
+          返回我的
+        </Link>
+      </Button>
       <PageHeader
         title="我的技术专题"
         description="关注长期跟踪的技术对象；出现新的热点议题会自动显示在这里，按未读顺序排列。"
@@ -107,7 +129,7 @@ export default async function MyTopicsPage() {
       <ul className="grid list-none gap-3 p-0">
         {follows.map((f) => {
           const t = f.topic;
-          const tier = TIER_LABELS[t.tier] ?? TIER_LABELS.emerging;
+          const TierIcon = TIER_ICONS[t.tier] ?? Compass;
           const list = issuesByTopic.get(t.id) ?? [];
           let unread = list.length;
           const last = f.lastViewedAt;
@@ -117,14 +139,13 @@ export default async function MyTopicsPage() {
           const top = list[0];
           const latest = researchByTopic.get(t.id) ?? null;
           totalUnread += unread;
-          const TierIcon = tier.Icon;
           return (
             <li key={f.id}>
               <Card>
                 <CardContent className="space-y-2 p-4">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <TierIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                    <Badge className={tier.cls}>{tier.label}</Badge>
+                    <StatusBadge kind="topicTier" value={t.tier} />
                     <h2 className="text-sm font-semibold">
                       <Link href={`/topics/${t.slug}`} className="hover:text-primary hover:underline">
                         {t.name}
@@ -153,12 +174,12 @@ export default async function MyTopicsPage() {
                   <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
                     <span>候选 {t.candidateCount}</span>
                     <span>·</span>
-                    <span>上次查看 {f.lastViewedAt ? new Date(f.lastViewedAt).toLocaleString('zh-CN') : '从未'}</span>
+                    <span>上次查看 {f.lastViewedAt ? formatRelative(f.lastViewedAt) : '从未'}</span>
                     {latest ? (
                       <>
                         <span>·</span>
                         <Link href={`/research/${latest.id}`} className="text-primary hover:underline">
-                          最近研究：{latest.title.slice(0, 30)}
+                          最近研究：<span className="line-clamp-1 inline-block max-w-[20ch] align-middle">{latest.title}</span>
                         </Link>
                       </>
                     ) : null}

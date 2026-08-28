@@ -54,7 +54,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { AdminActionDialog, type AdminActionValues } from '@/components/admin/AdminActionDialog';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -140,6 +140,7 @@ interface DashboardData {
           distilledNoise: number;
           unassessable: number;
           hardVeto: number;
+          contentFetchFailed: number;
           conflict: number;
           other: number;
         };
@@ -167,6 +168,7 @@ interface DashboardData {
           distilledNoise: number;
           unassessable: number;
           hardVeto: number;
+          contentFetchFailed: number;
           lowQuality: number;
           pendingScore: number;
           other: number;
@@ -339,7 +341,11 @@ export default function AdminConsole() {
             );
           })}
         </TabsList>
-      </Tabs>
+        {/* Radix Tabs trigger 自动 aria-controls 指向面板 id;
+          单 TabsContent(value=当前 tab)即可让所有 trigger 找到对应面板,
+          避免 axe aria-valid-attr-value 违规。
+          实际内容用 tab 客户端条件渲染,避免重复 DOM。 */}
+        <TabsContent value={tab} className="mt-3 space-y-3 focus-visible:outline-none">
 
       <div className="mt-4">
         {tab === 'dashboard' && <DashboardTab />}
@@ -364,6 +370,8 @@ export default function AdminConsole() {
         {tab === 'llm_usage' && <LlmUsageConsole />}
         {tab === 'users' && <UsersTab />}
       </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1117,7 +1125,8 @@ function RadarMonitorPanel({
             <span>评分噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.distilledNoise}</strong></span>
             <span>不可评估 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.unassessable}</strong></span>
             <span>硬否决 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.hardVeto}</strong></span>
-            <span>抓取内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
+            <span>抓取失败 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.contentFetchFailed}</strong></span>
+            <span>内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
             <span>待评分 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.pendingScore}</strong></span>
             <span>其他 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.other}</strong></span>
           </div>
@@ -1454,7 +1463,6 @@ function RadarGovernanceTab() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部来源</SelectItem>
-                <SelectItem value="github_tracked">GitHub 跟踪仓库</SelectItem>
                 <SelectItem value="github_topic_search">GitHub 话题搜索</SelectItem>
                 <SelectItem value="github_trending">GitHub 趋势</SelectItem>
                 <SelectItem value="arxiv">arXiv</SelectItem>
@@ -1475,6 +1483,7 @@ function RadarGovernanceTab() {
                 <SelectItem value="DISTILLED_HARD_VETO">硬否决</SelectItem>
                 <SelectItem value="RULE_NOISE">规则噪声</SelectItem>
                 <SelectItem value="LOW_QUALITY">内容不足</SelectItem>
+                <SelectItem value="CONTENT_FETCH_FAILED">抓取失败</SelectItem>
                 <SelectItem value="PENDING_SCORE">待评分</SelectItem>
                 <SelectItem value="AI_ENGINE_UNAVAILABLE">AI 不可用</SelectItem>
               </SelectContent>

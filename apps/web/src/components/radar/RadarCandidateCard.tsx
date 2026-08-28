@@ -106,8 +106,7 @@ export function RadarCandidateCard({
   const resolvedDetailHref = detailHref ?? `/radar/${candidate.id}`;
   const tier = candidate.distilledScore?.tier ?? null;
   const contentPending = candidate.tags.includes('content_pending');
-  const tierScore = candidate.distilledScore?.rankingScore
-    ?? candidate.distilledScore?.effectiveTotal
+  const tierScore = candidate.distilledScore?.tierScore
     ?? candidate.distilledScore?.total
     ?? null;
   const tierLabel =

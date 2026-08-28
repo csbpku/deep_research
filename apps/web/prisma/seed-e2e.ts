@@ -85,6 +85,35 @@ async function main() {
     console.log('[seed:e2e] seed summary created');
   }
 
+  // 一个已聚合的专题（cognition V2 E2E 依赖 /topics/ai-agents 服务端渲染）
+  const seedSynthesisPayload = {
+    tldr: '一句话概要',
+    keyChanges: [{ title: '关键变化 1', whyItMatters: '为什么重要', summaryIds: [] }],
+    subtopics: [{ title: '子方向', summary: '简述' }],
+    openQuestions: ['仍然开放的问题'],
+    sections: [{ title: '深度阅读', content: '段落内容', summaryIds: [] }],
+    references: [],
+  };
+  await prisma.topic.upsert({
+    where: { slug: 'ai-agents' },
+    update: { synthesisPayload: seedSynthesisPayload },
+    create: {
+      id: 'b84dbb4c-ec77-4c25-8699-746bd2d550fc',
+      slug: 'ai-agents',
+      name: 'AI Agents',
+      summary: 'AI agent frameworks and orchestration patterns.',
+      tier: 'hot',
+      candidateCount: 1,
+      sourceCount: 1,
+      aggregationWindowStart: new Date(Date.now() - 14 * 24 * 3600 * 1000),
+      aggregationWindowEnd: new Date(),
+      lastSyncedAt: new Date(),
+      synthesisPayload: seedSynthesisPayload,
+      lastSynthesisSuccessAt: new Date(),
+    },
+  });
+  console.log('[seed:e2e] seed topic ensured');
+
   console.log('[seed:e2e] done');
 }
 

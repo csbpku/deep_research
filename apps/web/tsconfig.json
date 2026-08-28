@@ -32,11 +32,12 @@
     }
   },
   "include": [
+    ".next-verify/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
-    ".next-verify/types/**/*.ts"
+    ".next-recovery/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

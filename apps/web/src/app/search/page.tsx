@@ -21,6 +21,7 @@ import { Search as SearchIcon } from 'lucide-react';
 import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
+import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -56,13 +57,7 @@ const TYPE_TABS: Array<{ key: string; label: string }> = [
   { key: 'long_research', label: '研究报告' },
   { key: 'knowledge', label: '知识卡片' },
 ];
-
-const TYPE_BADGE: Record<SearchRow['type'], { label: string; className: string }> = {
-  radar: { label: '雷达', className: 'bg-radar-candidate-bg text-radar-candidate-fg' },
-  summary: { label: '摘要', className: 'bg-radar-published-bg text-radar-published-fg' },
-  long_research: { label: '研究报告', className: 'bg-status-running-bg text-status-running-fg' },
-  knowledge: { label: '知识卡片', className: 'bg-status-queued-bg text-status-queued-fg' },
-};
+// 类型徽章由 StatusBadge kind="searchType" 统一管理，颜色不再散落于此。
 
 export default function SearchPage() {
   return (
@@ -101,6 +96,9 @@ function SearchContent() {
       : row.type === 'summary'
         ? `/radar/${row.refId}`
         : `/researches/${row.refId}`;
+    /* 详情页跳转契约:?returnTo=/search?...(同源、必须以 /search 开头)
+   消费方:BackToSearchButton 读取并校验 startsWith('/search'),避免开放重定向
+   链接会完整带 q/type/page 参数,详情页 BackToSearchButton 点击后还原 */
     const currentSearch = searchParams.toString();
     const returnTo = `/search${currentSearch ? `?${currentSearch}` : ''}`;
     return `${base}?returnTo=${encodeURIComponent(returnTo)}`;
@@ -177,11 +175,11 @@ function SearchContent() {
           onChange={(e) => setQ(e.target.value)}
           placeholder='例如 "RAG 评估" OR GraphRAG'
           aria-label="搜索关键词"
-          className="flex-1"
+          className="min-w-0 flex-1"
         />
-        <Button type="submit" disabled={loading || !q.trim()}>
-          <SearchIcon />
-          {loading ? '搜索中…' : '搜索'}
+        <Button type="submit" disabled={loading || !q.trim()} className="shrink-0">
+          <SearchIcon className="sm:mr-1" />
+          <span className="hidden sm:inline">{loading ? '搜索中…' : '搜索'}</span>
         </Button>
       </form>
 
@@ -192,9 +190,9 @@ function SearchContent() {
           setPage(1);
         }}
       >
-        <TabsList className="w-full justify-start">
+        <TabsList className="w-full justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TYPE_TABS.map((tab) => (
-            <TabsTrigger key={tab.key} value={tab.key}>
+            <TabsTrigger key={tab.key} value={tab.key} className="shrink-0">
               {tab.label}
             </TabsTrigger>
           ))}
@@ -237,17 +235,17 @@ function SearchContent() {
             </p>
             <ul className="grid list-none gap-2.5 p-0">
               {items.map((row) => {
-                const badge = TYPE_BADGE[row.type];
+                const searchKind =
+                  row.type === 'long_research' ? 'research' :
+                  row.type === 'radar' ? 'radar' :
+                  row.type === 'knowledge' ? 'knowledge' :
+                  'summary';
                 return (
                   <li key={row.id}>
                     <Card className="transition-colors duration-200 hover:border-primary/40">
                       <CardContent className="p-3.5">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}
-                          >
-                            {badge.label}
-                          </span>
+                          <StatusBadge kind="searchType" value={searchKind} />
                           <Link
                             href={detailHref(row)}
                             className="text-sm font-medium hover:text-primary hover:underline"

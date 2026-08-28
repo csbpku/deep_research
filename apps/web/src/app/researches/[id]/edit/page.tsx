@@ -31,8 +31,6 @@ import {
   List,
   ListChecks,
   Link2,
-  Maximize2,
-  Minimize2,
   PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
@@ -52,6 +50,7 @@ import {
 import MarkdownContent from '@/components/MarkdownContent';
 import { type CommentAnchor } from '@/components/CommentSection';
 import { StatusBadge } from '@/components/domain/StatusBadge';
+import { SectionCard } from '@/components/domain/SectionCard';
 import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -172,7 +171,6 @@ export default function EditorPage() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [view, setView] = useState<'write' | 'split' | 'preview'>('write');
-  const [fullscreen, setFullscreen] = useState(false);
   const [background, setBackground] = useState('');
   const [conclusion, setConclusion] = useState('');
   const [risks, setRisks] = useState('');
@@ -198,6 +196,14 @@ export default function EditorPage() {
   const [commandState, setCommandState] = useState<{ query: string; start: number } | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
   const [selectionMessage, setSelectionMessage] = useState('');
+  /* flashMessage:与 selectedText 解耦的瞬时反馈(2s 自动消失),
+     避免复制 toast 在选区仍然存在时被立刻隐藏 */
+  const [flashMessage, setFlashMessage] = useState('');
+  useEffect(() => {
+    if (!flashMessage) return;
+    const t = setTimeout(() => setFlashMessage(''), 2000);
+    return () => clearTimeout(t);
+  }, [flashMessage]);
   const [bodyHash, setBodyHash] = useState('');
   const [assistantResult, setAssistantResult] = useState<{ operation: string; original: string; suggestion: string | null; rationale: string; claims: Array<{ text: string; verdict: string; evidence?: string }>; warnings: string[] } | null>(null);
   const [assistantBusy, setAssistantBusy] = useState(false);
@@ -337,8 +343,14 @@ export default function EditorPage() {
     const quote = body.slice(textarea.selectionStart, textarea.selectionEnd).trim();
     setSelectedText(quote);
     updateOutlineTarget(textarea.selectionStart);
-    void sha256Hex(body).then((contentHash) => setSelectedAnchor({ quote, startOffset: textarea.selectionStart, endOffset: textarea.selectionEnd, contentHash }));
+    // 节流:长正文每次 mouseup 即算 sha256 会卡;200ms debounce 已足够文本选区停留时间
+    let cancelled = false;
+    setTimeout(() => {
+      if (cancelled) return;
+      void sha256Hex(body).then((contentHash) => setSelectedAnchor({ quote, startOffset: textarea.selectionStart, endOffset: textarea.selectionEnd, contentHash }));
+    }, 200);
     setSelectionMessage('');
+    return () => { cancelled = true; };
   }, [body, updateOutlineTarget]);
 
   const handleBodyChange = useCallback((value: string, caret: number) => {
@@ -361,7 +373,7 @@ export default function EditorPage() {
   const copySelectedQuote = useCallback(async () => {
     if (!selectedText) return;
     await navigator.clipboard.writeText(`> ${selectedText.replace(/\n/g, '\n> ')}`);
-    setSelectionMessage('已复制为引用格式');
+    setFlashMessage('已复制为引用格式');
   }, [selectedText]);
 
   const citeSelection = useCallback(async (source: ResearchSourceItem) => {
@@ -699,10 +711,18 @@ export default function EditorPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {(isNew || manualSaveRequired || existing?.status === 'published') && <Button type="button" variant="outline" size="sm" onClick={handleSave} disabled={saving || !isDirty}>
-            <Save />
-            {saving ? '保存中…' : isNew ? '创建草稿' : existing?.status === 'published' ? '保存修改' : '确认保存'}
-          </Button>}
+          {(isNew || manualSaveRequired || existing?.status === 'published' || (existing?.status === 'draft' && isDirty)) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || !isDirty}
+            >
+              <Save />
+              {saving ? '保存中…' : isNew ? '创建草稿' : existing?.status === 'published' ? '保存修改' : '保存修改'}
+            </Button>
+          )}
           {existing && existing.status === 'draft' && (
             <Button type="button" size="sm" onClick={() => setPublishConfirmOpen(true)} disabled={publishDisabled} title={!summaryComplete ? '发布前必须填写背景、结论和风险或待验证项' : '发布调研'}>
               <Send />
@@ -712,8 +732,14 @@ export default function EditorPage() {
         </div>
       </header>
 
-      {selectionMessage && !selectedText ? (
-        <p className="mb-3 text-xs text-status-success-fg" role="status">{selectionMessage}</p>
+      {flashMessage ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-status-success-border bg-status-succeeded-bg px-3 py-2 text-xs text-status-succeeded-fg shadow-sm"
+        >
+          {flashMessage}
+        </div>
       ) : null}
 
       {existing?.status === 'draft' && missingSummaryFields.length > 0 ? (
@@ -788,12 +814,12 @@ export default function EditorPage() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="给这份调研起一个明确的标题…"
-              className="h-auto border-0 bg-transparent px-0 py-1 text-xl font-semibold shadow-none focus-visible:ring-0"
+              className="h-auto border-0 bg-transparent px-0 py-1 text-xl font-semibold shadow-none focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/30 px-3 py-2">
-            <Button type="button" variant="ghost" size="icon-sm" onClick={() => setFullscreen((f) => !f)} title={fullscreen ? '退出全屏' : '全屏编辑'} aria-label={fullscreen ? '退出全屏' : '全屏编辑'}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</Button>
+            {/* 全屏编辑按钮: 当前未挂载 Fullscreen API,留待后续接入 CSS 占满视口 + ESC 退出 */}
             {editorTools.map((tool) => {
               const Icon = tool.icon;
               return (
@@ -828,7 +854,16 @@ export default function EditorPage() {
               ] as const).map((item) => {
                 const Icon = item.icon;
                 return (
-                  <Button key={item.key} type="button" variant={view === item.key ? 'secondary' : 'ghost'} size="xs" aria-pressed={view === item.key} onClick={() => setView(item.key)} className="gap-1.5">
+                  <Button
+                    key={item.key}
+                    type="button"
+                    variant={view === item.key ? 'secondary' : 'ghost'}
+                    size="xs"
+                    aria-pressed={view === item.key}
+                    aria-controls="editor-preview-pane"
+                    onClick={() => setView(item.key)}
+                    className="gap-1.5"
+                  >
                     <Icon />
                     <span className="hidden sm:inline">{item.label}</span>
                   </Button>
@@ -857,7 +892,7 @@ export default function EditorPage() {
                   onSelect={handleTextSelection}
                   placeholder={'# 从问题背景开始\n\n写下事实、判断和仍需验证的风险…'}
                   spellCheck={false}
-                  className="min-h-[560px] resize-y rounded-none border-0 bg-transparent px-5 py-5 font-sans text-[14px] leading-[1.6] shadow-none selection:bg-primary/20 selection:text-foreground focus-visible:ring-0"
+                  className="min-h-[560px] resize-y rounded-none border-0 bg-transparent px-5 py-5 font-sans text-[14px] leading-[1.6] shadow-none selection:bg-primary/20 selection:text-foreground focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
                 />
                 {commandState && matchingCommands(commandState.query).length > 0 && (
                   <div className="relative z-10 mx-5 -mt-2 rounded-md border border-border bg-popover p-1 shadow-md" role="listbox" aria-label="Markdown 命令">
@@ -867,7 +902,12 @@ export default function EditorPage() {
               </div>
             )}
             {view !== 'write' && (
-              <div className={view === 'split' ? 'min-h-[560px] border-t border-border px-6 py-5 xl:border-l xl:border-t-0' : 'min-h-[560px] px-7 py-6'}>
+              <div
+                id="editor-preview-pane"
+                role="region"
+                aria-label="预览"
+                className={view === 'split' ? 'min-h-[560px] border-t border-border px-6 py-5 xl:border-l xl:border-t-0' : 'min-h-[560px] px-7 py-6'}
+              >
                 <MarkdownContent content={body || '# 开始编写...'} compact />
               </div>
             )}
@@ -875,8 +915,6 @@ export default function EditorPage() {
 
           <footer className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
             <span>{manualSaveRequired ? '待手动保存' : isDirty ? '未保存' : '已保存'}</span>
-            <span aria-hidden>·</span>
-            <span>{wordCount.toLocaleString('zh-CN')} 字</span>
             <span aria-hidden>·</span>
             <span>⌘/Ctrl + S 保存</span>
             {showAutoStatus ? <span className="ml-auto">{autoSaveLabel(autoSave.status)}</span> : null}
@@ -891,23 +929,49 @@ export default function EditorPage() {
                 {!toolsCollapsed ? <p className="text-sm font-medium">研究工具</p> : <span className="sr-only">研究工具已收起</span>}
                 <div className="flex items-center gap-1"><span className="text-[11px] text-muted-foreground">{!toolsCollapsed ? `${outline.length} 节` : ''}</span><Button type="button" variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={() => setToolsCollapsed((collapsed) => !collapsed)} aria-label={toolsCollapsed ? '展开研究工具' : '收起研究工具'} title={toolsCollapsed ? '展开研究工具' : '收起研究工具'}>{toolsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</Button>{mobilePanelOpen ? <Button type="button" variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setMobilePanelOpen(false)} aria-label="关闭研究工具"><X /></Button> : null}</div>
               </div>
-              {!toolsCollapsed ? <div className="-mb-px flex min-w-0 overflow-x-auto" role="tablist" aria-label="研究辅助面板">
-                {([
-                  { key: 'sources', label: '来源与引用' },
-                  { key: 'assistant', label: 'AI 助手' },
-                  { key: 'details', label: '发布准备' },
-                  { key: 'versions', label: '版本历史' },
-                ] as const).map((item) => (
-                  <button key={item.key} type="button" role="tab" aria-selected={sidePanel === item.key} title={item.label} onClick={() => setSidePanel(item.key as typeof sidePanel)} className={`min-w-max flex-none border-b-2 px-2 py-2 text-xs ${sidePanel === item.key ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}>
-                    {item.label}
-                  </button>
-                ))}
-              </div> : null}
+              {!toolsCollapsed ? (
+                <div
+                  className="-mb-px flex min-w-0 overflow-x-auto"
+                  role="tablist"
+                  aria-label="研究辅助面板"
+                  onKeyDown={(e) => {
+                    // 简易方向键支持:ArrowLeft/ArrowRight 在 tablist 中切换
+                    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                    e.preventDefault();
+                    const order = ['sources', 'assistant', 'details', 'versions'] as const;
+                    const idx = order.indexOf(sidePanel);
+                    const nextIdx = e.key === 'ArrowRight'
+                      ? (idx + 1) % order.length
+                      : (idx - 1 + order.length) % order.length;
+                    setSidePanel(order[nextIdx] as typeof sidePanel);
+                  }}
+                >
+                  {([
+                    { key: 'sources', label: '来源与引用', panelId: 'side-panel-sources' },
+                    { key: 'assistant', label: 'AI 助手', panelId: 'side-panel-assistant' },
+                    { key: 'details', label: '发布准备', panelId: 'side-panel-details' },
+                    { key: 'versions', label: '版本历史', panelId: 'side-panel-versions' },
+                  ] as const).map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={sidePanel === item.key}
+                      aria-controls={item.panelId}
+                      title={item.label}
+                      onClick={() => setSidePanel(item.key as typeof sidePanel)}
+                      className={`min-w-max flex-none border-b-2 px-2 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${sidePanel === item.key ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             {!toolsCollapsed ? <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {sidePanel === 'sources' && (
-                <div className="space-y-3">
+                <div id="side-panel-sources" role="tabpanel" aria-label="来源与引用" className="space-y-3">
                   <p className="text-xs leading-relaxed text-muted-foreground">来源用于支撑正文中的判断；正文中的引用标记会连接到对应证据。</p>
                   {selectedText && view !== 'preview' && (
                     <div className="rounded border border-border bg-muted/20 p-2.5">
@@ -918,7 +982,7 @@ export default function EditorPage() {
                         <Button type="button" size="xs" variant="ghost" onClick={() => insertBlock(`> ${selectedText.replace(/\n/g, '\n> ')}`)}><Link2 />插入正文</Button>
                       </div>
                       {sources.length > 0 && <p className="mt-1.5 text-[11px] text-muted-foreground">请在下方来源卡片中选择要关联的证据。</p>}
-                      {selectionMessage && <p className="mt-1.5 text-[11px] text-status-success-fg">{selectionMessage}</p>}
+                      {flashMessage && <p className="mt-1.5 text-[11px] text-status-success-fg">{flashMessage}</p>}
                     </div>
                   )}
                   <div className="space-y-2">
@@ -928,19 +992,85 @@ export default function EditorPage() {
                       const citation = citationsQuery.data?.items.find((item) => item.source.id === source.id);
                       const citationMissing = Boolean(citation && !body.includes(citation.marker));
                       const citationStale = Boolean(citation && (citation.startOffset < 0 || citation.endOffset > body.length || citation.endOffset <= citation.startOffset || body.slice(citation.startOffset, citation.endOffset).trim() !== citation.quote.trim()));
-                      return <div key={source.id} className="rounded border border-border/70 bg-muted/20 p-2.5"><div className="flex items-start gap-2"><Link2 className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><div className="min-w-0 flex-1"><div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">{sourceTypeLabel(ref.type)}</div><button type="button" className={`line-clamp-2 text-left text-xs font-medium ${citation ? 'hover:underline' : ''}`} onClick={() => citation && jumpToCitation(citation)}>{citation?.marker ? `${citation.marker} ` : ''}{source.title || (link ? '未命名来源' : '来源链接不可用')}</button>{source.description && <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{source.description}</p>}{!link && <p className="mt-1 text-[11px] text-status-warning-fg">原始链接无法定位，请重新挂载来源。</p>}{citationMissing || citationStale ? <p className="mt-1 text-[11px] text-status-warning-fg">{citationMissing ? '正文中找不到引用标记' : '引用位置可能已失效'}</p> : null}<div className="mt-2 flex flex-wrap items-center gap-2">{link && <a href={link.href} target={link.external ? '_blank' : undefined} rel={link.external ? 'noreferrer' : undefined} className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline">打开原始来源 <ExternalLink className="size-3" /></a>}{selectedAnchor && <Button type="button" variant="ghost" size="xs" className="h-6 px-1.5 text-[11px]" onClick={() => void citeSelection(source)}><FileText className="size-3" />引用这段</Button>}</div></div></div></div>;
-                    }) : <div className="rounded border border-dashed border-border p-3 text-xs leading-relaxed text-muted-foreground">暂时没有挂载来源。来源会用于正文引用和事实核验，不会单独出现在发布文章中。</div>}
+                      return (
+                        <SectionCard key={source.id} tone="muted" icon={Link2} className="text-xs">
+                          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{sourceTypeLabel(ref.type)}</div>
+                          <button
+                            type="button"
+                            className={`mt-1 line-clamp-2 text-left font-medium ${citation ? 'hover:underline' : ''}`}
+                            onClick={() => citation && jumpToCitation(citation)}
+                          >
+                            {citation?.marker ? `${citation.marker} ` : ''}{source.title || (link ? '未命名来源' : '来源链接不可用')}
+                          </button>
+                          {source.description && (
+                            <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{source.description}</p>
+                          )}
+                          {!link && (
+                            <p className="mt-1 text-[11px] text-status-warning-fg">原始链接无法定位，请重新挂载来源。</p>
+                          )}
+                          {citationMissing || citationStale ? (
+                            <p className="mt-1 text-[11px] text-status-warning-fg">
+                              {citationMissing ? '正文中找不到引用标记' : '引用位置可能已失效'}
+                            </p>
+                          ) : null}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {link && (
+                              <a
+                                href={link.href}
+                                target={link.external ? '_blank' : undefined}
+                                rel={link.external ? 'noreferrer' : undefined}
+                                className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                              >
+                                打开原始来源 <ExternalLink className="size-3" />
+                              </a>
+                            )}
+                            {selectedAnchor && (
+                              <Button type="button" variant="ghost" size="xs" onClick={() => void citeSelection(source)}>
+                                <FileText className="size-3" />引用这段
+                              </Button>
+                            )}
+                          </div>
+                        </SectionCard>
+                      );
+                    }) : (
+                    <div className="space-y-2 rounded border border-dashed border-border p-3 text-xs leading-relaxed text-muted-foreground">
+                      <p>暂时没有挂载来源。来源会用于正文引用和事实核验，不会单独出现在发布文章中。</p>
+                      <p className="text-[11px]">
+                        添加路径：在「AI 助手」标签里选择「补充来源」即可让模型基于当前正文去搜索并挂载候选来源。
+                      </p>
+                    </div>
+                  )}
                   </div>
                 </div>
               )}
 
               {sidePanel === 'assistant' && (
-                <div className="space-y-3 text-xs text-muted-foreground">
+                <div id="side-panel-assistant" role="tabpanel" aria-label="AI 助手" className="space-y-3 text-xs text-muted-foreground">
                   <p className="font-medium text-foreground">AI 助手</p>
                   <p>先选中正文，再选择你要完成的任务。AI 只提供建议或核验结果，接受后才会改动正文。</p>
                   {selectedText ? <div className="rounded-md border border-primary/30 bg-primary/10 p-2.5 text-foreground shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"><p className="text-[11px] font-medium text-primary">当前选文</p><p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{selectedText}</p></div> : null}
                   <div className="grid gap-2">
-                    {([['rewrite', '改写得更清晰'], ['summarize', '总结这段'], ['counterpoint', '补充反方观点'], ['fact_check', '检查事实'], ['conclusion_check', '核验结论']] as const).map(([operation, label]) => <Button key={operation} type="button" variant="outline" size="sm" disabled={!selectedText || assistantBusy} onClick={() => void runAssistant(operation)}>{assistantBusy ? '处理中…' : label}</Button>)}
+                    {([
+                      { op: 'rewrite' as const, label: '改写得更清晰', hint: '重写当前段落,保持原意但更易读' },
+                      { op: 'summarize' as const, label: '总结这段', hint: '压缩成简短摘要' },
+                      { op: 'counterpoint' as const, label: '补充反方观点', hint: '生成与本文相反的论证' },
+                      { op: 'fact_check' as const, label: '检查事实', hint: '逐句核对引用与来源' },
+                      { op: 'conclusion_check' as const, label: '核验结论', hint: '检查结论是否被证据支持' },
+                    ]).map(({ op: operation, label, hint }) => (
+                      <Button
+                        key={operation}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!selectedText || assistantBusy}
+                        onClick={() => void runAssistant(operation)}
+                        title={hint}
+                        aria-label={`${label}:${hint}`}
+                        className="justify-start gap-1.5"
+                      >
+                        {assistantBusy ? '处理中…' : label}
+                      </Button>
+                    ))}
                   </div>
                   {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-[11px] text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-[11px] text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
                   {!selectedText && <p>未选中文本。</p>}
@@ -948,11 +1078,27 @@ export default function EditorPage() {
               )}
 
               {sidePanel === 'versions' && (
-                <div className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-[10px] text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{audit.editor.name}</div>{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-[10px]"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-[11px] text-muted-foreground">状态记录，无字段差异。</p>}<Button type="button" size="xs" variant="outline" className="mt-2" onClick={() => restoreAudit(audit)} disabled={!audit.prevSnapshot}><RotateCcw />恢复</Button></div>)}{!existing?.audits?.length && <p className="text-xs text-muted-foreground">还没有版本记录。</p>}</div>
+                <div id="side-panel-versions" role="tabpanel" aria-label="版本历史" className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-[10px] text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{audit.editor.name}</div>{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-[10px]"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-[11px] text-muted-foreground">状态记录，无字段差异。</p>}
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    className="mt-2"
+                    disabled={!audit.prevSnapshot}
+                    onClick={() => {
+                      // 恢复是 destructive:覆盖当前未保存修改。先确认避免误触
+                      if (window.confirm('恢复该版本会覆盖当前未保存的修改,确认继续?')) {
+                        void restoreAudit(audit);
+                      }
+                    }}
+                  >
+                    <RotateCcw />恢复
+                  </Button>
+                </div>)}{!existing?.audits?.length && <p className="text-xs text-muted-foreground">还没有版本记录。</p>}</div>
               )}
 
               {sidePanel === 'details' && (
-                <div className="space-y-4">
+                <div id="side-panel-details" role="tabpanel" aria-label="发布准备" className="space-y-4">
                   <p className="text-xs leading-relaxed text-muted-foreground">发布前先补齐研究摘要，再核对事实和来源。保存草稿不受这些检查影响。</p>
                   <div className="space-y-2.5">
                     <p className="text-xs font-medium text-muted-foreground">研究摘要</p>

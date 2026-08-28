@@ -19,7 +19,7 @@ test.describe('Homepage (anonymous)', () => {
 
   test('top navigation exposes radar, topics, research and AI research', async ({ page }) => {
     await gotoHome(page);
-    for (const label of ['技术雷达', '热点主题', '调研库', 'AI 调研']) {
+    for (const label of ['技术雷达', '技术专题', '调研库', 'AI 调研']) {
       await expect(page.getByRole('link', { name: label, exact: true })).toBeVisible();
     }
     await expect(page.getByRole('button', { name: /打开全局搜索/ })).toBeVisible();

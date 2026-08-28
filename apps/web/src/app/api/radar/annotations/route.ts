@@ -29,12 +29,18 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const input = await parseBody(req, CreateAnnotationInput);
   if (input instanceof NextResponse) return input;
 
-  // Only published summaries are annotatable
+  // Radar detail pages are readable before editorial publication. An
+  // annotation belongs to the user's private reading trail, so all
+  // user-visible radar states can be annotated; rejected/archived rows stay
+  // out of the write path.
   const seed = await prisma.summary.findUnique({
     where: { id: input.summaryId },
     select: { id: true, status: true },
   });
-  if (!seed || seed.status !== 'published') {
+  const annotatable = seed?.status === 'candidate'
+    || seed?.status === 'pending_review'
+    || seed?.status === 'published';
+  if (!seed || !annotatable) {
     return toApiErrorResponse({
       code: ERROR_CODES.AI_CHAT_FORBIDDEN_SEED,
       message: '该摘要不可注释',
@@ -45,7 +51,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   // Dedup: same (summary, author, quote, kind) is idempotent
   const existing = await prisma.$queryRawUnsafe<{ id: string }[]>(
     `SELECT id FROM radar_annotations
-      WHERE "summaryId" = $1 AND "authorId" = $2
+      WHERE "summaryId" = $1::uuid AND "authorId" = $2::uuid
         AND "quote" = $3 AND kind = $4
       LIMIT 1`,
     input.summaryId, user.id, input.quote, input.kind,
@@ -56,7 +62,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
 
   const rows = await prisma.$queryRawUnsafe<{ id: string }[]>(
     `INSERT INTO radar_annotations ("summaryId", "authorId", kind, quote, "startOffset", "endOffset", body, color)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8)
     RETURNING id`,
     input.summaryId, user.id, input.kind, input.quote,
     input.startOffset, input.endOffset,
@@ -88,7 +94,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             a."createdAt"::text, u.name AS author_name,
             (SELECT count(*) FROM radar_annotation_stars s WHERE s."annotationId" = a.id)::int AS stars
       FROM radar_annotations a JOIN users u ON u.id = a."authorId"
-      WHERE a."summaryId" = $1 ${mineOnly ? 'AND a."authorId" = $2' : ''}
+      WHERE a."summaryId" = $1::uuid ${mineOnly ? 'AND a."authorId" = $2::uuid' : ''}
       ORDER BY a."createdAt" DESC
       LIMIT 200`,
     ...(mineOnly ? [summaryId, user.id] : [summaryId]),

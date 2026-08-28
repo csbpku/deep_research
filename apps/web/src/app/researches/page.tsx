@@ -35,6 +35,7 @@ import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TagChip, TagList } from '@/components/domain/TagChip';
+import { FilterBar } from '@/components/domain/FilterBar';
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
 import {
@@ -52,7 +53,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
@@ -193,7 +194,7 @@ function ResearchesContent() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
-                  <Link href="/researches/new#blank">
+                  <Link href="/researches/new?mode=blank">
                     <FilePlus2 />
                     空白草稿
                   </Link>
@@ -225,12 +226,26 @@ function ResearchesContent() {
             </TabsTrigger>
           ))}
         </TabsList>
-      </Tabs>
+
+        {/* Radix Tabs trigger 自动生成的 aria-controls 指向面板 id;
+          单一 TabsContent(value=当前 tab)即可让所有 4 个 trigger 找到对应面板。
+          内容用客户端 tab 状态过滤,避免渲染 4 份重复 DOM。 */}
+        <TabsContent value={tab} className="mt-3 space-y-3 focus-visible:outline-none">
 
       {/* 过滤条 —— 仅在 published tab 显示（草稿通常不需要按标题搜） */}
       {tab !== 'draft' && (
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px] sm:max-w-md">
+        <FilterBar
+          onSubmit={(e) => e.preventDefault()}
+          trailing={
+            q || sort !== 'newest' ? (
+              <span>
+                <ArrowDownNarrowWide className="mr-1 inline size-3 align-text-bottom" />
+                {visible.length} / {data?.items.length ?? 0}
+              </span>
+            ) : null
+          }
+        >
+          <div className="relative min-w-[200px] flex-1 sm:max-w-md">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={q}
@@ -253,13 +268,7 @@ function ResearchesContent() {
               ))}
             </SelectContent>
           </Select>
-          {(q || sort !== 'newest') && (
-            <span className="font-mono text-xs tabular-nums text-muted-foreground">
-              <ArrowDownNarrowWide className="mr-1 inline size-3 align-text-bottom" />
-              {visible.length} / {data?.items.length ?? 0}
-            </span>
-          )}
-        </div>
+        </FilterBar>
       )}
 
       <div className="mt-4">
@@ -324,12 +333,7 @@ function ResearchesContent() {
                   <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                     <StatusBadge kind="method" value={item.creationMethod} />
                     {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
-                    {item.featuredAt && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                        <Star className="size-3" />
-                        精华
-                      </span>
-                    )}
+                    {item.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star />} />}
                   </div>
                   {tab === 'draft' ? (
                     <DeleteDraftButton
@@ -388,6 +392,8 @@ function ResearchesContent() {
           disabled={isFetching}
         />
       </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

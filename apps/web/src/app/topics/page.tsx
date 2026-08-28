@@ -4,6 +4,7 @@ import { Sparkles, TrendingUp, Compass, BookOpenCheck, Bell } from 'lucide-react
 
 import { prisma } from '@/lib/db';
 import { PageHeader } from '@/components/domain/PageHeader';
+import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
@@ -13,10 +14,11 @@ import { parseTopicFilter, type TopicFilterKey } from './topic-filter-options';
 
 type IconComponent = React.ComponentType<{ className?: string }>;
 
-const TIER_LABELS: Record<string, { label: string; cls: string; Icon: IconComponent }> = {
-  hot: { label: '热门', cls: 'bg-status-failed-bg text-status-failed-fg', Icon: TrendingUp },
-  warming: { label: '升温', cls: 'bg-status-running-bg text-status-running-fg', Icon: Sparkles },
-  emerging: { label: '新出现', cls: 'bg-muted text-muted-foreground', Icon: Compass },
+/** 主题 tier 的 icon 映射 —— 颜色统一由 StatusBadge kind="topicTier" 接管 */
+const TIER_ICONS: Record<string, IconComponent> = {
+  hot: TrendingUp,
+  warming: Sparkles,
+  emerging: Compass,
 };
 
 export const dynamic = 'force-dynamic';
@@ -162,8 +164,7 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
       <TopicsFilter unreadByFilter={unreadByFilter} />
       <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {topics.map((t) => {
-          const tier = TIER_LABELS[t.tier] ?? TIER_LABELS.emerging;
-          const TierIcon = tier.Icon;
+          const TierIcon = TIER_ICONS[t.tier] ?? Compass;
           const isFollowed = followedMap.has(t.id);
           const lastViewedAt = followedMap.get(t.id) ?? null;
           const activeDates = activeIssueDatesByTopic.get(t.id) ?? [];
@@ -180,7 +181,7 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
                   <CardContent className="space-y-2 p-4">
                     <header className="flex flex-wrap items-center gap-1.5">
                       <TierIcon className="size-3.5 text-muted-foreground" />
-                      <Badge className={tier.cls}>{tier.label}</Badge>
+                      <StatusBadge kind="topicTier" value={t.tier} />
                       <h2 className="text-sm font-semibold">{t.name}</h2>
                       {isFollowed ? (
                         <Badge className="bg-secondary text-secondary-foreground">

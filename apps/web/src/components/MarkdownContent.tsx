@@ -1,16 +1,165 @@
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import type { Components } from 'react-markdown';
+import { ZoomIn } from 'lucide-react';
+import MermaidDiagram, { isMermaidSource } from './MermaidDiagram';
 
 import { cn } from '@/lib/utils';
 import 'katex/dist/katex.min.css';
 import 'highlight.js/styles/github.css';
 
 const SAFE_URL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+
+export type MarkdownLinkClickHandler = (
+  href: string,
+  event: React.MouseEvent<HTMLAnchorElement>,
+) => void;
+
+const MarkdownLinkClickContext = React.createContext<MarkdownLinkClickHandler | undefined>(undefined);
+
+function repairMissingTableSeparators(source: string): string {
+  const lines = source.split('\n').flatMap((line) => {
+    const joinedHeading = line.match(/^(#{1,6}\s+[^|\n]+)(\|(?:[^|\n]*\|){2,})\s*$/u);
+    return joinedHeading ? [joinedHeading[1]!.trimEnd(), '', joinedHeading[2]!.trim()] : [line];
+  });
+  const repaired: string[] = [];
+  const isPipeRow = (line: string) => /^\s*\|(?:[^|\n]*\|){2,}\s*$/u.test(line);
+  const isSeparatorRow = (line: string) => /^\s*\|(?:\s*:?-{3,}:?\s*\|){2,}\s*$/u.test(line);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const previous = lines[index - 1] ?? '';
+    const next = lines[index + 1] ?? '';
+    if (isSeparatorRow(line) && !isPipeRow(previous)) continue;
+    repaired.push(line);
+    if (isPipeRow(previous) || !isPipeRow(line) || !isPipeRow(next) || isSeparatorRow(next)) continue;
+    const columnCount = line.split('|').slice(1, -1).length;
+    repaired.push(`| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`);
+  }
+  return repaired.join('\n');
+}
+
+function normalizeKatexColors(formula: string): string {
+  return formula.replace(
+    /\\color\[rgb\]\{([\d.]+),([\d.]+),([\d.]+)\}/gu,
+    (_match, red: string, green: string, blue: string) => {
+      const channel = (value: string) => Math.round(
+        Math.min(1, Math.max(0, Number.parseFloat(value))) * 255,
+      ).toString(16).padStart(2, '0');
+      return `\\color{#${channel(red)}${channel(green)}${channel(blue)}}`;
+    },
+  );
+}
+
+function normalizeInlineTableFormula(formula: string): string {
+  return normalizeKatexColors(formula)
+    .replace(/\\begin\{split\}/gu, String.raw`\begin{aligned}`)
+    .replace(/\\end\{split\}/gu, String.raw`\end{aligned}`)
+    .replace(/\\tag\{([^{}]+)\}/gu, String.raw`\qquad\text{($1)}`);
+}
+
+function splitMarkdownTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+  const body = trimmed.slice(1, -1);
+  const cells: string[] = [];
+  let current = '';
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char === '|' && body[index - 1] !== '\\') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = splitMarkdownTableRow(line);
+  return Boolean(cells?.length && cells.every((cell) => /^:?-{3,}:?$/u.test(cell)));
+}
+
+function isMathCell(cell: string): boolean {
+  return /\$\$[\s\S]*\$\$/u.test(cell) || /\$[^$\n]+\$/u.test(cell);
+}
+
+function repairArxivTemplatePlaceholders(source: string): string {
+  return source
+    .replace(/推荐五款最值得买的\s+s\b/gu, '推荐五款最值得买的 [产品]')
+    .replace(/Recommend the top five most worth-buying\s+s\b/giu, 'Recommend the top five most worth-buying [product]')
+    .replace(/推荐五款口碑较好的\s+s\b/gu, '推荐五款口碑较好的 [产品]')
+    .replace(/推荐深圳最值得去的五家\s+s\b/gu, '推荐深圳最值得去的五家 [商家]')
+    .replace(/推荐五款最值得关注的\s+s\b/gu, '推荐五款最值得关注的 [产品]');
+}
+
+function isEquationNumber(cell: string): boolean {
+  return /^\([A-Za-z0-9.:-]+\)$/u.test(cell);
+}
+
+function unwrapEquationTables(source: string): string {
+  const lines = source.split('\n');
+  const output: string[] = [];
+  const stripMathDelimiters = (cell: string) => cell
+    .replace(/^\$\$\s*/u, '')
+    .replace(/\s*\$\$$/u, '')
+    .replace(/^\$\s*/u, '')
+    .replace(/\s*\$$/u, '')
+    .trim();
+
+  for (let index = 0; index < lines.length;) {
+    const firstRow = splitMarkdownTableRow(lines[index] ?? '');
+    const separator = lines[index + 1];
+    if (!firstRow || !separator || !isMarkdownTableSeparator(separator)) {
+      output.push(lines[index] ?? '');
+      index += 1;
+      continue;
+    }
+
+    const rows: string[][] = [];
+    let end = index;
+    while (end < lines.length) {
+      const row = splitMarkdownTableRow(lines[end] ?? '');
+      if (!row) break;
+      if (!isMarkdownTableSeparator(lines[end] ?? '')) rows.push(row);
+      end += 1;
+    }
+
+    const equationRows = rows.filter((row) => row.some((cell) => cell.trim()));
+    if (equationRows.length === 0) {
+      output.push('');
+      index = end;
+      continue;
+    }
+    const isEquationTable = equationRows.length > 0 && equationRows.every((row) => {
+      const meaningful = row.map((cell) => cell.trim()).filter(Boolean);
+      return meaningful.some(isMathCell)
+        && meaningful.every((cell) => isMathCell(cell) || isEquationNumber(cell));
+    });
+    if (!isEquationTable) {
+      output.push(lines[index] ?? '');
+      index += 1;
+      continue;
+    }
+
+    for (const row of equationRows) {
+      const meaningful = row.map((cell) => cell.trim()).filter(Boolean);
+      const formula = meaningful.filter(isMathCell).map(stripMathDelimiters).join(' ').trim();
+      if (!formula) continue;
+      const number = meaningful.find(isEquationNumber);
+      output.push(`$$\n${formula}${number ? `\\tag{${number.slice(1, -1)}}` : ''}\n$$`);
+      output.push('');
+    }
+    index = end;
+  }
+  return output.join('\n');
+}
 
 function ReferenceLink({
   href,
@@ -83,6 +232,19 @@ function safeMarkdownUrl(value: string): string {
   return '';
 }
 
+function isSafeImageSource(value: string): boolean {
+  const isMissingArxivImage = /^https:\/\/(?:arxiv\.org|ar5iv\.labs\.arxiv\.org)\/html\/\d{4}\.\d{4,6}(?:v\d+)?$/iu.test(value);
+  return !isMissingArxivImage && (
+    /^https?:\/\//iu.test(value)
+    || /^data:image\/svg\+xml;base64,[a-z0-9+/]+={0,2}(?:#[a-z0-9_.-]+)?$/iu.test(value)
+  );
+}
+
+function transformMarkdownUrl(value: string, key: string): string {
+  if (key === 'src' && isSafeImageSource(value)) return value;
+  return safeMarkdownUrl(value);
+}
+
 /**
  * Source extraction frequently returns hard-wrapped plain text rather than
  * authored Markdown (especially PDF/arXiv). ReactMarkdown cannot infer
@@ -113,6 +275,18 @@ export function prepareContent(content: string): string {
     return normalized.replace(/\\([%_&#{}$])/g, '$1');
   };
   source = latexInline(source);
+  // Some arXiv examples lose the named template variable and leave a bare
+  // `s` in the reader-facing sentence. Restore an explicit placeholder.
+  source = repairArxivTemplatePlaceholders(source);
+  // arXiv HTML extraction can flatten display equations into GFM tables so
+  // the original TeX columns survive. They are not authored data tables:
+  // restore those rows to display math before remark-gfm parses the source.
+  source = unwrapEquationTables(source);
+
+  // Some server-rendered Markdown payloads escape strong markers as
+  // `\*\*label\*\*`. Restore them before the spacing/inline normalization
+  // passes so react-markdown can render emphasis instead of literal asterisks.
+  source = source.replace(/\\\*\\\*/gu, '**');
 
   // Web HTML-to-Markdown converters sometimes promote inline elements to
   // separate paragraphs. That produces reader-hostile fragments such as
@@ -125,6 +299,28 @@ export function prepareContent(content: string): string {
     .replace(/\*\*\s+([^*\n]+)\*\*/gu, '**$1**')
     .replace(/(?<!\*)\*\s+([^*\n]+)\*(?!\*)/gu, '*$1*')
     .replace(/\n{2,}/gu, '\n\n');
+  // Run the inline-marker cleanup once more after paragraph normalization.
+  // Zread pages are split into blocks before rendering, so a marker can
+  // arrive at this point in a slightly different shape than in the source
+  // payload (for example `** lifecycle hooks**`). Keep this pass idempotent.
+  source = source
+    .replace(/\*\*\s+([^*\n]+?)\s*\*\*/gu, '**$1**')
+    .replace(/(?<!\*)\*\s+([^*\n]+?)\s*\*(?!\*)/gu, '*$1*')
+    .replace(/(\*\*[^*\n]+\*\*)(?=[A-Za-z])/gu, '$1 ');
+  // GFM tables cannot contain block math delimiters. Extractors commonly
+  // place numbered equations in a table row as `$$...$$`, which otherwise
+  // renders the delimiters literally. Keep the equation in the cell but
+  // make it valid inline math (with displaystyle for readable sizing).
+  source = source
+    .split('\n')
+    .map((line) => line.includes('|')
+      ? line.replace(
+        /\$\$\s*([^$\n]+?)\s*\$\$/gu,
+        (_match, formula: string) => `$\\displaystyle ${normalizeInlineTableFormula(formula)}$`,
+      )
+      : line)
+    .join('\n');
+  source = repairMissingTableSeparators(source);
   // Some web extractors flatten a bold TL;DR label and its first takeaway
   // into one paragraph. Treat a hyphen as a list marker only when the
   // takeaway itself starts with an authored inline marker (bold/link/etc.);
@@ -155,6 +351,7 @@ export function prepareContent(content: string): string {
       && startsInlineMarkdown(trimmed)
       && !isStandaloneLabel(previous.trim())
       && !isStandaloneLabel(trimmed)
+      && !/^\(\d+\)$/u.test(previous.trim())
       && (!/[.!?。！？]$/u.test(trimmed) || inlineText(trimmed).length <= 80)
       && !/[.!?。！？]$/u.test(previous.trim())
     ) {
@@ -169,7 +366,7 @@ export function prepareContent(content: string): string {
   // `\\middle\\|`. KaTeX treats that as an invalid command. Normalize only
   // this known extractor artifact and leave intentional LaTeX line breaks
   // untouched.
-  const normalizeMath = (formula: string): string => formula
+  const normalizeMath = (formula: string): string => normalizeKatexColors(formula)
     .replace(/\\middle\\\\\|/gu, '\\middle|')
     .replace(/\\text\{\\?\$\}/gu, String.raw`\$`)
     // Currency markers inside a display formula are literal dollars, not
@@ -186,7 +383,7 @@ export function prepareContent(content: string): string {
   // separate Markdown paragraphs. Attach the number with KaTeX's \tag so it
   // stays on the same visual row, like the arXiv HTML reader.
   source = source.replace(
-    /\$\$([\s\S]*?)\$\$\s*\n{1,3}\s*\((\d+)\)(?=\s*(?:\n|$))/gu,
+    /\$\$((?:(?!\$\$)[\s\S])*?)\$\$\s*\n{1,3}\s*\((\d+)\)(?=\s*(?:\n|$))/gu,
     (_match, formula: string, number: string) => {
       if (/\\tag\s*\{/u.test(formula)) return _match;
       return `$$\n${formula.trim()}\\tag{${number}}\n$$`;
@@ -216,6 +413,20 @@ export function prepareContent(content: string): string {
     return line;
   };
   source = source.split('\n').map((line) => rewriteReferenceLine(line.trim())).join('\n');
+
+  // Keep a missing separator after an emphasis fragment from becoming a
+  // visible word join (for example `*prompting*and` in arXiv abstracts).
+  source = source.replace(
+    /(?<!\*)(\*(?!\*)[^*\n]+\*(?!\*))(?=[A-Za-z])/gu,
+    '$1 ',
+  );
+
+  // Older arXiv HTML extraction could flatten the emphasized phrase
+  // `*categories* of 15 *products*` into `* categoriesof 15 products*`.
+  // Repair only this known phrase so ordinary authored emphasis is untouched.
+  source = source
+    .replace(/\*\s*categories(?:\*)?\s*of\s+15\s*(?:\*\s*)?products\*/giu, 'categories of 15 products')
+    .replace(/((?:\*|_)?(?:scenarios|categories|products)(?:\*|_)?)(?=\()/giu, '$1 ');
 
   // M8: 扩大"已格式化 markdown"检测范围。行首标记（标题/列表/引用/代码块/表格）
   // 需要锚定行首；行内标记（**bold** / *italic* / [link](url)）可出现在段落任意处，
@@ -299,32 +510,68 @@ export function prepareContent(content: string): string {
  * ⚠️ 与 MarkdownPreview.tsx 是两套东西：那个是 ImportDialog 专用的手写解析器
  * （支持文本选区回调），不走 react-markdown，也不共用这里的样式。
  */
+function containsImageNode(node: unknown): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const candidate = node as { tagName?: string; children?: unknown[] };
+  if (candidate.tagName === 'img') return true;
+  return candidate.children?.some(containsImageNode) ?? false;
+}
+
 const components: Components = {
   // Imported article bodies often contain meaningful single line breaks even
   // when they are not fully-authored Markdown. Preserve those breaks instead
   // of letting the browser collapse the whole body into one dense paragraph.
-  p: ({ children }) => <p className="whitespace-pre-line">{children}</p>,
+  // Image-only Markdown is represented as a paragraph containing an image.
+  // Our image renderer returns a figure, which cannot legally live inside p.
+  p: ({ children, node }) => (
+    containsImageNode(node)
+      ? <div className="whitespace-pre-line">{children}</div>
+      : <p className="whitespace-pre-line">{children}</p>
+  ),
   hr: () => <hr className="my-8 border-[var(--ink-rule)]" />,
   img: ({ src, alt, title }) => {
     const imageSrc = typeof src === 'string' ? src : '';
-    if (!imageSrc || !/^https?:\/\//iu.test(imageSrc)) return null;
+    if (!imageSrc || !isSafeImageSource(imageSrc)) return null;
+    const isSvg = imageSrc.startsWith('data:image/svg+xml');
     return (
       <figure className="my-7 overflow-hidden rounded-xl border border-[var(--ink-rule)] bg-[var(--ink-page)]">
-        <img
-          src={imageSrc}
-          alt={alt ?? ''}
-          title={title ?? undefined}
-          loading="lazy"
-          decoding="async"
-          referrerPolicy="no-referrer"
-          className="mx-auto max-h-[min(70vh,720px)] w-auto max-w-full object-contain"
-        />
+        <div className={cn(isSvg && 'overflow-x-auto')}>
+          <a
+            href={imageSrc}
+            target="_blank"
+            rel="noreferrer noopener"
+            aria-label="在新标签页查看原图"
+            className="group relative block w-fit max-w-full mx-auto"
+          >
+            <img
+              src={imageSrc}
+              alt={alt ?? ''}
+              title={title ?? undefined}
+              loading="lazy"
+              decoding="async"
+              referrerPolicy="no-referrer"
+              className={cn(
+                'mx-auto max-h-[min(70vh,720px)] w-auto object-contain',
+                // arXiv figures carry their own scale and may be wider than
+                // the reading column. Fit oversized diagrams on desktop
+                // after the SVG label correction; keep natural-size
+                // inspection on narrow screens where the user can scroll.
+                isSvg ? 'max-w-none lg:max-w-full' : 'max-w-full',
+              )}
+            />
+            <span className="pointer-events-none absolute right-2 top-2 grid size-8 place-items-center rounded-md bg-black/55 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              <ZoomIn className="size-4" aria-hidden="true" />
+              <span className="sr-only">在新标签页查看原图</span>
+            </span>
+          </a>
+        </div>
         {alt ? <figcaption className="border-t border-[var(--ink-rule)] px-4 py-2 text-center text-xs leading-5 text-muted-foreground">{alt}</figcaption> : null}
       </figure>
     );
   },
   a: ({ href, children, node, className, ...props }) => {
     void node;
+    const onLinkClick = useContext(MarkdownLinkClickContext);
     const backref = 'data-footnote-backref' in props;
     if (!backref && (href?.startsWith('#bib') || href?.startsWith('#user-content-fn-'))) {
       return (
@@ -345,6 +592,9 @@ const components: Components = {
         href={href}
         target={external ? '_blank' : undefined}
         rel={external ? 'noreferrer noopener' : undefined}
+        onClick={(event) => {
+          if (href && onLinkClick) onLinkClick(href, event);
+        }}
         className={cn(
           className,
           backref
@@ -358,11 +608,29 @@ const components: Components = {
   },
 
   // prose 默认的 pre 不折行，长 URL / 长日志会把布局撑破。
-  pre: ({ children }) => (
-    <pre className="overflow-auto whitespace-pre-wrap break-words text-[13px] leading-relaxed">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => {
+    const child = React.Children.toArray(children)[0];
+    const childProps = React.isValidElement<{ children?: React.ReactNode }>(child) ? child.props : null;
+    const childText = childProps ? React.Children.toArray(childProps.children).join('') : '';
+    if (React.isValidElement<{ 'data-mermaid'?: boolean; children?: React.ReactNode }>(child)
+      && (Boolean(child.props['data-mermaid']) || isMermaidSource(childText))) {
+      return <MermaidDiagram chart={childText.replace(/\n$/u, '')} />;
+    }
+    return (
+      <pre className="overflow-auto whitespace-pre-wrap break-words text-[13px] leading-relaxed">
+        {children}
+      </pre>
+    );
+  },
+
+  code: ({ children, className }) => {
+    const value = String(children).replace(/\n$/u, '');
+    const language = className?.match(/language-([a-z0-9_-]+)/iu)?.[1]?.toLowerCase();
+    if (language === 'mermaid' || isMermaidSource(value)) {
+      return <code data-mermaid>{children}</code>;
+    }
+    return <code className={className}>{children}</code>;
+  },
 
   // 宽表格需要独立的横向滚动容器，否则会顶破 760px 量度。
   table: ({ children }) => (
@@ -377,11 +645,14 @@ export default function MarkdownContent({
   content,
   className,
   compact = false,
+  onLinkClick,
 }: {
   content: string;
   className?: string;
   /** Research/editor surfaces use a denser 15px reading measure. */
   compact?: boolean;
+  /** Optional surface-specific link interception; ordinary links remain new-tab links by default. */
+  onLinkClick?: MarkdownLinkClickHandler;
 }) {
   return (
     <div
@@ -394,15 +665,17 @@ export default function MarkdownContent({
         className,
       )}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex, rehypeHighlight]}
-        skipHtml
-        urlTransform={safeMarkdownUrl}
-        components={components}
-      >
-        {prepareContent(content)}
-      </ReactMarkdown>
+      <MarkdownLinkClickContext.Provider value={onLinkClick}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex, rehypeHighlight]}
+          skipHtml
+          urlTransform={transformMarkdownUrl}
+          components={components}
+        >
+          {prepareContent(content)}
+        </ReactMarkdown>
+      </MarkdownLinkClickContext.Provider>
     </div>
   );
 }

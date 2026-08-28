@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import MarkdownContent, { prepareContent } from './MarkdownContent';
+import { isMermaidSource } from './MermaidDiagram';
 
 describe('MarkdownContent links', () => {
   it('renders external references as visibly styled new-tab links', () => {
@@ -55,12 +56,137 @@ describe('MarkdownContent links', () => {
     expect(html).toContain('alt="系统架构图"');
     expect(html).toContain('loading="lazy"');
     expect(html).not.toContain('data:image');
+    expect(html).not.toMatch(/<p[^>]*>\s*<figure/u);
+  });
+
+  it('renders sanitized inline SVG images but rejects other data URLs', () => {
+    const html = renderToStaticMarkup(
+      createElement(MarkdownContent, {
+        content: '![图形](data:image/svg+xml;base64,PHN2Zy8+#A1.F12)\n\n![不应保留](data:image/png;base64,broken)',
+      }),
+    );
+
+    expect(html).toContain('src="data:image/svg+xml;base64,PHN2Zy8+#A1.F12"');
+    expect(html).toContain('alt="图形"');
+    expect(html).toContain('class="overflow-x-auto"');
+    expect(html).toContain('lg:max-w-full');
+    expect(html).toContain('aria-label="在新标签页查看原图"');
+    expect(html).not.toContain('data:image/png');
+  });
+
+  it('does not render an arXiv page URL as a missing image', () => {
+    const html = renderToStaticMarkup(
+      createElement(MarkdownContent, {
+        content: '![Refer to caption](https://arxiv.org/html/2608.20280)\n\n*Figure 1: unavailable*',
+      }),
+    );
+
+    expect(html).not.toContain('src="https://arxiv.org/html/2608.20280"');
+    expect(html).toContain('Figure 1: unavailable');
+  });
+
+  it('repairs bare arXiv template variables in reader-facing text', () => {
+    const prepared = prepareContent(
+      '推荐五款最值得买的 s；推荐深圳最值得去的五家 s；Recommend the top five most worth-buying s',
+    );
+
+    expect(prepared).toContain('推荐五款最值得买的 [产品]');
+    expect(prepared).toContain('推荐深圳最值得去的五家 [商家]');
+    expect(prepared).toContain('Recommend the top five most worth-buying [product]');
+    expect(prepared).not.toMatch(/worth-buying s\b/u);
   });
 });
 
 // M8: prepareContent 的 isMarkdown 检测 —— 已格式化的 markdown 原样返回，
 // 不触发 reflow 启发式；PDF/arXiv 纯文本才走启发式 reflow。
 describe('MarkdownContent prepareContent', () => {
+  it('repairs escaped and tightly joined bold Markdown', () => {
+    const input = String.raw`A **core ruleset**lives here, and \*\*lifecycle hooks\*\* inject it.`;
+    expect(prepareContent(input)).toBe(
+      'A **core ruleset** lives here, and **lifecycle hooks** inject it.',
+    );
+  });
+
+  it('repairs a bold marker with a leading space after block splitting', () => {
+    expect(prepareContent('and ** lifecycle hooks** inject it.')).toBe(
+      'and **lifecycle hooks** inject it.',
+    );
+  });
+
+  it('converts block math embedded in GFM table rows to valid inline math', () => {
+    expect(prepareContent('| (4) | $$ \\\\widehat{D}=a-b. $$ |')).toContain(
+      '| (4) | $\\displaystyle \\\\widehat{D}=a-b.$ |',
+    );
+    expect(prepareContent('| (4) | $$ \\\\widehat{D}=a-b. $$ |')).not.toContain('$$');
+  });
+
+  it('normalizes display-only constructs when equations are extracted into table cells', () => {
+    const input = String.raw`| Formula |
+| --- |
+| $$ \begin{split}a&=b\\&=c\end{split}\tag{8} $$ |
+| $$ {\color[rgb]{1,0,0}x} $$ |`;
+    const prepared = prepareContent(input);
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+
+    expect(prepared).toContain(String.raw`\begin{aligned}`);
+    expect(prepared).toContain(String.raw`\text{(8)}`);
+    expect(prepared).toContain(String.raw`\color{#ff0000}`);
+    expect(html).not.toContain('katex-error');
+  });
+
+  it('unwraps arXiv equation tables instead of rendering formulas as data tables', () => {
+    const input = [
+      '|  | $\\displaystyle u_{\\tau}$ | $\\displaystyle=\\mathbb{I}\\{\\mathcal{C}_{\\tau}\\},$ | $\\displaystyle a_{\\tau}$ | $\\displaystyle=\\mathbb{I}\\{\\mathcal{A}_{\\tau}\\},$ |  | (3.3) |',
+      '| --- | --- | --- | --- | --- |',
+      '|  | $\\displaystyle P_{d}$ | $\\displaystyle=\\{p_{1},\\ldots,p_{m}\\},$ |  |  | (1) |',
+    ].join('\n');
+    const prepared = prepareContent(input);
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+
+    expect(prepared).toContain('$$');
+    expect(prepared).toContain(String.raw`\tag{1}`);
+    expect(html).toContain('katex-display');
+    expect(html).not.toContain('<table>');
+  });
+
+  it('drops empty table shells emitted before arXiv figures', () => {
+    const input = '|  |\n| --- |\n\n![Figure](https://arxiv.org/html/2608.17286v1/figures/headline.png)';
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+
+    expect(html).not.toContain('<table>');
+    expect(html).toContain('headline.png');
+  });
+
+  it('normalizes arXiv RGB colors and removes orphan table separators after equations', () => {
+    const input = String.raw`$$
+J=\mathbb{E}_{q\sim{\color[rgb]{1,0,0}\rho}}[g(q)].
+$$
+
+(8)
+| --- | --- | --- | --- |`;
+    const prepared = prepareContent(input);
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+
+    expect(prepared).toContain(String.raw`\color{#ff0000}`);
+    expect(prepared).not.toContain('| --- |');
+    expect(html).not.toContain('katex-error');
+  });
+
+  it('adds a missing GFM separator row to extracted tables', () => {
+    const input = [
+      '#### **表1 模型比较**| **模型** | **规模** | **结果** |',
+      '| Falcon | 585M | 最优 |',
+      '| Chronos | 120M | 次优 |',
+    ].join('\n');
+    const prepared = prepareContent(input);
+
+    expect(prepared).toContain('| --- | --- | --- |');
+    expect(prepared).toContain('#### **表1 模型比较**\n\n| **模型**');
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+    expect(html).toContain('<table>');
+    expect(html).toContain('<strong>模型</strong>');
+  });
+
   it('returns authored markdown unchanged (headings + lists + bold)', () => {
     const md = '# Title\n\n## Section\n\n- item one\n- item two\n\n**bold text** with a [link](https://example.com)';
     expect(prepareContent(md)).toBe(md);
@@ -90,6 +216,22 @@ describe('MarkdownContent prepareContent', () => {
     expect(out).toContain('[previous post](https://example.com), we compared **with** [ALTK-Evolve](https://example.com/altk) [ACE](https://arxiv.org/abs/2510.04618) and showed that *how much* should you give it?');
     expect(out).not.toMatch(/compared\n\n\*\*with\*\*/u);
     expect(prepareContent('** Agentic memory** and * how*you').replace(/\n/g, ' ')).toContain('**Agentic memory** and *how* you');
+  });
+
+  it('repairs the known arXiv category word join before rendering', () => {
+    const input = 'We curate five *scenarios*(Digital Products), each containing three * categories*of 15 * products*—225 real products.';
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+
+    expect(html).toContain('<em>scenarios</em> (Digital Products)');
+    expect(html).toContain('categories of 15 products');
+    expect(html).not.toContain('categoriesof');
+    expect(html).not.toContain('* categories');
+  });
+
+  it('keeps spaces after italic fragments in arXiv abstracts', () => {
+    const input = 'We ask: *to what extent do models help with results?*To answer this, we introduce FORGE. We evaluate three defenses: *skepticism prompting*and *consensus filtering* (over model priors).';
+    expect(prepareContent(input)).toContain('results?* To answer');
+    expect(prepareContent(input)).toContain('prompting* and *consensus');
   });
 
   it('keeps inline labels such as TL;DR on their own line', () => {
@@ -135,6 +277,29 @@ describe('MarkdownContent prepareContent', () => {
     expect(out).not.toMatch(/\$\$[\s\S]*\$\$\n\n\(1\)/u);
   });
 
+  it('does not attach an equation number across intervening prose and formulas', () => {
+    const input = String.raw`$$ \begin{split}a&=b\\&=c\end{split} $$
+
+(7)
+| --- | --- | --- | --- |
+
+*which flows through $a$ without constraining $b$.*
+
+#### Next objective
+
+$$ J=\mathbb{E}[g(q)]. $$
+
+(8)
+| --- | --- | --- | --- |`;
+    const prepared = prepareContent(input);
+    const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
+
+    expect(prepared).toContain(String.raw`\tag{7}`);
+    expect(prepared).toContain(String.raw`\tag{8}`);
+    expect(prepared).not.toMatch(/\\tag\{8\}[\s\S]*which flows/u);
+    expect(html).not.toContain('katex-error');
+  });
+
   it('keeps paper reference links on-page for hover preview lookup', () => {
     const html = renderToStaticMarkup(
       createElement(MarkdownContent, {
@@ -164,5 +329,13 @@ S_{r}\in{0.12}, $$ |  |`;
     const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
     expect(html).not.toContain('katex-error');
     expect(html).toContain('0.0033');
+  });
+});
+
+describe('Mermaid detection', () => {
+  it('recognizes common diagram sources without confusing ordinary code for a diagram', () => {
+    expect(isMermaidSource('flowchart TB\nA --> B')).toBe(true);
+    expect(isMermaidSource('sequenceDiagram\nAlice->>Bob: Hello')).toBe(true);
+    expect(isMermaidSource('const graph = true;')).toBe(false);
   });
 });

@@ -52,11 +52,52 @@ const METHOD_TONES: Record<string, Tone> = {
   },
 };
 
+/** researches.featuredAt —— 精华徽章，琥珀实心，对应原手写 `border-amber-*` 系列 */
+const FEATURED_TONES: Record<string, Tone> = {
+  true: { className: 'bg-warning-bg text-warning-fg border border-warning-border', label: '精华' },
+  false: { className: 'bg-muted text-muted-foreground', label: '' },
+};
+
+/** researches.type —— "研究报告 / 知识卡片" 区分 */
+const RESEARCH_TYPE_TONES: Record<string, Tone> = {
+  research: { className: 'bg-status-running-bg text-status-running-fg', label: '研究报告' },
+  knowledge: { className: 'bg-status-queued-bg text-status-queued-fg', label: '知识卡片' },
+};
+
+/** topic tier —— 主题热度，不与 score tier 共享语义色 */
+const TOPIC_TIER_TONES: Record<string, Tone> = {
+  hot: { className: 'bg-tier-hot-bg text-tier-hot-fg', label: '热门' },
+  warming: { className: 'bg-tier-warming-bg text-tier-warming-fg', label: '升温中' },
+  emerging: { className: 'bg-tier-emerging-bg text-tier-emerging-fg', label: '新出现' },
+};
+
+/** radar issues —— 雷达详情页内的事件/问题徽章 */
+const ISSUE_TONES: Record<string, Tone> = {
+  info: { className: 'bg-status-running-bg text-status-running-fg border border-status-running-border', label: '信息' },
+  warn: { className: 'bg-status-partial-bg text-status-partial-fg border border-status-partial-border', label: '提示' },
+  error: { className: 'bg-status-failed-bg text-status-failed-fg border border-status-failed-border', label: '异常' },
+  success: { className: 'bg-status-succeeded-bg text-status-succeeded-fg border border-status-succeeded-border', label: '已处理' },
+};
+
+/** search results type —— 搜索结果类型徽章，使用中性 palette 不与 job status 混淆 */
+const SEARCH_TYPE_TONES: Record<string, Tone> = {
+  radar: { className: 'bg-secondary text-secondary-foreground', label: '雷达' },
+  summary: { className: 'bg-secondary text-secondary-foreground', label: '摘要' },
+  research: { className: 'bg-secondary text-secondary-foreground', label: '研究报告' },
+  knowledge: { className: 'bg-secondary text-secondary-foreground', label: '知识卡片' },
+  all: { className: 'bg-secondary text-secondary-foreground', label: '全部' },
+};
+
 const REGISTRY = {
   job: JOB_TONES,
   radar: RADAR_TONES,
   research: RESEARCH_TONES,
   method: METHOD_TONES,
+  featured: FEATURED_TONES,
+  researchType: RESEARCH_TYPE_TONES,
+  topicTier: TOPIC_TIER_TONES,
+  issue: ISSUE_TONES,
+  searchType: SEARCH_TYPE_TONES,
 } as const;
 
 export type StatusKind = keyof typeof REGISTRY;
@@ -83,6 +124,11 @@ export function StatusBadge({
     className: 'bg-muted text-muted-foreground',
     label: value,
   };
+
+  // featured=false / 空 label 时不渲染（用于条件显示）
+  if (label === '' || (tone.label === '' && !label && !icon)) {
+    return null;
+  }
 
   return (
     <span

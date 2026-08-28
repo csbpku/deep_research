@@ -38,7 +38,10 @@ export async function UnreadIssuesBanner() {
   if (unread === 0) return null;
 
   return (
-    <Link href="/me/topics" className="block focus-visible:outline-none">
+    <Link
+      href="/me/topics"
+      className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+    >
       <Card className="m-4 border-primary/40 bg-primary/10 transition-colors hover:bg-primary/15">
         <CardContent className="flex flex-wrap items-center gap-2 p-3 text-sm">
           <Bell className="size-4 text-primary" />

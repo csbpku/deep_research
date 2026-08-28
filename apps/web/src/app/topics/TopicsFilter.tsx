@@ -29,7 +29,7 @@ export function TopicsFilter({ unreadByFilter }: Props) {
   const current = (params.get('filter') ?? 'all') as TopicFilterKey;
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2" role="tablist" aria-label="专题筛选">
+    <nav className="mb-3 flex flex-wrap items-center gap-2" aria-label="专题筛选">
       {TOPICS_FILTERS.map(({ key, label, Icon }) => {
         const active = current === key;
         const unread = key === 'followed' ? unreadByFilter[key] : undefined;
@@ -38,14 +38,14 @@ export function TopicsFilter({ unreadByFilter }: Props) {
           <Link
             key={key}
             href={href}
-            role="tab"
-            aria-selected={active}
+            aria-current={active ? 'page' : undefined}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+              // 触控目标最小 36×36 (Tailwind h-9 = 36px)，移动端 44+ 安全。
+              'inline-flex h-9 min-h-[36px] items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors',
               active
                 ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border bg-card text-muted-foreground hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                : 'border-border bg-card text-foreground/80 hover:text-foreground hover:border-foreground/30',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             )}
           >
             <Icon className="size-3.5" />
@@ -58,6 +58,6 @@ export function TopicsFilter({ unreadByFilter }: Props) {
           </Link>
         );
       })}
-    </div>
+    </nav>
   );
 }

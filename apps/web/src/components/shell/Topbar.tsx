@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet';
@@ -52,12 +53,13 @@ function AiResearchIndicator() {
   });
   const job = data?.items?.[0];
   if (!job) return null;
+  /* AI 调研进行中指示器：触控目标 ≥ 36px，移动端仍可达 */
   return (
     <button
       type="button"
       onClick={() => router.push(`/ai-research/${job.jobId}`)}
       aria-label={`查看调研进度：${job.topic}`}
-      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="inline-flex h-9 min-h-[36px] items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
     >
       <Loader2 className="size-3 animate-spin text-status-running-fg" />
       <span className="hidden max-w-[140px] truncate sm:inline">{job.topic}</span>
@@ -87,21 +89,37 @@ function GlobalSearchCommand() {
   }, [router]);
 
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={() => router.push('/search')}
-      aria-label="打开全局搜索（⌘K）"
-      aria-keyshortcuts="Meta+K Control+K"
-      className="hidden h-8 min-w-0 gap-2 px-2.5 text-muted-foreground sm:flex sm:w-52 sm:justify-start"
-    >
-      <SearchIcon className="size-3.5" />
-      <span className="truncate text-xs">搜索研究内容</span>
-      <kbd className="ml-auto rounded border border-border bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground">
-        ⌘K
-      </kbd>
-    </Button>
+    <>
+      {/* 桌面端 ⌘K 触发器（sm 以上显示） */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => router.push('/search')}
+        aria-label="打开全局搜索（⌘K）"
+        aria-keyshortcuts="Meta+K Control+K"
+        className="hidden h-9 min-w-0 gap-2 px-2.5 text-muted-foreground sm:flex sm:w-52 sm:justify-start"
+      >
+        <SearchIcon className="size-3.5" />
+        <span className="truncate text-xs">搜索研究内容</span>
+        <kbd className="ml-auto rounded border border-border bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground">
+          ⌘K
+        </kbd>
+      </Button>
+
+      {/* 移动端 icon-only 搜索入口（&lt;sm 显示）—— 触控目标 44×44 */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={() => router.push('/search')}
+        aria-label="打开搜索"
+        aria-keyshortcuts="Meta+K Control+K"
+        className="h-11 w-11 sm:hidden"
+      >
+        <SearchIcon className="size-4" />
+      </Button>
+    </>
   );
 }
 
@@ -124,12 +142,21 @@ export function Topbar({
       {/* 移动端侧栏 */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetTrigger asChild>
-          <Button variant="ghost" size="icon-sm" className="md:hidden" aria-label="打开导航">
+          {/* 触控目标 44×44（避免小屏难命中） */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 md:hidden"
+            aria-label="打开导航"
+          >
             <Menu />
           </Button>
         </SheetTrigger>
         <SheetContent side="left" className="w-64 p-0 sm:max-w-xs">
           <SheetTitle className="sr-only">主导航</SheetTitle>
+          <SheetDescription className="sr-only">
+            切换专题、调研库、搜索、设置等主要功能区
+          </SheetDescription>
           <div className="flex h-topbar items-center gap-2 border-b border-border px-4">
             <BrandMark />
             <span className="text-sm font-semibold tracking-normal">AI技术调研平台</span>

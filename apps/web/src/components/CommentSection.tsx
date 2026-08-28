@@ -631,6 +631,7 @@ function CommentInput({
         <Button
           type="button"
           size="xs"
+          aria-label="发布评论"
           onClick={submit}
           disabled={disabled || submitting || !body.trim()}
         >

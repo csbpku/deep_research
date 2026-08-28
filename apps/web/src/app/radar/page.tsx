@@ -383,7 +383,6 @@ export default function RadarPage() {
           onChange={(next) => {
             setQuality(next.length > 0 ? next as QualityValue[] : DEFAULT_QUALITY);
             setPage(1);
-            setView('ranked');
           }}
         />
 
@@ -391,7 +390,7 @@ export default function RadarPage() {
           <span>入库时间</span>
           <Select
             value={dateRange}
-            onValueChange={(v) => { setDateRange(v as DateRange); setPage(1); setView('ranked'); }}
+            onValueChange={(v) => { setDateRange(v as DateRange); setPage(1); }}
           >
             <SelectTrigger className="w-32" aria-label="入库时间筛选">
               <SelectValue />
@@ -413,7 +412,6 @@ export default function RadarPage() {
           onChange={(next) => {
             setSourceTypes(next);
             setPage(1);
-            setView('ranked');
           }}
         />
 
@@ -445,7 +443,7 @@ export default function RadarPage() {
           {RADAR_GROUPS.map((group, index) => {
             const groupQuery = groupedQueries[index];
             const groupItems = groupQuery.data?.items ?? [];
-            const accent = ['bg-primary', 'bg-status-succeeded-fg', 'bg-status-queued-fg', 'bg-status-running-fg'][index] ?? 'bg-primary';
+            const accent = ['bg-primary', 'bg-status-succeeded-fg', 'bg-status-queued-fg', 'bg-status-running-fg', 'bg-tier-noise'][index] ?? 'bg-primary';
             return (
               <section key={group.id} className="min-w-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm" aria-labelledby={`radar-group-${group.id}`}>
                 <div className="flex min-w-0 items-start justify-between gap-3 border-b border-border bg-muted/30 px-4 py-3">
@@ -502,11 +500,26 @@ export default function RadarPage() {
           ))}
         </div>
       ) : query.isError ? (
-        <EmptyState title="加载失败" description={String((query.error as Error).message)} />
+        <EmptyState
+          title="加载失败"
+          description={String((query.error as Error).message)}
+          action={
+            <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+              重试
+            </Button>
+          }
+        />
       ) : items.length === 0 ? (
         <EmptyState
           title="暂无候选"
           description="雷达同步尚未产出候选；稍后再来或联系 admin 触发手动同步。"
+          action={
+            me.data?.role === 'admin' ? (
+              <Button variant="outline" size="sm" asChild>
+                <a href="/admin/radar">前往后台触发同步</a>
+              </Button>
+            ) : null
+          }
         />
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-card">

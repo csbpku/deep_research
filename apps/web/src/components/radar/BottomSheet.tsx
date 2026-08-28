@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { GripVertical, Minus, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type SheetState = 'closed' | 'open' | 'minimized';
@@ -205,6 +206,19 @@ export function BottomSheet({
     };
   }, []);
 
+  /* Escape 关闭面板 —— 满足 a11y 规则 (modal-escape) */
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onOpenChange(false);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onOpenChange]);
+
   if (!open) return null;
 
   return (
@@ -257,7 +271,7 @@ export function BottomSheet({
             data-sheet-header
             className="flex cursor-grab select-none items-center gap-2.5 rounded-tl-[16px] border-b border-[var(--ink-rule)] bg-white px-5 py-3.5"
           >
-            <span className="cursor-grab select-none text-xl text-[var(--ink-faint)]">⠿</span>
+            <GripVertical className="size-4 shrink-0 cursor-grab select-none text-[var(--ink-faint)]" aria-hidden />
             <h2 className="flex-1 font-sans text-[15px] font-semibold">{title}</h2>
             {subtitle ? (
               <span className="hidden max-w-[28%] truncate font-sans text-xs text-[var(--ink-muted)] sm:inline">{subtitle}</span>
@@ -265,18 +279,18 @@ export function BottomSheet({
             <button
               type="button"
               onClick={minimize}
-              className="rounded px-2 py-1.5 text-base text-[var(--ink-muted)] hover:bg-[var(--ink-paper)]"
+              className="rounded-md p-1.5 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] hover:text-[var(--ink-text)]"
               aria-label="最小化"
             >
-              ▾
+              <Minus className="size-4" />
             </button>
             <button
               type="button"
               onClick={close}
-              className="rounded px-2 py-1.5 text-base text-[var(--ink-muted)] hover:bg-[var(--ink-paper)]"
+              className="rounded-md p-1.5 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] hover:text-[var(--ink-text)]"
               aria-label="关闭"
             >
-              ×
+              <X className="size-4" />
             </button>
           </header>
 

@@ -100,7 +100,7 @@ export function AskAiDrawer({
         </div>
 
         {/* AI pane */}
-        <div className="flex min-h-0 w-full flex-1 flex-col bg-card lg:w-[430px] lg:flex-none lg:border-l lg:border-border">
+        <div className="flex min-h-0 w-full flex-1 flex-col bg-card lg:w-[min(440px,38%)] lg:flex-none lg:border-l lg:border-border">
           <SheetHeader className="flex-row items-center justify-between gap-3 pr-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <Sparkles className="size-4 shrink-0 text-method-ai" aria-hidden />
@@ -128,11 +128,13 @@ export function AskAiDrawer({
             messages={chat.session?.messages ?? []}
             loading={chat.loading}
             sending={chat.sending}
+            slowGeneration={chat.slowGeneration}
             thinkingStep={chat.thinkingStep}
             err={chat.err}
             input={chat.input}
             onInputChange={chat.setInput}
             onSubmit={chat.sendMessage}
+            onStop={chat.stopGeneration}
             onRetryLoad={chat.retryLoad}
             messagesRef={chat.messagesRef}
             textareaRef={chat.textareaRef}

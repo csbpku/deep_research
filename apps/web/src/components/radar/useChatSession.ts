@@ -52,6 +52,9 @@ export type ContextScope = 'selection' | 'paragraph' | 'section' | 'full' | 'pro
 const MAX_INPUT_CHARS = 32000;
 
 const THINKING_STEP_MS: ReadonlyArray<number> = [900, 1900];
+const TYPEWRITER_INTERVAL_MS = 16;
+const TYPEWRITER_CHARS_PER_TICK = 12;
+const SLOW_GENERATION_MS = 12000;
 
 export interface UseChatSessionOptions {
   summaryId: string;
@@ -74,11 +77,13 @@ export interface UseChatSessionResult {
   session: ChatSession | null;
   loading: boolean;
   sending: boolean;
+  slowGeneration: boolean;
   thinkingStep: number;
   err: string | null;
   input: string;
   setInput: (value: string) => void;
   sendMessage: (content: string, anchor?: Anchor | null) => Promise<void>;
+  stopGeneration: () => void;
   contextScope: ContextScope;
   setContextScope: (scope: ContextScope) => void;
   retryLoad: () => void;
@@ -95,6 +100,7 @@ export function useChatSession({
   const [session, setSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [slowGeneration, setSlowGeneration] = useState(false);
   const [thinkingStep, setThinkingStep] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -104,6 +110,27 @@ export function useChatSession({
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const loadRef = useRef<{ summaryId: string; promise: Promise<ChatSession> } | null>(null);
+  const typewriterQueueRef = useRef('');
+  const typewriterTimerRef = useRef<number | null>(null);
+  const typewriterWaitersRef = useRef<Array<() => void>>([]);
+  const slowTimerRef = useRef<number | null>(null);
+  const firstDeltaAtRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const typewriterControlRef = useRef<{ stop: () => void } | null>(null);
+
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (slowTimerRef.current !== null) {
+      window.clearTimeout(slowTimerRef.current);
+    }
+    if (typewriterTimerRef.current !== null) {
+      window.clearTimeout(typewriterTimerRef.current);
+    }
+    typewriterQueueRef.current = '';
+    const waiters = typewriterWaitersRef.current.splice(0);
+    waiters.forEach((resolve) => resolve());
+  }, []);
 
   // Load session on enable / summary change
   useEffect(() => {
@@ -189,60 +216,154 @@ export function useChatSession({
       );
       setInput('');
 
+      const stopTypewriter = () => {
+        if (typewriterTimerRef.current !== null) {
+          window.clearTimeout(typewriterTimerRef.current);
+          typewriterTimerRef.current = null;
+        }
+        typewriterQueueRef.current = '';
+        const waiters = typewriterWaitersRef.current.splice(0);
+        waiters.forEach((resolve) => resolve());
+      };
+      const clearSlowTimer = () => {
+        if (slowTimerRef.current !== null) {
+          window.clearTimeout(slowTimerRef.current);
+          slowTimerRef.current = null;
+        }
+        setSlowGeneration(false);
+      };
+      typewriterControlRef.current = { stop: stopTypewriter };
+      firstDeltaAtRef.current = null;
+      setSlowGeneration(false);
+      slowTimerRef.current = window.setTimeout(() => {
+        slowTimerRef.current = null;
+        if (firstDeltaAtRef.current === null) {
+          setSlowGeneration(true);
+        }
+      }, SLOW_GENERATION_MS);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const resolveTypewriterWaiters = () => {
+        const waiters = typewriterWaitersRef.current.splice(0);
+        waiters.forEach((resolve) => resolve());
+      };
+      const scheduleTypewriter = () => {
+        if (typewriterTimerRef.current !== null) return;
+        typewriterTimerRef.current = window.setTimeout(() => {
+          typewriterTimerRef.current = null;
+          const visibleChunk = typewriterQueueRef.current.slice(0, TYPEWRITER_CHARS_PER_TICK);
+          typewriterQueueRef.current = typewriterQueueRef.current.slice(visibleChunk.length);
+          if (visibleChunk) {
+            setSession((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    messages: prev.messages.map((m) =>
+                      m.id === streamingAssistantId ? { ...m, content: m.content + visibleChunk } : m,
+                    ),
+                  }
+                : prev,
+            );
+          }
+          if (typewriterQueueRef.current) {
+            scheduleTypewriter();
+          } else {
+            resolveTypewriterWaiters();
+          }
+        }, TYPEWRITER_INTERVAL_MS);
+      };
+      const enqueueTypewriterText = (chunk: string) => {
+        typewriterQueueRef.current += chunk;
+        scheduleTypewriter();
+      };
+      const drainTypewriter = () => {
+        if (!typewriterQueueRef.current) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          typewriterWaitersRef.current.push(resolve);
+          scheduleTypewriter();
+        });
+      };
+
       // Try SSE first; fall back to polling POST if SSE is unavailable.
-      const streamAttempt = await tryStreamChat(session.sessionId, trimmed, anchor, contextScope, {
-        onDelta: (chunk) => {
-          setSession((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  messages: prev.messages.map((m) =>
-                    m.id === streamingAssistantId ? { ...m, content: m.content + chunk } : m,
-                  ),
-                }
-              : prev,
-          );
+      const streamAttempt = await tryStreamChat(
+        session.sessionId,
+        trimmed,
+        anchor,
+        contextScope,
+        {
+          onDelta: (chunk) => {
+            firstDeltaAtRef.current = Date.now();
+            clearSlowTimer();
+            enqueueTypewriterText(chunk);
+          },
+          onCitations: (sources) => {
+            setSession((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    messages: prev.messages.map((m) =>
+                      m.id === streamingAssistantId ? { ...m, sources } : m,
+                    ),
+                  }
+                : prev,
+            );
+          },
+          onDone: async (finalMsg) => {
+            await drainTypewriter();
+            clearSlowTimer();
+            const persisted: ChatMessage = {
+              id: finalMsg.id,
+              role: 'assistant',
+              content: finalMsg.content,
+              createdAt: finalMsg.createdAt,
+              latencyMs: finalMsg.latencyMs ?? null,
+              sources: finalMsg.sources ?? null,
+            };
+            setSession((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    messages: prev.messages.map((m) => (m.id === streamingAssistantId ? persisted : m)),
+                  }
+                : prev,
+            );
+            onAssistantMessage?.(persisted);
+          },
         },
-        onCitations: (sources) => {
-          setSession((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  messages: prev.messages.map((m) =>
-                    m.id === streamingAssistantId ? { ...m, sources } : m,
-                  ),
-                }
-              : prev,
-          );
-        },
-        onDone: (finalMsg) => {
-          const persisted: ChatMessage = {
-            id: finalMsg.id,
-            role: 'assistant',
-            content: finalMsg.content,
-            createdAt: finalMsg.createdAt,
-            latencyMs: finalMsg.latencyMs ?? null,
-            sources: finalMsg.sources ?? null,
-          };
-          setSession((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  messages: prev.messages.map((m) => (m.id === streamingAssistantId ? persisted : m)),
-                }
-              : prev,
-          );
-          onAssistantMessage?.(persisted);
-        },
-      }).catch(() => null);
+        controller.signal,
+      ).catch(() => null);
+
+      if (streamAttempt === 'aborted') {
+        stopTypewriter();
+        clearSlowTimer();
+        abortRef.current = null;
+        setSession((prev) =>
+          prev
+            ? {
+                ...prev,
+                messages: prev.messages.filter(
+                  (m) => m.id !== streamingAssistantId && m.id !== optimisticUserId,
+                ),
+              }
+            : prev,
+        );
+        setInput(trimmed);
+        setSending(false);
+        textareaRef.current?.focus();
+        return;
+      }
 
       if (streamAttempt === 'streamed') {
+        await drainTypewriter();
+        clearSlowTimer();
+        abortRef.current = null;
         setSending(false);
         textareaRef.current?.focus();
         return;
       }
 
       // Fallback: polling POST. Roll back the streaming placeholder first.
+      stopTypewriter();
       setSession((prev) =>
         prev
           ? { ...prev, messages: prev.messages.filter((m) => m.id !== streamingAssistantId) }
@@ -266,6 +387,7 @@ export function useChatSession({
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
+          signal: controller.signal,
         });
         if (!res.ok) {
           const errBody = (await res.json().catch(() => ({}))) as {
@@ -283,6 +405,20 @@ export function useChatSession({
         );
         onAssistantMessage?.(reply);
       } catch (error) {
+        if (isAbortError(error)) {
+          setSession((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  messages: prev.messages.filter(
+                    (m) => m.id !== streamingAssistantId && m.id !== optimisticUserId,
+                  ),
+                }
+              : prev,
+          );
+          setInput(trimmed);
+          return;
+        }
         setErr(error instanceof Error ? error.message : String(error));
         setSession((prev) =>
           prev
@@ -290,6 +426,8 @@ export function useChatSession({
             : prev,
         );
       } finally {
+        clearSlowTimer();
+        abortRef.current = null;
         setSending(false);
         textareaRef.current?.focus();
       }
@@ -297,15 +435,29 @@ export function useChatSession({
     [contextScope, session, sending, onAssistantMessage, onStreamFallback],
   );
 
+  const stopGeneration = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    firstDeltaAtRef.current = null;
+    if (slowTimerRef.current !== null) {
+      window.clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
+    }
+    setSlowGeneration(false);
+    typewriterControlRef.current?.stop();
+  }, []);
+
   return {
     session,
     loading,
     sending,
+    slowGeneration,
     thinkingStep,
     err,
     input,
     setInput,
     sendMessage,
+    stopGeneration,
     contextScope,
     setContextScope,
     retryLoad,
@@ -350,10 +502,10 @@ interface StreamCallbacks {
     createdAt: string;
     latencyMs?: number | null;
     sources?: Array<{ quote?: string; sourceBlockIndex?: number | string; location?: string; sourcePath?: string; sourceUrl?: string; anchorId?: string }> | null;
-  }) => void;
+  }) => void | Promise<void>;
 }
 
-type StreamOutcome = 'streamed' | 'unsupported' | 'error';
+type StreamOutcome = 'streamed' | 'unsupported' | 'error' | 'aborted';
 
 /**
  * Try the SSE endpoint. Returns:
@@ -367,6 +519,7 @@ async function tryStreamChat(
   anchor: Anchor | null | undefined,
   contextScope: ContextScope,
   callbacks: StreamCallbacks,
+  signal?: AbortSignal,
 ): Promise<StreamOutcome> {
   let res: Response;
   try {
@@ -384,9 +537,10 @@ async function tryStreamChat(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     });
-  } catch {
-    return 'error';
+  } catch (error) {
+    return isAbortError(error) ? 'aborted' : 'error';
   }
   // 404 means the streaming endpoint isn't deployed (older ai-engine);
   // 5xx means the engine is unavailable. Both fall back to polling.
@@ -435,7 +589,7 @@ async function tryStreamChat(
               latency_ms?: number | null;
               sources?: Array<{ quote?: string; sourceBlockIndex?: number | string; location?: string; sourcePath?: string; sourceUrl?: string; anchorId?: string }> | null;
             };
-            callbacks.onDone({
+            await callbacks.onDone({
               id: payload.message_id,
               content: payload.content,
               createdAt: payload.created_at,
@@ -458,8 +612,8 @@ async function tryStreamChat(
       }
     }
     return 'streamed';
-  } catch {
-    return 'error';
+  } catch (error) {
+    return isAbortError(error) ? 'aborted' : 'error';
   } finally {
     try {
       await reader.cancel();
@@ -488,4 +642,11 @@ function parseSseFrame(frame: string): ParsedFrame | null {
   }
   if (!data) return null;
   return { event, data };
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.name === 'AbortError')
+    || (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError')
+  );
 }

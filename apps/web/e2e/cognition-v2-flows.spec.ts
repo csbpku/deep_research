@@ -18,17 +18,20 @@ test.describe('Topics list filter chips (V2)', () => {
       role: 'member',
     });
     await page.goto('/topics');
-    await expect(page.getByRole('tab', { name: '全部专题' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: '热门' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: '升温' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: '新出现' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: '我的关注' })).toBeVisible();
+    // 筛选区现在是链接导航（aria-current 标记激活项），不再是 Radix tabs
+    const filterNav = page.getByRole('navigation', { name: '专题筛选' });
+    await expect(filterNav.getByRole('link', { name: '全部专题' })).toBeVisible();
+    await expect(filterNav.getByRole('link', { name: '热门' })).toBeVisible();
+    await expect(filterNav.getByRole('link', { name: '升温' })).toBeVisible();
+    await expect(filterNav.getByRole('link', { name: '新出现' })).toBeVisible();
+    // 「我的关注」入口有两处（/me/topics 页面链接 + 筛选芯片），断言筛选区内的那个
+    await expect(filterNav.getByRole('link', { name: '我的关注' })).toBeVisible();
 
-    await page.getByRole('tab', { name: '热门' }).click();
+    await filterNav.getByRole('link', { name: '热门' }).click();
     await expect(page).toHaveURL(/filter=hot/);
-    await expect(page.getByRole('tab', { name: '热门' })).toHaveAttribute('aria-selected', 'true');
+    await expect(filterNav.getByRole('link', { name: '热门' })).toHaveAttribute('aria-current', 'page');
 
-    await page.getByRole('tab', { name: '升温' }).click();
+    await filterNav.getByRole('link', { name: '升温' }).click();
     await expect(page).toHaveURL(/filter=warming/);
   });
 });
@@ -84,7 +87,8 @@ test.describe('Topic detail 4-tab view (V2)', () => {
 
     // 默认进入"概览"
     await expect(page.getByRole('tab', { name: /概览/ })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByText('一句话概要')).toBeVisible();
+    // tldr 内容与区块标题同文案，用 heading 精确断言概览面板已渲染
+    await expect(page.getByRole('heading', { name: '一句话概要' })).toBeVisible();
 
     // 切到"热点议题"
     await page.getByRole('tab', { name: /热点议题/ }).click();
@@ -159,6 +163,6 @@ test.describe('AI Research V2 brief', () => {
 
     // Brief 卡片应出现
     await expect(page.getByText(/Research Brief/)).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText(/快速概览/)).toBeVisible();
+    await expect(page.getByText('快速概览', { exact: true })).toBeVisible();
   });
 });

@@ -14,6 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
 import { PreferencesForm } from '@/components/me/PreferencesForm';
@@ -62,24 +63,25 @@ export function MeWorkspace({ userEmail, initial }: { userEmail: string; initial
 
   return (
     <Tabs value={tab} onValueChange={setTab}>
-      <TabsList className="h-auto flex-wrap justify-start">
-        <TabsTrigger value="drafts">
+      {/* 桌面:横向并排;移动(&lt;sm):横向滚动,避免换行后 active 下划线错位 */}
+      <TabsList className="h-auto w-full justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <TabsTrigger value="drafts" className="shrink-0">
           <FileText className="size-3" />
           草稿
         </TabsTrigger>
-        <TabsTrigger value="bookmarks">
+        <TabsTrigger value="bookmarks" className="shrink-0">
           <Bookmark className="size-3" />
           收藏
         </TabsTrigger>
-        <TabsTrigger value="templates">
+        <TabsTrigger value="templates" className="shrink-0">
           <Library className="size-3" />
           模板
         </TabsTrigger>
-        <TabsTrigger value="notifications">
+        <TabsTrigger value="notifications" className="shrink-0">
           <Bell className="size-3" />
           通知
         </TabsTrigger>
-        <TabsTrigger value="preferences">
+        <TabsTrigger value="preferences" className="shrink-0">
           <SettingsIcon className="size-3" />
           设置
         </TabsTrigger>
@@ -166,6 +168,7 @@ function NotificationsSection() {
               <Link
                 href={item.href}
                 onClick={() => unread && readMut.mutate(item.id)}
+                aria-label={unread ? `未读:${item.actor.name} ${item.type === 'mention' ? '@了你' : '回复了你'}` : undefined}
                 className="group block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Card className={unread ? 'border-primary/35 bg-primary/[0.035]' : ''}>
@@ -179,7 +182,9 @@ function NotificationsSection() {
                           {item.actor.name} {item.type === 'mention' ? '@了你' : '回复了你'}
                         </span>
                         <span className="text-xs text-muted-foreground">{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
-                        {unread && <span className="size-1.5 rounded-full bg-primary" aria-label="未读" />}
+                        {unread ? (
+                          <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+                        ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{item.excerpt}</p>
                     </div>
@@ -196,6 +201,7 @@ function NotificationsSection() {
 
 // ── 草稿 ──────────────────────────────────────────────────────────
 function DraftsSection({ drafts }: { drafts: Initial['drafts'] }) {
+  const queryClient = useQueryClient();
   if (drafts.length === 0) {
     return (
       <EmptyState
@@ -226,7 +232,7 @@ function DraftsSection({ drafts }: { drafts: Initial['drafts'] }) {
                   researchId={d.id}
                   title={d.title || '未命名草稿'}
                   compact
-                  onDeleted={() => window.location.reload()}
+                  onDeleted={() => queryClient.invalidateQueries({ queryKey: ['me-drafts'] })}
                 />
               </div>
             </CardContent>
@@ -281,7 +287,18 @@ function BookmarksSection({ initial }: { initial: Initial['bookmarks'] }) {
                 )}
                 {b.note ? <p className="mt-1 text-sm">{b.note}</p> : null}
               </div>
-              <Button type="button" size="xs" variant="outline" onClick={() => delMut.mutate(b.id)}>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                className="text-destructive hover:bg-destructive/10"
+                onClick={() => {
+                  if (window.confirm('从收藏移除后可在原页面重新添加,确认继续?')) {
+                    delMut.mutate(b.id);
+                  }
+                }}
+                aria-label={`移除收藏:${b.title ?? b.targetType}`}
+              >
                 <Trash2 className="size-3" />
                 移除
               </Button>
@@ -402,12 +419,12 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
         <div className="grid gap-2">
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="模板名称（必填）" />
           <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="调研主题（必填）" />
-          <textarea
+          <Textarea
             value={background}
             onChange={(e) => setBackground(e.target.value)}
             placeholder="背景（可选）"
             rows={3}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            className="text-sm"
           />
         </div>
         {createMut.error ? (

@@ -22,6 +22,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/domain/PageHeader';
+import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TopicFollowButton } from '@/components/topics/TopicFollowButton';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import type { ReactNode } from 'react';
@@ -87,6 +88,12 @@ interface ViewedResponse {
   lastViewedAt: string | null;
 }
 
+/** "暂无活跃议题"文案统一:overview 末尾 + issues tab 共用,避免两处不一致 */
+const NO_ACTIVE_ISSUE_COPY = (candidateCount: number) =>
+  candidateCount > 0
+    ? `累计 ${candidateCount} 候选但尚未触发议题；保持关注，新候选累计后会生成。`
+    : '暂无活跃热点议题；AI 会在窗口内候选累计足够时自动生成。';
+
 interface Props {
   topic: TopicPayload;
   issues: IssueRow[];
@@ -96,11 +103,7 @@ interface Props {
   isAdmin: boolean;
 }
 
-const TIER_LABELS: Record<string, { label: string; cls: string }> = {
-  hot: { label: '热门', cls: 'bg-status-failed-bg text-status-failed-fg' },
-  warming: { label: '升温', cls: 'bg-status-running-bg text-status-running-fg' },
-  emerging: { label: '新出现', cls: 'bg-muted text-muted-foreground' },
-};
+// Tier 徽章已收敛进 StatusBadge kind="topicTier",颜色不再散落于此。
 
 const TAB_KEYS = ['overview', 'issues', 'research', 'sources'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
@@ -111,14 +114,17 @@ interface QueryState {
 }
 
 export function TopicDetailTabs({ topic, issues, researchTopics, candidates, followed, isAdmin }: Props) {
-  const tier = TIER_LABELS[topic.tier] ?? TIER_LABELS.emerging;
   const [tab, setTab] = useState<TabKey>('overview');
   const [viewedAt, setViewedAt] = useState<string | null>(null);
 
-  // 停留后 ping /viewed；只在第一次到访时上报。
+  // 停留后 ping /viewed；只在真正到访 issues tab 或停留 10s+ 才上报,
+// 避免路过用户被自动标记已读。
   useEffect(() => {
     if (!followed) return;
-    const timer = window.setTimeout(() => {
+    const start = Date.now();
+    const visitedIssues = tab === 'issues';
+    const elapsed = () => Date.now() - start;
+    const report = () => {
       void fetch(`/api/topics/${encodeURIComponent(topic.slug)}/viewed`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -132,9 +138,16 @@ export function TopicDetailTabs({ topic, issues, researchTopics, candidates, fol
           if (value?.lastViewedAt) setViewedAt(value.lastViewedAt);
         })
         .catch(() => undefined);
-    }, 1500);
+    };
+    if (visitedIssues) {
+      report();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (elapsed() >= 10_000) report();
+    }, 10_000);
     return () => window.clearTimeout(timer);
-  }, [followed, topic.slug]);
+  }, [followed, topic.slug, tab]);
 
   return (
     <div className="mx-auto max-w-shell">
@@ -144,10 +157,20 @@ export function TopicDetailTabs({ topic, issues, researchTopics, candidates, fol
       </Link>
       <PageHeader
         title={topic.name}
-        description={topic.summary ?? undefined}
+        description={
+          <>
+            {topic.summary ? <span className="block">{topic.summary}</span> : null}
+            <span className="mt-1 block text-xs text-muted-foreground">
+              候选 {topic.candidateCount} · 来源 {topic.sourceCount} · 上次同步{' '}
+              {topic.lastSyncedAt
+                ? new Date(topic.lastSyncedAt).toLocaleDateString('zh-CN')
+                : '待同步'}
+            </span>
+          </>
+        }
         actions={
           <div className="flex items-center gap-2">
-            <Badge className={tier.cls}>{tier.label}</Badge>
+            <StatusBadge kind="topicTier" value={topic.tier} />
             <TopicFollowButton slug={topic.slug} initialFollowed={followed} />
           </div>
         }
@@ -159,13 +182,15 @@ export function TopicDetailTabs({ topic, issues, researchTopics, candidates, fol
         onValueChange={(value) => setTab((TAB_KEYS as readonly string[]).includes(value) ? (value as TabKey) : 'overview')}
         className="mt-2"
       >
-        <div className="sticky top-12 z-10 -mx-4 border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="sticky top-topbar z-10 -mx-4 border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <TabsList className="border-b-0">
             <TabsTrigger value="overview">
               <Sparkles className="size-3.5" /> 概览
             </TabsTrigger>
             <TabsTrigger value="issues">
-              <Sparkles className="size-3.5 text-primary" /> 热点议题（{issues.length}）
+              {/* icon 颜色跟随 trigger 状态(active 由 tabs.tsx 的 data-[state=active] 控制),
+                  不再 inline 强制 text-primary —— 修复 v7 review 提到的颜色打架 */}
+              <Sparkles className="size-3.5" /> 热点议题（{issues.length}）
             </TabsTrigger>
             <TabsTrigger value="research">
               <FileText className="size-3.5" /> 相关研究（{researchTopics.length}）
@@ -221,16 +246,28 @@ function OverviewPane({
     return (
       <Card>
         <CardContent className="space-y-2 p-4">
-          <p className="text-sm text-destructive">
-            综述生成失败（{topic.synthesisErrorCode}）：{topic.synthesisErrorMessage}
-          </p>
+          {isAdmin ? (
+            <p className="text-sm text-destructive">
+              综述生成失败（{topic.synthesisErrorCode}）：{topic.synthesisErrorMessage}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">AI 综述暂时不可用,请稍后再试。</p>
+          )}
           {topic.lastSynthesisSuccessAt ? (
             <p className="text-xs text-muted-foreground">
               上次成功更新：{new Date(topic.lastSynthesisSuccessAt).toLocaleString('zh-CN')}
             </p>
           ) : null}
           {isAdmin ? (
-            <form action={`/api/topics/${topic.slug}/synthesis/retry`} method="post">
+            <form
+              action={`/api/topics/${topic.slug}/synthesis/retry`}
+              method="post"
+              onSubmit={(e) => {
+                if (!window.confirm('重新生成 AI 综述会消耗模型调用额度,确认继续?')) {
+                  e.preventDefault();
+                }
+              }}
+            >
               <Button type="submit" size="sm" variant="outline">
                 重试综述
               </Button>
@@ -259,85 +296,78 @@ function OverviewPane({
       </Card>
     );
   }
+  /* 综述改成长文块 + 嵌入式 section divider,只在「事实审核」保留 Card */
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardContent className="space-y-3 p-4 text-sm">
-          <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-            <Sparkles className="size-4 text-muted-foreground" /> 一句话概要
-          </h2>
-          <p className="text-base font-medium">{synthesis.tldr}</p>
-          {topic.lastSynthesisSuccessAt ? (
-            <p className="text-xs text-muted-foreground">
-              最近更新：{new Date(topic.lastSynthesisSuccessAt).toLocaleString('zh-CN')}
-            </p>
-          ) : null}
-        </CardContent>
-      </Card>
+    <div className="space-y-5 text-sm">
+      <section>
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+          <Sparkles className="size-4 text-muted-foreground" aria-hidden /> 一句话概要
+        </h2>
+        <p className="mt-2 text-base font-medium leading-relaxed">{synthesis.tldr}</p>
+        {topic.lastSynthesisSuccessAt ? (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            最近更新：{new Date(topic.lastSynthesisSuccessAt).toLocaleString('zh-CN')}
+          </p>
+        ) : null}
+      </section>
 
       {synthesis.keyChanges && synthesis.keyChanges.length > 0 ? (
-        <Card>
-          <CardContent className="space-y-3 p-4 text-sm">
-            <h2 className="text-sm font-semibold">为什么重要</h2>
-            <ul className="grid list-none gap-3 p-0">
-              {synthesis.keyChanges.map((kc, i) => (
-                <li key={i} className="rounded-md border border-border bg-card/60 p-3">
-                  <p className="font-medium">{kc.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{kc.whyItMatters}</p>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <section>
+          <h2 className="text-sm font-semibold">为什么重要</h2>
+          <ul className="mt-2 grid list-none gap-2 p-0">
+            {synthesis.keyChanges.map((kc, i) => (
+              <li key={i} className="rounded-md border border-border bg-card/60 p-3">
+                <p className="font-medium">{kc.title}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{kc.whyItMatters}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {synthesis.subtopics && synthesis.subtopics.length > 0 ? (
-        <Card>
-          <CardContent className="space-y-3 p-4 text-sm">
-            <h2 className="text-sm font-semibold">子方向</h2>
-            <ul className="grid list-none gap-2 p-0">
-              {synthesis.subtopics.map((st, i) => (
-                <li key={i} className="rounded-md border border-border bg-card/60 p-3">
-                  <p className="font-medium">{st.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{st.summary}</p>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <section>
+          <h2 className="text-sm font-semibold">子方向</h2>
+          <ul className="mt-2 grid list-none gap-2 p-0">
+            {synthesis.subtopics.map((st, i) => (
+              <li key={i} className="rounded-md border border-border bg-card/60 p-3">
+                <p className="font-medium">{st.title}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{st.summary}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {synthesis.openQuestions && synthesis.openQuestions.length > 0 ? (
-        <Card>
-          <CardContent className="space-y-3 p-4 text-sm">
-            <h2 className="text-sm font-semibold">仍然开放的问题</h2>
-            <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
-              {synthesis.openQuestions.map((q, i) => (
-                <li key={i}>{q}</li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <section>
+          <h2 className="text-sm font-semibold">仍然开放的问题</h2>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+            {synthesis.openQuestions.map((q, i) => (
+              <li key={i}>{q}</li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       {synthesis.sections && synthesis.sections.length > 0 ? (
-        <Card>
-          <CardContent className="space-y-3 p-4 text-sm">
-            <h2 className="text-sm font-semibold">深度阅读</h2>
+        <section>
+          <h2 className="text-sm font-semibold">深度阅读</h2>
+          <div className="mt-2 space-y-3">
             {synthesis.sections.map((s, i) => (
               <section key={i} className="border-l-2 border-primary/30 pl-3">
                 <h3 className="mb-1 text-sm font-semibold">{s.title}</h3>
                 <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">{s.content}</p>
               </section>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       ) : null}
 
       {issues.length === 0 ? (
         <Card>
           <CardContent className="p-4 text-xs text-muted-foreground">
-            暂无活跃热点议题；AI 会在窗口内候选累计足够时自动生成。
+            {NO_ACTIVE_ISSUE_COPY(topic.candidateCount)}
           </CardContent>
         </Card>
       ) : null}
@@ -367,7 +397,7 @@ function IssuesPane({
         </h2>
         {issues.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            累计 {candidateCount} 候选但尚未触发议题；保持关注，新候选累计后会生成。
+            {NO_ACTIVE_ISSUE_COPY(candidateCount)}
           </p>
         ) : (
           <ul className="grid list-none gap-2 p-0">
@@ -430,7 +460,7 @@ function ResearchPane({ researchTopics }: { researchTopics: ResearchRow[] }): Re
                     {row.researchTitle}
                   </Link>
                   {row.researchStatus === 'published' ? (
-                    <Badge className="bg-status-success-bg text-status-success-fg">已发布</Badge>
+                    <Badge className="bg-status-succeeded-bg text-status-succeeded-fg">已发布</Badge>
                   ) : (
                     <Badge className="bg-muted text-muted-foreground">{row.researchStatus}</Badge>
                   )}
@@ -560,26 +590,32 @@ function TimelinePane({ candidates }: { candidates: CandidateRow[] }): ReactNode
   if (candidates.length === 0) {
     return <p className="text-xs text-muted-foreground">暂无候选。</p>;
   }
+  /* 服务端已按 addedAt desc 排序;客户端仅按 publishedAt desc 排序,
+     null 的候选(尚未发布) 排到末尾,而不是最前 */
   const sorted = [...candidates].sort((a, b) => {
-    const at = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
-    const bt = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
-    return at - bt;
+    const at = a.publishedAt ? new Date(a.publishedAt).getTime() : -Infinity;
+    const bt = b.publishedAt ? new Date(b.publishedAt).getTime() : -Infinity;
+    return bt - at;
   });
   return (
-    <ol className="grid list-none gap-1.5 p-0 text-xs">
-      {sorted.slice(0, 12).map((c) => (
-        <li key={c.summaryId} className="flex items-start gap-2">
-          <span className="mt-1 inline-block size-1.5 shrink-0 rounded-full bg-primary" />
-          <div className="min-w-0 flex-1">
-            <p className="font-mono text-[10px] text-muted-foreground">
-              {c.publishedAt ? new Date(c.publishedAt).toLocaleDateString('zh-CN') : '—'}
-            </p>
-            <Link href={`/radar/${c.summaryId}`} className="line-clamp-2 hover:text-primary hover:underline">
-              {c.title}
-            </Link>
-          </div>
-        </li>
-      ))}
-    </ol>
+    <Card>
+      <CardContent className="space-y-1.5 p-3">
+        <ol aria-label="按发布时间排序的近期候选" className="grid list-none gap-1.5 p-0 text-xs">
+          {sorted.slice(0, 12).map((c) => (
+            <li key={c.summaryId} className="flex items-start gap-2">
+              <span className="mt-1 inline-block size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-[10px] text-muted-foreground">
+                  <time>{c.publishedAt ? new Date(c.publishedAt).toLocaleDateString('zh-CN') : '待发布'}</time>
+                </p>
+                <Link href={`/radar/${c.summaryId}`} className="line-clamp-2 hover:text-primary hover:underline">
+                  {c.title}
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </CardContent>
+    </Card>
   );
 }

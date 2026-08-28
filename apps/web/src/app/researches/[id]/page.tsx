@@ -27,13 +27,16 @@ import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCurrentUser } from '@/lib/auth/client';
 import { BackToSearchButton } from '@/components/domain/BackToSearchButton';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
 import {
+  AlertTriangle,
+  ArrowUpRight,
   CalendarDays,
+  CheckCircle2,
   Info,
   MessageSquare,
   Pencil,
@@ -160,23 +163,10 @@ export default function ResearchDetailPage() {
           <h1 className="text-2xl font-semibold leading-tight tracking-normal">{data.title}</h1>
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span
-              className={
-                isLongResearch
-                  ? 'rounded-full bg-status-running-bg px-2 py-0.5 text-xs font-medium text-status-running-fg'
-                  : 'rounded-full bg-status-queued-bg px-2 py-0.5 text-xs font-medium text-status-queued-fg'
-              }
-            >
-              {isLongResearch ? '研究报告' : '知识卡片'}
-            </span>
+            <StatusBadge kind="researchType" value={isLongResearch ? 'research' : 'knowledge'} />
             <StatusBadge kind="method" value={data.creationMethod} />
             {isDraft && <StatusBadge kind="research" value="draft" />}
-            {data.featuredAt && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                <Star className="size-3" />
-                精华
-              </span>
-            )}
+            {data.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star />} />}
           </div>
 
           <MetaRow className="mt-2">
@@ -245,16 +235,28 @@ export default function ResearchDetailPage() {
             {(data.background || data.conclusion || data.risks) && (
               <SectionCard title="研究摘要" tone="default" icon={Info}>
                 <div className="space-y-3">
-                  {data.background && <div className="rounded-md border border-status-running-fg/25 bg-status-running-bg/35 p-3"><h2 className="mb-1 text-sm font-medium text-status-running-fg">背景</h2><MarkdownContent content={data.background} compact={data.aiAssisted} /></div>}
-                  {data.conclusion && <div className="rounded-md border border-status-succeeded-fg/25 bg-status-succeeded-bg/35 p-3"><h2 className="mb-1 text-sm font-medium text-status-succeeded-fg">结论</h2><MarkdownContent content={data.conclusion} compact={data.aiAssisted} /></div>}
-                  {data.risks && <div className="rounded-md border border-status-failed-fg/25 bg-status-failed-bg/35 p-3"><h2 className="mb-1 text-sm font-medium text-status-failed-fg">风险与待验证项</h2><MarkdownContent content={data.risks} compact={data.aiAssisted} /></div>}
+                  {data.background && (
+                    <SectionCard tone="info" icon={Info} title="背景" bodyClassName="text-sm">
+                      <MarkdownContent content={data.background} compact={data.aiAssisted} />
+                    </SectionCard>
+                  )}
+                  {data.conclusion && (
+                    <SectionCard tone="success" icon={CheckCircle2} title="结论" bodyClassName="text-sm">
+                      <MarkdownContent content={data.conclusion} compact={data.aiAssisted} />
+                    </SectionCard>
+                  )}
+                  {data.risks && (
+                    <SectionCard tone="destructive" icon={AlertTriangle} title="风险与待验证项" bodyClassName="text-sm">
+                      <MarkdownContent content={data.risks} compact={data.aiAssisted} />
+                    </SectionCard>
+                  )}
                 </div>
               </SectionCard>
             )}
 
-            <article className="py-2 sm:py-3" aria-label="正文">
+            <SectionCard title="正文" bodyClassName="prose-compact">
               <MarkdownContent content={cleanResearchMarkdown(data.body)} compact={data.aiAssisted} />
-            </article>
+            </SectionCard>
 
           </>
         )}
@@ -264,11 +266,11 @@ export default function ResearchDetailPage() {
           <>
             {data.sourceComment && (
               <SectionCard title="来源评论" tone="accent">
-                <blockquote className="rounded-md border border-border bg-card px-3 py-2 text-sm leading-relaxed">
+                <blockquote className="border-l-2 border-l-accent-foreground/40 bg-accent/30 px-3 py-2 text-sm leading-relaxed">
                   {data.sourceComment.body}
                 </blockquote>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>by {data.sourceComment.authorName}</span>
+                  <span>来自 {data.sourceComment.authorName}</span>
                   {data.sourceComment.targetId && (
                     <Link
                       href={
@@ -276,8 +278,9 @@ export default function ResearchDetailPage() {
                           ? `/radar/${data.sourceComment.targetId}`
                           : `/researches/${data.sourceComment.targetId}`
                       }
-                      className="text-primary hover:underline"
+                      className="inline-flex items-center gap-0.5 text-primary hover:underline"
                     >
+                      <ArrowUpRight className="size-3" />
                       查看原始{data.sourceComment.targetType === 'summary' ? '摘要' : '研究报告'}:{' '}
                       {data.sourceComment.targetTitle ?? '...'}
                     </Link>
@@ -297,8 +300,15 @@ export default function ResearchDetailPage() {
             )}
 
             {data.conclusion && (
-              <SectionCard title="结论">
+              <SectionCard title="结论" tone="success" icon={CheckCircle2}>
                 <MarkdownContent content={data.conclusion} compact={data.aiAssisted} />
+              </SectionCard>
+            )}
+
+            {/* 风险字段:knowledge 布局也读 risks,字段对齐 research 布局 */}
+            {data.risks && (
+              <SectionCard title="风险与待验证项" tone="destructive" icon={AlertTriangle}>
+                <MarkdownContent content={data.risks} compact={data.aiAssisted} />
               </SectionCard>
             )}
           </>
@@ -306,24 +316,29 @@ export default function ResearchDetailPage() {
       </div>
 
       <aside className="space-y-3 lg:sticky lg:top-[72px]">
-        <section className="rounded-lg border border-border bg-card p-4">
-          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">证据卡</h2>
+        <SectionCard title="证据卡" tone="muted" icon={Info}>
+          {/* D5/D6:证据卡「内容类型」「更新时间」对齐 SectionCard tone="muted" 风格;
+              顶部 MetaRow 已展示「作者/创建/发布/评论数」,证据卡不重复 */}
           <dl className="grid gap-3 text-xs">
             <div><dt className="text-muted-foreground">状态</dt><dd className="mt-0.5 font-medium">{isDraft ? '草稿' : data.status === 'published' ? '已发布' : '已归档'}</dd></div>
-            <div><dt className="text-muted-foreground">作者</dt><dd className="mt-0.5 font-medium">{data.author.name}</dd></div>
-            <div><dt className="text-muted-foreground">更新时间</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(data.updatedAt).toISOString().slice(0, 10)}</dd></div>
             <div><dt className="text-muted-foreground">内容类型</dt><dd className="mt-0.5 font-medium">{isLongResearch ? '研究报告' : '知识卡片'}</dd></div>
+            <div><dt className="text-muted-foreground">更新时间</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(data.updatedAt).toISOString().slice(0, 10)}</dd></div>
           </dl>
-        </section>
+        </SectionCard>
         {data.status === 'published' ? (
-          <section className="rounded-lg border border-border bg-card p-4">
-            <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">团队讨论</h2>
+          <SectionCard
+            title="团队讨论"
+            tone="muted"
+            icon={MessageSquare}
+            actions={
+              <Button type="button" variant="outline" size="sm" onClick={() => setDiscussionOpen(true)}>
+                <MessageSquare className="size-3.5" />
+                打开讨论
+              </Button>
+            }
+          >
             <p className="text-xs leading-relaxed text-muted-foreground">发布后可在这里查看评论、回复并继续协作。</p>
-            <Button type="button" variant="outline" size="sm" className="mt-3 w-full" onClick={() => setDiscussionOpen(true)}>
-              <MessageSquare className="size-3.5" />
-              打开讨论
-            </Button>
-          </section>
+          </SectionCard>
         ) : null}
       </aside>
       </div>
@@ -373,6 +388,9 @@ export default function ResearchDetailPage() {
               <MessageSquare className="size-4 text-muted-foreground" />
               讨论 · {data.commentCount ?? 0} 条
             </SheetTitle>
+            <SheetDescription className="sr-only">
+              针对这篇调研的团队讨论与回复
+            </SheetDescription>
             <div className="flex-1 overflow-y-auto px-4 py-4">
               <CommentSection targetType="research" targetId={data.id} currentUserId={me.data?.id ?? null} currentUserRole={me.data?.role ?? null} content={data.body} />
             </div>

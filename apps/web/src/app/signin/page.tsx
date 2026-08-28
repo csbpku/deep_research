@@ -1,5 +1,6 @@
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/domain/PageHeader';
 import { signIn } from '@/lib/auth/config';
 import { getWebEnv } from '@/lib/env';
 
@@ -19,6 +20,7 @@ export default async function SignInPage({
   const googleConfigured = Boolean(
     getWebEnv().GOOGLE_CLIENT_ID && getWebEnv().GOOGLE_CLIENT_SECRET,
   );
+  const isDevMode = process.env.NODE_ENV !== 'production';
   // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
   // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
   // 攻击者可构造 /signin?callbackUrl=https://evil.com 做开放重定向钓鱼。
@@ -36,20 +38,24 @@ export default async function SignInPage({
   if (error) {
     return (
       <div className="mx-auto max-w-md py-10">
-        <h1 className="mb-4 text-xl font-semibold tracking-normal">登录失败</h1>
+        <PageHeader title="登录失败" />
         <EmptyState
           title="登录失败"
           description={
             error === 'AccessDenied'
               ? '你的邮箱域不在允许列表内，或账号已被禁用。请使用公司邮箱重试。'
-              : `登录失败（error=${error}）。请重试或联系管理员。`
+              : '登录失败，请稍后重试或联系管理员。'
           }
           action={
             googleConfigured ? (
               <form action={doSignIn}>
                 <Button type="submit">重新登录</Button>
               </form>
-            ) : undefined
+            ) : (
+              <Button asChild variant="outline" type="button">
+                <a href="/">返回首页</a>
+              </Button>
+            )
           }
         />
       </div>
@@ -58,40 +64,36 @@ export default async function SignInPage({
 
   return (
     <div className="mx-auto max-w-md py-10 text-center">
-      <h1 className="text-xl font-semibold tracking-normal">登录</h1>
+      <PageHeader title="登录" description="使用 Google 账号登录,邮箱必须在允许域名列表内。" />
       {googleConfigured ? (
-        <>
-          <p className="mt-2 text-sm text-muted-foreground">
-            使用 Google 账号登录。邮箱必须在允许域名列表内。
-          </p>
-
-          <form action={doSignIn} className="mt-6">
-            <Button type="submit" variant="outline" size="lg" className="w-full">
-              <GoogleMark />
-              使用 Google 登录
-            </Button>
-          </form>
-        </>
-      ) : (
-        <div className="mt-6 rounded-lg border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+        <form action={doSignIn} className="mt-6">
+          <Button type="submit" variant="outline" size="lg" className="w-full">
+            <GoogleMark />
+            使用 Google 登录
+          </Button>
+        </form>
+      ) : isDevMode ? (
+        <div className="mt-6 rounded-lg border border-dashed border-border bg-card p-6 text-left text-sm text-muted-foreground">
           <p className="font-medium text-foreground">Google OAuth 未配置</p>
           <p className="mt-2">登录已禁用。配置 GOOGLE_CLIENT_ID 与 GOOGLE_CLIENT_SECRET 后重新启动服务即可启用。</p>
         </div>
-      )}
+      ) : null}
 
-
-      <details className="mt-8 rounded-lg border border-border bg-card p-4 text-left text-sm text-muted-foreground">
+      <details
+        aria-label="本地开发提示"
+        className="mt-8 rounded-lg border border-border bg-card p-4 text-left text-sm text-muted-foreground"
+      >
         <summary className="cursor-pointer text-foreground">本地开发提示</summary>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>
-            启用 Google 登录时，需在 Google Cloud Console 登记{' '}
+            启用 Google 登录时,需在 Google Cloud Console 登记{' '}
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
               http://localhost:3000/api/auth/callback/google
             </code>{' '}
             为已授权重定向 URI。
           </li>
-          <li>本地快速模式不要求 Google 凭证；未配置时登录页会显示“未配置”状态。</li>
-          <li>未在 ALLOWED_EMAIL_DOMAINS 的域名会被拒绝（?error=AccessDenied）。</li>
+          <li>本地快速模式不要求 Google 凭证;未配置时登录页会显示"未配置"状态。</li>
+          <li>未在 ALLOWED_EMAIL_DOMAINS 的域名会被拒绝(?error=AccessDenied)。</li>
           <li>已禁用账号无法建立新 session。</li>
         </ul>
       </details>
