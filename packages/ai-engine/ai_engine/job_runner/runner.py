@@ -23,6 +23,7 @@ import os
 import socket
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Literal, Mapping
 
 from ai_engine.adapters.base import (
     AdapterSource,
@@ -51,11 +52,23 @@ from ai_engine.job_runner.store import JobStore, cast_status
 
 
 def _review_details(metadata: dict[str, object] | None) -> dict[str, object] | None:
-    """Narrow JSON metadata before passing it through the typed job APIs."""
+    """Persist review data and the live deep-research checkpoint.
+
+    ``reviewDetails`` predates the live research checkpoint, so it remains the
+    durable JSON channel for both.  Keep the final review fields at the top
+    level for existing consumers and namespace the in-flight progress to avoid
+    confusing it with fact-review status.
+    """
     if not metadata:
         return None
     value = metadata.get("review")
-    return value if isinstance(value, dict) else None
+    progress = metadata.get("research_progress")
+    if not isinstance(value, dict) and not isinstance(progress, dict):
+        return None
+    persisted = dict(value) if isinstance(value, dict) else {}
+    if isinstance(progress, dict):
+        persisted["research_progress"] = progress
+    return persisted
 
 
 def _metadata_int(metadata: dict[str, object] | None, key: str, default: int = 0) -> int:
@@ -81,6 +94,44 @@ def _default_worker_id() -> str:
     locks, so logs are easy to correlate across machines.
     """
     return f"{socket.gethostname()}-{os.getpid()}"
+
+
+def _resolve_worker_timeout(report_length: str, env: Mapping[str, str] | None = None) -> int:
+    """Resolve the job budget without treating deep research like a brief.
+
+    A deep run has a bounded research tree plus report writing and evidence
+    review. The old global five-minute budget routinely expired after the
+    search tree had finished, which discarded useful work at the publication
+    boundary. Keep the normal budget unchanged, give deep runs a calibrated
+    default, and retain an explicit operator override for local/test runs.
+    """
+    values = os.environ if env is None else env
+
+    def positive_int(name: str, default: int) -> int:
+        raw = values.get(name)
+        if raw is None:
+            return default
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
+    if str(report_length).strip().lower() == "deep":
+        # Deep research has a separate publication boundary: the search tree
+        # can be useful and complete while writing/reviewing still needs time.
+        # Prefer its explicit budget, then fall back to the generic worker
+        # setting for backwards-compatible deployments.
+        if values.get("DEEP_RESEARCH_TIMEOUT_SECONDS") is not None:
+            deep_default = positive_int("WORKER_JOB_TIMEOUT_SECONDS", 1200)
+            return positive_int("DEEP_RESEARCH_TIMEOUT_SECONDS", deep_default)
+        if values.get("WORKER_JOB_TIMEOUT_SECONDS") is not None:
+            return positive_int("WORKER_JOB_TIMEOUT_SECONDS", 300)
+        return 1200
+    global_default = values.get("WORKER_JOB_TIMEOUT_SECONDS")
+    if global_default is not None:
+        return positive_int("WORKER_JOB_TIMEOUT_SECONDS", 300)
+    return 300
 
 
 async def run_once(
@@ -110,7 +161,9 @@ async def run_once(
         report_type=snapshot.report_type,
         source_policy=snapshot.source_policy,
         source_refs=snapshot.source_refs,
-        timeout_seconds=int(os.environ.get("WORKER_JOB_TIMEOUT_SECONDS", "300")),
+        report_length=snapshot.report_length,
+        max_urls_to_scrape=snapshot.max_urls_to_scrape,
+        timeout_seconds=_resolve_worker_timeout(snapshot.report_length),
     )
     started_monotonic = asyncio.get_event_loop().time()
 
@@ -136,22 +189,91 @@ async def run_once(
             "adapterErrorCode": adapter_status.error_code if adapter_status else code,
         }
 
+    # The job budget must cover every adapter boundary, not only the time
+    # between successful polls. A provider can hang while submitting or
+    # reading status; without a bounded await the loop below can never reach
+    # its deadline and the user sees an immortal "running" task.
+    deadline_monotonic = asyncio.get_event_loop().time() + request.timeout_seconds
+
+    async def timeout_outcome(last_status: AdapterStatus | None) -> RunOutcome:
+        """Persist an honest timeout even when the adapter call is stuck."""
+        try:
+            await asyncio.wait_for(adapter.cancel(lease.job_id), timeout=5.0)
+        except (AdapterError, asyncio.TimeoutError):
+            # Cancellation is best effort. The durable job state still needs
+            # to leave running so the UI and reaper can recover it.
+            pass
+
+        timeout_status = last_status
+        captured_output = (
+            timeout_status.output_text.strip()
+            if timeout_status is not None
+            and timeout_status.output_text
+            and timeout_status.output_text.strip()
+            else None
+        )
+        captured_sources = timeout_status.sources if timeout_status is not None else ()
+        has_partial_evidence = len(captured_sources) >= PARTIAL_MIN_SOURCES
+        timeout_final_status: Literal["partial", "failed"] = (
+            "partial" if captured_output and has_partial_evidence else "failed"
+        )
+        timeout_message = (
+            "研究稿已生成，但任务在自动审核完成前达到时间上限；已保留阶段性研究稿。"
+            if timeout_final_status == AI_JOB_STATUS["PARTIAL"]
+            else "任务达到时间上限；已保留已抓取资料，请重新运行。"
+        )
+        current_step = timeout_status.current_step if timeout_status is not None else snapshot.current_step
+        hooks.on_lease_lost(lease)
+        await store.mark_terminal(
+            lease,
+            timeout_final_status,
+            current_step=current_step,
+            error_code="WORKER_TIMEOUT",
+            error_message=timeout_message,
+            error_details=error_details(
+                current_step,
+                adapter_status=timeout_status,
+                code="WORKER_TIMEOUT",
+            ),
+            draft_research_id=None,
+            output_text=captured_output,
+        )
+        return RunOutcome(
+            job_id=lease.job_id,
+            final_status=timeout_final_status,
+            cost=timeout_status.cost if timeout_status is not None else _zero_cost(),
+            sources=captured_sources,
+            current_step=current_step,
+            error_code="WORKER_TIMEOUT",
+            error_message=timeout_message,
+            error_details=error_details(
+                current_step,
+                adapter_status=timeout_status,
+                code="WORKER_TIMEOUT",
+            ),
+            output_text=captured_output,
+        )
+
     try:
-        await adapter.submit(request)
+        await asyncio.wait_for(
+            adapter.submit(request),
+            timeout=max(0.1, deadline_monotonic - asyncio.get_event_loop().time()),
+        )
+    except asyncio.TimeoutError:
+        return await timeout_outcome(None)
     except AdapterError:
         # Adapter refused — most likely duplicate submit (idempotent on
         # job_id). We still poll get_status below.
         pass
 
     # Poll until terminal. Cap iterations to keep tests fast.
-    deadline_monotonic = asyncio.get_event_loop().time() + request.timeout_seconds
     terminal: AdapterStatus | None = None
+    last_status: AdapterStatus | None = None
     _last_heartbeat = 0.0
     _heartbeat_seconds = max(0.01, float(lease.heartbeat_interval_seconds))
     while True:
-        # W2/W3 review 修正: 每 15s 调一次 store.heartbeat()。
-        # 没有 heartbeat,超过 60s 的任务被 reaper 抢回,exactly-once 不成立。
-        # 轮询间隔保持 0.5s(测试 0.05s),每 15s 给 store 续期。
+        # 每 15s 调一次 store.heartbeat()。失去 lease 后由 reaper 负责恢复，
+        # 因此 worker 不能继续写入；轮询间隔保持 0.5s（测试 0.05s）。
         now_ts = asyncio.get_event_loop().time()
         if now_ts - _last_heartbeat >= _heartbeat_seconds:
             try:
@@ -176,7 +298,16 @@ async def run_once(
                     error_details=error_details(snapshot.current_step, code="WORKER_LEASE_LOST"),
                 )
         try:
-            status = await adapter.get_status(lease.job_id)
+            status = await asyncio.wait_for(
+                adapter.get_status(lease.job_id),
+                timeout=max(0.1, deadline_monotonic - asyncio.get_event_loop().time()),
+            )
+            last_status = status
+        except asyncio.TimeoutError:
+            # Do not attempt another unbounded final status read here. The
+            # last completed snapshot is enough to preserve inspectable
+            # evidence, and timeout_outcome guarantees a terminal DB state.
+            return await timeout_outcome(last_status)
         except AdapterError as exc:
             if exc.code == "AI_JOB_NOT_FOUND":
                 # Adapter restarted and lost our job — treat as failed.
@@ -224,6 +355,8 @@ async def run_once(
                 cost_cents=status.cost.cost_cents,
                 sources=status.sources,
                 review_details=_review_details(status.output_metadata),
+                output_text=status.output_text,
+                prune_sources=status.status == AI_JOB_STATUS["SUCCEEDED"],
             )
             terminal = status
             break
@@ -245,29 +378,10 @@ async def run_once(
             cost_cents=status.cost.cost_cents,
             sources=status.sources,
             review_details=_review_details(status.output_metadata),
+            output_text=status.output_text,
         )
         if asyncio.get_event_loop().time() >= deadline_monotonic:
-            # Adapter is still running past our budget → lease lost.
-            hooks.on_lease_lost(lease)
-            await store.mark_terminal(
-                lease,
-                "failed",
-                current_step=status.current_step,
-                error_code="WORKER_TIMEOUT",
-                error_message="worker exceeded job budget",
-                error_details=error_details(status.current_step, adapter_status=status, code="WORKER_TIMEOUT"),
-                draft_research_id=None,
-            )
-            return RunOutcome(
-                job_id=lease.job_id,
-                final_status="failed",
-                cost=status.cost,
-                sources=status.sources,
-                current_step=status.current_step,
-                error_code="WORKER_TIMEOUT",
-                error_message="worker exceeded job budget",
-                error_details=error_details(status.current_step, adapter_status=status, code="WORKER_TIMEOUT"),
-            )
+            return await timeout_outcome(status)
         await asyncio.sleep(0.05 if os.environ.get("AI_ENGINE_TEST_FAST_POLL") else 0.5)
 
     assert terminal is not None  # noqa: S101 — for mypy
@@ -277,38 +391,91 @@ async def run_once(
     output_text: str | None = None
     sources_tuple: tuple[AdapterSource, ...] = terminal.sources
     review_details = _review_details(terminal.output_metadata)
+    if final_status == AI_JOB_STATUS["PARTIAL"] and terminal.output_text:
+        # A partial deep run may have finished research and writing but miss
+        # the publication/review boundary. Persist the readable report inline
+        # so the user can inspect it and continue from evidence, without
+        # falsely creating a publishable Research draft.
+        output_text = terminal.output_text.strip() or None
+
     if final_status == AI_JOB_STATUS["SUCCEEDED"]:
-        # research_report persists a private draft; summary_brief persists
-        # inline output on the job and never invokes the draft factory.
-        if not terminal.output_text or not terminal.output_text.strip():
-            raise ValueError("succeeded adapter result has no output_text")
-        artifact_type: ArtifactType = "slides" if snapshot.report_type == "slides" else "markdown"
-        artifact_content = render_artifact_content(
-            terminal.output_text.strip(),
-            artifact_type,
-            snapshot.topic,
-        )
-        if snapshot.report_type == "summary_brief":
-            output_text = artifact_content
-        elif draft_factory is None:
-            from ai_engine.job_runner.db_store import _drafts_for_tests
-            import uuid as _uuid
-            draft_id = str(_uuid.uuid4())
-            _drafts_for_tests[draft_id] = {
-                "topic": snapshot.topic,
-                "requester_id": snapshot.requester_id,
-                "sources": len(sources_tuple),
-                "via": "default_factory",
-            }
-        else:
-            draft_id = await draft_factory(
-                snapshot, sources_tuple, artifact_content, review_details
+            # research_report persists a private draft; summary_brief and the
+            # internal evidence_search persist inline output and never invoke
+            # the draft factory. A claim-scoped evidence task must not create
+            # a second research asset as a side effect of looking for proof.
+        try:
+            if not terminal.output_text or not terminal.output_text.strip():
+                raise ValueError("succeeded adapter result has no output_text")
+            artifact_type: ArtifactType = "slides" if snapshot.report_type == "slides" else "markdown"
+            artifact_content = render_artifact_content(
+                terminal.output_text.strip(),
+                artifact_type,
+                snapshot.topic,
             )
-            if not draft_id:
-                raise ValueError(
-                    "run_once: draft_factory returned None for succeeded job; "
-                    "must INSERT a research row and return its id."
+            if snapshot.report_type in {"summary_brief", "evidence_search"}:
+                output_text = artifact_content
+            elif draft_factory is None:
+                from ai_engine.job_runner.db_store import _drafts_for_tests
+                import uuid as _uuid
+                draft_id = str(_uuid.uuid4())
+                _drafts_for_tests[draft_id] = {
+                    "topic": snapshot.topic,
+                    "requester_id": snapshot.requester_id,
+                    "sources": len(sources_tuple),
+                    "via": "default_factory",
+                }
+            else:
+                draft_id = await draft_factory(
+                    snapshot, sources_tuple, artifact_content, review_details
                 )
+                if not draft_id:
+                    raise ValueError(
+                        "run_once: draft_factory returned None for succeeded job; "
+                        "must INSERT a research row and return its id."
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The adapter has already produced a report, but persistence of the
+            # user-facing artifact failed. Never leave the queue row in
+            # ``running``: a terminal failure is honest and retryable, whereas
+            # a permanently spinning progress page is neither.
+            failure_code = "RESEARCH_DRAFT_PERSIST_FAILED"
+            failure_message = "研究报告已生成，但保存研究稿失败，请重新运行。"
+            failure_details = error_details(
+                terminal.current_step,
+                adapter_status=terminal,
+                code=failure_code,
+            )
+            failure_details["failureType"] = type(exc).__name__
+            await store.mark_terminal(
+                lease,
+                "failed",
+                current_step=terminal.current_step,
+                error_code=failure_code,
+                error_message=failure_message,
+                draft_research_id=None,
+                error_details=failure_details,
+                review_details=review_details,
+            )
+            hooks.on_terminal(
+                lease,
+                "failed",
+                cost=terminal.cost,
+                error_code=failure_code,
+                error_message=failure_message,
+            )
+            return RunOutcome(
+                job_id=lease.job_id,
+                final_status="failed",
+                cost=terminal.cost,
+                sources=sources_tuple,
+                current_step=terminal.current_step,
+                error_code=failure_code,
+                error_message=failure_message,
+                error_details=failure_details,
+                review_details=review_details,
+            )
 
     terminal_error_details = (
         error_details(terminal.current_step, adapter_status=terminal, code=terminal.error_code)
@@ -389,10 +556,48 @@ async def run_one_available_job(
     if acquired is None:
         return None
     lease, snapshot = acquired
-    return await run_once(
-        store=store, adapter=adapter, lease=lease, snapshot=snapshot,
-        hooks=hooks, draft_factory=draft_factory,
-    )
+    try:
+        return await run_once(
+            store=store, adapter=adapter, lease=lease, snapshot=snapshot,
+            hooks=hooks, draft_factory=draft_factory,
+        )
+    except asyncio.CancelledError:
+        raise
+    except LeaseLostError:
+        # The lease owner changed; the reaper is responsible for recovery.
+        raise
+    except Exception as exc:
+        # A worker exception before the normal terminal write must not strand
+        # an acquired row in ``running``. Keep the user-facing error generic;
+        # the exception type is enough for structured diagnostics and logs
+        # retain the traceback at the worker boundary.
+        failure_code = "WORKER_UNHANDLED"
+        failure_message = "研究任务遇到未预期错误，请重新运行。"
+        failure_details: dict[str, object] = {
+            "phase": snapshot.current_step or "unknown",
+            "attempt": snapshot.attempts,
+            "adapter": type(adapter).__name__,
+            "errorType": type(exc).__name__,
+        }
+        await store.mark_terminal(
+            lease,
+            "failed",
+            current_step=snapshot.current_step,
+            error_code=failure_code,
+            error_message=failure_message,
+            draft_research_id=None,
+            error_details=failure_details,
+        )
+        return RunOutcome(
+            job_id=lease.job_id,
+            final_status="failed",
+            cost=_zero_cost(),
+            sources=(),
+            current_step=snapshot.current_step,
+            error_code=failure_code,
+            error_message=failure_message,
+            error_details=failure_details,
+        )
 
 
 def _zero_cost() -> CostMetrics:

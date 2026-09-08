@@ -28,7 +28,7 @@ test.describe('Research editor workbench', () => {
       await expect(page.getByRole('tab', { name: '来源与引用', exact: true })).toBeVisible();
       await expect(page.getByRole('tab', { name: 'AI 助手' })).toBeVisible();
       await expect(page.getByRole('tab', { name: '版本历史' })).toBeVisible();
-      await expect(page.getByRole('tab', { name: '发布准备' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: '文章信息' })).toBeVisible();
       await expect(page.getByRole('tab', { name: '讨论' })).toHaveCount(0);
       await expect(page.getByText('草稿', { exact: true })).toBeVisible();
 

@@ -185,7 +185,6 @@ async def main() -> int:
                 '"distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, '
                 '"distilledTier" = %s, '
-                '"distilledMustRead" = %s, '
                 '"distilledProfile" = %s, '
                 '"scoreReason" = %s '
                 'WHERE "id" = %s',
@@ -193,7 +192,6 @@ async def main() -> int:
                     json.dumps(result.to_dict(), ensure_ascii=False),
                     result.tier_score if result.tier_score is not None else result.total,
                     result.tier,
-                    result.must_read,
                     result.profile_id,
                     build_distilled_score_reason(result),
                     row["id"],
@@ -202,7 +200,7 @@ async def main() -> int:
             print(f"  [{scored:3d}] {str(row['title'])[:60]:<60s} | {result.total:4.0f} | {result.tier:10s} | {result.profile_id}")
 
     alerts = monitor.evaluate()
-    print(f"\n  Scored: {monitor.total_count}  Default: {monitor.default_count}  Must-read: {monitor.must_read_count}")
+    print(f"\n  Scored: {monitor.total_count}  Default: {monitor.default_count}")
     if alerts:
         print(f"  Alerts: {alerts}")
     await store.close()

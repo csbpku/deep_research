@@ -24,7 +24,7 @@ export function FilterBar({
     <form
       onSubmit={onSubmit}
       className={cn(
-        'mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3',
+        'mb-4 flex flex-wrap items-center gap-2.5 rounded-md border border-border bg-card/80 p-2.5 sm:p-3',
         className,
       )}
     >

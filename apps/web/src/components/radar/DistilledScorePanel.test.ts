@@ -13,7 +13,6 @@ describe('DistilledScorePanel', () => {
         rankingScore: 52.33,
         tierScore: 35,
         tier: 'noise',
-        mustRead: false,
         dimensions: {
           informationGain: 1,
           analysisDepth: 0,

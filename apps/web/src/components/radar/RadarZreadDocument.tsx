@@ -4,22 +4,18 @@ import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, ExternalLink, Eye, FileCode2, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 
 import MarkdownContent from '../MarkdownContent';
+import { isZreadRepository, ZREAD_SAMPLE_URL } from './radar-repository';
 import { cn } from '@/lib/utils';
-import { decodeRadarTextEscapes, radarBlockId, splitRadarReadingBlocks } from './radar-reading-blocks';
+import {
+  decodeRadarTextEscapes,
+  radarBlockId,
+  radarQuoteMatchesBlock,
+  splitRadarReadingBlocks,
+} from './radar-reading-blocks';
 import { highlightAnnotationQuotes } from './RadarOriginalArticle';
 import { repoSummariesOverlap } from './RadarRepoSummary';
 
-export const ZREAD_SAMPLE_URL = 'https://github.com/deepseek-ai/deepseek-harness';
-
-/** Repo reading mode is intentionally limited to GitHub repositories. */
-export function isZreadRepository(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname === 'github.com' && !parsed.searchParams.has('digest');
-  } catch {
-    return false;
-  }
-}
+export { isZreadRepository, ZREAD_SAMPLE_URL };
 
 // Kept as a compatibility alias for existing imports during the rollout.
 export const isZreadSampleRepository = isZreadRepository;
@@ -31,6 +27,11 @@ interface Page {
   group?: string;
   section?: string;
   sourceRefs?: Array<{ path: string; line?: number }>;
+}
+
+interface PreparedPage extends Page {
+  id: string;
+  blocks: Array<{ content: string; blockIndex: number }>;
 }
 
 interface SourceReference {
@@ -46,6 +47,8 @@ interface Props {
   leftColRef: React.RefObject<HTMLDivElement | null>;
   aiBrief?: string | null;
   projectSummary?: string | null;
+  /** The detail page may already present the unified intro summary. */
+  showOverview?: boolean;
   meta: {
     language?: string | null;
     defaultBranch?: string | null;
@@ -128,15 +131,12 @@ function htmlPreviewDocument(content: string, baseUrl: string): string {
   const style = `
     <style>
       :root { color-scheme: light dark; }
-      body { margin: 1.25rem; font: 14px/1.7 system-ui, -apple-system, sans-serif; color: #252525; background: #fff; }
-      @media (prefers-color-scheme: dark) {
-        body { color: #e8e8e8; background: #1b1b1b; }
-      }
+      body { margin: 1.25rem; font: 14px/1.7 system-ui, -apple-system, sans-serif; color: CanvasText; background: Canvas; }
       img, svg, video { max-width: 100%; height: auto; }
       pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
-      pre { padding: .75rem; border-radius: .5rem; background: rgba(127,127,127,.12); }
+      pre { padding: .75rem; border-radius: .5rem; background: color-mix(in srgb, CanvasText 10%, Canvas); }
       table { max-width: 100%; border-collapse: collapse; overflow: auto; display: block; }
-      th, td { border: 1px solid rgba(127,127,127,.35); padding: .35rem .55rem; text-align: left; }
+      th, td { border: 1px solid color-mix(in srgb, CanvasText 35%, Canvas); padding: .35rem .55rem; text-align: left; }
     </style>
   `;
   if (/<html(?:\s|>)/iu.test(content)) {
@@ -197,12 +197,109 @@ function isGithubRepositoryTreeLink(href: string, repositoryUrl: string): boolea
   }
 }
 
+function estimatedPageHeight(page: PreparedPage): number {
+  const characters = page.blocks.reduce((total, block) => total + block.content.length, 0);
+  return Math.min(18_000, Math.max(360, Math.round(characters * 0.36)));
+}
+
+function getScrollableRoot(ref: React.RefObject<HTMLElement | null>): HTMLElement | null {
+  const root = ref.current;
+  if (!root) return null;
+  const style = getComputedStyle(root);
+  return root.scrollHeight > root.clientHeight + 8
+    && (style.overflowY === 'auto' || style.overflowY === 'scroll')
+    ? root
+    : null;
+}
+
+function LazyRepoPage({
+  page,
+  pageIndex,
+  leftColRef,
+  repositoryUrl,
+  refName,
+  onLinkClick,
+  initiallyRendered = false,
+}: {
+  page: PreparedPage;
+  pageIndex: number;
+  leftColRef: React.RefObject<HTMLDivElement | null>;
+  repositoryUrl: string;
+  refName: string;
+  onLinkClick: (href: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
+  initiallyRendered?: boolean;
+}) {
+  const pageRef = useRef<HTMLElement>(null);
+  const [rendered, setRendered] = useState(pageIndex === 0 || initiallyRendered);
+
+  useEffect(() => {
+    if (initiallyRendered) setRendered(true);
+  }, [initiallyRendered]);
+
+  useEffect(() => {
+    if (rendered) return;
+    const root = getScrollableRoot(leftColRef);
+    const target = pageRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') {
+      setRendered(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setRendered(true);
+        observer.disconnect();
+      },
+      { root, rootMargin: '1200px 0px' },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [leftColRef, pageIndex, rendered]);
+
+  return (
+    <section
+      ref={pageRef}
+      id={page.id}
+      className="mb-14 scroll-mt-6 last:mb-0"
+      style={rendered ? undefined : { minHeight: estimatedPageHeight(page) }}
+    >
+      {rendered ? (
+        <>
+          <div className="mb-4 flex items-center justify-end border-b border-[var(--ink-rule)] pb-2">
+            <span className="text-[10px] text-[var(--ink-faint)]">第 {pageIndex + 1} 页</span>
+          </div>
+          <h2 className="mb-5 font-serif text-2xl font-semibold leading-tight text-[var(--ink-text)]">
+            {page.title || `项目文档 ${pageIndex + 1}`}
+          </h2>
+          {page.blocks.map((block) => (
+            <section
+              key={radarBlockId(block.blockIndex)}
+              id={radarBlockId(block.blockIndex)}
+              data-radar-block="true"
+              data-radar-block-index={block.blockIndex}
+              className="group relative -mx-3 scroll-mt-6 rounded-md px-3 py-2 transition-colors"
+              style={{ contentVisibility: 'auto', containIntrinsicSize: '280px' }}
+            >
+              <MarkdownContent
+                content={resolveRepoReferences(block.content, repositoryUrl, refName)}
+                className="text-[16px] text-[var(--ink-text)]"
+                onLinkClick={onLinkClick}
+              />
+            </section>
+          ))}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export const RadarZreadDocument = memo(function RadarZreadDocument({
   repositoryUrl,
   leftColRef,
   aiBrief,
   meta,
   projectSummary,
+  showOverview = true,
   onRefresh,
   onRetry,
   annotations = [],
@@ -221,7 +318,10 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
   ) && cachedPages.length > 0;
   const isReadmeFallback = provider === 'github-readme-fallback' || meta?.zread?.fallback === true;
   const status = meta?.zread?.status ?? 'queued';
-  const cacheStatus = status === 'partial'
+  const expectedPageCount = meta?.zread?.expectedPageCount ?? null;
+  const isPartialCache = status === 'partial'
+    || Boolean(expectedPageCount && cachedPages.length < expectedPageCount);
+  const cacheStatus = isPartialCache
     ? '部分完成'
     : status === 'complete'
       ? '已完成'
@@ -256,7 +356,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
   const sourceDetailsRef = useRef<HTMLDetailsElement>(null);
   const ref = meta?.zread?.commitSha || meta?.defaultBranch || 'main';
 
-  const pages = useMemo(() => {
+  const pages = useMemo<PreparedPage[]>(() => {
     let blockIndex = 0;
     return cachedPages.map((page, pageIndex) => {
       const blocks = splitRadarReadingBlocks(page.content ?? '').map((content) => ({
@@ -274,6 +374,18 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
       };
     });
   }, [cachedPages]);
+  const annotationPageIndices = useMemo(() => {
+    const indices = new Set<number>();
+    if (!annotations.length) return indices;
+    pages.forEach((page, pageIndex) => {
+      if (annotations.some((annotation) => (
+        page.blocks.some((block) => radarQuoteMatchesBlock(block.content, annotation.quote))
+      ))) {
+        indices.add(pageIndex);
+      }
+    });
+    return indices;
+  }, [annotations, pages]);
 
   const groupedPages = useMemo(() => {
     const groups = new Map<string, Map<string, Array<(typeof pages)[number]>>>();
@@ -443,58 +555,85 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
 
   return (
     <section data-testid="repo-document" className="mb-8">
-      <div className="mb-7 border-y border-[var(--ink-rule)] py-4">
+      {showOverview ? (
+        <div className="mb-7 border-y border-[var(--ink-rule)] py-4">
           <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{overviewLabel}</p>
-            {overview ? (
-              <p className="mt-2 max-w-3xl font-serif text-sm leading-6 text-[var(--ink-muted)]">{overview}</p>
-            ) : null}
-            {showBrief && summary ? (
-              <div className="mt-3 max-w-3xl rounded-md border-l-2 border-[var(--ink-accent)] bg-[var(--ink-paper)]/70 px-3 py-2.5">
-                <p className="mb-1 text-[11px] font-medium text-[var(--ink-muted)]">AI 一句话解读</p>
-                <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{brief}</p>
-              </div>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-[var(--ink-muted)]">
-              <span>{cachedPageLabel}</span>
-              <span>{providerLabel}</span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{overviewLabel}</p>
+              {overview ? (
+                <p className="mt-2 max-w-3xl font-serif text-sm leading-6 text-[var(--ink-muted)]">{overview}</p>
+              ) : null}
+              {showBrief && summary ? (
+                <div className="mt-3 max-w-3xl rounded-md border-l-2 border-[var(--ink-accent)] bg-[var(--ink-paper)]/70 px-3 py-2.5">
+                  <p className="mb-1 text-[11px] font-medium text-[var(--ink-muted)]">AI 一句话解读</p>
+                  <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{brief}</p>
+                </div>
+              ) : null}
             </div>
-            {onRefresh ? (
-              <button
-                type="button"
-                onClick={() => void refreshDocument()}
-                disabled={refreshing}
-                className="inline-flex items-center gap-1.5 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
-              >
-                <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
-                {refreshing ? '刷新中…' : '刷新文档'}
-              </button>
-            ) : null}
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-[var(--ink-muted)]">
+                <span>{cachedPageLabel}</span>
+                <span>{providerLabel}</span>
+              </div>
+              {onRefresh ? (
+                <button
+                  type="button"
+                  onClick={() => void refreshDocument()}
+                  disabled={refreshing}
+                  className="inline-flex items-center gap-1.5 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
+                >
+                  <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+                  {refreshing ? '刷新中…' : '刷新文档'}
+                </button>
+              ) : null}
+            </div>
           </div>
+          {refreshError ? (
+            <p role="alert" className="mt-3 text-xs text-destructive">
+              {refreshError}，已保留上次文档。
+            </p>
+          ) : null}
+          <details className="mt-3 text-[11px] text-[var(--ink-faint)]">
+            <summary className="cursor-pointer select-none hover:text-[var(--ink-accent)]">来源与仓库信息</summary>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+              {meta?.language ? <span>{meta.language}</span> : null}
+              {meta?.defaultBranch ? <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{meta.defaultBranch}</span> : null}
+              {formatCount(meta?.stars) ? <span>★ {formatCount(meta?.stars)}</span> : null}
+              {formatCount(meta?.forks) ? <span>⑂ {formatCount(meta?.forks)} forks</span> : null}
+              <span>缓存于 {displayGeneratedAt}</span>
+              <span className="inline-flex items-center gap-1"><GitCommitHorizontal className="size-3" />commit {displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</span>
+            </div>
+          </details>
         </div>
-        {refreshError ? (
-          <p role="alert" className="mt-3 text-xs text-rose-700 dark:text-rose-300">
-            {refreshError}，已保留上次文档。
-          </p>
-        ) : null}
-        <details className="mt-3 text-[11px] text-[var(--ink-faint)]">
-          <summary className="cursor-pointer select-none hover:text-[var(--ink-accent)]">来源与仓库信息</summary>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-            {meta?.language ? <span>{meta.language}</span> : null}
-            {meta?.defaultBranch ? <span className="inline-flex items-center gap-1"><GitBranch className="size-3" />{meta.defaultBranch}</span> : null}
-            {formatCount(meta?.stars) ? <span>★ {formatCount(meta?.stars)}</span> : null}
-            {formatCount(meta?.forks) ? <span>⑂ {formatCount(meta?.forks)} forks</span> : null}
-            <span>缓存于 {displayGeneratedAt}</span>
-            <span className="inline-flex items-center gap-1"><GitCommitHorizontal className="size-3" />commit {displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</span>
-          </div>
-        </details>
-      </div>
+      ) : null}
 
-      {status === 'partial' || isReadmeFallback ? (
-        <div className="mb-7 flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/20 dark:text-amber-100">
+      {!showOverview && onRefresh ? (
+        <div className="mb-7 flex flex-wrap items-center justify-between gap-3 border-y border-[var(--ink-rule)] py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">项目文档</p>
+            <p className="mt-1 text-[11px] text-[var(--ink-muted)]">
+              {cachedPageLabel} · {providerLabel} · {cacheStatus}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshDocument()}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
+          >
+            <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+            {refreshing ? '刷新中…' : '刷新文档'}
+          </button>
+          {refreshError ? (
+            <p role="alert" className="basis-full text-xs text-destructive">
+              {refreshError}，已保留上次文档。
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {isPartialCache || isReadmeFallback ? (
+        <div className="mb-7 flex items-start gap-2 rounded-md border border-warning-border/60 bg-warning-bg px-4 py-3 text-xs leading-5 text-warning-fg">
           <Sparkles className="mt-0.5 size-3.5 shrink-0" />
           <span>
             {isReadmeFallback
@@ -506,10 +645,10 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
       ) : null}
 
       {status === 'failed' ? (
-        <div className="mb-7 rounded-md border border-rose-300/60 bg-rose-50 px-4 py-3 text-xs leading-5 text-rose-900 dark:border-rose-700/50 dark:bg-rose-950/20 dark:text-rose-100">
+        <div className="mb-7 rounded-md border border-status-failed-border/60 bg-status-failed-bg px-4 py-3 text-xs leading-5 text-status-failed-fg">
           <p><strong>项目文档生成失败。</strong>{meta?.zread?.error || '当前没有可展示的项目正文。'}</p>
           {onRetry ? (
-            <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-2 border border-rose-300 bg-background px-2 py-1 font-medium hover:bg-rose-100 disabled:opacity-50">
+            <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-2 border border-status-failed-border bg-background px-2 py-1 font-medium hover:bg-status-failed-bg disabled:opacity-50">
               {retrying ? '正在重新投递…' : '重试抓取'}
             </button>
           ) : null}
@@ -556,10 +695,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
           </nav>
           <div className="hidden min-h-[520px] border-x border-[var(--ink-rule)] lg:block" aria-hidden />
           <div className="min-w-0 lg:pl-8">
-            <details
-              className="mb-6 overflow-y-auto overscroll-contain rounded-lg border border-[var(--ink-rule)] lg:hidden"
-              style={{ maxHeight: '60dvh' }}
-            >
+            <details className="mb-6 rounded-lg border border-[var(--ink-rule)] lg:hidden">
               <summary className="cursor-pointer px-3 py-2.5 text-xs font-semibold text-[var(--ink-text)]">文档目录</summary>
               <div className="space-y-3 border-t border-[var(--ink-rule)] px-3 py-2">
                 {groupedPages.map(({ group, sections }) => (
@@ -588,29 +724,16 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
 
             <div data-zread-article data-radar-reading-body="true" className="reading-workbench-markdown text-[16px] text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20">
               {pages.map((page, pageIndex) => (
-                <section key={page.id} id={page.id} className="mb-14 scroll-mt-6 last:mb-0">
-                  <div className="mb-4 flex items-center justify-end border-b border-[var(--ink-rule)] pb-2">
-                    <span className="text-[10px] text-[var(--ink-faint)]">第 {pageIndex + 1} 页</span>
-                  </div>
-                  <h2 className="mb-5 font-serif text-2xl font-semibold leading-tight text-[var(--ink-text)]">
-                    {page.title || `项目文档 ${pageIndex + 1}`}
-                  </h2>
-                  {page.blocks.map((block) => (
-                    <section
-                      key={radarBlockId(block.blockIndex)}
-                      id={radarBlockId(block.blockIndex)}
-                      data-radar-block="true"
-                      data-radar-block-index={block.blockIndex}
-                      className="group relative -mx-3 scroll-mt-6 rounded-md px-3 py-2 transition-colors"
-                    >
-                      <MarkdownContent
-                        content={resolveRepoReferences(block.content, repositoryUrl, ref)}
-                        className="text-[16px] text-[var(--ink-text)]"
-                        onLinkClick={handleDocumentLinkClick}
-                      />
-                    </section>
-                  ))}
-                </section>
+                <LazyRepoPage
+                  key={page.id}
+                  page={page}
+                  pageIndex={pageIndex}
+                  leftColRef={leftColRef}
+                  repositoryUrl={repositoryUrl}
+                  refName={ref}
+                  onLinkClick={handleDocumentLinkClick}
+                  initiallyRendered={annotationPageIndices.has(pageIndex)}
+                />
               ))}
             </div>
           </div>
@@ -716,7 +839,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                 <Loader2 className="size-4 animate-spin" />正在读取引用源码…
               </div>
             ) : sourceError ? (
-              <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+              <div role="alert" className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs leading-5 text-warning-fg">
                 {sourceError}
               </div>
             ) : sourceViewMode === 'preview' ? (
@@ -746,7 +869,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                     <code
                       key={lineNumber}
                       data-source-line={lineNumber}
-                      className={cn('block px-2', active && 'rounded-sm bg-amber-200/70 dark:bg-amber-900/40')}
+                      className={cn('block px-2', active && 'rounded-sm bg-warning-bg')}
                     >
                       <span className="mr-4 inline-block w-10 select-none text-right text-muted-foreground/60">{lineNumber}</span>
                       {line || ' '}

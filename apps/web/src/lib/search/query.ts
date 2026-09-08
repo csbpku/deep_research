@@ -1,6 +1,6 @@
 // Search query builder —— 构造 raw SQL 用于 search_docs。
 //
-// 契约源：docs/agent-prompts/week4-engineer-a.md §任务 2
+// 契约源：docs/archive/2026-09-08-agent-prompts/week4-engineer-a.md §任务 2
 // 约束：
 //   - simple 字典全文检索 + pg_trgm 近似匹配（两者均已在基础 migration 启用）
 //   - 参数化查询；禁止拼接
@@ -244,16 +244,31 @@ export function isSearchableType(t: string): t is SearchableType {
   return t === 'summary' || t === 'long_research' || t === 'knowledge' || t === 'radar';
 }
 
+/** 清掉摘要里不适合搜索结果展示的 Markdown 外壳，保留可读文本。 */
+function stripSearchMarkdown(value: string): string {
+  return value
+    .replace(/!\[!\[([^\]]*)\]\([^)]*\)\]\([^)]*\)/gu, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gmu, '')
+    .replace(/`{1,3}/gu, '')
+    .replace(/[ \t]{2,}/gu, ' ');
+}
+
 /** 只允许数据库高亮器生成的 <mark>，其余来源文本一律转义。 */
 export function sanitizeSearchHighlight(value: string): string {
-  return value
+  const markStart = '\u0001';
+  const markEnd = '\u0002';
+  return stripSearchMarkdown(value)
+    .replaceAll('<mark>', markStart)
+    .replaceAll('</mark>', markEnd)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
-    .replaceAll('&lt;mark&gt;', '<mark>')
-    .replaceAll('&lt;/mark&gt;', '</mark>');
+    .replaceAll(markStart, '<mark>')
+    .replaceAll(markEnd, '</mark>');
 }
 
 /** 类型 re-export 保留，便于 IDE 推断。 */

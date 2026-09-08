@@ -14,7 +14,7 @@
 //      - failed：errorCode + errorMessage + "重试" 按钮
 //   7. 调用方权限不足（401/403）→ router.push('/signin')
 //
-// 来源：docs/agent-prompts/week4-engineer-a.md §任务 1
+// 来源：docs/archive/2026-09-08-agent-prompts/week4-engineer-a.md §任务 1
 //
 // UI 重设计后：弹窗改用 shadcn Dialog（Radix），焦点陷阱 / ESC / 滚动锁
 // 由 Radix 提供，不再手写 overlay + stopPropagation。

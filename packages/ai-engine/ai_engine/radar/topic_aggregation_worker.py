@@ -34,13 +34,12 @@ WINDOW_DAYS = 14
 MIN_CANDIDATES = 3
 MIN_SOURCES = 2
 # 质量守门：以 distilled tier 为主，hard score 阈值作兜底。
-# V1 选择：tier ∈ {'skim', 'deep_read'} 即视为"够格"主题候选；
-# 'noise' 直接排除。这样 skim(avg~59) 与 deep_read(avg~80) 都进，
-# 而 noise(avg~28) 不会污染主题。
+# 热点主题只收录 deep_read 及以上（collection / deep_read）；skim 只适合
+# 快速浏览，不进入主题聚合，避免低频信息撑大主题却缺少可深读材料。
 # Hard score SCORE_THRESHOLD 用作 admin 后台可调的兜底（未来同步给
 # AdminConsole 设置页）；目前 V1 不强约束，避免和现有 Admin 队列不一致。
 SCORE_THRESHOLD = 0.0  # 兜底用；V1 主要靠 tier 守门
-ALLOWED_TIERS = frozenset({"skim", "deep_read"})
+ALLOWED_TIERS = frozenset({"collection", "deep_read"})
 
 def _topic_slug(name: str) -> str:
     """Return the stable canonical slug used for reconciliation and upsert."""
@@ -54,7 +53,7 @@ async def _fetch_candidate_clusters(pool: Any, since: datetime) -> list[dict[str
     """
     async with pool.connection() as conn:
         # Step 1: 收集通过质量守门的 summary + 它们的非 metadata tag。
-        # 质量守门：distilledTier ∈ {skim, deep_read}（噪声 noise 排除）。
+        # 质量守门：distilledTier ∈ {collection, deep_read}（skim/noise 排除）。
         # NULL tier 表示尚未评分（sync_runner 还没跑 LLM distilled）；
         # 它们**不**进主题候选 —— 让用户先看到 Admin 队列候选里的人工筛选结果。
         # Hard score 阈值 SCORE_THRESHOLD 当前为 0（兜底用），方便 V2 把控。

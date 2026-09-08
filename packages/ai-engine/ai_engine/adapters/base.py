@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from ai_engine.contracts.errors import AdapterError
 from ai_engine.contracts.states import (
@@ -30,6 +30,7 @@ from ai_engine.contracts.states import (
 # Source-ref union — mirrors packages/shared/src/schemas.ts `SourceRefUrl`
 # plus the discriminated variants for favorite/research/summary ids.
 SourceRef = dict[str, str | bool]
+EvidenceStatus = Literal["discovered", "fetched"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -47,6 +48,10 @@ class ResearchRequest:
     report_type: ReportType
     source_policy: SourcePolicy
     source_refs: tuple[SourceRef, ...]
+    # User-confirmed research depth. The worker persists these values so a
+    # queued job keeps the same research contract after a restart.
+    report_length: str = "standard"
+    max_urls_to_scrape: int | None = None
     # Hint from the worker about expected max latency. Adapter should raise
     # AdapterError(code=WORKER_TIMEOUT) past this. Default 5 min — see
     # ARCHITECTURE §四.
@@ -73,6 +78,9 @@ class AdapterSource:
     score: float | None
     step_captured: AiJobStep
     is_accessible: bool = True  # HEAD probe result
+    # A URL may be discovered before its page body is fetched. Only fetched
+    # entries can enter the durable evidence ledger.
+    evidence_status: EvidenceStatus = "fetched"
 
 
 @dataclass(slots=True, frozen=True)

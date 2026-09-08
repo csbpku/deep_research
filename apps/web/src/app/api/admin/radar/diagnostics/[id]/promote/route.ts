@@ -75,7 +75,6 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
               distilledScore: diagnostic.distilledScore ?? undefined,
               distilledTotal: total,
               distilledTier: diagnostic.distilledTier,
-              distilledMustRead: Boolean(score.mustRead),
               syncRunId: diagnostic.runId,
               interpretation: (diagnostic.body || '').slice(0, 2000) || null,
               selectionReason: 'Admin 从同步过滤队列人工提升',

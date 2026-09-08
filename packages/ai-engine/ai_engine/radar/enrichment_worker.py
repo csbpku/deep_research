@@ -30,11 +30,13 @@ import logging
 import os
 import re as _re
 import re as _re_arxiv
+import socket
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
@@ -42,6 +44,9 @@ from ai_engine.fetcher.safe_fetch import safe_fetch
 from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import resolve_spec
 from ai_engine.radar.distilled_scorer import _parse_llm_response
+from ai_engine.radar.enrichment_contract import enrichment_review_reset_assignments
+from ai_engine.radar.reader_quality import evaluate_reader_quality
+from ai_engine.radar.review_reconciliation import finalize_enrichment
 
 logger = logging.getLogger("ai_engine.radar.enrichment_worker")
 
@@ -52,6 +57,186 @@ logger = logging.getLogger("ai_engine.radar.enrichment_worker")
 # processes.
 _ENRICHMENT_RUN_LOCK = asyncio.Lock()
 _ENRICHMENT_ADVISORY_LOCK_KEYS = (2147483629, 20260827)
+ENRICHMENT_WORKER_ID = (
+    f"enrichment-{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:10]}"
+)
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    """Parse worker tuning knobs without allowing one bad env to kill import."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+ENRICHMENT_LEASE_SECONDS = _env_int(
+    "RADAR_ENRICHMENT_LEASE_SECONDS",
+    900,
+    minimum=300,
+)
+ENRICHMENT_HEARTBEAT_SECONDS = max(
+    15,
+    min(
+        _env_int(
+            "RADAR_ENRICHMENT_HEARTBEAT_SECONDS",
+            60,
+            minimum=15,
+        ),
+        ENRICHMENT_LEASE_SECONDS // 3,
+    ),
+)
+ENRICHMENT_MAX_ATTEMPTS = _env_int(
+    "RADAR_ENRICHMENT_MAX_ATTEMPTS",
+    6,
+    minimum=1,
+)
+ENRICHMENT_RETRY_BASE_SECONDS = _env_int(
+    "RADAR_ENRICHMENT_RETRY_BASE_SECONDS",
+    300,
+    minimum=30,
+)
+ENRICHMENT_RETRY_MAX_SECONDS = max(
+    ENRICHMENT_RETRY_BASE_SECONDS,
+    _env_int(
+        "RADAR_ENRICHMENT_RETRY_MAX_SECONDS",
+        21600,
+        minimum=30,
+    ),
+)
+_RETURNING_ID = ' RETURNING "id"'
+
+
+class EnrichmentLeaseLost(RuntimeError):
+    """Raised when a late worker no longer owns the summary lease."""
+
+
+def _lease_guard(
+    lease_owner: str | None,
+    claim_id: str | None = None,
+) -> str:
+    if not lease_owner:
+        return ""
+    guard = (
+        ' AND "enrichmentStatus" = \'running\' '
+        'AND "enrichmentLockedBy" = %s'
+    )
+    if claim_id:
+        guard += ' AND "enrichmentClaimId" = %s::uuid'
+    return guard
+
+
+def _lease_params(
+    lease_owner: str | None,
+    claim_id: str | None = None,
+) -> tuple[str, ...]:
+    if not lease_owner:
+        return ()
+    return (lease_owner, claim_id) if claim_id else (lease_owner,)
+
+
+async def _assert_enrichment_lease(
+    pool: Any,
+    *,
+    summary_id: str,
+    lease_owner: str,
+    claim_id: str,
+) -> None:
+    """Fail before post-source work if this attempt no longer owns the row."""
+    async with pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                'SELECT 1 FROM "summaries" '
+                'WHERE "id" = %s '
+                'AND "enrichmentStatus" = \'running\' '
+                'AND "enrichmentLockedBy" = %s '
+                'AND "enrichmentClaimId" = %s::uuid',
+                (summary_id, lease_owner, claim_id),
+            )
+        ).fetchone()
+    if row is None:
+        raise EnrichmentLeaseLost(summary_id)
+
+
+async def release_enrichment_leases(
+    pool: Any,
+    *,
+    lease_owner: str = ENRICHMENT_WORKER_ID,
+) -> int:
+    """Return this process's in-flight rows to the durable retry queue.
+
+    This is used during graceful shutdown/reload. A crash still relies on the
+    lease expiry, while a normal shutdown should not leave rows blocked for
+    the full lease duration.
+    """
+    async with pool.connection() as conn:
+        rows = await (
+            await conn.execute(
+                'UPDATE "summaries" SET '
+                '"enrichmentStatus" = \'retryable\', '
+                '"enrichmentLockedBy" = NULL, '
+                '"enrichmentLeaseExpiresAt" = NULL, '
+                '"enrichmentHeartbeatAt" = NULL, '
+                '"enrichmentClaimId" = NULL, '
+                '"enrichmentNextRetryAt" = now(), '
+                '"enrichmentErrorCode" = \'WORKER_SHUTDOWN\', '
+                '"enrichmentErrorMessage" = \'worker stopped before enrichment completed\', '
+                '"updatedAt" = now() '
+                'WHERE "enrichmentStatus" = \'running\' '
+                'AND "enrichmentLockedBy" = %s '
+                'RETURNING "id"',
+                (lease_owner,),
+            )
+        ).fetchall()
+    return len(rows)
+
+
+async def recover_expired_enrichment_leases(
+    pool: Any,
+    *,
+    limit: int = 50,
+) -> int:
+    """Make crashed enrichment attempts visible before the next claim.
+
+    Claiming an expired row directly is safe, but it hides the fact that the
+    previous attempt died. Persisting the recovery event first gives
+    operators a durable ``WORKER_LOST`` breadcrumb and makes a stopped worker
+    observable without waiting for a later source write.
+    """
+    async with pool.connection() as conn:
+        rows = await (
+            await conn.execute(
+                'WITH expired AS ('
+                'SELECT "id" FROM "summaries" '
+                'WHERE "distilledTier" IN (\'collection\', \'deep_read\') '
+                'AND "enrichmentStatus" = \'running\' '
+                'AND "enrichmentLeaseExpiresAt" < now() '
+                'ORDER BY "enrichmentLeaseExpiresAt" ASC '
+                'LIMIT %s FOR UPDATE SKIP LOCKED'
+                ') '
+                'UPDATE "summaries" AS s SET '
+                '"enrichmentStatus" = \'retryable\', '
+                '"enrichmentLockedBy" = NULL, '
+                '"enrichmentLeaseExpiresAt" = NULL, '
+                '"enrichmentHeartbeatAt" = NULL, '
+                '"enrichmentClaimId" = NULL, '
+                '"enrichmentNextRetryAt" = now(), '
+                '"enrichmentErrorCode" = \'WORKER_LOST\', '
+                '"enrichmentErrorMessage" = \'previous enrichment lease expired\', '
+                '"updatedAt" = now() '
+                'FROM expired WHERE s."id" = expired."id" '
+                'RETURNING s."id"',
+                (max(1, limit),),
+            )
+        ).fetchall()
+    if rows:
+        logger.warning(
+            "ai-engine.radar.enrichment.expired_leases_recovered",
+            extra={"count": len(rows)},
+        )
+    return len(rows)
+
 
 # Cap tree nodes to keep payloads bounded; 200 is the gpt-researcher
 # recommendation and matches Phase 2A design.
@@ -60,13 +245,19 @@ TREE_NODE_MAX = 200
 ORIGINAL_META_MAX_BYTES = 16_000
 README_MAX_CHARS = 120_000
 # Inline SVG figures are base64-encoded for the safe Markdown renderer. Keep
-# enough room for a full paper plus its vector figures; generic web content
-# retains the smaller limit in sync_runner.
-ARXIV_MARKDOWN_MAX_BYTES = 512 * 1024
+# a bounded 2MB payload for HTML/PDF enrichment; GitHub Zread pages are already
+# bounded by their provider adapters and must not be silently clipped again.
+ARXIV_MARKDOWN_MAX_BYTES = 2 * 1024 * 1024
 ENRICHMENT_VERSION = "2.0"
-GITHUB_ENRICHMENT_RETRY_SECONDS = max(
-    3_600,
-    int(os.environ.get("RADAR_GITHUB_ENRICHMENT_RETRY_SECONDS", "7200")),
+GITHUB_ENRICHMENT_RETRY_SECONDS = _env_int(
+    "RADAR_GITHUB_ENRICHMENT_RETRY_SECONDS",
+    7200,
+    minimum=3_600,
+)
+WEB_ENRICHMENT_RETRY_SECONDS = _env_int(
+    "RADAR_WEB_ENRICHMENT_RETRY_SECONDS",
+    3600,
+    minimum=900,
 )
 
 # Files we mark as "key" in the file tree renderer.
@@ -109,6 +300,8 @@ DEFAULT_ENRICHMENT_KINDS: tuple[str, ...] = (
     "github_repo",
     "arxiv",
     "github_other",
+    "github_issue",
+    "github_pr",
     "github_release",
     "rss",
     "web_share",
@@ -284,7 +477,8 @@ async def _fetch_enrichment_row(pool: Any, summary_id: str) -> dict[str, Any]:
         row = await (
             await conn.execute(
                 'SELECT "id", "title", "interpretation", "originalMarkdown", '
-                '"originalMeta", "tldr", "highlights", "repoSummary" '
+                '"originalMeta", "originalKind", "readerQualityStatus", '
+                '"tldr", "highlights", "repoSummary" '
                 'FROM "summaries" WHERE "id" = %s',
                 (summary_id,),
             )
@@ -296,13 +490,20 @@ async def _fetch_enrichment_row(pool: Any, summary_id: str) -> dict[str, Any]:
     except (TypeError, ValueError):
         keys = (
             "id", "title", "interpretation",
-            "originalMarkdown", "originalMeta", "tldr", "highlights",
+            "originalMarkdown", "originalMeta", "originalKind",
+            "readerQualityStatus", "tldr", "highlights",
             "repoSummary",
         )
         return dict(zip(keys, row))
 
 
-async def _downgrade_empty_web_candidate(pool: Any, summary_id: str) -> None:
+async def _downgrade_empty_web_candidate(
+    pool: Any,
+    summary_id: str,
+    *,
+    lease_owner: str | None = None,
+    claim_id: str | None = None,
+) -> None:
     """Keep an unextractable page as a summary-only skim candidate.
 
     A deep-read tier is a claim that the source body was available.  If both
@@ -319,17 +520,77 @@ async def _downgrade_empty_web_candidate(pool: Any, summary_id: str) -> None:
     if markdown.strip() and not _is_low_quality_content(markdown):
         return
     async with pool.connection() as conn:
-        await conn.execute(
+        cursor = await conn.execute(
             'UPDATE "summaries" SET '
             '"distilledTier" = \'skim\', '
-            '"distilledMustRead" = false, '
+            ''
             '"tags" = CASE WHEN \'content_pending\' = ANY('
             'COALESCE("tags", ARRAY[]::text[])) THEN "tags" '
             'ELSE array_append(COALESCE("tags", ARRAY[]::text[]), '
             '\'content_pending\') END, '
-            '"updatedAt" = now() WHERE "id" = %s',
-            (summary_id,),
+            '"updatedAt" = now() WHERE "id" = %s'
+            f'{_lease_guard(lease_owner, claim_id)}'
+            f'{_RETURNING_ID if lease_owner else ""}',
+            (summary_id, *_lease_params(lease_owner, claim_id)),
         )
+        if lease_owner and await cursor.fetchone() is None:
+            raise EnrichmentLeaseLost(summary_id)
+
+
+def _retry_delay_seconds(attempts: int) -> int:
+    """Return bounded exponential backoff for a persisted enrichment attempt."""
+    exponent = max(0, min(attempts - 1, 10))
+    return int(min(
+        ENRICHMENT_RETRY_MAX_SECONDS,
+        ENRICHMENT_RETRY_BASE_SECONDS * (2 ** exponent),
+    ))
+
+
+async def request_enrichment_run(
+    pool: Any,
+    *,
+    summary_ids: tuple[str, ...],
+    force: bool = True,
+) -> tuple[str, list[str]]:
+    """Persist a manual enrichment request before launching any coroutine.
+
+    The returned run id is written to every row that was queued. Rows with a
+    healthy active lease are left alone, so a repeated browser click cannot
+    reset work already in progress.
+    """
+    run_id = str(uuid.uuid4())
+    async with pool.connection() as conn:
+        rows = await (
+            await conn.execute(
+                'UPDATE "summaries" SET '
+                '"enrichmentStatus" = \'pending\', '
+                '"enrichmentRequestedAt" = now(), '
+                '"enrichmentRunId" = %s::uuid, '
+                '"enrichmentNextRetryAt" = now(), '
+                '"enrichmentLockedBy" = NULL, '
+                '"enrichmentLeaseExpiresAt" = NULL, '
+                '"enrichmentHeartbeatAt" = NULL, '
+                '"enrichmentClaimId" = NULL, '
+                '"enrichmentErrorCode" = NULL, '
+                '"enrichmentErrorMessage" = NULL, '
+                '"updatedAt" = now() '
+                'WHERE "id" = ANY(%s::uuid[]) '
+                'AND ('
+                '"enrichmentStatus" IS DISTINCT FROM \'running\' '
+                'OR "enrichmentLeaseExpiresAt" < now() '
+                'OR "enrichmentLeaseExpiresAt" IS NULL'
+                ') '
+                'AND (%s OR "enrichmentStatus" IS NULL '
+                'OR "enrichmentStatus" IN (\'pending\', \'retryable\', \'manual\')) '
+                'RETURNING "id"',
+                (run_id, list(summary_ids), force),
+            )
+        ).fetchall()
+    queued_ids = [
+        str(row["id"]) if isinstance(row, dict) else str(row[0])
+        for row in rows
+    ]
+    return run_id, queued_ids
 
 
 async def enrich_github_item_candidate(
@@ -337,6 +598,8 @@ async def enrich_github_item_candidate(
     *,
     summary_id: str,
     canonical_url: str,
+    lease_owner: str | None = None,
+    claim_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Enrich a GitHub issue/PR/release candidate with REST API content."""
     parsed = _parse_github_item_url(canonical_url)
@@ -372,24 +635,30 @@ async def enrich_github_item_candidate(
     tldr = current.get("tldr") or current.get("interpretation")
 
     async with pool.connection() as conn:
-        await conn.execute(
+        cursor = await conn.execute(
             'UPDATE "summaries" SET '
             '"originalMarkdown" = %s, '
-            '"originalMeta" = %s::jsonb, '
             '"originalSha256" = %s, '
+            '"originalMeta" = %s::jsonb, '
             '"originalBytes" = %s, '
             '"tldr" = COALESCE("tldr", %s), '
+            f'{enrichment_review_reset_assignments()}, '
             '"updatedAt" = now() '
-            'WHERE "id" = %s',
+            'WHERE "id" = %s'
+            f'{_lease_guard(lease_owner, claim_id)}'
+            f'{_RETURNING_ID if lease_owner else ""}',
             (
                 markdown,
-                json.dumps(payload, ensure_ascii=False),
                 hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+                json.dumps(payload, ensure_ascii=False),
                 len(markdown.encode("utf-8")),
                 str(tldr)[:500] if tldr else None,
                 summary_id,
+                *_lease_params(lease_owner, claim_id),
             ),
         )
+        if lease_owner and await cursor.fetchone() is None:
+            raise EnrichmentLeaseLost(summary_id)
     logger.info(
         "ai-engine.radar.enrichment.github_item_done",
         extra={
@@ -403,12 +672,66 @@ async def enrich_github_item_candidate(
     return payload
 
 
+def _parse_huggingface_model_url(url: str) -> tuple[str, str] | None:
+    """Extract an owner/model pair from a Hugging Face model page."""
+    try:
+        parsed = urlsplit(url.strip())
+    except Exception:
+        return None
+    if parsed.netloc.lower() not in {"huggingface.co", "www.huggingface.co"}:
+        return None
+    parts = [unquote(part).strip() for part in parsed.path.split("/") if part.strip()]
+    if len(parts) != 2 or any(part in {".", ".."} for part in parts):
+        return None
+    return parts[0], parts[1]
+
+
+async def _fetch_huggingface_model_readme(
+    canonical_url: str,
+) -> Any | None:
+    """Fetch a commit-pinned Hugging Face model card as plain Markdown.
+
+    Hugging Face model pages render their useful card body through a client
+    application. The generic HTML extractor can therefore see only a
+    collection/source card. The public model API exposes the immutable repo
+    SHA, which lets us fetch the actual README without scraping UI markup.
+    """
+    parsed = _parse_huggingface_model_url(canonical_url)
+    if parsed is None:
+        return None
+    owner, model = parsed
+    api_url = (
+        "https://huggingface.co/api/models/"
+        f"{quote(owner, safe='')}/{quote(model, safe='')}"
+    )
+    try:
+        api_doc = await safe_fetch(api_url, timeout=15.0)
+        if api_doc.status != 200:
+            return None
+        metadata = json.loads(api_doc.content.decode("utf-8", errors="replace"))
+        sha = str(metadata.get("sha") or "").strip()
+        if not sha:
+            return None
+        readme_url = (
+            f"https://huggingface.co/{quote(owner, safe='')}/"
+            f"{quote(model, safe='')}/resolve/{quote(sha, safe='')}/README.md"
+        )
+        readme_doc = await safe_fetch(readme_url, timeout=15.0)
+        if readme_doc.status != 200 or not readme_doc.content.strip():
+            return None
+        return readme_doc
+    except Exception:
+        return None
+
+
 async def enrich_web_candidate(
     pool: Any,
     *,
     summary_id: str,
     canonical_url: str,
     force: bool = False,
+    lease_owner: str | None = None,
+    claim_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Enrich rss/web_share candidates with fresh page metadata + markdown.
 
@@ -432,18 +755,23 @@ async def enrich_web_candidate(
         isinstance(existing_meta, dict)
         and existing_meta.get("provider") == "web"
         and isinstance(current.get("highlights"), dict)
+        and current.get("readerQualityStatus") == "ready"
     ):
         return dict(existing_meta)
 
-    doc = None
-    try:
-        doc = await safe_fetch(canonical_url, timeout=15.0)
-    except Exception:
-        if not existing_markdown or _is_low_quality_content(existing_markdown):
-            return None
-
     fetched_markdown = ""
+    doc = await _fetch_huggingface_model_readme(canonical_url)
     if doc is not None:
+        fetched_markdown = _strip_nul(
+            doc.content.decode("utf-8", errors="replace")
+        )
+    else:
+        try:
+            doc = await safe_fetch(canonical_url, timeout=15.0)
+        except Exception:
+            if not existing_markdown or _is_low_quality_content(existing_markdown):
+                return None
+    if doc is not None and not fetched_markdown:
         html = doc.content.decode("utf-8", errors="replace")
         fetched_markdown = _strip_nul(
             _extract_article_content(html, canonical_url, "web")
@@ -451,12 +779,29 @@ async def enrich_web_candidate(
         fetched_markdown = fetched_markdown[:ARXIV_MARKDOWN_MAX_BYTES]
 
     new_markdown = existing_markdown
-    if fetched_markdown and not _is_low_quality_content(fetched_markdown):
-        if (
+    fetched_quality = (
+        evaluate_reader_quality(
+            kind=str(current.get("originalKind") or ""),
+            markdown=fetched_markdown,
+            original_meta=existing_meta,
+        )
+        if fetched_markdown
+        else None
+    )
+    if (
+        fetched_markdown
+        and not _is_low_quality_content(fetched_markdown)
+        and (
             not existing_markdown.strip()
             or _is_low_quality_content(existing_markdown)
-        ):
-            new_markdown = fetched_markdown
+            or (
+                current.get("readerQualityStatus") in {"incomplete", "invalid"}
+                and fetched_quality is not None
+                and fetched_quality.ready
+            )
+        )
+    ):
+        new_markdown = fetched_markdown
 
     # A successful HTTP response is not the same as usable article content.
     # Do not persist an enrichmentVersion marker for an empty page shell: that
@@ -505,7 +850,7 @@ async def enrich_web_candidate(
 
     markdown_bytes = new_markdown.encode("utf-8") if new_markdown else b""
     async with pool.connection() as conn:
-        await conn.execute(
+        cursor = await conn.execute(
             'UPDATE "summaries" SET '
             '"originalMeta" = %s::jsonb, '
             '"originalMarkdown" = %s, '
@@ -514,8 +859,11 @@ async def enrich_web_candidate(
             '"originalFetchedAt" = now(), '
             '"tldr" = COALESCE("tldr", %s), '
             '"highlights" = %s::jsonb, '
+            f'{enrichment_review_reset_assignments()}, '
             '"updatedAt" = now() '
-            'WHERE "id" = %s',
+            'WHERE "id" = %s'
+            f'{_lease_guard(lease_owner, claim_id)}'
+            f'{_RETURNING_ID if lease_owner else ""}',
             (
                 json.dumps(payload, ensure_ascii=False),
                 new_markdown or None,
@@ -527,8 +875,11 @@ async def enrich_web_candidate(
                 tldr or None,
                 json.dumps(highlights, ensure_ascii=False) if highlights else None,
                 summary_id,
+                *_lease_params(lease_owner, claim_id),
             ),
         )
+        if lease_owner and await cursor.fetchone() is None:
+            raise EnrichmentLeaseLost(summary_id)
     logger.info(
         "ai-engine.radar.enrichment.web_done",
         extra={
@@ -870,6 +1221,110 @@ def _classify_tree(tree: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _merge_zread_pages(
+    existing_zread: dict[str, Any] | None,
+    new_zread: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Merge previously generated Zread pages into a new partial draft.
+
+    A long-running Zread generation can be interrupted by the outer
+    enrichment timeout (``RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS``) or by a
+    network/LLM failure.  The CLI returns the pages already written to its
+    ``drafts/`` directory at that point.  Without this merge the new partial
+    would overwrite every page that a previous run had already persisted and
+    silently regress a wiki that had 28 pages to one with 1 page.
+
+    The merge is conservative:
+
+    * A complete new document replaces the old one, even when the repository
+      commit changed.
+    * An incomplete new document merges with the old pages even across
+      commits. This avoids regressing a readable 29-page snapshot to a
+      one-page draft while a durable CLI resume is still filling the gap.
+      The payload records the previous commit so mixed-version pages remain
+      observable until the new document becomes complete.
+    * New pages win on ``path`` conflict because the freshest content reflects
+      the current repo state.
+    * Other fields (``status``, ``expectedPageCount``, ``commitSha``, etc.)
+      always come from the new payload so the persisted record matches the
+      latest run.
+    """
+    if not isinstance(existing_zread, dict) or not isinstance(new_zread, dict):
+        return new_zread
+    existing_pages = existing_zread.get("pages")
+    new_pages = new_zread.get("pages")
+    # The CLI failed before producing any pages (e.g. ``git clone`` couldn't
+    # reach GitHub).  ``new_zread`` carries the failure metadata but no
+    # ``pages`` list.  Without this branch the persisted wiki would silently
+    # regress from N usable pages to 0 pages and lose the prior enrichment.
+    # Preserve the existing pages while still surfacing the failure so the
+    # UI / retry loop can react to it.
+    if not isinstance(new_pages, list):
+        if (
+            isinstance(existing_pages, list)
+            and existing_pages
+            and not _zread_pages_complete(new_zread)
+        ):
+            merged_payload = dict(new_zread)
+            merged_payload["pages"] = existing_pages
+            merged_payload["pageCount"] = len(existing_pages)
+            if existing_zread.get("commitSha") != new_zread.get("commitSha"):
+                merged_payload["previousCommitSha"] = existing_zread.get("commitSha")
+                merged_payload["mixedCommits"] = True
+            return merged_payload
+        return new_zread
+    if not isinstance(existing_pages, list) or not isinstance(new_pages, list):
+        return new_zread
+    existing_commit = existing_zread.get("commitSha")
+    new_commit = new_zread.get("commitSha")
+    if _zread_pages_complete(new_zread):
+        return new_zread
+    new_by_path: dict[str, dict[str, Any]] = {}
+    for page in new_pages:
+        if isinstance(page, dict):
+            path = page.get("path")
+            if path:
+                new_by_path[path] = page
+    merged: list[dict[str, Any]] = list(new_pages)
+    seen_paths = set(new_by_path.keys())
+    for page in existing_pages:
+        if not isinstance(page, dict):
+            continue
+        path = page.get("path")
+        if not path or path in seen_paths:
+            continue
+        merged.append(page)
+        seen_paths.add(path)
+    merged_payload = dict(new_zread)
+    merged_payload["pages"] = merged
+    merged_payload["pageCount"] = len(merged)
+    if existing_commit and new_commit and existing_commit != new_commit:
+        merged_payload["previousCommitSha"] = existing_commit
+        merged_payload["mixedCommits"] = True
+    return merged_payload
+
+
+def _zread_pages_complete(payload: Any) -> bool:
+    """Return true only when a Zread payload has no catalog page gap."""
+    if not isinstance(payload, dict):
+        return False
+    if (
+        payload.get("status") != "complete"
+        or payload.get("truncated")
+        or payload.get("missingPages")
+        or payload.get("mixedCommits")
+    ):
+        return False
+    try:
+        page_count = int(payload.get("pageCount") or 0)
+        expected_page_count = int(payload.get("expectedPageCount") or 0)
+    except (TypeError, ValueError):
+        return False
+    if expected_page_count > 0:
+        return page_count >= expected_page_count and bool(payload.get("pages"))
+    return payload.get("status") == "complete" and bool(payload.get("pages"))
+
+
 def _build_meta_payload(
     repo_meta: dict[str, Any] | None,
     tree: list[dict[str, Any]],
@@ -933,7 +1388,7 @@ def _zread_scoring_markdown(
     markdown = "\n\n---\n\n".join(parts).strip()
     if not markdown and readme_text:
         markdown = _strip_nul(readme_text).strip()
-    return markdown[:ARXIV_MARKDOWN_MAX_BYTES]
+    return markdown
 
 
 async def enrich_github_candidate(
@@ -942,6 +1397,8 @@ async def enrich_github_candidate(
     summary_id: str,
     canonical_url: str,
     force: bool = False,
+    lease_owner: str | None = None,
+    claim_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Enrich one GitHub repo candidate; returns the persisted meta or None.
 
@@ -980,8 +1437,20 @@ async def enrich_github_candidate(
     # Zread is deliberately a separate best-effort step. Reuse the public
     # Zread wiki first; only generate locally when the already-indexed public
     # pages are unavailable. A remote cache is keyed by its indexed commit.
+    # Once a local CLI draft exists, it is the authoritative resumable work
+    # product for this repository. Retrying remote first would add a slow,
+    # unrelated network dependency and could replace a useful local draft
+    # with a different/partial public catalog. New repositories still keep
+    # the normal remote-first policy.
+    existing_cli_draft = (
+        isinstance(existing_zread, dict)
+        and existing_zread.get("provider") == "zread-cli"
+        and isinstance(existing_zread.get("pages"), list)
+        and bool(existing_zread.get("pages"))
+    )
     zread_payload = existing_zread if (
         not force
+        and not existing_cli_draft
         and
         isinstance(existing_zread, dict)
         and (
@@ -991,20 +1460,14 @@ async def enrich_github_candidate(
             and existing_zread.get("parserVersion") == 4
         )
         and isinstance(existing_zread.get("pages"), list)
-        and (
-            existing_zread.get("status") == "complete"
-            or (
-                int(existing_zread.get("pageCount") or 0)
-                >= int(existing_zread.get("expectedPageCount") or 0)
-            )
-        )
+        and _zread_pages_complete(existing_zread)
     ) else None
     # Remote retrieval and local generation are separate providers. Disabling
     # the CLI must never disable fetching an already-published Zread wiki.
     zread_cli_enabled = os.environ.get("ZREAD_CLI_ENABLED", "1").strip().lower() not in {
         "0", "false", "no", "off",
     }
-    if zread_payload is None:
+    if zread_payload is None and not existing_cli_draft:
         try:
             from ai_engine.radar.zread_remote import fetch_zread_wiki
 
@@ -1022,18 +1485,7 @@ async def enrich_github_candidate(
         and zread_payload.get("provider") == "zread-remote"
         else None
     )
-    remote_page_count = int((remote_payload or {}).get("pageCount") or 0)
-    remote_expected_page_count = int((remote_payload or {}).get("expectedPageCount") or 0)
-    remote_complete = bool(
-        remote_payload
-        and (
-            remote_payload.get("status") == "complete"
-            or (
-                remote_page_count > 0
-                and remote_page_count >= remote_expected_page_count
-            )
-        )
-    )
+    remote_complete = _zread_pages_complete(remote_payload)
     # A remote catalog with missing pages is not a usable document. Try the
     # local generator for both "remote unavailable" and "remote partial";
     # retain the remote partial only when the CLI cannot produce anything.
@@ -1141,6 +1593,12 @@ async def enrich_github_candidate(
         # escaping layer; keeping this here prevents a later refresh from
         # reintroducing visible ``\uXXXX`` text after a historical backfill.
         payload["zread"] = _scrub_zread_payload(zread_payload)
+        # The CLI frequently returns a partial draft when an outer timeout
+        # (RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS) or a network/LLM hiccup
+        # interrupts generation.  Merge with the previously persisted wiki
+        # by page path so a successful earlier run is not silently lost.
+        if isinstance(existing_zread, dict) and payload["zread"].get("status") != "complete":
+            payload["zread"] = _merge_zread_pages(existing_zread, payload["zread"])
 
     # Phase 2D: AI-written summary (500 words, styled after deepwiki.com's
     # Overview + What Is sections). Best-effort, doesn't break meta write.
@@ -1171,9 +1629,11 @@ async def enrich_github_candidate(
         readme_text,
     ) or _strip_nul(str(current.get("originalMarkdown") or "")).strip()
     markdown_bytes = scoring_markdown.encode("utf-8")
+    payload["readerMarkdownComplete"] = True
+    payload["readerMarkdownBytes"] = len(markdown_bytes)
 
     async with pool.connection() as conn:
-        await conn.execute(
+        cursor = await conn.execute(
             'UPDATE "summaries" SET '
             '"originalMeta" = %s::jsonb, '
             '"originalMarkdown" = %s, '
@@ -1181,8 +1641,11 @@ async def enrich_github_candidate(
             '"originalBytes" = %s, '
             '"originalFetchedAt" = now(), '
             '"repoSummary" = %s, '
+            f'{enrichment_review_reset_assignments()}, '
             '"updatedAt" = now() '
-            'WHERE "id" = %s',
+            'WHERE "id" = %s'
+            f'{_lease_guard(lease_owner, claim_id)}'
+            f'{_RETURNING_ID if lease_owner else ""}',
             (
                 json.dumps(payload, ensure_ascii=False),
                 scoring_markdown or None,
@@ -1190,8 +1653,11 @@ async def enrich_github_candidate(
                 len(markdown_bytes) or None,
                 repo_summary,
                 summary_id,
+                *_lease_params(lease_owner, claim_id),
             ),
         )
+        if lease_owner and await cursor.fetchone() is None:
+            raise EnrichmentLeaseLost(summary_id)
     logger.info(
             "ai-engine.radar.enrichment.github_done",
         extra={
@@ -1280,6 +1746,65 @@ def _arxiv_html_authors(html: str) -> list[str]:
         return []
 
 
+def _arxiv_html_figures(html: str, base_url: str) -> list[dict[str, Any]]:
+    """Collect usable figure metadata from arXiv HTML.
+
+    arXiv HTML commonly uses ``<object data="...svg">`` rather than ``img``.
+    The Markdown extractor can render that URL, but the enrichment metadata
+    also needs to report the figures so coverage and future figure navigation
+    do not claim that a paper has zero figures.
+    """
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        figures: list[dict[str, Any]] = []
+        for index, figure in enumerate(soup.select("figure[id]"), start=1):
+            graphic = figure.find(["object", "img", "svg"])
+            if graphic is None:
+                continue
+            figure_id = str(figure.get("id") or "")
+            figure_number_match = _re.search(r"\.F(\d+)$", figure_id)
+            figure_number = (
+                int(figure_number_match.group(1))
+                if figure_number_match
+                else index
+            )
+            raw_url = str(
+                graphic.get("data")
+                or graphic.get("src")
+                or graphic.get("data-src")
+                or ""
+            ).strip()
+            image_url = urljoin(base_url, raw_url) if raw_url else None
+            if image_url and urlsplit(image_url).scheme not in {"http", "https"}:
+                image_url = None
+            caption_node = figure.find("figcaption")
+            caption = None
+            if caption_node is not None:
+                # MathML exposes both visible glyphs and an annotation node.
+                # Replace each math element with its TeX alt text first so
+                # metadata does not contain artifacts such as "32 32".
+                caption_soup = BeautifulSoup(str(caption_node), "html.parser")
+                for math_node in caption_soup.select("math"):
+                    alttext = str(math_node.get("alttext") or "").strip()
+                    if not alttext:
+                        annotation = math_node.select_one("annotation")
+                        alttext = annotation.get_text(" ", strip=True) if annotation else ""
+                    math_node.replace_with(alttext)
+                caption = " ".join(caption_soup.get_text(" ", strip=True).split()) or None
+            figures.append({
+                "figureId": figure_id,
+                "figureNumber": figure_number,
+                "page": figure_number,
+                "caption": caption,
+                "url": image_url,
+            })
+        return figures[:50]
+    except Exception:
+        return []
+
+
 def _sections_from_markdown(markdown: str) -> list[dict[str, Any]]:
     """Create lightweight section anchors from headings in rendered HTML."""
     sections: list[dict[str, Any]] = []
@@ -1294,6 +1819,19 @@ def _sections_from_markdown(markdown: str) -> list[dict[str, Any]]:
             })
         offset += len(line) + 1
     return sections[:100]
+
+
+def _strip_extracted_arxiv_footnotes(value: str) -> str:
+    """Remove author footnotes leaked by HTML/PDF extraction."""
+    value = _re.sub(
+        r"(?:^|[\n ])[*_~`†‡⁎✝0-9\s]{0,24}footnotetext\s*:\s*.*?"
+        r"(?=\s+(?:#{1,6}\s|!\[|[*_~`†‡⁎✝0-9\s]{0,24}footnotetext\s*:)|$)",
+        "\n",
+        value,
+        flags=_re.IGNORECASE | _re.MULTILINE | _re.DOTALL,
+    )
+    value = _re.sub(r"footnotemark\s*:\s*", "", value, flags=_re.IGNORECASE)
+    return _re.sub(r"\n{3,}", "\n\n", value)
 
 
 def _clean_arxiv_html_markdown(markdown: str, paper_title: str) -> str:
@@ -1325,6 +1863,32 @@ def _clean_arxiv_html_markdown(markdown: str, paper_title: str) -> str:
         cleaned.append(line)
     value = "\n".join(cleaned)
     value = _re.sub(r"\n{3,}", "\n\n", value)
+    # arXiv's HTML-to-Markdown path can expose author footnotes with dagger,
+    # digit, or Markdown prefixes. They are metadata already represented in
+    # the paper header and should not become visible prose in the reader.
+    value = _strip_extracted_arxiv_footnotes(value)
+    # Some abstract fallbacks preserve TeX emphasis commands as plain text.
+    # Strip the presentation command while keeping the words readable.
+    for _ in range(3):
+        cleaned_value = _re.sub(
+            r"\\(?:textbf|textit|emph|texttt|textrm|textsf|textsc|textnormal|underline)"
+            r"\{([^{}\n]*)\}",
+            r"\1",
+            value,
+        )
+        cleaned_value = _re.sub(
+            r"\\href\{([^{}\n]+)\}\{([^{}\n]*)\}",
+            r"\2",
+            cleaned_value,
+        )
+        cleaned_value = _re.sub(
+            r"\\url\{([^{}\n]+)\}",
+            r"\1",
+            cleaned_value,
+        )
+        if cleaned_value == value:
+            break
+        value = cleaned_value
     # A small number of converted pages contain a model-instruction artifact
     # instead of paper prose. Remove only this exact signature; real appendix
     # prompts and ordinary mentions of reasoning remain untouched.
@@ -1514,7 +2078,7 @@ async def _parse_arxiv_html_document(
         markdown[:ARXIV_MARKDOWN_MAX_BYTES],
         _sections_from_markdown(markdown),
         _arxiv_html_authors(html),
-        [],
+        _arxiv_html_figures(html, source_url),
         source_url,
     )
 
@@ -1715,6 +2279,7 @@ def _parse_arxiv_pdf(
 
     doc.close()
     markdown = "\n\n".join(body_parts)
+    markdown = _strip_extracted_arxiv_footnotes(markdown)
     if len(markdown) > ARXIV_MARKDOWN_MAX_BYTES:
         markdown = markdown[:ARXIV_MARKDOWN_MAX_BYTES]
     # doc.close() omitted — pymupdf documents get GC'd; explicit close
@@ -1889,6 +2454,8 @@ async def enrich_arxiv_candidate(
     *,
     summary_id: str,
     canonical_url: str,
+    lease_owner: str | None = None,
+    claim_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Enrich one arxiv paper candidate; returns the persisted meta or None.
 
@@ -1926,6 +2493,8 @@ async def enrich_arxiv_candidate(
                 summary_id=summary_id,
                 arxiv_id=arxiv_id,
                 reason="html_and_pdf_fetch_failed",
+                lease_owner=lease_owner,
+                claim_id=claim_id,
             )
 
         if len(pdf_bytes) > 8 * 1024 * 1024:
@@ -1938,6 +2507,8 @@ async def enrich_arxiv_candidate(
                 summary_id=summary_id,
                 arxiv_id=arxiv_id,
                 reason="pdf_too_large",
+                lease_owner=lease_owner,
+                claim_id=claim_id,
             )
 
         markdown, sections, authors, figures = _parse_arxiv_pdf(pdf_bytes)
@@ -1959,21 +2530,34 @@ async def enrich_arxiv_candidate(
     async with pool.connection() as conn:
         title_row = await (
             await conn.execute(
-                'SELECT "title" FROM "summaries" WHERE "id" = %s',
+                'SELECT "title", "tldr", "arxivAnalysis" FROM "summaries" WHERE "id" = %s',
                 (summary_id,),
             )
         ).fetchone()
         if title_row is None:
             title = arxiv_id
+            existing_tldr = None
+            existing_analysis = None
         else:
             # pool.connection() may return dict_row (mapping) or tuple
             try:
                 title = str(title_row["title"])  # dict-like
+                existing_tldr = title_row.get("tldr")
+                existing_analysis = title_row.get("arxivAnalysis")
             except (TypeError, KeyError):
                 title = str(title_row[0])  # tuple-like
+                existing_tldr = title_row[1] if len(title_row) > 1 else None
+                existing_analysis = title_row[2] if len(title_row) > 2 else None
 
-    analysis = await _generate_arxiv_analysis(markdown, title)
-    tldr_text: str | None = analysis.get("tldr") if analysis else None
+    generated_analysis = await _generate_arxiv_analysis(markdown, title)
+    analysis = generated_analysis or (
+        existing_analysis if isinstance(existing_analysis, dict) else None
+    )
+    tldr_text: str | None = (
+        str((generated_analysis or {}).get("tldr") or "").strip()
+        or str(existing_tldr or "").strip()
+        or None
+    )
 
     # Update DB row
     meta_payload = {
@@ -1987,11 +2571,14 @@ async def enrich_arxiv_candidate(
         "authorCount": len(authors),
         "figureCount": len(figures),
         "figures": figures[:20],  # keep meta payload small; full list in figures column
+        "readerMarkdownComplete": len(markdown.encode("utf-8")) < ARXIV_MARKDOWN_MAX_BYTES,
+        "readerMarkdownBytes": len(markdown.encode("utf-8")),
     }
     async with pool.connection() as conn:
-        await conn.execute(
+        cursor = await conn.execute(
             'UPDATE "summaries" SET '
             '"originalMarkdown" = %s, '
+            '"originalSha256" = %s, '
             '"originalMeta" = %s::jsonb, '
             '"sections" = %s::jsonb, '
             '"tldr" = %s, '
@@ -2000,10 +2587,14 @@ async def enrich_arxiv_candidate(
             '"figures" = %s::jsonb, '
             '"originalBytes" = %s, '
             '"originalFetchedAt" = now(), '
+            f'{enrichment_review_reset_assignments()}, '
             '"updatedAt" = now() '
-            'WHERE "id" = %s',
+            'WHERE "id" = %s'
+            f'{_lease_guard(lease_owner, claim_id)}'
+            f'{_RETURNING_ID if lease_owner else ""}',
             (
                 markdown,
+                hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
                 json.dumps(meta_payload, ensure_ascii=False),
                 json.dumps(sections, ensure_ascii=False),
                 tldr_text,
@@ -2012,8 +2603,11 @@ async def enrich_arxiv_candidate(
                 json.dumps(figures, ensure_ascii=False),
                 len(markdown.encode("utf-8")),
                 summary_id,
+                *_lease_params(lease_owner, claim_id),
             ),
         )
+        if lease_owner and await cursor.fetchone() is None:
+            raise EnrichmentLeaseLost(summary_id)
     logger.info(
         "ai-engine.radar.enrichment.arxiv_done",
         extra={
@@ -2041,6 +2635,8 @@ async def _enrich_arxiv_from_cached_abstract(
     summary_id: str,
     arxiv_id: str,
     reason: str,
+    lease_owner: str | None = None,
+    claim_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Persist useful arXiv analysis when the full PDF cannot be processed."""
     current = await _fetch_enrichment_row(pool, summary_id)
@@ -2068,21 +2664,29 @@ async def _enrich_arxiv_from_cached_abstract(
         "reason": reason,
     }
     async with pool.connection() as conn:
-        await conn.execute(
+        cursor = await conn.execute(
             'UPDATE "summaries" SET "originalMeta" = %s::jsonb, '
+            '"originalSha256" = %s, '
             '"tldr" = COALESCE("tldr", %s), '
             '"arxivAnalysis" = COALESCE("arxivAnalysis", %s::jsonb), '
             '"originalBytes" = COALESCE("originalBytes", %s), '
             '"originalFetchedAt" = COALESCE("originalFetchedAt", now()), '
-            '"updatedAt" = now() WHERE "id" = %s',
+            f'{enrichment_review_reset_assignments()}, '
+            '"updatedAt" = now() WHERE "id" = %s'
+            f'{_lease_guard(lease_owner, claim_id)}'
+            f'{_RETURNING_ID if lease_owner else ""}',
             (
                 json.dumps(meta_payload, ensure_ascii=False),
+                hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
                 tldr or None,
                 json.dumps(analysis, ensure_ascii=False) if analysis else None,
                 len(markdown.encode("utf-8")),
                 summary_id,
+                *_lease_params(lease_owner, claim_id),
             ),
         )
+        if lease_owner and await cursor.fetchone() is None:
+            raise EnrichmentLeaseLost(summary_id)
     return {
         "markdown": markdown,
         "sections": [],
@@ -2104,6 +2708,7 @@ async def _run_enrichment_for_pending(
     concurrency: int | None = None,
     force: bool = False,
     item_timeout: float | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Find candidates that need enrichment and process them.
 
@@ -2118,6 +2723,16 @@ async def _run_enrichment_for_pending(
 
     Returns count of successfully enriched rows.
     """
+    enrichment_concurrency = max(
+        1,
+        concurrency
+        or int(os.environ.get("RADAR_ENRICHMENT_CONCURRENCY", "2")),
+    )
+    claim_limit = min(max(1, limit), enrichment_concurrency)
+    await recover_expired_enrichment_leases(
+        pool,
+        limit=max(claim_limit, 50),
+    )
     placeholders = ",".join(["%s"] * len(source_kinds))
     run_filter = ""
     summary_filter = ""
@@ -2135,44 +2750,67 @@ async def _run_enrichment_for_pending(
             'AND sh."status" = \'approved\')) '
         )
         params = (*params, *sync_run_ids)
+    # Keep each legacy predicate independently balanced.  This is deliberately
+    # assembled as a list rather than one long parenthesized literal: a small
+    # condition added to one source must not invalidate the whole claim SQL.
+    legacy_enrichment_need = " OR ".join(
+        [
+            '("originalKind" IN (\'rss\', \'web_share\') AND ('
+            '"highlights" IS NULL OR '
+            'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\'))',
+            # GitHub sync can persist a lightweight repository snapshot before
+            # the deep enrichment stage.  Do not mistake that snapshot for a
+            # completed enrichment: it has no v2 marker and no Zread pages.
+            '("originalKind" = \'github_repo\' '
+            'AND "canonicalUrl" NOT LIKE \'%%digest=%%\' AND ('
+            '"originalMeta" IS NULL '
+            'OR COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\' '
+            # Older enrichment silently clipped the reader body at roughly
+            # 512KB. Rebuild large rows without the new completeness marker.
+            'OR (COALESCE("originalMeta"->>\'readerMarkdownComplete\', \'\') <> \'true\' '
+            'AND char_length(COALESCE("originalMarkdown", \'\')) >= 500000) '
+            'OR COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') '
+            'NOT IN (\'complete\', \'partial\', \'failed\') '
+            # A README fallback is deliberately marked partial even though
+            # it contains one readable page. It must remain retryable;
+            # otherwise pageCount=expectedPageCount=1 makes the fallback
+            # permanently mask a missing Zread wiki.
+            'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'partial\' '
+            'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'generatedAt\', \'\')::timestamptz, '
+            'to_timestamp(0)) < now() - '
+            f'make_interval(secs => {GITHUB_ENRICHMENT_RETRY_SECONDS})) '
+            'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'failed\' '
+            'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'generatedAt\', \'\')::timestamptz, '
+            'to_timestamp(0)) < now() - '
+            f'make_interval(secs => {GITHUB_ENRICHMENT_RETRY_SECONDS})) '
+            'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'complete\' '
+            'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'expectedPageCount\', \'\'), \'0\')::int > 0 '
+            'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'pageCount\', \'\'), \'0\')::int '
+            '< COALESCE(NULLIF("originalMeta"->\'zread\'->>\'expectedPageCount\', \'\'), \'0\')::int)))',
+            '("originalKind" = \'arxiv\' AND ('
+            '"arxivAnalysis" IS NULL OR "tldr" IS NULL OR '
+            'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\' '
+            'OR (COALESCE("originalMeta"->>\'readerMarkdownComplete\', \'\') <> \'true\' '
+            'AND char_length(COALESCE("originalMarkdown", \'\')) >= 500000)))',
+            '("originalKind" IN (\'github_other\', \'github_issue\', \'github_pr\', \'github_release\') AND ('
+            '"originalMeta" IS NULL OR '
+            'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\'))',
+            '("originalKind" NOT IN (\'rss\', \'web_share\', \'github_repo\') '
+            'AND "originalMeta" IS NULL)',
+            '("originalKind" IN (\'rss\', \'web_share\') '
+            'AND "readerQualityStatus" IN (\'incomplete\', \'invalid\') '
+            'AND COALESCE("originalFetchedAt", to_timestamp(0)) < now() - '
+            f'make_interval(secs => {WEB_ENRICHMENT_RETRY_SECONDS}))',
+        ]
+    )
     enrichment_need = (
         'TRUE '
         if force
-        else '((("originalKind" IN (\'rss\', \'web_share\')) AND ('
-             '"highlights" IS NULL OR '
-             'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\')) '
-             # GitHub sync can persist a lightweight repository snapshot before
-             # the deep enrichment stage.  Do not mistake that snapshot for a
-             # completed enrichment: it has no v2 marker and no Zread pages.
-             'OR ("originalKind" = \'github_repo\' '
-             'AND "canonicalUrl" NOT LIKE \'%%digest=%%\' AND ('
-             '"originalMeta" IS NULL '
-             'OR COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\' '
-             'OR COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') '
-             'NOT IN (\'complete\', \'partial\', \'failed\') '
-             # A README fallback is deliberately marked partial even though
-             # it contains one readable page.  It must remain retryable;
-             # otherwise pageCount=expectedPageCount=1 makes the fallback
-             # permanently mask a missing Zread wiki.  The same retry rule
-             # applies to any partial result so an unpublished draft can
-             # eventually be promoted to a complete document.
-             'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'partial\' '
-             'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'generatedAt\', \'\')::timestamptz, '
-             'to_timestamp(0)) < now() - '
-             f'make_interval(secs => {GITHUB_ENRICHMENT_RETRY_SECONDS})) '
-             'OR (COALESCE("originalMeta"->\'zread\'->>\'status\', \'\') = \'failed\' '
-             'AND COALESCE(NULLIF("originalMeta"->\'zread\'->>\'generatedAt\', \'\')::timestamptz, '
-             'to_timestamp(0)) < now() - '
-             f'make_interval(secs => {GITHUB_ENRICHMENT_RETRY_SECONDS}))'
-             ')) '
-             'OR ("originalKind" = \'arxiv\' AND ('
-             '"arxivAnalysis" IS NULL OR "tldr" IS NULL OR '
-             'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\')) '
-             'OR ("originalKind" IN (\'github_other\', \'github_release\') AND ('
-             '"originalMeta" IS NULL OR '
-             'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\')) '
-             'OR ("originalKind" NOT IN (\'rss\', \'web_share\', \'github_repo\') '
-             'AND "originalMeta" IS NULL)) '
+        else '('
+             '("enrichmentStatus" IN (\'pending\', \'retryable\') '
+             'AND COALESCE("enrichmentNextRetryAt", to_timestamp(0)) <= now()) '
+                f'OR ({legacy_enrichment_need})'
+             ') '
     )
     # Distilled scoring already decided the reading depth.  Enrichment is a
     # deeper, more expensive representation and must not run for skim/noise
@@ -2181,38 +2819,103 @@ async def _run_enrichment_for_pending(
         'TRUE' if force
         else '"distilledTier" IN (\'collection\', \'deep_read\')'
     )
-    async with pool.connection() as conn:
-        rows = await (
-            await conn.execute(
-                'SELECT "id", "canonicalUrl", "originalKind" FROM "summaries" '
-                f'WHERE "originalKind" IN ({placeholders}) '
-                f'AND {tier_filter} '
-                f'AND {enrichment_need}'
-                'AND NOT ("originalKind" = \'github_repo\' AND '
-                'COALESCE("tags", ARRAY[]::text[]) '
-                '@> ARRAY[\'repo_digest\']::text[]) '
-                'AND ("source" = \'daily\' OR "syncRunId" IS NOT NULL OR EXISTS ('
-                'SELECT 1 FROM "share_submissions" sh '
-                'WHERE sh."publishedSummaryId" = "summaries"."id" '
-                'AND sh."status" = \'approved\')) '
-                f"{summary_filter}"
-                f"{run_filter}"
-                'ORDER BY "createdAt" DESC LIMIT %s',
-                (*params, limit),
-            )
-        ).fetchall()
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    state_filter = (
+        '("enrichmentStatus" IS DISTINCT FROM \'running\' '
+        'OR "enrichmentLeaseExpiresAt" < now() '
+        'OR "enrichmentLeaseExpiresAt" IS NULL)'
+        if force
+        else (
+            '("enrichmentStatus" IS NULL '
+            'OR "enrichmentStatus" IN (\'pending\', \'retryable\') '
+            'AND COALESCE("enrichmentNextRetryAt", to_timestamp(0)) <= now() '
+            'OR ("enrichmentStatus" = \'running\' '
+            'AND "enrichmentLeaseExpiresAt" < now()))'
+        )
+    )
+    source_filter = (
+        'TRUE'
+        if force and summary_ids
+        else '("source" = \'daily\' OR "syncRunId" IS NOT NULL OR EXISTS ('
+             'SELECT 1 FROM "share_submissions" sh '
+             'WHERE sh."publishedSummaryId" = "summaries"."id" '
+             'AND sh."status" = \'approved\'))'
+    )
+    # The CTE + UPDATE is one PostgreSQL statement. It is an atomic per-row
+    # claim even when the process-level advisory lock is removed later.
+    claim_sql = (
+        'WITH candidates AS ('
+        'SELECT "id" FROM "summaries" '
+        f'WHERE "originalKind" IN ({placeholders}) '
+        f'AND {tier_filter} '
+        f'AND {enrichment_need}'
+        f'AND {state_filter} '
+        'AND NOT ("originalKind" = \'github_repo\' AND '
+        'COALESCE("tags", ARRAY[]::text[]) '
+        '@> ARRAY[\'repo_digest\']::text[]) '
+        f'AND {source_filter} '
+        f"{summary_filter}"
+        f"{run_filter}"
+        # Retryable work is recovery debt. Serve it before fresh candidates
+        # and order by due time so a steady stream of new radar rows cannot
+        # starve an older failed source forever.
+        'ORDER BY CASE WHEN "enrichmentStatus" = \'retryable\' THEN 0 ELSE 1 END, '
+        'COALESCE("enrichmentNextRetryAt", "createdAt") ASC, '
+        '"createdAt" ASC LIMIT %s '
+        'FOR UPDATE SKIP LOCKED) '
+        'UPDATE "summaries" AS s SET '
+        '"enrichmentStatus" = \'running\', '
+        '"enrichmentAttempts" = COALESCE(s."enrichmentAttempts", 0) + 1, '
+        '"enrichmentLockedBy" = %s, '
+        '"enrichmentLeaseExpiresAt" = now() + (%s || \' seconds\')::interval, '
+        '"enrichmentHeartbeatAt" = now(), '
+        '"enrichmentLastAttemptAt" = now(), '
+        '"enrichmentRunId" = %s::uuid, '
+        '"enrichmentClaimId" = gen_random_uuid(), '
+        '"enrichmentNextRetryAt" = NULL, '
+        '"enrichmentErrorCode" = NULL, '
+        '"enrichmentErrorMessage" = NULL, '
+        '"updatedAt" = now() '
+        'FROM candidates '
+        'WHERE s."id" = candidates."id" '
+        'RETURNING s."id", s."canonicalUrl", s."originalKind", '
+        's."enrichmentAttempts", s."enrichmentClaimId"'
+    )
+    # The advisory lock protects only the short claim transaction. Per-row
+    # leases and claim tokens already protect the long external enrichment
+    # phase, so holding this lock across Zread would unnecessarily block
+    # unrelated new candidates.
+    async with _ENRICHMENT_RUN_LOCK:
+        async with _cross_process_enrichment_lock(pool) as acquired:
+            if not acquired:
+                return 0
+            async with pool.connection() as conn:
+                rows = await (
+                    await conn.execute(
+                        claim_sql,
+                        (
+                            *params,
+                            claim_limit,
+                            ENRICHMENT_WORKER_ID,
+                            str(ENRICHMENT_LEASE_SECONDS),
+                            run_id,
+                        ),
+                    )
+                ).fetchall()
     candidates = [
-        (str(r["id"]), str(r["canonicalUrl"]), str(r["originalKind"]))
+        (
+            str(r["id"]),
+            str(r["canonicalUrl"]),
+            str(r["originalKind"]),
+            int(r.get("enrichmentAttempts") or 1),
+            str(r.get("enrichmentClaimId") or run_id),
+        )
         for r in rows
     ]
     if not candidates:
         return 0
 
-    enrichment_concurrency = max(
-        1,
-        concurrency
-        or int(os.environ.get("RADAR_ENRICHMENT_CONCURRENCY", "2")),
-    )
     effective_item_timeout = None if item_timeout == 0 else item_timeout
     if effective_item_timeout is None and item_timeout != 0:
         try:
@@ -2224,8 +2927,115 @@ async def _run_enrichment_for_pending(
             effective_item_timeout = 600.0
     semaphore = asyncio.Semaphore(enrichment_concurrency)
 
-    async def _enrich_one(summary_id: str, url: str, kind: str) -> bool:
+    async def _mark_enrichment_retry(
+        summary_id: str,
+        *,
+        attempts: int,
+        claim_id: str,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        terminal = attempts >= ENRICHMENT_MAX_ATTEMPTS
+        status = "manual" if terminal else "retryable"
+        delay = _retry_delay_seconds(attempts)
+        async with pool.connection() as conn:
+            await conn.execute(
+                'UPDATE "summaries" SET '
+                '"enrichmentStatus" = %s, '
+                '"enrichmentLockedBy" = NULL, '
+                '"enrichmentLeaseExpiresAt" = NULL, '
+                '"enrichmentHeartbeatAt" = NULL, '
+                '"enrichmentClaimId" = NULL, '
+                '"enrichmentNextRetryAt" = CASE WHEN %s THEN NULL '
+                'ELSE now() + (%s || \' seconds\')::interval END, '
+                '"enrichmentErrorCode" = %s, '
+                '"enrichmentErrorMessage" = %s, '
+                '"updatedAt" = now() '
+                'WHERE "id" = %s AND "enrichmentLockedBy" = %s '
+                'AND "enrichmentClaimId" = %s::uuid '
+                'AND "enrichmentStatus" = \'running\'',
+                (
+                    status,
+                    terminal,
+                    str(delay),
+                    error_code[:64],
+                    error_message[:500],
+                    summary_id,
+                    ENRICHMENT_WORKER_ID,
+                    claim_id,
+                ),
+            )
+
+    async def _mark_enrichment_success(
+        summary_id: str,
+        *,
+        attempts: int,
+        claim_id: str,
+        retryable: bool,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        terminal = retryable and attempts >= ENRICHMENT_MAX_ATTEMPTS
+        delay = _retry_delay_seconds(attempts)
+        async with pool.connection() as conn:
+            await conn.execute(
+                'UPDATE "summaries" SET '
+                '"enrichmentStatus" = CASE WHEN "distilledTier" IN '
+                '(\'collection\', \'deep_read\') THEN %s ELSE NULL END, '
+                '"enrichmentLockedBy" = NULL, '
+                '"enrichmentLeaseExpiresAt" = NULL, '
+                '"enrichmentHeartbeatAt" = NULL, '
+                '"enrichmentClaimId" = NULL, '
+                '"enrichmentNextRetryAt" = CASE WHEN "distilledTier" IN '
+                '(\'collection\', \'deep_read\') AND %s THEN '
+                'now() + (%s || \' seconds\')::interval ELSE NULL END, '
+                '"enrichmentErrorCode" = %s, '
+                '"enrichmentErrorMessage" = %s, '
+                '"updatedAt" = now() '
+                'WHERE "id" = %s AND "enrichmentLockedBy" = %s '
+                'AND "enrichmentClaimId" = %s::uuid '
+                'AND "enrichmentStatus" = \'running\'',
+                (
+                    "manual" if terminal else ("retryable" if retryable else "ready"),
+                    retryable and not terminal,
+                    str(delay),
+                    error_code[:64] if error_code else None,
+                    error_message[:500] if error_message else None,
+                    summary_id,
+                    ENRICHMENT_WORKER_ID,
+                    claim_id,
+                ),
+            )
+
+    async def _heartbeat(summary_id: str, claim_id: str) -> None:
+        interval = ENRICHMENT_HEARTBEAT_SECONDS
+        while True:
+            await asyncio.sleep(interval)
+            async with pool.connection() as conn:
+                await conn.execute(
+                    'UPDATE "summaries" SET '
+                    '"enrichmentHeartbeatAt" = now(), '
+                    '"enrichmentLeaseExpiresAt" = now() + (%s || \' seconds\')::interval '
+                    'WHERE "id" = %s AND "enrichmentLockedBy" = %s '
+                    'AND "enrichmentClaimId" = %s::uuid '
+                    'AND "enrichmentStatus" = \'running\'',
+                    (
+                        str(ENRICHMENT_LEASE_SECONDS),
+                        summary_id,
+                        ENRICHMENT_WORKER_ID,
+                        claim_id,
+                    ),
+                )
+
+    async def _enrich_one(
+        summary_id: str,
+        url: str,
+        kind: str,
+        attempts: int,
+        claim_id: str,
+    ) -> bool:
         async with semaphore:
+            heartbeat_task = asyncio.create_task(_heartbeat(summary_id, claim_id))
             try:
                 payload: dict[str, Any] | None = None
                 if kind == "github_repo":
@@ -2234,12 +3044,18 @@ async def _run_enrichment_for_pending(
                         summary_id=summary_id,
                         canonical_url=url,
                         force=force,
+                        lease_owner=ENRICHMENT_WORKER_ID,
+                        claim_id=claim_id,
                     )
                 elif kind == "arxiv":
                     payload = await enrich_arxiv_candidate(
-                        pool, summary_id=summary_id, canonical_url=url,
+                        pool,
+                        summary_id=summary_id,
+                        canonical_url=url,
+                        lease_owner=ENRICHMENT_WORKER_ID,
+                        claim_id=claim_id,
                     )
-                elif kind in ("github_other", "github_release"):
+                elif kind in ("github_other", "github_issue", "github_pr", "github_release"):
                     # GitHub "other" includes blob/docs links shared by HN
                     # and other feeds.  Only issue/PR/release URLs can use
                     # the GitHub item API; arbitrary GitHub pages must use the
@@ -2247,37 +3063,148 @@ async def _run_enrichment_for_pending(
                     # unparseable item forever.
                     if _parse_github_item_url(url) is not None:
                         payload = await enrich_github_item_candidate(
-                            pool, summary_id=summary_id, canonical_url=url,
+                            pool,
+                            summary_id=summary_id,
+                            canonical_url=url,
+                            lease_owner=ENRICHMENT_WORKER_ID,
+                            claim_id=claim_id,
                         )
                     else:
                         payload = await enrich_web_candidate(
-                            pool, summary_id=summary_id, canonical_url=url,
+                            pool,
+                            summary_id=summary_id,
+                            canonical_url=url,
+                            lease_owner=ENRICHMENT_WORKER_ID,
+                            claim_id=claim_id,
                         )
                 elif kind in ("rss", "web_share"):
                     if force:
                         payload = await enrich_web_candidate(
-                            pool, summary_id=summary_id, canonical_url=url, force=True,
+                            pool,
+                            summary_id=summary_id,
+                            canonical_url=url,
+                            force=True,
+                            lease_owner=ENRICHMENT_WORKER_ID,
+                            claim_id=claim_id,
                         )
                     else:
                         payload = await enrich_web_candidate(
-                            pool, summary_id=summary_id, canonical_url=url,
+                            pool,
+                            summary_id=summary_id,
+                            canonical_url=url,
+                            lease_owner=ENRICHMENT_WORKER_ID,
+                            claim_id=claim_id,
                         )
+                await _assert_enrichment_lease(
+                    pool,
+                    summary_id=summary_id,
+                    lease_owner=ENRICHMENT_WORKER_ID,
+                    claim_id=claim_id,
+                )
                 if payload is None and kind in ("rss", "web_share", "github_other"):
-                    await _downgrade_empty_web_candidate(pool, summary_id)
-                if payload:
-                    async with pool.connection() as conn:
-                        await conn.execute(
-                            'UPDATE "summaries" SET "tags" = array_remove('
-                            'array_remove("tags", \'content_pending\'), '
-                            '\'github_content_pending\'), "updatedAt" = now() '
-                            'WHERE "id" = %s',
-                            (summary_id,),
+                    await _downgrade_empty_web_candidate(
+                        pool,
+                        summary_id,
+                        lease_owner=ENRICHMENT_WORKER_ID,
+                        claim_id=claim_id,
+                    )
+                source_retryable = payload is None
+                source_error_code = "ENRICHMENT_EMPTY_RESULT" if payload is None else None
+                source_error_message = (
+                    "source enrichment returned no usable payload"
+                    if payload is None else None
+                )
+                if kind == "github_repo" and isinstance(payload, dict):
+                    zread = payload.get("zread")
+                    if not _zread_pages_complete(zread):
+                        source_retryable = True
+                        source_error_code = "ZREAD_INCOMPLETE"
+                        source_error_message = "Zread document is partial or failed"
+                finalization: dict[str, Any] = {}
+                try:
+                    # Source writes are claim-guarded, but review
+                    # reconciliation is a separate state machine. Re-check
+                    # immediately before and after it so a reclaimed lease
+                    # cannot continue into review/final status transitions.
+                    await _assert_enrichment_lease(
+                        pool,
+                        summary_id=summary_id,
+                        lease_owner=ENRICHMENT_WORKER_ID,
+                        claim_id=claim_id,
+                    )
+                    finalization = await finalize_enrichment(
+                        pool,
+                        summary_id=summary_id,
+                        # A normal write invalidates the old review state in
+                        # the same SQL transaction. Explicit force is only
+                        # needed for a caller that deliberately refreshed the
+                        # snapshot.
+                        force_review=bool(payload and force),
+                    )
+                    await _assert_enrichment_lease(
+                        pool,
+                        summary_id=summary_id,
+                        lease_owner=ENRICHMENT_WORKER_ID,
+                        claim_id=claim_id,
+                    )
+                    if finalization.get("quality_status") in {"incomplete", "invalid"}:
+                        source_retryable = True
+                        source_error_code = source_error_code or "READER_QUALITY_INCOMPLETE"
+                        source_error_message = (
+                            source_error_message
+                            or "reader quality contract is incomplete"
                         )
-                        commit = getattr(conn, "commit", None)
-                        if commit is not None:
-                            await commit()
-                return bool(payload)
+                except EnrichmentLeaseLost:
+                    raise
+                except Exception:
+                    # The source snapshot is already durable. Review
+                    # reconciliation can repair a missing quality/content
+                    # handoff without forcing another expensive source fetch.
+                    logger.warning(
+                        "ai-engine.radar.enrichment.finalization_failed",
+                        extra={"summary_id": summary_id},
+                        exc_info=True,
+                    )
+                await _mark_enrichment_success(
+                    summary_id,
+                    attempts=attempts,
+                    claim_id=claim_id,
+                    retryable=source_retryable,
+                    error_code=source_error_code,
+                    error_message=source_error_message,
+                )
+                review = finalization.get("review")
+                if review is None:
+                    logger.info(
+                        "ai-engine.radar.enrichment.review_claim_skipped",
+                        extra={"summary_id": summary_id},
+                    )
+                elif review["content_status"] == "needs_manual_review":
+                    logger.warning(
+                        "ai-engine.radar.enrichment.content_review_manual",
+                        extra={
+                            "summary_id": summary_id,
+                            "quality_status": review["quality_status"],
+                        },
+                    )
+                if review and review["render_queued"]:
+                    logger.info(
+                        "ai-engine.radar.enrichment.render_review_queued",
+                        extra={"summary_id": summary_id},
+                    )
+                # A persisted partial/failed source is durable evidence for
+                # diagnostics, not a successful enrichment. Keep it out of
+                # this count so callers do not rescore or report an incomplete
+                # reader snapshot as completed work.
+                return bool(payload) and not source_retryable
             except Exception as exc:
+                await _mark_enrichment_retry(
+                    summary_id,
+                    attempts=attempts,
+                    claim_id=claim_id,
+                    error_code=type(exc).__name__,
+                    error_message=str(exc),
+                )
                 logger.warning(
                     "ai-engine.radar.enrichment.candidate_exception",
                     extra={
@@ -2288,16 +3215,38 @@ async def _run_enrichment_for_pending(
                     },
                 )
                 return False
+            finally:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
 
-    async def _bounded_enrich(summary_id: str, url: str, kind: str) -> bool:
+    async def _bounded_enrich(
+        summary_id: str,
+        url: str,
+        kind: str,
+        attempts: int,
+        claim_id: str,
+    ) -> bool:
         try:
             if effective_item_timeout is None:
-                return await _enrich_one(summary_id, url, kind)
+                return await _enrich_one(
+                    summary_id,
+                    url,
+                    kind,
+                    attempts,
+                    claim_id,
+                )
             return await asyncio.wait_for(
-                _enrich_one(summary_id, url, kind),
+                _enrich_one(summary_id, url, kind, attempts, claim_id),
                 timeout=effective_item_timeout,
             )
         except asyncio.TimeoutError:
+            await _mark_enrichment_retry(
+                summary_id,
+                attempts=attempts,
+                claim_id=claim_id,
+                error_code="ENRICHMENT_TIMEOUT",
+                error_message=f"item exceeded {effective_item_timeout:.0f}s timeout",
+            )
             logger.warning(
                 "ai-engine.radar.enrichment.item_timeout",
                 extra={
@@ -2309,9 +3258,44 @@ async def _run_enrichment_for_pending(
             return False
 
     outcomes = await asyncio.gather(
-        *(_bounded_enrich(summary_id, url, kind) for summary_id, url, kind in candidates)
+        *(
+            _bounded_enrich(summary_id, url, kind, attempts, claim_id)
+            for summary_id, url, kind, attempts, claim_id in candidates
+        )
     )
-    return sum(outcomes)
+    succeeded = sum(outcomes)
+    attempted = len(candidates)
+    if attempted < claim_limit or attempted >= limit:
+        return succeeded
+
+    # Never claim more rows than can be actively heartbeated. Continue in a
+    # fresh bounded batch so a serial CLI run cannot leave waiting rows with
+    # expired leases. Explicit force runs must provide summary_ids; remove the
+    # completed ids before the next batch so a forced repair cannot reselect
+    # its own completed work.
+    remaining_summary_ids = summary_ids
+    if summary_ids:
+        completed_ids = {summary_id for summary_id, *_ in candidates}
+        remaining_summary_ids = tuple(
+            summary_id for summary_id in summary_ids
+            if summary_id not in completed_ids
+        )
+        if not remaining_summary_ids:
+            return succeeded
+    elif force:
+        return succeeded
+
+    return succeeded + await _run_enrichment_for_pending(
+        pool,
+        limit=limit - attempted,
+        source_kinds=source_kinds,
+        sync_run_ids=sync_run_ids,
+        summary_ids=remaining_summary_ids,
+        concurrency=enrichment_concurrency,
+        force=force,
+        item_timeout=item_timeout,
+        run_id=run_id,
+    )
 
 
 async def run_enrichment_for_pending(
@@ -2324,28 +3308,26 @@ async def run_enrichment_for_pending(
     concurrency: int | None = None,
     force: bool = False,
     item_timeout: float | None = None,
+    run_id: str | None = None,
 ) -> int:
-    """Serialize enrichment dispatch across processes and within one process.
+    """Claim and process durable enrichment work.
 
-    A PostgreSQL session-level advisory lock is held for the full dispatch.
-    ``pg_try_advisory_lock`` is intentionally non-blocking: an overlapping
-    caller returns zero and the scheduler/manual caller can retry later,
-    rather than starting a second expensive Zread generation.
+    The advisory lock is acquired only around the short database claim inside
+    ``_run_enrichment_for_pending``. Long-running source fetches use the
+    per-row lease and claim token, so an unrelated new candidate does not wait
+    behind a slow Zread job.
     """
-    async with _ENRICHMENT_RUN_LOCK:
-        async with _cross_process_enrichment_lock(pool) as acquired:
-            if not acquired:
-                return 0
-            return await _run_enrichment_for_pending(
-                pool,
-                limit=limit,
-                source_kinds=source_kinds,
-                sync_run_ids=sync_run_ids,
-                summary_ids=summary_ids,
-                concurrency=concurrency,
-                force=force,
-                item_timeout=item_timeout,
-            )
+    return await _run_enrichment_for_pending(
+        pool,
+        limit=limit,
+        source_kinds=source_kinds,
+        sync_run_ids=sync_run_ids,
+        summary_ids=summary_ids,
+        concurrency=concurrency,
+        force=force,
+        item_timeout=item_timeout,
+        run_id=run_id,
+    )
 
 
 @asynccontextmanager
@@ -2357,53 +3339,68 @@ async def _cross_process_enrichment_lock(pool: Any) -> AsyncIterator[bool]:
     pool object.  Fail closed if the lock cannot be acquired or verified;
     running duplicate Zread jobs is more harmful than deferring one retry.
     """
+    connection_cm = pool.connection()
     try:
-        async with pool.connection() as lock_conn:
-            try:
-                cursor = await lock_conn.execute(
-                    "SELECT pg_try_advisory_lock(%s, %s) AS acquired",
-                    _ENRICHMENT_ADVISORY_LOCK_KEYS,
-                )
-                row = await cursor.fetchone()
-                if isinstance(row, dict):
-                    acquired = bool(row.get("acquired"))
-                elif row:
-                    acquired = bool(row[0])
-                else:
-                    acquired = False
-            except Exception:
-                logger.exception(
-                    "ai-engine.radar.enrichment.lock_check_failed",
-                )
-                yield False
-                return
-
-            if not acquired:
-                logger.info(
-                    "ai-engine.radar.enrichment.lock_busy",
-                )
-                yield False
-                return
-
-            try:
-                yield True
-            finally:
-                try:
-                    await lock_conn.execute(
-                        "SELECT pg_advisory_unlock(%s, %s)",
-                        _ENRICHMENT_ADVISORY_LOCK_KEYS,
-                    )
-                except Exception:
-                    # The connection is about to return to the pool; keep
-                    # the failure visible, but do not mask the worker result.
-                    logger.exception(
-                        "ai-engine.radar.enrichment.lock_release_failed",
-                    )
+        lock_conn = await connection_cm.__aenter__()
     except Exception:
         logger.exception(
             "ai-engine.radar.enrichment.lock_connection_failed",
         )
         yield False
+        return
+
+    try:
+        try:
+            cursor = await lock_conn.execute(
+                "SELECT pg_try_advisory_lock(%s, %s) AS acquired",
+                _ENRICHMENT_ADVISORY_LOCK_KEYS,
+            )
+            row = await cursor.fetchone()
+            if isinstance(row, dict):
+                acquired = bool(row.get("acquired"))
+            elif row:
+                acquired = bool(row[0])
+            else:
+                acquired = False
+        except Exception:
+            logger.exception(
+                "ai-engine.radar.enrichment.lock_check_failed",
+            )
+            yield False
+            return
+
+        if not acquired:
+            logger.info(
+                "ai-engine.radar.enrichment.lock_busy",
+            )
+            yield False
+            return
+
+        try:
+            # Let exceptions from the work performed under the lock propagate
+            # unchanged. Catching them in the outer context manager and
+            # yielding a second time produces the opaque
+            # "generator didn't stop after athrow()" failure.
+            yield True
+        finally:
+            try:
+                await lock_conn.execute(
+                    "SELECT pg_advisory_unlock(%s, %s)",
+                    _ENRICHMENT_ADVISORY_LOCK_KEYS,
+                )
+            except Exception:
+                # The connection is about to return to the pool; keep
+                # the failure visible, but do not mask the worker result.
+                logger.exception(
+                    "ai-engine.radar.enrichment.lock_release_failed",
+                )
+    finally:
+        try:
+            await connection_cm.__aexit__(None, None, None)
+        except Exception:
+            logger.exception(
+                "ai-engine.radar.enrichment.lock_connection_close_failed",
+            )
 
 
 async def _generate_web_highlights(

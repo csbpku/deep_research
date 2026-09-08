@@ -113,7 +113,7 @@ async def main() -> int:
             await conn.execute(
                 'UPDATE "summaries" SET '
                 '"distilledScore" = NULL, "distilledTotal" = NULL, '
-                '"distilledTier" = NULL, "distilledMustRead" = false, '
+                '"distilledTier" = NULL, '
                 '"distilledProfile" = NULL, "scoreReason" = NULL, '
                 '"updatedAt" = now() WHERE "id" IN ('
                 + placeholders

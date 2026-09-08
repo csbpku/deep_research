@@ -16,7 +16,7 @@ export const TOPICS_FILTERS = [
   { key: 'hot', label: '热门', Icon: Flame },
   { key: 'warming', label: '升温', Icon: TrendingUp },
   { key: 'emerging', label: '新出现', Icon: Sparkles },
-  { key: 'followed', label: '我的关注', Icon: Star },
+  { key: 'followed', label: '只看已关注', Icon: Star },
 ] as const;
 
 interface Props {
@@ -40,8 +40,8 @@ export function TopicsFilter({ unreadByFilter }: Props) {
             href={href}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              // 触控目标最小 36×36 (Tailwind h-9 = 36px)，移动端 44+ 安全。
-              'inline-flex h-9 min-h-[36px] items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors',
+              // 移动端使用 44px 触控目标，桌面端收紧到 36px。
+              'inline-flex h-11 min-h-11 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors sm:h-9 sm:min-h-9',
               active
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'border-border bg-card text-foreground/80 hover:text-foreground hover:border-foreground/30',

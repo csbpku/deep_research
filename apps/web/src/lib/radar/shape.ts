@@ -32,10 +32,13 @@ export type RadarCandidateShape = {
   id: string;
   title: string;
   excerpt: string;
+  /** 列表卡片上 excerpt 的呈现策略：完整 / clamp-5。 */
+  excerptDisplay: ExcerptDisplayMode;
   body: string | null;
   tier: string | null;
   url: string;
   sourceType: string | null;
+  sourceName: string | null;
   syncRunId: string | null;
   syncDate: string | null;
   tags: string[];
@@ -61,6 +64,13 @@ export type RadarCandidateShape = {
   originalKind: string | null;
   originalMarkdown: string | null;
   originalMeta: unknown;
+  readerQualityStatus: string | null;
+  readerQualityDetails: unknown;
+  contentReviewStatus: string | null;
+  contentReviewDetails: unknown;
+  contentReviewRound: number;
+  renderReviewStatus: string | null;
+  renderReviewRound: number;
   githubItemMeta: RadarGithubItemMeta | null;
   repoSummary: string | null;
   highlights: {
@@ -117,6 +127,13 @@ export function shapeCandidate(input: {
     originalKind?: string | null;
     originalMarkdown?: string | null;
     originalMeta?: unknown;
+    readerQualityStatus?: string | null;
+    readerQualityDetails?: unknown;
+    contentReviewStatus?: string | null;
+    contentReviewDetails?: unknown;
+    contentReviewRound?: number;
+    renderReviewStatus?: string | null;
+    renderReviewRound?: number;
     repoSummary?: string | null;
     highlights?: unknown;
     arxivAnalysis?: unknown;
@@ -148,11 +165,13 @@ export function shapeCandidate(input: {
   return {
     id: s.id,
     title: s.title,
-    excerpt: excerptOf(s.body, 280),
+    excerpt: excerptOf(s.body, 1200),
+    excerptDisplay: classifyExcerptDisplay(excerptOf(s.body, 1200)),
     body: input.includeBody === false ? null : s.body,
     tier: s.distilledTier ?? distilledScore?.tier ?? null,
     url: s.url,
     sourceType: s.syncRun?.source?.sourceType ?? (s.source === 'user' ? 'web_share' : null),
+    sourceName: s.syncRun?.source?.name ?? (s.source === 'user' ? '用户分享' : null),
     syncRunId: s.syncRunId,
     syncDate: s.syncRun?.completedAt
       ? s.syncRun.completedAt.toISOString()
@@ -178,6 +197,13 @@ export function shapeCandidate(input: {
     originalKind: s.originalKind ?? null,
     originalMarkdown: s.originalMarkdown ?? null,
     originalMeta: sanitizeOriginalMeta(s.originalMeta ?? null),
+    readerQualityStatus: s.readerQualityStatus ?? null,
+    readerQualityDetails: s.readerQualityDetails ?? null,
+    contentReviewStatus: s.contentReviewStatus ?? null,
+    contentReviewDetails: s.contentReviewDetails ?? null,
+    contentReviewRound: s.contentReviewRound ?? 0,
+    renderReviewStatus: s.renderReviewStatus ?? null,
+    renderReviewRound: s.renderReviewRound ?? 0,
     githubItemMeta,
     repoSummary: s.repoSummary ?? null,
     highlights,
@@ -306,7 +332,6 @@ export function parseDistilledScore(value: unknown): DistilledScore | null {
     tierScore: raw.tierScore ?? raw.tier_score,
     sourceBonus: raw.sourceBonus ?? raw.source_bonus,
     tier: raw.tier,
-    mustRead: raw.mustRead ?? raw.must_read,
     dimensions: {
       informationGain: dims.informationGain ?? dims.info_increment,
       analysisDepth: dims.analysisDepth ?? dims.analysis_depth,
@@ -362,6 +387,29 @@ export function excerptOf(body: string, max: number): string {
   return sliced + '…';
 }
 
+/**
+ * `excerptDisplay` —— 列表卡上正文片段的呈现策略。
+ *
+ * 长摘要（arxiv abstract / 长文导言）是用户判断"值不值得读"的关键信号，
+ * 一刀切 clamp-5 会把它从五六百字压到前两句，等于丢掉了主要内容。
+ * 而对话、流水账、列表型 web_share 内容每个段落都很短，clamp-5 之前会铺一整墙。
+ *
+ * 分类信号（基于段落数 + 平均段长）：
+ *   - n_para <= 3  → 短小，完整显示
+ *   - avg_len >= 200 → 长段落，完整显示（典型 abstract / 长段叙述）
+ *   - 其余 → 多数短段，clamp-5 抑制对话墙
+ */
+export type ExcerptDisplayMode = 'full' | 'clamp';
+
+export function classifyExcerptDisplay(excerpt: string): ExcerptDisplayMode {
+  if (!excerpt) return 'clamp';
+  const paragraphs = excerpt.split(/\n{2,}/u).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length <= 3) return 'full';
+  const totalLen = paragraphs.reduce((sum, p) => sum + p.length, 0);
+  const avgLen = totalLen / paragraphs.length;
+  return avgLen >= 200 ? 'full' : 'clamp';
+}
+
 /** 把 YYYY-MM-DD 字符串（UTC 当日 00:00:00）解析成 Date 对象。 */
 export function parseUtcDate(yyyyMmDd: string): Date {
   const [y, m, d] = yyyyMmDd.split('-').map((s) => Number(s));
@@ -391,12 +439,18 @@ export async function aggregateFeedbacks(
   }
   if (summaryIds.length === 0) return result;
 
-  const grouped: Array<{ summaryId: string; feedbackType: string; _count: { feedbackType: number } }> =
-    await prisma.radarFeedback.groupBy({
-      by: ['summaryId', 'feedbackType'],
-      where: { summaryId: { in: summaryIds } },
-      _count: { feedbackType: true },
-    });
+  const groupedPromise = prisma.radarFeedback.groupBy({
+    by: ['summaryId', 'feedbackType'],
+    where: { summaryId: { in: summaryIds } },
+    _count: { feedbackType: true },
+  }) as Promise<Array<{ summaryId: string; feedbackType: string; _count: { feedbackType: number } }>>;
+  const minePromise = userId
+    ? prisma.radarFeedback.findMany({
+        where: { summaryId: { in: summaryIds }, userId },
+        select: { summaryId: true, feedbackType: true },
+      }) as Promise<Array<{ summaryId: string; feedbackType: string }>>
+    : Promise.resolve([] as Array<{ summaryId: string; feedbackType: string }>);
+  const [grouped, mine] = await Promise.all([groupedPromise, minePromise]);
   for (const row of grouped) {
     const entry = result.get(row.summaryId);
     if (!entry) continue;
@@ -406,12 +460,6 @@ export async function aggregateFeedbacks(
     }
   }
 
-  const mine: Array<{ summaryId: string; feedbackType: string }> = userId
-    ? await prisma.radarFeedback.findMany({
-        where: { summaryId: { in: summaryIds }, userId },
-        select: { summaryId: true, feedbackType: true },
-      })
-    : [];
   for (const row of mine) {
     const entry = result.get(row.summaryId);
     if (!entry) continue;

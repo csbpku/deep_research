@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 export const userPreferencesSchema = z
   .object({
-    defaultReportType: z.enum(['research_report', 'summary_brief', 'slides']).optional(),
+    defaultReportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).optional(),
     defaultSourcePolicy: z
       .enum(['prefer_user_sources', 'only_user_sources', 'web_only'])
       .optional(),

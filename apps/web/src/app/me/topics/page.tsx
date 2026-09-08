@@ -5,6 +5,7 @@ import { ArrowLeft, BookOpenCheck, Compass, Sparkles, TrendingUp } from 'lucide-
 
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
+import { collapseTopicIssues } from '@/lib/topics';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -78,15 +79,34 @@ export default async function MyTopicsPage() {
       topicId: true,
       title: true,
       proposition: true,
+      kind: true,
       importanceScore: true,
       lastSeenAt: true,
+      candidates: { select: { summaryId: true } },
     },
   });
-  const issuesByTopic = new Map<string, typeof issues>();
+  const issueRowsByTopic = new Map<string, typeof issues>();
   for (const issue of issues) {
-    const arr = issuesByTopic.get(issue.topicId) ?? [];
-    arr.push(issue);
-    issuesByTopic.set(issue.topicId, arr);
+    const rows = issueRowsByTopic.get(issue.topicId) ?? [];
+    rows.push(issue);
+    issueRowsByTopic.set(issue.topicId, rows);
+  }
+  const issuesByTopic = new Map<string, ReturnType<typeof collapseTopicIssues>>();
+  for (const [topicId, rows] of issueRowsByTopic) {
+    issuesByTopic.set(
+      topicId,
+      collapseTopicIssues(
+        rows.map((issue) => ({
+          id: issue.id,
+          title: issue.title,
+          proposition: issue.proposition,
+          kind: issue.kind,
+          importanceScore: issue.importanceScore,
+          lastSeenAt: issue.lastSeenAt,
+          candidateIds: (issue.candidates ?? []).map((candidate) => candidate.summaryId),
+        })),
+      ),
+    );
   }
 
   const latestResearch = await prisma.researchTopic.findMany({
@@ -134,7 +154,9 @@ export default async function MyTopicsPage() {
           let unread = list.length;
           const last = f.lastViewedAt;
           if (last) {
-            unread = list.filter((i) => i.lastSeenAt.getTime() > last.getTime()).length;
+            unread = list.filter((i) => (
+              (typeof i.lastSeenAt === 'string' ? Date.parse(i.lastSeenAt) : i.lastSeenAt.getTime()) > last.getTime()
+            )).length;
           }
           const top = list[0];
           const latest = researchByTopic.get(t.id) ?? null;
@@ -172,7 +194,9 @@ export default async function MyTopicsPage() {
                     </div>
                   ) : null}
                   <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                    <span>候选 {t.candidateCount}</span>
+                    <span>{t.candidateCount} 条相关内容</span>
+                    <span>·</span>
+                    <span>{list.length} 个活跃议题</span>
                     <span>·</span>
                     <span>上次查看 {f.lastViewedAt ? formatRelative(f.lastViewedAt) : '从未'}</span>
                     {latest ? (

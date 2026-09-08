@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_engine.llm.client import generate_text
+from ai_engine.llm.client import generate_text, is_retryable_llm_error
 
 
 @pytest.fixture(autouse=True)
@@ -178,6 +178,11 @@ async def test_generate_text_reuses_client(
     await generate_text(llm_spec="openai:test-model", user_prompt="two")
 
     assert constructed == 1
+
+
+def test_transport_disconnects_are_retryable() -> None:
+    assert is_retryable_llm_error(BrokenPipeError("upstream closed the pipe")) is True
+    assert is_retryable_llm_error(ConnectionResetError("connection reset by peer")) is True
 
 
 async def test_generate_text_falls_back_after_quota_error(

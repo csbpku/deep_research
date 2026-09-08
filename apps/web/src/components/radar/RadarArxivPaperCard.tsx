@@ -22,6 +22,7 @@ interface Props {
   authors: string[];
   tldr: string | null;
   analysis: ArxivAnalysis | null;
+  showTldr?: boolean;
 }
 
 function formatAuthors(authors: string[]): string {
@@ -47,12 +48,12 @@ function buildAnalysisBlocks(analysis: ArxivAnalysis | null): AnalysisBlock[] {
   ].filter((block) => block.text);
 }
 
-export function RadarArxivPaperCard({ meta, authors, tldr, analysis }: Props) {
+export function RadarArxivPaperCard({ meta, authors, tldr, analysis, showTldr = true }: Props) {
   const blocks = buildAnalysisBlocks(analysis);
 
   // Do not reserve a large “论文解读” card when the optional LLM analysis
   // failed. The source article and article map remain available below.
-  if (!tldr && !analysis) return null;
+  if ((!tldr || !showTldr) && !analysis) return null;
 
   return (
     <section data-testid="arxiv-paper-card" className="my-5 rounded-lg bg-muted/30 px-4 py-4">
@@ -86,7 +87,7 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis }: Props) {
       </div>
 
       {/* TL;DR */}
-      {(tldr || (analysis && analysis.tldr)) && (
+      {showTldr && (tldr || (analysis && analysis.tldr)) && (
         <div className="mb-3 border-l-2 border-primary bg-muted/40 px-3 py-2.5">
           <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-primary">
             <Sparkles className="size-3" />

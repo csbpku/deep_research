@@ -33,15 +33,14 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 
 ## Current State
 
-- **入口文档**：[`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) — 当前进度、测试指标、follow-up bug、文档地图。
-- As of 2026-08-27: Weeks 1–13 / P1 / cognition-loop V2 已交付；2026-08-26 完成 GitHub curated 雷达链路收口。本地 `main` 工作树含未提交 draft（AI 调研对话流、LLM usage/resilience、Zread 刷新等），最新事实以 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 顶部条目为准。
+- **入口文档**：[`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) — 当前进度、测试指标、follow-up bug、文档地图；文档分层见 [`docs/README.md`](./docs/README.md)。
+- As of 2026-09-08: Weeks 1–13 / P1 / cognition-loop V2 已交付；当前继续收口 AI 调研产物、深度研究、雷达正文质量和全站体验。当前仍是本地 `main` 工作树 draft：未提交、未部署；最新事实以 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 顶部条目为准。
 - AI engine: `GptResearcherAdapter` is primary (ADR 0004 复评通过), `FakeAdapter` is the test/CI fallback. Canonical LLM slots 是 `<provider>:<model>` 形式的 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM`（fallback 兼容读取旧名 `LLM_FALLBACK_LLM`；`SMART_LLM` 等旧槽位仅作 gpt-researcher 兼容镜像，派生逻辑见 `ai_engine/llm/config.py`）；`scripts/setup.sh` discovers `/models` and writes the selected model to the canonical slots, while `--quick`/fake uses `anthropic:deepseek-v4-flash`. Heavy calls prefer `*_HEAVY` credentials and fall back to the light pair. 只有 `RETRIEVER=tavily` 时才需要 `TAVILY_API_KEY`。
 - Week 9 交付详见 `docs/weekly/week9-delivery.md`。
-- P1 已交付：研究文章三栏工作台（版本/大纲/AI 助手/AI 校核/引用/锚定评论）、雷达讨论与治理（@成员/站内通知、软屏蔽/恢复）、Confluence 导入框架（代码完成，OAuth 需外部凭据验收）、AI 事实核验与结论审查；日报生成链路已删除。
-- 雷达详情当前为“原文 + 阅读动作栏”：文章地图只允许严格正文 block 回链，选中文本支持解释/翻译/问 AI/批注/复制引用；HTML 正文图片会保留为安全 HTTPS 图片并懒加载。enrichment 迁移与文章地图缓存的实测数字不在此维护快照，以 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 对应条目为准。
+- P1 已交付：研究文章三栏工作台、雷达讨论与治理、Confluence 导入框架（OAuth 仍需外部凭据验收）、AI 事实核验与结论审查；日报生成链路已删除。本周新增/收口知识卡片显式提炼、研究库状态/类型筛选、AI 调研四种产物（研究稿、快速判断、Slides 提纲、网页简报）和独立审核边界。
+- 雷达详情当前为“摘要先行 + 原文阅读动作栏”：文章地图只允许严格正文 block 回链，选中文本支持解释/翻译/问 AI/批注/复制引用；HTML 正文图片会保留为安全 HTTPS 图片并懒加载。高价值 enrichment 还会经过内容呈现审核和真实浏览器渲染审核，二者与 AI 研究事实审核分开。
 - 部署脚手架 `infra/` 已就绪，Docker Compose 镜像构建及备份恢复演练已完成。
 - 本地运行：`launchd` 模板（`infra/launchd/`）支持常驻 AI engine（uvicorn 直接运行，无 `--reload`）和 Next.js 服务。
-- **测试指标**（2026-08-06 实测）：Web 单测 383 ✅、Web E2E 33 passed/2 skipped ✅、Python 全量测试 443 passed/1 skipped ✅、typecheck + ruff 全绿、mypy 66 files 0 issues ✅。详见 PROJECT_STATUS.md。
-- **lint gate 状态**：`ruff check .` 与 `mypy ai_engine` 均 clean（66 个源文件）。
+- **本次收口门禁**：`git diff --check`、`pnpm typecheck`、`uv run ruff check .`、`uv run mypy ai_engine tools` 均通过；mypy 当前检查 84 个源文件。Web/Python 全量测试和真实外部服务验收以 PROJECT_STATUS 的逐条记录为准，不把未在本次收口重跑的数量写成新基线。
 - **已移除/废弃**：`apps/web/src/app/api/admin/radar/[id]/select/route.ts`（逐条选入日报接口已移除；当前雷达由自动排序与 Admin 负向治理处理）。
-- **备用 `distDir`**：`next.config.ts` 支持 `NEXT_DIST_DIR` 环境变量，用于隔离 production build 路径。
+- **Next 构建目录**：开发环境默认使用 `apps/web/.next-dev`，production/隔离构建默认使用 `.next`；`NEXT_DIST_DIR` 仍可覆盖输出目录。`.next-*` 是本地构建残留，未经确认不要删除。

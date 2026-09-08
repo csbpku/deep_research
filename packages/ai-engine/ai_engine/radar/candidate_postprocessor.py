@@ -105,7 +105,11 @@ async def score_missing_candidates(
             or row.get("title")
             or ""
         )
-        shell_label = _shell_content_label(content)
+        shell_label = _shell_content_label(
+            content,
+            source_type=source_type,
+            url=str(row.get("url") or ""),
+        )
         scoreability = _scoreability(content)
         if scoreability is None:
             logger.info(
@@ -173,7 +177,7 @@ async def score_missing_candidates(
                     'array_append(COALESCE("tags", ARRAY[]::text[]), '
                     '\'content_pending\'), \'fetch_failed_shell\') END, '
                     '"distilledScore" = NULL, "distilledTotal" = NULL, '
-                    '"distilledTier" = NULL, "distilledMustRead" = false, '
+                    '"distilledTier" = NULL, '
                     '"distilledProfile" = NULL, "scoreReason" = %s, '
                     '"updatedAt" = now() WHERE "id" = %s',
                     (pending_reason, summary_id),
@@ -216,7 +220,7 @@ async def score_missing_candidates(
             await conn.execute(
                 'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, "distilledTier" = %s, '
-                '"distilledMustRead" = %s, "distilledProfile" = %s, '
+                '"distilledProfile" = %s, '
                 '"scoreReason" = %s, '
                 '"tags" = ' + tags_sql + ', '
                 '"updatedAt" = now() WHERE "id" = %s',
@@ -224,7 +228,6 @@ async def score_missing_candidates(
                     json.dumps(result.to_dict(), ensure_ascii=False),
                     total,
                     result.tier,
-                    result.must_read,
                     result.profile_id,
                     score_reason,
                     summary_id,

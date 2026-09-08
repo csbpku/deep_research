@@ -266,7 +266,6 @@ def test_compute_score_all_zeros() -> None:
     result = compute_score(parsed)
     assert result.total == 0.0
     assert result.tier == TIER_NOISE
-    assert result.must_read is False
     assert result.veto is None
     assert result.risk_flag is None
     assert result.suspected_repost is False
@@ -306,9 +305,6 @@ def test_github_structured_signals_rescue_documented_repo_to_skim() -> None:
     # M7: tier_deep_read lowered 70→55 (engineering) so a github repo
     # with strong signals clears the new bar.
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
 def test_github_popularity_without_technical_evidence_does_not_rescue() -> None:
     result = compute_score(
         _all_zero_parsed(),
@@ -325,7 +321,6 @@ def test_compute_score_all_max_engineering() -> None:
     assert result.total == 100.0
     assert result.tier == TIER_COLLECTION
     assert result.tier_score == 100.0
-    assert result.must_read is True
     assert result.profile_id == PROFILE_ENGINEERING
 
 
@@ -339,9 +334,6 @@ def test_direct_relevance_zero_caps_high_quality_article() -> None:
     # engineering. The item lands in skim rather than noise; tier_noise
     # behavior is exercised by all-zero parsed via the distribution test.
     assert result.tier == TIER_SKIM
-    assert result.must_read is False
-
-
 def test_direct_relevance_one_caps_high_quality_article() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 1
@@ -351,9 +343,6 @@ def test_direct_relevance_one_caps_high_quality_article() -> None:
     # 70→55, ranking_score=56 now clears tier_deep_read → deep_read.
     assert result.ranking_score == 56.0
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
 def test_generic_engineering_asset_can_be_indirectly_relevant() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 2
@@ -375,9 +364,6 @@ def test_direct_relevance_two_cannot_reach_collection() -> None:
     # (collection_ready) still rejects rel=2 even at this higher ceiling.
     assert result.ranking_score == 80.0
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
 def test_direct_relevance_three_preserves_normal_tier() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 3
@@ -390,7 +376,6 @@ def test_direct_relevance_three_preserves_normal_tier() -> None:
         evidence_text="本文提供 API 重试代码、压测结果和延迟/可靠性取舍。",
     )
     assert result.tier == TIER_COLLECTION
-    assert result.must_read is True
     assert result.effective_total == 100.0
 
 
@@ -402,9 +387,6 @@ def test_direct_relevance_three_without_evidence_downgrades_to_indirect() -> Non
     # M7: relevance_cap for rel=2 non-github 72→80.
     assert result.effective_total == 80.0
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
 def test_direct_relevance_three_without_actionable_details_downgrades() -> None:
     parsed = _all_max_parsed()
     parsed["direct_relevance"] = 3
@@ -429,9 +411,6 @@ def test_collection_requires_complete_engineering_evidence() -> None:
     # dimension is conservatively scored 2.
     assert result.ranking_score == 95.84
     assert result.tier == TIER_COLLECTION
-    assert result.must_read is True
-
-
 def test_collection_cannot_bypass_news_ranking_threshold() -> None:
     """Editorial readiness must not turn a sub-threshold news item into collection."""
     parsed = _all_max_parsed()
@@ -445,9 +424,6 @@ def test_collection_cannot_bypass_news_ranking_threshold() -> None:
     assert result.ranking_score is not None
     assert result.ranking_score < NEWS_PROFILE.tier_collection
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
 def test_single_setup_experiment_cannot_enter_collection() -> None:
     parsed = _all_max_parsed()
     parsed.update({
@@ -462,9 +438,6 @@ def test_single_setup_experiment_cannot_enter_collection() -> None:
     # collection tier or become must-read even when every other dimension is
     # perfect.
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
 def test_experiment_harness_cannot_claim_direct_implementation_relevance() -> None:
     parsed = _all_max_parsed()
     parsed.update({
@@ -576,9 +549,6 @@ def test_devto_source_is_capped_without_independent_validation() -> None:
     result = compute_score(parsed, source_type="devto")
     assert result.ranking_score == ENGINEERING_PROFILE.tier_skim
     assert result.tier == TIER_SKIM
-    assert result.must_read is False
-
-
 def test_v3_separates_content_quality_from_team_value() -> None:
     parsed = _all_zero_parsed(
         **{
@@ -645,11 +615,10 @@ def test_legacy_result_without_direct_relevance_remains_compatible() -> None:
 
 
 def test_compute_score_all_max_paper() -> None:
-    """paper profile: must_read_total=86, core_count=2."""
+    """paper profile: tier thresholds favor 8."""
     result = compute_score(_all_max_parsed(PAPER_PROFILE), profile=PAPER_PROFILE)
     assert result.total == 100.0
     assert result.tier == TIER_COLLECTION
-    assert result.must_read is True
     assert result.profile_id == PROFILE_PAPER
 
 
@@ -669,121 +638,9 @@ def test_compute_score_midrange() -> None:
     # M7: engineering tier_deep_read 70→55; the weighted total=55 lands
     # exactly on the boundary, so the item reaches deep_read (>=).
     assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
     assert "可行动性" in result.weak_point
 
 
-# ── must_read precision ───────────────────────────────────────────
-
-
-def test_must_read_requires_high_core_and_total() -> None:
-    """High support dims but low core → not must_read even if total high."""
-    parsed = _all_zero_parsed(
-        **{
-            "信息增量": 1, "分析深度": 1, "可行动性": 1,
-            "事实可信度": 3, "时效性": 3, "表达质量": 3, "综合信号": 3,
-            "weak_point": "core dims low",
-        }
-    )
-    result = compute_score(parsed)
-    # engineering weights → total well below 88.
-    assert result.total < 88
-    assert result.must_read is False
-
-
-def test_must_read_with_two_core_at_2_engineering() -> None:
-    """engineering profile: must_read_total=82, core_count=2.
-
-    A response with two core dims at 3 and one at 0 reaches ~75 under
-    engineering weights — below must_read_total → not must_read.
-    """
-    parsed = _all_zero_parsed(
-        **{
-            "信息增量": 3, "分析深度": 3, "可行动性": 0,
-            "事实可信度": 3, "时效性": 3, "表达质量": 3, "综合信号": 3,
-            "weak_point": "可行动性低",
-        }
-    )
-    result = compute_score(parsed)
-    # engineering: 3*25/3 + 3*20/3 + 0*25/3 + 3*10/3 + 3*10/3 + 3*5/3 + 3*5/3
-    # = 25 + 20 + 0 + 10 + 10 + 5 + 5 = 75.0 → < 82
-    assert result.total < 82
-    assert result.must_read is False
-
-
-def test_must_read_paper_lower_threshold() -> None:
-    """paper profile requires the calibrated 92-point threshold.
-
-    A merely good paper should remain deep_read rather than must_read.
-    """
-    # Calibrated paper weights: info=25, depth=25, actionability=20,
-    # credibility=10, timeliness=5, expression=5, audience=10.
-    parsed = _all_zero_parsed(
-        **{
-            "信息增量": 3, "分析深度": 2, "可行动性": 1,
-            "事实可信度": 3, "时效性": 3, "表达质量": 2, "综合信号": 2,
-            "weak_point": "",
-        }
-    )
-    # The first pass is intentionally below the calibrated must_read floor.
-    result = compute_score(parsed, profile=PAPER_PROFILE)
-    # Bump 可行动性 to 2; this reaches 83.33, below the new 92 threshold.
-    parsed["可行动性"] = 2
-    result = compute_score(parsed, profile=PAPER_PROFILE)
-    parsed["时效性"] = 3
-    parsed["综合信号"] = 3
-    result = compute_score(parsed, profile=PAPER_PROFILE)
-    assert result.total < 92
-    assert result.must_read is False
-
-
-def test_paper_low_actionability_cannot_be_collection() -> None:
-    """Theoretical depth alone must not produce a top-tier paper signal."""
-    parsed = _all_zero_parsed(
-        **{
-            "信息增量": 3,
-            "分析深度": 3,
-            "可行动性": 1,
-            "事实可信度": 3,
-            "时效性": 3,
-            "表达质量": 3,
-            "综合信号": 3,
-        }
-    )
-    result = compute_score(parsed, profile=PAPER_PROFILE)
-    assert result.total == 86.67
-    # M7: paper tier_deep_read 76→60; the low-actionability cap at 64 now
-    # sits above deep_read so the item lands in deep_read, not skim. The
-    # editorial guard (no collection) still holds — direct_relevance is
-    # None so collection_ready cannot fire.
-    assert result.tier == TIER_DEEP_READ
-    assert result.must_read is False
-
-
-def test_must_read_news_requires_only_one_core() -> None:
-    """news profile: must_read_core_count=1.
-
-    Even if only one core dim is at 2, the score can still be must_read
-    as long as total ≥ 85.
-    """
-    parsed = _all_zero_parsed(
-        **{
-            "信息增量": 2, "分析深度": 1, "可行动性": 1,
-            "事实可信度": 3, "时效性": 3, "表达质量": 3, "综合信号": 3,
-            "weak_point": "",
-        }
-    )
-    result = compute_score(parsed, profile=NEWS_PROFILE)
-    # news: 2*15/3 + 1*10/3 + 1*10/3 + 3*15/3 + 3*25/3 + 3*10/3 + 3*15/3
-    # = 10 + 3.33 + 3.33 + 15 + 25 + 10 + 15 = 81.66
-    # Boost by raising 信息增量 to 3 → 86.66 → must_read (1 core dim ≥ 2)
-    parsed["信息增量"] = 3
-    result = compute_score(parsed, profile=NEWS_PROFILE)
-    assert result.total >= 85
-    assert result.must_read is True
-
-
-# ── Hard veto / risk flag / repost flag ───────────────────────────
 
 
 def test_hard_veto_title_content_mismatch() -> None:
@@ -792,7 +649,6 @@ def test_hard_veto_title_content_mismatch() -> None:
     result = compute_score(parsed)
     assert result.total == 0.0
     assert result.tier == TIER_NOISE
-    assert result.must_read is False
     assert result.veto == VETO_MISMATCH
     assert result.has_risk_signal is False
     assert result.suspected_repost is False
@@ -826,14 +682,12 @@ def test_hard_veto_unsafe_content() -> None:
 
 def test_legacy_pure_repost_flag_migrated() -> None:
     """Old v1 callers used veto=='pure_repost' or 'suspected_repost'.
-    v2 must NOT zero the scores; cap 信息增量 at 1 and force
-    must_read=False."""
+    v2 must NOT zero the scores; cap 信息增量 at 1."""
     parsed = _all_max_parsed()
     parsed["veto"] = "pure_repost"
     result = compute_score(parsed)
     assert result.veto is None
     assert result.suspected_repost is True
-    assert result.must_read is False
     # 信息增量 is capped at 1; other dims keep their full scores.
     assert result.dimension_scores["信息增量"] == 1
     assert result.dimension_scores["分析深度"] == 3
@@ -844,7 +698,6 @@ def test_suspected_repost_caps_info_increment() -> None:
     parsed["suspected_repost"] = True
     result = compute_score(parsed)
     assert result.suspected_repost is True
-    assert result.must_read is False
     # Info increment capped at 1.
     assert result.dimension_scores["信息增量"] == 1
     # Total is reduced but not zeroed.
@@ -855,7 +708,7 @@ def test_suspected_repost_caps_info_increment() -> None:
 def test_security_risk_no_longer_veto() -> None:
     """v2: security_risk is a risk flag, not a veto.
 
-    Scores remain intact (not zeroed); must_read is forced False; veto
+    Scores remain intact (not zeroed); veto
     stays None and risk_flag / has_risk_signal carry the signal.
     """
     parsed = _all_max_parsed()
@@ -864,7 +717,6 @@ def test_security_risk_no_longer_veto() -> None:
     assert result.veto is None
     assert result.risk_flag == RISK_SECURITY
     assert result.has_risk_signal is True
-    assert result.must_read is False
     # Scores are NOT zeroed.
     assert result.dimension_scores["信息增量"] == 3
     assert result.total > 80
@@ -878,9 +730,6 @@ def test_risk_flag_via_explicit_field() -> None:
     assert result.risk_flag == RISK_SECURITY
     assert result.has_risk_signal is True
     assert result.veto is None
-    assert result.must_read is False
-
-
 def test_unknown_veto_ignored() -> None:
     """Unknown veto string is treated as None (not migrated to risk_flag)."""
     parsed = _all_max_parsed()
@@ -973,7 +822,6 @@ def test_default_score() -> None:
     assert result.tier_score == 0.0
     assert result.tier == TIER_NOISE
     assert result.is_default is True
-    assert result.must_read is False
     assert all(v == 0 for v in result.dimension_scores.values())
     assert result.profile_id == PROFILE_ENGINEERING
 
@@ -1057,7 +905,6 @@ async def test_score_with_llm_custom_scorer() -> None:
     result = await score_with_llm("title", "content", scorer=mock_scorer)
     assert result.total == 100.0
     assert result.tier == TIER_COLLECTION
-    assert result.must_read is True
     assert result.is_default is False
 
 
@@ -1228,13 +1075,13 @@ def test_scoring_monitor_tracks_metrics() -> None:
 
     monitor = ScoringMonitor()
     s1 = DistilledScore(
-        total=90.0, tier=TIER_COLLECTION, must_read=True,
+        total=90.0, tier=TIER_COLLECTION,
         dimension_scores={}, weak_point="", veto=None,
         risk_flag=None, suspected_repost=False, has_risk_signal=False,
         profile_id=PROFILE_ENGINEERING, is_default=False,
     )
     s2 = DistilledScore(
-        total=60.0, tier=TIER_SKIM, must_read=False,
+        total=60.0, tier=TIER_SKIM,
         dimension_scores={}, weak_point="", veto=None,
         risk_flag=None, suspected_repost=False, has_risk_signal=False,
         profile_id=PROFILE_ENGINEERING, is_default=False,
@@ -1245,9 +1092,7 @@ def test_scoring_monitor_tracks_metrics() -> None:
     monitor.record(s3)
     assert monitor.total_count == 3
     assert monitor.default_count == 1
-    assert monitor.must_read_count == 1
     assert abs(monitor.default_rate - 1/3) < 0.01
-    assert abs(monitor.must_read_rate - 1/3) < 0.01
     assert abs(monitor.daily_avg - 50.0) < 0.1
 
 
@@ -1256,13 +1101,13 @@ def test_scoring_monitor_tracks_risk_and_repost() -> None:
 
     monitor = ScoringMonitor()
     monitor.record(DistilledScore(
-        total=80.0, tier=TIER_DEEP_READ, must_read=False,
+        total=80.0, tier=TIER_DEEP_READ,
         dimension_scores={}, weak_point="", veto=None,
         risk_flag=RISK_SECURITY, suspected_repost=False, has_risk_signal=True,
         profile_id=PROFILE_ENGINEERING, is_default=False,
     ))
     monitor.record(DistilledScore(
-        total=40.0, tier=TIER_NOISE, must_read=False,
+        total=40.0, tier=TIER_NOISE,
         dimension_scores={}, weak_point="", veto=None,
         risk_flag=None, suspected_repost=True, has_risk_signal=False,
         profile_id=PROFILE_ENGINEERING, is_default=False,
@@ -1287,7 +1132,7 @@ def test_scoring_monitor_baseline_drift_alert() -> None:
     monitor = ScoringMonitor()
     for _ in range(10):
         monitor.record(DistilledScore(
-            total=50.0, tier=TIER_SKIM, must_read=False,
+            total=50.0, tier=TIER_SKIM,
             dimension_scores={}, weak_point="", veto=None,
             risk_flag=None, suspected_repost=False, has_risk_signal=False,
             profile_id=PROFILE_ENGINEERING, is_default=False,
@@ -1296,33 +1141,18 @@ def test_scoring_monitor_baseline_drift_alert() -> None:
     assert any("dropped" in a for a in alerts)
 
 
-def test_scoring_monitor_must_read_rate_alert() -> None:
-    from ai_engine.radar.distilled_scorer import DistilledScore
-
-    monitor = ScoringMonitor()
-    for _ in range(10):
-        monitor.record(DistilledScore(
-            total=50.0, tier=TIER_SKIM, must_read=False,
-            dimension_scores={}, weak_point="", veto=None,
-            risk_flag=None, suspected_repost=False, has_risk_signal=False,
-            profile_id=PROFILE_ENGINEERING, is_default=False,
-        ))
-    alerts = monitor.evaluate(baseline_must_read_rate=0.5)
-    assert any("must_read_rate" in a for a in alerts)
-
-
 def test_scoring_monitor_no_alerts_when_healthy() -> None:
     from ai_engine.radar.distilled_scorer import DistilledScore
 
     monitor = ScoringMonitor()
     for _ in range(10):
         monitor.record(DistilledScore(
-            total=90.0, tier=TIER_COLLECTION, must_read=True,
+            total=90.0, tier=TIER_COLLECTION,
             dimension_scores={}, weak_point="", veto=None,
             risk_flag=None, suspected_repost=False, has_risk_signal=False,
             profile_id=PROFILE_ENGINEERING, is_default=False,
         ))
-    alerts = monitor.evaluate(baseline_daily_avg=88.0, baseline_must_read_rate=0.9)
+    alerts = monitor.evaluate()
     assert len(alerts) == 0
 
 
@@ -1332,7 +1162,7 @@ def test_scoring_monitor_risk_rate_alert() -> None:
     monitor = ScoringMonitor()
     for _ in range(10):
         monitor.record(DistilledScore(
-            total=70.0, tier=TIER_DEEP_READ, must_read=False,
+            total=70.0, tier=TIER_DEEP_READ,
             dimension_scores={}, weak_point="", veto=None,
             risk_flag=RISK_SECURITY, suspected_repost=False, has_risk_signal=True,
             profile_id=PROFILE_ENGINEERING, is_default=False,

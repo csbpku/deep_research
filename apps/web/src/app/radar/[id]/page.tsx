@@ -3,9 +3,10 @@
 import { useParams, useSearchParams } from 'next/navigation';
 
 import { useQuery } from '@tanstack/react-query';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BookOpenCheck, BookmarkPlus, Check, Copy, ExternalLink, Languages, MessageCircle, Sparkles, Workflow } from 'lucide-react';
+import { BookOpenCheck, BookmarkPlus, Check, Copy, ExternalLink, Languages, Loader2, MessageCircle, RotateCw, Sparkles } from 'lucide-react';
 import { EmptyState } from '../../../components/EmptyState';
 import { CommentSection } from '../../../components/CommentSection';
 import { useCurrentUser } from '../../../lib/auth/client';
@@ -13,32 +14,62 @@ import { RadarFeedbackBar } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackCounts } from '../../../components/radar/RadarFeedbackBar';
 import { RadarArxivPaperCard } from '../../../components/radar/RadarArxivPaperCard';
 import { RadarRepoSummary } from '../../../components/radar/RadarRepoSummary';
-import { RadarZreadDocument, isZreadRepository } from '../../../components/radar/RadarZreadDocument';
 import { RadarGithubItemSummary } from '../../../components/radar/RadarGithubItemSummary';
 import { RadarArticleHighlights } from '../../../components/radar/RadarArticleHighlights';
-import { RadarOriginalArticle } from '../../../components/radar/RadarOriginalArticle';
-import { RadarRightPanel } from '../../../components/radar/RadarRightPanel';
+import { RadarDetailIntro } from '../../../components/radar/RadarDetailIntro';
 import { ReadingProgressBar } from '../../../components/radar/ReadingProgressBar';
 import { FloatingAiIcon } from '../../../components/radar/FloatingAiIcon';
 import { BottomSheet } from '../../../components/radar/BottomSheet';
-import { ChatPanel } from '../../../components/radar/ChatPanel';
 import { SelectionActionWindow } from '../../../components/radar/SelectionActionWindow';
 import { useChatSession } from '../../../components/radar/useChatSession';
 import type { Anchor, ContextScope } from '../../../components/radar/useChatSession';
 import type { RadarGithubItemMeta } from '../../../lib/radar/shape';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
-import { formatSourceType } from '../../../lib/radar/source-labels';
+import { formatRadarContentKind, formatSourceType } from '../../../lib/radar/source-labels';
 import { DistilledScorePanel } from '../../../components/radar/DistilledScorePanel';
 import { Button } from '../../../components/ui/button';
 import { toApiHttpError } from '../../../lib/errors/api-error';
 import { retryOnceAi } from '../../../lib/errors/friendly';
 import { BackToSearchButton } from '../../../components/domain/BackToSearchButton';
 import {
+  cleanExtractedPlainText,
+  cleanRadarBrief,
   decodeRadarTextEntities,
   radarQuoteMatchesBlock,
 } from '../../../components/radar/radar-reading-blocks';
-import MarkdownContent from '../../../components/MarkdownContent';
+import { isZreadRepository } from '../../../components/radar/radar-repository';
+
+const RadarOriginalArticle = dynamic(
+  () => import('../../../components/radar/RadarOriginalArticle').then((module) => module.RadarOriginalArticle),
+  {
+    ssr: false,
+    loading: () => <ReadingBodyLoading />,
+  },
+);
+const RadarZreadDocument = dynamic(
+  () => import('../../../components/radar/RadarZreadDocument').then((module) => module.RadarZreadDocument),
+  {
+    ssr: false,
+    loading: () => <ReadingBodyLoading />,
+  },
+);
+const RadarRightPanel = dynamic(
+  () => import('../../../components/radar/RadarRightPanel').then((module) => module.RadarRightPanel),
+  {
+    ssr: false,
+    loading: () => <div className="rounded-md border border-border bg-card p-4 text-xs text-muted-foreground">文章地图加载中…</div>,
+  },
+);
+const RadarSelectionResult = dynamic(
+  () => import('../../../components/radar/RadarSelectionResult').then((module) => module.RadarSelectionResult),
+  { ssr: false },
+);
+
+const ChatPanel = dynamic(
+  () => import('../../../components/radar/ChatPanel').then((module) => module.ChatPanel),
+  { ssr: false },
+);
 
 interface RadarDetail {
   id: string;
@@ -48,6 +79,7 @@ interface RadarDetail {
   tier: string | null;
   url: string;
   sourceType: string | null;
+  sourceName: string | null;
   tags: string[];
   status: string;
   publishedAt: string | null;
@@ -71,6 +103,13 @@ interface RadarDetail {
   originalKind: string | null;
   originalMarkdown: string | null;
   originalMeta: unknown;
+  readerQualityStatus: string | null;
+  readerQualityDetails: unknown;
+  contentReviewStatus: string | null;
+  contentReviewDetails: unknown;
+  contentReviewRound: number;
+  renderReviewStatus: string | null;
+  renderReviewRound: number;
   githubItemMeta: RadarGithubItemMeta | null;
   repoSummary: string | null;
   highlights: {
@@ -125,6 +164,50 @@ interface RepoMeta {
   } | null;
 }
 
+const RADAR_DETAIL_REQUEST_TIMEOUT_MS = 20_000;
+
+function ReadingBodyLoading() {
+  return (
+    <div className="space-y-3" role="status" aria-live="polite">
+      <div className="h-3 w-28 animate-pulse rounded bg-muted" />
+      <div className="h-3 w-full animate-pulse rounded bg-muted" />
+      <div className="h-3 w-11/12 animate-pulse rounded bg-muted" />
+      <span className="sr-only">正文渲染中</span>
+    </div>
+  );
+}
+
+async function fetchRadarSurface<T>(
+  path: string,
+  timeoutMessage: string,
+  signal: AbortSignal,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), RADAR_DETAIL_REQUEST_TIMEOUT_MS);
+  const abortFromQuery = () => controller.abort();
+  if (signal.aborted) {
+    controller.abort();
+  } else {
+    signal.addEventListener('abort', abortFromQuery, { once: true });
+  }
+
+  try {
+    const response = await fetch(path, { cache: 'no-store', signal: controller.signal });
+    if (!response.ok) {
+      throw await toApiHttpError(response, timeoutMessage.replace('超时，请重试。', ''));
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    if (controller.signal.aborted && !signal.aborted) {
+      throw new Error(timeoutMessage);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal.removeEventListener('abort', abortFromQuery);
+  }
+}
+
 export default function RadarDetailPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -150,14 +233,48 @@ export default function RadarDetailPage() {
   const [annotationComposerOpen, setAnnotationComposerOpen] = useState(false);
   const [annotationDraft, setAnnotationDraft] = useState('');
   const [aiPanelWidth, setAiPanelWidth] = useState(360);
+  const [isCompactViewport, setIsCompactViewport] = useState(false);
+  const [showMobileAiTrigger, setShowMobileAiTrigger] = useState(false);
+  const [chatPreloadReady, setChatPreloadReady] = useState(false);
+  const [contentEnabled, setContentEnabled] = useState(false);
+  const [detailLoadingElapsed, setDetailLoadingElapsed] = useState(0);
   const resizingRef = useRef(false);
   const focusTimerRef = useRef<number | null>(null);
   const leftColRef = useRef<HTMLDivElement>(null);
   const me = useCurrentUser();
   const chat = useChatSession({
     summaryId: params.id,
-    enabled: chatOpen && Boolean(me.data?.id),
+    // Warm the lightweight session after the first paint so opening the AI
+    // drawer is immediate without competing with the initial detail render.
+    enabled: Boolean(me.data?.id) && (chatOpen || chatPreloadReady),
   });
+
+  useEffect(() => {
+    if (!me.data?.id || !params.id) {
+      setChatPreloadReady(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setChatPreloadReady(true), 800);
+    return () => window.clearTimeout(timer);
+  }, [me.data?.id, params.id]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1023px)');
+    const main = document.querySelector('main');
+    const updateViewport = () => setIsCompactViewport(media.matches);
+    const updateScrollState = () => {
+      setShowMobileAiTrigger(!media.matches || (main?.scrollTop ?? 0) > 180);
+    };
+
+    updateViewport();
+    updateScrollState();
+    media.addEventListener('change', updateViewport);
+    main?.addEventListener('scroll', updateScrollState, { passive: true });
+    return () => {
+      media.removeEventListener('change', updateViewport);
+      main?.removeEventListener('scroll', updateScrollState);
+    };
+  }, []);
 
   const selectedRangeRef = useRef<Range | null>(null);
   const lastSelectionKeyRef = useRef<string | null>(null);
@@ -202,19 +319,73 @@ export default function RadarDetailPage() {
   }
   const q = useQuery<RadarDetail>({
     queryKey: ['radar', params.id],
-    queryFn: async () => {
-      const r = await fetch(`/api/radar/${params.id}`, { cache: 'no-store' });
-      if (!r.ok) {
-        throw await toApiHttpError(r, '加载失败');
-      }
-      return (await r.json()) as RadarDetail;
-    },
+    queryFn: ({ signal }) => fetchRadarSurface<RadarDetail>(
+      `/api/radar/${params.id}?surface=summary`,
+      '读取雷达详情超时，请重试。',
+      signal,
+    ),
     retry: retryOnceAi,
-    // Radar enrichment can update originalMarkdown while this SPA session is
-    // still alive. Always refetch when returning to a detail page so a stale
-    // client-side snapshot cannot mask the newly normalized source content.
-    refetchOnMount: 'always',
+    // Explicit refresh actions still call refetch(); a short client cache keeps
+    // back/forward navigation from re-downloading the same detail immediately.
+    staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setContentEnabled(false);
+    if (!q.data || q.data.tier === 'skim') return;
+    // Let the summary paint and become interactive before downloading and
+    // parsing a potentially large paper or repository document.
+    const timer = window.setTimeout(() => setContentEnabled(true), 180);
+    return () => window.clearTimeout(timer);
+  }, [params.id, q.data?.id, q.data?.tier]);
+
+  const contentQuery = useQuery<Partial<RadarDetail> & { id: string }>({
+    queryKey: ['radar-content', params.id],
+    // The summary is the first-viewport contract. Do not let a large article
+    // or repository document compete with it during navigation; start the
+    // body request once the quick judgment is already renderable.
+    enabled: contentEnabled,
+    queryFn: ({ signal }) => fetchRadarSurface<Partial<RadarDetail> & { id: string }>(
+      `/api/radar/${params.id}?surface=content`,
+      '读取正文超时，请重试。',
+      signal,
+    ),
+    retry: retryOnceAi,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!q.isLoading) {
+      setDetailLoadingElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const updateElapsed = () => setDetailLoadingElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [params.id, q.isLoading]);
+
+  const contentLoading = Boolean(contentEnabled && params.id && contentQuery.isPending);
+  const contentLoadError = Boolean(contentEnabled && params.id && contentQuery.isError);
+  const cameFromRadarList = returnQuery !== null;
+
+  useEffect(() => {
+    if (!cameFromRadarList) return;
+    const resetReadingPosition = () => {
+      // AppShell owns the page scroll. Reset it together with the article
+      // column so a new item opened from the list always starts at its title.
+      document.querySelector<HTMLElement>('main')?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      leftColRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    };
+    resetReadingPosition();
+    const frame = window.requestAnimationFrame(() => {
+      resetReadingPosition();
+      window.requestAnimationFrame(resetReadingPosition);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [params.id, cameFromRadarList]);
 
   const refreshZreadDocument = useCallback(async () => {
     const summaryId = q.data?.id;
@@ -225,7 +396,7 @@ export default function RadarDetailPage() {
     });
     const payload = await response.json().catch(() => ({})) as { message?: string };
     if (!response.ok) throw new Error(payload.message ?? '项目文档刷新失败');
-    const originalMeta = q.data?.originalMeta;
+    const originalMeta = contentQuery.data?.originalMeta ?? q.data?.originalMeta;
     const previousGeneratedAt = originalMeta
       && typeof originalMeta === 'object'
       && !Array.isArray(originalMeta)
@@ -233,14 +404,15 @@ export default function RadarDetailPage() {
       : null;
     for (let attempt = 0; attempt < 45; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-      const next = await q.refetch();
+      const next = await contentQuery.refetch();
       const generatedAt = next.data?.originalMeta
         && typeof next.data.originalMeta === 'object'
         && !Array.isArray(next.data.originalMeta)
         && (next.data.originalMeta as RepoMeta).zread?.generatedAt;
+      await q.refetch();
       if (generatedAt && generatedAt !== previousGeneratedAt) return;
     }
-  }, [q.data?.id, q.data?.originalMeta, q.refetch]);
+  }, [contentQuery, q.data?.id, q.data?.originalMeta, q.refetch]);
 
   const retryZreadDocument = useCallback(async () => {
     const summaryId = q.data?.id;
@@ -249,8 +421,9 @@ export default function RadarDetailPage() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
     });
+    await contentQuery.refetch();
     await q.refetch();
-  }, [q.data?.id, q.refetch]);
+  }, [contentQuery, q.data?.id, q.refetch]);
 
   const findRadarBlock = useCallback((quote: string, sourceBlockIndex?: number, anchorId?: string): HTMLElement | null => {
     const leftCol = leftColRef.current;
@@ -262,7 +435,10 @@ export default function RadarDetailPage() {
     const blocks = Array.from(leftCol.querySelectorAll<HTMLElement>('[data-radar-block="true"]'));
     if (sourceBlockIndex != null) {
       const indexed = blocks.find((block) => Number(block.dataset.radarBlockIndex) === sourceBlockIndex);
-      if (indexed && radarQuoteMatchesBlock(indexed.textContent ?? '', quote)) return indexed;
+      if (
+        indexed
+        && (!indexed.textContent?.trim() || radarQuoteMatchesBlock(indexed.textContent, quote))
+      ) return indexed;
     }
     // Never choose a merely similar paragraph. If the AI quote cannot be
     // proven to belong to one block, returning null is the safe behavior.
@@ -284,10 +460,26 @@ export default function RadarDetailPage() {
     if (!target) return;
     target.classList.add('radar-source-focus');
     if (scroll) {
-      const targetRect = target.getBoundingClientRect();
-      const containerRect = leftCol.getBoundingClientRect();
-      const nextTop = leftCol.scrollTop + targetRect.top - containerRect.top - (leftCol.clientHeight - targetRect.height) / 2;
-      leftCol.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+      const canScrollInsideColumn = leftCol.scrollHeight > leftCol.clientHeight + 8;
+      if (canScrollInsideColumn) {
+        const targetRect = target.getBoundingClientRect();
+        const containerRect = leftCol.getBoundingClientRect();
+        const nextTop = leftCol.scrollTop + targetRect.top - containerRect.top - (leftCol.clientHeight - targetRect.height) / 2;
+        leftCol.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+      } else {
+        // Mobile uses AppShell's main as the only scroll owner. Computing the
+        // offset avoids scrollIntoView choosing an inner ancestor and creating
+        // the "I scrolled, but the article did not move" effect.
+        const main = document.querySelector<HTMLElement>('main');
+        if (main) {
+          const targetRect = target.getBoundingClientRect();
+          const containerRect = main.getBoundingClientRect();
+          const nextTop = main.scrollTop + targetRect.top - containerRect.top - (main.clientHeight - targetRect.height) / 2;
+          main.scrollTo({ top: Math.max(0, nextTop), behavior: 'smooth' });
+        } else {
+          window.scrollTo({ top: Math.max(0, window.scrollY + target.getBoundingClientRect().top - window.innerHeight / 2), behavior: 'smooth' });
+        }
+      }
     }
     focusTimerRef.current = window.setTimeout(() => target.classList.remove('radar-source-focus'), scroll ? 3200 : 1200);
   }, [findRadarBlock]);
@@ -295,6 +487,22 @@ export default function RadarDetailPage() {
   const handleHighlightClick = useCallback((quote: string, sourceBlockIndex?: number, anchorId?: string) => {
     focusRadarBlock(quote, true, sourceBlockIndex, anchorId);
   }, [focusRadarBlock]);
+
+  const handleChatSourceClick = useCallback(
+    (quote: string, sourceBlockIndex?: number, anchorId?: string) => {
+      if (!isCompactViewport) {
+        handleHighlightClick(quote, sourceBlockIndex, anchorId);
+        return;
+      }
+      // On mobile the AI sheet covers the reading surface. Close it before
+      // scrolling so a citation click reveals the paragraph it points to.
+      setChatOpen(false);
+      window.requestAnimationFrame(() => {
+        handleHighlightClick(quote, sourceBlockIndex, anchorId);
+      });
+    },
+    [handleHighlightClick, isCompactViewport],
+  );
 
   const handleAnnotationSelect = useCallback((annotationId: string) => {
     const annotation = myAnnotationsRef.current.find((item) => item.id === annotationId);
@@ -317,24 +525,71 @@ export default function RadarDetailPage() {
     if (!root) return;
     const storageKey = `radar-reading-position:${summaryId}`;
     const saved = Number(window.localStorage.getItem(storageKey) ?? 0);
-    if (Number.isFinite(saved) && saved > 0) {
+    const findScrollContainer = () => {
+      let current: HTMLElement | null = root;
+      while (current) {
+        const style = getComputedStyle(current);
+        if (
+          current.scrollHeight > current.clientHeight + 8
+          && (style.overflowY === 'auto' || style.overflowY === 'scroll')
+        ) {
+          return current;
+        }
+        current = current.parentElement;
+      }
+      return null;
+    };
+    const readScrollTop = () => findScrollContainer()?.scrollTop ?? window.scrollY;
+    const resetScrollPosition = () => {
+      root.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      const scrollContainer = findScrollContainer();
+      if (scrollContainer) scrollContainer.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    };
+    // A list click represents a new reading task. Do not carry the previous
+    // article's position into it; only direct deep links resume reading.
+    if (cameFromRadarList) {
+      requestAnimationFrame(resetScrollPosition);
+    } else if (Number.isFinite(saved) && saved > 0) {
       requestAnimationFrame(() => {
-        root.scrollTop = saved;
+        const scrollContainer = findScrollContainer();
+        if (scrollContainer) scrollContainer.scrollTop = saved;
+        else window.scrollTo({ top: saved, behavior: 'auto' });
       });
     }
     let timer: number | null = null;
     const persist = () => {
       if (timer !== null) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
-        window.localStorage.setItem(storageKey, String(Math.round(root.scrollTop)));
+        window.localStorage.setItem(storageKey, String(Math.round(readScrollTop())));
       }, 180);
     };
     root.addEventListener('scroll', persist, { passive: true });
+    const scrollContainers: HTMLElement[] = [];
+    let current: HTMLElement | null = root;
+    while (current) {
+      const style = getComputedStyle(current);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        scrollContainers.push(current);
+      }
+      current = current.parentElement;
+    }
+    scrollContainers.forEach((container) => container.addEventListener('scroll', persist, { passive: true }));
+    window.addEventListener('scroll', persist, { passive: true });
     return () => {
       if (timer !== null) window.clearTimeout(timer);
       root.removeEventListener('scroll', persist);
+      scrollContainers.forEach((container) => container.removeEventListener('scroll', persist));
+      window.removeEventListener('scroll', persist);
     };
-  }, [q.data?.id, q.data?.originalMarkdown, q.data?.body]);
+  }, [
+    cameFromRadarList,
+    contentQuery.data?.body,
+    contentQuery.data?.originalMarkdown,
+    q.data?.body,
+    q.data?.id,
+    q.data?.originalMarkdown,
+  ]);
 
   useEffect(() => {
     if (!q.data?.id || !me.data?.id) {
@@ -368,10 +623,13 @@ export default function RadarDetailPage() {
   // 重新生成和评分由 ai-engine 后台完成，不阻塞正文首屏。
   useEffect(() => {
     if (!q.data?.id) return;
-    void fetch(`/api/radar/${q.data.id}/migrate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    }).catch(() => undefined);
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/radar/${q.data.id}/migrate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      }).catch(() => undefined);
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, [q.data?.id]);
 
   useEffect(() => {
@@ -497,13 +755,44 @@ export default function RadarDetailPage() {
   };
 
   if (q.isLoading) {
+    const longWait = detailLoadingElapsed >= 8;
+    const loadingMessage = detailLoadingElapsed >= 8
+      ? '服务响应时间较长，仍在读取这篇内容。'
+      : detailLoadingElapsed >= 3
+        ? '正在读取文章摘要与正文，马上就好。'
+        : '正在准备这篇内容。';
     return (
       <div className="mx-auto max-w-measure">
         <div className="flex items-center gap-2">
           <BackToSearchButton />
           <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 返回雷达</Link>
         </div>
-        <p className="mt-4 text-sm text-muted-foreground">加载中…</p>
+        <div className="mt-8 rounded-lg border border-border bg-card p-5 shadow-sm" role="status" aria-live="polite">
+          <div className="flex items-start gap-3">
+            <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-primary" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">{loadingMessage}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                已等待 {detailLoadingElapsed} 秒；你可以先返回列表浏览其他内容。
+              </p>
+              {longWait ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-4"
+                  onClick={() => {
+                    setDetailLoadingElapsed(0);
+                    void Promise.allSettled([q.refetch(), contentQuery.refetch()]);
+                  }}
+                >
+                  <RotateCw className="size-3.5" />
+                  重新加载
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -520,7 +809,24 @@ export default function RadarDetailPage() {
           <EmptyState
             title={needsLogin ? '需要登录' : '加载失败'}
             description={needsLogin ? '登录后才能查看雷达详情、评分和讨论。' : errorMessage}
-            action={needsLogin ? <Button asChild size="sm"><Link href="/signin">去登录</Link></Button> : undefined}
+            action={needsLogin ? (
+              <Button asChild size="sm">
+                <Link href="/signin">去登录</Link>
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setDetailLoadingElapsed(0);
+                  void Promise.allSettled([q.refetch(), contentQuery.refetch()]);
+                }}
+              >
+                <RotateCw className="size-3.5" />
+                重新加载
+              </Button>
+            )}
           />
         </div>
       </div>
@@ -528,9 +834,10 @@ export default function RadarDetailPage() {
   }
   if (!q.data) return null;
 
-  const d = q.data;
+  const d = { ...q.data, ...(contentQuery.data ?? {}) };
   const displayTitle = decodeRadarTextEntities(d.title);
   const sourceLabel = formatSourceType(d.sourceType);
+  const contentKindLabel = formatRadarContentKind(d.originalKind, d.sourceType, d.url);
   const tier = d.tier ?? d.distilledScore?.tier ?? null;
   const isFullReading = tier === 'collection' || tier === 'deep_read';
   const isSkim = tier === 'skim';
@@ -547,12 +854,16 @@ export default function RadarDetailPage() {
   const rawReadingBody = isFullReading
     ? repoReader ? repoReadingBody : d.originalMarkdown ?? d.body ?? ''
     : '';
+  const expectedRepoPageCount = repoMeta?.zread?.expectedPageCount ?? null;
   const repoCoverageComplete = repoReader
     && repoMeta?.zread?.status === 'complete'
-    && repoMeta?.zread?.provider !== 'github-readme-fallback';
+    && repoMeta?.zread?.provider !== 'github-readme-fallback'
+    && (!expectedRepoPageCount || repoPages.length >= expectedRepoPageCount);
   const contentPending = isFullReading && (repoReader
-    ? repoPages.length === 0
-    : d.tags.includes('content_pending') || rawReadingBody.trim().length < 200);
+    ? repoPages.length === 0 || d.readerQualityStatus !== 'ready'
+    : d.readerQualityStatus !== 'ready'
+      || d.tags.includes('content_pending')
+      || rawReadingBody.trim().length < 200);
   const readingBody = isFullReading
     ? contentPending
       ? d.interpretation ?? d.highlights?.summary ?? d.excerpt
@@ -566,23 +877,47 @@ export default function RadarDetailPage() {
   const repoBrief = d.originalKind === 'github_repo' ? d.interpretation?.trim() || null : null;
   const repoProjectSummary = d.originalKind === 'github_repo' ? d.repoSummary?.trim() || null : null;
   const hasRepoText = Boolean(repoBrief || repoProjectSummary);
-  const hasDedicatedKindBadge = d.originalKind === 'arxiv' || d.originalKind?.startsWith('github');
-  const originalKindLabel = d.originalKind === 'arxiv'
-    ? 'arXiv 论文'
-    : d.originalKind === 'github_repo'
-      ? 'GitHub 仓库'
-      : d.originalKind === 'github_release'
-        ? 'GitHub 发布'
-        : d.originalKind === 'github_other'
-          ? 'GitHub 动态'
-          : null;
   const arxivAuthorsLabel = d.authors.length > 3
     ? `${d.authors.slice(0, 3).join(', ')} 等 ${d.authors.length} 人`
     : d.authors.join(', ');
+  const introSummaryCandidates = d.originalKind === 'github_repo'
+    ? [repoProjectSummary, repoBrief, d.excerpt]
+    : d.originalKind === 'arxiv'
+      ? [d.tldr, d.arxivAnalysis?.tldr, d.interpretation, d.highlights?.summary, d.excerpt]
+      : [d.interpretation, d.highlights?.summary, d.excerpt];
+  const cleanedIntroSummary = introSummaryCandidates
+    .map((candidate) => candidate ? cleanRadarBrief(candidate) : null)
+    .find((candidate): candidate is string => Boolean(candidate))
+    ?? '';
+  const introSummary = cleanedIntroSummary
+    ? cleanedIntroSummary.length > 520
+      ? `${cleanedIntroSummary.slice(0, 519)}…`
+      : cleanedIntroSummary
+    : null;
+  const coverageLabel = isSkim
+    ? '正文覆盖：摘要 + 来源大纲'
+    : repoReader
+      ? `正文覆盖：${d.readerQualityStatus === null
+        ? '待质量确认'
+        : repoCoverageComplete
+          ? '完整项目文档'
+          : repoPages.length
+            ? '部分项目文档'
+            : '暂无项目文档'}`
+      : `正文覆盖：${d.readerQualityStatus === null
+        ? '待质量确认'
+        : contentPending ? '不完整' : '已抓取'}`;
+  const coverageTone = isSkim
+    || d.readerQualityStatus !== 'ready'
+    || contentPending
+    || (repoReader && !repoCoverageComplete)
+    ? 'partial'
+    : 'good';
   // Zread already provides a complete project-document TOC in the reading
   // column. Articles and papers keep the AI map alongside the deterministic
   // source TOC so the user can compare structure with interpretation.
   const showRightPanel = repoReader ? canInteract && myAnnotations.length > 0 : true;
+  const discoveryLabel = d.sourceName?.trim() || sourceLabel.short;
   const repoContextLabel = repoReader
     ? repoPages.length > 0
       ? `${repoMeta?.zread?.provider === 'github-readme-fallback' ? 'GitHub README' : 'Zread 项目文档'} · ${
@@ -596,6 +931,148 @@ export default function RadarDetailPage() {
           ? '项目文档抓取中'
           : '项目文档尚未抓取'
     : undefined;
+  const chatContextLabel = repoContextLabel
+    ?? (isSkim
+      ? `当前条目摘要 · ${discoveryLabel}`
+      : d.originalKind === 'arxiv'
+        ? `论文正文${arxivMeta?.arxivId ? ` · arXiv:${arxivMeta.arxivId}` : ''}`
+        : `${contentKindLabel.short}正文 · ${discoveryLabel}`);
+  const detailIntro = (
+    <RadarDetailIntro
+      title={displayTitle}
+      discoverySource={sourceLabel}
+      contentKind={contentKindLabel}
+      summary={introSummary}
+      authorsLabel={isFullReading && d.originalKind === 'arxiv'
+        ? [arxivAuthorsLabel, arxivMeta?.arxivId ? `arXiv:${arxivMeta.arxivId}` : null].filter(Boolean).join(' · ')
+        : null}
+      dateLabel={d.publishedAt ? `发布于 ${new Date(d.publishedAt).toLocaleDateString('zh-CN')}` : null}
+      coverageLabel={coverageLabel}
+      coverageTone={coverageTone}
+      sourceName={d.sourceName && d.sourceName !== sourceLabel.short ? d.sourceName : null}
+    />
+  );
+  const contentReviewBlock = isFullReading ? (
+    <div
+      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--ink-muted)]"
+      aria-label="内容质量与审核状态"
+    >
+      <span className="font-medium text-[var(--ink-text)]">内容质量 / 审核</span>
+      <span className={
+        d.readerQualityStatus === 'ready' && d.contentReviewStatus === 'approved'
+          ? 'text-status-succeeded-fg'
+          : d.readerQualityStatus === 'incomplete' || d.readerQualityStatus === 'invalid'
+            || d.contentReviewStatus === 'needs_manual_review'
+            ? 'text-status-failed-fg'
+            : 'text-status-partial-fg'
+      }>
+        {d.readerQualityStatus === 'incomplete'
+          ? '正文不完整'
+          : d.readerQualityStatus === 'invalid'
+            ? '正文抓取异常'
+            : d.contentReviewStatus === 'approved'
+              ? '内容审核通过'
+              : d.contentReviewStatus === 'needs_manual_review'
+                ? '内容待人工复核'
+                : d.contentReviewStatus === 'reviewing'
+                  ? '内容审核中'
+                  : '内容审核未完成'}
+      </span>
+    </div>
+  ) : null;
+  const renderReviewBlock = isFullReading ? (
+    <div
+      className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--ink-rule)] pb-4 text-xs text-[var(--ink-muted)]"
+      aria-label="页面呈现审核状态"
+    >
+      <span className="font-medium text-[var(--ink-text)]">页面呈现审核</span>
+      <span className={
+        d.renderReviewStatus === 'approved'
+          ? 'text-status-succeeded-fg'
+          : d.renderReviewStatus === 'needs_manual_review'
+            ? 'text-status-failed-fg'
+            : d.renderReviewStatus === 'unavailable'
+              ? 'text-status-partial-fg'
+              : 'text-[var(--ink-accent)]'
+      }>
+        {!d.renderReviewStatus
+          ? '页面审核未完成'
+          : d.renderReviewStatus === 'approved'
+          ? '桌面与移动端已通过'
+          : d.renderReviewStatus === 'needs_manual_review'
+            ? '发现页面问题，待修复'
+            : d.renderReviewStatus === 'unavailable'
+              ? '页面审核未完成'
+              : d.renderReviewStatus === 'reviewing'
+                ? '审核中'
+                : '排队中'}
+      </span>
+      {d.renderReviewRound > 0 ? <span>第 {d.renderReviewRound}/2 轮</span> : null}
+    </div>
+  ) : null;
+  const isTechnicalArticlePage = contentKindLabel.short === '技术文章';
+  const selectionReasonBlock = d.selectionReason ? (
+    <p className="mb-7 rounded-md border-l-2 border-status-succeeded-fg bg-status-succeeded-bg px-3 py-2 text-sm text-status-succeeded-fg">
+      <strong>入选理由：</strong>
+      {d.selectionReason}
+      {d.sortOrder !== null ? `（#${d.sortOrder}）` : ''}
+    </p>
+  ) : null;
+  const topicsBlock = d.topics.length ? <RadarTopicPicker topics={d.topics} /> : null;
+  const sourceAnalysisBlock = d.distilledScore || d.scoreReason
+    || (d.originalKind === 'github_repo' && !repoReader && hasRepoText)
+    || (d.originalKind === 'arxiv' && d.arxivAnalysis)
+    || d.githubItemMeta
+    || d.highlights ? (
+      <details className="mb-7 rounded-xl border border-border bg-card group">
+        <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+          <span className="mr-2 text-xs text-muted-foreground">按需查看</span>
+          来源分析、评分与结构
+          <span className="float-right text-muted-foreground transition-transform group-open:rotate-180">⌄</span>
+        </summary>
+        <div className="border-t border-border px-4 py-4">
+          {d.distilledScore ? (
+            <div className="mb-6">
+              <DistilledScorePanel score={d.distilledScore} />
+            </div>
+          ) : d.scoreReason ? (
+            <p className="mb-6 text-sm text-muted-foreground">
+              <strong>评分理由：</strong>
+              {d.scoreReason}
+            </p>
+          ) : null}
+
+          {d.originalKind === 'github_repo' && !repoReader && hasRepoText ? (
+            <RadarRepoSummary
+              brief={repoBrief}
+              summary={repoProjectSummary}
+              meta={(d.originalMeta ?? null) as RepoMeta | null}
+            />
+          ) : null}
+
+          {d.originalKind === 'arxiv' ? (
+            <RadarArxivPaperCard
+              meta={arxivMeta ?? {}}
+              authors={d.authors}
+              tldr={d.tldr}
+              analysis={d.arxivAnalysis}
+              showTldr={false}
+            />
+          ) : null}
+
+          {(d.originalKind === 'github_other' || d.originalKind === 'github_release') && d.githubItemMeta ? (
+            <RadarGithubItemSummary meta={d.githubItemMeta} />
+          ) : null}
+
+          {(d.originalKind === 'rss' || d.originalKind === 'web_share') && d.highlights ? (
+            <div>
+              <p className="mb-2 text-xs font-semibold text-muted-foreground">来源亮点</p>
+              <RadarArticleHighlights {...d.highlights} showSummary={false} />
+            </div>
+          ) : null}
+        </div>
+      </details>
+    ) : null;
 
   async function runSelectionAction(action: 'explain' | 'translate') {
     const quote = selectedAnchor?.quote?.trim();
@@ -786,7 +1263,7 @@ export default function RadarDetailPage() {
             <div>
               <label className="block text-xs font-medium text-foreground" htmlFor="radar-annotation-note">对这段文字添加批注</label>
               {selectionAction.error ? (
-                <p role="alert" className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                <p role="alert" className="mt-2 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-xs leading-5 text-warning-fg">
                   {selectionAction.error}
                 </p>
               ) : null}
@@ -823,16 +1300,12 @@ export default function RadarDetailPage() {
               ) : null}
               {selectionAction.error ? <div className="text-sm text-destructive">{selectionAction.error}</div> : null}
               {selectionIncomplete ? (
-                <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                <div className="mb-3 rounded-md border border-warning-border bg-warning-bg px-3 py-2 text-xs leading-5 text-warning-fg">
                   当前结果不完整，部分内容生成失败或被截断。
                 </div>
               ) : null}
               {selectionAction.result ? (
-                <MarkdownContent
-                  content={selectionAction.result}
-                  compact
-                  className="text-sm leading-7"
-                />
+                <RadarSelectionResult content={selectionAction.result} />
               ) : null}
             </>
           )}
@@ -858,7 +1331,7 @@ export default function RadarDetailPage() {
         onMouseDown={(event) => event.stopPropagation()}
         onMouseUp={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center gap-1 rounded-xl border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur">
+        <div className="flex items-center gap-1 rounded-md border border-border bg-background/95 p-1.5 shadow-xl backdrop-blur">
           {/* 选区操作按钮:触控目标 ≥ 44×44,带 aria-label + 当前 scope 上下文 */}
           <Button
             type="button"
@@ -882,23 +1355,25 @@ export default function RadarDetailPage() {
               {translationLabel}
             </span>
             {translationScopeLabel ? (
-              <span className="ml-1 rounded bg-amber-200/60 px-1 py-0.5 text-[10px] font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+              <span className="ml-1 rounded bg-warning-bg px-1 py-0.5 text-[10px] font-medium text-warning-fg">
                 {translationScopeLabel}
               </span>
             ) : null}
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setChatOpen(true);
-              setSelectionPrompt(null);
-            }}
-            aria-label="对选区发起 AI 问答"
-          >
-            <MessageCircle className="size-3.5" />问 AI
-          </Button>
+          {canInteract ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setChatOpen(true);
+                setSelectionPrompt(null);
+              }}
+              aria-label="对选区发起 AI 问答"
+            >
+              <MessageCircle className="size-3.5" />问 AI
+            </Button>
+          ) : null}
           <Button
             type="button"
             size="sm"
@@ -914,30 +1389,26 @@ export default function RadarDetailPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-104px)] flex-col">
-      {/* 顶栏：返回 + 来源 badge + 阅读进度条 */}
+    <div className="flex min-h-0 flex-1 flex-col overflow-visible lg:overflow-hidden">
+      {/* 顶栏只保留返回与外部来源；来源语义在正文首屏统一说明。 */}
       <div className="relative flex items-center justify-between border-b border-border bg-background px-4 py-3">
         <div className="flex items-center gap-2">
           <BackToSearchButton />
           <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">← 回到雷达列表</Link>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1.5">
-          {!hasDedicatedKindBadge ? (
-            <span
-              className="rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground"
-              aria-label={sourceLabel.full}
-              title={sourceLabel.full}
+          {canInteract ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="md:hidden"
+              onClick={() => setChatOpen(true)}
+              aria-label="与 AI 讨论"
             >
-              {sourceLabel.short}
-            </span>
-          ) : null}
-          {originalKindLabel ? (
-            <span
-              data-testid="original-kind-badge"
-              className="rounded-full border border-primary/30 bg-accent px-2 py-0.5 text-[11px] text-accent-foreground"
-            >
-              {originalKindLabel}
-            </span>
+              <MessageCircle className="size-3.5" />
+              AI 讨论
+            </Button>
           ) : null}
           <a
             href={d.url}
@@ -946,7 +1417,7 @@ export default function RadarDetailPage() {
             className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/5 px-2.5 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <ExternalLink className="size-3.5" />
-            {repoReader ? '打开 GitHub' : '打开原文'}
+            {repoReader ? '打开 GitHub' : '打开来源'}
           </a>
         </div>
         <ReadingProgressBar scrollRef={leftColRef} />
@@ -957,25 +1428,51 @@ export default function RadarDetailPage() {
       {/* 原文主阅读区 + 上下文工具栏。右侧不再渲染第二份正文。 */}
       <div
         className={showRightPanel
-          ? 'flex min-h-0 flex-1 flex-col overflow-y-auto contain-layout contain-paint lg:grid lg:overflow-hidden'
-          : 'flex min-h-0 flex-1 flex-col overflow-y-auto contain-layout contain-paint'}
+          ? 'flex min-h-0 flex-1 flex-col overflow-visible lg:contain-layout lg:contain-paint lg:grid lg:overflow-hidden'
+          : 'flex min-h-0 flex-1 flex-col overflow-visible lg:contain-layout lg:contain-paint'}
         style={showRightPanel ? { gridTemplateColumns: `minmax(0, 1fr) 12px ${aiPanelWidth}px` } : undefined}
       >
-        <div ref={leftColRef} className="min-w-0 border-r border-border bg-[var(--ink-page)] px-8 py-8 lg:min-h-0 lg:overflow-y-auto">
+        <div className="order-1 min-w-0 border-b border-border bg-[var(--ink-page)] px-4 py-6 sm:px-8 sm:py-8 lg:hidden">
           <article className="mx-auto w-full max-w-[96rem] leading-7">
-            <h1 className={`font-serif text-3xl font-semibold leading-tight tracking-normal ${
-              isFullReading && d.originalKind === 'arxiv' ? 'mb-2' : 'mb-6'
-            }`}>{displayTitle}</h1>
-            {isFullReading && d.originalKind === 'arxiv' && (arxivAuthorsLabel || arxivMeta?.arxivId) ? (
-              <p className="mb-5 text-xs leading-5 text-muted-foreground">
-                {arxivAuthorsLabel}
-                {arxivAuthorsLabel && arxivMeta?.arxivId ? ' · ' : null}
-                {arxivMeta?.arxivId ? <span className="font-mono">arXiv:{arxivMeta.arxivId}</span> : null}
-              </p>
-            ) : null}
+            {detailIntro}
+            {contentReviewBlock}
+            {renderReviewBlock}
+          </article>
+        </div>
 
-            {!repoReader && contentPending ? (
-              <div className="mb-7 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-fg">
+        <div ref={leftColRef} className={`order-2 min-w-0 overflow-x-clip overflow-y-visible border-r border-border bg-[var(--ink-page)] px-4 py-6 sm:px-8 sm:py-8 ${canInteract ? 'pb-24 lg:pb-8' : 'pb-8'} lg:order-1 lg:col-start-1 lg:min-h-0 lg:overflow-y-auto`}>
+          <article className="mx-auto w-full max-w-[96rem] leading-7">
+            <div className="hidden lg:block">
+              {detailIntro}
+              {contentReviewBlock}
+              {renderReviewBlock}
+            </div>
+
+            {isFullReading && contentLoading ? (
+              <div className="mb-7 flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-muted-foreground" role="status">
+                <div className="flex-1">
+                  <strong className="text-foreground">正文加载中</strong>
+                  <span className="ml-2">快速判断已经可用，正文到达后会自动展开。</span>
+                </div>
+              </div>
+            ) : null}
+            {isFullReading && contentLoadError ? (
+              <div className="mb-7 flex items-start gap-2 rounded-md border border-status-failed-border/60 bg-status-failed-bg px-4 py-3 text-sm text-status-failed-fg" role="alert">
+                <div className="flex-1">
+                  <strong>正文加载失败</strong>
+                  <span className="ml-2">当前保留快速判断，不影响返回列表。</span>
+                  <button
+                    type="button"
+                    onClick={() => void contentQuery.refetch()}
+                    className="ml-3 font-medium underline underline-offset-2"
+                  >
+                    重试加载正文
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {!repoReader && !contentLoading && !contentLoadError && contentPending ? (
+              <div id="enrichment-banner" className="mb-7 flex items-start gap-2 rounded-md border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-fg">
                 <div className="flex-1">
                   <strong>正文正在补抓</strong>
                   <span className="ml-2">当前仅展示来源摘要，未使用不完整正文参与评分；访问后会在后台重新抓取并生成。</span>
@@ -994,21 +1491,6 @@ export default function RadarDetailPage() {
               </div>
             ) : null}
             <div data-testid="reading-coverage" className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-              <span className={isSkim || (repoReader ? repoCoverageComplete : !contentPending)
-                ? 'font-medium text-status-succeeded-fg'
-                : 'font-medium text-status-partial-fg'}>
-                正文覆盖：{isSkim
-                  ? '摘要 + 来源大纲'
-                  : repoReader
-                  ? repoCoverageComplete
-                    ? '完整项目文档'
-                    : repoPages.length
-                      ? '部分项目文档'
-                      : '暂无项目文档'
-                  : contentPending
-                    ? '不完整'
-                    : '已抓取'}
-              </span>
               {repoReader && repoPages.length ? (
                 <span>
                   文档页：{repoMeta?.zread?.expectedPageCount
@@ -1021,71 +1503,12 @@ export default function RadarDetailPage() {
               ) : null}
             </div>
 
-            {d.selectionReason ? (
-              <p className="mb-7 rounded-md border-l-2 border-status-succeeded-fg bg-status-succeeded-bg px-3 py-2 text-sm text-status-succeeded-fg">
-                <strong>入选理由：</strong>
-                {d.selectionReason}
-                {d.sortOrder !== null ? `（#${d.sortOrder}）` : ''}
-              </p>
-            ) : null}
-
-            {d.topics.length ? <RadarTopicPicker topics={d.topics} /> : null}
-
-            {d.distilledScore || d.scoreReason || (d.interpretation && d.originalKind !== 'github_repo') || (d.originalKind === 'github_repo' && !repoReader && hasRepoText) || d.originalKind === 'arxiv' || d.githubItemMeta || d.highlights ? (
-              <details className="mb-7 rounded-xl border border-border bg-card group">
-                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
-                  <span className="mr-2 text-xs text-muted-foreground">按需查看</span>
-                  来源分析、评分与结构
-                  <span className="float-right text-muted-foreground transition-transform group-open:rotate-180">⌄</span>
-                </summary>
-                <div className="border-t border-border px-4 py-4">
-                  {d.distilledScore ? (
-                    <div className="mb-6">
-                      <DistilledScorePanel score={d.distilledScore} />
-                    </div>
-                  ) : d.scoreReason ? (
-                    <p className="mb-6 text-sm text-muted-foreground">
-                      <strong>评分理由：</strong>
-                      {d.scoreReason}
-                    </p>
-                  ) : null}
-
-                  {d.interpretation && d.originalKind !== 'github_repo' ? (
-                    <p className="mb-6 rounded-md border-l-2 border-primary bg-accent/60 px-4 py-3 text-sm leading-7 text-foreground">
-                      <span className="mr-1.5 text-xs font-medium text-muted-foreground">AI 一句话解读：</span>
-                      {d.interpretation}
-                    </p>
-                  ) : null}
-
-                  {d.originalKind === 'github_repo' && !repoReader && hasRepoText ? (
-                    <RadarRepoSummary
-                      brief={repoBrief}
-                      summary={repoProjectSummary}
-                      meta={(d.originalMeta ?? null) as RepoMeta | null}
-                    />
-                  ) : null}
-
-                  {d.originalKind === 'arxiv' ? (
-                    <RadarArxivPaperCard
-                      meta={arxivMeta ?? {}}
-                      authors={d.authors}
-                      tldr={d.tldr}
-                      analysis={d.arxivAnalysis}
-                    />
-                  ) : null}
-
-                  {(d.originalKind === 'github_other' || d.originalKind === 'github_release') && d.githubItemMeta ? (
-                    <RadarGithubItemSummary meta={d.githubItemMeta} />
-                  ) : null}
-
-                  {(d.originalKind === 'rss' || d.originalKind === 'web_share') && d.highlights ? (
-                    <div>
-                      <p className="mb-2 text-xs font-semibold text-muted-foreground">来源摘要与亮点</p>
-                      <RadarArticleHighlights {...d.highlights} />
-                    </div>
-                  ) : null}
-                </div>
-              </details>
+            {!isTechnicalArticlePage ? (
+              <>
+                {selectionReasonBlock}
+                {topicsBlock}
+                {sourceAnalysisBlock}
+              </>
             ) : null}
 
             {repoReader ? (
@@ -1095,6 +1518,7 @@ export default function RadarDetailPage() {
                 meta={repoMeta}
                 aiBrief={repoBrief}
                 projectSummary={repoProjectSummary}
+                showOverview={false}
                 annotations={myAnnotations}
                 selectedAnnotationId={selectedAnnotationId}
                 onAnnotationClick={handleAnnotationSelect}
@@ -1106,6 +1530,9 @@ export default function RadarDetailPage() {
                 content={readingBody}
                 title={displayTitle}
                 paperMode={d.originalKind === 'arxiv'}
+                showMobileToc={false}
+                readingMeasure={isTechnicalArticlePage ? 'regular' : 'wide'}
+                scrollRootRef={leftColRef}
                 highlights={d.highlights}
                 annotations={myAnnotations}
                 selectedAnnotationId={selectedAnnotationId}
@@ -1113,10 +1540,29 @@ export default function RadarDetailPage() {
               />
             ) : null}
 
+            {isTechnicalArticlePage ? (
+              <>
+                {selectionReasonBlock}
+                {topicsBlock}
+                {sourceAnalysisBlock}
+              </>
+            ) : null}
+
             {(() => {
               const displayTags = d.tags.filter((t) => {
-                if (t === 'must_read' || t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
-                if (t === 'rss' || t === 'api' || t === 'web' || t === 'github' || t === 'tracked' || t === 'repo_digest') return false;
+                if (t.startsWith('tier_') || t.startsWith('profile_') || t.startsWith('veto_') || t.startsWith('risk_')) return false;
+                if (t.startsWith('migration_') || t.endsWith('_pending')) return false;
+                if (
+                  t === 'rss'
+                  || t === 'api'
+                  || t === 'web'
+                  || t === 'github'
+                  || t === 'tracked'
+                  || t === 'repo_digest'
+                  || t === 'content_pending'
+                  || t === 'fetch_failed_shell'
+                  || t === 'paywall_stub'
+                ) return false;
                 return true;
               });
               if (displayTags.length === 0) return null;
@@ -1140,17 +1586,11 @@ export default function RadarDetailPage() {
                   types={['useful', 'inaccurate']}
                   className="shrink-0 gap-1 py-0"
                 />
-                <Button asChild variant="outline" size="xs" className="ml-2 h-7 shrink-0 gap-1.5">
-                  <Link href={`/ai-research?seed=${d.id}`} aria-label="深入调研">
-                    <Workflow className="size-3.5" />
-                    深入调研
-                  </Link>
-                </Button>
               </div>
             ) : (
               <p className="mt-6 border-y border-border py-3 text-xs text-muted-foreground">
                 <Link href="/signin" className="font-medium text-primary hover:underline">登录</Link>
-                {' '}后可收藏、反馈、评论和继续调研。
+                {' '}后可收藏、反馈和评论。
               </p>
             )}
 
@@ -1176,7 +1616,7 @@ export default function RadarDetailPage() {
           <>
             <button
               type="button"
-              className="group hidden w-3 touch-none cursor-col-resize items-center justify-center border-x border-border bg-[var(--ink-page)] hover:bg-muted focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 lg:flex"
+              className="group order-3 hidden w-3 touch-none cursor-col-resize items-center justify-center border-x border-border bg-[var(--ink-page)] hover:bg-muted focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 lg:order-2 lg:col-start-2 lg:flex"
               aria-label="调整右侧 AI 栏宽度"
               aria-valuemin={280}
               aria-valuemax={520}
@@ -1187,31 +1627,33 @@ export default function RadarDetailPage() {
             >
               <span className="h-12 w-0.5 rounded-full bg-border transition-colors group-hover:bg-primary" />
             </button>
-            <div className="min-h-[360px] min-w-0 shrink-0 bg-[var(--ink-page)] px-6 py-8 lg:min-h-0 lg:overflow-y-auto">
-              <RadarRightPanel
-                summaryId={d.id}
-                onHighlightClick={handleHighlightClick}
-                canInteract={canInteract}
-                rawReadingBody={rawReadingBody}
-                contentPending={contentPending || isSkim}
-                sourceTitle={displayTitle}
-                sourceOutline={d.sourceOutline}
-                sourceOnly={isSkim}
-                annotationsOnly={repoReader}
-                annotationRefreshKey={annotationRefreshKey}
-                selectedQuote={selectedAnchor?.quote ?? null}
-                onExplainSelection={() => void runSelectionAction('explain')}
-                onTranslateSelection={() => void runSelectionAction('translate')}
-                onAnnotateSelection={openAnnotationComposer}
-                onCopySelection={() => void copySelectedQuote()}
-                onAskSelection={() => {
-                  setChatOpen(true);
-                  setSelectionPrompt(null);
-                }}
-                selectedAnnotationId={selectedAnnotationId}
-                onAnnotationSelect={handleAnnotationSelect}
-                onAnnotationsChanged={handleAnnotationsChanged}
-              />
+            <div className="order-3 min-w-0 max-w-full shrink-0 overflow-x-clip overflow-y-visible border-b border-border bg-[var(--ink-page)] px-4 py-3 lg:order-3 lg:col-start-3 lg:min-h-0 lg:max-h-none lg:overflow-y-auto lg:border-b-0 lg:px-6 lg:py-8">
+            <RadarRightPanel
+              key={d.id}
+              summaryId={d.id}
+              onHighlightClick={handleHighlightClick}
+              canInteract={canInteract}
+              rawReadingBody={rawReadingBody}
+              contentPending={contentPending || isSkim}
+              contentLoading={contentLoading}
+              sourceTitle={displayTitle}
+              sourceOutline={d.sourceOutline}
+              sourceOnly={isSkim}
+              annotationsOnly={repoReader}
+              annotationRefreshKey={annotationRefreshKey}
+              selectedQuote={selectedAnchor?.quote ?? null}
+              onExplainSelection={() => void runSelectionAction('explain')}
+              onTranslateSelection={() => void runSelectionAction('translate')}
+              onAnnotateSelection={openAnnotationComposer}
+              onCopySelection={() => void copySelectedQuote()}
+              onAskSelection={canInteract ? () => {
+                setChatOpen(true);
+                setSelectionPrompt(null);
+              } : undefined}
+              selectedAnnotationId={selectedAnnotationId}
+              onAnnotationSelect={handleAnnotationSelect}
+              onAnnotationsChanged={handleAnnotationsChanged}
+            />
             </div>
           </>
         ) : null}
@@ -1219,7 +1661,11 @@ export default function RadarDetailPage() {
 
       {canInteract ? (
         <>
-          <FloatingAiIcon isOpen={chatOpen} onClick={() => setChatOpen((v) => !v)} />
+          <FloatingAiIcon
+            isOpen={chatOpen}
+            onClick={() => setChatOpen((v) => !v)}
+            className={isCompactViewport && !showMobileAiTrigger ? 'hidden' : undefined}
+          />
           <BottomSheet
             open={chatOpen}
             onOpenChange={setChatOpen}
@@ -1229,6 +1675,7 @@ export default function RadarDetailPage() {
             <ChatPanel
               messages={chat.session?.messages ?? []}
               loading={chat.loading}
+              slowLoading={chat.slowLoading}
               sending={chat.sending}
               slowGeneration={chat.slowGeneration}
               thinkingStep={chat.thinkingStep}
@@ -1241,7 +1688,7 @@ export default function RadarDetailPage() {
               messagesRef={chat.messagesRef}
               textareaRef={chat.textareaRef}
               compact
-              contextLabel={repoContextLabel}
+              contextLabel={chatContextLabel}
               selectedAnchor={selectedAnchor}
               onClearSelectedAnchor={() => {
                 selectedRangeRef.current = null;
@@ -1251,7 +1698,14 @@ export default function RadarDetailPage() {
               contextScope={chat.contextScope}
               onContextScopeChange={chat.setContextScope}
               hasProjectContext={repoReader}
-              onSourceClick={handleHighlightClick}
+              onSourceClick={handleChatSourceClick}
+              sourceLinkLabel={
+                repoReader
+                  ? '打开 GitHub 来源'
+                  : d.originalKind === 'arxiv'
+                    ? '打开论文来源'
+                    : '打开来源'
+              }
             />
           </BottomSheet>
         </>

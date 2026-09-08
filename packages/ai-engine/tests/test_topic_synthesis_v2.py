@@ -14,6 +14,7 @@ from ai_engine.radar.topic_issue_worker import (
     _meets_authoritative_threshold,
     _meets_normal_threshold,
     _normalize_issues,
+    _issues_are_near_duplicates,
     _parse_payload,
 )
 from ai_engine.radar.topic_synthesis_v2 import (
@@ -125,7 +126,6 @@ def _make_row(
     *,
     sid: str,
     kind: str = "rss",
-    must_read: bool = False,
     host: str = "blog.dev",
     tier: str = "skim",
 ) -> dict[str, object]:
@@ -137,7 +137,6 @@ def _make_row(
         "originalKind": kind,
         "url": f"https://{host}/p/{sid}",
         "sourceHost": host,
-        "distilledMustRead": must_read,
         "distilledTier": tier,
         "addedAt": datetime(2026, 8, 19, tzinfo=timezone.utc),
     }
@@ -145,7 +144,7 @@ def _make_row(
 
 def test_normal_threshold_requires_three_and_two_sources_and_one_deep() -> None:
     rows = [
-        _make_row(sid="1", host="a.dev", tier="skim", must_read=True),
+        _make_row(sid="1", host="a.dev", tier="deep_read"),
         _make_row(sid="2", host="b.dev", tier="skim"),
         _make_row(sid="3", host="c.dev", tier="skim"),
     ]
@@ -155,31 +154,31 @@ def test_normal_threshold_requires_three_and_two_sources_and_one_deep() -> None:
     assert not _meets_normal_threshold(too_few)
 
     same_source = [
-        _make_row(sid="1", host="a.dev", tier="skim", must_read=True),
+        _make_row(sid="1", host="a.dev", tier="deep_read"),
         _make_row(sid="2", host="a.dev", tier="skim"),
         _make_row(sid="3", host="a.dev", tier="skim"),
     ]
     assert not _meets_normal_threshold(same_source)
 
     no_deep = [
-        _make_row(sid="1", host="a.dev", tier="skim", must_read=False),
-        _make_row(sid="2", host="b.dev", tier="skim", must_read=False),
-        _make_row(sid="3", host="c.dev", tier="skim", must_read=False),
+        _make_row(sid="1", host="a.dev", tier="skim"),
+        _make_row(sid="2", host="b.dev", tier="skim"),
+        _make_row(sid="3", host="c.dev", tier="skim"),
     ]
     assert not _meets_normal_threshold(no_deep)
 
 
-def test_authoritative_threshold_requires_authoritative_kind_and_must_read() -> None:
+def test_authoritative_threshold_requires_authoritative_kind_and_deep_read() -> None:
     rows = [
-        _make_row(sid="1", kind="arxiv", must_read=True),
+        _make_row(sid="1", kind="arxiv", tier="deep_read"),
     ]
     assert _meets_authoritative_threshold(rows)
 
-    no_kind = [_make_row(sid="1", kind="rss", must_read=True)]
+    no_kind = [_make_row(sid="1", kind="rss", tier="deep_read")]
     assert not _meets_authoritative_threshold(no_kind)
 
-    no_must = [_make_row(sid="1", kind="arxiv", must_read=False)]
-    assert not _meets_authoritative_threshold(no_must)
+    no_deep = [_make_row(sid="1", kind="arxiv", tier="skim")]
+    assert not _meets_authoritative_threshold(no_deep)
 
 
 def test_distinct_sources_uses_host_then_kind() -> None:
@@ -221,14 +220,72 @@ def test_normalize_issues_filters_invalid_summary_ids() -> None:
     assert out[0]["summaryIds"] == ["good"]
 
 
-def test_build_issue_prompt_includes_kind_and_must_read() -> None:
+def test_near_duplicate_issues_require_evidence_overlap_and_related_claims() -> None:
+    benchmark = {
+        "kind": "problem",
+        "title": "纯文本 Agent 排行榜与评测基准失真",
+        "proposition": "文本排行榜和单一答案评测无法反映真实运行表现。",
+        "summaryIds": ["1", "2", "3", "4"],
+    }
+    benchmark_rewrite = {
+        "kind": "event",
+        "title": "面向 AI Agent 的多领域评测基准集中涌现",
+        "proposition": "多领域评测基准近期集中发布，揭示智能体在长程任务上的差距。",
+        "summaryIds": ["1", "2", "3", "5"],
+    }
+    unrelated = {
+        "kind": "problem",
+        "title": "安全沙箱存在失控风险",
+        "proposition": "工具调用权限过大时可能导致数据外泄与任意命令执行。",
+        "summaryIds": ["1", "2", "3", "5"],
+    }
+
+    assert _issues_are_near_duplicates(benchmark, benchmark_rewrite)
+    assert not _issues_are_near_duplicates(benchmark, unrelated)
+
+
+def test_near_duplicate_issues_merge_exact_evidence_sets_across_kinds() -> None:
+    event = {
+        "kind": "event",
+        "title": "NavMCP 框架发布",
+        "proposition": "一个新框架被提出。",
+        "summaryIds": ["one"],
+    }
+    problem = {
+        "kind": "problem",
+        "title": "基础模型能力割裂",
+        "proposition": "两个模型的能力存在差异。",
+        "summaryIds": ["one"],
+    }
+
+    assert _issues_are_near_duplicates(event, problem)
+
+
+def test_near_duplicate_issues_merge_two_of_three_related_evidence_items() -> None:
+    first = {
+        "kind": "event",
+        "title": "自改进型智能体框架密集涌现",
+        "proposition": "多项研究发布具备自我迭代能力的智能体框架。",
+        "summaryIds": ["1", "2", "3"],
+    }
+    second = {
+        "kind": "event",
+        "title": "自改进/递归智能体研究密集涌现",
+        "proposition": "近期出现多篇关于自改进智能体的研究。",
+        "summaryIds": ["2", "3", "4"],
+    }
+
+    assert _issues_are_near_duplicates(first, second)
+
+
+def test_build_issue_prompt_includes_kind_and_tier() -> None:
     rows = [
-        _make_row(sid="uuid-x", kind="arxiv", must_read=True),
+        _make_row(sid="uuid-x", kind="arxiv", tier="deep_read"),
     ]
     prompt = _build_issue_prompt("Topic", rows)
     assert "uuid-x" in prompt
     assert "kind=arxiv" in prompt
-    assert "must_read=True" in prompt
+    assert "tier=deep_read" in prompt
 
 
 def test_parse_payload_handles_fenced() -> None:

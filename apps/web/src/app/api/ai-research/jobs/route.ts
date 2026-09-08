@@ -46,7 +46,12 @@ interface ListAiJobsItem {
   status: string;
   current_step: string | null;
   report_type: string;
+  report_length: string;
+  has_report: boolean;
+  captured_sources_count?: number;
+  deliverable_status?: 'report' | 'evidence_only' | 'none';
   source_policy: string;
+  source_refs: Array<{ type: string; value: string; required?: boolean }>;
   token_input_total: number;
   token_output_total: number;
   cost_cents: number;
@@ -55,6 +60,7 @@ interface ListAiJobsItem {
   error_code: string | null;
   error_message: string | null;
   error_details: Record<string, unknown> | null;
+  review_status?: string | null;
   created_at: string | null;
   updated_at: string | null;
   completed_at: string | null;
@@ -114,7 +120,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       status: it.status,
       currentStep: it.current_step,
       reportType: it.report_type,
+      reportLength: it.report_length,
+      hasReport: it.has_report,
+      capturedSourcesCount: it.captured_sources_count,
+      deliverableStatus: it.deliverable_status,
       sourcePolicy: it.source_policy,
+      sourceRefs: it.source_refs ?? [],
       tokenInputTotal: it.token_input_total,
       tokenOutputTotal: it.token_output_total,
       costCents: it.cost_cents,
@@ -123,6 +134,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       errorCode: it.error_code,
       errorMessage: it.error_message,
       errorDetails: it.error_details,
+      reviewStatus: it.review_status ?? null,
       createdAt: it.created_at,
       updatedAt: it.updated_at,
       completedAt: it.completed_at,

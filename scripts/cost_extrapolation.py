@@ -1,6 +1,6 @@
 """Week 9 收尾验收：月成本外推。
 
-依据：docs/IMPLEMENTATION_PLAN.md §十一
+依据：docs/archive/2026-09-08-implementation-plan.md §十一
   - "月成本按当前试用强度外推不超过 $200；超过则在试用前降低每日额度"
   - "用真实 token/search 数据重算月成本"（§十二 Week 12）
 

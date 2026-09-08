@@ -9,6 +9,7 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../../../lib/db';
 import { apiHandler } from '../../../../lib/api-handler';
 import { getCurrentUser } from '../../../../lib/auth/session';
@@ -88,9 +89,70 @@ function buildSourceOutline(summary: {
   return fromRepo.length ? fromRepo : sourceOutlineFromMarkdown(summary.originalMarkdown ?? null, summary.title);
 }
 
+const radarDetailSummarySelect = {
+  id: true,
+  title: true,
+  body: true,
+  url: true,
+  tags: true,
+  status: true,
+  summaryDate: true,
+  publishedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  interpretation: true,
+  scoreReason: true,
+  scoreVersion: true,
+  relevanceScore: true,
+  timelinessScore: true,
+  sourceQualityScore: true,
+  distilledScore: true,
+  distilledTier: true,
+  selectionReason: true,
+  sortOrder: true,
+  syncRunId: true,
+  source: true,
+  shareSource: { select: { status: true } },
+  originalKind: true,
+  readerQualityStatus: true,
+  readerQualityDetails: true,
+  contentReviewStatus: true,
+  contentReviewRound: true,
+  contentReviewDetails: true,
+  renderReviewStatus: true,
+  renderReviewRound: true,
+  repoSummary: true,
+  highlights: true,
+  tldr: true,
+  sections: true,
+  sharedBy: { select: { id: true, name: true } },
+  topicLinks: {
+    select: {
+      topic: { select: { id: true, slug: true, name: true, tier: true } },
+    },
+  },
+  syncRun: {
+    select: {
+      id: true,
+      completedAt: true,
+      source: { select: { sourceType: true, name: true } },
+    },
+  },
+} as const satisfies Prisma.SummarySelect;
+
+const radarDetailContentSelect = {
+  ...radarDetailSummarySelect,
+  originalMarkdown: true,
+  originalMeta: true,
+  arxivAnalysis: true,
+  figures: true,
+  authors: true,
+} as const satisfies Prisma.SummarySelect;
+
 export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
-  const u = await getCurrentUser();
+  const surface = new URL(req.url).searchParams.get('surface');
+  const isContentSurface = surface === 'content';
 
   const parsed = RadarIdParam.safeParse(await ctx.params);
   if (!parsed.success) {
@@ -102,60 +164,15 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  const summary = await prisma.summary.findUnique({
-    where: { id: parsed.data.id },
-    select: {
-      id: true,
-      title: true,
-      body: true,
-      url: true,
-      tags: true,
-      status: true,
-      summaryDate: true,
-      publishedAt: true,
-      createdAt: true,
-      updatedAt: true,
-      interpretation: true,
-      scoreReason: true,
-      scoreVersion: true,
-      relevanceScore: true,
-      timelinessScore: true,
-      sourceQualityScore: true,
-      distilledScore: true,
-      distilledTier: true,
-      selectionReason: true,
-      sortOrder: true,
-      syncRunId: true,
-      source: true,
-      shareSource: { select: { status: true } },
-      // Deep-dive source content and enrichment payloads. originalKind
-      // selects the presentation; originalMarkdown remains available to chat.
-      originalKind: true,
-      originalMarkdown: true,
-      originalMeta: true,
-      repoSummary: true,
-      highlights: true,
-      arxivAnalysis: true,
-      // Phase 2B deep-dive: arxiv paper parsed structure.
-      tldr: true,
-      sections: true,
-      figures: true,
-      authors: true,
-      sharedBy: { select: { id: true, name: true } },
-      topicLinks: {
-        select: {
-          topic: { select: { id: true, slug: true, name: true, tier: true } },
-        },
-      },
-      syncRun: {
-        select: {
-          id: true,
-          completedAt: true,
-          source: { select: { sourceType: true, name: true } },
-        },
-      },
-    },
-  });
+  // Session validation and the summary read are independent. Keep the
+  // navigation-critical request from paying both latencies back-to-back.
+  const [u, summary] = await Promise.all([
+    getCurrentUser(),
+    prisma.summary.findUnique({
+      where: { id: parsed.data.id },
+      select: isContentSurface ? radarDetailContentSelect : radarDetailSummarySelect,
+    }),
+  ]);
 
   const isAutomaticRadar = summary?.source === 'daily' && summary.syncRunId !== null;
   const isApprovedShare = summary?.source === 'user' && summary.shareSource?.status === 'approved';
@@ -168,8 +185,12 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  const fbMap = await aggregateFeedbacks(prisma, [summary.id], u?.id);
-  const fb = fbMap.get(summary.id) ?? {
+  const fb = isContentSurface
+    ? {
+        counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
+        mine: [],
+      }
+    : (await aggregateFeedbacks(prisma, [summary.id], u?.id)).get(summary.id) ?? {
     counts: { useful: 0, inaccurate: 0, used: 0, favorite: 0, suggest_research: 0 },
     mine: [],
   };
@@ -195,7 +216,9 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     ? {
         ...shaped,
         body: null,
-        originalKind: null,
+        // Keep the content kind for the detail header.  Redacting the
+        // enrichment payload must not turn an arXiv paper into a generic
+        // webpage label.
         originalMarkdown: null,
         originalMeta: null,
         githubItemMeta: null,
@@ -209,9 +232,58 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       }
     : shaped;
 
+  if (surface === 'content') {
+    return NextResponse.json({
+      id: responseCandidate.id,
+      body: responseCandidate.body,
+      originalKind: responseCandidate.originalKind,
+      originalMarkdown: responseCandidate.originalMarkdown,
+      originalMeta: responseCandidate.originalMeta,
+      githubItemMeta: responseCandidate.githubItemMeta,
+      repoSummary: responseCandidate.repoSummary,
+      highlights: responseCandidate.highlights,
+      arxivAnalysis: responseCandidate.arxivAnalysis,
+      tldr: responseCandidate.tldr,
+      sections: responseCandidate.sections,
+      figures: responseCandidate.figures,
+      authors: responseCandidate.authors,
+    });
+  }
+
+  if (surface === 'summary') {
+    const sourceOutline = tier === 'skim'
+      ? buildSourceOutline({
+          title: shaped.title,
+          originalKind: shaped.originalKind,
+          originalMarkdown: shaped.originalMarkdown,
+          originalMeta: shaped.originalMeta,
+          sections: shaped.sections,
+        })
+      : null;
+    return NextResponse.json({
+      ...responseCandidate,
+      body: null,
+      originalMarkdown: null,
+      originalMeta: null,
+      githubItemMeta: null,
+      sections: null,
+      figures: null,
+      sourceOutline,
+    });
+  }
+
   return NextResponse.json({
     ...responseCandidate,
-    sourceOutline: tier === 'skim' ? buildSourceOutline(summary) : null,
+    sourceOutline: tier === 'skim'
+      ? buildSourceOutline({
+          title: shaped.title,
+          originalKind: shaped.originalKind,
+          originalMarkdown: shaped.originalMarkdown,
+          originalMeta: shaped.originalMeta,
+          sections: shaped.sections,
+        })
+      : null,
+    sourceName: responseCandidate.sourceName,
     canManage: u?.role === 'admin',
     isAuthenticated: Boolean(u),
   });

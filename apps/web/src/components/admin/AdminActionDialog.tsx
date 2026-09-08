@@ -23,9 +23,9 @@
 //   />
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Eye, FileText, Pencil, X } from 'lucide-react';
 
-import MarkdownContent from '@/components/MarkdownContent';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -38,6 +38,11 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+
+const MarkdownContent = dynamic(() => import('@/components/MarkdownContent'), {
+  ssr: false,
+  loading: () => <div className="min-h-[220px] animate-pulse rounded-md bg-muted/40" />,
+});
 
 export type AdminActionField =
   | {

@@ -25,9 +25,9 @@ test.describe('UI 重设计 · 契约守护', () => {
     await expect(page.locator('h1', { hasText: '技术雷达' })).toBeVisible();
   });
 
-  test('/researches 含 h1「调研库」与内容入口', async ({ page }) => {
+  test('/researches 含 h1「研究库」与内容入口', async ({ page }) => {
     await page.goto('/researches');
-    await expect(page.locator('main h1', { hasText: '调研库' })).toBeVisible();
+    await expect(page.locator('main h1', { hasText: '研究库' })).toBeVisible();
     await expect(page.getByRole('link', { name: '开始 AI 调研' })).toBeVisible();
     await expect(page.getByRole('button', { name: /添加内容/ })).toBeVisible();
   });

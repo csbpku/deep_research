@@ -28,6 +28,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
@@ -55,11 +56,13 @@ from ai_engine.contracts.states import (
 )
 from ai_engine.job_runner.runner import run_one_available_job
 from ai_engine.job_runner.store import (
+    JobRowView,
     JobStore,
     build_store,
     make_job_snapshot,
 )
-from ai_engine.job_runner.models import JobSnapshot
+from ai_engine.job_runner.models import JobSnapshot, ReviewWorkItem
+from ai_engine.reviewer import ClaimVerdict
 from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import config_snapshot, resolve_spec
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
@@ -94,6 +97,73 @@ def _json_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _clip_db_text(value: str | None, limit: int) -> str | None:
+    """Fit source metadata into the shared Prisma varchar contract."""
+    if value is None:
+        return None
+    if len(value) <= limit:
+        return value
+    suffix = "…"
+    return f"{value[: max(0, limit - len(suffix))].rstrip()}{suffix}"
+
+
+def _review_source_snapshot_hash(sources: tuple[AdapterSource, ...]) -> str:
+    """Hash the exact evidence metadata handed to a fact reviewer.
+
+    The hash is an audit coordinate, not a quality score.  Keep ordering and
+    the captured excerpt in the snapshot so a later review can explain which
+    evidence set it actually saw.
+    """
+    payload = [
+        {
+            "canonicalKey": source.canonical_key,
+            "sourceRef": source.source_ref,
+            "title": source.title,
+            "snippet": source.snippet,
+        }
+        for source in sorted(sources, key=lambda item: item.canonical_key)
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _merge_auto_radar_refs(
+    auto_refs: tuple[dict[str, str | bool], ...],
+    resolved_refs: tuple[dict[str, str | bool], ...],
+) -> tuple[dict[str, str | bool], ...]:
+    """Append explicitly requested automatic radar context.
+
+    This helper remains available for an explicit opt-in flow, but normal
+    research submission must not call it: an empty "资料范围" selection
+    means the user chose web search without silently adding project history.
+    """
+    user_keys = {
+        (str(ref.get("type")), str(ref.get("value")))
+        for ref in resolved_refs
+    }
+    auto = tuple(
+        ref for ref in auto_refs
+        if (str(ref.get("type")), str(ref.get("value"))) not in user_keys
+    )
+    return resolved_refs + auto
+
+
+def _is_idempotency_replay(existing: JobRowView | None, requested_job_id: str) -> bool:
+    """Distinguish a real replay from the Web BFF's pre-created queue row.
+
+    The Web BFF creates ``ai_research_jobs`` before forwarding the request so
+    it can attach product events and conversation metadata.  Consequently,
+    the first engine request can find its own queued row through the unique
+    idempotency key.  That row still needs hydration and enqueueing; only a
+    different job id (or a row that has already moved past queued) is a replay.
+    """
+    if existing is None:
+        return False
+    snapshot = existing.snapshot
+    return snapshot.job_id != requested_job_id or snapshot.status != "queued"
+
+
 # ──────────────────────────────────────────────────────────────────────
 # App factory
 # ──────────────────────────────────────────────────────────────────────
@@ -115,13 +185,18 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
     from ai_engine.job_runner.db_store import DbJobStore
     share_worker_task: asyncio.Task[None] | None = None
     ai_job_worker_task: asyncio.Task[None] | None = None
+    fact_review_worker_task: asyncio.Task[None] | None = None
     import_worker_task: asyncio.Task[None] | None = None
     radar_sync_task: asyncio.Task[None] | None = None
     submission_task: asyncio.Task[None] | None = None
     topic_proposal_task: asyncio.Task[None] | None = None
     topic_synth_task: asyncio.Task[None] | None = None
     topic_issue_task: asyncio.Task[None] | None = None
+    enrichment_recovery_task: asyncio.Task[None] | None = None
     llm_recovery_task: asyncio.Task[None] | None = None
+    render_review_task: asyncio.Task[None] | None = None
+    review_reconciliation_task: asyncio.Task[None] | None = None
+    evidence_reconciliation_task: asyncio.Task[None] | None = None
     # asyncio tasks can start immediately, so publish the adapter before any
     # worker reads app.state.adapter.
     app_instance.state.adapter = build_adapter()
@@ -140,6 +215,16 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
                 _ai_job_worker_loop(app_instance),
                 name="ai-job-worker",
             )
+        if os.environ.get("FACT_REVIEW_WORKER_ENABLED", "1") == "1":
+            fact_review_worker_task = asyncio.create_task(
+                _fact_review_worker_loop(app_instance),
+                name="fact-review-worker",
+            )
+        if os.environ.get("EVIDENCE_RECONCILIATION_ENABLED", "1") == "1":
+            evidence_reconciliation_task = asyncio.create_task(
+                _evidence_reconciliation_loop(app_instance),
+                name="evidence-reconciliation-worker",
+            )
         if os.environ.get("IMPORT_WORKER_ENABLED", "1") == "1":
             import_worker_task = asyncio.create_task(
                 _import_worker_loop(),
@@ -150,10 +235,25 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
                 _radar_sync_loop(app_instance),
                 name="radar-sync-cron",
             )
+        if os.environ.get("RADAR_ENRICHMENT_RECOVERY_ENABLED", "1") == "1":
+            enrichment_recovery_task = asyncio.create_task(
+                _enrichment_recovery_loop(app_instance),
+                name="radar-enrichment-recovery",
+            )
         if os.environ.get("LLM_RECOVERY_ENABLED", "1") == "1":
             llm_recovery_task = asyncio.create_task(
                 _llm_recovery_loop(app_instance),
                 name="llm-recovery",
+            )
+        if os.environ.get("RADAR_RENDER_REVIEW_ENABLED", "1") == "1":
+            render_review_task = asyncio.create_task(
+                _render_review_loop(app_instance),
+                name="radar-render-review",
+            )
+        if os.environ.get("RADAR_REVIEW_RECONCILIATION_ENABLED", "1") == "1":
+            review_reconciliation_task = asyncio.create_task(
+                _review_reconciliation_loop(app_instance),
+                name="radar-review-reconciliation",
             )
         # P1-B: submission worker
         if os.environ.get("SUBMISSION_WORKER_ENABLED", "1") == "1":
@@ -190,6 +290,14 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             ai_job_worker_task.cancel()
             with suppress(asyncio.CancelledError):
                 await ai_job_worker_task
+        if fact_review_worker_task is not None:
+            fact_review_worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await fact_review_worker_task
+        if evidence_reconciliation_task is not None:
+            evidence_reconciliation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await evidence_reconciliation_task
         if import_worker_task is not None:
             import_worker_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -214,11 +322,37 @@ async def _lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
             topic_issue_task.cancel()
             with suppress(asyncio.CancelledError):
                 await topic_issue_task
+        if enrichment_recovery_task is not None:
+            enrichment_recovery_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await enrichment_recovery_task
         if llm_recovery_task is not None:
             llm_recovery_task.cancel()
             with suppress(asyncio.CancelledError):
                 await llm_recovery_task
+        if render_review_task is not None:
+            render_review_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await render_review_task
+        if review_reconciliation_task is not None:
+            review_reconciliation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await review_reconciliation_task
         if isinstance(store, DbJobStore):
+            try:
+                from ai_engine.radar.enrichment_worker import release_enrichment_leases
+
+                released = await release_enrichment_leases(store.pool)
+                if released:
+                    structlog.get_logger("ai_engine.server").info(
+                        "ai-engine.radar.enrichment.leases_released",
+                        released=released,
+                    )
+            except Exception:
+                structlog.get_logger("ai_engine.server").warning(
+                    "ai-engine.radar.enrichment.lease_release_failed",
+                    exc_info=True,
+                )
             await store.close()
     structlog.get_logger("ai_engine.server").info("ai-engine.shutdown")
 
@@ -285,6 +419,390 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
                 exc_info=True,
                 error_type=type(exc).__name__,
                 error_message=str(exc)[:300],
+            )
+            await asyncio.sleep(1.0)
+
+
+def _fact_review_timeout_seconds() -> int:
+    """Bound one independent review attempt; it must not hold the job queue."""
+    try:
+        value = int(os.environ.get("FACT_REVIEW_TIMEOUT_SECONDS", "180"))
+    except (TypeError, ValueError):
+        value = 180
+    return min(max(value, 30), 600)
+
+
+def _fact_review_heartbeat_seconds(store: JobStore) -> float:
+    """Use the store's lease cadence without coupling the worker to DB types."""
+    configured = getattr(store, "_review_heartbeat_seconds", 15)
+    try:
+        return max(5.0, float(configured))
+    except (TypeError, ValueError):
+        return 15.0
+
+
+async def _review_heartbeat_loop(store: JobStore, work: ReviewWorkItem) -> None:
+    """Keep an active review claim alive; expiry remains crash recovery."""
+    review_logger = structlog.get_logger("ai_engine.fact_review")
+    while True:
+        await asyncio.sleep(_fact_review_heartbeat_seconds(store))
+        try:
+            renewed = await store.heartbeat_review(work)
+        except Exception:  # pragma: no cover - defensive worker boundary
+            review_logger.warning(
+                "ai-engine.fact-review.heartbeat_failed",
+                exc_info=True,
+                review_run_id=work.review_run_id,
+            )
+            return
+        if not renewed:
+            review_logger.warning(
+                "ai-engine.fact-review.lease_lost",
+                review_run_id=work.review_run_id,
+            )
+            return
+
+
+def _claims_from_review_inventory(
+    checkpoints: Mapping[str, object],
+) -> tuple["ClaimVerdict", ...]:
+    """Recover settled batch rows and unresolved inventory claim rows.
+
+    Inventory is not evidence. It is the last reliable boundary before the
+    slower adjudication call. Keeping both the inventory and the settled
+    batch rows on timeout lets the UI preserve successful work while saying
+    "identified, not judged" for the active/failed batch.
+    """
+    from ai_engine.reviewer import _parse_review_payload
+
+    phase_payload = checkpoints.get("adjudicating")
+    if not isinstance(phase_payload, dict):
+        return ()
+    raw_inventory = phase_payload.get("inventory")
+    if not isinstance(raw_inventory, list):
+        return ()
+    settled_by_id: dict[str, ClaimVerdict] = {}
+    raw_settled = phase_payload.get("settled_claims")
+    if isinstance(raw_settled, list):
+        parsed_settled = _parse_review_payload({"claims": raw_settled})
+        settled_by_id = {
+            claim.claim_id: claim
+            for claim in parsed_settled.claims
+            if claim.claim_id
+        }
+    claims: list[ClaimVerdict] = []
+    for raw in raw_inventory:
+        if not isinstance(raw, dict):
+            continue
+        claim_id = raw.get("claim_id")
+        claim_text = raw.get("claim")
+        if (
+            not isinstance(claim_id, str)
+            or not claim_id.strip()
+            or not isinstance(claim_text, str)
+            or not claim_text.strip()
+        ):
+            continue
+        claim_type = raw.get("claim_type")
+        if claim_type not in {"external_fact", "research_process", "interpretation", "citation_relationship"}:
+            claim_type = "external_fact"
+        risk = raw.get("risk")
+        if risk not in {"high", "medium", "low", "opinion"}:
+            risk = "medium"
+        is_fact = claim_type == "external_fact" and risk != "opinion"
+        settled = settled_by_id.get(claim_id.strip())
+        if settled is not None:
+            claims.append(ClaimVerdict(
+                claim_id=claim_id.strip(),
+                claim=claim_text.strip(),
+                risk=cast(Any, risk),
+                verdict=settled.verdict,
+                evidence=settled.evidence,
+                correction=settled.correction,
+                reason=settled.reason,
+                judgment_status=settled.judgment_status,
+                execution_error_code=settled.execution_error_code,
+                location=settled.location,
+                claim_type=cast(Any, claim_type),
+            ))
+            continue
+        claims.append(ClaimVerdict(
+            claim_id=claim_id.strip(),
+            claim=claim_text.strip(),
+            risk=cast(Any, risk),
+            verdict="unverified" if is_fact else "not_applicable",
+            evidence=None,
+            reason=(
+                "审核在逐条判断证据前中断；这条声明已被识别，但尚未判断为真或假。"
+                if is_fact
+                else "这条内容属于研究过程、观点或引用关系，不进入事实发布门禁。"
+            ),
+            judgment_status="not_judged" if is_fact else "settled",
+            execution_error_code="review_interrupted" if is_fact else None,
+            claim_type=cast(Any, claim_type),
+        ))
+    return tuple(claims)
+
+
+def _claim_evidence_relation(value: Mapping[str, object] | ClaimVerdict) -> str:
+    """Reduce a claim to the evidence relation used for second-opinion diffing."""
+    judgment_status = (
+        value.judgment_status if isinstance(value, ClaimVerdict) else value.get("judgment_status")
+    )
+    if judgment_status in {"not_judged", "execution_failed", "disputed"}:
+        return "unsettled"
+    verdict = value.verdict if isinstance(value, ClaimVerdict) else value.get("verdict")
+    evidence = value.evidence if isinstance(value, ClaimVerdict) else value.get("evidence")
+    has_excerpt = bool(
+        evidence.excerpt.strip()
+        if hasattr(evidence, "excerpt") and isinstance(evidence.excerpt, str)
+        else isinstance(evidence, dict) and isinstance(evidence.get("excerpt"), str) and evidence.get("excerpt", "").strip()
+    )
+    normalized = str(verdict or "").lower()
+    if normalized in {"supported", "verified", "pass"} and has_excerpt:
+        return "supported"
+    if normalized in {"contradicted", "conflict", "correctable"}:
+        return "contradicted"
+    return "unverified"
+
+
+async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
+    """Run one claim review and commit only the review snapshot.
+
+    The report body is intentionally not passed to a repair writer here.  A
+    fact review is an assessment artifact; changing the research requires an
+    explicit user revision and a new review of that revision.
+    """
+    from ai_engine.reviewer import (
+        DefaultResearchReviewer,
+        ReviewResult,
+        _citation_ledger,
+    )
+    review_logger = structlog.get_logger("ai_engine.fact_review")
+    heartbeat_task = asyncio.create_task(
+        _review_heartbeat_loop(store, work),
+        name=f"fact-review-heartbeat-{work.review_run_id or work.job_id}",
+    )
+
+    try:
+        # A review is a workflow, not a single opaque model call. Persist the
+        # cheap deterministic checkpoints first so a page refresh can explain
+        # what the worker actually reached, and a crash can be retried without
+        # presenting the report as factually wrong.
+        checkpoint_review = getattr(store, "checkpoint_review", None)
+        workflow_checkpoints: dict[str, object] = {}
+        phase_order = {
+            "inventorying": 0,
+            "adjudicating": 1,
+            "matching": 2,
+            "conflict_check": 3,
+        }
+
+        async def checkpoint(payload: dict[str, object]) -> None:
+            phase = payload.get("phase")
+            previous_phase = workflow_checkpoints.get("phase")
+            current_rank = phase_order.get(phase) if isinstance(phase, str) else None
+            previous_rank = phase_order.get(previous_phase) if isinstance(previous_phase, str) else None
+            if current_rank is not None and previous_rank is not None and current_rank < previous_rank:
+                # A final summary can arrive after the reviewer already
+                # reported a later phase. Keep its metrics, but do not move
+                # the visible workflow backwards.
+                workflow_checkpoints.update({
+                    key: value for key, value in payload.items() if key != "phase"
+                })
+                return
+            workflow_checkpoints.update(payload)
+            # A reviewer may report a richer payload for the same phase after
+            # the initial worker checkpoint. The adjudication phase reports
+            # one event per independent batch, so persist same-phase updates
+            # as well; otherwise a crash during batch 3 would leave the UI
+            # believing that only batch 1 ever started.
+            if phase == previous_phase and phase != "adjudicating":
+                return
+            if not callable(checkpoint_review):
+                return
+            try:
+                await checkpoint_review(work, payload)
+            except Exception:  # pragma: no cover - diagnostic boundary
+                review_logger.warning(
+                    "ai-engine.fact-review.checkpoint_failed",
+                    exc_info=True,
+                    review_run_id=work.review_run_id,
+                    phase=payload.get("phase"),
+                )
+
+        captured_sources = [
+            source for source in work.sources
+            if isinstance(source.snippet, str) and source.snippet.strip()
+        ]
+        await checkpoint({
+            "phase": "inventorying",
+            "inventory": {
+                "report_chars": len(work.report),
+                "source_count": len(work.sources),
+                "captured_source_count": len(captured_sources),
+                "source_snapshot_hash": work.source_snapshot_hash,
+            },
+        })
+        async def review_progress(phase: str, payload: dict[str, object]) -> None:
+            await checkpoint({"phase": phase, phase: payload})
+
+        try:
+            reviewer_llm = os.environ.get("FACT_REVIEWER_LLM")
+            if work.review_mode == "evidence_challenge":
+                # An explicit challenge model is optional. When omitted, the
+                # same provider may be used for a second call, but the
+                # strategy is still independent and is recorded below.
+                reviewer_llm = os.environ.get("FACT_CHALLENGE_REVIEWER_LLM") or reviewer_llm
+            reviewer = DefaultResearchReviewer(
+                llm_spec=resolve_spec("utility", explicit=reviewer_llm),
+            )
+            if work.review_mode == "evidence_challenge" and work.target_claim:
+                target = work.target_claim
+                target_claim_id = target.get("claim_id")
+                target_claim_text = target.get("claim")
+                target_risk = target.get("risk")
+                if not isinstance(target_claim_id, str) or not isinstance(target_claim_text, str):
+                    raise ValueError("evidence challenge target claim is incomplete")
+                if target_risk not in {"high", "medium", "low", "opinion"}:
+                    target_risk = "medium"
+                result = await asyncio.wait_for(
+                    reviewer.challenge_support(
+                        work.report,
+                        work.sources,
+                        work.topic,
+                        report_type=work.report_type,
+                        claim_id=target_claim_id,
+                        claim=target_claim_text,
+                        risk=cast(Any, target_risk),
+                        phase_callback=review_progress,
+                    ),
+                    timeout=_fact_review_timeout_seconds(),
+                )
+                if result.claims:
+                    challenged = result.claims[0]
+                    previous_relation = _claim_evidence_relation(target)
+                    second_relation = _claim_evidence_relation(challenged)
+                    if (
+                        previous_relation != "unsettled"
+                        and second_relation != "unsettled"
+                        and previous_relation != second_relation
+                    ):
+                        challenged = replace(
+                            challenged,
+                            judgment_status="disputed",
+                            execution_error_code=None,
+                            reason="原审核与独立复核对这条声明的证据关系不一致；系统不会替你判定真伪。",
+                        )
+                        result = replace(
+                            result,
+                            status="needs_revision",
+                            claims=(challenged,),
+                            error=None,
+                            error_code=None,
+                            coverage_status="complete",
+                        )
+            else:
+                result = await asyncio.wait_for(
+                    reviewer.review(
+                        work.report,
+                        work.sources,
+                        work.topic,
+                        report_type=work.report_type,
+                        phase_callback=review_progress,
+                    ),
+                    timeout=_fact_review_timeout_seconds(),
+                )
+        except asyncio.TimeoutError:
+            checkpoint_claims = _claims_from_review_inventory(workflow_checkpoints)
+            result = ReviewResult(
+                "review_unavailable",
+                claims=(*checkpoint_claims, *_citation_ledger(work.report, work.sources)),
+                error="事实审核超时，已保留待核验状态",
+                error_code="timeout",
+                attempts=work.attempts,
+                coverage_status="insufficient",
+            )
+        except Exception as exc:  # pragma: no cover - defensive worker boundary
+            review_logger.warning(
+                "ai-engine.fact-review.failed",
+                exc_info=True,
+                job_id=work.job_id,
+                error_type=type(exc).__name__,
+            )
+            checkpoint_claims = _claims_from_review_inventory(workflow_checkpoints)
+            result = ReviewResult(
+                "review_unavailable",
+                claims=(*checkpoint_claims, *_citation_ledger(work.report, work.sources)),
+                error=f"{type(exc).__name__}: reviewer unavailable",
+                error_code="provider_unavailable",
+                attempts=work.attempts,
+                coverage_status="insufficient",
+            )
+
+        await checkpoint({
+            "phase": "matching",
+            "matching": {
+                "claim_count": len(result.claims),
+                "evidence_binding_repaired_count": result.evidence_binding_repaired_count,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        })
+        await checkpoint({
+            "phase": "conflict_check",
+            "conflict_check": {
+                "claim_count": len(result.claims),
+                "factual_claim_count": result.factual_claim_count,
+                "contradicted_count": result.contradicted_count,
+                "unverified_count": result.unverified_count,
+                "not_judged_count": result.not_judged_count,
+                "execution_failed_claim_count": result.execution_failed_claim_count,
+                "disputed_count": result.disputed_count,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        })
+        details = result.to_dict()
+        # Keep the phase evidence alongside the terminal verdict.  The
+        # checkpoint row is the recoverability record; replacing it with only
+        # the final model payload would make a completed review opaque again.
+        details.update(workflow_checkpoints)
+        details["phase"] = "completed"
+        details["attempts"] = work.attempts
+        # Keep the operational failure class explicit in the durable snapshot.
+        # Older rows only carried the human-readable error, which made timeout
+        # and parser failures indistinguishable in the recovery UI.
+        details["error_code"] = result.error_code
+        details["review_mode"] = work.review_mode
+        if work.review_mode == "evidence_challenge":
+            details["review_strategy"] = "independent_second_opinion"
+            details["challenge_model_configured"] = bool(os.environ.get("FACT_CHALLENGE_REVIEWER_LLM"))
+        await store.complete_review(work, details)
+    finally:
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
+
+
+async def _fact_review_worker_loop(app_instance: FastAPI) -> None:
+    """Recover and process review work independently from research jobs."""
+    store: JobStore = app_instance.state.job_store
+    review_logger = structlog.get_logger("ai_engine.fact_review")
+    worker_id = f"fact-review-{os.getpid()}"
+    while True:
+        try:
+            await store.open()
+            work = await store.claim_next_review(worker_id)
+            if work is None:
+                await asyncio.sleep(1.0)
+                continue
+            await _review_one_item(store, work)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            review_logger.warning(
+                "ai-engine.fact-review.loop_failed",
+                exc_info=True,
+                error_type=type(exc).__name__,
             )
             await asyncio.sleep(1.0)
 
@@ -535,6 +1053,75 @@ async def _radar_sync_loop(app_instance: FastAPI) -> None:
     await _radar_tiered_sync_loop(app_instance)
 
 
+def _llm_recovery_interval_seconds() -> float:
+    try:
+        return max(
+            300.0,
+            float(os.environ.get("LLM_RECOVERY_INTERVAL_SECONDS", "600")),
+        )
+    except (TypeError, ValueError):
+        return 600.0
+
+
+def _llm_recovery_limit() -> int:
+    try:
+        return max(1, int(os.environ.get("LLM_RECOVERY_LIMIT", "50")))
+    except (TypeError, ValueError):
+        return 50
+
+
+def _enrichment_recovery_interval_seconds() -> float:
+    try:
+        return max(
+            30.0,
+            float(os.environ.get("RADAR_ENRICHMENT_RECOVERY_INTERVAL_SECONDS", "60")),
+        )
+    except (TypeError, ValueError):
+        return 60.0
+
+
+async def _enrichment_recovery_loop(app_instance: FastAPI) -> None:
+    """Reclaim crashed enrichment leases independently of long source calls."""
+    from ai_engine.radar.enrichment_worker import recover_expired_enrichment_leases
+
+    interval = _enrichment_recovery_interval_seconds()
+    limit = _llm_recovery_limit()
+    log = structlog.get_logger("ai_engine.radar.enrichment_recovery")
+    log.info(
+        "ai-engine.radar.enrichment_recovery.started",
+        interval_seconds=interval,
+        limit=limit,
+    )
+    while True:
+        try:
+            recovered = await recover_expired_enrichment_leases(
+                app_instance.state.db_pool,
+                limit=limit,
+            )
+            if recovered:
+                log.info(
+                    "ai-engine.radar.enrichment_recovery.completed",
+                    recovered=recovered,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.enrichment_recovery.failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc)[:500],
+            )
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.radar.enrichment_recovery.sleep_failed",
+                error_type=type(exc).__name__,
+            )
+
+
 async def _llm_recovery_loop(app_instance: FastAPI) -> None:
     """Retry recoverable radar work after a temporary local/network outage.
 
@@ -547,11 +1134,8 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
     from ai_engine.radar.candidate_postprocessor import score_missing_candidates
     from ai_engine.radar.enrichment_worker import run_enrichment_for_pending
 
-    interval = max(
-        300.0,
-        float(os.environ.get("LLM_RECOVERY_INTERVAL_SECONDS", "7200")),
-    )
-    limit = max(1, int(os.environ.get("LLM_RECOVERY_LIMIT", "50")))
+    interval = _llm_recovery_interval_seconds()
+    limit = _llm_recovery_limit()
     log = structlog.get_logger("ai_engine.llm_recovery")
     log.info(
         "ai-engine.llm_recovery.started",
@@ -559,7 +1143,51 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
         limit=limit,
     )
 
+    async def _run_once() -> None:
+        lock = getattr(app_instance.state, "radar_sync_lock", None)
+        if lock is None:
+            raise RuntimeError("radar sync lock is not initialized")
+        async with lock:
+            scored = await score_missing_candidates(
+                app_instance.state.db_pool,
+                limit=limit,
+            )
+            enriched = await run_enrichment_for_pending(
+                app_instance.state.db_pool,
+                limit=limit,
+            )
+            rescored = (
+                await score_missing_candidates(
+                    app_instance.state.db_pool,
+                    limit=limit,
+                )
+                if enriched > 0
+                else 0
+            )
+        log.info(
+            "ai-engine.llm_recovery.completed",
+            interval_seconds=interval,
+            limit=limit,
+            scored=scored,
+            enriched=enriched,
+            rescored=rescored,
+        )
+
+    # Recovery is a durable queue consumer. A process restart must perform a
+    # bounded pass immediately; waiting for the default two-hour interval
+    # leaves expired leases and retryable rows stranded after every restart.
     while True:
+        try:
+            await _run_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning(
+                "ai-engine.llm_recovery.failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc)[:500],
+                interval_seconds=interval,
+            )
         try:
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
@@ -569,48 +1197,27 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
                 "ai-engine.llm_recovery.sleep_failed",
                 error_type=type(exc).__name__,
             )
-            continue
 
-        try:
-            lock = getattr(app_instance.state, "radar_sync_lock", None)
-            if lock is None:
-                raise RuntimeError("radar sync lock is not initialized")
-            async with lock:
-                scored = await score_missing_candidates(
-                    app_instance.state.db_pool,
-                    limit=limit,
-                )
-                enriched = await run_enrichment_for_pending(
-                    app_instance.state.db_pool,
-                    limit=limit,
-                )
-                rescored = (
-                    await score_missing_candidates(
-                        app_instance.state.db_pool,
-                        limit=limit,
-                    )
-                    if enriched > 0
-                    else 0
-                )
-            log.info(
-                "ai-engine.llm_recovery.completed",
-                interval_seconds=interval,
-                limit=limit,
-                scored=scored,
-                enriched=enriched,
-                rescored=rescored,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            # A failed recovery tick must not kill the permanent scheduler.
-            # The next fixed interval is the next bounded retry opportunity.
-            log.warning(
-                "ai-engine.llm_recovery.failed",
-                error_type=type(exc).__name__,
-                error_message=str(exc)[:500],
-                interval_seconds=interval,
-            )
+
+async def _render_review_loop(app_instance: FastAPI) -> None:
+    """Run real-browser review after content review queues an enriched row."""
+    from ai_engine.radar.render_review_worker import render_review_loop
+
+    await render_review_loop(app_instance.state.db_pool)
+
+
+async def _review_reconciliation_loop(app_instance: FastAPI) -> None:
+    """Converge persisted high-value radar review state after restarts."""
+    from ai_engine.radar.review_reconciliation import review_reconciliation_loop
+
+    await review_reconciliation_loop(app_instance.state.db_pool)
+
+
+async def _evidence_reconciliation_loop(app_instance: FastAPI) -> None:
+    """Finish claim-scoped evidence handoffs after the browser is gone."""
+    from ai_engine.evidence_reconciliation import reconciliation_loop
+
+    await reconciliation_loop(app_instance.state.db_pool)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -900,10 +1507,11 @@ class SubmitAiJobBody(BaseModel):
     topic: str = Field(min_length=2, max_length=200)
     context: str | None = Field(default=None, max_length=20000)
     report_type: ReportType = Field(default="research_report")
-    # P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
+    # P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE
+    # (deep preset allows up to 48 captured web sources).
     source_policy: SourcePolicy = Field(default="prefer_user_sources")
     report_length: str = Field(default="standard")  # brief | standard | deep
-    max_urls_to_scrape: int | None = Field(default=None, ge=5, le=30)
+    max_urls_to_scrape: int | None = Field(default=None, ge=5, le=48)
     source_refs: list[dict[str, str | bool]] = Field(default_factory=list, max_length=10)
     idempotency_key: str | None = Field(default=None, max_length=64)
 
@@ -936,6 +1544,9 @@ class SubmitAiJobResponse(BaseModel):
     # produced a conclusion without any grounded source.
     is_inferred: bool = False
     review: dict[str, object] | None = None
+    # Deep-research branch checkpoint. Kept separate from fact-review fields
+    # so the UI can explain long-running work without inventing a result.
+    research_progress: dict[str, object] | None = None
 
 
 class ReviewResearchBody(BaseModel):
@@ -954,7 +1565,7 @@ class AssistantSelection(BaseModel):
 
 
 class ResearchAssistantBody(BaseModel):
-    operation: str = Field(pattern=r"^(explain|translate|rewrite|summarize|guide|guide_section|guide_synthesis|counterpoint|fact_check|conclusion_check)$")
+    operation: str = Field(pattern=r"^(explain|translate|rewrite|summarize|knowledge_card|guide|guide_section|guide_synthesis|counterpoint|fact_check|conclusion_check)$")
     body: str = Field(min_length=1, max_length=256000)
     selection: AssistantSelection | None = None
     instruction: str | None = Field(default=None, max_length=2000)
@@ -985,7 +1596,19 @@ class ListAiJobsItem(BaseModel):
     status: str
     current_step: str | None = None
     report_type: str
+    report_length: str = "standard"
+    has_report: bool = False
+    # Number of persisted, fetched source excerpts.  ``source_refs`` is the
+    # user's requested input and cannot tell the UI whether the run actually
+    # produced inspectable evidence.
+    captured_sources_count: int = 0
+    # ``has_report`` is kept for backwards compatibility, but it only means
+    # that some output was persisted.  The UI needs to distinguish a real
+    # reader-facing report from the recoverable evidence digest used when the
+    # writer did not return publishable prose.
+    deliverable_status: str = "none"  # report | evidence_only | none
     source_policy: str
+    source_refs: list[dict[str, object]] = Field(default_factory=list)
     token_input_total: int = 0
     token_output_total: int = 0
     cost_cents: int = 0
@@ -994,6 +1617,10 @@ class ListAiJobsItem(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     error_details: dict[str, object] | None = None
+    # Report generation and fact review are separate boundaries. Keep the
+    # review outcome in history so a completed-but-unverified report does not
+    # look identical to a fully audited one.
+    review_status: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     completed_at: str | None = None
@@ -1004,6 +1631,26 @@ class ListAiJobsResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+def _research_deliverable_status(
+    output_text: str | None,
+    draft_research_id: str | None,
+) -> str:
+    """Return the user-facing deliverable kind for a history row.
+
+    A persisted output is not necessarily a report.  When the report writer
+    times out or returns no usable prose, the adapter stores an evidence
+    digest so the work is recoverable.  That digest must not appear as a
+    completed report in the task list (including for legacy rows that were
+    incorrectly stored with ``succeeded``).
+    """
+    normalized = " ".join((output_text or "").split())
+    if "报告模型没有返回可发布的研究正文" in normalized and "研究结论：待补写" in normalized:
+        return "evidence_only"
+    if output_text and output_text.strip() or draft_research_id:
+        return "report"
+    return "none"
 
 
 class HealthResponse(BaseModel):
@@ -1211,7 +1858,7 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
             llm_spec=resolve_spec(
                 "utility", explicit=os.environ.get("RESEARCH_ASSISTANT_LLM")
             ),
-            tier="light", max_tokens=max_tokens, timeout=45.0,
+            tier="light", max_tokens=max_tokens, timeout=120.0,
             disable_thinking=True,
             operation=f"research_assistant.{body.operation}",
             request_id=request_id,
@@ -1245,6 +1892,92 @@ async def research_assistant(body: ResearchAssistantBody, request: Request) -> d
         # problem into the generic "生成阅读内容失败" state.
         suggestion = _strip_reasoning_blocks(generated.text) if guide is None else None
         return {"operation": body.operation, "original": original, "suggestion": suggestion, "guide": guide, "rationale": guide_instruction, "claims": [], "warnings": warnings, "request_id": request_id, "metrics": metrics}
+
+    if body.operation == "knowledge_card":
+        # This branch is intentionally opt-in: the web BFF only calls it
+        # after the reader clicks "提炼为知识卡片". It produces a short,
+        # editable preview and never writes a Research row.
+        source_context = json.dumps(
+            body.sources[:12],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        generated = await generate_text(
+            user_prompt=(
+                f"主题：{body.topic}\n"
+                f"待提炼的 AI 回答：\n{context}\n"
+                f"可用来源：\n{source_context}\n\n"
+                "请把这条回答提炼成一张短知识卡片。只输出 JSON，不要输出 Markdown、解释或 <think>。"
+                "格式必须是："
+                "{\"title\":\"卡片标题\",\"body\":\"核心结论\",\"conclusion\":\"一句话结论\",\"tags\":[\"标签\"]}。"
+                "title 不超过 60 字；body 不超过 500 字；conclusion 不超过 160 字；tags 最多 5 个。"
+                "只保留回答中有依据的内容，不补充回答和来源中没有的事实。"
+            ),
+            system_prompt=(
+                "你是知识整理助手。你的工作是把用户明确选中的一条 AI 回答压缩成可复用的短知识卡片。"
+                "知识卡片必须保留边界和不确定性；来源不足时要在结论中保留“待核验”语义。"
+                "只返回合法 JSON。"
+            ),
+            llm_spec=resolve_spec(
+                "utility", explicit=os.environ.get("RESEARCH_ASSISTANT_LLM")
+            ),
+            tier="light",
+            max_tokens=900,
+            timeout=45.0,
+            disable_thinking=True,
+            operation="research_assistant.knowledge_card",
+            request_id=request_id,
+        )
+        metrics = {
+            "latency_ms": int((asyncio.get_event_loop().time() - started) * 1000),
+            "token_input_total": generated.input_tokens,
+            "token_output_total": generated.output_tokens,
+            "cost_cents": 0,
+        }
+        card: dict[str, object] | None = None
+        try:
+            from json_repair import repair_json
+
+            parsed_card = json.loads(repair_json(_strip_reasoning_blocks(generated.text)))
+            if isinstance(parsed_card, dict):
+                title = str(parsed_card.get("title") or "").strip()[:60]
+                card_body = str(parsed_card.get("body") or "").strip()[:500]
+                conclusion = str(parsed_card.get("conclusion") or "").strip()[:160]
+                raw_tags = parsed_card.get("tags")
+                tags = [
+                    str(tag).strip()[:40]
+                    for tag in raw_tags
+                    if str(tag).strip()
+                ][:5] if isinstance(raw_tags, list) else []
+                if title and card_body:
+                    card = {
+                        "title": title,
+                        "body": card_body,
+                        "conclusion": conclusion or card_body[:160],
+                        "tags": tags,
+                    }
+        except Exception:
+            card = None
+        _safe_structlog(
+            structlog.get_logger("ai_engine.research_assistant"),
+            "info",
+            "research-assistant.completed",
+            request_id=request_id,
+            operation=body.operation,
+            card_parsed=card is not None,
+            **metrics,
+        )
+        return {
+            "operation": body.operation,
+            "original": original,
+            "suggestion": json.dumps(card, ensure_ascii=False) if card else None,
+            "card": card,
+            "rationale": "explicit_knowledge_card_extraction",
+            "claims": [],
+            "warnings": warnings if card else ["知识卡片预览解析失败，请重试"],
+            "request_id": request_id,
+            "metrics": metrics,
+        }
 
     prompts = {
         "explain": "解释选中的术语或片段：先定义，再结合上下文说明其在本文中的具体含义、涉及的变量或机制，以及为什么重要；不要只说它是一个术语，不要泛泛而谈。",
@@ -1388,6 +2121,10 @@ async def submit_ai_job(
             )
         except AdapterError as exc:
             raise _http_error(exc.code, exc.message) from exc
+        # Do not append recent radar items implicitly. The confirmation UI
+        # treats project history as an optional, user-selected source; adding
+        # it here would expand the research boundary after confirmation and
+        # makes an empty "当前资料" indicator misleading.
 
     # W6: Idempotency replay — same (requester_id, idempotency_key) returns the
     # original job without enqueueing a new one. Status 200 instead of 202 so
@@ -1396,7 +2133,8 @@ async def submit_ai_job(
         existing = await store.find_by_idempotency_key(
             body.requester_id, body.idempotency_key
         )
-        if existing is not None:
+        if _is_idempotency_replay(existing, body.job_id):
+            assert existing is not None
             snap = existing.snapshot
             return SubmitAiJobResponse(
                 job_id=snap.job_id,
@@ -1439,6 +2177,8 @@ async def submit_ai_job(
         requester_id=body.requester_id,
         report_type=body.report_type,
         source_policy=body.source_policy,
+        report_length=body.report_length,
+        max_urls_to_scrape=body.max_urls_to_scrape,
     )
     # Override job_id with the caller-provided one (BFF-supplied uuid).
     snapshot = type(snapshot)(
@@ -1448,6 +2188,8 @@ async def submit_ai_job(
         context=body.context,
         report_type=snapshot.report_type,
         source_policy=snapshot.source_policy,
+        report_length=snapshot.report_length,
+        max_urls_to_scrape=snapshot.max_urls_to_scrape,
         status=snapshot.status,
         current_step=snapshot.current_step,
         attempts=snapshot.attempts,
@@ -1455,6 +2197,8 @@ async def submit_ai_job(
         source_refs=resolved_source_refs,
     )
     await store.enqueue(snapshot)
+    if isinstance(store, DbJobStore):
+        await store.persist_source_refs(body.job_id, resolved_source_refs)
 
     # 2. Fire-and-forget background runner. Week 1 review 修正：原版同步
     # await run_one_available_job 会阻塞 HTTP 连接 5 分钟。Week 2 起改
@@ -1581,7 +2325,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
                 ' "reviewStatus", "reviewAttempts", "reviewSummary", "reviewClaims", "reviewDetails", "reviewedAt", '
                 ' "aiAssisted", "originContentSha256", "createdAt", "updatedAt") '
-                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now(), true, %s, now(), now()) "
+                "VALUES (%s, 'research', 'draft', %s, %s, %s, 'ai_research', %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NULL, true, %s, now(), now()) "
                 'ON CONFLICT ("id") DO NOTHING'
             )
             review_status = review_details.get("status") if review_details else None
@@ -1590,7 +2334,16 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                 {
                     "corrected_count": review_details.get("corrected_count", 0),
                     "unverified_count": review_details.get("unverified_count", 0),
+                    "not_judged_count": review_details.get("not_judged_count", 0),
+                    "execution_failed_claim_count": review_details.get("execution_failed_claim_count", 0),
+                    "disputed_count": review_details.get("disputed_count", 0),
                     "contradicted_count": review_details.get("contradicted_count", 0),
+                    "factual_claim_count": review_details.get("factual_claim_count", 0),
+                    "citation_count": review_details.get("citation_count", 0),
+                    "citation_pending_count": review_details.get("citation_pending_count", 0),
+                    "evidence_binding_repaired_count": review_details.get("evidence_binding_repaired_count", 0),
+                    "coverage_status": review_details.get("coverage_status", "complete"),
+                    "review_outcome": review_details.get("review_outcome"),
                 }
                 if review_details
                 else None
@@ -1623,9 +2376,40 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                             (
                                 new_id,
                                 json.dumps(source.source_ref, ensure_ascii=False),
-                                source.canonical_key,
-                                source.title,
-                                source.snippet,
+                                source.canonical_key[:512],
+                                _clip_db_text(source.title, 300),
+                                _clip_db_text(source.snippet, 1000),
+                            ),
+                        )
+                    if snapshot.report_type != "summary_brief":
+                        review_id = str(
+                            uuid.uuid5(
+                                uuid.NAMESPACE_URL,
+                                f"deep-research:ai-job:{snapshot.job_id}:review:1",
+                            )
+                        )
+                        await conn.execute(
+                            'INSERT INTO "research_review_runs" '
+                            '("id", "researchId", "aiResearchJobId", "revisionHash", '
+                            ' "sourceSnapshotHash", "policyVersion", "executionStatus", '
+                            ' "attempt", "details", "triggeredBy", "createdAt") '
+                            'VALUES (%s, %s, %s, %s, %s, %s, \'queued\', 0, %s::jsonb, \'system\', now()) '
+                            'ON CONFLICT ("id") DO NOTHING',
+                            (
+                                review_id,
+                                new_id,
+                                snapshot.job_id,
+                                origin_sha256,
+                                _review_source_snapshot_hash(sources),
+                                "fact-review-v1",
+                                json.dumps(
+                                    {
+                                        "phase": "queued",
+                                        "status": "queued",
+                                        "attempts": 0,
+                                    },
+                                    ensure_ascii=False,
+                                ),
                             ),
                         )
             return new_id
@@ -1717,6 +2501,9 @@ async def list_ai_jobs(
     items: list[ListAiJobsItem] = []
     for view in rows:
         snap = view.snapshot
+        output_text = getattr(view, "output_text", None)
+        draft_research_id = getattr(view, "draft_research_id", None)
+        draft_research_body = getattr(view, "draft_research_body", None)
         items.append(
             ListAiJobsItem(
                 job_id=snap.job_id,
@@ -1724,15 +2511,29 @@ async def list_ai_jobs(
                 status=snap.status,
                 current_step=snap.current_step,
                 report_type=snap.report_type,
+                report_length=snap.report_length,
+                has_report=bool(output_text or draft_research_id),
+                captured_sources_count=len(getattr(view, "last_sources", ())),
+                deliverable_status=_research_deliverable_status(
+                    output_text or draft_research_body,
+                    draft_research_id,
+                ),
                 source_policy=snap.source_policy,
+                source_refs=[cast(dict[str, object], dict(ref)) for ref in snap.source_refs],
                 token_input_total=getattr(view, "last_token_in", 0),
                 token_output_total=getattr(view, "last_token_out", 0),
                 cost_cents=getattr(view, "last_cost_cents", 0),
-                draft_research_id=getattr(view, "draft_research_id", None),
+                draft_research_id=draft_research_id,
                 published_research_id=getattr(view, "published_research_id", None),
                 error_code=getattr(view, "last_error_code", None),
                 error_message=getattr(view, "last_error_message", None),
                 error_details=getattr(view, "last_error_details", None),
+                review_status=(
+                    getattr(view, "review_details", {}).get("status")
+                    if isinstance(getattr(view, "review_details", None), dict)
+                    and isinstance(getattr(view, "review_details", {}).get("status"), str)
+                    else None
+                ),
                 created_at=_iso(getattr(view, "created_at", None)),
                 updated_at=_iso(getattr(view, "updated_at", None)),
                 completed_at=_iso(getattr(view, "completed_at", None)),
@@ -1767,6 +2568,13 @@ async def get_ai_job(
     snap: JobSnapshot = row.snapshot
     last_sources = getattr(row, "last_sources", ())
     last_failed_sources = getattr(row, "last_failed_sources", ())
+    persisted_review = getattr(row, "review_details", None)
+    research_progress = (
+        persisted_review.get("research_progress")
+        if isinstance(persisted_review, dict)
+        and isinstance(persisted_review.get("research_progress"), dict)
+        else None
+    )
     # W7 (工程师 B): an inferred conclusion is one that succeeded with
     # zero grounded sources. We surface this on the response so the
     # BFF / UI can render it differently.
@@ -1797,7 +2605,8 @@ async def get_ai_job(
         created_at=_iso(getattr(row, "created_at", None)),
         completed_at=_iso(getattr(row, "completed_at", None)),
         is_inferred=is_inferred,
-        review=getattr(row, "review_details", None),
+        review=persisted_review,
+        research_progress=research_progress,
     )
 
 

@@ -116,7 +116,7 @@ export function FollowedTopicsStrip() {
                         </p>
                       ) : null}
                       <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-                        候选 {topic.candidateCount} · 来源 {topic.sourceCount}
+                        {topic.candidateCount} 条相关内容 · {topic.sourceCount} 个采集渠道
                         {topic.lastSyncedAt ? ` · 更新 ${formatTimeAgo(topic.lastSyncedAt)}` : null}
                       </p>
                     </div>

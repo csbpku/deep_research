@@ -10,16 +10,14 @@ v2 changes vs v1:
   against the target audience instead of generic "信号".
 - Hard vetoes are split:
     * ``title_content_mismatch`` and ``unsafe_content`` remain hard
-      vetoes (score 0, must_read=False, tier=noise).
+      vetoes (score 0, tier=noise).
     * ``security_risk`` is now a *risk flag* on the result — it sets a
-      ``has_risk_signal=True`` field and zeros the score / must_read, but
+      ``has_risk_signal=True`` field, but
       ``veto`` is left as ``None`` so downstream code can apply policy
       (e.g. require human review before publishing) without the candidate
       being filtered out by the radar ingest path.
     * ``pure_repost`` is now ``suspected_repost``: it caps 信息增量 at 1
-      and forces must_read=False, but does not zero other dimensions.
-- must_read rule is precise: total >= profile.must_read_total AND
-  profile.must_read_core_count of the 3 core dims >= 2.
+      but does not zero other dimensions.
 - Prompt includes profile id, source type, URL domain, published date,
   and the current date so the LLM has temporal context.
 
@@ -63,14 +61,18 @@ DISTILLED_VERSION = "4.7"
 # (navigation, loading placeholders, and footer). Keep enough context for
 # long articles while bounding the prompt size. For very long documents we
 # retain both the opening (problem/setup) and closing (results/limitations).
-MAX_SCORING_CONTENT_CHARS = 24_000
-SCORING_CONTENT_HEAD_CHARS = 16_000
-SCORING_CONTENT_TAIL_CHARS = 8_000
+# Doubled in v4.8 so arxiv papers and enriched GitHub wikis do not lose their
+# middle sections (experiments, benchmarks, limitations) before the LLM scores
+# them; 304 noise rows were previously clipped to the first 16k + last 8k chars.
+MAX_SCORING_CONTENT_CHARS = 48_000
+SCORING_CONTENT_HEAD_CHARS = 32_000
+SCORING_CONTENT_TAIL_CHARS = 16_000
 
 # ── 7 Dimensions (fixed; only weights vary per profile) ───────────
 #
 # Each dimension has: name, description, and a 4-level rubric (0–3).
-# Core dimensions (信息增量, 分析深度, 可行动性) are the must_read axis.
+# Core dimensions (信息增量, 分析深度, 可行动性) carry the highest
+# editorial weight and decide whether an item reaches \`collection\`.
 #
 # In v2, 综合信号 is renamed semantically to 受众匹配度. The LLM is
 # instructed to anchor scoring against the active profile's target
@@ -201,9 +203,9 @@ TIER_NOISE = "noise"             # below profile.tier_skim
 # v2 splits the v1 "veto" field into:
 #   - ``veto``: hard veto (title_content_mismatch, unsafe_content).
 #   - ``risk_flag``: non-veto risk signal (security_risk). Sets
-#     ``has_risk_signal=True`` and forces must_read=False, but does not
+#     ``has_risk_signal=True`` but does not
 #     zero the dimension scores.
-#   - ``suspected_repost``: pure repost → cap 信息增量 at 1, must_read=
+#   - ``suspected_repost``: pure repost → cap 信息增量 at 1, but
 #     False, but do not zero scores.
 #
 # Old string ``pure_repost`` is still accepted on input and translated
@@ -227,7 +229,6 @@ class DistilledScore:
 
     total: float                          # 0–100 weighted score
     tier: str                             # collection / deep_read / skim / noise
-    must_read: bool                       # profile.must_read_total + core count
     dimension_scores: dict[str, int]      # Chinese dim name → 0–3
     weak_point: str                       # lowest dimension's deduction reason
     veto: str | None                      # hard veto (title_content_mismatch / unsafe_content)
@@ -269,7 +270,6 @@ class DistilledScore:
         result = {
             "total": self.total,
             "tier": self.tier,
-            "mustRead": self.must_read,
             "dimensions": {
                 SERIAL_KEYS[name]: value
                 for name, value in self.dimension_scores.items()
@@ -392,7 +392,7 @@ SYSTEM_PROMPT = """你是一名严苛的评审员，为偏 AI 应用开发的软
 
 GitHub 项目特别注意：README、代码/配置、可复用命令、工作流、评测方法或工程质量门禁是相关性证据；像 agent skills 这类能改善 AI 项目开发流程的仓库可以高分，但必须依据实际资产评分。只有仓库热度、24 小时动态、模型/项目名称或极薄介绍时，按 1 或更低处理。
 
-来源不设绝对上限，但来源不自动等价：官方/大厂一手实践可以提供较强事实依据；社区个人实践即使代码完整，也只能证明作者自己的环境有效，不能直接当作生产级可靠性证据。对 dev.to 等社区实践，除非正文给出独立模型/数据/生产流量复现或明确的大厂一手来源，否则事实可信度和验证广度必须保守，不能进入 collection/must_read。不要因为来源权威、论文形式、作者知名、文章流行、表达质量高或观点新颖而自动加分；同样，也不要把社区文章的可操作代码误判为生产实践。
+来源不设绝对上限，但来源不自动等价：官方/大厂一手实践可以提供较强事实依据；社区个人实践即使代码完整，也只能证明作者自己的环境有效，不能直接当作生产级可靠性证据。对 dev.to 等社区实践，除非正文给出独立模型/数据/生产流量复现或明确的大厂一手来源，否则事实可信度和验证广度必须保守，不能进入 collection。不要因为来源权威、论文形式、作者知名、文章流行、表达质量高或观点新颖而自动加分；同样，也不要把社区文章的可操作代码误判为生产实践。
 
 经验/实验文章的验证广度（必须单独输出 validation_breadth，0–2）：
 - 2 分：正文自身在多个独立模型、独立数据集/仓库、生产流量或外部复现中验证；引用别人的实验不算本文验证
@@ -437,20 +437,20 @@ def _build_veto_text() -> str:
 
     v2 distinction:
       - Hard vetoes (``title_content_mismatch``, ``unsafe_content``)
-        zero the score and force must_read=False.
+        zero the score.
       - Risk flag (``security_risk``) sets has_risk_signal=True and
-        forces must_read=False but does not zero the score.
+        but does not zero the score.
       - Repost flag (``suspected_repost``) caps 信息增量 at 1 and
-        forces must_read=False but does not zero the score.
+        but does not zero the score.
     """
     return """
 ## 三类信号（按严重程度）
 1. **硬否决**（任一命中则所有维度记 0 分）：
    - `title_content_mismatch`：标题与内容严重不符，标题党
    - `unsafe_content`：明确鼓励违法、伤害、歧视或其他违反公共安全的内容
-2. **风险标记**（不否决但 must_read=false，并标 risk_flag）：
+2. **风险标记**（不否决，但标 risk_flag）：
    - `security_risk`：涉及安全漏洞利用、攻击教程、恶意代码分发。仍可能有分析价值，但不应被高优先级推送
-3. **疑似搬运标记**（不否决但必须把 信息增量 限制在 1 分以下，must_read=false）：
+3. **疑似搬运标记**（不否决，但必须把 信息增量 限制在 1 分以下）：
    - `suspected_repost`：纯搬运/转载，逐字复制他人内容且无任何增量。注意：原创项目的 README、awesome-list 策展列表、聚合了多个资源并提供使用说明的内容不算 repost——它们有原创的组织和行动指引增量，应正常评分
 """.strip()
 
@@ -528,7 +528,12 @@ def build_user_prompt(
         current_date=current_date,
         structured_signals=structured_signals,
     )
-    content_for_scoring = _prepare_scoring_content(title, content)
+    content_for_scoring = _prepare_scoring_content(
+        title,
+        content,
+        source_type=source_type,
+        url=url,
+    )
     return f"""请对以下文章进行 7 个维度的评分（每个维度 0–3 分）。
 
 ## 评分画像上下文
@@ -637,15 +642,30 @@ async def anthropic_scorer(
     return result.text
 
 
-def _prepare_scoring_content(title: str, content: str) -> str:
+def _prepare_scoring_content(
+    title: str,
+    content: str,
+    *,
+    source_type: str | None = None,
+    url: str | None = None,
+) -> str:
     """Prefer the real article body when a client-side docs shell is stored.
 
     Some vendor docs persist a long navigation/loading shell before the
     article body. Taking the first 8k characters would then score the shell
     instead of the document. When repeated loading markers are present, use
     the last title occurrence as the likely article start.
+
+    GitHub READMEs are fetched as raw markdown and frequently mention
+    "search" or "loading" as real content, so the shell heuristic would
+    wrongly truncate them to the README footer. Keep them intact.
     """
     if not content:
+        return content
+    if (
+        (source_type or "").startswith("github")
+        or (url or "").find("github.com/") >= 0
+    ):
         return content
     lowered = content.lower()
     noisy_shell = lowered.count("loading") >= 3 or lowered.count("search") >= 4
@@ -1062,13 +1082,11 @@ def compute_score(
     v2 changes:
     - Accepts a profile argument (defaults to active_profile()).
     - Hard veto = title_content_mismatch / unsafe_content → score 0,
-      tier=noise, must_read=False, veto set.
+      tier=noise, veto set.
     - Risk flag (security_risk) → does NOT zero scores, but sets
-      risk_flag / has_risk_signal and forces must_read=False.
-    - Suspected repost → does NOT zero scores, but caps 信息增量 at 1
-      and forces must_read=False.
-    - must_read rule is precise: total >= profile.must_read_total AND
-      profile.must_read_core_count of the 3 core dims >= 2.
+      risk_flag / has_risk_signal but does not zero scores.
+    - Suspected repost → does NOT zero scores, but caps 信息增量 at 1.
+
     """
     profile = profile or active_profile()
     risk_flag = _normalize_risk_flag(parsed)
@@ -1111,7 +1129,6 @@ def compute_score(
         return DistilledScore(
             total=0.0,
             tier=TIER_NOISE,
-            must_read=False,
             dimension_scores=veto_scores,
             direct_relevance=direct_relevance,
             relevance_evidence=relevance_evidence,
@@ -1200,17 +1217,6 @@ def compute_score(
         signals=structured_signals,
     )
 
-    # must_read: total >= profile.must_read_total AND ≥ core_count of
-    # 3 core dims ≥ 2.
-    core_names = tuple(DIMENSIONS[i].name for i in _CORE_DIM_INDICES)
-    core_high = sum(1 for n in core_names if dim_scores[n] >= 2)
-    must_read = (
-        total >= profile.must_read_total
-        and core_high >= profile.must_read_core_count
-        and not repost_flag
-        and risk_flag is None
-    )
-
     # Two-layer scoring keeps editorial quality separate from usefulness to
     # this team. Content quality and team value have equal influence; source
     # priority is only a small tie-breaker and must not change reading tier.
@@ -1251,14 +1257,6 @@ def compute_score(
     else:
         ranking_score = total
 
-    effective_must_read = must_read and (
-        direct_relevance is None
-        or (
-            direct_relevance == 3
-            and audience_fit == 3
-            and ranking_score >= profile.must_read_total
-        )
-    )
 
     # A paper without an actionable transfer path can still be a good paper,
     # but it is only a skim item for this engineering radar.
@@ -1267,7 +1265,6 @@ def compute_score(
     )
     if paper_low_actionability:
         ranking_score = min(ranking_score, 64.0)
-        effective_must_read = False
 
     # Collection is the highest editorial tier, not just a high weighted
     # average. M7 relaxation history:
@@ -1341,15 +1338,12 @@ def compute_score(
     if validation_breadth is not None and validation_breadth <= 1:
         ranking_score = min(ranking_score, profile.tier_collection - 0.01)
         collection_ready = False
-        effective_must_read = False
 
     if direct_relevance is not None and not collection_ready:
         ranking_score = min(ranking_score, profile.tier_collection - 0.01)
-        effective_must_read = False
 
     if community_practice:
         ranking_score = min(ranking_score, profile.tier_skim)
-        effective_must_read = False
 
     # Reading tier is an editorial-quality decision. Keep ranking_score for
     # cross-source ordering, but never let source bonus or team-value uplift
@@ -1383,7 +1377,6 @@ def compute_score(
     return DistilledScore(
         total=total,
         tier=_tier_for_score(tier_score, profile),
-        must_read=effective_must_read,
         dimension_scores=dim_scores,
         direct_relevance=direct_relevance,
         relevance_evidence=relevance_evidence,
@@ -1415,7 +1408,6 @@ def default_score(profile: ScoringProfile | None = None) -> DistilledScore:
     return DistilledScore(
         total=0.0,
         tier=TIER_NOISE,
-        must_read=False,
         dimension_scores={d.name: 0 for d in DIMENSIONS},
         direct_relevance=None,
         effective_total=0.0,
@@ -1651,7 +1643,6 @@ class ScoringMonitor:
     """
     total_count: int = 0
     default_count: int = 0
-    must_read_count: int = 0
     risk_count: int = 0
     repost_count: int = 0
     scores: list[float] = field(default_factory=list)
@@ -1660,8 +1651,6 @@ class ScoringMonitor:
         self.total_count += 1
         if score.is_default:
             self.default_count += 1
-        if score.must_read:
-            self.must_read_count += 1
         if score.has_risk_signal:
             self.risk_count += 1
         if score.suspected_repost:
@@ -1673,12 +1662,6 @@ class ScoringMonitor:
         if self.total_count == 0:
             return 0.0
         return self.default_count / self.total_count
-
-    @property
-    def must_read_rate(self) -> float:
-        if self.total_count == 0:
-            return 0.0
-        return self.must_read_count / self.total_count
 
     @property
     def risk_rate(self) -> float:
@@ -1702,7 +1685,6 @@ class ScoringMonitor:
         self,
         *,
         baseline_daily_avg: float | None = None,
-        baseline_must_read_rate: float | None = None,
     ) -> list[str]:
         """Return list of alert messages (empty if all healthy)."""
         alerts: list[str] = []
@@ -1719,12 +1701,6 @@ class ScoringMonitor:
                 alerts.append(
                     f"daily_avg {self.daily_avg:.1f} dropped {drop:.1f} "
                     f"from baseline {baseline_daily_avg:.1f}"
-                )
-        if baseline_must_read_rate is not None:
-            if self.must_read_rate < baseline_must_read_rate * 0.75:
-                alerts.append(
-                    f"must_read_rate {self.must_read_rate:.1%} < 75% of "
-                    f"baseline {baseline_must_read_rate:.1%}"
                 )
         # New v2 alert: too many risk-flagged items.
         if self.risk_rate > 0.10:

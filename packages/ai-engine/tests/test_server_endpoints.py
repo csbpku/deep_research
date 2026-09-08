@@ -21,7 +21,18 @@ import pytest
 from httpx import ASGITransport
 
 from ai_engine.adapters.fake import FakeAdapter
-from ai_engine.server.app import app, _make_draft_factory, _store_singleton
+from ai_engine.server.app import (
+    app,
+    _make_draft_factory,
+    _merge_auto_radar_refs,
+    _is_idempotency_replay,
+    _enrichment_recovery_interval_seconds,
+    _llm_recovery_interval_seconds,
+    _llm_recovery_limit,
+    _claims_from_review_inventory,
+    _research_deliverable_status,
+    _store_singleton,
+)
 from ai_engine.job_runner.db_store import _drafts_for_tests
 from ai_engine.job_runner.store import InMemoryJobStore, make_job_snapshot
 
@@ -29,6 +40,51 @@ from ai_engine.job_runner.store import InMemoryJobStore, make_job_snapshot
 # 轮询窗口:5s;fake adapter 正常 51ms 跑完,留余量
 _POLL_TIMEOUT_SECONDS = 5.0
 _POLL_INTERVAL_SECONDS = 0.05
+
+
+def test_recovery_config_is_bounded_and_tolerates_invalid_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_RECOVERY_INTERVAL_SECONDS", "invalid")
+    monkeypatch.setenv("LLM_RECOVERY_LIMIT", "invalid")
+    assert _llm_recovery_interval_seconds() == 600.0
+    assert _llm_recovery_limit() == 50
+
+    monkeypatch.setenv("LLM_RECOVERY_INTERVAL_SECONDS", "1")
+    monkeypatch.setenv("LLM_RECOVERY_LIMIT", "0")
+    assert _llm_recovery_interval_seconds() == 300.0
+    assert _llm_recovery_limit() == 1
+
+    monkeypatch.setenv("RADAR_ENRICHMENT_RECOVERY_INTERVAL_SECONDS", "invalid")
+    assert _enrichment_recovery_interval_seconds() == 60.0
+    monkeypatch.setenv("RADAR_ENRICHMENT_RECOVERY_INTERVAL_SECONDS", "1")
+    assert _enrichment_recovery_interval_seconds() == 30.0
+
+
+def test_review_timeout_keeps_inventory_as_unresolved_claims() -> None:
+    claims = _claims_from_review_inventory({
+        "adjudicating": {
+            "coverage_status": "complete",
+            "inventory": [
+                {
+                    "claim_id": "C1",
+                    "claim": "项目支持 Playwright",
+                    "risk": "high",
+                    "claim_type": "external_fact",
+                },
+                {
+                    "claim_id": "C2",
+                    "claim": "本轮没有抓取到安装正文",
+                    "risk": "medium",
+                    "claim_type": "research_process",
+                },
+            ],
+        },
+    })
+
+    assert [claim.verdict for claim in claims] == ["unverified", "not_applicable"]
+    assert claims[0].reason and "尚未判断为真或假" in claims[0].reason
+    assert claims[1].claim_type == "research_process"
 
 
 async def _wait_final_status(client: httpx.AsyncClient, job_id: str, timeout: float = _POLL_TIMEOUT_SECONDS) -> dict:
@@ -192,6 +248,73 @@ async def test_submit_returns_202_immediately_with_queued(
     assert body["request_id"] == resp.headers.get("x-request-id")
 
 
+def test_merge_auto_radar_refs_dedupes_user_attached_summaries() -> None:
+    auto = (
+        {
+            "type": "summary",
+            "value": "11111111-0000-0000-0000-000000000001",
+            "auto": True,
+            "resolvedTitle": "Auto radar",
+        },
+        {
+            "type": "summary",
+            "value": "22222222-0000-0000-0000-000000000002",
+            "auto": True,
+            "resolvedTitle": "Second radar",
+        },
+    )
+    user = (
+        {
+            "type": "summary",
+            "value": "22222222-0000-0000-0000-000000000002",
+            "required": True,
+            "resolvedTitle": "Second radar",
+        },
+        {
+            "type": "url",
+            "value": "https://example.com/external",
+            "required": False,
+        },
+    )
+
+    merged = _merge_auto_radar_refs(auto, user)
+
+    assert [ref["value"] for ref in merged] == [
+        "22222222-0000-0000-0000-000000000002",
+        "https://example.com/external",
+        "11111111-0000-0000-0000-000000000001",
+    ]
+    assert merged[0]["required"] is True
+
+
+def test_idempotency_allows_bff_precreated_queued_job_to_enter_engine() -> None:
+    """A BFF-created queued row is the first submit, not a replay."""
+
+    class Existing:
+        class Snapshot:
+            job_id = "same-job"
+            status = "queued"
+
+        snapshot = Snapshot()
+
+    assert _is_idempotency_replay(Existing(), "same-job") is False
+
+
+def test_idempotency_replays_different_or_already_started_job() -> None:
+    class Existing:
+        class Snapshot:
+            job_id = "other-job"
+            status = "queued"
+
+        snapshot = Snapshot()
+
+    assert _is_idempotency_replay(Existing(), "same-job") is True
+
+    Existing.Snapshot.job_id = "same-job"
+    Existing.Snapshot.status = "running"
+    assert _is_idempotency_replay(Existing(), "same-job") is True
+
+
 async def test_submit_success_reaches_succeeded_via_polling(
     client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
 ) -> None:
@@ -213,6 +336,82 @@ async def test_submit_success_reaches_succeeded_via_polling(
     assert final["sources_count"] >= 3
     assert final["token_input_total"] > 0
     assert final["cost_cents"] >= 0
+
+
+async def test_list_preserves_depth_and_reports_whether_a_result_exists(
+    client_with_store: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    client, _store, _adapter = client_with_store
+    resp = await client.post(
+        "/api/ai/jobs",
+        json={"topic": "深度研究列表契约", "report_length": "deep"},
+    )
+    assert resp.status_code == 202
+    await _wait_final_status(client, resp.json()["job_id"])
+
+    listed = await client.get(
+        "/api/ai/jobs",
+        params={"requester_id": "00000000-0000-0000-0000-000000000001"},
+    )
+    assert listed.status_code == 200
+    item = next(row for row in listed.json()["items"] if row["job_id"] == resp.json()["job_id"])
+    assert item["report_length"] == "deep"
+    assert item["has_report"] is True
+    assert item["deliverable_status"] == "report"
+    assert item["captured_sources_count"] == 5
+
+
+async def test_list_exposes_zero_captured_sources_for_model_only_output(
+    client_with_no_sources: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    client, _store, _adapter = client_with_no_sources
+    resp = await client.post(
+        "/api/ai/jobs",
+        json={"topic": "无资料的快速简报", "report_type": "summary_brief", "report_length": "brief"},
+    )
+    assert resp.status_code == 202
+    await _wait_final_status(client, resp.json()["job_id"])
+
+    listed = await client.get(
+        "/api/ai/jobs",
+        params={"requester_id": "00000000-0000-0000-0000-000000000001"},
+    )
+    assert listed.status_code == 200
+    item = next(row for row in listed.json()["items"] if row["job_id"] == resp.json()["job_id"])
+    assert item["captured_sources_count"] == 0
+    assert item["has_report"] is True
+
+
+async def test_list_marks_partial_without_report_as_material_only(
+    client_with_partial: tuple[httpx.AsyncClient, InMemoryJobStore, FakeAdapter],
+) -> None:
+    client, _store, _adapter = client_with_partial
+    resp = await client.post(
+        "/api/ai/jobs",
+        json={"topic": "只有资料的部分任务", "report_length": "deep"},
+    )
+    assert resp.status_code == 202
+    await _wait_final_status(client, resp.json()["job_id"])
+
+    listed = await client.get(
+        "/api/ai/jobs",
+        params={"requester_id": "00000000-0000-0000-0000-000000000001"},
+    )
+    assert listed.status_code == 200
+    item = next(row for row in listed.json()["items"] if row["job_id"] == resp.json()["job_id"])
+    assert item["report_length"] == "deep"
+    assert item["has_report"] is False
+    assert item["deliverable_status"] == "none"
+
+
+def test_research_deliverable_status_does_not_promote_evidence_digest() -> None:
+    digest = (
+        "> 本轮已完成资料检索，但报告模型没有返回可发布的研究正文。"
+        "\n- 研究结论：待补写"
+    )
+    assert _research_deliverable_status(digest, "draft-id") == "evidence_only"
+    assert _research_deliverable_status("# 可交付研究稿\n\n正文", "draft-id") == "report"
+    assert _research_deliverable_status(None, None) == "none"
 
 
 async def test_submit_partial_records_workflow_state(

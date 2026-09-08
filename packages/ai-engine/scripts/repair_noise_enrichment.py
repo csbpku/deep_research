@@ -75,7 +75,7 @@ async def _clear_scores(pool: Any, rows: list[dict[str, Any]]) -> None:
         await conn.execute(
             'UPDATE "summaries" SET '
             '"distilledScore" = NULL, "distilledTotal" = NULL, '
-            '"distilledTier" = NULL, "distilledMustRead" = false, '
+            '"distilledTier" = NULL, '
             '"distilledProfile" = NULL, "scoreReason" = NULL, '
             '"tags" = CASE WHEN \'content_pending\' = ANY('
             'COALESCE("tags", ARRAY[]::text[])) THEN "tags" '

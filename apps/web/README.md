@@ -2,12 +2,13 @@
 
 Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/内容工作流和 Prisma 数据访问。跨运行时契约以根目录 `docs/contracts/`、`packages/shared/` 和 `apps/web/prisma/schema.prisma` 为准。
 
-## 当前能力（2026-08-20）
+## 当前能力（2026-09-04）
 
-- 页面：技术雷达与详情、主题、沉淀列表/详情/编辑、文件导入、AI 调研、搜索、登录和 Admin。
-- API：researches、imports、radar、shares、search、AI research、chat session/message、auth 与 admin routes；日报 summaries 路由已移除。
-- 基础设施：NextAuth Google OAuth、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma。
-- Week 6 新增摘要上下文 AI 讨论抽屉及对应 BFF；具体历史验收见 `docs/weekly/week6-delivery.md`。
+- 页面：技术雷达与详情、主题、研究库/知识卡片、文件导入、AI 调研、搜索、登录和 Admin。
+- AI 调研：研究稿、快速判断、Slides 提纲、独立网页简报；深度任务会展示实际证据进度，运行中/部分完成的研究稿可读但仍受事实审核和发布门禁约束。
+- 雷达阅读：摘要先行、正文延迟加载、文章地图与选文动作；高价值 enrichment 的内容审核和真实浏览器渲染审核状态会单独展示，日报生成链路已移除。
+- API：researches、knowledge、imports、radar、shares、search、AI research、chat session/message、auth 与 admin routes；包含任务取消、研究审核、知识卡片提炼和雷达文档刷新。
+- 基础设施：NextAuth Google OAuth、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma；开发环境默认使用 `.next-dev`，隔离构建可用 `NEXT_DIST_DIR`。
 
 ## 目录
 

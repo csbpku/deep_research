@@ -5,8 +5,8 @@
 //   - /topics/[slug] 4 标签切换（概览 / 热点议题 / 相关研究 / 来源）
 //   - AI 调研页 brief 自动注入（带建议主题时出现 Research Brief 卡片）
 //
-// 跑测约定：web 服务以 E2E=1 启动并登录 E2E 账号；不查真实数据库行
-// （仅校验 UI 形态 + 模拟 API 拦截），与现有 AI 调研 suite 风格一致。
+// 跑测约定：web 服务以 E2E=1 启动并登录 E2E 账号；专题详情为服务端渲染，
+// 因而只断言稳定的 UI 契约，不依赖某条真实综述内容是否已生成。
 
 import { test, expect } from '@playwright/test';
 import { loginWithCredentials } from './fixtures';
@@ -24,8 +24,7 @@ test.describe('Topics list filter chips (V2)', () => {
     await expect(filterNav.getByRole('link', { name: '热门' })).toBeVisible();
     await expect(filterNav.getByRole('link', { name: '升温' })).toBeVisible();
     await expect(filterNav.getByRole('link', { name: '新出现' })).toBeVisible();
-    // 「我的关注」入口有两处（/me/topics 页面链接 + 筛选芯片），断言筛选区内的那个
-    await expect(filterNav.getByRole('link', { name: '我的关注' })).toBeVisible();
+    await expect(filterNav.getByRole('link', { name: '只看已关注' })).toBeVisible();
 
     await filterNav.getByRole('link', { name: '热门' }).click();
     await expect(page).toHaveURL(/filter=hot/);
@@ -37,7 +36,7 @@ test.describe('Topics list filter chips (V2)', () => {
 });
 
 test.describe('Topic detail 4-tab view (V2)', () => {
-  test('tabs 概览 / 热点议题 / 相关研究 / 来源 are present and switchable', async ({ page }) => {
+  test('tabs 概览 / 热点议题 / 相关研究 / 相关内容 are present and switchable', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
       email: 'member@shopee.com',
       role: 'member',
@@ -83,12 +82,12 @@ test.describe('Topic detail 4-tab view (V2)', () => {
     await expect(page.getByRole('tab', { name: /概览/ })).toBeVisible();
     await expect(page.getByRole('tab', { name: /热点议题/ })).toBeVisible();
     await expect(page.getByRole('tab', { name: /相关研究/ })).toBeVisible();
-    await expect(page.getByRole('tab', { name: /来源/ })).toBeVisible();
+    await expect(page.getByRole('tab', { name: /相关内容/ })).toBeVisible();
 
     // 默认进入"概览"
     await expect(page.getByRole('tab', { name: /概览/ })).toHaveAttribute('aria-selected', 'true');
-    // tldr 内容与区块标题同文案，用 heading 精确断言概览面板已渲染
-    await expect(page.getByRole('heading', { name: '一句话概要' })).toBeVisible();
+    // 服务端数据可能处于“综述生成中”，但概览面板本身必须稳定可见。
+    await expect(page.getByRole('heading', { name: /^(一句话概要|AI 综述)$/ })).toBeVisible();
 
     // 切到"热点议题"
     await page.getByRole('tab', { name: /热点议题/ }).click();
@@ -98,9 +97,9 @@ test.describe('Topic detail 4-tab view (V2)', () => {
     await page.getByRole('tab', { name: /相关研究/ }).click();
     await expect(page.getByRole('tab', { name: /相关研究/ })).toHaveAttribute('aria-selected', 'true');
 
-    // 切到"来源"
-    await page.getByRole('tab', { name: /来源/ }).click();
-    await expect(page.getByRole('tab', { name: /来源/ })).toHaveAttribute('aria-selected', 'true');
+    // 切到"相关内容"
+    await page.getByRole('tab', { name: /相关内容/ }).click();
+    await expect(page.getByRole('tab', { name: /相关内容/ })).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -162,7 +161,7 @@ test.describe('AI Research V2 brief', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
 
     // Brief 卡片应出现
-    await expect(page.getByText(/Research Brief/)).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('快速概览', { exact: true })).toBeVisible();
+    await expect(page.getByText('研究计划', { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('button', { name: '快速概览', exact: true })).toBeVisible();
   });
 });

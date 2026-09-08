@@ -2,15 +2,17 @@
 
 FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓取与解读、导入/分享 worker、SSRF-safe URL fetch，以及摘要上下文 AI 讨论。
 
-## 当前能力（2026-08-20）
+## 当前能力（2026-09-04）
 
 - `adapters/`：统一 `ResearchEngineAdapter` 协议，当前运行时使用
   `gpt_researcher`，`fake` 仅用于测试/CI 或无凭证的 UI walkthrough。
-- `job_runner/`：内存/数据库 store、幂等 replay、日配额、lease、reaper 和任务执行。
-- `radar/`：GitHub、arXiv、RSS source 管理、抓取、同步与解释流水线。
+- `job_runner/`：内存/数据库 store、幂等 replay、日配额、lease、reaper、深度研究检查点和独立事实审核队列。
+- `radar/`：GitHub、arXiv、RSS source 管理、抓取、同步、解释、内容呈现审核和真实浏览器渲染审核流水线。
 - `fetcher/`：SSRF-safe URL fetch 与 source URL 处理（gpt-researcher 内部使用 Tavily/DuckDuckGo 作为 retriever；该配置来自 `RETRIEVER` env，不再走我们 fetcher 目录）。
-- `server/`：health、AI job、radar sync、share submission 和 chat endpoints。
+- `server/`：health、AI job、独立 fact-review worker、radar sync、share submission 和 chat endpoints。
 - 顶层 worker：文件导入与分享提交处理。
+
+AI 调研当前支持四种产物：`research_report`（可编辑研究稿）、`summary_brief`（快速判断，不承诺完整检索或逐条事实审核）、`slides`（可编辑 Markdown 按页提纲，不承诺 `.pptx`）和 `web_brief`（从同一研究稿直接派生的响应式阅读版）。`succeeded` 表示研究执行产出了可读结果；事实审核通过前不能把结论描述为已核验或允许发布。深度任务可在写作/审核边界保留只读检查点，不能借此创建可发布草稿。
 
 `gpt-researcher` 是当前运行时主适配（ADR 0004 复评通过）；`fake` 是测试/CI fallback。Claude 适配（`adapters/claude.py`）已从 `build_adapter` 工厂移除，历史 spike 报告保留在 `reports/`，引擎选型见 `docs/decisions/0004-ai-engine-selection.md`。默认 retriever 通过 `RETRIEVER` env 切换（`tavily` / `duckduckgo` / `google` 等，由 gpt-researcher 内部负责；本仓库不直接调用 Tavily）。只有 `RETRIEVER=tavily` 时才需要 `TAVILY_API_KEY`。
 

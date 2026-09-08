@@ -63,7 +63,20 @@ describe('POST /api/ai-research/plan', () => {
     const body = await res.json();
     expect(body.brief.objective).toBe('decide');
     expect(body.plan.steps.length).toBeGreaterThan(0);
+    expect(body.plan.steps.map((step: { title: string }) => step.title)).not.toContain('结合历史研判');
+    expect(body.plan.steps.map((step: { title: string }) => step.title)).toContain('交叉核对证据');
     expect(body.missingFields).toContain('comparisonOptions');
+    expect(body.brief.questionsToAnswer.length).toBeGreaterThan(0);
+    expect(body.brief.successCriteria.length).toBeGreaterThan(0);
+  });
+
+  it('把中文比较问题识别为决策类调研', async () => {
+    const res = await planPost(buildReq({ question: '比较 Claude、Gemini 和 ChatGPT Deep Research 的研究过程设计' }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.objective).toBe('decide');
+    expect(body.brief.comparisonOptions).toEqual(['Claude', 'Gemini', 'ChatGPT Deep Research']);
+    expect(body.missingFields).not.toContain('comparisonOptions');
+    expect(body.ready).toBe(true);
   });
 
   it('推断学习类问题为 learn', async () => {
@@ -111,11 +124,13 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.brief.primaryTopicId).toBe('22222222-2222-4222-8222-222222222222');
   });
 
-  it('不触发 explore 时要求 questionsToAnswer', async () => {
+  it('对缺少用户自定义问题的学习类请求提供可编辑的默认问题', async () => {
     const res = await planPost(buildReq({ question: '我想从零上手 GraphRAG，给个学习路径' }) as never, ctx());
     const body = await res.json();
     expect(body.brief.objective).toBe('learn');
-    expect(body.missingFields).toContain('questionsToAnswer');
+    expect(body.brief.questionsToAnswer.length).toBeGreaterThan(0);
+    expect(body.missingFields).not.toContain('questionsToAnswer');
+    expect(body.ready).toBe(true);
   });
 
   it('补全 questionsToAnswer 后 ready=true', async () => {
@@ -125,6 +140,24 @@ describe('POST /api/ai-research/plan', () => {
     }) as never, ctx());
     const body = await res.json();
     expect(body.ready).toBe(true);
+  });
+
+  it('返回并保留用户确认的检索限定', async () => {
+    const res = await planPost(buildReq({
+      question: '评估 React 19 在中国团队的适用性',
+      scope: {
+        timeRange: { preset: '90d' },
+        regions: ['中国'],
+        technologyVersions: ['React 19'],
+      },
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.scope).toEqual({
+      timeRange: { preset: '90d' },
+      regions: ['中国'],
+      technologyVersions: ['React 19'],
+      retrievalNotes: '',
+    });
   });
 });
 

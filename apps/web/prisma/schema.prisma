@@ -1,6 +1,6 @@
 // Prisma schema — Week 0 freeze
 //
-// 锁定基线：docs/ARCHITECTURE.md §五 + docs/IMPLEMENTATION_PLAN.md §三-十一。
+// 锁定基线：docs/ARCHITECTURE.md §五 + docs/archive/2026-09-08-implementation-plan.md §三-十一。
 // 共 12 张表。schema freeze 后工程师 A/B 不直接改；
 // 修改走 [db] PR 由主会话 review，并同步 ARCHITECTURE §五 增量。
 //
@@ -195,6 +195,7 @@ model User {
   summariesShared       Summary[]          @relation("summary_shared_by")
   researchesAuthor      Research[]         @relation("research_author")
   researchAudit         ResearchAudit[]
+  researchReviewDecisions ResearchReviewDecision[]
   comments              Comment[]
   commentStars          CommentStar[]
   aiJobs                AiResearchJob[]
@@ -273,7 +274,6 @@ model Summary {
   distilledScore     Json?    @db.JsonB // Distilled v2 完整结构化评分
   distilledTotal     Float? // Distilled 分层分 0..100（与 distilledTier 判定一致）
   distilledTier      String?  @db.VarChar(16)
-  distilledMustRead  Boolean?
   distilledProfile   String?  @db.VarChar(16)
   interpretation     String?  @db.VarChar(2000) // AI 一句话解读
   syncRunId          String?  @db.Uuid // radar_sync_runs.id
@@ -290,6 +290,45 @@ model Summary {
   // Schema: { provider: "github", defaultBranch, language, stars, lastPushedAt,
   //           tree: [{path, type, size?}, ...], entryPoints: [string], fetchedAt }
   originalMeta      Json?     @db.JsonB
+  // Durable enrichment state. The source payload and the worker state are
+  // separate: a process restart must not erase an in-flight attempt or its
+  // retry diagnostics.
+  enrichmentStatus          String?   @db.VarChar(24) // pending | running | ready | retryable | manual
+  enrichmentAttempts        Int       @default(0)
+  enrichmentLockedBy        String?
+  enrichmentLeaseExpiresAt  DateTime? @db.Timestamptz(3)
+  enrichmentHeartbeatAt     DateTime? @db.Timestamptz(3)
+  enrichmentNextRetryAt     DateTime? @db.Timestamptz(3)
+  enrichmentLastAttemptAt   DateTime? @db.Timestamptz(3)
+  enrichmentRequestedAt     DateTime? @db.Timestamptz(3)
+  enrichmentRunId           String?   @db.Uuid
+  enrichmentClaimId         String?   @db.Uuid
+  enrichmentErrorCode       String?   @db.VarChar(64)
+  enrichmentErrorMessage    String?   @db.VarChar(500)
+  // Deterministic source-specific reader contract. This is separate from
+  // enrichmentVersion: a payload can exist while still being a card, fallback,
+  // partial Zread result, or bot shell.
+  readerQualityStatus      String?   @db.VarChar(32) // ready | incomplete | invalid
+  readerQualityDetails     Json?     @db.JsonB
+  readerQualityCheckedAt   DateTime? @db.Timestamptz(3)
+  // Post-enrichment browser presentation review. This is independent from
+  // Research/AiResearchJob fact review and survives later originalMeta writes.
+  contentReviewStatus  String?   @db.VarChar(32) // reviewing | approved | needs_manual_review
+  contentReviewRound   Int       @default(0)
+  contentReviewSummary Json?     @db.JsonB
+  contentReviewDetails Json?     @db.JsonB
+  contentReviewStartedAt DateTime? @db.Timestamptz(3)
+  contentReviewClaimId String?   @db.Uuid
+  contentReviewedAt    DateTime? @db.Timestamptz(3)
+  // Real-browser presentation review for enriched collection/deep_read rows.
+  // This gate is independent from the Markdown/content reviewer above.
+  renderReviewStatus      String?   @db.VarChar(32) // queued | reviewing | approved | needs_manual_review | unavailable
+  renderReviewRound       Int       @default(0)
+  renderReviewSummary     Json?     @db.JsonB
+  renderReviewDetails     Json?     @db.JsonB
+  renderReviewStartedAt   DateTime? @db.Timestamptz(3)
+  renderReviewClaimId     String?   @db.Uuid
+  renderReviewedAt        DateTime? @db.Timestamptz(3)
   // Phase 2B deep-dive: arxiv paper parsed structure.
   // tldr: AI 一句话摘要 (≤500 chars); sections: [{title, level, startOffset, endOffset}];
   // Phase 2A deep-dive fields for GitHub repo structured view.
@@ -334,8 +373,10 @@ model Summary {
   @@index([status, createdAt(sort: Desc)])
   @@index([summaryDate])
   @@index([sharedByUserId])
-  @@index([distilledMustRead, distilledTotal(sort: Desc), createdAt(sort: Desc)])
   @@index([distilledProfile, distilledTotal(sort: Desc)])
+  @@index([enrichmentStatus, enrichmentNextRetryAt])
+  @@index([enrichmentLeaseExpiresAt])
+  @@index([enrichmentRunId])
   @@map("summaries")
 }
 
@@ -362,8 +403,14 @@ model Research {
   creationMethod      CreationMethod @default(manual)
   originContentSha256 String?        @db.Char(64) // 阻止未修改 AI 草稿直接发布
   sourceCommentId     String?        @db.Uuid // type=knowledge 时指向源评论
+  // 已发布 AI 研究是稳定的、经过审核的版本；后续编辑创建新的私有草稿。
+  supersedesResearchId String?       @db.Uuid
   reviewStatus        String?        @db.VarChar(32)
   reviewAttempts      Int            @default(0)
+  // Current review run lease.  A late reviewer result must never overwrite
+  // a newer revision or a newer manual/queued review.
+  reviewStartedAt     DateTime?      @db.Timestamptz(3)
+  reviewRunToken      String?        @db.Uuid
   reviewSummary       Json?          @db.JsonB
   reviewClaims        Json           @default("[]")
   reviewedAt          DateTime?      @db.Timestamptz(3)
@@ -382,16 +429,21 @@ model Research {
 
   researchSources ResearchSource[]
   citations       ResearchCitation[]
+  reviewRuns      ResearchReviewRun[]
+  evidenceTasks   ResearchEvidenceTask[]
   audit           ResearchAudit[]
   comments        Comment[]         @relation("comments_research")
   sourceAiJob     AiResearchJob?    @relation("ai_job_draft")
   sourceImportJob ContentImportJob? @relation("import_job_output")
   researchTopics ResearchTopic[]
+  supersedesResearch Research? @relation("research_revision", fields: [supersedesResearchId], references: [id], onDelete: SetNull)
+  revisions Research[] @relation("research_revision")
 
   @@index([type, publishedAt(sort: Desc)])
   @@index([authorId, status])
   @@index([aiAssisted])
   @@index([sourceCommentId])
+  @@index([supersedesResearchId])
   @@map("researches")
 }
 
@@ -446,9 +498,12 @@ model AiResearchJob {
   requesterId    String      @db.Uuid
   topic          String      @db.VarChar(200)
   context        String?     @db.VarChar(2000)
-  reportType     String      @default("research_report") @db.VarChar(40) // research_report | summary_brief
-  artifactType   String      @default("markdown") @db.VarChar(24) // markdown | slides | table | chart
+  reportType     String      @default("research_report") @db.VarChar(40) // research_report | summary_brief | slides | web_brief | evidence_search (internal)
+  artifactType   String      @default("markdown") @db.VarChar(24) // markdown (research_report/web_brief) | slides | table | chart
   sourcePolicy   String      @default("prefer_user_sources") @db.VarChar(40)
+  // 研究深度必须随任务持久化，否则重启后的队列 worker 会退回默认轻量档。
+  reportLength   String      @default("standard") @db.VarChar(16) // brief | standard | deep
+  maxUrlsToScrape Int?
   status         AiJobStatus @default(queued)
   currentStep    AiJobStep? // 最近一步；中途失败时保留
   attempts       Int         @default(0)
@@ -475,11 +530,15 @@ model AiResearchJob {
   errorDetails     Json?     @db.JsonB
   reviewStatus     String?   @db.VarChar(32)
   reviewAttempts   Int       @default(0)
+  // 独立事实审核 worker 的恢复游标；不与研究执行 lease 共用。
+  reviewStartedAt  DateTime? @db.Timestamptz(3)
+  reviewRunToken   String?   @db.Uuid
   reviewSummary    Json?     @db.JsonB
   reviewClaims     Json      @default("[]")
   reviewedAt       DateTime? @db.Timestamptz(3)
   reviewDetails    Json?     @db.JsonB
-  // summary_brief 的终态输出；轻量摘要不创建 Research 草稿
+  // summary_brief 的终态输出；partial 深度任务也可保存阶段性研究稿，
+  // 但它不创建 Research 草稿，前端只读展示并允许用户继续追问/重跑。
   outputText       String?   @db.Text
   // 生成的研究草稿 id
   draftResearchId  String?   @unique @db.Uuid
@@ -499,6 +558,8 @@ model AiResearchJob {
   researchConversation AiResearchConversation? @relation("ai_research_job_conversation")
 
   aiResearchSources AiResearchSource[]
+  reviewRuns       ResearchReviewRun[]
+  evidenceTask     ResearchEvidenceTask?
 
   // 主队列：抢锁 ORDER BY (status, created_at)；partial index 在 SQL migration 加
   // （Prisma 5.x schema 不支持 where 限定；详见 migration init_constraints）
@@ -509,6 +570,104 @@ model AiResearchJob {
   @@index([requesterId, createdAt(sort: Desc)])
   @@index([primaryTopicId, createdAt(sort: Desc)])
   @@map("ai_research_jobs")
+}
+
+// A claim-scoped search is a research operation in its own right. It must not
+// be represented as a human decision or as a generic review rerun: it adds a
+// new evidence snapshot, after which a new review run is created.
+model ResearchEvidenceTask {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchId       String   @db.Uuid
+  aiResearchJobId  String   @unique @db.Uuid
+  claimId          String   @db.VarChar(160)
+  revisionHash     String   @db.Char(64)
+  claimText        String   @db.Text
+  searchInstruction String?  @db.Text
+  status           String   @default("queued") @db.VarChar(24) // queued | researching | evidence_ready | review_queued | completed | failed | stale
+  sourceCount      Int      @default(0)
+  reviewRunId      String?  @db.Uuid
+  result           Json?    @db.JsonB
+  errorCode        String?  @db.VarChar(64)
+  errorMessage     String?  @db.VarChar(500)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  research  Research         @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  aiJob     AiResearchJob    @relation(fields: [aiResearchJobId], references: [id], onDelete: Cascade)
+  reviewRun ResearchReviewRun? @relation(fields: [reviewRunId], references: [id], onDelete: SetNull)
+
+  @@index([researchId, claimId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Asc)])
+  @@index([reviewRunId])
+  // A partial unique index in migration 20260907000009 prevents duplicate
+  // active searches for one claim/revision; Prisma cannot express its WHERE.
+  @@map("research_evidence_tasks")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 6.5 research_review_runs — 绑定具体正文版本的事实审核账本
+// ─────────────────────────────────────────────────────────────────────
+
+model ResearchReviewRun {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchId        String   @db.Uuid
+  aiResearchJobId   String?  @db.Uuid
+  revisionHash      String   @db.Char(64)
+  sourceSnapshotHash String  @db.Char(64)
+  policyVersion     String   @default("fact-review-v1") @db.VarChar(40)
+  // queued | reviewing | completed | unavailable | stale
+  executionStatus   String   @default("queued") @db.VarChar(24)
+  // clear | attention | blocked | insufficient | unavailable; null while running
+  outcome           String?  @db.VarChar(24)
+  attempt           Int      @default(0)
+  startedAt         DateTime? @db.Timestamptz(3)
+  // Independent reviewer lease. A process restart must release a run after
+  // the short lease expires; the research/job leases are unrelated.
+  leaseExpiresAt    DateTime? @db.Timestamptz(3)
+  heartbeatAt       DateTime? @db.Timestamptz(3)
+  completedAt       DateTime? @db.Timestamptz(3)
+  summary           Json?    @db.JsonB
+  claims            Json     @default("[]")
+  details           Json?    @db.JsonB
+  triggeredBy       String   @default("system") @db.VarChar(32)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  research      Research       @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  aiResearchJob AiResearchJob? @relation(fields: [aiResearchJobId], references: [id], onDelete: SetNull)
+  decisions     ResearchReviewDecision[]
+  evidenceTasks ResearchEvidenceTask[]
+
+  @@index([researchId, createdAt(sort: Desc)])
+  @@index([executionStatus, createdAt(sort: Asc)])
+  @@index([executionStatus, leaseExpiresAt])
+  @@index([aiResearchJobId])
+  // A partial unique index in migration 20260907000004 enforces at most one
+  // queued/reviewing run per draft. Prisma schema cannot express its WHERE
+  // predicate, so this remains documented here as a database invariant.
+  @@map("research_review_runs")
+}
+
+// 人工处理声明的追加式审计记录。机器审核结果属于 run 本身，不被覆盖；
+// 当前声明处理状态由同一 run 下最新的一条 decision 投影得到。
+model ResearchReviewDecision {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  researchReviewRunId String  @db.Uuid
+  claimId           String   @db.VarChar(160)
+  revisionHash      String   @db.Char(64)
+  action            String   @db.VarChar(32)
+  reason            String?  @db.Text
+  metadata          Json?    @db.JsonB
+  actorId           String   @db.Uuid
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  run   ResearchReviewRun @relation(fields: [researchReviewRunId], references: [id], onDelete: Cascade)
+  actor User              @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([researchReviewRunId, claimId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("research_review_decisions")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -561,9 +720,12 @@ model AiResearchConversationMessage {
   conversationId String   @db.Uuid
   role           String   @db.VarChar(16)
   content        String   @db.Text
+  // answer | verify | revise | action；历史规划消息默认 answer
+  intent         String   @default("answer") @db.VarChar(16)
   createdAt      DateTime @default(now()) @db.Timestamptz(3)
 
   conversation AiResearchConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  researchAudits ResearchAudit[] @relation("research_audit_source_message")
 
   @@index([conversationId, createdAt(sort: Asc)])
   @@map("ai_research_conversation_messages")
@@ -669,12 +831,20 @@ model ResearchAudit {
   action       String   @db.VarChar(16)
   diff         Json?
   prevSnapshot Json?
+  // Follow-up revision provenance. Null for ordinary manual/status audits.
+  sourceMessageId String? @db.Uuid
+  sourceIntent    String? @db.VarChar(16)
+  sourceQuestion  String? @db.Text
+  reason          String? @db.VarChar(2000)
+  sourceRefs      Json?   @db.JsonB
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
   research Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
   editor   User     @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  sourceMessage AiResearchConversationMessage? @relation("research_audit_source_message", fields: [sourceMessageId], references: [id], onDelete: SetNull)
 
   @@index([researchId, createdAt(sort: Desc)])
+  @@index([sourceMessageId])
   @@map("research_audit")
 }
 

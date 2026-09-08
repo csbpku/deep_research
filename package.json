@@ -28,7 +28,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "perf:first-visit": "pnpm --filter @deep-research/web perf:first-visit"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

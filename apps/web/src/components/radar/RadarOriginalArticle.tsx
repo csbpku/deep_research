@@ -1,11 +1,12 @@
 'use client';
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import MarkdownContent from '@/components/MarkdownContent';
 import {
   prepareRadarReadingContent,
   radarBlockId,
+  radarQuoteMatchesBlock,
   splitRadarReadingBlocks,
 } from './radar-reading-blocks';
 import { cn } from '@/lib/utils';
@@ -23,27 +24,103 @@ interface RadarOriginalArticleProps {
   /** Remove a source-level title when the page already renders the title. */
   title?: string;
   paperMode?: boolean;
+  /** The detail page already exposes one consolidated mobile navigation entry. */
+  showMobileToc?: boolean;
+  /** Keep technical articles at a comfortable long-form reading measure. */
+  readingMeasure?: 'regular' | 'wide';
+  /** The detail page's scroll owner, used to render long bodies progressively. */
+  scrollRootRef?: React.RefObject<HTMLElement | null>;
   className?: string;
   annotations?: Array<{ id: string; quote: string }>;
   selectedAnnotationId?: string | null;
   onAnnotationClick?: (annotationId: string) => void;
 }
 
+function estimatedBlockHeight(block: string): number {
+  return Math.min(1800, Math.max(140, Math.round(block.length * 0.3)));
+}
+
+function getScrollableRoot(ref?: React.RefObject<HTMLElement | null>): HTMLElement | null {
+  const root = ref?.current;
+  if (!root) return null;
+  const style = getComputedStyle(root);
+  return root.scrollHeight > root.clientHeight + 8
+    && (style.overflowY === 'auto' || style.overflowY === 'scroll')
+    ? root
+    : null;
+}
+
+function LazyArticleBlock({
+  block,
+  blockIndex,
+  scrollRootRef,
+  initiallyRendered,
+  onRendered,
+}: {
+  block: string;
+  blockIndex: number;
+  scrollRootRef?: React.RefObject<HTMLElement | null>;
+  initiallyRendered: boolean;
+  onRendered: () => void;
+}) {
+  const blockRef = useRef<HTMLElement>(null);
+  const [rendered, setRendered] = useState(initiallyRendered);
+
+  useEffect(() => {
+    setRendered(initiallyRendered);
+  }, [block, initiallyRendered]);
+
+  useEffect(() => {
+    if (rendered) return;
+    const root = getScrollableRoot(scrollRootRef);
+    const target = blockRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') {
+      setRendered(true);
+      onRendered();
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setRendered(true);
+        onRendered();
+        observer.disconnect();
+      },
+      { root, rootMargin: '1200px 0px' },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [onRendered, rendered, scrollRootRef]);
+
+  return (
+    <section
+      ref={blockRef}
+      id={radarBlockId(blockIndex)}
+      data-radar-block="true"
+      data-radar-block-index={blockIndex}
+      className="group relative -mx-3 scroll-mt-6 rounded-md px-3 py-2 transition-colors"
+      style={rendered ? undefined : { minHeight: estimatedBlockHeight(block), contentVisibility: 'auto', containIntrinsicSize: '280px' }}
+    >
+      {rendered ? <MarkdownContent content={block} className="text-[16px] text-[var(--ink-text)]" /> : null}
+    </section>
+  );
+}
+
 interface RadarTocItem {
   label: string;
-  level: 2 | 3;
+  level: 1 | 2 | 3;
   blockIndex: number;
 }
 
-function extractRadarToc(blocks: string[], paperMode = false): RadarTocItem[] {
+export function extractRadarToc(blocks: string[], paperMode = false): RadarTocItem[] {
   return blocks.flatMap((block, blockIndex) => {
-    const heading = block.match(new RegExp(`^(#{${paperMode ? '1,6' : '2,3'}})\\s+(.+?)\\s*#*\\s*$`, 'mu'));
+    const heading = block.match(new RegExp(`^(#{${paperMode ? '1,3' : '2,3'}})\\s+(.+?)\\s*#*\\s*$`, 'mu'));
     if (!heading) return [];
     // Trafilatura flattens HTML <details><summary><b>...</b></summary>
     // blocks into bold Markdown headings. They are code-example labels, not
     // article sections, so keep them in the body but exclude them from TOC.
     if (/^(?:\*\*|__)[^*_]+(?:\*\*|__)$/u.test(heading[2]!.trim())) return [];
-    const level = heading[1]!.length as 2 | 3;
+    const level = heading[1]!.length as 1 | 2 | 3;
     const label = heading[2]!
       .replace(/[*_`]/gu, '')
       .replace(/\[([^\]]+)\]\([^)]+\)/gu, '$1')
@@ -125,11 +202,11 @@ export function highlightAnnotationQuotes(
         const prefix = item.node;
         const selectedNode = prefix.splitText(from);
         const mark = document.createElement('mark');
-        mark.className = 'radar-user-annotation rounded-sm bg-amber-200/75 px-0.5 text-inherit decoration-amber-500/80 decoration-2 underline-offset-2';
+        mark.className = 'radar-user-annotation rounded-sm bg-warning-bg px-0.5 text-inherit decoration-warning/80 decoration-2 underline-offset-2';
         mark.dataset.annotationId = annotation.id;
         mark.style.cursor = 'pointer';
         if (annotation.id === options.selectedAnnotationId) {
-          mark.style.boxShadow = '0 0 0 2px rgb(180 83 9 / 0.55)';
+          mark.style.boxShadow = '0 0 0 2px hsl(var(--warning) / 0.55)';
         }
         if (options.onAnnotationClick) {
           mark.setAttribute('role', 'button');
@@ -158,17 +235,28 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
   content,
   title,
   paperMode = false,
+  showMobileToc = true,
+  readingMeasure = 'wide',
+  scrollRootRef,
   className,
   annotations = [],
   selectedAnnotationId,
   onAnnotationClick,
 }: RadarOriginalArticleProps) {
   const [tocWidth, setTocWidth] = useState(240);
+  const [renderedBlockVersion, setRenderedBlockVersion] = useState(0);
   const tocResizingRef = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const readingContent = prepareRadarReadingContent(content, title, paperMode);
-  const blocks = splitRadarReadingBlocks(readingContent);
-  const toc = extractRadarToc(blocks, paperMode);
+  const readingContent = useMemo(
+    () => prepareRadarReadingContent(content, title, paperMode),
+    [content, paperMode, title],
+  );
+  const blocks = useMemo(() => splitRadarReadingBlocks(readingContent), [readingContent]);
+  const toc = useMemo(() => extractRadarToc(blocks, paperMode), [blocks, paperMode]);
+  const initialBlockCount = paperMode ? 3 : 2;
+  const handleBlockRendered = useCallback(() => {
+    setRenderedBlockVersion((version) => version + 1);
+  }, []);
 
   useEffect(() => {
     if (!paperMode || !rootRef.current) return;
@@ -197,7 +285,7 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
         mark.replaceWith(document.createTextNode(mark.textContent ?? ''));
       });
     };
-  }, [annotations, blocks.length, content, onAnnotationClick, selectedAnnotationId]);
+  }, [annotations, blocks.length, content, onAnnotationClick, renderedBlockVersion, selectedAnnotationId]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -234,11 +322,8 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
 
   return (
     <div ref={rootRef} className={cn('relative', className)}>
-      {toc.length ? (
-        <details
-          className="mb-6 overflow-y-auto overscroll-contain rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-page)] lg:hidden"
-          style={{ maxHeight: '60dvh' }}
-        >
+      {toc.length && showMobileToc ? (
+        <details className="mb-6 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-page)] lg:hidden">
           <summary className="cursor-pointer px-3 py-2.5 text-xs font-semibold text-[var(--ink-text)]">目录</summary>
           <TocList items={toc} />
         </details>
@@ -249,7 +334,7 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
       >
         {toc.length ? (
           <nav className="sticky top-4 hidden h-[calc(100dvh-12rem)] max-h-[calc(100dvh-12rem)] self-start overscroll-contain overflow-y-auto pr-2 lg:block" aria-label="原文目录">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-accent)]">On this page</p>
+            <p className="mb-2 text-[10px] font-semibold tracking-[0.16em] text-[var(--ink-accent)]">原文目录</p>
             <TocList items={toc} />
           </nav>
         ) : null}
@@ -268,21 +353,25 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
             <span className="sticky top-1/2 mt-8 h-24 w-1 rounded-full bg-[var(--ink-rule)] transition-colors group-hover:bg-[var(--ink-accent)]" />
           </button>
         ) : null}
-        <div data-radar-reading-body="true" className="reading-workbench-markdown min-w-0 text-[16px] text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20 lg:pl-8">
+        <div
+          data-radar-reading-body="true"
+          className={cn(
+            'reading-workbench-markdown min-w-0 text-[16px] text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20 lg:pl-8',
+            readingMeasure === 'regular' && 'reading-measure-regular',
+          )}
+        >
         {blocks.map((block, index) => (
-          <section
+          <LazyArticleBlock
             key={radarBlockId(index)}
-            id={radarBlockId(index)}
-            data-radar-block="true"
-            data-radar-block-index={index}
-            className={cn(
-              'group relative scroll-mt-6 rounded-md px-3 py-2 -mx-3 transition-colors',
-              // Selection actions are rendered next to the browser text selection.
-              // Do not paint the whole paragraph as a second, blue selection state.
-            )}
-          >
-            <MarkdownContent content={block} className="text-[16px] text-[var(--ink-text)]" />
-          </section>
+            block={block}
+            blockIndex={index}
+            scrollRootRef={scrollRootRef}
+            initiallyRendered={
+              index < initialBlockCount
+              || annotations.some((annotation) => radarQuoteMatchesBlock(block, annotation.quote))
+            }
+            onRendered={handleBlockRendered}
+          />
         ))}
         </div>
       </div>
@@ -299,7 +388,7 @@ function TocList({ items }: { items: RadarTocItem[] }) {
             href={`#${radarBlockId(item.blockIndex)}`}
             className={cn(
               'block py-1 text-xs leading-5 text-[var(--ink-muted)] transition-colors hover:text-[var(--ink-accent)]',
-              item.level === 2 && 'font-semibold text-[var(--ink-text)]',
+              item.level <= 2 && 'font-semibold text-[var(--ink-text)]',
               item.level === 3 && 'pl-2 text-[11px]',
             )}
           >

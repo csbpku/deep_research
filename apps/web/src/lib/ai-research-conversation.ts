@@ -68,7 +68,7 @@ export function advanceResearchConversation(
     if (isSkipResponse(value)) {
       return {
         next: { topic: currentTopic, context: currentContext, phase: 'ready' },
-        reply: '好的，我会以当前问题为主线展开调研。你可以直接开始，也可以在下方选择产物、补充资料或调整范围。',
+        reply: '好的，我会以当前问题为主线展开调研。你可以直接开始，也可以在下方确认研究方式、资料来源和交付形式。',
         canStart: true,
       };
     }
@@ -78,7 +78,7 @@ export function advanceResearchConversation(
       : value;
     return {
       next: { topic: currentTopic, context: nextContext, phase: 'ready' },
-      reply: '这些背景已纳入调研范围。请检查下方的产物和资料设置；准备好后即可开始调研。',
+      reply: '这些背景已纳入研究计划。请检查下方的研究方式、资料来源和交付形式；准备好后即可开始。',
       canStart: true,
     };
   }
@@ -88,7 +88,7 @@ export function advanceResearchConversation(
     : value;
   return {
     next: { topic: currentTopic, context: nextContext, phase: 'ready' },
-    reply: '已补充到调研上下文。你可以继续补充要求，或直接开始调研。',
+    reply: '已补充到研究计划。你可以继续补充要求，或直接开始调研。',
     canStart: true,
   };
 }

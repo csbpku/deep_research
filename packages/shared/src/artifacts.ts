@@ -21,6 +21,8 @@ export interface ResearchArtifact {
   version: number;
   mimeType: 'text/markdown' | 'application/json';
   content: string | null;
+  /** Optional unrendered source retained for safe, lossless revisions. */
+  rawContent?: string | null;
   payload: unknown | null;
   sourceRefs: ArtifactSourceRef[];
   sourceHash: string | null;

@@ -1,6 +1,6 @@
 'use client';
 
-// 首页"调研库精选" —— 登录态展示已发布的研究/知识卡片 2x2 缩略图。
+// 首页"研究库精选" —— 登录态展示已发布的研究/知识卡片 2x2 缩略图。
 //
 // 数据源：复用 /api/researches?scope=published&limit=4（不传 type 同时拿 research + knowledge，
 // 已在 researchListWhere 里实现 type 可选过滤）。该路由内部 requireUser，
@@ -81,7 +81,7 @@ export function RecentResearchStrip() {
   return (
     <div className="mt-6">
       <SectionCard
-        title="调研库精选"
+        title="研究库精选"
         icon={Library}
         actions={
           <Link href="/researches" className="text-xs text-primary hover:underline">

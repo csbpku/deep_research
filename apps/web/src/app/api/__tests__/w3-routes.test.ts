@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   researchCreate: vi.fn(),
   researchFindUnique: vi.fn(),
   researchUpdate: vi.fn(),
+  researchUpdateMany: vi.fn(),
   researchDelete: vi.fn(),
   aiJobDelete: vi.fn(),
   auditCreate: vi.fn(),
@@ -56,11 +57,12 @@ beforeEach(() => {
   mocks.writeFile.mockResolvedValue(undefined);
   mocks.unlink.mockResolvedValue(undefined);
   mocks.transaction.mockImplementation((callback) => callback({
-    research: { create: mocks.researchCreate, update: mocks.researchUpdate, delete: mocks.researchDelete },
+    research: { create: mocks.researchCreate, update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany, delete: mocks.researchDelete },
     aiResearchJob: { delete: mocks.aiJobDelete },
     researchAudit: { create: mocks.auditCreate },
     productEvent: { create: mocks.eventCreate },
   }));
+  mocks.researchUpdateMany.mockResolvedValue({ count: 1 });
   mocks.create.mockResolvedValue({
     id: 'job-1',
     status: 'queued',
@@ -174,7 +176,7 @@ describe('research provenance input', () => {
       id: '22222222-2222-2222-2222-222222222222',
       authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
       title: 'AI draft', body, background: '研究背景', conclusion: '研究结论', risks: '风险与待验证项', tags: [],
-      creationMethod: 'ai_research',
+      creationMethod: 'ai_research', reviewStatus: 'passed',
     });
     mocks.researchUpdate.mockImplementation(({ data }) => Promise.resolve({
       id: '22222222-2222-2222-2222-222222222222', type: 'research',
@@ -235,6 +237,75 @@ describe('research provenance input', () => {
     expect(await response.json()).toMatchObject({ code: 'VALIDATION_FAILED' });
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
+
+  it('does not treat a contradictory historical run as a current-version block', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'AI draft', body: 'Current body', background: '背景', conclusion: '结论',
+      risks: '风险', tags: [], creationMethod: 'ai_research', reviewStatus: null,
+      reviewRuns: [{
+        id: 'review-run-1', revisionHash: 'b'.repeat(64), executionStatus: 'completed',
+        outcome: 'blocked', attempt: 1,
+      }],
+    });
+
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      message: '事实审核尚未完成，审核通过后才能发布 AI 调研',
+    });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('does not let a historical passed mirror publish the current revision', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+      title: 'AI draft', body: 'Current body', background: '背景', conclusion: '结论',
+      risks: '风险', tags: [], creationMethod: 'ai_research', reviewStatus: 'passed',
+      reviewRuns: [{
+        id: 'review-run-1', revisionHash: 'b'.repeat(64), executionStatus: 'completed',
+        outcome: 'clear', attempt: 1,
+      }],
+    });
+
+    const response = await publishPost(
+      new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
+      { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      message: '事实审核尚未完成，审核通过后才能发布 AI 调研',
+    });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'queued', 'reviewing', 'needs_revision', 'review_unavailable'])
+    ('does not publish an AI draft before the current review passes (%s)', async (reviewStatus) => {
+      mocks.researchFindUnique.mockResolvedValue({
+        id: '22222222-2222-2222-2222-222222222222',
+        authorId: '11111111-1111-1111-1111-111111111111', status: 'draft',
+        title: 'AI draft', body: 'AI output', background: '研究背景', conclusion: '研究结论',
+        risks: '风险与待验证项', tags: [], creationMethod: 'ai_research', reviewStatus,
+      });
+
+      const response = await publishPost(
+        new Request('http://localhost/api/researches/id/publish', { method: 'POST' }) as never,
+        { params: Promise.resolve({ id: '22222222-2222-2222-2222-222222222222' }) },
+      );
+
+      expect(response.status).toBe(400);
+      expect((await response.json()).code).toBe('VALIDATION_FAILED');
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    });
 });
 
 describe('DELETE /api/researches/[id]', () => {

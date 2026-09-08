@@ -1,6 +1,6 @@
 """SSRF-safe URL fetcher — Week 4 (W4-1).
 
-Implements the URL safety contract per `docs/IMPLEMENTATION_PLAN.md §六`
+Implements the URL safety contract per `docs/archive/2026-09-08-implementation-plan.md §六`
 (URL 抓取 / SSRF 防护):
 
 - Scheme: only http / https.

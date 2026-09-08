@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   excerptOf,
+  classifyExcerptDisplay,
   parseUtcDate,
   isoDateOf,
   matchesQuery,
@@ -39,6 +40,47 @@ describe('excerptOf', () => {
     const r = excerptOf(long, 50);
     expect(r.length).toBe(50);
     expect(r.endsWith('…')).toBe(true);
+  });
+});
+
+describe('classifyExcerptDisplay', () => {
+  it('returns clamp on empty input', () => {
+    expect(classifyExcerptDisplay('')).toBe('clamp');
+  });
+
+  it('returns full for short single-paragraph content', () => {
+    expect(classifyExcerptDisplay('Authors: Yipeng Zhao. Reasoning-Induced Misalignment, where fine-tuning on reasoning data containing no harmful content, including mathematics, code, and problem-solving with chain-of-thought traces can induce harmful behaviors of LLM.')).toBe('full');
+  });
+
+  it('returns full for arxiv-style abstract (long single paragraph)', () => {
+    const abstract = 'Authors: Yipeng Zhao, Qishun Yang, Shenzhe Zhu, Shu Yang, Di Wang. Reasoning-Induced Misalignment, where fine-tuning on reasoning data containing no harmful content, including mathematics, code, and problem-solving with chain-of-thought traces can induce harmful behaviors of LLM, posing a serious challenge to the safety of LLM reasoning. Cross-architecture, cross-scale, and cross-dataset checks show that RIM does not always emerge.';
+    expect(classifyExcerptDisplay(abstract)).toBe('full');
+  });
+
+  it('returns full when paragraph count is small (<= 3)', () => {
+    const text = 'Para 1 with several sentences and content.\n\nPara 2 also with text.\n\nPara 3 closes it.';
+    expect(classifyExcerptDisplay(text)).toBe('full');
+  });
+
+  it('returns clamp for dialogue-heavy content (many short paragraphs)', () => {
+    const dialogue = [
+      '\"I use IPython as my terminal\'s shell.\"',
+      '\"IPython in the shell?\"',
+      '\"No, IPython is the shell.\"',
+      '\"IPython? As the shell?\"',
+      '\"Only way to live.\"',
+      '\"What about cat, ls, cd?\"',
+      '\"I use those... But in IPython.\"',
+      '\"Oh you are one of those `!` people...\"',
+    ].join('\n\n');
+    expect(classifyExcerptDisplay(dialogue)).toBe('clamp');
+  });
+
+  it('returns full when avg paragraph length >= 200 even with many paragraphs', () => {
+    const longPara = 'Long paragraph with substantial content that goes on and on with detailed explanations about a topic, covering many aspects and going deep into the subject matter with extensive analysis and discussion that ensures the paragraph remains well above the 200 character threshold for the display classifier.';
+    expect(longPara.length).toBeGreaterThanOrEqual(200);
+    const text = Array.from({ length: 6 }).map(() => longPara).join('\n\n');
+    expect(classifyExcerptDisplay(text)).toBe('full');
   });
 });
 
@@ -150,7 +192,6 @@ describe('parseDistilledScore', () => {
       tier_score: 68,
       source_bonus: 8,
       tier: 'collection',
-      must_read: true,
       dimensions: {
         info_increment: 3,
         analysis_depth: 2,
@@ -177,7 +218,6 @@ describe('parseDistilledScore', () => {
     expect(score?.teamValueScore).toBe(66);
     expect(score?.sourceBonus).toBe(8);
     expect(score?.directRelevance).toBe(2);
-    expect(score?.mustRead).toBe(true);
     expect(score?.dimensions.analysisDepth).toBe(2);
     expect(score?.dimensions.currentApplicability).toBe(3);
     expect(score?.weakPoint).toBe('缺少机制分析');

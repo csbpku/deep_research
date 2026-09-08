@@ -1,6 +1,6 @@
 """Week 9 收尾验收：20 个文件导入样本（10 合法 + 10 恶意）。
 
-依据：docs/IMPLEMENTATION_PLAN.md §十一
+依据：docs/archive/2026-09-08-implementation-plan.md §十一
   - "20 个合法/恶意文件导入样本均符合预期"
   - "HTML 危险内容残留为 0"
 

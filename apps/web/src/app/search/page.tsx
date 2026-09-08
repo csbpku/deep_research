@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { Search as SearchIcon } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { ErrorState } from '@/components/StateMessage';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -89,6 +90,7 @@ function SearchContent() {
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requestKey, setRequestKey] = useState(0);
 
   const detailHref = useCallback((row: SearchRow) => {
     const base = row.type === 'radar'
@@ -148,7 +150,7 @@ function SearchContent() {
     return () => {
       cancelled = true;
     };
-  }, [submittedQ, type, page]);
+  }, [submittedQ, type, page, requestKey]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -163,10 +165,10 @@ function SearchContent() {
   const items = data?.items ?? [];
 
   return (
-    <div className="mx-auto max-w-shell">
+    <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="搜索"
-        description="跨雷达、摘要与调研库检索；标题优先，兼顾词组和近似匹配。"
+        description="跨雷达、摘要与研究库检索；标题优先，兼顾词组和近似匹配。"
       />
 
       <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
@@ -200,14 +202,18 @@ function SearchContent() {
       </Tabs>
 
       <div className="mt-4">
-        {error && (
-          <div
-            role="alert"
-            className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-          >
-            {error}
-          </div>
-        )}
+        {error ? (
+          <ErrorState
+            className="mb-3"
+            title="搜索暂时失败"
+            description={error}
+            action={
+              <Button type="button" size="xs" variant="outline" onClick={() => setRequestKey((value) => value + 1)}>
+                重试
+              </Button>
+            }
+          />
+        ) : null}
 
         {!submittedQ && (
           <EmptyState title="开始搜索" description="输入关键词以搜索雷达、摘要、研究报告和知识卡片。" />
@@ -241,14 +247,14 @@ function SearchContent() {
                   row.type === 'knowledge' ? 'knowledge' :
                   'summary';
                 return (
-                  <li key={row.id}>
-                    <Card className="transition-colors duration-200 hover:border-primary/40">
-                      <CardContent className="p-3.5">
+                  <li key={row.id} className="min-w-0">
+                    <Card className="min-w-0 max-w-full transition-colors duration-200 hover:border-primary/40">
+                      <CardContent className="min-w-0 p-3.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusBadge kind="searchType" value={searchKind} />
                           <Link
                             href={detailHref(row)}
-                            className="text-sm font-medium hover:text-primary hover:underline"
+                            className="min-w-0 break-words text-sm font-medium hover:text-primary hover:underline"
                           >
                             {row.title}
                           </Link>

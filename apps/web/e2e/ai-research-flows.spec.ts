@@ -99,6 +99,7 @@ test.describe('AI Research parent (UI polish)', () => {
     );
     await page.goto('/ai-research');
     await page.waitForLoadState('networkidle').catch(() => {});
+    await page.getByRole('button', { name: '查看全部任务' }).click();
     await expect(page.getByText('还没有调研任务')).toBeVisible();
   });
 
@@ -108,8 +109,58 @@ test.describe('AI Research parent (UI polish)', () => {
     );
     await page.goto('/ai-research');
     await page.waitForLoadState('networkidle').catch(() => {});
+    await page.getByRole('button', { name: '查看全部任务' }).click();
     const retry = page.getByRole('button', { name: '重试' }).first();
     await expect(retry).toBeVisible();
+  });
+
+  test('recent research stays compact and full history opens in a drawer', async ({ page }) => {
+    await page.goto('/ai-research');
+    const history = page.getByRole('button', { name: '查看全部任务' });
+    await expect(history).toBeVisible();
+    await history.click();
+    const drawer = page.getByRole('dialog', { name: '调研历史' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('button', { name: '失败' })).toBeVisible();
+    await drawer.getByRole('button', { name: '关闭' }).click();
+    await expect(drawer).toBeHidden();
+  });
+
+  test('history keeps task actions reachable on a narrow mobile viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route('**/api/ai-research/jobs*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          items: [{
+            jobId: '55555555-5555-4555-8555-555555555555',
+            topic: '移动端历史任务操作可达性',
+            status: 'succeeded',
+            currentStep: null,
+            reportType: 'slides',
+            reportLength: 'standard',
+            hasReport: true,
+            capturedSourcesCount: 3,
+            deliverableStatus: 'report',
+            sourcePolicy: 'prefer_user_sources',
+            sourceRefs: [],
+            draftResearchId: null,
+            publishedResearchId: null,
+            createdAt: '2026-09-04T04:00:00.000Z',
+          }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+      }),
+    );
+    await page.goto('/ai-research');
+    await page.getByRole('button', { name: '查看全部任务' }).click();
+    const drawer = page.getByRole('dialog', { name: '调研历史' });
+    await expect(drawer.getByRole('link', { name: '打开' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: '重新运行' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
   test('form error alert has retry button', async ({ page }) => {
@@ -146,7 +197,7 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(page.getByText('研究稿')).toBeVisible();
-    await expect(page.getByText('优先指定资料')).toBeVisible();
+    await expect(page.getByText('网页搜索 + 我提供的资料')).toBeVisible();
   });
 
   test('research artifact card defaults to markdown research draft', async ({ page }) => {
@@ -157,5 +208,117 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(page.getByText('完整调研、引用和可编辑草稿')).toBeVisible();
+  });
+
+  test('slides artifact is rendered once as a bounded outline', async ({ page }) => {
+    const jobId = '22222222-2222-4222-8222-222222222222';
+    await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId,
+        status: 'succeeded',
+        finalStatus: 'succeeded',
+        currentStep: 'write',
+        topic: '比较三种网页抓取方案',
+        sourcesCount: 3,
+        savedSourcesCount: 3,
+        partialSourcesCount: 3,
+        failedSourcesCount: 0,
+        userSourceRefsCount: 0,
+        autoSourceRefsCount: 3,
+        reportType: 'slides',
+        reportLength: 'standard',
+        deliverableStatus: 'report',
+        sourcePolicy: 'prefer_user_sources',
+        researchProgress: null,
+        outputText: null,
+        errorCode: null,
+        errorMessage: null,
+        errorDetails: null,
+        startedAt: '2026-09-04T04:00:00.000Z',
+        createdAt: '2026-09-04T04:00:00.000Z',
+        completedAt: '2026-09-04T04:01:00.000Z',
+        draftResearchId: '33333333-3333-4333-8333-333333333333',
+        review: { phase: 'completed', status: 'passed', attempts: 1, corrected_count: 0, unverified_count: 0, contradicted_count: 0, claims: [] },
+        conversation: [],
+        sources: [],
+        artifact: {
+          type: 'slides',
+          title: '网页抓取方案选型',
+          version: 1,
+          mimeType: 'text/markdown',
+          content: '## Slide 1: 判断\n\n先验证目标。\n\n## Slide 2: 证据\n\n官方资料。\n\n## Slide 3: 行动\n\n运行灰度。',
+          rawContent: null,
+          payload: null,
+          sourceRefs: [],
+          sourceHash: null,
+          draftResearchId: '33333333-3333-4333-8333-333333333333',
+        },
+      }),
+    }));
+    await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
+    await page.goto(`/ai-research/${jobId}`);
+    await expect(page.getByText('Slides 提纲已生成，可继续编辑或追问。')).toBeVisible();
+    await expect(page.getByLabel('Slides 提纲预览')).toHaveCount(1);
+    await expect(page.getByText('3 页')).toBeVisible();
+    await expect(page.getByRole('link', { name: '编辑 Slides 提纲' })).toBeVisible();
+  });
+
+  test('brief without captured evidence is not presented as verified research', async ({ page }) => {
+    const jobId = '44444444-4444-4444-8444-444444444444';
+    await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId,
+        status: 'succeeded',
+        finalStatus: 'succeeded',
+        currentStep: 'write',
+        topic: '没有资料的快速简报',
+        sourcesCount: 0,
+        savedSourcesCount: 0,
+        partialSourcesCount: 0,
+        failedSourcesCount: 0,
+        userSourceRefsCount: 0,
+        autoSourceRefsCount: 0,
+        reportType: 'summary_brief',
+        reportLength: 'brief',
+        deliverableStatus: 'report',
+        sourcePolicy: 'prefer_user_sources',
+        researchProgress: null,
+        outputText: null,
+        errorCode: null,
+        errorMessage: null,
+        errorDetails: null,
+        startedAt: '2026-09-04T04:00:00.000Z',
+        createdAt: '2026-09-04T04:00:00.000Z',
+        completedAt: '2026-09-04T04:00:06.000Z',
+        draftResearchId: null,
+        review: null,
+        conversation: [],
+        sources: [],
+        artifact: {
+          type: 'markdown',
+          title: '没有资料的快速简报',
+          version: 1,
+          mimeType: 'text/markdown',
+          content: '这是一个没有来源的模型摘录。',
+          rawContent: null,
+          payload: null,
+          sourceRefs: [],
+          sourceHash: null,
+          draftResearchId: null,
+        },
+      }),
+    }));
+    await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
+    await page.goto(`/ai-research/${jobId}`);
+    await expect(page.getByRole('heading', { name: '快速判断已生成，但未找到资料' })).toBeVisible();
+    await expect(page.getByText('无证据')).toBeVisible();
+    await expect(page.getByText('仅模型摘录')).toBeVisible();
+    await expect(page.getByText('生成摘要', { exact: true })).toBeVisible();
+    await expect(page.getByText('本轮未保存可核对资料')).toBeVisible();
+    await expect(page.getByText('100%', { exact: true })).toHaveCount(0);
   });
 });

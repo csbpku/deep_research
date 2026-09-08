@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   topicFindMany: vi.fn(),
   topicCount: vi.fn(),
   topicIssueFindMany: vi.fn(),
+  topicIssueCount: vi.fn(),
   topicIssueGroupBy: vi.fn(),
   researchTopicFindMany: vi.fn(),
   topicFollowFindMany: vi.fn(),
@@ -44,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   // publish
   researchFindUnique: vi.fn(),
   researchUpdate: vi.fn(),
+  researchUpdateMany: vi.fn(),
   researchAuditCreate: vi.fn(),
   adminActionCreate: vi.fn(),
   researchTopicUpsert: vi.fn(),
@@ -80,6 +82,7 @@ vi.mock('@/lib/db', () => ({
     },
     topicIssue: {
       findMany: mocks.topicIssueFindMany,
+      count: mocks.topicIssueCount,
       groupBy: mocks.topicIssueGroupBy,
     },
     researchTopic: {
@@ -115,6 +118,8 @@ beforeEach(() => {
   mocks.requireUser.mockResolvedValue(USER);
   mocks.getCurrentUser.mockResolvedValue(USER);
   mocks.requireAdmin.mockResolvedValue(ADMIN);
+  mocks.topicIssueCount.mockResolvedValue(0);
+  mocks.researchUpdateMany.mockResolvedValue({ count: 1 });
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -139,6 +144,34 @@ async function ctx(slug: string): Promise<{ params: Promise<{ slug: string }> }>
 // ───────────────────────────────────────────────────────────────────
 
 describe('POST /api/ai-research — V2 brief forwarding', () => {
+  it('persists the slides artifact type before the background worker starts', async () => {
+    const { POST } = await import('../ai-research/route');
+
+    mocks.aiJobCreate.mockResolvedValueOnce({ id: 'job-slides' });
+
+    const response = await POST(
+      req('http://localhost/api/ai-research', {
+        topic: '比较三种研究工具',
+        reportType: 'slides',
+        reportLength: 'standard',
+        sourcePolicy: 'prefer_user_sources',
+      }) as never,
+    );
+
+    expect(response.status).toBe(202);
+    expect(mocks.aiJobCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reportType: 'slides',
+          artifactType: 'slides',
+        }),
+      }),
+    );
+    const upstreamInit = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const upstreamBody = JSON.parse(String(upstreamInit.body)) as { report_type?: string };
+    expect(upstreamBody.report_type).toBe('slides');
+  });
+
   it('持久化 brief / objective / primaryTopicId 并自动 upsert TopicFollow', async () => {
     const { POST } = await import('../ai-research/route');
 
@@ -175,6 +208,14 @@ describe('POST /api/ai-research — V2 brief forwarding', () => {
       primaryTopicId: '44444444-4444-4444-8444-444444444444',
       outputType: 'markdown',
     });
+
+    // The editable brief is not display-only: the actual research engine
+    // must receive the confirmed questions and constraints as its context.
+    const upstreamInit = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const upstreamBody = JSON.parse(String(upstreamInit.body)) as { context?: string };
+    expect(upstreamBody.context).toContain('[用户确认的研究计划]');
+    expect(upstreamBody.context).toContain('索引差异是什么');
+    expect(upstreamBody.context).toContain('团队已用 PG 15');
 
     // 2. primaryTopicId 触发 TopicFollow upsert
     expect(mocks.topicFollowUpsert).toHaveBeenCalledWith(
@@ -462,9 +503,14 @@ describe('GET /api/me/topics', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      items: Array<{ unreadIssueCount: number; latestResearch: { id: string } | null }>;
+      items: Array<{
+        activeIssueCount: number;
+        unreadIssueCount: number;
+        latestResearch: { id: string } | null;
+      }>;
       totalUnread: number;
     };
+    expect(body.items[0].activeIssueCount).toBe(2);
     expect(body.items[0].unreadIssueCount).toBe(1);
     expect(body.items[0].latestResearch?.id).toBe('r-1');
     expect(body.totalUnread).toBe(1);
@@ -500,9 +546,36 @@ describe('GET /api/topics (V2 enhanced)', () => {
       { topicId: 't-1', lastViewedAt: new Date('2026-08-19T07:00:00Z') },
     ]);
     mocks.topicIssueFindMany.mockResolvedValueOnce([
-      { topicId: 't-1', lastSeenAt: new Date('2026-08-19T06:00:00Z') }, // old
-      { topicId: 't-1', lastSeenAt: new Date('2026-08-19T08:00:00Z') }, // unread
-      { topicId: 't-1', lastSeenAt: new Date('2026-08-19T08:30:00Z') }, // unread
+      {
+        topicId: 't-1',
+        id: 'i-old',
+        title: 'old issue',
+        proposition: 'old proposition',
+        kind: 'event',
+        importanceScore: 0.3,
+        lastSeenAt: new Date('2026-08-19T06:00:00Z'),
+        candidates: [],
+      }, // old
+      {
+        topicId: 't-1',
+        id: 'i-new',
+        title: 'new issue',
+        proposition: 'new proposition',
+        kind: 'event',
+        importanceScore: 0.8,
+        lastSeenAt: new Date('2026-08-19T08:00:00Z'),
+        candidates: [],
+      }, // unread
+      {
+        topicId: 't-1',
+        id: 'i-newer',
+        title: 'newer issue',
+        proposition: 'newer proposition',
+        kind: 'event',
+        importanceScore: 0.7,
+        lastSeenAt: new Date('2026-08-19T08:30:00Z'),
+        candidates: [],
+      }, // unread
     ]);
     mocks.researchTopicFindMany.mockResolvedValueOnce([]);
     mocks.topicCount.mockResolvedValueOnce(1);
@@ -532,7 +605,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
   beforeEach(() => {
     mocks.transaction.mockImplementation((callback) =>
       callback({
-        research: { update: mocks.researchUpdate },
+        research: { update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
         researchAudit: { create: mocks.researchAuditCreate },
         productEvent: { create: mocks.productEventCreate },
         // 注意：不传 researchTopic — 模拟现有 w3 测试里的 tx 形状
@@ -594,7 +667,7 @@ describe('POST /api/researches/[id]/publish — V2 ResearchTopic auto-flow', () 
     // 重新 mock: 现在 transaction 提供 researchTopic 与 aiResearchJob.findFirst
     mocks.transaction.mockImplementationOnce((callback) =>
       callback({
-        research: { update: mocks.researchUpdate },
+        research: { update: mocks.researchUpdate, updateMany: mocks.researchUpdateMany },
         researchAudit: { create: mocks.researchAuditCreate },
         productEvent: { create: mocks.productEventCreate },
         researchTopic: { upsert: mocks.researchTopicUpsert },

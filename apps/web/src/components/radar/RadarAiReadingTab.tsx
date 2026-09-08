@@ -67,7 +67,7 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
   return (
     <div className="space-y-1">
       {guide.summary ? (
-        <section aria-labelledby="radar-guide-summary" className="rounded-xl border border-[var(--ink-accent)]/20 bg-[var(--ink-accent)]/[0.07] px-4 py-4">
+        <section aria-labelledby="radar-guide-summary" className="rounded-md border border-[var(--ink-accent)]/20 bg-[var(--ink-accent)]/[0.07] px-4 py-4">
           <h3 id="radar-guide-summary" className="mb-2 font-sans text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">一句话判断</h3>
           <p className="font-serif text-[15px] leading-7 text-[var(--ink-text)]">{guide.summary}</p>
         </section>
@@ -80,7 +80,7 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
             {guide.outline.map((item, i) => (
               <div
                 key={`${item.heading ?? 'section'}-${i}`}
-                className="flex gap-3 rounded-lg border border-[var(--ink-rule)] bg-white px-3 py-2.5 transition-colors hover:bg-[var(--ink-accent)]/[0.05]"
+                className="flex gap-3 rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-3 py-2.5 transition-colors hover:bg-[var(--ink-accent)]/[0.05]"
               >
                 <span className="mt-0.5 font-mono text-[11px] text-[var(--ink-accent)]">{String(i + 1).padStart(2, '0')}</span>
                 <div className="min-w-0">
@@ -109,7 +109,7 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
           <SectionHeading>关键观点</SectionHeading>
           <div id="radar-guide-takeaways" className="space-y-2">
             {visibleTakeaways.map((item, i) => (
-              <article key={`${item.claim ?? 'takeaway'}-${i}`} className="rounded-lg border border-[var(--ink-rule)] bg-white px-3.5 py-3">
+              <article key={`${item.claim ?? 'takeaway'}-${i}`} className="rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-3.5 py-3">
                 <div className="flex gap-2">
                   <span className="mt-0.5 shrink-0 font-mono text-[11px] text-[var(--ink-accent)]">{String(i + 1).padStart(2, '0')}</span>
                   <div className="min-w-0">
@@ -137,27 +137,27 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
       {guide.implications?.length ? (
         <section>
           <SectionHeading>可能的应用影响</SectionHeading>
-          <ul className="rounded-lg border border-emerald-200/80 bg-emerald-50/60 px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
-            {guide.implications.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-emerald-600">{item}</li>)}
+          <ul className="rounded-md border border-status-succeeded-border/70 bg-status-succeeded-bg px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
+            {guide.implications.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-status-succeeded-fg">{item}</li>)}
           </ul>
         </section>
       ) : null}
 
       <div className="mt-6 border-t border-[var(--ink-rule)] pt-2">
         <CollapsibleSection title="风险与限制" count={caveats.length}>
-          <ul className="rounded-lg border border-amber-200/80 bg-amber-50/70 px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
-            {caveats.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-amber-600">{item}</li>)}
+          <ul className="rounded-md border border-warning-border/80 bg-warning-bg px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
+            {caveats.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-warning-fg">{item}</li>)}
           </ul>
         </CollapsibleSection>
         <CollapsibleSection title="待验证问题" count={guide.openQuestions?.length ?? 0}>
-          <ul className="rounded-lg border border-sky-200/80 bg-sky-50/60 px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
-            {guide.openQuestions?.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-sky-600">{item}</li>)}
+          <ul className="rounded-md border border-status-running-border/70 bg-status-running-bg px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
+            {guide.openQuestions?.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-status-running-fg">{item}</li>)}
           </ul>
         </CollapsibleSection>
         <CollapsibleSection title="值得回看的原文摘录" count={guide.highlights?.length ?? 0}>
           <div className="space-y-2">
             {guide.highlights?.map((item, i) => (
-              <button key={`${item.quote ?? 'quote'}-${i}`} type="button" onClick={() => onHighlightClick?.(item.quote ?? '')} className="block w-full border-l-2 border-[var(--ink-accent)] bg-white px-3.5 py-3 text-left font-serif text-[13px] leading-6 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40">
+              <button key={`${item.quote ?? 'quote'}-${i}`} type="button" onClick={() => onHighlightClick?.(item.quote ?? '')} className="block w-full border-l-2 border-[var(--ink-accent)] bg-[var(--ink-page)] px-3.5 py-3 text-left font-serif text-[13px] leading-6 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40">
                 <span className="mb-1 block font-sans text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">原文摘录 · {i + 1}</span>
                 <span className="font-semibold text-[var(--ink-text)]">{item.quote}</span>
                 {item.rationale ? <span className="mt-0.5 block text-xs text-[var(--ink-faint)]">{item.rationale}</span> : null}

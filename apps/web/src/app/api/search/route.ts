@@ -1,7 +1,7 @@
 // BFF handler: GET /api/search — 全文搜索
 //
 // 契约源：
-//   - docs/agent-prompts/week4-engineer-a.md §任务 2
+//   - docs/archive/2026-09-08-agent-prompts/week4-engineer-a.md §任务 2
 //   - SearchDoc（published-only）+ summaries 中的雷达候选
 //   - simple 字典全文检索 + pg_trgm 近似匹配
 //

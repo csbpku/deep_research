@@ -24,7 +24,13 @@ from typing import Literal, Protocol
 from ai_engine.adapters.base import AdapterSource
 from ai_engine.contracts.errors import AdapterError
 from ai_engine.contracts.states import AiJobStatus, AiJobStep, ReportType, SourcePolicy
-from ai_engine.job_runner.models import HeartbeatResult, JobLease, JobSnapshot, LeaseLostError
+from ai_engine.job_runner.models import (
+    HeartbeatResult,
+    JobLease,
+    JobSnapshot,
+    LeaseLostError,
+    ReviewWorkItem,
+)
 
 BackendName = Literal["memory", "db"]
 
@@ -88,6 +94,8 @@ class JobStore:
         cost_cents: int,
         sources: Iterable[AdapterSource],
         review_details: dict[str, object] | None = None,
+        output_text: str | None = None,
+        prune_sources: bool = False,
     ) -> None:
         return None
 
@@ -169,6 +177,35 @@ class JobStore:
         """
         return 0
 
+    async def claim_next_review(self, worker_id: str) -> ReviewWorkItem | None:
+        """Claim one queued fact review, independent of the research queue."""
+        return None
+
+    async def heartbeat_review(self, work: ReviewWorkItem) -> bool:
+        """Renew an independent fact-review lease while the reviewer runs."""
+        return False
+
+    async def checkpoint_review(
+        self,
+        work: ReviewWorkItem,
+        checkpoint: dict[str, object],
+    ) -> bool:
+        """Persist a recoverable review phase while the claim is alive.
+
+        Checkpoints are diagnostic workflow state, not verdicts.  A stale
+        worker must never be able to write one onto a newer attempt, so the
+        DB implementation fences this update with the review claim token.
+        """
+        return False
+
+    async def complete_review(
+        self,
+        work: ReviewWorkItem,
+        review_details: dict[str, object],
+    ) -> None:
+        """Persist a review result without requiring the research lease."""
+        return None
+
 
 @dataclass(slots=True)
 class InMemoryJobStore(JobStore):
@@ -183,7 +220,8 @@ class InMemoryJobStore(JobStore):
       (raises `LeaseLostError`).
     """
 
-    lease_seconds: int = 1020
+    # Crash-recovery window; active jobs renew this every 15 seconds.
+    lease_seconds: int = 180
     heartbeat_seconds: int = 15
     _rows: dict[str, _Row] = field(default_factory=dict)
     _global_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -267,6 +305,8 @@ class InMemoryJobStore(JobStore):
                     attempts=row.snapshot.attempts,
                     idempotency_key=row.snapshot.idempotency_key,
                     source_refs=row.snapshot.source_refs,
+                    report_length=row.snapshot.report_length,
+                    max_urls_to_scrape=row.snapshot.max_urls_to_scrape,
                 )
                 lease = JobLease(
                     job_id=row.snapshot.job_id,
@@ -308,6 +348,8 @@ class InMemoryJobStore(JobStore):
         cost_cents: int,
         sources: Iterable[AdapterSource],
         review_details: dict[str, object] | None = None,
+        output_text: str | None = None,
+        prune_sources: bool = False,
     ) -> None:
         row = self._require_lease(lease)
         async with self._row_lock(lease.job_id):
@@ -323,13 +365,22 @@ class InMemoryJobStore(JobStore):
                 attempts=row.snapshot.attempts,
                 idempotency_key=row.snapshot.idempotency_key,
                 source_refs=row.snapshot.source_refs,
+                report_length=row.snapshot.report_length,
+                max_urls_to_scrape=row.snapshot.max_urls_to_scrape,
             )
             row.last_token_in = token_in
             row.last_token_out = token_out
             row.last_cost_cents = cost_cents
-            row.last_sources = tuple(sources)
+            # A discovered URL without a fetched excerpt is live progress,
+            # not inspectable evidence.
+            row.last_sources = tuple(
+                source for source in sources
+                if source.evidence_status == "fetched" and (source.snippet or "").strip()
+            )
             if review_details is not None:
                 row.review_details = review_details
+            if output_text is not None and output_text.strip():
+                row.output_text = output_text.strip()
 
     async def mark_terminal(
         self,
@@ -350,7 +401,11 @@ class InMemoryJobStore(JobStore):
                 "mark_terminal: succeeded requires exactly one of "
                 "draft_research_id or output_text"
             )
-        if status != "succeeded" and (
+        if status == "partial" and draft_research_id is not None:
+            raise ValueError("mark_terminal: partial cannot persist a research draft")
+        if status == "partial" and output_text is not None and not output_text.strip():
+            raise ValueError("mark_terminal: partial output_text must not be blank")
+        if status not in {"succeeded", "partial"} and (
             draft_research_id is not None or output_text is not None
         ):
             raise ValueError(f"mark_terminal: status={status} cannot persist output")
@@ -367,6 +422,8 @@ class InMemoryJobStore(JobStore):
                 attempts=row.snapshot.attempts,
                 idempotency_key=row.snapshot.idempotency_key,
                 source_refs=row.snapshot.source_refs,
+                report_length=row.snapshot.report_length,
+                max_urls_to_scrape=row.snapshot.max_urls_to_scrape,
             )
             row.locked_by = None
             row.lease_expires_at = None
@@ -379,6 +436,19 @@ class InMemoryJobStore(JobStore):
             row.output_text = output_text
         # Caller is responsible for downstream side-effects (e.g. draft
         # research row) — see Week 5 worker.
+
+    async def claim_next_review(self, worker_id: str) -> ReviewWorkItem | None:
+        # The in-memory adapter path is used by unit tests and local smoke
+        # tests.  It has no durable research body to review, so the DB-backed
+        # worker is intentionally the only production implementation.
+        return None
+
+    async def complete_review(
+        self,
+        work: ReviewWorkItem,
+        review_details: dict[str, object],
+    ) -> None:
+        return None
 
     async def release_lease(self, lease: JobLease) -> None:
         row = self._rows.get(lease.job_id)
@@ -409,6 +479,8 @@ class InMemoryJobStore(JobStore):
                 attempts=row.snapshot.attempts,
                 idempotency_key=row.snapshot.idempotency_key,
                 source_refs=row.snapshot.source_refs,
+                report_length=row.snapshot.report_length,
+                max_urls_to_scrape=row.snapshot.max_urls_to_scrape,
             )
             row.locked_by = None
             row.lease_expires_at = None
@@ -502,7 +574,7 @@ def build_store(
     chosen = (name or os.environ.get("JOB_RUNNER_BACKEND") or "memory").lower()
     if chosen == "memory":
         return InMemoryJobStore(
-        lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "1020")),
+        lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "180")),
             heartbeat_seconds=heartbeat_seconds
             or int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")),
         )
@@ -519,7 +591,7 @@ def build_store(
         table_name = os.environ.get("JOB_RUNNER_TABLE", AI_TABLE)
         return DbJobStore(
             table_name=table_name,
-        lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "1020")),
+        lease_seconds=lease_seconds or int(os.environ.get("WORKER_LEASE_SECONDS", "180")),
             heartbeat_seconds=heartbeat_seconds
             or int(os.environ.get("WORKER_HEARTBEAT_SECONDS", "15")),
         )
@@ -535,6 +607,8 @@ def make_job_snapshot(
     requester_id: str = "00000000-0000-0000-0000-000000000001",
     report_type: ReportType = "research_report",
     source_policy: SourcePolicy = "prefer_user_sources",
+    report_length: str = "standard",
+    max_urls_to_scrape: int | None = None,
 ) -> JobSnapshot:
     """Convenience constructor used by tests and the spike harness."""
     return JobSnapshot(
@@ -549,6 +623,8 @@ def make_job_snapshot(
         attempts=0,
         idempotency_key=None,
         source_refs=(),
+        report_length=report_length,
+        max_urls_to_scrape=max_urls_to_scrape,
     )
 
 

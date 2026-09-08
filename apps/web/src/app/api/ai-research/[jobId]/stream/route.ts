@@ -29,6 +29,7 @@ interface UpstreamJobSnapshot {
   error_code?: string | null;
   error_message?: string | null;
   review?: Record<string, unknown> | null;
+  research_progress?: Record<string, unknown> | null;
 }
 
 interface StreamJobSnapshot {
@@ -42,6 +43,7 @@ interface StreamJobSnapshot {
   errorCode: string | null;
   errorMessage: string | null;
   review: Record<string, unknown> | null;
+  researchProgress: Record<string, unknown> | null;
 }
 
 function toStreamSnapshot(value: UpstreamJobSnapshot): StreamJobSnapshot {
@@ -56,6 +58,7 @@ function toStreamSnapshot(value: UpstreamJobSnapshot): StreamJobSnapshot {
     errorCode: value.error_code ?? null,
     errorMessage: value.error_message ?? null,
     review: value.review ?? null,
+    researchProgress: value.research_progress ?? null,
   };
 }
 

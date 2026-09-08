@@ -76,7 +76,7 @@ async def main() -> int:
             )
     print(f"{'─'*60}")
     print(f"  {'TOTAL':<25} {'':>8}  {total_fetched:>7}  {total_new:>5}  {total_skipped:>5}  {total_failed:>5}  {sum(r.fallback_count for r in result.runs):>8}")
-    print(f"  Distilled scored: {monitor.total_count - monitor.default_count}  default: {monitor.default_count}  must-read: {monitor.must_read_count}")
+    print(f"  Distilled scored: {monitor.total_count - monitor.default_count}  default: {monitor.default_count}")
     print(
         f"  Enriched: {pipeline_result.enriched_count}  "
         f"elapsed: {pipeline_result.enrichment_elapsed_ms / 1000:.1f}s"

@@ -24,10 +24,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string; ver
 
   const research = await prisma.research.findUnique({
     where: { id: parsed.data.id },
-    select: { id: true, authorId: true, status: true },
+    select: { id: true, authorId: true, status: true, creationMethod: true },
   });
   if (!research || (research.authorId !== user.id && user.role !== 'admin')) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: '调研库不存在', requestId });
+  }
+  if (research.status === 'published' && research.creationMethod === 'ai_research') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.AI_PUBLISHED_IMMUTABLE,
+      message: '已发布的 AI 调研不可原地恢复，请先创建修订草稿',
+      requestId,
+    });
   }
 
   const audit = await prisma.researchAudit.findFirst({

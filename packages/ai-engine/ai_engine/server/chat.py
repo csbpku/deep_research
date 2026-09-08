@@ -205,14 +205,6 @@ class ChatSeedSnapshot(BaseModel):
     reading_context: str | None = None
 
 
-class CreateChatSessionResponse(BaseModel):
-    session_id: str
-    status: AiChatSessionStatus
-    created_at: str
-    seed_snapshot: ChatSeedSnapshot
-    message_count: int = 0
-
-
 class ChatMessageOut(BaseModel):
     id: str
     role: AiChatRole
@@ -223,6 +215,15 @@ class ChatMessageOut(BaseModel):
     tokens_out: int | None = None
     cost_cents: int | None = None
     created_at: str
+
+
+class CreateChatSessionResponse(BaseModel):
+    session_id: str
+    status: AiChatSessionStatus
+    created_at: str
+    seed_snapshot: ChatSeedSnapshot
+    message_count: int = 0
+    messages: list[ChatMessageOut] = Field(default_factory=list)
 
 
 class GetSessionResponse(BaseModel):
@@ -336,15 +337,35 @@ def _zread_context(meta: Any) -> str | None:
     return "\n\n---\n\n".join(chunks)[:_ZREAD_CONTEXT_MAX]
 
 
-async def _count_messages(pool: Any, session_id: str) -> int:
+async def _load_messages(pool: Any, session_id: str) -> list[ChatMessageOut]:
     async with pool.connection() as conn:
-        row = await (
+        rows = await (
             await conn.execute(
-                'SELECT count(*) AS cnt FROM "ai_chat_messages" WHERE "sessionId" = %s',
+                'SELECT "id", "role", "content", "sourcesJson", "latencyMs", '
+                '"tokensIn", "tokensOut", "costCents", "createdAt" '
+                'FROM "ai_chat_messages" WHERE "sessionId" = %s ORDER BY "createdAt" ASC',
                 (session_id,),
             )
-        ).fetchone()
-    return int(row["cnt"]) if row else 0
+        ).fetchall()
+
+    messages: list[ChatMessageOut] = []
+    for row in rows:
+        message = dict(row)
+        sources = message.get("sourcesJson")
+        messages.append(
+            ChatMessageOut(
+                id=str(message["id"]),
+                role=cast(AiChatRole, message["role"]),
+                content=message["content"],
+                sources_json=list(sources) if isinstance(sources, list) else None,
+                latency_ms=message.get("latencyMs"),
+                tokens_in=message.get("tokensIn"),
+                tokens_out=message.get("tokensOut"),
+                cost_cents=message.get("costCents"),
+                created_at=message["createdAt"].isoformat(),
+            )
+        )
+    return messages
 
 
 async def _count_user_messages_today(pool: Any, user_id: str) -> int:
@@ -414,8 +435,10 @@ async def _build_prompt(
     # M7: 引用锚点 —— 让模型在直接引用原文时用 [[cite]]...[[/cite]] 包裹，
     # 前端解析后回链到左栏原文（fuzzy match）。不改变预算，只追加一句指令。
     citation_hint = (
-        "\n\n引用纪律：当你直接引用原文中的句子来支撑回答时，用 [[cite]] 原文句子 [[/cite]] 包裹，"
-        "引文必须逐字复制原文。不要滥用引文，只在需要锚定证据时使用。"
+        "\n\n引用纪律：回答涉及事实、数字、比较、实验结果、方法或限制时，"
+        "至少为主要结论提供一条来自原文的逐字短引文，并用 [[cite]] 原文句子 [[/cite]] 包裹。"
+        "引文必须逐字复制给定原文且能在其中找到；找不到依据时写“原文未说明”或标记[推断]，不要猜测。"
+        "不要把整段来源正文再次贴进回答，也不要在中文解释后重复粘贴无关的英文原文。"
     )
     return built.system + citation_hint + "\n\n" + built.user, built.estimated_tokens
 
@@ -446,7 +469,7 @@ async def create_session(
     async with pool.connection() as conn:
         existing = await (
             await conn.execute(
-                'SELECT "id", "createdAt" FROM "ai_chat_sessions" '
+                'SELECT "id", "createdAt", "seedSnapshot" FROM "ai_chat_sessions" '
                 'WHERE "userId" = %s AND "seedSummaryId" = %s AND "status" = \'active\' '
                 'ORDER BY "updatedAt" DESC LIMIT 1',
                 (body.user_id, body.seed_summary_id),
@@ -459,14 +482,19 @@ async def create_session(
             user_id=body.user_id,
             session_id=str(existing["id"]),
         )
+        existing_snapshot = (
+            existing["seedSnapshot"]
+            if isinstance(existing["seedSnapshot"], dict)
+            else json.loads(existing["seedSnapshot"])
+        )
+        messages = await _load_messages(pool, str(existing["id"]))
         return CreateChatSessionResponse(
             session_id=str(existing["id"]),
             status=cast(AiChatSessionStatus, AI_CHAT_SESSION_STATUS["ACTIVE"]),
             created_at=existing["createdAt"].isoformat(),
-            seed_snapshot=ChatSeedSnapshot.model_validate(
-                (await get_session(request, pool, str(existing["id"]))).seed_snapshot
-            ),
-            message_count=await _count_messages(pool, str(existing["id"])),
+            seed_snapshot=ChatSeedSnapshot.model_validate(existing_snapshot),
+            message_count=len(messages),
+            messages=messages,
         )
 
     snapshot: dict[str, object] = {
@@ -527,6 +555,7 @@ async def create_session(
         created_at=row["createdAt"].isoformat(),
         seed_snapshot=ChatSeedSnapshot.model_validate(snapshot),
         message_count=0,
+        messages=[],
     )
 
 
@@ -551,33 +580,7 @@ async def get_session(
         raise _http_error("AI_CHAT_SESSION_NOT_FOUND", "会话不存在")
     s = dict(s_row)
     snapshot = s["seedSnapshot"] if isinstance(s["seedSnapshot"], dict) else json.loads(s["seedSnapshot"])
-    async with pool.connection() as conn:
-        msg_rows = await (
-            await conn.execute(
-                'SELECT "id", "role", "content", "sourcesJson", "latencyMs", '
-                '"tokensIn", "tokensOut", "costCents", "createdAt" '
-                'FROM "ai_chat_messages" WHERE "sessionId" = %s ORDER BY "createdAt" ASC',
-                (session_id,),
-            )
-        ).fetchall()
-
-    messages = []
-    for r in msg_rows:
-        m = dict(r)
-        sources = m.get("sourcesJson")
-        messages.append(
-            ChatMessageOut(
-                id=str(m["id"]),
-                role=cast(AiChatRole, m["role"]),
-                content=m["content"],
-                sources_json=list(sources) if isinstance(sources, list) else None,
-                latency_ms=m.get("latencyMs"),
-                tokens_in=m.get("tokensIn"),
-                tokens_out=m.get("tokensOut"),
-                cost_cents=m.get("costCents"),
-                created_at=m["createdAt"].isoformat(),
-            )
-        )
+    messages = await _load_messages(pool, session_id)
 
     return GetSessionResponse(
         session_id=str(s["id"]),

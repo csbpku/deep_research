@@ -56,4 +56,33 @@ describe('RadarZreadDocument summary presentation', () => {
     expect(html).toContain('可验证的本地执行回执');
     expect(html).toContain('多模型评审');
   });
+
+  it('treats a complete status with missing expected pages as partial cache', () => {
+    const html = renderToStaticMarkup(createElement(RadarZreadDocument, {
+      ...baseProps,
+      meta: {
+        ...baseProps.meta,
+        zread: {
+          ...baseProps.meta?.zread,
+          status: 'complete',
+          expectedPageCount: 2,
+        },
+      },
+      showOverview: false,
+    }));
+
+    expect(html).toContain('当前项目文档为部分缓存（1/2 页）');
+    expect(html).toContain('部分完成');
+  });
+
+  it('keeps the document refresh action visible when the detail intro owns the overview', () => {
+    const html = renderToStaticMarkup(createElement(RadarZreadDocument, {
+      ...baseProps,
+      showOverview: false,
+      onRefresh: () => undefined,
+    }));
+
+    expect(html).toContain('项目文档');
+    expect(html).toContain('刷新文档');
+  });
 });

@@ -32,6 +32,16 @@ def test_follow_up_streams_done_frame_with_report_grounding() -> None:
             "user_id": "11111111-1111-4111-8111-111111111111",
             "report_title": "GraphRAG 调研",
             "report_content": "结论：GraphRAG 适合当前规模。",
+            "evidence": [
+                {
+                    "key": "https://example.com/graphrag",
+                    "title": "官方文档",
+                    "url": "https://example.com/graphrag",
+                    "excerpt": "GraphRAG 用图结构组织跨文档关系。",
+                    "captured_at": "2026-09-04T00:00:00Z",
+                    "source_type": "web",
+                }
+            ],
             "history": [{"role": "user", "content": "前期问题"}, {"role": "assistant", "content": "前期回答"}],
             "question": "再展开讲讲风险",
         },
@@ -86,6 +96,16 @@ def test_follow_up_uses_chat_mode_prompt_and_system_instructions() -> None:
             "user_id": "22222222-2222-4222-8222-222222222222",
             "report_title": "GraphRAG 调研",
             "report_content": "结论：GraphRAG 适合当前规模。",
+            "evidence": [
+                {
+                    "key": "source-1",
+                    "title": "官方证据",
+                    "url": "https://example.com/source-1",
+                    "excerpt": "原文明确说明了适用条件。",
+                    "captured_at": "2026-09-04T00:00:00Z",
+                    "source_type": "web",
+                }
+            ],
             "history": [],
             "question": "再展开讲讲风险",
         },
@@ -96,6 +116,10 @@ def test_follow_up_uses_chat_mode_prompt_and_system_instructions() -> None:
     assert adapter.captured is not None
     assert adapter.captured.request_id.startswith("chat-")
     assert "不要展示内部推理过程" in (adapter.captured.context or "")
+    assert "证据账本" in (adapter.captured.context or "")
+    assert "官方证据" in (adapter.captured.context or "")
+    assert "原文明确说明了适用条件" in (adapter.captured.context or "")
+    assert "<evidence-ledger>" in (adapter.captured.context or "")
 
 
 def test_clean_model_text_strips_closed_and_unclosed_think_blocks() -> None:

@@ -7,6 +7,7 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
+import { collapseTopicIssues } from '@/lib/topics';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,15 +49,34 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       topicId: true,
       title: true,
       proposition: true,
+      kind: true,
       importanceScore: true,
       lastSeenAt: true,
+      candidates: { select: { summaryId: true } },
     },
   });
-  const issueByTopic = new Map<string, typeof issues>();
+  const issueRowsByTopic = new Map<string, typeof issues>();
   for (const issue of issues) {
-    const arr = issueByTopic.get(issue.topicId) ?? [];
-    arr.push(issue);
-    issueByTopic.set(issue.topicId, arr);
+    const rows = issueRowsByTopic.get(issue.topicId) ?? [];
+    rows.push(issue);
+    issueRowsByTopic.set(issue.topicId, rows);
+  }
+  const issueByTopic = new Map<string, ReturnType<typeof collapseTopicIssues>>();
+  for (const [topicId, rows] of issueRowsByTopic) {
+    issueByTopic.set(
+      topicId,
+      collapseTopicIssues(
+        rows.map((issue) => ({
+          id: issue.id,
+          title: issue.title,
+          proposition: issue.proposition,
+          kind: issue.kind,
+          importanceScore: issue.importanceScore,
+          lastSeenAt: issue.lastSeenAt,
+          candidateIds: (issue.candidates ?? []).map((candidate) => candidate.summaryId),
+        })),
+      ),
+    );
   }
 
   const latestResearch = await prisma.researchTopic.findMany({
@@ -87,7 +107,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     let unread = list.length;
     const last = f.lastViewedAt;
     if (last) {
-      unread = list.filter((i) => i.lastSeenAt.getTime() > last.getTime()).length;
+      unread = list.filter((i) => (
+        (typeof i.lastSeenAt === 'string' ? Date.parse(i.lastSeenAt) : i.lastSeenAt.getTime()) > last.getTime()
+      )).length;
     }
     const top = list[0];
     const research = researchByTopic.get(f.topic.id) ?? null;
@@ -100,6 +122,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         lastSyncedAt: f.topic.lastSyncedAt?.toISOString() ?? null,
         synthesisGeneratedAt: f.topic.synthesisGeneratedAt?.toISOString() ?? null,
       },
+      activeIssueCount: list.length,
       unreadIssueCount: unread,
       latestIssue: top
         ? { id: top.id, title: top.title, proposition: top.proposition, importanceScore: top.importanceScore }

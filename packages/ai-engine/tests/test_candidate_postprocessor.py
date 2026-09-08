@@ -198,7 +198,7 @@ async def test_score_missing_candidates_retries_complete_content_pending_row() -
     assert "array_remove" in update_sql
     assert "content_pending" in update_sql
     update_params = pool.connection_value.executions[1][1]
-    assert not str(update_params[5]).startswith("抓取失败:")
+    assert not str(update_params[4]).startswith("抓取失败:")
 
 
 async def test_score_missing_candidates_tags_scored_shell_as_fetch_failure() -> None:
@@ -230,4 +230,4 @@ async def test_score_missing_candidates_tags_scored_shell_as_fetch_failure() -> 
     update_sql, update_params = pool.connection_value.executions[1]
     assert "fetch_failed_shell" in update_sql
     assert "'fetch_failed_shell') END" in update_sql
-    assert "抓取失败: 推广/重定向页" in str(update_params[5])
+    assert "抓取失败: 推广/重定向页" in str(update_params[4])

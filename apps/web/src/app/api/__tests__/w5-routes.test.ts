@@ -296,6 +296,22 @@ describe('GET /api/radar', () => {
         AND: expect.arrayContaining([{ distilledTier: { in: ['collection', 'deep_read', 'skim'] } }]),
       }),
     }));
+    expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          {
+            NOT: {
+              OR: [
+                { originalKind: { in: ['github_issue', 'github_pr', 'github_release'] } },
+                { canonicalUrl: { contains: '/issues/' } },
+                { canonicalUrl: { contains: '/pull/' } },
+                { canonicalUrl: { contains: '/releases/tag/' } },
+              ],
+            },
+          },
+        ]),
+      }),
+    }));
   });
 
   it('returns 400 on invalid query params', async () => {
@@ -346,7 +362,14 @@ describe('GET /api/radar', () => {
           expect.objectContaining({
             OR: expect.arrayContaining([
               expect.objectContaining({
-                syncRun: { source: { sourceType: { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] } } },
+                syncRun: {
+                  source: {
+                    AND: [
+                      { sourceType: { in: ['rss', 'devto', 'vendor_news', 'vendor_changelog', 'wechat', 'sitemap_watch'] } },
+                      { NOT: { name: { contains: 'Hacker News', mode: 'insensitive' } } },
+                    ],
+                  },
+                },
               }),
             ]),
           }),
@@ -361,7 +384,19 @@ describe('GET /api/radar', () => {
           expect.objectContaining({
             OR: expect.arrayContaining([
               expect.objectContaining({
-                syncRun: { source: { sourceType: { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] } } },
+                syncRun: {
+                  source: {
+                    OR: [
+                      { sourceType: { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] } },
+                      {
+                        AND: [
+                          { sourceType: { in: ['rss', 'devto', 'vendor_news', 'vendor_changelog', 'wechat', 'sitemap_watch'] } },
+                          { name: { contains: 'Hacker News', mode: 'insensitive' } },
+                        ],
+                      },
+                    ],
+                  },
+                },
               }),
             ]),
           }),
@@ -584,7 +619,7 @@ describe('GET /api/radar/[id]', () => {
     expect(response.status).toBe(200);
     expect(body.interpretation).toBe('short AI summary');
     expect(body.body).toBeNull();
-    expect(body.originalKind).toBeNull();
+    expect(body.originalKind).toBe('arxiv');
     expect(body.originalMarkdown).toBeNull();
     expect(body.repoSummary).toBeNull();
     expect(body.highlights).toBeNull();
@@ -593,6 +628,79 @@ describe('GET /api/radar/[id]', () => {
     expect(body.figures).toBeNull();
     expect(body.authors).toEqual([]);
     expect(body.sourceOutline).toEqual([{ heading: 'Intro', level: 2 }]);
+  });
+
+  it('returns a lightweight summary surface without selecting deep source payloads', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Summary surface', body: 'short excerpt', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date('2026-08-31'), publishedAt: null,
+      createdAt: new Date(), interpretation: 'quick read', scoreReason: null,
+      scoreVersion: null, relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read', selectionReason: null, sortOrder: null, syncRunId: 'r',
+      source: 'daily', originalKind: 'arxiv', repoSummary: null,
+      highlights: { summary: 'highlights', highlights: [], keyQuote: null },
+      tldr: 'paper tldr', sections: [{ title: 'Intro', level: 2, startOffset: 0 }],
+      sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'arxiv', name: 'arXiv' } },
+      shareSource: null,
+    });
+    mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+    mocks.radarFeedbackFindMany.mockResolvedValue([]);
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x?surface=summary') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    const body = await response.json();
+    const select = mocks.summaryFindUnique.mock.calls[0]?.[0]?.select as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body.title).toBe('Summary surface');
+    expect(body.body).toBeNull();
+    expect(body.originalMarkdown).toBeNull();
+    expect(body.originalMeta).toBeNull();
+    expect(body.sourceOutline).toBeNull();
+    expect(select.originalMarkdown).toBeUndefined();
+    expect(select.originalMeta).toBeUndefined();
+    expect(select.arxivAnalysis).toBeUndefined();
+    expect(select.sections).toBe(true);
+  });
+
+  it('returns only content fields for the content surface and skips feedback queries', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Content surface', body: 'excerpt', url: 'u', tags: [],
+      status: 'candidate', summaryDate: new Date('2026-08-31'), publishedAt: null,
+      createdAt: new Date(), interpretation: 'quick read', scoreReason: null,
+      scoreVersion: null, relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read', selectionReason: null, sortOrder: null, syncRunId: 'r',
+      source: 'daily', originalKind: 'rss', originalMarkdown: '# Full article',
+      originalMeta: { provider: 'rss' }, arxivAnalysis: null, figures: null, authors: [],
+      repoSummary: null, highlights: null, tldr: null, sections: null,
+      sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
+      shareSource: null,
+    });
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x?surface=content') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    const body = await response.json();
+    const select = mocks.summaryFindUnique.mock.calls[0]?.[0]?.select as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual(expect.objectContaining({
+      id: SUM_ID,
+      body: 'excerpt',
+      originalMarkdown: '# Full article',
+      originalMeta: { provider: 'rss' },
+    }));
+    expect(body.canManage).toBeUndefined();
+    expect(select.originalMarkdown).toBe(true);
+    expect(select.originalMeta).toBe(true);
+    expect(select.arxivAnalysis).toBe(true);
+    expect(mocks.radarFeedbackGroupBy).not.toHaveBeenCalled();
+    expect(mocks.radarFeedbackFindMany).not.toHaveBeenCalled();
   });
 
   it('returns 404 for an unscored detail to regular members', async () => {
@@ -848,7 +956,19 @@ describe('GET /api/admin/radar', () => {
         AND: expect.arrayContaining([
           expect.objectContaining({
             OR: [expect.objectContaining({
-              syncRun: { source: { sourceType: { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] } } },
+              syncRun: {
+                source: {
+                  OR: [
+                    { sourceType: { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] } },
+                    {
+                      AND: [
+                        { sourceType: { in: ['rss', 'devto', 'vendor_news', 'vendor_changelog', 'wechat', 'sitemap_watch'] } },
+                        { name: { contains: 'Hacker News', mode: 'insensitive' } },
+                      ],
+                    },
+                  ],
+                },
+              },
             })],
           }),
         ]),
@@ -862,6 +982,35 @@ describe('GET /api/admin/radar', () => {
           { OR: [{ source: 'user', shareSource: { is: { status: 'approved' } } }] },
         ]),
       }),
+    }));
+  });
+
+  it('supports server-side admin priority queues', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+
+    await adminRadarList(new Request('http://localhost/api/admin/radar?adminQueue=pending_score') as never);
+    expect(mocks.summaryFindMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([{ distilledTier: null }]),
+      }),
+      orderBy: [
+        { distilledTier: { sort: 'asc', nulls: 'first' } },
+        { createdAt: 'desc' },
+      ],
+    }));
+
+    await adminRadarList(new Request('http://localhost/api/admin/radar?adminQueue=low_confidence') as never);
+    expect(mocks.summaryFindMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          { OR: [{ distilledTier: 'noise' }, { distilledTotal: { lt: 60 } }] },
+        ]),
+      }),
+      orderBy: [
+        { distilledTotal: { sort: 'asc', nulls: 'first' } },
+        { createdAt: 'desc' },
+      ],
     }));
   });
 });

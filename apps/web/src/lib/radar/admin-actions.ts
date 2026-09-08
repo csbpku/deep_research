@@ -2,7 +2,7 @@
 //
 // 契约源：
 //   - apps/web/prisma/schema.prisma: AdminAction / Summary
-//   - docs/agent-prompts/week5-engineer-a.md §任务 3
+//   - docs/archive/2026-09-08-agent-prompts/week5-engineer-a.md §任务 3
 //
 // 所有 Admin 操作必须写一条 AdminAction 审计行（actor + action + target +
 // requestId + metadata）。失败时整事务回滚，避免状态错位。

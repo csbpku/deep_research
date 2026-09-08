@@ -70,7 +70,7 @@ JSON 键必须为：信息增量,分析深度,可行动性,事实可信度,时�
             await conn.execute(
                 'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, "distilledTier" = %s, '
-                '"distilledMustRead" = %s, "distilledProfile" = %s, '
+                '"distilledProfile" = %s, '
                 '"scoreReason" = %s, "tags" = array_remove('
                 'COALESCE("tags", ARRAY[]::text[]), \'content_pending\'), '
                 '"updatedAt" = now() WHERE "id" = %s',
@@ -78,7 +78,6 @@ JSON 键必须为：信息增量,分析深度,可行动性,事实可信度,时�
                     json.dumps(score.to_dict(), ensure_ascii=False),
                     total,
                     score.tier,
-                    score.must_read,
                     score.profile_id,
                     build_distilled_score_reason(score),
                     SUMMARY_ID,

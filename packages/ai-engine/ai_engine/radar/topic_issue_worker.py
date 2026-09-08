@@ -7,7 +7,7 @@
   - 若 LLM 返回的某个 Issue 引用 >= 3 个 candidateId 且其中至少 1 个 originalKind 在
     authoritative set（github_repo/github_release/arxiv/vendor_changelog），
     视为通过质量门槛，写入 TopicIssue + TopicIssueCandidate。
-- 单一权威例外：当一个 candidate 落在 authoritative set 且 distilledMustRead=true
+- 单一权威例外：当一个 candidate 落在 authoritative set 且 distilledTier 至少是 deep_read
   时，允许 1 个 candidate 就形成一个 Issue（event 类型）。
 - 去重：已有 active Issue.title + proposition 与新提议相似时跳过。
 - 提供 keep / archive API 供 Admin V2 治理使用。
@@ -43,6 +43,58 @@ AUTHORITATIVE_KINDS = frozenset(
     }
 )
 
+_ISSUE_TEXT_STOPWORDS = frozenset(
+    {
+        "ai",
+        "agent",
+        "agents",
+        "artificial",
+        "intelligence",
+        "llm",
+        "llms",
+        "model",
+        "models",
+        "system",
+        "systems",
+        "technology",
+        "technologies",
+        "tool",
+        "tools",
+        "new",
+        "open",
+        "source",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "that",
+        "this",
+    }
+)
+
+_ISSUE_CJK_STOP_CONCEPTS = frozenset(
+    {
+        "智能体",
+        "基础模型",
+        "框架",
+        "系统",
+        "问题",
+        "能力",
+        "发布",
+        "提出",
+        "面向",
+        "当前",
+        "集中",
+        "密集",
+        "普遍",
+        "受到",
+        "引发",
+        "关注",
+    }
+)
+
 
 def _authoritative_count(rows: list[dict[str, Any]]) -> int:
     return sum(1 for r in rows if (r.get("originalKind") in AUTHORITATIVE_KINDS))
@@ -58,6 +110,64 @@ def _distinct_sources(rows: list[dict[str, Any]]) -> set[str]:
         elif kind:
             out.add(kind)
     return {v for v in out if v}
+
+
+def _issue_candidate_ids(issue: dict[str, Any]) -> list[str]:
+    values = issue.get("summaryIds") or issue.get("candidateIds") or []
+    return list(dict.fromkeys(str(value) for value in values if str(value)))
+
+
+def _issue_concepts(issue: dict[str, Any]) -> set[str]:
+    text = f"{issue.get('title') or ''} {issue.get('proposition') or ''}".lower()
+    concepts: set[str] = set()
+    for match in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        for size in (2, 3):
+            for index in range(len(match) - size + 1):
+                concept = match[index : index + size]
+                if concept not in _ISSUE_CJK_STOP_CONCEPTS:
+                    concepts.add(concept)
+    for token in re.findall(r"[a-z][a-z0-9-]{2,}", text):
+        if token not in _ISSUE_TEXT_STOPWORDS:
+            concepts.add(token)
+    return concepts
+
+
+def _candidate_overlap(left: list[str], right: list[str]) -> float:
+    left_set = set(left)
+    right_set = set(right)
+    if not left_set or not right_set:
+        return 0.0
+    return len(left_set & right_set) / min(len(left_set), len(right_set))
+
+
+def _concept_overlap(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_concepts = _issue_concepts(left)
+    right_concepts = _issue_concepts(right)
+    if not left_concepts or not right_concepts:
+        return 0.0
+    return len(left_concepts & right_concepts) / min(len(left_concepts), len(right_concepts))
+
+
+def _same_candidate_set(left: list[str], right: list[str]) -> bool:
+    left_set = set(left)
+    right_set = set(right)
+    return bool(left_set) and left_set == right_set
+
+
+def _issues_are_near_duplicates(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_ids = _issue_candidate_ids(left)
+    right_ids = _issue_candidate_ids(right)
+    overlap = _candidate_overlap(left_ids, right_ids)
+    if overlap == 0:
+        return False
+    if _same_candidate_set(left_ids, right_ids):
+        return True
+    if overlap >= 0.8:
+        return True
+
+    # Shared evidence alone is insufficient because one article can support
+    # distinct claims. Require a strong shared evidence core and related text.
+    return overlap >= 2 / 3 and _concept_overlap(left, right) >= 0.08
 
 
 async def _fetch_topic_inputs(
@@ -77,7 +187,7 @@ async def _fetch_topic_inputs(
             await conn.execute(
                 """
                 SELECT s."id", s."title", s."interpretation", s."tags",
-                       s."originalKind", s."url", s."distilledMustRead",
+                       s."originalKind", s."url",
                        s."publishedAt", s."createdAt",
                        s."distilledTier",
                        split_part(regexp_replace(COALESCE(s."url", ''), '^https?://', ''), '/', 1) AS "sourceHost",
@@ -102,7 +212,6 @@ async def _fetch_topic_inputs(
                 "originalKind": r["originalKind"],
                 "url": str(r["url"] or ""),
                 "sourceHost": str(r["sourceHost"] or ""),
-                "distilledMustRead": bool(r["distilledMustRead"]),
                 "distilledTier": r["distilledTier"],
                 "addedAt": r["addedAt"],
             }
@@ -120,7 +229,7 @@ def _meets_normal_threshold(group_rows: list[dict[str, Any]]) -> bool:
         return False
     if len(_distinct_sources(group_rows)) < 2:
         return False
-    if not any(r["distilledMustRead"] or r["distilledTier"] == "deep_read" for r in group_rows):
+    if not any(r["distilledTier"] == "deep_read" for r in group_rows):
         return False
     return True
 
@@ -130,7 +239,7 @@ def _meets_authoritative_threshold(group_rows: list[dict[str, Any]]) -> bool:
         return False
     if _authoritative_count(group_rows) < 1:
         return False
-    if not any(r["distilledMustRead"] for r in group_rows):
+    if not any(r["distilledTier"] == "deep_read" for r in group_rows):
         return False
     return True
 
@@ -163,7 +272,7 @@ def _build_issue_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
         title = (c["title"] or "").strip()[:200]
         snippet = (c["interpretation"] or "").strip()[:300]
         parts.append(
-            f"- id={c['id']} kind={c['originalKind']} must_read={c['distilledMustRead']} title={title}\n  {snippet}"
+            f"- id={c['id']} kind={c['originalKind']} tier={c['distilledTier']} title={title}\n  {snippet}"
         )
     return "\n".join(parts)
 
@@ -222,16 +331,40 @@ def _normalize_issues(raw: dict[str, Any], valid_ids: set[str]) -> list[dict[str
     return out
 
 
-async def _existing_active_titles(pool: Any, topic_id: str) -> set[str]:
+async def _existing_active_issues(pool: Any, topic_id: str) -> list[dict[str, Any]]:
     async with pool.connection() as conn:
         conn.row_factory = dict_row
         rows = await (
             await conn.execute(
-                'SELECT "title" FROM "topic_issues" WHERE "topicId" = %s AND "status" = %s',
+                """
+                SELECT ti."id", ti."kind", ti."title", ti."proposition",
+                       ti."importanceScore", ti."lastSeenAt", tic."summaryId"
+                FROM "topic_issues" ti
+                LEFT JOIN "topic_issue_candidates" tic ON tic."issueId" = ti."id"
+                WHERE ti."topicId" = %s AND ti."status" = %s
+                ORDER BY ti."importanceScore" DESC, ti."lastSeenAt" DESC, ti."id" ASC
+                """,
                 (topic_id, "active"),
             )
         ).fetchall()
-    return {str(r["title"]) for r in rows}
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        issue_id = str(row["id"])
+        issue = grouped.get(issue_id)
+        if issue is None:
+            issue = {
+                "id": issue_id,
+                "kind": str(row["kind"]),
+                "title": str(row["title"] or ""),
+                "proposition": str(row["proposition"] or ""),
+                "importanceScore": float(row["importanceScore"] or 0),
+                "lastSeenAt": row["lastSeenAt"],
+                "summaryIds": [],
+            }
+            grouped[issue_id] = issue
+        if row["summaryId"] is not None:
+            issue["summaryIds"].append(str(row["summaryId"]))
+    return list(grouped.values())
 
 
 async def _persist_issue(
@@ -239,6 +372,8 @@ async def _persist_issue(
     topic_id: str,
     issue: dict[str, Any],
     rows_by_id: dict[str, dict[str, Any]],
+    *,
+    existing_issue_id: str | None = None,
 ) -> str | None:
     summary_ids = issue["summaryIds"]
     group_rows = [rows_by_id[sid] for sid in summary_ids if sid in rows_by_id]
@@ -253,7 +388,7 @@ async def _persist_issue(
 
     async with pool.connection() as conn, conn.transaction():
         conn.row_factory = dict_row
-        existing = await (
+        existing = {"id": existing_issue_id} if existing_issue_id else await (
             await conn.execute(
                 'SELECT "id" FROM "topic_issues" WHERE "topicId" = %s AND "title" = %s AND "status" = %s',
                 (topic_id, issue["title"], "active"),
@@ -261,6 +396,17 @@ async def _persist_issue(
         ).fetchone()
         if existing:
             issue_id = str(existing["id"])
+            await conn.execute(
+                """
+                UPDATE "topic_issues"
+                SET "firstSeenAt" = LEAST("firstSeenAt", %s),
+                    "lastSeenAt" = GREATEST("lastSeenAt", %s),
+                    "importanceScore" = GREATEST("importanceScore", %s),
+                    "updatedAt" = now()
+                WHERE "id" = %s
+                """,
+                (first_seen, last_seen, importance, issue_id),
+            )
         else:
             row = await (
                 await conn.execute(
@@ -311,12 +457,12 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
     valid_ids = set(rows_by_id.keys())
 
     authoritative_existing = any(
-        r for r in new_rows if r["distilledMustRead"] and r["originalKind"] in AUTHORITATIVE_KINDS
+        r for r in new_rows if r["distilledTier"] in {"collection", "deep_read"} and r["originalKind"] in AUTHORITATIVE_KINDS
     )
     if len(new_rows) < 3 and not authoritative_existing:
         return {"considered": len(new_rows), "created": 0, "skipped": 0}
 
-    active_titles = await _existing_active_titles(pool, topic_id)
+    active_issues = await _existing_active_issues(pool, topic_id)
 
     try:
         result = await asyncio.wait_for(
@@ -338,22 +484,51 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
         )
         return {"considered": len(new_rows), "created": 0, "skipped": 0}
 
-    issues = _normalize_issues(raw, valid_ids)
-    seen: set[tuple[str, str]] = set()
+    # Keep one clustering run bounded even when the model ignores the 1-3 issue instruction.
+    issues = _normalize_issues(raw, valid_ids)[:3]
     created = 0
     skipped = 0
     for issue in issues:
-        key = (issue["title"], issue["kind"])
-        if key in seen:
+        duplicate = next(
+            (existing for existing in active_issues if _issues_are_near_duplicates(issue, existing)),
+            None,
+        )
+        if duplicate is not None:
+            issue_id = await _persist_issue(
+                pool,
+                topic_id,
+                issue,
+                rows_by_id,
+                existing_issue_id=str(duplicate["id"]),
+            )
+            if issue_id:
+                duplicate["summaryIds"] = list(
+                    dict.fromkeys(
+                        [*duplicate.get("summaryIds", []), *_issue_candidate_ids(issue)],
+                    )
+                )
             skipped += 1
             continue
-        seen.add(key)
-        if issue["title"] in active_titles:
+        if any(issue["title"] == existing["title"] for existing in active_issues):
             skipped += 1
             continue
         issue_id = await _persist_issue(pool, topic_id, issue, rows_by_id)
         if issue_id:
             created += 1
+            active_issues.append(
+                {
+                    "id": issue_id,
+                    "kind": issue["kind"],
+                    "title": issue["title"],
+                    "proposition": issue["proposition"],
+                    "importanceScore": min(1.0, 0.3 + 0.1 * len(issue["summaryIds"])),
+                    "lastSeenAt": max(
+                        (rows_by_id[sid]["addedAt"] for sid in issue["summaryIds"] if sid in rows_by_id),
+                        default=datetime.now(UTC),
+                    ),
+                    "summaryIds": _issue_candidate_ids(issue),
+                }
+            )
         else:
             skipped += 1
     return {"considered": len(new_rows), "created": created, "skipped": skipped}

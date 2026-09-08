@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import MarkdownContent, { prepareContent } from './MarkdownContent';
+import { cleanExtractedPlainText } from '@/lib/markdown-content';
 import { isMermaidSource } from './MermaidDiagram';
 
 describe('MarkdownContent links', () => {
@@ -85,6 +86,37 @@ describe('MarkdownContent links', () => {
     expect(html).toContain('Figure 1: unavailable');
   });
 
+  it('does not nest an anchor inside another anchor when an image sits inside a markdown link', () => {
+    const html = renderToStaticMarkup(
+      createElement(MarkdownContent, {
+        content: '[![架构图](https://cdn.example.com/diagram.png)](https://example.com/page)',
+      }),
+    );
+
+    // The outer markdown link must still wrap the image, but the click-to-zoom
+    // anchor that the `img` handler normally adds must be suppressed so React
+    // can hydrate the resulting DOM. A simple nested-anchor check via DOMParser
+    // would be more accurate, but for SSR HTML a raw `<a>...<a>` substring
+    // indicates the bug we are guarding against.
+    expect(html).toContain('href="https://example.com/page"');
+    expect(html).toContain('src="https://cdn.example.com/diagram.png"');
+    expect(html).not.toContain('href="https://cdn.example.com/diagram.png"');
+    expect(html).toMatch(/<a [^>]*href="https:\/\/example\.com\/page"[^>]*>[\s\S]*<\/a>/u);
+  });
+
+  it('preserves underscores inside linked image URLs', () => {
+    const imageUrl = 'https://huggingface.co/datasets/example/resolve/main/mve_medical_model_size_ndcg.png';
+    const html = renderToStaticMarkup(
+      createElement(MarkdownContent, {
+        content: `[![NDCG chart](${imageUrl})](${imageUrl})`,
+      }),
+    );
+
+    expect(html).toContain(`src="${imageUrl}"`);
+    expect(html).toContain(`href="${imageUrl}"`);
+    expect(html).not.toContain('medical_ model_ size_');
+  });
+
   it('repairs bare arXiv template variables in reader-facing text', () => {
     const prepared = prepareContent(
       '推荐五款最值得买的 s；推荐深圳最值得去的五家 s；Recommend the top five most worth-buying s',
@@ -94,6 +126,55 @@ describe('MarkdownContent links', () => {
     expect(prepared).toContain('推荐深圳最值得去的五家 [商家]');
     expect(prepared).toContain('Recommend the top five most worth-buying [product]');
     expect(prepared).not.toMatch(/worth-buying s\b/u);
+  });
+
+  it('removes image close markers and duplicated image captions', () => {
+    const prepared = prepareContent([
+      '✕![Latency chart](https://cdn.example.com/latency.png) Latency chart.This paragraph follows the image.',
+      '',
+      '✕',
+      '![Throughput chart](https://cdn.example.com/throughput.png)',
+    ].join('\n'));
+
+    expect(prepared).toBe([
+      '![Latency chart](https://cdn.example.com/latency.png)',
+      '',
+      'This paragraph follows the image.',
+      '',
+      '![Throughput chart](https://cdn.example.com/throughput.png)',
+    ].join('\n'));
+    expect(prepared).not.toContain('✕');
+    expect(prepared).not.toContain('×');
+  });
+
+  it('decodes HTML entities and removes extraction-only paper footnotes', () => {
+    const prepared = prepareContent('正文&nbsp;仍然可读。\n\n**footnotetext: Corresponding authors.**');
+
+    expect(prepared).toContain('正文 仍然可读。');
+    expect(prepared).not.toContain('&nbsp;');
+    expect(prepared).not.toContain('footnotetext');
+  });
+
+  it('removes dagger-prefixed paper footnotes and plain-text LaTeX emphasis', () => {
+    expect(prepareContent('正文。\n\n††footnotetext: Corresponding authors.')).not.toContain('footnotetext');
+    expect(cleanExtractedPlainText(
+      String.raw`\emph{weighted-additive combination} and \textbf{prediction-preserving repair}`,
+    )).toBe('weighted-additive combination and prediction-preserving repair');
+  });
+
+  it('removes extracted footnote spans with numeric prefixes and figure boundaries', () => {
+    const prepared = prepareContent([
+      'Abstract text.',
+      '00footnotetext: Equal contribution.  ‡Equal advising.',
+      '![Figure 1](https://example.com/figure.svg)',
+      '## 1 Introduction',
+      '正文继续。',
+    ].join('\n'));
+
+    expect(prepared).not.toContain('footnotetext');
+    expect(prepared).not.toContain('Equal contribution');
+    expect(prepared).toContain('![Figure 1](https://example.com/figure.svg)');
+    expect(prepared).toContain('## 1 Introduction');
   });
 });
 
@@ -111,6 +192,17 @@ describe('MarkdownContent prepareContent', () => {
     expect(prepareContent('and ** lifecycle hooks** inject it.')).toBe(
       'and **lifecycle hooks** inject it.',
     );
+    expect(prepareContent('优先落地 **P0 引用治理** 三项')).toBe(
+      '优先落地 **P0 引用治理** 三项',
+    );
+    expect(prepareContent('**P0 根基**，关键；**P1 "低负担"**，体验；**P2 持续研究**，演进。')).toBe(
+      '**P0 根基**，关键；**P1 "低负担"**，体验；**P2 持续研究**，演进。',
+    );
+    const html = renderToStaticMarkup(createElement(MarkdownContent, {
+      content: '**P0 根基**，关键；**P1 "低负担"**，体验；**P2 持续研究**，演进。',
+    }));
+    expect(html).toContain('<strong>P1 &quot;低负担&quot;</strong>');
+    expect(html).not.toContain('** P1');
   });
 
   it('converts block math embedded in GFM table rows to valid inline math', () => {
@@ -185,6 +277,15 @@ $$
     const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
     expect(html).toContain('<table>');
     expect(html).toContain('<strong>模型</strong>');
+  });
+
+  it('labels tables as horizontally scrollable on narrow screens', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownContent, {
+      content: '| 名称 | 说明 |\n| --- | --- |\n| A | A long value |',
+    }));
+
+    expect(html).toContain('aria-label="可横向滚动的表格"');
+    expect(html).toContain('表格可左右滑动查看');
   });
 
   it('returns authored markdown unchanged (headings + lists + bold)', () => {
@@ -268,6 +369,7 @@ $$
     );
     expect(html).toContain('class="katex"');
     expect(html).toContain('katex-display');
+    expect(html).not.toContain('katex-mathml');
   });
 
   it('keeps extracted equation numbers attached to display math', () => {
@@ -329,6 +431,19 @@ S_{r}\in{0.12}, $$ |  |`;
     const html = renderToStaticMarkup(createElement(MarkdownContent, { content: input }));
     expect(html).not.toContain('katex-error');
     expect(html).toContain('0.0033');
+  });
+
+  it('removes unescaped TeX comments inside math without touching escaped percent signs', () => {
+    const input = String.raw`$$
+x = 1 % extractor comment
+y = 2\%
+$$`;
+    const prepared = prepareContent(input);
+
+    expect(prepared).toContain('x = 1');
+    expect(prepared).not.toContain('extractor comment');
+    expect(prepared).toContain(String.raw`y = 2\%`);
+    expect(renderToStaticMarkup(createElement(MarkdownContent, { content: input }))).not.toContain('katex-error');
   });
 });
 

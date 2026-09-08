@@ -273,6 +273,17 @@ def _parse_pubdate_from_rss(xml: str, url: str) -> datetime | None:
     return None
 
 
+def _coerce_utc(value: str) -> datetime | None:
+    """Parse an ISO sitemap <lastmod> value into an aware UTC datetime."""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _infer_title(text: str, url: str) -> str:
     lines = text.strip().split("\n")
     for line in lines:
@@ -320,8 +331,12 @@ async def check_and_fetch_vendor_news(
         for url, lastmod in current_urls.items():
             prev = previous.get(url)
             if prev is None or (lastmod and prev != lastmod):
-                # Always apply time window filter based on RSS pubDate
+                # Apply the time window using RSS pubDate when present; for
+                # sitemap-only vendors fall back to <lastmod> so max_age_hours
+                # still bounds what we fetch.
                 pub_date = _parse_pubdate_from_rss(xml, url)
+                if pub_date is None:
+                    pub_date = _coerce_utc(lastmod)
                 if pub_date is not None and pub_date < cutoff:
                     continue
                 new_or_changed.append((url, pub_date or datetime.now(timezone.utc)))

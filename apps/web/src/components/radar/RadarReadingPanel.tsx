@@ -132,32 +132,32 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
   }
 
   return (
-    <section className="my-9 overflow-hidden rounded-2xl border border-[#d9d6cc] bg-[#f4f2ec] shadow-[0_18px_50px_rgba(35,35,25,0.08)]" aria-labelledby="radar-reading-workbench">
-      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-[#d9d6cc] px-5 py-5 sm:px-7">
+    <section className="my-9 overflow-hidden rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-paper)] shadow-sm" aria-labelledby="radar-reading-workbench">
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--ink-rule)] px-5 py-5 sm:px-7">
         <div>
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#706f65]">
-            <Sparkles className="size-3.5 text-[#b85b35]" />
+          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-accent)]">
+            <Sparkles className="size-3.5" />
             阅读工作台
           </div>
-          <h2 id="radar-reading-workbench" className="mt-1.5 text-xl font-semibold tracking-tight text-[#24251f]">
+          <h2 id="radar-reading-workbench" className="mt-1.5 text-xl font-semibold tracking-normal text-[var(--ink-text)]">
             {title}
           </h2>
-          <p className="mt-1 text-xs text-[#77766d]">左侧读结论，右侧核对证据；AI 内容会在打开页面后提前准备。</p>
+          <p className="mt-1 text-xs text-[var(--ink-muted)]">左侧读结论，右侧核对证据；AI 内容会在打开页面后提前准备。</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-[#77766d]" aria-live="polite">
+        <div className="flex items-center gap-2 text-xs text-[var(--ink-muted)]" aria-live="polite">
           {aiReady && translationReady ? (
             <>
-              <Check className="size-3.5 text-[#3f7b59]" />
+              <Check className="size-3.5 text-status-succeeded-fg" />
               AI 阅读与翻译已准备
             </>
           ) : anyWarmup ? (
             <>
-              <Loader2 className="size-3.5 animate-spin text-[#b85b35]" />
+              <Loader2 className="size-3.5 animate-spin text-[var(--ink-accent)]" />
               正在准备阅读辅助
             </>
           ) : (
             <>
-              <Zap className="size-3.5 text-[#b85b35]" />
+              <Zap className="size-3.5 text-[var(--ink-accent)]" />
               原文可立即阅读
             </>
           )}
@@ -165,19 +165,19 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
       </header>
 
       <div className="grid lg:grid-cols-[minmax(0,1.12fr)_minmax(340px,0.88fr)]">
-        <article className="min-w-0 border-b border-[#d9d6cc] bg-[#fbfaf7] px-5 py-6 sm:px-7 lg:border-b-0 lg:border-r">
+        <article className="min-w-0 border-b border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 py-6 sm:px-7 lg:border-b-0 lg:border-r">
           <div className="mb-5 flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#706f65]">{leftTitle}</p>
-              <p className="mt-1 text-xs text-[#8a887e]">{leftDescription}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{leftTitle}</p>
+              <p className="mt-1 text-xs text-[var(--ink-muted)]">{leftDescription}</p>
             </div>
             {mode === 'translate' ? (
-              <label className="flex items-center gap-2 text-xs text-[#77766d]">
+              <label className="flex items-center gap-2 text-xs text-[var(--ink-muted)]">
                 <Languages className="size-3.5" />
                 <select
                   value={language}
                   onChange={(event) => changeLanguage(event.target.value)}
-                  className="h-8 rounded-md border border-[#d9d6cc] bg-white px-2 text-xs text-[#24251f]"
+                  className="h-8 rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-2 text-xs text-[var(--ink-text)]"
                   aria-label="翻译目标语言"
                 >
                   <option value="zh-CN">简体中文</option>
@@ -189,42 +189,42 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
           </div>
 
           {mode === 'ai_reading' && highlights ? (
-            <div className="mb-5 rounded-xl border border-[#ead8c9] bg-[#fff8f1] p-4">
-              <p className="text-sm font-medium leading-6 text-[#49352a]">{highlights.summary}</p>
+            <div className="mb-5 rounded-lg border border-[var(--ink-callout-border)] bg-[var(--ink-callout)] p-4">
+              <p className="text-sm font-medium leading-6 text-[var(--ink-text)]">{highlights.summary}</p>
               {highlights.highlights.length > 0 ? (
-                <ul className="mt-3 space-y-2 text-sm leading-6 text-[#6d5b4e]">
-                  {highlights.highlights.map((item) => <li key={item} className="border-l-2 border-[#c97a51] pl-3">{item}</li>)}
+                <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--ink-muted)]">
+                  {highlights.highlights.map((item) => <li key={item} className="border-l-2 border-[var(--ink-accent)]/60 pl-3">{item}</li>)}
                 </ul>
               ) : null}
             </div>
           ) : null}
 
           {activeTransform?.loading ? (
-            <div className="flex min-h-40 items-center justify-center gap-2 rounded-xl border border-[#e1ded5] bg-white text-sm text-[#77766d]">
-              <Loader2 className="size-4 animate-spin text-[#b85b35]" />
+            <div className="flex min-h-40 items-center justify-center gap-2 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] text-sm text-[var(--ink-muted)]">
+              <Loader2 className="size-4 animate-spin text-[var(--ink-accent)]" />
               正在准备{mode === 'translate' ? '翻译' : 'AI 导读'}，原文证据已在右侧。
             </div>
           ) : activeTransform?.error ? (
-            <div role="alert" className="rounded-xl border border-[#e5bdb5] bg-[#fff4f1] p-4 text-sm text-[#9d4638]">
+            <div role="alert" className="rounded-lg border border-[var(--ink-danger-border)] bg-[var(--ink-danger)] p-4 text-sm text-[var(--ink-danger-text)]">
               {activeTransform.error}
             </div>
           ) : leftContent ? (
-            <MarkdownContent content={leftContent} className="reading-workbench-markdown text-[15px] leading-8 text-[#303129]" />
+            <MarkdownContent content={leftContent} className="reading-workbench-markdown text-[15px] leading-8 text-[var(--ink-text)]" />
           ) : (
-            <div className="rounded-xl border border-[#e1ded5] bg-white p-5 text-sm text-[#77766d]">暂无可展示内容。</div>
+            <div className="rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-5 text-sm text-[var(--ink-muted)]">暂无可展示内容。</div>
           )}
         </article>
 
-        <aside className="min-w-0 bg-[#eeece5] px-5 py-6 sm:px-7" aria-label="原文证据与阅读模式">
+        <aside className="min-w-0 bg-[var(--ink-surface)] px-5 py-6 sm:px-7" aria-label="原文证据与阅读模式">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#706f65]">阅读模式</p>
-              <p className="mt-1 text-xs text-[#8a887e]">切换左侧的阅读辅助，右侧始终保留证据。</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读模式</p>
+              <p className="mt-1 text-xs text-[var(--ink-muted)]">切换左侧的阅读辅助，右侧始终保留证据。</p>
             </div>
-            <span className="rounded-full bg-[#dedbd1] px-2 py-1 text-[10px] font-medium text-[#706f65]">双栏</span>
+            <span className="rounded-full bg-[var(--ink-page)] px-2 py-1 text-[10px] font-medium text-[var(--ink-muted)]">双栏</span>
           </div>
 
-          <div className="mt-4 grid gap-1 rounded-xl border border-[#d9d6cc] bg-[#f8f7f3] p-1.5">
+          <div className="mt-4 grid gap-1 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-1.5">
             {MODES.map((item) => (
               <Button
                 key={item.value}
@@ -232,47 +232,47 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
                 variant="ghost"
                 size="sm"
                 className={cn(
-                  'h-auto justify-start rounded-lg px-3 py-2.5 text-left text-[#4a4a42] hover:bg-white',
-                  mode === item.value && 'bg-white text-[#24251f] shadow-sm',
+                  'h-auto justify-start rounded-md px-3 py-2.5 text-left text-[var(--ink-muted)] hover:bg-[var(--ink-page)]',
+                  mode === item.value && 'bg-[var(--ink-page)] text-[var(--ink-text)] shadow-sm',
                 )}
                 onClick={() => selectMode(item.value)}
                 aria-pressed={mode === item.value}
               >
-                <span className="mr-2 text-[#b85b35]">{item.value === 'translate' ? <Languages className="size-3.5" /> : item.value === 'ai_reading' ? <Sparkles className="size-3.5" /> : <span className="block size-1.5 rounded-full bg-current" />}</span>
+                <span className="mr-2 text-[var(--ink-accent)]">{item.value === 'translate' ? <Languages className="size-3.5" /> : item.value === 'ai_reading' ? <Sparkles className="size-3.5" /> : <span className="block size-1.5 rounded-full bg-current" />}</span>
                 <span>
                   <span className="block text-xs font-semibold">{item.label}</span>
-                  <span className="mt-0.5 block text-[11px] text-[#8a887e]">{item.description}</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--ink-faint)]">{item.description}</span>
                 </span>
               </Button>
             ))}
           </div>
 
-          <div className="mt-6 border-t border-[#d9d6cc] pt-5">
+          <div className="mt-6 border-t border-[var(--ink-rule)] pt-5">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#706f65]">原文证据</p>
-                <p className="mt-1 text-xs text-[#8a887e]">高亮段落来自 AI 阅读结果</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">原文证据</p>
+                <p className="mt-1 text-xs text-[var(--ink-muted)]">高亮段落来自 AI 阅读结果</p>
               </div>
-              {highlightedBlocks.length > 0 ? <span className="text-[11px] font-medium text-[#b85b35]">{highlightedBlocks.length} 段高亮</span> : null}
+              {highlightedBlocks.length > 0 ? <span className="text-[11px] font-medium text-[var(--ink-accent)]">{highlightedBlocks.length} 段高亮</span> : null}
             </div>
 
             {highlightedBlocks.length > 0 ? (
               <div className="mt-4 space-y-3">
                 {highlightedBlocks.map((block) => (
-                  <div key={block} className="rounded-xl border-l-2 border-[#b85b35] bg-[#fffaf4] px-4 py-3 shadow-sm">
-                    <MarkdownContent content={block} compact className="text-sm leading-6 text-[#4f4138]" />
+                  <div key={block} className="rounded-lg border-l-2 border-[var(--ink-highlight-border)] bg-[var(--ink-highlight)] px-4 py-3 shadow-sm">
+                    <MarkdownContent content={block} compact className="text-sm leading-6 text-[var(--ink-text)]" />
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="mt-4 rounded-xl border border-[#d9d6cc] bg-[#f8f7f3] p-4 text-sm leading-6 text-[#77766d]">
+              <div className="mt-4 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-4 text-sm leading-6 text-[var(--ink-muted)]">
                 AI 尚未标出特定段落；你可以先从左侧结论进入，再回到这里核对原文。
               </div>
             )}
 
-            <details className="mt-4 rounded-xl border border-[#d9d6cc] bg-[#f8f7f3] p-4">
-              <summary className="cursor-pointer text-xs font-semibold text-[#4a4a42]">展开完整原文</summary>
-              <MarkdownContent content={originalContent} compact className="mt-4 max-h-[520px] overflow-y-auto text-sm leading-6 text-[#5b5a51]" />
+            <details className="mt-4 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-4">
+              <summary className="cursor-pointer text-xs font-semibold text-[var(--ink-text)]">展开完整原文</summary>
+              <MarkdownContent content={originalContent} compact className="mt-4 max-h-[520px] overflow-y-auto text-sm leading-6 text-[var(--ink-muted)]" />
             </details>
           </div>
         </aside>

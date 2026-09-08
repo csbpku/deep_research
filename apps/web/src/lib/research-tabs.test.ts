@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseResearchTab, researchTabHref } from './research-tabs';
+import {
+  parseResearchTab,
+  researchTabHref,
+  researchTypeForTab,
+  researchViewForTab,
+} from './research-tabs';
 
 describe('research tab URL contract', () => {
   it('accepts every supported tab', () => {
@@ -20,5 +25,16 @@ describe('research tab URL contract', () => {
     expect(researchTabHref('knowledge')).toBe('/researches?tab=knowledge');
     expect(researchTabHref('mine')).toBe('/researches?tab=mine');
     expect(researchTabHref('draft')).toBe('/researches?tab=draft');
+    expect(researchTabHref('published')).toBe('/researches');
+  });
+
+  it('maps legacy type tabs into the new status-oriented views', () => {
+    expect(researchViewForTab('research')).toBe('published');
+    expect(researchViewForTab('knowledge')).toBe('published');
+    expect(researchViewForTab('mine')).toBe('mine');
+    expect(researchViewForTab('draft')).toBe('draft');
+    expect(researchTypeForTab('research')).toBe('research');
+    expect(researchTypeForTab('knowledge')).toBe('knowledge');
+    expect(researchTypeForTab('mine')).toBe('all');
   });
 });

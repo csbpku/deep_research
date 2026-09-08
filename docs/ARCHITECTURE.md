@@ -1,6 +1,6 @@
 # AI技术调研平台 · 架构方案
 
-> 版本：v3.9 · 2026-08-27
+> 版本：v4.0 · 2026-09-04
 > 本文件描述当前系统架构、数据模型、安全边界与部署拓扑；只记录现状，不写演进过程。
 
 ---
@@ -12,11 +12,11 @@
 1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；`sync → enrich → topic refresh` 流水线产出轻量解读与多维评分；GitHub 仓库候选按 Distilled 层级生成 Zread 项目文档，详情页提供「刷新文档」入口（强制重取，失败保留旧缓存）。
 2. **技术专题**：关注专题后自动聚合热点议题，生成带可点击引用的综述（内容 hash 变化触发重算）；发布调研自动回流专题；专题页四标签：概览 / 热点议题 / 相关研究 / 来源。
 3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索、版本审计与恢复、AI Diff 建议与事实核验、三栏研究工作台。
-4. **AI 调研**：对话澄清主题/背景/资料/产物类型，规则推断 objective 并返回 Research Brief 与匹配上下文；异步流水线生成参考草稿，用户实际修改后才能发布。
+4. **AI 调研**：对话澄清主题/背景/资料/检索范围/产物类型，规则推断 objective 并返回 Research Brief 与匹配上下文；异步流水线支持研究稿、快速判断、Slides 提纲和网页简报，用户实际修改且当前版本通过事实审核后才能发布。
 5. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
 6. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
 7. **用户分享与主动提交**：URL + 备注经安全抓取、轻量摘要和人工审核后进入雷达候选池；成员也可直接向雷达提交 URL/文件候选。
-8. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、成员管理、同步状态与失败任务入口、LLM 用量审计、专题提案审批。
+8. **Admin**：雷达软屏蔽/恢复、分享审核、评论提炼、成员管理、同步状态与失败任务入口、LLM 用量审计、专题提案审批，以及雷达内容/渲染审核状态巡检。
 9. **运行底线**：Auth、权限、日志、成本埋点、备份恢复。
 
 ### 规划能力
@@ -63,7 +63,7 @@ flowchart LR
 | Next.js Web + BFF | 页面、Auth、资源权限、输入校验、任务创建和状态查询 | 执行长时间 AI 任务 |
 | PostgreSQL | 业务数据、全文索引、AI/import 队列、租约、幂等和审计 | 保存原始导入文件 |
 | Import worker | 文件校验、HTML 清洗、Markdown 转换、warnings 和临时文件清理 | 调用 LLM 改写内容 |
-| AI worker | 雷达同步、轻量解读、调研任务、心跳、重试、来源和成本 | 决定内容是否公开 |
+| AI worker | 雷达同步、轻量解读、调研任务、事实审核、内容/渲染审核、心跳、重试、来源和成本 | 决定内容是否公开 |
 | ResearchEngineAdapter | 隔离具体 AI 引擎，统一任务、状态、来源和成本契约 | 用户权限与发布权限 |
 
 ### 技术栈
@@ -134,6 +134,8 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 - `content_import_jobs.requester_id → users.id`，成功后 `output_research_id → researches.id`。
 - `ai_research_jobs.draft_research_id` 与 `content_import_jobs.output_research_id` 均为唯一外键，一个草稿只对应一个来源任务。
 - 两类 job 都持有 `attempts`、`next_retry_at`、lease 与 heartbeat 字段，才能复用同一 runner。
+- AI 研究执行 lease 与事实审核 claim 分离；`reviewStartedAt` / `reviewRunToken` 用于恢复和 compare-and-set，迟到的旧审核结果不能覆盖新版本。
+- 已发布 AI 调研是不可变版本；从已发布版本继续编辑时创建新的私有草稿，并通过 `researches.supersedesResearchId` 保留修订链。
 - `product_events.user_id → users.id`；`dedupe_key` 唯一。`admin_actions.actor_id → users.id`；`request_id` 唯一。
 - `radar_sync_runs.source_id → radar_sources.id`；候选 `summaries.sync_run_id → radar_sync_runs.id`。
 - `radar_feedback(summary_id, user_id, type)` 唯一；业务状态不能只依赖分析事件反推。
@@ -178,9 +180,19 @@ queued -> running -> succeeded
                   -> cancelled
 ```
 
-两个队列分表，但复用租约、心跳、重试和幂等 helper。worker 使用事务和 `FOR UPDATE SKIP LOCKED` 抢占；lease 60 秒、heartbeat 15 秒、reaper 30 秒；只有租约过期任务可被接管。初次执行后最多重试 3 次，退避 30/120/300 秒，且只有网络超时、429 和 5xx 可重试。
+两个队列分表，但复用租约、心跳、重试和幂等 helper。worker 使用事务和 `FOR UPDATE SKIP LOCKED` 抢占；公共 lease 由 `WORKER_LEASE_SECONDS` 配置，AI 研究 job 至少使用 `DEEP_RESEARCH_TIMEOUT_SECONDS + 120` 秒（当前默认 `1800 + 120 = 1920` 秒），heartbeat 默认 15 秒、reaper 默认 30 秒；只有租约过期任务可被接管。初次执行后最多重试 3 次，退避 30/120/300 秒，且只有网络超时、429 和 5xx 可重试。
 
-AI job 使用请求者 + `Idempotency-Key` 唯一约束。单 job 最长 5 分钟；已获得至少 3 条可引用资料但未完成报告时进入终态 `partial`，不创建可发布草稿；用户重试创建新 job。不足 3 条来源则标记 `failed`。
+AI job 使用请求者 + `Idempotency-Key` 唯一约束。普通 job 最长 5 分钟，deep job 使用独立的长预算；研究执行达到写作或审核边界时可以先持久化 `running` / `partial` 的只读检查点，避免 worker 重启丢失已生成正文，但检查点不创建 Research 草稿。至少 3 条可核对来源但未完成交付边界时进入 `partial`；不足 3 条来源则标记 `failed`。`summary_brief` 成功时保留 inline 输出且不创建草稿，`research_report` / `slides` / `web_brief` 成功时创建 owner-only 私有草稿。
+
+AI 产物与审核边界：
+
+- `research_report` 是可编辑研究稿；`slides` 是可编辑 Markdown 按页提纲，当前不承诺 `.pptx`；`web_brief` 是直接从同一研究稿派生的响应式阅读版，不经过 Slides 转换。
+- `summary_brief` 只回答当前方向的快速判断，不承诺完整检索、逐条事实审核或正式研究稿；没有可核对资料时仍可显示为“仅模型摘录”。
+- 研究执行完成不等于结论已核验。带草稿的任务会创建 `research_review_runs`，每次 run 绑定完整研究快照（标题、正文、背景、结论、风险、标签）的 hash、资料快照 hash 与策略版本，异步经历 `queued → reviewing → completed / unavailable / stale`，并在 `outcome` 中表达 `clear / attention / blocked / insufficient / unavailable`；旧 `review*` 字段仅是兼容镜像。
+- 审核 run 的机器声明保持不可变；用户处理写入追加式 `research_review_decisions`，绑定 `runId + claimId + revisionHash + actorId`。证据不足不是事实错误：低/中风险声明可由用户明确接受并以“带待验证项”发布，高风险来源冲突只能通过修改/删除正文后重新审核解除。
+- 审核发布门禁同时检查执行状态、声明覆盖状态和声明级证据关系；`coverage_status='insufficient'` 不能被逐条处理决定绕过。有可检查摘录的 `supported` 声明自动闭环；“重新核对当前资料”不等于新增证据，定向补证必须是独立任务。
+- 声明级补证不是浏览器动作：`research_evidence_tasks` 由 AI engine 后台 reconciliation worker 在 evidence job 终态后自动完成“合并来源账本 → 创建当前版本新审核 run”，审核终态后再关闭任务。页面轮询只提供即时反馈，不能决定是否合并或是否进入审核；正文仍不会被自动改写。
+- `partial` / `running` 的可读检查点只允许阅读、核对来源和继续追问；不能直接发布，也不能把资料快照描述为研究结论。
 
 ---
 
@@ -213,6 +225,7 @@ flowchart LR
 - 抓取正文先经过正文抽取、Markdown 转换和 deterministic normalizer，再保存为 `originalMarkdown`。
 - `originalSha256` 是正文版本锚点；翻译、AI 阅读和高亮结果必须携带对应 source hash，不能覆盖原文。
 - Web 端统一使用 `MarkdownContent` renderer；原始 HTML 默认跳过，URL 协议只允许 `http`、`https`、`mailto`。
+- `collection/deep_read` enrichment 完成后先执行内容呈现审核，再进入独立的真实浏览器渲染审核；内容审核和渲染审核都最多两轮，浏览器不可用标记 `unavailable`，不把审核失败伪装成 enrichment 失败。
 - 雷达详情公开读取；反馈、评论、AI 聊天和深入调研仍走登录权限。
 
 ### 文件导入
@@ -236,15 +249,20 @@ Confluence 导入当前未启用；数据库中的历史字段仅为兼容既有
 ```text
 对话澄清主题/背景/资料/产物 -> BFF 写 queued job 并在 2 秒内返回 id
  -> worker: context -> plan -> search -> compress -> analyze -> write
- -> artifact(markdown|future slides) -> private AI draft -> 用户修改 -> published research
+ -> artifact(research_report|slides|web_brief|summary_brief)
+ -> private AI draft 或 inline output -> 独立事实审核 run -> 声明待办/用户处理记录 -> 必要时新版本重新审核 -> publication gate -> published research
+
+AI 调研发布后的研究行是稳定版本：已发布 AI 内容不原地修改，后续编辑先复制为新的
+private draft，并通过 `supersedesResearchId` 指向上一版。审核结果属于具体草稿版本，
+不能被下一次编辑继承。
 ```
 
-- Context 目标 500-800 个中文字符，服务端执行 1,500 token 硬限并记录被截断槽位。
+- Context 目标 500-800 个中文字符，服务端执行 1,500 token 硬限并记录被截断槽位；Research Brief 还会保存时间、地区、技术版本和自然语言检索限定。
 - `prefer_user_sources` 先读指定资料，再自动搜索；指定资料失败可降级并标注。
 - `only_user_sources` 只使用指定资料；全部失败则 job 失败。
 - 用户指定 URL 与分享共用同一个安全抓取器；收藏和沉淀使用内部 ID，由 BFF 先做可见性检查。
-- 前端每 5 秒轮询 job 状态；SSE 为可选增强。
-- AI 原始草稿、失败 job 和 partial 资料都不自动公开。
+- 前端对 queued/running job 每 5 秒轮询；研究执行进入终态后，若独立事实审核仍为 `queued` / `reviewing`，继续以 3 秒短轮询，审核进入终态后停止；SSE 为可选增强。
+- AI 原始草稿、失败 job、partial/running 检查点和 evidence-only 资料快照都不自动公开；只有 owner 可读取自己的任务与草稿。
 
 ### 评论与审核
 
@@ -297,9 +315,14 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 |---|---|
 | `POST /api/ai-research` | 校验权限、配额、资料可见性和幂等 key；2 秒内返回 job id |
 | `GET /api/ai-research/{id}/status` | 返回 status、current_step、progress、elapsed、来源数和失败阶段 |
+| `POST /api/ai-research/{id}/cancel` | owner-only；取消 queued/running 任务并返回原状态 |
+| `GET /api/ai-research/jobs` | owner-only；按执行、产物和证据状态列出调研历史 |
 | `POST /api/content-import` | 创建 import job；原始文件进入隔离临时目录 |
 | `GET /api/content-import/{id}` | 返回状态、warnings、错误码和输出草稿 id |
 | `POST /api/researches/{id}/publish` | 校验 owner、状态和 AI 初始哈希；事务内发布和更新索引 |
+| `POST /api/researches/{id}/review` | owner/admin；为当前研究版本排队、重跑或读取独立事实审核 |
+| `POST /api/researches/{id}/review/decisions` | owner/admin；在当前审核 run 上追加声明处理决定，不能覆盖机器结论 |
+| `POST /api/knowledge/derive` / `POST /api/knowledge` | 从雷达/研究上下文显式提炼并保存知识卡片 |
 | `POST /api/shares` | 使用统一安全抓取器，创建待审核分享 |
 | `POST /api/radar/{id}/feedback` | 相同用户、候选和反馈类型幂等 |
 | `POST /api/radar/sync` | Admin-only；触发同步并返回 run id |

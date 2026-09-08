@@ -58,8 +58,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         requestedModel: true,
         status: true,
         usedFallback: true,
+        errorKind: true,
         inputTokens: true,
         outputTokens: true,
+        costCents: true,
         createdAt: true,
       },
     }),
@@ -86,7 +88,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     fallbackCount: number;
     failureCount: number;
   }>();
-  const dayMap = new Map<string, { calls: number; totalTokens: number; fallbackCount: number }>();
+  const failureMap = new Map<string, { count: number; operations: Set<string> }>();
+  const dayMap = new Map<string, {
+    calls: number;
+    totalTokens: number;
+    fallbackCount: number;
+    failureCount: number;
+    knownCostCents: number;
+  }>();
   const dayFormatter = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
@@ -105,7 +114,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     operation.inputTokens += item.inputTokens ?? 0;
     operation.outputTokens += item.outputTokens ?? 0;
     if (item.usedFallback) operation.fallbackCount += 1;
-    if (item.status === 'failed') operation.failureCount += 1;
+    if (item.status === 'failed') {
+      operation.failureCount += 1;
+      const kind = item.errorKind ?? 'unknown';
+      const failure = failureMap.get(kind) ?? { count: 0, operations: new Set<string>() };
+      failure.count += 1;
+      failure.operations.add(item.operation);
+      failureMap.set(kind, failure);
+    }
     operationMap.set(item.operation, operation);
 
     const model = modelMap.get(item.requestedModel) ?? {
@@ -123,10 +139,18 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     modelMap.set(item.requestedModel, model);
 
     const dayKey = dayFormatter.format(item.createdAt);
-    const day = dayMap.get(dayKey) ?? { calls: 0, totalTokens: 0, fallbackCount: 0 };
+    const day = dayMap.get(dayKey) ?? {
+      calls: 0,
+      totalTokens: 0,
+      fallbackCount: 0,
+      failureCount: 0,
+      knownCostCents: 0,
+    };
     day.calls += 1;
     day.totalTokens += (item.inputTokens ?? 0) + (item.outputTokens ?? 0);
     if (item.usedFallback) day.fallbackCount += 1;
+    if (item.status === 'failed') day.failureCount += 1;
+    day.knownCostCents += item.costCents ?? 0;
     dayMap.set(dayKey, day);
   }
 
@@ -139,6 +163,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const daily = [...dayMap.entries()]
     .map(([date, value]) => ({ date, ...value }))
     .sort((a, b) => a.date.localeCompare(b.date));
+  const failureBreakdown = [...failureMap.entries()]
+    .map(([kind, value]) => ({
+      kind,
+      count: value.count,
+      operations: [...value.operations].sort(),
+    }))
+    .sort((a, b) => b.count - a.count);
 
   return NextResponse.json({
     days,
@@ -154,6 +185,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     operationBreakdown,
     modelBreakdown,
     daily,
+    failureBreakdown,
     items: items.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() })),
     requestId,
   });

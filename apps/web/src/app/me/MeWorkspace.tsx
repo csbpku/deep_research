@@ -18,7 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
 import { PreferencesForm } from '@/components/me/PreferencesForm';
-import { DeleteDraftButton } from '@/components/research/DeleteDraftButton';
+import { DraftActionsMenu } from '@/components/research/DraftActionsMenu';
 
 interface Initial {
   drafts: Array<{ id: string; title: string; updatedAt: string }>;
@@ -202,36 +202,53 @@ function NotificationsSection() {
 // ── 草稿 ──────────────────────────────────────────────────────────
 function DraftsSection({ drafts }: { drafts: Initial['drafts'] }) {
   const queryClient = useQueryClient();
+  const recentDrafts = drafts.slice(0, 5);
   if (drafts.length === 0) {
     return (
       <EmptyState
         title="还没有草稿"
-        description="在调研库点击「新建草稿」开始写作；这里会显示你最近的 20 条草稿。"
+        description="在研究库或 AI 调研中创建草稿；最近草稿会显示在这里。"
         action={
           <Button asChild size="sm">
-            <Link href="/researches?tab=draft">打开草稿列表</Link>
+            <Link href="/researches?tab=draft">查看全部草稿</Link>
           </Button>
         }
       />
     );
   }
   return (
-    <ul className="grid list-none gap-2 p-0">
-      {drafts.map((d) => (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          最近 {recentDrafts.length} 份草稿
+          {drafts.length > recentDrafts.length ? ` · 另有 ${drafts.length - recentDrafts.length} 份` : ''}
+        </p>
+        <Button asChild type="button" variant="outline" size="xs">
+          <Link href="/researches?tab=draft">查看全部草稿</Link>
+        </Button>
+      </div>
+      <ul className="grid list-none gap-2 p-0">
+      {recentDrafts.map((d) => (
         <li key={d.id}>
           <Card>
-            <CardContent className="flex items-center justify-between p-3">
-              <Link href={`/researches/${d.id}`} className="text-sm font-medium hover:text-primary hover:underline">
+            <CardContent className="flex items-start justify-between gap-3 p-3 sm:items-center">
+              <Link
+                href={`/researches/${d.id}`}
+                title={d.title || '未命名草稿'}
+                className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-relaxed hover:text-primary hover:underline"
+              >
                 {d.title || '（未命名草稿）'}
               </Link>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">
-                  {new Date(d.updatedAt).toLocaleString('zh-CN')}
+              <div className="flex shrink-0 items-center gap-2">
+                <span
+                  className="hidden text-right text-xs text-muted-foreground sm:inline"
+                  title={new Date(d.updatedAt).toLocaleString('zh-CN')}
+                >
+                  {new Date(d.updatedAt).toLocaleDateString('zh-CN')}
                 </span>
-                <DeleteDraftButton
+                <DraftActionsMenu
                   researchId={d.id}
                   title={d.title || '未命名草稿'}
-                  compact
                   onDeleted={() => queryClient.invalidateQueries({ queryKey: ['me-drafts'] })}
                 />
               </div>
@@ -239,7 +256,8 @@ function DraftsSection({ drafts }: { drafts: Initial['drafts'] }) {
           </Card>
         </li>
       ))}
-    </ul>
+      </ul>
+    </div>
   );
 }
 

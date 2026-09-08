@@ -145,6 +145,7 @@ export type ResearchObjective =
 export const RESEARCH_OUTPUT_TYPE = {
   MARKDOWN: 'markdown',
   SLIDES: 'slides',
+  WEB: 'web',
 } as const;
 export type ResearchOutputType =
   (typeof RESEARCH_OUTPUT_TYPE)[keyof typeof RESEARCH_OUTPUT_TYPE];

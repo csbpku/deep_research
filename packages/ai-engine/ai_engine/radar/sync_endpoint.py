@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from ai_engine.adapters.base import ResearchEngineAdapter
 from ai_engine.radar.enrichment_worker import (
     _generate_web_highlights as _gen_highlights,
+    request_enrichment_run,
     run_enrichment_for_pending,
 )
 from ai_engine.radar.sync_runner import (
@@ -223,6 +224,11 @@ async def enqueue_radar_enrichment(
 ) -> dict[str, Any]:
     """Queue explicit deep-dive enrichment for selected radar candidates."""
     summary_ids = tuple(dict.fromkeys(body.summary_ids))
+    run_id, queued_ids = await request_enrichment_run(
+        pool,
+        summary_ids=summary_ids,
+        force=body.force,
+    )
 
     async def _run_body() -> None:
         enriched = await run_enrichment_for_pending(
@@ -230,6 +236,7 @@ async def enqueue_radar_enrichment(
             limit=len(summary_ids),
             summary_ids=summary_ids,
             force=body.force,
+            run_id=run_id,
         )
         rescored = 0
         if body.force and enriched > 0:
@@ -266,7 +273,12 @@ async def enqueue_radar_enrichment(
                 await conn.commit()
 
     asyncio.create_task(_run())
-    return {"status": "queued", "summaryIds": list(summary_ids)}
+    return {
+        "status": "queued",
+        "runId": run_id,
+        "summaryIds": list(summary_ids),
+        "queuedSummaryIds": queued_ids,
+    }
 
 
 async def _run_background(
@@ -306,7 +318,6 @@ async def _run_background(
             source_runs=len(result.runs),
             distilled_scored=monitor.total_count - monitor.default_count,
             distilled_default=monitor.default_count,
-            must_read=monitor.must_read_count,
             alerts=alerts,
         )
         log.info(

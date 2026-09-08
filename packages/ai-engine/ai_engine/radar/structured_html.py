@@ -52,7 +52,12 @@ def _href(node: Tag) -> str:
 
 
 def _image_url(node: Tag, base_url: str | None) -> str:
-    raw = str(node.get("src") or node.get("data-src") or "").strip()
+    raw = str(
+        node.get("src")
+        or node.get("data-src")
+        or node.get("data")
+        or ""
+    ).strip()
     if not raw:
         srcset = str(node.get("srcset") or "").strip()
         raw = srcset.split(",", 1)[0].strip().split(" ", 1)[0] if srcset else ""
@@ -186,6 +191,28 @@ def _svg_data_url(node: Tag, figure_id: str = "") -> str:
     return f"data:image/svg+xml;base64,{encoded}"
 
 
+def _svg_abstract_markdown(node: Tag, base_url: str | None = None) -> str:
+    """Recover the abstract when arXiv embeds it in the first SVG card.
+
+    ar5iv renders some papers' abstracts as text inside an SVG
+    ``foreignObject``. Treating that SVG only as an image makes the abstract
+    inaccessible and causes the reader to jump straight from authors to the
+    first numbered section.
+    """
+    foreign_object = node.find("foreignObject")
+    if not isinstance(foreign_object, Tag):
+        return ""
+
+    paragraphs: list[str] = []
+    for paragraph in foreign_object.select(".ltx_p"):
+        text = _clean_inline(_inline(paragraph, base_url))
+        if text and text not in paragraphs:
+            paragraphs.append(text)
+    if len(paragraphs) < 2 or paragraphs[0].strip().lower() not in {"abstract", "摘要"}:
+        return ""
+    return "## Abstract\n\n" + "\n\n".join(paragraphs[1:])
+
+
 def _figure_fragment(value: Any) -> str:
     figure_id = str(value or "").strip()
     return f"#{figure_id}" if re.fullmatch(r"[A-Za-z]\d+\.F\d+", figure_id) else ""
@@ -202,9 +229,23 @@ def _inline(node: Any, base_url: str | None = None, figure_id: str = "") -> str:
     if name in {"script", "style", "button", "input"}:
         return ""
     if name == "svg":
+        abstract = _svg_abstract_markdown(node, base_url)
+        if abstract:
+            return abstract
         src = _svg_data_url(node, figure_id)
         src += _figure_fragment(figure_id)
         return f"![图形]({src})" if src else ""
+    if name == "object":
+        src = _image_url(node, base_url)
+        src += _figure_fragment(figure_id)
+        alt = _clean_inline(str(node.get("aria-label") or node.get("title") or "图形"))
+        return f"![{alt}]({src})" if src else ""
+    if name == "math":
+        alttext = str(node.get("alttext") or "").strip()
+        if alttext:
+            delimiter = "$$" if str(node.get("display") or "").lower() in {"block", "display"} else "$"
+            return f"{delimiter}{alttext}{delimiter}"
+        return _clean_inline(node.get_text(" ", strip=True))
     if name == "br":
         return "\n"
     if name == "a":
@@ -291,17 +332,22 @@ def _render(node: Any, level: int = 0, base_url: str | None = None) -> str:
         return prefix + "\n".join(output) + "\n\n"
     if name == "figure":
         image = node.find("img")
+        object_node = node.find("object", class_="ltx_graphics")
         svg = node.find("svg", class_="ltx_picture")
-        if not isinstance(image, Tag) and not isinstance(svg, Tag):
+        if not isinstance(image, Tag) and not isinstance(object_node, Tag) and not isinstance(svg, Tag):
             return _render_children(node, base_url)
         image_markdown = _inline(
-            image if isinstance(image, Tag) else svg,
+            image if isinstance(image, Tag) else object_node if isinstance(object_node, Tag) else svg,
             base_url,
             str(node.get("id") or ""),
         )
         caption_node = node.find("figcaption")
-        caption = _clean_inline(caption_node.get_text(" ", strip=True)) if isinstance(caption_node, Tag) else ""
-        return f"{image_markdown}\n\n*{caption}*\n\n" if image_markdown and caption else f"{image_markdown}\n\n"
+        caption = _clean_inline(_inline(caption_node, base_url)) if isinstance(caption_node, Tag) else ""
+        if image_markdown and caption:
+            return f"{image_markdown}\n\n*{caption}*\n\n"
+        if image_markdown:
+            return f"{image_markdown}\n\n"
+        return f"*{caption}*\n\n" if caption else ""
     if name == "details":
         summary = node.find("summary", recursive=False)
         label = _clean_inline(_inline(summary, base_url)) if summary else ""
@@ -314,7 +360,13 @@ def _render(node: Any, level: int = 0, base_url: str | None = None) -> str:
     if name in {"p", "dt", "dd"}:
         text = _clean_inline(_inline(node, base_url))
         return f"{text}\n\n" if text else ""
+    # arXiv wraps wide tables in transformed inline spans. Treat only spans
+    # that actually contain block-like structures as containers; ordinary
+    # inline spans must keep using ``_inline`` so SVG abstracts still pass
+    # through the dedicated foreignObject recovery path above.
     if name in {"div", "section", "figcaption", "body"}:
+        return _render_children(node, base_url)
+    if name == "span" and node.find(["table", "figure", "pre", "ul", "ol", "blockquote"]):
         return _render_children(node, base_url)
     return _inline(node, base_url)
 

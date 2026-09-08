@@ -6,8 +6,7 @@
 //
 // 把配置 + 类型放在这里；组件与图标运行时放在 SidebarNav.tsx 里。
 //
-// ⚠️ e2e 契约（researches-flows + contract）：正文必须含 /调研库|researches/
-// 这两个关键字之一（任一即可，不再依赖中文字面）。
+// 研究库是沉淀入口；AI 调研是主动生产入口。
 
 export type NavItemIconKey =
   | 'home'
@@ -27,8 +26,8 @@ export interface NavItem {
 export const PRIMARY_NAV: NavItem[] = [
   { href: '/radar', label: '技术雷达', icon: 'radar' },
   { href: '/topics', label: '技术专题', icon: 'topic' },
-  { href: '/researches', label: '调研库', icon: 'research' },
   { href: '/ai-research', label: 'AI 调研', icon: 'aiResearch' },
+  { href: '/researches', label: '研究库', icon: 'research' },
 ];
 
 export const ADMIN_NAV: NavItem = { href: '/admin', label: 'Admin', icon: 'admin' };

@@ -12,7 +12,7 @@
 //
 // 布局：max-w-measure（760px）—— 中文长文的舒适量度。
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -29,9 +29,15 @@ import { TagChip, TagList } from '@/components/domain/TagChip';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { LoadingState } from '@/components/StateMessage';
 import { useCurrentUser } from '@/lib/auth/client';
 import { BackToSearchButton } from '@/components/domain/BackToSearchButton';
-import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
+import {
+  cleanResearchLabel,
+  cleanResearchMarkdown,
+  cleanResearchText,
+} from '@/lib/research-markdown-cleanup';
+import { resolveResearchSourceLink } from '@/lib/research-source-link';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -83,6 +89,14 @@ interface ResearchDetail {
   canEdit: boolean;
   canManageStatus: boolean;
   researchSources: ResearchSourceItem[];
+  reviewDisclosure?: Array<{
+    claimId: string;
+    claim: string;
+    action: 'accept_uncertainty';
+    label: string;
+    reason: string | null;
+    evidenceStatus: 'supported' | 'unverified' | 'contradicted';
+  }>;
   sourceComment: SourceCommentItem | null;
   audits?: AuditEntry[];
   commentCount?: number;
@@ -92,6 +106,9 @@ interface AuditEntry {
   id: string;
   action: string;
   diff: unknown;
+  sourceIntent?: string | null;
+  sourceQuestion?: string | null;
+  reason?: string | null;
   createdAt: string;
   editor: { id: string; name: string };
 }
@@ -102,25 +119,67 @@ export default function ResearchDetailPage() {
   const queryClient = useQueryClient();
   const me = useCurrentUser();
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
 
-  const { data, isLoading, isError, error } = useQuery<ResearchDetail>({
+  const { data, isLoading, isError, error, refetch } = useQuery<ResearchDetail>({
     queryKey: ['research', params.id],
     queryFn: async () => {
-      const res = await fetch(`/api/researches/${params.id}`);
-      if (!res.ok) {
-        if (res.status === 404) throw new Error('调研库不存在');
-        throw new Error('加载失败');
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 15_000);
+      try {
+        const res = await fetch(`/api/researches/${params.id}`, { signal: controller.signal });
+        if (!res.ok) {
+          if (res.status === 404) throw new Error('调研库不存在');
+          throw new Error('加载失败');
+        }
+        return res.json();
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === 'AbortError') {
+          throw new Error('加载调研超时，请重试。');
+        }
+        throw cause;
+      } finally {
+        window.clearTimeout(timeout);
       }
-      return res.json();
     },
+    retry: 1,
   });
+
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setLoadingElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isLoading]);
 
   if (isLoading) {
     return (
-      <div className="mx-auto max-w-measure space-y-3">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-7 w-2/3" />
-        <Skeleton className="h-4 w-48" />
+      <div className="mx-auto w-full max-w-measure space-y-4" aria-busy="true">
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-8 w-full max-w-2xl" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+        <LoadingState
+          label={
+            loadingElapsed >= 5
+              ? '正文仍在加载，正在准备阅读视图…'
+              : '正在加载调研正文…'
+          }
+        />
+        {loadingElapsed >= 10 ? (
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <span>响应时间较长，可以重新尝试。</span>
+            <Button type="button" size="xs" variant="outline" onClick={() => void refetch()}>
+              重新加载
+            </Button>
+          </div>
+        ) : null}
         <Skeleton className="h-48 w-full" />
       </div>
     );
@@ -146,21 +205,25 @@ export default function ResearchDetailPage() {
   const isDraft = data.status === 'draft';
   const isArchived = data.status === 'archived';
 
+  const displayTitle = cleanResearchLabel(data.title);
+
   return (
-    <div className="mx-auto max-w-shell">
+    <div className="mx-auto w-full max-w-shell">
       {/* 头部 */}
-      <div className="mb-5 flex items-start justify-between gap-3">
+      <div className="mb-5 flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div className="min-w-0">
           <nav className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
             <BackToSearchButton />
             <Link href="/researches" className="hover:text-foreground hover:underline">
-              调研库
+              研究库
             </Link>
             <span>/</span>
-            <span className="truncate">{data.title}</span>
+            <span className="truncate">{displayTitle}</span>
           </nav>
 
-          <h1 className="text-2xl font-semibold leading-tight tracking-normal">{data.title}</h1>
+          <h1 className="max-w-4xl break-words text-xl font-semibold leading-tight tracking-normal [text-wrap:pretty] sm:text-3xl">
+            {displayTitle}
+          </h1>
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <StatusBadge kind="researchType" value={isLongResearch ? 'research' : 'knowledge'} />
@@ -184,7 +247,7 @@ export default function ResearchDetailPage() {
         </div>
 
         {data.canEdit || data.canManageStatus ? (
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
             {isDraft && data.canEdit ? (
               <DeleteDraftButton
                 researchId={data.id}
@@ -233,21 +296,27 @@ export default function ResearchDetailPage() {
         {isLongResearch && (
           <>
             {(data.background || data.conclusion || data.risks) && (
-              <SectionCard title="研究摘要" tone="default" icon={Info}>
-                <div className="space-y-3">
+              <SectionCard
+                title="研究摘要"
+                tone="default"
+                icon={Info}
+                className="rounded-none border-x-0 bg-transparent"
+                bodyClassName="px-0 pb-0"
+              >
+                <div className="space-y-4">
                   {data.background && (
                     <SectionCard tone="info" icon={Info} title="背景" bodyClassName="text-sm">
-                      <MarkdownContent content={data.background} compact={data.aiAssisted} />
+                      <MarkdownContent content={cleanResearchMarkdown(data.background)} compact={data.aiAssisted} />
                     </SectionCard>
                   )}
                   {data.conclusion && (
                     <SectionCard tone="success" icon={CheckCircle2} title="结论" bodyClassName="text-sm">
-                      <MarkdownContent content={data.conclusion} compact={data.aiAssisted} />
+                      <MarkdownContent content={cleanResearchMarkdown(data.conclusion)} compact={data.aiAssisted} />
                     </SectionCard>
                   )}
                   {data.risks && (
                     <SectionCard tone="destructive" icon={AlertTriangle} title="风险与待验证项" bodyClassName="text-sm">
-                      <MarkdownContent content={data.risks} compact={data.aiAssisted} />
+                      <MarkdownContent content={cleanResearchMarkdown(data.risks)} compact={data.aiAssisted} />
                     </SectionCard>
                   )}
                 </div>
@@ -258,6 +327,24 @@ export default function ResearchDetailPage() {
               <MarkdownContent content={cleanResearchMarkdown(data.body)} compact={data.aiAssisted} />
             </SectionCard>
 
+            {data.reviewDisclosure && data.reviewDisclosure.length > 0 && (
+              <SectionCard title="不确定性说明" tone="warning" icon={AlertTriangle} bodyClassName="text-sm">
+                <p className="leading-6 text-status-partial-fg">
+                  这份调研保留了以下尚未完全确定的结论，阅读时请结合原文证据和风险说明判断。
+                </p>
+                <ul className="mt-3 space-y-2">
+                  {data.reviewDisclosure.map((item) => (
+                    <li key={item.claimId} className="rounded border border-status-partial-fg/20 bg-status-partial-bg/30 px-3 py-2">
+                      <p className="font-medium leading-5 text-foreground">{item.claim}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {item.label}{item.reason ? ` · ${item.reason}` : ''}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </SectionCard>
+            )}
+
           </>
         )}
 
@@ -267,7 +354,7 @@ export default function ResearchDetailPage() {
             {data.sourceComment && (
               <SectionCard title="来源评论" tone="accent">
                 <blockquote className="border-l-2 border-l-accent-foreground/40 bg-accent/30 px-3 py-2 text-sm leading-relaxed">
-                  {data.sourceComment.body}
+                  {cleanResearchText(data.sourceComment.body)}
                 </blockquote>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>来自 {data.sourceComment.authorName}</span>
@@ -282,33 +369,63 @@ export default function ResearchDetailPage() {
                     >
                       <ArrowUpRight className="size-3" />
                       查看原始{data.sourceComment.targetType === 'summary' ? '摘要' : '研究报告'}:{' '}
-                      {data.sourceComment.targetTitle ?? '...'}
+                      {cleanResearchLabel(data.sourceComment.targetTitle ?? '...')}
                     </Link>
                   )}
                 </div>
               </SectionCard>
             )}
 
+            {data.researchSources.length > 0 && (
+              <SectionCard title="来源" tone="muted">
+                <div className="space-y-2">
+                  {data.researchSources.map((source) => {
+                    const ref = source.sourceRef && typeof source.sourceRef === 'object'
+                      ? source.sourceRef as { type?: string; value?: string }
+                      : {};
+                    const link = resolveResearchSourceLink(ref, source.canonicalKey);
+                    if (!link) return null;
+                    return (
+                      <div key={source.id} className="min-w-0">
+                        <a
+                          href={link.href}
+                          target={link.external ? '_blank' : undefined}
+                          rel={link.external ? 'noreferrer' : undefined}
+                          className="inline-flex max-w-full items-start gap-1 text-sm text-primary hover:underline"
+                        >
+                          <ArrowUpRight className="mt-0.5 size-3.5 shrink-0" />
+                          <span className="min-w-0 break-words">{cleanResearchLabel(source.title ?? source.canonicalKey)}</span>
+                        </a>
+                        {source.description ? (
+                          <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{cleanResearchText(source.description)}</p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </SectionCard>
+            )}
+
             <SectionCard title="正文">
-              <MarkdownContent content={data.body} compact={data.aiAssisted} />
+              <MarkdownContent content={cleanResearchMarkdown(data.body)} compact={data.aiAssisted} />
             </SectionCard>
 
             {data.background && (
               <SectionCard title="背景">
-                <MarkdownContent content={data.background} compact={data.aiAssisted} />
+                <MarkdownContent content={cleanResearchMarkdown(data.background)} compact={data.aiAssisted} />
               </SectionCard>
             )}
 
             {data.conclusion && (
               <SectionCard title="结论" tone="success" icon={CheckCircle2}>
-                <MarkdownContent content={data.conclusion} compact={data.aiAssisted} />
+                <MarkdownContent content={cleanResearchMarkdown(data.conclusion)} compact={data.aiAssisted} />
               </SectionCard>
             )}
 
             {/* 风险字段:knowledge 布局也读 risks,字段对齐 research 布局 */}
             {data.risks && (
               <SectionCard title="风险与待验证项" tone="destructive" icon={AlertTriangle}>
-                <MarkdownContent content={data.risks} compact={data.aiAssisted} />
+                <MarkdownContent content={cleanResearchMarkdown(data.risks)} compact={data.aiAssisted} />
               </SectionCard>
             )}
           </>
@@ -374,6 +491,12 @@ export default function ResearchDetailPage() {
                 typeof a.diff === 'object' &&
                 Object.keys(a.diff as Record<string, unknown>).length > 0 ? (
                   <span> （{Object.keys(a.diff as Record<string, unknown>).join(', ')} 变更）</span>
+                ) : null}
+                {a.sourceIntent === 'revise' ? (
+                  <div className="mt-1 rounded border border-primary/15 bg-primary/[0.03] px-2 py-1.5 text-[11px] text-muted-foreground">
+                    <span className="font-medium text-primary">来自追问修订</span>
+                    {a.sourceQuestion ? <span className="ml-1">：{a.sourceQuestion}</span> : null}
+                  </div>
                 ) : null}
               </div>
             ))}

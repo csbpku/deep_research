@@ -92,7 +92,7 @@ function ScoreDetails({ score, tierVisual, tierLabel }: { score: DistilledScore;
   return (
     <div className="space-y-2 text-xs">
       <div className="flex items-center justify-between border-b border-border pb-2">
-        <span className={`font-medium ${tierVisual.text}`}>{tierLabel}{score.mustRead ? ' · 必读' : ''}</span>
+        <span className={`font-medium ${tierVisual.text}`}>{tierLabel}</span>
         <span className="text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
       </div>
       {score.tierScore !== undefined || score.rankingScore !== undefined ? (

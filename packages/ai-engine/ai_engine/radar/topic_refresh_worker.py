@@ -18,7 +18,7 @@ from ai_engine.radar.topic_clustering import is_metadata_tag
 from ai_engine.radar.topic_presets import load_topic_presets
 
 WINDOW_DAYS = 14
-ALLOWED_TIERS = frozenset({"skim", "deep_read"})
+ALLOWED_TIERS = frozenset({"collection", "deep_read"})
 
 
 def _source_key(url: str, original_kind: str | None) -> str:

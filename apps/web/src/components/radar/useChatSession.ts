@@ -55,6 +55,11 @@ const THINKING_STEP_MS: ReadonlyArray<number> = [900, 1900];
 const TYPEWRITER_INTERVAL_MS = 16;
 const TYPEWRITER_CHARS_PER_TICK = 12;
 const SLOW_GENERATION_MS = 12000;
+// The first request in Next dev can include route compilation. Keep the
+// explicit timeout above that cold-start cost while the UI shows slow feedback
+// after 1.8s and offers an immediate retry path.
+const SESSION_LOAD_TIMEOUT_MS = 15000;
+const SLOW_SESSION_LOAD_MS = 1800;
 
 export interface UseChatSessionOptions {
   summaryId: string;
@@ -76,6 +81,7 @@ export interface UseChatSessionOptions {
 export interface UseChatSessionResult {
   session: ChatSession | null;
   loading: boolean;
+  slowLoading: boolean;
   sending: boolean;
   slowGeneration: boolean;
   thinkingStep: number;
@@ -99,6 +105,7 @@ export function useChatSession({
 }: UseChatSessionOptions): UseChatSessionResult {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(false);
+  const [slowLoading, setSlowLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [slowGeneration, setSlowGeneration] = useState(false);
   const [thinkingStep, setThinkingStep] = useState(0);
@@ -109,7 +116,11 @@ export function useChatSession({
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const loadRef = useRef<{ summaryId: string; promise: Promise<ChatSession> } | null>(null);
+  const loadRef = useRef<{
+    summaryId: string;
+    promise: Promise<ChatSession>;
+    controller: AbortController;
+  } | null>(null);
   const typewriterQueueRef = useRef('');
   const typewriterTimerRef = useRef<number | null>(null);
   const typewriterWaitersRef = useRef<Array<() => void>>([]);
@@ -136,12 +147,18 @@ export function useChatSession({
   useEffect(() => {
     if (!enabled || !summaryId) return;
     if (!loadRef.current || loadRef.current.summaryId !== summaryId) {
-      loadRef.current = { summaryId, promise: createAndLoadSession(summaryId) };
+      const controller = new AbortController();
+      loadRef.current = { summaryId, promise: createAndLoadSession(summaryId, controller.signal), controller };
     }
+    const activeLoad = loadRef.current;
     let cancelled = false;
     setLoading(true);
+    setSlowLoading(false);
     setErr(null);
-    void loadRef.current.promise
+    const slowTimer = window.setTimeout(() => {
+      if (!cancelled) setSlowLoading(true);
+    }, SLOW_SESSION_LOAD_MS);
+    void activeLoad.promise
       .then((sessionData) => {
         if (!cancelled) setSession(sessionData);
       })
@@ -152,10 +169,19 @@ export function useChatSession({
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        window.clearTimeout(slowTimer);
+        if (!cancelled) {
+          setLoading(false);
+          setSlowLoading(false);
+        }
       });
     return () => {
       cancelled = true;
+      window.clearTimeout(slowTimer);
+      if (loadRef.current === activeLoad) {
+        activeLoad.controller.abort();
+        loadRef.current = null;
+      }
     };
   }, [enabled, summaryId, retryCount]);
 
@@ -179,8 +205,10 @@ export function useChatSession({
   }, [session?.messages.length, sending]);
 
   const retryLoad = useCallback(() => {
+    loadRef.current?.controller.abort();
     loadRef.current = null;
     setSession(null);
+    setSlowLoading(false);
     setRetryCount((c) => c + 1);
   }, []);
 
@@ -450,6 +478,7 @@ export function useChatSession({
   return {
     session,
     loading,
+    slowLoading,
     sending,
     slowGeneration,
     thinkingStep,
@@ -470,23 +499,45 @@ export function useChatSession({
 // Wire: session create + load
 // ─────────────────────────────────────────────────────────────────────
 
-async function createAndLoadSession(summaryId: string): Promise<ChatSession> {
-  const createRes = await fetch('/api/chat/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ seedSummaryId: summaryId }),
-  });
-  if (!createRes.ok) {
-    const body = (await createRes.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message ?? '创建会话失败');
+async function createAndLoadSession(summaryId: string, signal: AbortSignal): Promise<ChatSession> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) controller.abort();
+  const timeoutAbort = window.setTimeout(abort, SESSION_LOAD_TIMEOUT_MS);
+  try {
+    const createRes = await fetch('/api/chat/sessions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seedSummaryId: summaryId }),
+      signal: controller.signal,
+    });
+    if (!createRes.ok) {
+      const body = (await createRes.json().catch(() => ({}))) as { message?: string };
+      throw new Error(body.message ?? '创建会话失败');
+    }
+    const createData = (await createRes.json()) as Partial<ChatSession> & { sessionId?: string };
+    // Current ai-engine returns the session and its transcript in one
+    // response. Keep the GET fallback for older engines during rollout.
+    if (createData.sessionId && createData.seedSnapshot && Array.isArray(createData.messages)) {
+      return createData as ChatSession;
+    }
+    if (!createData.sessionId) throw new Error('创建会话返回无效');
+    const getRes = await fetch(`/api/chat/sessions/${createData.sessionId}`, { cache: 'no-store', signal: controller.signal });
+    if (!getRes.ok) {
+      const body = (await getRes.json().catch(() => ({}))) as { message?: string };
+      throw new Error(body.message ?? '加载历史失败');
+    }
+    return (await getRes.json()) as ChatSession;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('连接 AI 讨论超时，请重试。');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutAbort);
+    signal.removeEventListener('abort', abort);
   }
-  const createData = (await createRes.json()) as { sessionId: string };
-  const getRes = await fetch(`/api/chat/sessions/${createData.sessionId}`, { cache: 'no-store' });
-  if (!getRes.ok) {
-    const body = (await getRes.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message ?? '加载历史失败');
-  }
-  return (await getRes.json()) as ChatSession;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -513,7 +564,7 @@ type StreamOutcome = 'streamed' | 'unsupported' | 'error' | 'aborted';
  *   - 'unsupported' when the route returned 404 or non-SSE (fall back to polling)
  *   - 'error' on transport error
  */
-async function tryStreamChat(
+export async function tryStreamChat(
   sessionId: string,
   content: string,
   anchor: Anchor | null | undefined,
@@ -555,7 +606,69 @@ async function tryStreamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let receivedDone = false;
   try {
+    const handleFrame = async (frame: string): Promise<boolean> => {
+      const parsed = parseSseFrame(frame);
+      if (!parsed) return false;
+
+      if (parsed.event === 'delta') {
+        const chunk = JSON.parse(parsed.data) as unknown;
+        if (typeof chunk === 'string') callbacks.onDelta(chunk);
+        return false;
+      }
+
+      if (parsed.event === 'citations') {
+        const payload = JSON.parse(parsed.data) as {
+          citations?: Array<{
+            quote?: string;
+            sourceBlockIndex?: number | string;
+            location?: string;
+            sourcePath?: string;
+            sourceUrl?: string;
+            anchorId?: string;
+          }>;
+        };
+        callbacks.onCitations(payload.citations ?? []);
+        return false;
+      }
+
+      if (parsed.event === 'error') {
+        const payload = JSON.parse(parsed.data) as { message?: string };
+        throw new Error(payload.message ?? 'AI 暂时没有生成回答');
+      }
+
+      if (parsed.event !== 'done') return false;
+
+      const payload = JSON.parse(parsed.data) as {
+        message_id: string;
+        content: string;
+        created_at: string;
+        latency_ms?: number | null;
+        sources?: Array<{
+          quote?: string;
+          sourceBlockIndex?: number | string;
+          location?: string;
+          sourcePath?: string;
+          sourceUrl?: string;
+          anchorId?: string;
+        }> | null;
+      };
+      if (!payload.message_id || typeof payload.content !== 'string' || !payload.created_at) {
+        throw new Error('AI 流式回答返回格式无效');
+      }
+
+      await callbacks.onDone({
+        id: payload.message_id,
+        content: payload.content,
+        createdAt: payload.created_at,
+        latencyMs: payload.latency_ms ?? null,
+        sources: payload.sources ?? null,
+      });
+      receivedDone = true;
+      return true;
+    };
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -564,53 +677,14 @@ async function tryStreamChat(
       while ((sep = buffer.indexOf('\n\n')) >= 0) {
         const frame = buffer.slice(0, sep);
         buffer = buffer.slice(sep + 2);
-        const parsed = parseSseFrame(frame);
-        if (!parsed) continue;
-        if (parsed.event === 'delta') {
-          try {
-            const chunk = JSON.parse(parsed.data) as string;
-            if (typeof chunk === 'string') callbacks.onDelta(chunk);
-          } catch {
-            // tolerate partial JSON
-          }
-        } else if (parsed.event === 'citations') {
-          try {
-            const payload = JSON.parse(parsed.data) as { citations: Array<{ quote?: string; sourceBlockIndex?: number | string; location?: string; sourcePath?: string; sourceUrl?: string; anchorId?: string }> };
-            callbacks.onCitations(payload.citations ?? []);
-          } catch {
-            // ignore
-          }
-        } else if (parsed.event === 'done') {
-          try {
-            const payload = JSON.parse(parsed.data) as {
-              message_id: string;
-              content: string;
-              created_at: string;
-              latency_ms?: number | null;
-              sources?: Array<{ quote?: string; sourceBlockIndex?: number | string; location?: string; sourcePath?: string; sourceUrl?: string; anchorId?: string }> | null;
-            };
-            await callbacks.onDone({
-              id: payload.message_id,
-              content: payload.content,
-              createdAt: payload.created_at,
-              latencyMs: payload.latency_ms ?? null,
-              sources: payload.sources ?? null,
-            });
-          } catch {
-            // ignore
-          }
-          return 'streamed';
-        } else if (parsed.event === 'error') {
-          try {
-            const payload = JSON.parse(parsed.data) as { message?: string };
-            throw new Error(payload.message ?? 'AI 暂时没有生成回答');
-          } catch (innerError) {
-            if (innerError instanceof Error) throw innerError;
-            throw new Error('AI 暂时没有生成回答');
-          }
-        }
+        if (await handleFrame(frame)) return 'streamed';
       }
     }
+
+    // A compliant server normally terminates frames with a blank line, but
+    // process a final unterminated frame before deciding the stream failed.
+    if (buffer.trim() && await handleFrame(buffer)) return 'streamed';
+    if (!receivedDone) throw new Error('AI 流式回答未正常结束');
     return 'streamed';
   } catch (error) {
     return isAbortError(error) ? 'aborted' : 'error';

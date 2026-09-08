@@ -264,6 +264,20 @@ describe('shapeSearchRow', () => {
     });
     expect(shaped.rank).toBe(0.1235);
   });
+
+  it('removes markdown wrappers from highlighted snippets while preserving marks', () => {
+    const shaped = shapeSearchRow({
+      id: 'a',
+      type: 'radar',
+      refId: 'r1',
+      title: 't',
+      snippet: 's',
+      highlighted: '![![diagram](https://example.com/image.png)](https://example.com) [](https://example.com/empty.png) <mark>GraphRAG</mark>',
+      publishedAt: new Date(),
+      rank: 1,
+    });
+    expect(shaped.highlighted).toBe('diagram <mark>GraphRAG</mark>');
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────

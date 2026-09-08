@@ -169,6 +169,13 @@ def is_quota_error(exc: BaseException) -> bool:
 
 def is_retryable_llm_error(exc: BaseException) -> bool:
     """Whether a configured fallback model may recover this provider failure."""
+    # The provider SDK can surface a dropped streaming/socket write as a
+    # built-in transport exception rather than an HTTP error. It is safe to
+    # retry these boundedly; classifying them as INTERNAL makes long research
+    # jobs fail after collecting useful evidence instead of trying the
+    # configured fallback or returning a retryable service-unavailable state.
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
     if is_quota_error(exc):
         return True
     if getattr(exc, "status_code", None) in {408, 409, 500, 502, 503, 504}:

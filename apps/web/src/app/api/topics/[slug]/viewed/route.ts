@@ -1,7 +1,7 @@
 // BFF handler: POST /api/topics/[slug]/viewed — 标记专题为已查看。
 //
-// ADR 0010：用户停留完成专题详情首屏后，前端 ping 此接口；后台
-// 推进 TopicFollow.lastViewedAt 用于未读议题计数。不要求手动标记。
+// ADR 0010：用户在热点议题视图中显式标记已读后，前端调用此接口；
+// 推进 TopicFollow.lastViewedAt 用于未读议题计数。
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';

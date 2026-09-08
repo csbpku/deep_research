@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from typing import Any, cast
@@ -20,6 +21,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+
+# ``LOG_LEVEL`` lets a launchd plist turn the otherwise-quiet INFO/WARNING
+# pipeline into a DEBUG trail without editing the script. Workers emit
+# structured warning logs ("ai-engine.radar.enrichment.*"); without DEBUG
+# they would be invisible from the launchd OUT stream.
+_LOG_LEVEL_NAME = os.environ.get("LOG_LEVEL", "WARNING").strip().upper() or "WARNING"
+_LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.WARNING)
+logging.basicConfig(
+    level=_LOG_LEVEL,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stdout,
+)
 
 from ai_engine.job_runner.db_store import DbJobStore
 from ai_engine.radar.enrichment_worker import (

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -124,6 +125,43 @@ async def _snapshot(
         idempotency_key=None,
         source_refs=(),
     )
+
+
+async def _insert_summary(
+    store: DbJobStore,
+    *,
+    summary_id: str,
+    title: str,
+    tier: str,
+    published_days_ago: int = 0,
+    created_days_ago: int = 0,
+    interpretation: str = "radar interpretation",
+) -> None:
+    """Insert a minimal published radar summary for source-ref tests."""
+    async with store._pool.connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO "summaries"
+              ("id", "title", "body", "url", "canonicalUrl", "source",
+               "summaryDate", "publishedAt", "status", "distilledTier",
+               "interpretation", "createdAt", "updatedAt")
+            VALUES (%s, %s, %s, %s, %s, 'daily', now()::date,
+                    now() - (%s * interval '1 day'), 'published', %s,
+                    %s, now() - (%s * interval '1 day'), now())
+            """,
+            (
+                summary_id,
+                title,
+                f"body {title}",
+                f"https://example.com/{title}",
+                f"https://example.com/{title}",
+                published_days_ago,
+                tier,
+                interpretation,
+                created_days_ago,
+            ),
+        )
+        await conn.commit()
 
 
 class TestDbJobStoreIntegration:
@@ -258,12 +296,60 @@ class TestDbJobStoreIntegration:
         finally:
             await store.close()
 
-    async def test_mark_terminal_succeeded_with_draft(self) -> None:
-        """终态 succeeded + 真 draftResearchId → CHECK 接受。W2 review #3。"""
+    async def test_running_report_checkpoint_survives_lease_recovery(self) -> None:
+        """A readable report must survive reaping after the worker loses its lease."""
         store = await _new_store()
         try:
             user_id = await _prepare_user(store)
-            snap = await _snapshot(user_id, "succeeded path")
+            snap = await _snapshot(user_id, "running checkpoint")
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+            sources = [
+                AdapterSource(
+                    source_ref={"type": "url", "value": f"https://real.example.it/checkpoint-{i}"},
+                    canonical_key=f"real.example.it::checkpoint::{i}",
+                    title=f"Checkpoint source {i}",
+                    snippet=f"Checkpoint evidence {i}",
+                    score=0.8,
+                    step_captured="search",
+                    is_accessible=True,
+                )
+                for i in range(3)
+            ]
+            report = "# 可恢复研究稿\n\n这份报告已在事实审核前写成。"
+            await store.record_progress(
+                lease,
+                current_step="write",
+                token_in=100,
+                token_out=200,
+                cost_cents=5,
+                sources=sources,
+                output_text=report,
+            )
+            async with store._pool.connection() as conn:
+                await conn.execute(
+                    f'UPDATE "{AI_TABLE}" SET "leaseExpiresAt" = now() - interval \'1 minute\' WHERE "id" = %s',
+                    (lease.job_id,),
+                )
+                await conn.commit()
+
+            assert await store.reap_expired_leases() >= 1
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.status == "partial"
+            assert row.output_text == report
+        finally:
+            await store.close()
+
+    @pytest.mark.parametrize("report_type", ["research_report", "web_brief"])
+    async def test_mark_terminal_succeeded_with_draft(self, report_type: ReportType) -> None:
+        """Markdown research artifacts with a draft satisfy the succeeded CHECK."""
+        store = await _new_store()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "succeeded path", report_type=report_type)
             await store.enqueue(snap)
             acquired = await store.acquire_next_job("worker-1")
             assert acquired is not None
@@ -306,6 +392,15 @@ class TestDbJobStoreIntegration:
             assert row.snapshot.status == "succeeded"
             assert len(row.last_sources) >= 1
             assert row.draft_research_id == research_id
+            async with store._pool.connection() as conn:
+                persisted = await (
+                    await conn.execute(
+                        'SELECT count(*) AS count FROM "ai_research_sources" WHERE "jobId" = %s',
+                        (snap.job_id,),
+                    )
+                ).fetchone()
+            assert persisted is not None
+            assert int(persisted["count"]) == 1
         finally:
             await store.close()
 
@@ -342,6 +437,113 @@ class TestDbJobStoreIntegration:
         finally:
             await store.close()
 
+    async def test_load_radar_context_refs_filters_and_limits(self) -> None:
+        store = await _new_store()
+        try:
+            await _insert_summary(
+                store,
+                summary_id="00000000-0000-0000-0000-000000000001",
+                title="deep-one",
+                tier="deep_read",
+                interpretation="Deep one",
+            )
+            await _insert_summary(
+                store,
+                summary_id="00000000-0000-0000-0000-000000000002",
+                title="collection-one",
+                tier="collection",
+                interpretation="Collection one",
+                published_days_ago=1,
+            )
+            await _insert_summary(
+                store,
+                summary_id="00000000-0000-0000-0000-000000000003",
+                title="skim-one",
+                tier="skim",
+                interpretation="Skim one",
+            )
+            await _insert_summary(
+                store,
+                summary_id="00000000-0000-0000-0000-000000000004",
+                title="noise-one",
+                tier="noise",
+                interpretation="Noise one",
+            )
+            await _insert_summary(
+                store,
+                summary_id="00000000-0000-0000-0000-000000000005",
+                title="old-deep",
+                tier="deep_read",
+                published_days_ago=40,
+                created_days_ago=40,
+                interpretation="Old deep",
+            )
+
+            refs = await store.load_radar_context_refs(limit=10, days=30)
+            titles = {str(ref.get("resolvedTitle")) for ref in refs}
+            assert titles == {"deep-one", "collection-one"}
+            assert all(ref.get("type") == "summary" for ref in refs)
+            assert all(ref.get("required") is False for ref in refs)
+            assert all(ref.get("auto") is True for ref in refs)
+            assert refs[0]["resolvedSnippet"] == "Deep one"
+            assert refs[0]["resolvedUrl"] == "https://example.com/deep-one"
+
+            limited = await store.load_radar_context_refs(limit=1, days=30)
+            assert len(limited) == 1
+            assert limited[0]["resolvedTitle"] == "deep-one"
+        finally:
+            await store.close()
+
+    async def test_persist_source_refs_updates_precreated_row(self) -> None:
+        store = await _new_store()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "persist source refs")
+            await store.enqueue(snap)
+
+            refs = (
+                {
+                    "type": "summary",
+                    "value": "00000000-0000-0000-0000-000000000009",
+                    "required": False,
+                    "auto": True,
+                    "resolvedTitle": "Auto radar",
+                    "resolvedSnippet": "Radar snippet",
+                },
+            )
+            await store.persist_source_refs(snap.job_id, refs)
+
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.source_refs == refs
+        finally:
+            await store.close()
+
+    async def test_enqueue_conflict_updates_resolved_refs_before_worker_can_claim(self) -> None:
+        """The BFF pre-creates jobs, so hydration must be race-free with acquire."""
+        store = await _new_store()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "atomic source refs")
+            await store.enqueue(snap)
+
+            resolved = (
+                {
+                    "type": "research",
+                    "value": "00000000-0000-0000-0000-000000000010",
+                    "required": False,
+                    "resolvedTitle": "Historical research",
+                    "resolvedSnippet": "Evidence from the user's saved research.",
+                },
+            )
+            await store.enqueue(replace(snap, source_refs=resolved))
+
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.source_refs == resolved
+        finally:
+            await store.close()
+
     async def test_reaper_requeues_expired_lease(self) -> None:
         store = await _new_store()
         try:
@@ -359,6 +561,53 @@ class TestDbJobStoreIntegration:
                 )
             n = await store.reap_expired_leases()
             assert n >= 1
+        finally:
+            await store.close()
+
+    async def test_ai_reaper_does_not_preempt_stale_heartbeat_before_lease_expires(self) -> None:
+        """A blocked provider call must not be mistaken for a dead AI worker."""
+        store = DbJobStore(
+            dsn=_test_dsn(),
+            table_name=AI_TABLE,
+            lease_seconds=900,
+            heartbeat_seconds=15,
+            # Make the recovery signal deterministic and fast for this test.
+            # The lease is still valid; only the heartbeat is stale.
+        )
+        await store.open()
+        try:
+            user_id = await _prepare_user(store)
+            snap = await _snapshot(user_id, "stale heartbeat")
+            await store.enqueue(snap)
+            acquired = await store.acquire_next_job("worker-1")
+            assert acquired is not None
+            lease, _ = acquired
+            async with store._pool.connection() as conn:
+                await conn.execute(
+                    f'UPDATE "{AI_TABLE}" SET "heartbeatAt" = now() - interval \'2 minutes\' WHERE "id" = %s',
+                    (lease.job_id,),
+                )
+                await conn.commit()
+
+            n = await store.reap_expired_leases()
+            assert n == 0
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.status == "running"
+
+            # The lease, rather than the heartbeat age, is the authoritative
+            # recovery boundary for AI research. Once it really expires, the
+            # same row is still recoverable by the normal reaper path.
+            async with store._pool.connection() as conn:
+                await conn.execute(
+                    f'UPDATE "{AI_TABLE}" SET "leaseExpiresAt" = now() - interval \'1 minute\' WHERE "id" = %s',
+                    (lease.job_id,),
+                )
+                await conn.commit()
+            assert await store.reap_expired_leases() >= 1
+            row = await store.get_row(snap.job_id)
+            assert row is not None
+            assert row.snapshot.status in {"queued", "failed", "partial"}
         finally:
             await store.close()
 

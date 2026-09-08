@@ -21,7 +21,6 @@ export const DistilledScoreSchema = z.object({
   tierScore: z.number().min(0).max(100).optional(),
   sourceBonus: z.number().min(0).max(20).optional(),
   tier: DistilledTierSchema,
-  mustRead: z.boolean(),
   dimensions: DistilledDimensionScoresSchema,
   weakPoint: z.string().max(100),
   veto: z.enum(['unsafe_content', 'title_content_mismatch']).nullable(),
@@ -58,19 +57,19 @@ const AiResearchConversationMessage = z.object({
 export const CreateAiJobInput = z.object({
   topic: z.string().min(2).max(200),
   context: z.string().max(2000).optional(),                    // 用户手填上下文
-  reportType: z.enum(['research_report', 'summary_brief', 'slides']).default('research_report'),
+  reportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).default('research_report'),
   // P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
   // brief  = ~500 words / 5 URLs  (default for summary_brief)
   // standard = 800 words / 10 URLs (legacy default for research_report)
-  // deep   = ~2000 words / 25 URLs (deep dive)
+  // deep   = ~3600 words / 48 URLs (deep dive)
   // The mapping lives in ai_engine.adapters.gpt_researcher; the API just
   // echoes the user's pick back so the FE can render progress in real time.
   reportLength: z.enum(['brief', 'standard', 'deep']).default('standard'),
   sourcePolicy: z.enum([SOURCE_POLICY.PREFER_USER_SOURCES, SOURCE_POLICY.ONLY_USER_SOURCES])
     .default(SOURCE_POLICY.PREFER_USER_SOURCES),
-  // P1.8: explicit URL-scrape cap override (5..30). When unset, the value
+  // P1.8: explicit URL-scrape cap override (5..48). When unset, the value
   // is derived from reportLength.
-  maxUrlsToScrape: z.number().int().min(5).max(30).optional(),
+  maxUrlsToScrape: z.number().int().min(5).max(48).optional(),
   sourceRefs: z.array(z.discriminatedUnion('type', [
     SourceRefUrl,
     SourceRefUuid('favorite'),
@@ -177,11 +176,47 @@ export const ResearchObjectiveSchema = z.enum([
 export const ResearchOutputTypeSchema = z.enum([
   RESEARCH_OUTPUT_TYPE.MARKDOWN,
   RESEARCH_OUTPUT_TYPE.SLIDES,
+  RESEARCH_OUTPUT_TYPE.WEB,
 ]);
+
+/**
+ * 用户在启动研究前确认的检索范围。
+ *
+ * 资料来源由 sourcePolicy / contextRefs 控制；这里的 scope 是检索上下文，
+ * 会随 brief 保存并传给研究引擎。retrievalNotes 用自然语言承载少量项目特定
+ * 的限定，避免要求所有研究都理解“地区”或“技术版本”这类并非总是适用的字段。
+ */
+export const ResearchTimeRangeSchema = z.object({
+  preset: z.enum(['any', '7d', '30d', '90d', '1y', 'custom']).default('any'),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, '日期格式必须为 YYYY-MM-DD').optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u, '日期格式必须为 YYYY-MM-DD').optional(),
+}).superRefine((value, ctx) => {
+  if (value.preset === 'custom' && (!value.from || !value.to)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['from'], message: '自定义时间范围需要起止日期' });
+  }
+  if (value.from && value.to && value.from > value.to) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['to'], message: '结束日期不能早于开始日期' });
+  }
+});
+export type ResearchTimeRange = z.infer<typeof ResearchTimeRangeSchema>;
+
+export const ResearchScopeSchema = z.object({
+  timeRange: ResearchTimeRangeSchema.default({ preset: 'any' }),
+  regions: z.array(z.string().trim().min(1).max(60)).max(8).default([]),
+  technologyVersions: z.array(z.string().trim().min(1).max(80)).max(8).default([]),
+  retrievalNotes: z.string().trim().max(400).default(''),
+}).default({
+  timeRange: { preset: 'any' },
+  regions: [],
+  technologyVersions: [],
+  retrievalNotes: '',
+});
+export type ResearchScope = z.infer<typeof ResearchScopeSchema>;
 
 export const ResearchBriefSchema = z.object({
   objective: ResearchObjectiveSchema,
   question: z.string().min(2).max(2000),
+  scope: ResearchScopeSchema,
   constraints: z.array(z.string().min(1).max(240)).max(20).default([]),
   questionsToAnswer: z.array(z.string().min(1).max(240)).max(20).default([]),
   comparisonOptions: z.array(z.string().min(1).max(240)).max(20).default([]),
@@ -216,10 +251,10 @@ export const CreateAiJobInputV2 = z.object({
   // v2 以 brief 为准，但允许保留旧 topic/context/reportType 等以便老调用不变。
   brief: ResearchBriefSchema.optional(),
   context: z.string().max(2000).optional(),
-  reportType: z.enum(['research_report', 'summary_brief', 'slides']).default('research_report'),
+  reportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).default('research_report'),
   reportLength: z.enum(['brief', 'standard', 'deep']).default('standard'),
   sourcePolicy: z.enum(['prefer_user_sources', 'only_user_sources']).default('prefer_user_sources'),
-  maxUrlsToScrape: z.number().int().min(5).max(30).optional(),
+  maxUrlsToScrape: z.number().int().min(5).max(48).optional(),
   sourceRefs: z.array(z.discriminatedUnion('type', [
     SourceRefUrlV2,
     SourceRefUuidV2('favorite'),

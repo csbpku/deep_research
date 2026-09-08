@@ -28,10 +28,8 @@ from typing import Any
 from ai_engine.fetcher.safe_fetch import safe_fetch
 from ai_engine.radar.enrichment_worker import (
     DEFAULT_ENRICHMENT_KINDS,
-    enrich_arxiv_candidate,
-    enrich_github_candidate,
-    enrich_github_item_candidate,
-    enrich_web_candidate,
+    request_enrichment_run,
+    run_enrichment_for_pending,
 )
 
 logger = logging.getLogger("ai_engine.radar.submission_worker")
@@ -151,6 +149,10 @@ _GITHUB_ISSUE_RE = re.compile(
 _GITHUB_PR_RE = re.compile(
     r"^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)", re.IGNORECASE
 )
+_GITHUB_RELEASE_RE = re.compile(
+    r"^https?://github\.com/([^/]+)/([^/]+)/releases/tag/([^/?#]+)",
+    re.IGNORECASE,
+)
 _ARXIV_RE = re.compile(
     r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/([0-9.]+(?:v\d+)?)(?:\.pdf)?/?$",
     re.IGNORECASE,
@@ -162,6 +164,8 @@ def _url_kind(url: str) -> str:
         return "github_issue"
     if _GITHUB_PR_RE.match(url):
         return "github_pr"
+    if _GITHUB_RELEASE_RE.match(url):
+        return "github_release"
     if _ARXIV_RE.match(url):
         return "arxiv"
     if _GITHUB_REPO_RE.match(url):
@@ -376,17 +380,24 @@ async def _process_one(pool: Any, row: dict[str, Any]) -> bool:
             pool, sid, status="completed", summary_id=summary_id, clear_lease=True,
         )
 
-        # 触发 enrichment：复用 sync_runner 的 enrich 入口
+        # Persist the request before running source-specific enrichment. This
+        # keeps user submissions recoverable across an engine restart and
+        # routes them through the same claim/lease/failure state machine as
+        # scheduled radar rows.
         try:
             if original_kind in DEFAULT_ENRICHMENT_KINDS:
-                if original_kind == "github_repo":
-                    await enrich_github_candidate(pool, summary_id=summary_id, canonical_url=canonical_url)
-                elif original_kind == "arxiv":
-                    await enrich_arxiv_candidate(pool, summary_id=summary_id, canonical_url=canonical_url)
-                elif original_kind in ("github_other", "github_release"):
-                    await enrich_github_item_candidate(pool, summary_id=summary_id, canonical_url=canonical_url)
-                elif original_kind in ("rss", "web_share"):
-                    await enrich_web_candidate(pool, summary_id=summary_id, canonical_url=canonical_url)
+                run_id, _ = await request_enrichment_run(
+                    pool,
+                    summary_ids=(summary_id,),
+                    force=True,
+                )
+                await run_enrichment_for_pending(
+                    pool,
+                    limit=1,
+                    summary_ids=(summary_id,),
+                    force=True,
+                    run_id=run_id,
+                )
         except Exception as exc:
             logger.warning(
                 "ai-engine.radar.submission.enrich_failed",

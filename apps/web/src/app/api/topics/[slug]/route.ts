@@ -5,7 +5,7 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
-import { findTopicBySlugOrId } from '@/lib/topics';
+import { findTopicBySlugOrId, loadTopicCandidateTrend } from '@/lib/topics';
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> }]>(async (req, ctx) => {
   const { slug } = await ctx.params;
@@ -63,6 +63,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
       ? prisma.topicFollow.findUnique({ where: { userId_topicId: { userId: user.id, topicId: topic.id } } })
       : Promise.resolve(null),
   ]);
+  const candidateTrend = await loadTopicCandidateTrend(topic.id);
 
   return NextResponse.json({
     topic: {
@@ -73,6 +74,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
       synthesisGeneratedAt: topic.synthesisGeneratedAt?.toISOString() ?? null,
       lastSynthesisSuccessAt: topic.lastSynthesisSuccessAt?.toISOString() ?? null,
       followed: !!followed,
+      candidateTrend,
     },
     candidates: candidates.map((c) => ({
       id: c.id,

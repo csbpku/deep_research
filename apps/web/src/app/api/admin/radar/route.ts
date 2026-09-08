@@ -2,7 +2,7 @@
 //
 // 契约源：
 //   - apps/web/prisma/schema.prisma: Summary（雷达字段）
-//   - docs/agent-prompts/week5-engineer-a.md §任务 3
+//   - docs/archive/2026-09-08-agent-prompts/week5-engineer-a.md §任务 3
 //
 // 入参: ?status=&sourceType=&page=1&per_page=20
 // 出参: items[] 含 scores / interpretation / feedbackCounts / sourceType。
@@ -22,6 +22,11 @@ import {
   normalizeRadarQuery,
   shapeCandidate,
 } from '../../../../lib/radar/shape';
+import {
+  RADAR_ARTICLE_SOURCE_TYPES,
+  RADAR_COMMUNITY_SOURCE_TYPES,
+  RADAR_RESEARCH_SOURCE_TYPES,
+} from '../../../../lib/radar/source-labels';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
@@ -34,6 +39,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     q: url.searchParams.get('q') ?? undefined,
     sourceType: url.searchParams.get('sourceType') ?? undefined,
     status: url.searchParams.get('status') ?? undefined,
+    adminQueue: url.searchParams.get('adminQueue') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     per_page: url.searchParams.get('per_page') ?? undefined,
   });
@@ -46,24 +52,46 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { q, sourceType, status, page, per_page: perPage } = parsed.data;
+  const { q, sourceType, status, adminQueue, page, per_page: perPage } = parsed.data;
   const sourceTypes = Array.isArray(sourceType) ? sourceType : sourceType ? [sourceType] : [];
+  const hackerNewsSource = {
+    name: { contains: 'Hacker News', mode: 'insensitive' as Prisma.QueryMode },
+  } satisfies Prisma.RadarSourceWhereInput;
+  const articleSource = {
+    AND: [
+      { sourceType: { in: [...RADAR_ARTICLE_SOURCE_TYPES] } },
+      { NOT: hackerNewsSource },
+    ],
+  } satisfies Prisma.RadarSourceWhereInput;
+  const communitySource = {
+    OR: [
+      { sourceType: { in: [...RADAR_COMMUNITY_SOURCE_TYPES] } },
+      {
+        AND: [
+          { sourceType: { in: [...RADAR_ARTICLE_SOURCE_TYPES] } },
+          hackerNewsSource,
+        ],
+      },
+    ],
+  } satisfies Prisma.RadarSourceWhereInput;
+  const sourceWhereForCategory = (selectedSource: string): Prisma.RadarSourceWhereInput => (
+    selectedSource === 'github'
+      ? { sourceType: { startsWith: 'github' } }
+      : selectedSource === 'research'
+        ? { sourceType: { in: [...RADAR_RESEARCH_SOURCE_TYPES] } }
+      : selectedSource === 'articles'
+        ? articleSource
+      : selectedSource === 'community'
+          ? communitySource
+          : { sourceType: selectedSource }
+  );
   const sourceFilters: Prisma.SummaryWhereInput[] = [];
   for (const selectedSource of sourceTypes) {
     if (selectedSource === 'shared' || selectedSource === 'web_share') {
       sourceFilters.push({ source: 'user', shareSource: { is: { status: 'approved' } } });
       continue;
     }
-    const sourceTypeFilter: Prisma.StringFilter | string = selectedSource === 'github'
-      ? { startsWith: 'github' }
-      : selectedSource === 'research'
-        ? 'arxiv'
-      : selectedSource === 'articles'
-        ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
-        : selectedSource === 'community'
-          ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
-          : selectedSource;
-    sourceFilters.push({ syncRun: { source: { sourceType: sourceTypeFilter } } });
+    sourceFilters.push({ syncRun: { source: sourceWhereForCategory(selectedSource) } });
   }
   const effectivePerPage = perPage === 'all' ? 100 : perPage;
 
@@ -92,14 +120,34 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             ],
           }]
         : []),
+      ...(adminQueue === 'pending_score'
+        ? [{ distilledTier: null }]
+        : adminQueue === 'low_confidence'
+          ? [{
+              OR: [
+                { distilledTier: 'noise' },
+                { distilledTotal: { lt: 60 } },
+              ],
+            }]
+          : []),
     ],
   };
 
-  const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
-    { distilledMustRead: { sort: 'desc', nulls: 'last' } },
-    { distilledTotal: { sort: 'desc', nulls: 'last' } },
-    { createdAt: 'desc' },
-  ];
+  const orderBy: Prisma.SummaryOrderByWithRelationInput[] =
+    adminQueue === 'pending_score'
+      ? [
+          { distilledTier: { sort: 'asc', nulls: 'first' } },
+          { createdAt: 'desc' },
+        ]
+      : adminQueue === 'low_confidence'
+        ? [
+            { distilledTotal: { sort: 'asc', nulls: 'first' } },
+            { createdAt: 'desc' },
+          ]
+        : [
+            { distilledTotal: { sort: 'desc', nulls: 'last' } },
+            { createdAt: 'desc' },
+          ];
 
   const [rawItems, total] = await Promise.all([
     prisma.summary.findMany({

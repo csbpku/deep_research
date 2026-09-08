@@ -4,7 +4,7 @@
    设计方向：Data-Dense Dashboard × Swiss Modernism 2.0
    - 密度 8/10：侧栏 240px、顶栏 56px、表格行 36px、卡片内边距 12px
    - 动效 3/10：150–300ms，尊重 prefers-reduced-motion
-   - 强调色：Indigo #4F46E5（单一色相；终端绿留给 score tier）
+   - 强调色：研究蓝 #315FE8（单一色相；终端绿留给 score tier）
 
    token 采用 shadcn 的 HSL 三元组约定（"H S% L%"，不带 hsl() 包裹），
    由 tailwind.config.ts 里的 `hsl(var(--x))` 消费。
@@ -126,18 +126,25 @@
     --shell-sidebar: 240px;
     --shell-topbar: 56px;
 
-    /* ---- Radar 阅读面板设计 tokens（M1 新增，双栏阅读专用） ----
-       方向：研究论文 + 工程师工具 双调性。
-       冷米色纸感 + 深墨蓝单一强调色，避开默认的暖 cream + terracotta。
-       与上方的 shadcn HSL token 独立，仅阅读面板组件消费，不影响整站。 */
-    --ink-paper: #F8F7F2;        /* 顶 bar / Sheet 背景 */
-    --ink-page: #FFFFFF;         /* 双栏内容区（统一白） */
-    --ink-text: #1A1A1A;         /* 主文字 */
-    --ink-muted: #5C5C58;        /* 二级文字 */
-    --ink-faint: #9A9A93;        /* 三级（citation / 时间戳） */
-    --ink-rule: #E5E4DE;         /* hairline 分隔 */
-    --ink-accent: #1A3A6E;       /* 单一强调色（深墨蓝，替代 terracotta） */
-    --ink-highlight: #FFF5B0;    /* 高亮段背景（AI 回链命中） */
+    /* ---- Radar 阅读面板设计 tokens ----
+       阅读保留纸张感和衬线正文，但与全站共享研究蓝、暖白和中性线条。
+       这样它仍然有 editorial 气质，却不再像一套独立产品。 */
+    --ink-paper: #F7F8F4;        /* 顶 bar / Sheet 背景 */
+    --ink-page: #FFFFFF;         /* 双栏内容区 */
+    --ink-surface: #EEF0EB;      /* 证据栏 / 次级表面 */
+    --ink-surface-raised: #FAFBF8;
+    --ink-text: #20211F;         /* 主文字，与全站 foreground 对齐 */
+    --ink-muted: #5E625D;        /* 二级文字 */
+    --ink-faint: #767D75;        /* 三级文字，避免过低对比 */
+    --ink-rule: #D9DDD5;         /* hairline 分隔 */
+    --ink-accent: #315FE8;       /* 共享研究蓝 */
+    --ink-highlight: #FFF3B0;    /* 高亮段背景（AI 回链命中） */
+    --ink-highlight-border: #C58A24;
+    --ink-callout: #EFF4FF;
+    --ink-callout-border: #C7D5FF;
+    --ink-danger: #FFF4F1;
+    --ink-danger-border: #E5BDB5;
+    --ink-danger-text: #9D4638;
   }
 
   .dark {
@@ -216,6 +223,37 @@
     --method-ai: 263 80% 78%;
     --method-file: 199 89% 66%;
     --method-import: 158 60% 62%;
+
+    --ink-paper: #171A20;
+    --ink-page: #1D2026;
+    --ink-surface: #252A32;
+    --ink-surface-raised: #20242B;
+    --ink-text: #F1F3EF;
+    --ink-muted: #B7BDB6;
+    --ink-faint: #8E968D;
+    --ink-rule: #343B45;
+    --ink-accent: #8EABFF;
+    --ink-highlight: #574D1F;
+    --ink-highlight-border: #D1A637;
+    --ink-callout: #202C48;
+    --ink-callout-border: #526EBC;
+    --ink-danger: #3C2524;
+    --ink-danger-border: #8F4C46;
+    --ink-danger-text: #FFB2AA;
+  }
+}
+
+@layer utilities {
+  /*
+   * Keep compact desktop controls visually dense while giving mobile users a
+   * stable hit area. The class is explicit so inline links and icon controls
+   * can opt in without changing every clickable text fragment.
+   */
+  @media (max-width: 639px) {
+    .touch-target {
+      min-width: 44px;
+      min-height: 44px;
+    }
   }
 }
 
@@ -236,6 +274,12 @@
       'liga' 1,
       'calt' 1;
     line-height: var(--leading-body, 1.7); /* v6.4: 中文行距更舒展（修复审视发现 #2） */
+  }
+
+  /* AppShell 的 main 是纵向 flex 容器；显式拉伸页面根节点，
+     让 max-w-shell 在桌面端以可控上限布局，而不是被内容宽度意外收缩。 */
+  main > * {
+    width: 100%;
   }
 
   /* 焦点可见性 —— 不允许任何地方 outline:none 而无替代 */
@@ -305,23 +349,30 @@
      the denser research/editor preview surfaces. */
   .reading-workbench-markdown {
     max-width: none;
-    color: #303129;
+    color: var(--ink-text);
     font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
     font-size: 1rem;
     line-height: 1.72;
   }
 
+  .reading-workbench-markdown.reading-measure-regular {
+    width: 100%;
+    max-width: 46rem;
+    margin-inline: auto;
+    justify-self: stretch;
+  }
+
   .radar-source-focus {
-    background: color-mix(in srgb, #f2c14e 24%, var(--ink-page));
-    box-shadow: inset 3px 0 0 #c58a24;
+    background: color-mix(in srgb, var(--ink-highlight-border) 24%, var(--ink-page));
+    box-shadow: inset 3px 0 0 var(--ink-highlight-border);
     border-radius: 0.35rem;
     transition: background-color 180ms ease, box-shadow 180ms ease;
   }
 
   .reading-workbench-markdown :where(h1, h2, h3, h4, h5, h6) {
-    color: #24251f;
+    color: var(--ink-text);
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: 0;
   }
 
   .reading-workbench-markdown :where(h5, h6) {
@@ -341,7 +392,7 @@
   .reading-workbench-markdown :where(h2) {
     margin-bottom: 0.65rem;
     margin-top: 1.8rem;
-    border-bottom: 1px solid #e2dfd5;
+    border-bottom: 1px solid var(--ink-rule);
     padding-bottom: 0.45rem;
     font-size: clamp(1.25rem, 1.7vw, 1.55rem);
     line-height: 1.3;
@@ -383,18 +434,18 @@
   }
 
   .reading-workbench-markdown :where(blockquote) {
-    border-left: 3px solid #b85b35;
-    background: #fff8f1;
-    color: #5f5045;
+    border-left: 3px solid var(--ink-accent);
+    background: var(--ink-callout);
+    color: var(--ink-muted);
     margin: 1.5rem 0;
     padding: 0.75rem 1rem;
   }
 
   .reading-workbench-markdown :where(pre) {
-    border: 1px solid #dedbd1;
-    border-radius: 0.75rem;
-    background: #f1efe8;
-    color: #303129;
+    border: 1px solid var(--ink-rule);
+    border-radius: 0.5rem;
+    background: var(--ink-surface);
+    color: var(--ink-text);
     margin: 1.5rem 0;
     padding: 1rem;
   }
@@ -406,8 +457,8 @@
   }
 
   .reading-workbench-markdown :where(th) {
-    background: #eae7de;
-    color: #24251f;
+    background: var(--ink-surface);
+    color: var(--ink-text);
   }
 
   /* AI 草稿与编辑器预览：紧凑排版 —— 13.5px / 1.6。

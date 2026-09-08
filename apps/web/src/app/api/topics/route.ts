@@ -9,6 +9,7 @@ import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { recordProductEvent } from '@/lib/product-events';
+import { collapseTopicIssues } from '@/lib/topics';
 
 type Filter = 'all' | 'hot' | 'warming' | 'emerging' | 'followed';
 
@@ -82,7 +83,16 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       : Promise.resolve([] as Array<{ topicId: string; lastViewedAt: Date | null }>),
     prisma.topicIssue.findMany({
       where: { topicId: { in: topicIds }, status: 'active' },
-      select: { topicId: true, lastSeenAt: true },
+      select: {
+        topicId: true,
+        id: true,
+        title: true,
+        proposition: true,
+        kind: true,
+        importanceScore: true,
+        lastSeenAt: true,
+        candidates: { select: { summaryId: true } },
+      },
     }),
     prisma.researchTopic.findMany({
       where: { topicId: { in: topicIds } },
@@ -98,13 +108,28 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   ]);
 
   const followedMap = new Map(follows.map((f) => [f.topicId, f.lastViewedAt] as const));
-  const activeIssueDatesByTopic = new Map<string, Date[]>();
-  const activeIssueCountByTopic = new Map<string, number>();
+  const issueRowsByTopic = new Map<string, typeof issueRows>();
   for (const row of issueRows) {
-    const list = activeIssueDatesByTopic.get(row.topicId) ?? [];
-    list.push(row.lastSeenAt);
-    activeIssueDatesByTopic.set(row.topicId, list);
-    activeIssueCountByTopic.set(row.topicId, (activeIssueCountByTopic.get(row.topicId) ?? 0) + 1);
+    const list = issueRowsByTopic.get(row.topicId) ?? [];
+    list.push(row);
+    issueRowsByTopic.set(row.topicId, list);
+  }
+  const activeIssuesByTopic = new Map<string, ReturnType<typeof collapseTopicIssues>>();
+  for (const [topicId, rows] of issueRowsByTopic) {
+    activeIssuesByTopic.set(
+      topicId,
+      collapseTopicIssues(
+        rows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          proposition: row.proposition,
+          kind: row.kind,
+          importanceScore: row.importanceScore,
+          lastSeenAt: row.lastSeenAt,
+          candidateIds: (row.candidates ?? []).map((candidate) => candidate.summaryId),
+        })),
+      ),
+    );
   }
   const researchByTopic = new Map<string, { id: string; title: string; status: string; at: string }>();
   for (const row of latestResearch) {
@@ -129,14 +154,17 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   return NextResponse.json({
     items: items.map((t) => {
       const lastViewedAt = followedMap.get(t.id) ?? null;
-      const activeDates = activeIssueDatesByTopic.get(t.id) ?? [];
+      const activeIssues = activeIssuesByTopic.get(t.id) ?? [];
+      const activeDates = activeIssues.map((issue) => issue.lastSeenAt);
       const latest = researchByTopic.get(t.id) ?? null;
       const isFollowed = followedMap.has(t.id);
       // 未读 = 当前 active 且 lastSeenAt 晚于 lastViewedAt。
       // 未关注或首次查看时，全部 active 都视为未读。
       const unreadCount = isFollowed
         ? lastViewedAt
-          ? activeDates.filter((d) => d.getTime() > lastViewedAt.getTime()).length
+          ? activeDates.filter((d) => (
+              (typeof d === 'string' ? Date.parse(d) : d.getTime()) > lastViewedAt.getTime()
+            )).length
           : activeDates.length
         : 0;
       return {
@@ -147,7 +175,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         aggregationWindowEnd: t.aggregationWindowEnd.toISOString(),
         followed: isFollowed,
         lastViewedAt: lastViewedAt?.toISOString() ?? null,
-        activeIssueCount: activeDates.length,
+        activeIssueCount: activeIssues.length,
         unreadIssueCount: unreadCount,
         latestResearch: latest,
       };

@@ -10,6 +10,18 @@
 // keeps the SSR experience simple and avoids a flicker.
 
 import { useMemo } from 'react';
+import {
+  CircleDot,
+  Clock3,
+  FileCode2,
+  FileText,
+  FolderOpen,
+  GitBranch,
+  GitFork,
+  Radio,
+  Star,
+  Target,
+} from 'lucide-react';
 
 interface TreeNode {
   path: string;
@@ -114,54 +126,28 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
   const entryPoints = meta.entryPoints ?? [];
 
   return (
-    <section
-      style={{
-        border: '1px solid #e2e8f0',
-        borderRadius: 10,
-        background: '#fff',
-        overflow: 'hidden',
-        marginBottom: 16,
-      }}
-    >
+    <section className="mb-4 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       {/* Repo header */}
-      <div
-        style={{
-          padding: '14px 18px',
-          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
-          color: '#f1f5f9',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 18 }}>📦</span>
-          <span style={{ fontWeight: 600, fontSize: 16 }}>
+      <div className="border-b border-border bg-muted/30 px-4 py-4 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <FolderOpen className="size-4 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 break-all font-mono text-sm font-semibold text-foreground">
             {owner}/{repo}
           </span>
           {meta.language && (
-            <span
-              style={{
-                marginLeft: 'auto',
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontSize: 11,
-                background: '#334155',
-                color: '#cbd5e1',
-              }}
-            >
+            <span className="ml-auto shrink-0 rounded border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
               {meta.language}
             </span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#94a3b8' }}>
-          <span>⭐ {formatStars(meta.stars)}</span>
-          {meta.forks != null && <span>🍴 {formatStars(meta.forks)}</span>}
-          {meta.openIssues != null && <span>🐛 {meta.openIssues}</span>}
-          {meta.defaultBranch && <span>🌿 {meta.defaultBranch}</span>}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5"><Star className="size-3.5" aria-hidden />{formatStars(meta.stars)}</span>
+          {meta.forks != null && <span className="inline-flex items-center gap-1.5"><GitFork className="size-3.5" aria-hidden />{formatStars(meta.forks)}</span>}
+          {meta.openIssues != null && <span className="inline-flex items-center gap-1.5"><CircleDot className="size-3.5" aria-hidden />{meta.openIssues}</span>}
+          {meta.defaultBranch && <span className="inline-flex items-center gap-1.5"><GitBranch className="size-3.5" aria-hidden />{meta.defaultBranch}</span>}
           {meta.lastPushedAt && (
-            <span>
-              🕒{' '}
+            <span className="inline-flex items-center gap-1.5">
+              <Clock3 className="size-3.5" aria-hidden />
               {new Date(meta.lastPushedAt).toLocaleDateString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
@@ -170,86 +156,45 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
             </span>
           )}
           {meta.snapshotFetchedAt && (
-            <span>📡 {new Date(meta.snapshotFetchedAt).toLocaleDateString('zh-CN')}</span>
+            <span className="inline-flex items-center gap-1.5"><Radio className="size-3.5" aria-hidden />{new Date(meta.snapshotFetchedAt).toLocaleDateString('zh-CN')}</span>
           )}
         </div>
         {meta.description && (
-          <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 4 }}>
+          <div className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
             {meta.description}
           </div>
         )}
       </div>
 
       {/* File tree */}
-      <div style={{ padding: '12px 18px', borderTop: '1px solid #e2e8f0' }}>
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            color: '#475569',
-            marginBottom: 8,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          <span>🌳</span>
+      <div className="border-b border-border px-4 py-4 sm:px-5">
+        <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-foreground">
+          <FileCode2 className="size-3.5 text-primary" aria-hidden />
           <span>文件结构</span>
-          <span style={{ color: '#94a3b8', fontWeight: 400 }}>
-            ({buckets.length} 顶层)
-          </span>
+          <span className="font-normal text-muted-foreground">({buckets.length} 顶层)</span>
           {meta.trimmed && (
-            <span
-              style={{
-                marginLeft: 'auto',
-                fontSize: 10,
-                color: '#92400e',
-                background: '#fef3c7',
-                padding: '2px 6px',
-                borderRadius: 3,
-              }}
-            >
+            <span className="ml-auto rounded border border-warning-border bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning-fg">
               已截断
             </span>
           )}
         </div>
-        <div
-          style={{
-            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-            fontSize: 12,
-            color: '#334155',
-            lineHeight: 1.7,
-          }}
-        >
+        <div className="space-y-1 font-mono text-xs leading-6 text-muted-foreground">
           {buckets.map((bucket) => (
-            <div key={bucket.name} style={{ marginBottom: 4 }}>
-              <span
-                style={{
-                  color: bucket.key ? '#0f766e' : '#475569',
-                  fontWeight: bucket.key ? 600 : 400,
-                }}
-              >
-                {bucket.type === 'tree' ? '📁' : '📄'} {bucket.name}
-                {bucket.key && ' ⭐'}
-              </span>
+            <div key={bucket.name}>
+              <div className={bucket.key ? 'flex items-start gap-2 break-all font-semibold text-primary' : 'flex items-start gap-2 break-all text-foreground'}>
+                {bucket.type === 'tree' ? <FolderOpen className="mt-1 size-3.5 shrink-0" aria-hidden /> : <FileText className="mt-1 size-3.5 shrink-0" aria-hidden />}
+                <span className="min-w-0">{bucket.name}</span>
+                {bucket.key && <span className="mt-0.5 shrink-0 text-[10px]" aria-label="关键入口">●</span>}
+              </div>
               {bucket.children.length > 0 && (
-                <div style={{ paddingLeft: 20, color: '#64748b' }}>
+                <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-4">
                   {bucket.children.map((child) => (
-                    <div key={child.path}>
-                      📄 {child.path.replace(`${bucket.name}/`, '')}
-                      {child.key && (
-                        <span style={{ color: '#0f766e' }}> ⭐</span>
-                      )}
+                    <div key={child.path} className={child.key ? 'flex items-start gap-2 break-all font-medium text-primary' : 'flex items-start gap-2 break-all'}>
+                      <FileText className="mt-1 size-3 shrink-0" aria-hidden />
+                      <span className="min-w-0">{child.path.replace(`${bucket.name}/`, '')}</span>
+                      {child.key && <span className="mt-0.5 shrink-0 text-[10px]" aria-label="关键入口">●</span>}
                       {child.size != null && (
-                        <span
-                          style={{
-                            color: '#94a3b8',
-                            fontSize: 11,
-                            marginLeft: 6,
-                          }}
-                        >
-                          ({formatSize(child.size)})
-                        </span>
+                        <span className="shrink-0 font-sans text-[11px] font-normal text-muted-foreground">({formatSize(child.size)})</span>
                       )}
                     </div>
                   ))}
@@ -262,41 +207,14 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
 
       {/* Entry points */}
       {entryPoints.length > 0 && (
-        <div
-          style={{
-            padding: '12px 18px',
-            borderTop: '1px solid #e2e8f0',
-            background: '#f8fafc',
-          }}
-        >
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: '#475569',
-              marginBottom: 8,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <span>🎯</span>
+        <div className="bg-muted/20 px-4 py-4 sm:px-5">
+          <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-foreground">
+            <Target className="size-3.5 text-primary" aria-hidden />
             <span>入口点</span>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <div className="flex flex-wrap gap-2">
             {entryPoints.map((ep) => (
-              <code
-                key={ep}
-                style={{
-                  padding: '2px 8px',
-                  background: '#fff',
-                  border: '1px solid #cbd5e1',
-                  borderRadius: 4,
-                  fontSize: 12,
-                  color: '#0f766e',
-                  fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-                }}
-              >
+              <code key={ep} className="break-all rounded border border-border bg-background px-2 py-1 font-mono text-xs text-primary">
                 {ep}
               </code>
             ))}

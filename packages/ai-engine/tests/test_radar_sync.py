@@ -22,6 +22,7 @@ from ai_engine.radar.sync_runner import (
     _create_run,
     _extract_article_content,
     _can_use_github_repo_metadata_fallback,
+    _classify_original_kind,
     _finish_run,
     _generate_brief_with_retry,
     _is_low_quality_content,
@@ -39,6 +40,20 @@ from ai_engine.radar.sync_runner import (
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.radar.distilled_scorer import compute_score
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://github.com/openai/codex/issues/37674", "github_issue"),
+        ("https://github.com/openai/codex/pull/123", "github_pr"),
+        ("https://github.com/microsoft/agent-lightning/releases/tag/v1.0.1", "github_release"),
+        ("https://github.com/openai/codex/blob/main/README.md", "github_other"),
+        ("https://github.com/openai/codex", "github_repo"),
+    ],
+)
+def test_classifies_github_item_urls_for_radar_boundary(url: str, expected: str) -> None:
+    assert _classify_original_kind("rss", url) == expected
 
 
 class _Cursor:
@@ -1165,6 +1180,16 @@ def test_shell_content_label_classifies_known_shells() -> None:
     assert _shell_content_label("\u672a\u627e\u5230\u9875\u9762 \u2013 \u91cf\u5b50\u4f4d 404") == "\u6e90\u7ad9 404"
     assert _shell_content_label("Lobste.rs score: 4 | comments: 2") == "\u53ea\u6709 Lobsters \u8bc4\u5206\u58f3"
     assert _shell_content_label("A substantive technical write-up about RAG agents and retrieval pipelines with examples.") is None
+
+
+def test_shell_content_label_ignores_github_readme_promo_markers() -> None:
+    readme = "Mark by Airtop is a sponsor. Wispr Flow appears in a support section."
+    assert _shell_content_label(readme) == "\u63a8\u5e7f/\u91cd\u5b9a\u5411\u9875"
+    assert _shell_content_label(
+        readme,
+        source_type="github",
+        url="https://github.com/owner/repo",
+    ) is None
 
 
 def test_is_fetch_failure_shell_matches_label() -> None:

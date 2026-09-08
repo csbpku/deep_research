@@ -24,7 +24,7 @@ vendors:
   anthropic:
     name: Anthropic
     sitemap_url: https://www.anthropic.com/sitemap.xml
-    url_pattern: "/news/|/blog/|/engineering/"
+    url_pattern: "/news/|/blog/|/engineering/|/research/"
     ai_filter: true
     quality_hint: 0.90
     tags: [vendor, anthropic]

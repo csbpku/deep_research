@@ -1,7 +1,7 @@
 # AI技术调研平台
 
 > AI 帮我们读文章、抓热搜、看趋势；我们给反馈、踩坑记下来，团队的判断和经验会越攒越多。
-> 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v3.8
+> 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v4.0
 
 [![CI](https://github.com/csbpku/deep_research/actions/workflows/ci.yml/badge.svg)](https://github.com/csbpku/deep_research/actions/workflows/ci.yml)
 
@@ -20,7 +20,7 @@
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
 - **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、Docker Compose 部署脚手架。
 
-技术设计说明见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)，部署见下文。
+文档总入口见 [`docs/README.md`](./docs/README.md)；技术设计说明见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)，按功能验收见 [`docs/FUNCTIONAL_CHECKLIST.md`](./docs/FUNCTIONAL_CHECKLIST.md)，部署见下文。
 
 ## 架构总览
 
@@ -199,12 +199,12 @@ curl -fsS https://research.example.com/ai-healthz
 | `packages/ai-engine/` | FastAPI + `gpt-researcher` 适配 + radar / import worker + SSRF-safe fetch |
 | `packages/shared/` | 跨 runtime 的 Zod schema、错误码、状态枚举（双方只读） |
 | `infra/` | `docker-compose.yml`、nginx、Dockerfile、`pg-backup.sh`、`pg-restore.sh` |
-| `docs/` | 入库的仅 `ARCHITECTURE.md`；其余是本地开发知识层（进度看 `docs/PROJECT_STATUS.md` 等），不入 git |
+| `docs/` | 本地开发知识层；从 [`docs/README.md`](./docs/README.md) 进入，当前规范与历史归档分层维护 |
 | `scripts/` | 仓库根 helper：`setup.sh`、`cost_extrapolation.py`、`test-local-env.sh` |
 
 ## 当前状态
 
-技术方案、数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)；最新进度、测试基线与 follow-up 见 `docs/PROJECT_STATUS.md`（本地知识层）。本 README 只维护现状，不记录演进过程。
+技术方案、数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)；最新进度、测试基线与 follow-up 见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)（本地知识层）。本 README 只维护现状，不记录演进过程。
 
 ## 贡献
 

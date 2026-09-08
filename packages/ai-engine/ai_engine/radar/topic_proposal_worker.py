@@ -115,7 +115,7 @@ async def _fetch_rows(pool: Any, since: datetime, limit: int) -> list[dict[str, 
                 FROM "summaries"
                 WHERE "status" IN ('candidate', 'published')
                   AND ("publishedAt" >= %s OR "createdAt" >= %s)
-                  AND "distilledTier" IN ('skim', 'deep_read')
+                  AND "distilledTier" IN ('collection', 'deep_read')
                 ORDER BY COALESCE("publishedAt", "createdAt") DESC
                 LIMIT %s
                 """,

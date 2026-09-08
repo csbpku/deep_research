@@ -21,6 +21,12 @@ interface RowBase {
   updatedAt?: string | null;
 }
 
+type ContextSourceRef = {
+  type: 'research' | 'summary';
+  value: string;
+  required: false;
+};
+
 export const dynamic = 'force-dynamic';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
@@ -34,46 +40,51 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   }
   const topicParam = url.searchParams.get('topicId');
 
-  const likeFilter = query
-    ? {
-        OR: [
-          { title: { contains: query, mode: 'insensitive' as const } },
-          { proposition: { contains: query, mode: 'insensitive' as const } },
-        ],
-      }
-    : {};
+  const contentFilter = {
+    OR: [
+      { title: { contains: query, mode: 'insensitive' as const } },
+      { body: { contains: query, mode: 'insensitive' as const } },
+      { background: { contains: query, mode: 'insensitive' as const } },
+      { conclusion: { contains: query, mode: 'insensitive' as const } },
+    ],
+  };
 
   const [researches, knowledge, issues, bookmarks] = await Promise.all([
     prisma.research.findMany({
       where: {
-        status: 'published',
-        ...likeFilter,
-        OR: undefined,
-        title: { contains: query, mode: 'insensitive' },
+        type: 'research',
+        AND: [contentFilter],
+        OR: [{ status: 'published' }, { authorId: u.id }],
       },
       orderBy: { publishedAt: 'desc' },
       take: MAX_RESULTS,
       select: {
         id: true,
         title: true,
+        status: true,
         body: true,
         background: true,
         conclusion: true,
+        authorId: true,
         publishedAt: true,
       },
     }),
     prisma.research.findMany({
       where: {
         type: 'knowledge',
-        status: 'published',
-        title: { contains: query, mode: 'insensitive' },
+        AND: [contentFilter],
+        OR: [{ status: 'published' }, { authorId: u.id }],
       },
       orderBy: { publishedAt: 'desc' },
       take: 4,
       select: {
         id: true,
         title: true,
+        status: true,
         body: true,
+        background: true,
+        conclusion: true,
+        authorId: true,
         publishedAt: true,
       },
     }),
@@ -94,14 +105,45 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         importanceScore: true,
         topicId: true,
         topic: { select: { id: true, slug: true, name: true } },
+        candidates: {
+          orderBy: { relevanceScore: 'desc' },
+          take: 5,
+          select: { summaryId: true },
+        },
       },
     }),
     prisma.userBookmark.findMany({
-      where: { userId: u.id, note: { contains: query, mode: 'insensitive' } },
+      // 收藏的标题不在 user_bookmarks 表中；先按用户取一个有界集合，
+      // 再用已解析的目标标题/正文过滤，避免用户只能按收藏备注找到资料。
+      where: { userId: u.id },
       orderBy: { createdAt: 'desc' },
-      take: 4,
+      take: 24,
       select: { id: true, note: true, targetType: true, targetId: true, createdAt: true },
     }),
+  ]);
+
+  const bookmarkedSummaryIds = bookmarks
+    .filter((bookmark) => bookmark.targetType === 'radar_candidate' || bookmark.targetType === 'summary')
+    .map((bookmark) => bookmark.targetId);
+  const bookmarkedResearchIds = bookmarks
+    .filter((bookmark) => bookmark.targetType === 'research' || bookmark.targetType === 'knowledge')
+    .map((bookmark) => bookmark.targetId);
+  const [bookmarkedSummaries, bookmarkedResearches] = await Promise.all([
+    bookmarkedSummaryIds.length > 0
+      ? prisma.summary.findMany({
+          where: { id: { in: bookmarkedSummaryIds } },
+          select: { id: true, title: true, body: true, interpretation: true, url: true },
+        })
+      : [],
+    bookmarkedResearchIds.length > 0
+      ? prisma.research.findMany({
+          where: {
+            id: { in: bookmarkedResearchIds },
+            OR: [{ status: 'published' }, { authorId: u.id }],
+          },
+          select: { id: true, title: true, body: true, background: true, conclusion: true },
+        })
+      : [],
   ]);
 
   const items: Array<RowBase & { kind: string }> = [
@@ -110,6 +152,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       id: r.id,
       title: r.title,
       snippet: (r.background ?? r.conclusion ?? r.body ?? '').slice(0, 240),
+      private: r.authorId === u.id && r.status !== 'published',
+      sourceRefs: [{ type: 'research' as const, value: r.id, required: false as const }],
       updatedAt: r.publishedAt?.toISOString() ?? null,
     })),
     ...knowledge.map((r) => ({
@@ -117,6 +161,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       id: r.id,
       title: r.title,
       snippet: (r.body ?? '').slice(0, 240),
+      private: r.authorId === u.id && r.status !== 'published',
+      sourceRefs: [{ type: 'research' as const, value: r.id, required: false as const }],
       updatedAt: r.publishedAt?.toISOString() ?? null,
     })),
     ...issues.map((issue) => ({
@@ -124,15 +170,43 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       id: issue.id,
       title: issue.title,
       snippet: issue.proposition,
+      sourceRefs: issue.candidates.map((candidate) => ({
+        type: 'summary' as const,
+        value: candidate.summaryId,
+        required: false as const,
+      })),
       updatedAt: null,
     })),
-    ...bookmarks.map((b) => ({
-      kind: 'bookmark' as const,
-      id: b.id,
-      title: b.note ?? `已收藏 ${b.targetType}`,
-      snippet: `target: ${b.targetType}`,
-      updatedAt: b.createdAt.toISOString(),
-    })),
+    ...bookmarks.flatMap((bookmark) => {
+      const isSummary = bookmark.targetType === 'radar_candidate' || bookmark.targetType === 'summary';
+      const target = isSummary
+        ? bookmarkedSummaries.find((item) => item.id === bookmark.targetId)
+        : bookmarkedResearches.find((item) => item.id === bookmark.targetId);
+      if (!target) return [];
+      // The two target selects intentionally have different shapes. Narrow
+      // before reading their content fields so a bookmark remains a real
+      // source rather than a loosely typed label.
+      const targetTitle = target.title;
+      const targetSnippet = isSummary
+        ? ((target as (typeof bookmarkedSummaries)[number]).interpretation ?? target.body) || ''
+        : ((target as (typeof bookmarkedResearches)[number]).background
+          ?? (target as (typeof bookmarkedResearches)[number]).conclusion
+          ?? target.body) || '';
+      const haystack = `${bookmark.note ?? ''} ${targetTitle} ${targetSnippet}`.toLocaleLowerCase();
+      if (!haystack.includes(query.toLocaleLowerCase())) return [];
+      return [{
+        kind: 'bookmark' as const,
+        id: bookmark.id,
+        title: targetTitle,
+        snippet: bookmark.note?.trim() || targetSnippet.slice(0, 240),
+        sourceRefs: [{
+          type: isSummary ? 'summary' as const : 'research' as const,
+          value: target.id,
+          required: false as const,
+        }],
+        updatedAt: bookmark.createdAt.toISOString(),
+      }];
+    }),
   ];
 
   const topics = Array.from(

@@ -18,6 +18,7 @@ vi.mock('../../../../../../../lib/chat-bff.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../../../../../lib/chat-bff.js')>();
   return {
     ...actual,
+    chatEngineUrl: (path: string) => `http://ai-engine.test${path}`,
     fetchChatEngine: mocks.fetchChatEngine,
     streamChatEngine: mocks.streamChatEngine,
     readUpstreamJson: mocks.readUpstreamJson,

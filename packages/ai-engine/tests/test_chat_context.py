@@ -48,4 +48,4 @@ async def test_chat_brief_keeps_full_context(monkeypatch: pytest.MonkeyPatch) ->
     prompt = str(captured["user_prompt"])
     assert tail_marker in prompt
     assert "请直接回答用户最后的问题" in prompt
-    assert captured["max_tokens"] == 8192
+    assert captured["max_tokens"] == 4096

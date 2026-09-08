@@ -15,7 +15,7 @@ from typing import Any, TypedDict
 _METADATA_TAG_PREFIXES = ("profile_", "tier_")
 _METADATA_TAG_EXACT = frozenset({
     "github", "arxiv", "huggingface", "devto", "hackernews",
-    "lobsters", "producthunt", "rss", "news", "trending", "must_read",
+    "lobsters", "producthunt", "rss", "news", "trending",
     "topic_search",
 })
 

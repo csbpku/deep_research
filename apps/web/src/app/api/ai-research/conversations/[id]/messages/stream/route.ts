@@ -20,6 +20,7 @@ import { loadResearchReportForJob } from '../../../../../../../lib/research-chat
 const IdParam = z.object({ id: z.string().uuid() });
 const FollowUpInput = z.object({
   content: z.string().trim().min(1, '提问不能为空').max(32000, '提问最多 32000 字'),
+  intent: z.enum(['answer', 'verify', 'revise', 'action']).default('answer'),
 }).strict();
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
@@ -70,27 +71,31 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       requestId,
     });
   }
+  const followUpIntent = input.intent;
 
   await prisma.aiResearchConversationMessage.create({
     data: {
       conversationId,
       role: 'user',
       content: input.content,
+      intent: followUpIntent,
     },
   });
 
-  async function persistAssistantMessage(content: string) {
-    await prisma.aiResearchConversationMessage.create({
+  async function persistAssistantMessage(content: string): Promise<string> {
+    const created = await prisma.aiResearchConversationMessage.create({
       data: {
         conversationId,
         role: 'assistant',
         content: content.slice(0, 100_000),
+        intent: followUpIntent,
       },
     });
     await prisma.aiResearchConversation.update({
       where: { id: conversationId },
       data: { updatedAt: new Date() },
     });
+    return created.id;
   }
 
   const history = conversation.messages
@@ -106,8 +111,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         user_id: user.id,
         report_title: report.title,
         report_content: report.content,
+        evidence: report.evidence,
         history,
         question: input.content,
+        intent: followUpIntent,
       }),
     },
     requestId,
@@ -169,14 +176,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           }
         }
 
+        let persistedMessageId: string | null = null;
         if (pendingAssistant) {
-          await persistAssistantMessage(pendingAssistant);
+          persistedMessageId = await persistAssistantMessage(pendingAssistant);
         } else if (pendingError) {
-          await persistAssistantMessage(`回答失败：${pendingError}`);
+          persistedMessageId = await persistAssistantMessage(`回答失败：${pendingError}`);
         } else {
-          await persistAssistantMessage('回答中断，请重试。');
+          persistedMessageId = await persistAssistantMessage('回答中断，请重试。');
         }
-        controller.enqueue(encoder.encode('event: persisted\ndata: {"ok":true}\n\n'));
+        controller.enqueue(encoder.encode(`event: persisted\ndata: ${JSON.stringify({ ok: true, message_id: persistedMessageId })}\n\n`));
         controller.close();
       } catch (err) {
         controller.error(err);

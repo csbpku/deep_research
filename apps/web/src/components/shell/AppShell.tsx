@@ -1,3 +1,5 @@
+import { Suspense } from 'react';
+
 import { getCurrentUser } from '@/lib/auth/session';
 import { UnreadIssuesBanner } from './UnreadIssuesBanner';
 import { Topbar } from './Topbar';
@@ -30,10 +32,12 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     : null;
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex h-dvh flex-col">
       <Topbar navItems={navItems} user={navUser} />
-      <UnreadIssuesBanner />
-      <main className="min-w-0 flex-1 px-4 py-6 sm:px-6">{children}</main>
+      <Suspense fallback={null}>
+        <UnreadIssuesBanner user={user} />
+      </Suspense>
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-y-contain px-4 py-6 sm:px-6">{children}</main>
     </div>
   );
 }

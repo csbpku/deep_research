@@ -20,6 +20,7 @@ export default async function SignInPage({
   const googleConfigured = Boolean(
     getWebEnv().GOOGLE_CLIENT_ID && getWebEnv().GOOGLE_CLIENT_SECRET,
   );
+  const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
   // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
   // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
@@ -32,6 +33,16 @@ export default async function SignInPage({
     'use server';
     if (!googleConfigured) return;
     await signIn('google', { redirectTo: callbackUrl });
+  }
+
+  async function doE2EAdminSignIn() {
+    'use server';
+    if (process.env.E2E !== '1') return;
+    await signIn('e2e-credentials', {
+      email: process.env.E2E_ADMIN_EMAIL ?? 'e2e-admin@example.com',
+      role: 'admin',
+      redirectTo: callbackUrl,
+    });
   }
 
 
@@ -77,6 +88,15 @@ export default async function SignInPage({
           <p className="font-medium text-foreground">Google OAuth 未配置</p>
           <p className="mt-2">登录已禁用。配置 GOOGLE_CLIENT_ID 与 GOOGLE_CLIENT_SECRET 后重新启动服务即可启用。</p>
         </div>
+      ) : null}
+
+      {isE2EMode ? (
+        <form action={doE2EAdminSignIn} className="mt-3">
+          <Button type="submit" variant="secondary" size="lg" className="w-full">
+            以 E2E Admin 登录
+          </Button>
+          <p className="mt-2 text-xs text-muted-foreground">仅在 E2E 模式可用，不读取真实账号凭据。</p>
+        </form>
       ) : null}
 
       <details

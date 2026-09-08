@@ -20,11 +20,11 @@ import {
   ArrowLeft,
   Bold,
   Braces,
-  Check,
   Columns2,
   ExternalLink,
   FileText,
   Eye,
+  GitBranch,
   Heading2,
   Italic,
   Keyboard,
@@ -42,7 +42,6 @@ import {
   RotateCcw,
   Save,
   Send,
-  ShieldCheck,
   Table2,
   X,
 } from 'lucide-react';
@@ -70,6 +69,8 @@ import { sha256Hex } from '@/lib/text-anchor';
 import { commandQuery, matchingCommands, type MarkdownCommand } from '@/lib/editor/markdown-commands';
 import { activeOutlineItem, parseOutline } from '@/lib/editor/outline';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
+import type { ReviewPublicationGate } from '@/lib/research-review-decisions';
+import { cn } from '@/lib/utils';
 
 interface ResearchDetail {
   id: string;
@@ -84,6 +85,7 @@ interface ResearchDetail {
   authorId: string;
   creationMethod: string;
   aiAssisted: boolean;
+  supersedesResearchId?: string | null;
   publishedAt: string | null;
   createdAt: string;
   reviewStatus: string | null;
@@ -93,6 +95,27 @@ interface ResearchDetail {
     unverified_count?: number;
     contradicted_count?: number;
   } | null;
+  currentReview?: {
+    revisionHash: string;
+    status: string;
+    outcome: string | null;
+    isCurrentRevision: boolean;
+    isLegacyFallback: boolean;
+    runId: string | null;
+    executionStatus: string | null;
+    attempt: number;
+    startedAt: string | null;
+    completedAt: string | null;
+    publicationGate?: ReviewPublicationGate | null;
+  };
+  reviewRuns?: Array<{
+    id: string;
+    isCurrentRevision?: boolean;
+    executionStatus: string;
+    outcome: string | null;
+    attempt: number;
+    createdAt: string;
+  }>;
   reviewedAt: string | null;
   author: { id: string; name: string };
   audits?: AuditEntry[];
@@ -122,6 +145,9 @@ interface AuditEntry {
   id: string;
   action: string;
   diff: unknown;
+  sourceIntent?: string | null;
+  sourceQuestion?: string | null;
+  reason?: string | null;
   prevSnapshot?: {
     title?: string;
     body?: string;
@@ -211,6 +237,7 @@ export default function EditorPage() {
   const workbenchRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<'outline' | 'tools' | null>(null);
   const skipExistingSyncRef = useRef(false);
+  const reviewClaimHandledRef = useRef<string | null>(null);
 
   useEffect(() => {
     setOutlineWidth(storedNumber(OUTLINE_WIDTH_KEY, 210, clampOutlineWidth));
@@ -270,6 +297,7 @@ export default function EditorPage() {
     },
     enabled: !isNew && !!params?.id,
   });
+  const isPublishedAi = existing?.status === 'published' && existing.creationMethod === 'ai_research';
 
   const citationsQuery = useQuery<{ items: CitationItem[] }>({
     queryKey: ['research-citations', params?.id],
@@ -302,6 +330,56 @@ export default function EditorPage() {
       );
     }
   }, [existing]);
+
+  // Claim-level review links land in the editor with the exact declaration
+  // that needs a decision. Select it when the report is loaded so the user
+  // edits the reviewed sentence, not an arbitrary place in a long document.
+  useEffect(() => {
+    if (isNew || !existing || !body || typeof window === 'undefined') return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const claim = searchParams.get('reviewClaim')?.trim();
+    if (!claim || reviewClaimHandledRef.current === claim) return;
+    const directOffset = body.indexOf(claim);
+    const normalizedClaim = claim.replace(/\s+/gu, ' ').trim();
+    const requestedStart = Number(searchParams.get('reviewStart'));
+    const requestedEnd = Number(searchParams.get('reviewEnd'));
+    let start = directOffset;
+    let end = directOffset >= 0 ? directOffset + claim.length : -1;
+    // Prefer the exact source-run offset only when the report text has not
+    // been normalized between the worker and editor. The claim text match
+    // below remains the safer fallback for cleaned Markdown.
+    if (start < 0 && Number.isInteger(requestedStart) && requestedStart >= 0 && requestedStart < body.length) {
+      start = requestedStart;
+      end = Number.isInteger(requestedEnd) && requestedEnd > start
+        ? Math.min(requestedEnd, body.length)
+        : Math.min(start + claim.length, body.length);
+    }
+    if (start < 0 && normalizedClaim) {
+      let cursor = 0;
+      for (const line of body.split(/\r?\n/u)) {
+        const normalizedLine = line.replace(/[*_`]/gu, '').replace(/\s+/gu, ' ').trim();
+        if (normalizedLine.includes(normalizedClaim) || normalizedClaim.includes(normalizedLine.slice(0, 120))) {
+          start = cursor;
+          end = cursor + line.length;
+          break;
+        }
+        cursor += line.length + 1;
+      }
+    }
+    reviewClaimHandledRef.current = claim;
+    setSidePanel('assistant');
+    if (start >= 0 && end > start) {
+      setSelectionMessage('已定位这条需要确认的结论；修改后保存，系统会更新资料检查。');
+      requestAnimationFrame(() => {
+        const textarea = bodyRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        textarea.setSelectionRange(start, end);
+      });
+    } else {
+      setSelectionMessage('没有在正文中找到完全匹配的声明，请在当前段落中人工定位后修改。');
+    }
+  }, [body, existing, isNew]);
 
   const tags = tagsInput
     .split(',')
@@ -417,12 +495,12 @@ export default function EditorPage() {
   }, [params?.id, selectedAnchor]);
 
   const acceptAssistant = useCallback(() => {
-    if (!assistantResult?.suggestion || !selectedAnchor) return;
+    if (isPublishedAi || !assistantResult?.suggestion || !selectedAnchor) return;
     const start = body.indexOf(assistantResult.original);
     if (start < 0) { setError('正文已变化，建议无法安全应用'); return; }
     setBody(`${body.slice(0, start)}${assistantResult.suggestion}${body.slice(start + assistantResult.original.length)}`);
     setAssistantResult(null);
-  }, [assistantResult, body, selectedAnchor]);
+  }, [assistantResult, body, isPublishedAi, selectedAnchor]);
 
   const insertBlock = useCallback((block: string) => {
     const textarea = bodyRef.current;
@@ -618,12 +696,28 @@ export default function EditorPage() {
     },
   });
 
+  const forkMutation = useMutation({
+    mutationFn: async () => {
+      if (!existing?.id) throw new Error('找不到要修订的研究');
+      const res = await fetch(`/api/researches/${existing.id}/fork`, { method: 'POST' });
+      const payload = await res.json().catch(() => ({})) as { id?: string; message?: string };
+      if (!res.ok || !payload.id) throw new Error(payload.message ?? '创建修订草稿失败');
+      return payload;
+    },
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: ['researches'] });
+      allowNext();
+      router.push(`/researches/${data.id}/edit`);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
   const reviewMutation = useMutation({
     mutationFn: async () => {
       if (!existing?.id) throw new Error('草稿尚未创建');
       const res = await fetch(`/api/researches/${existing.id}/review`, { method: 'POST' });
       const payload = await res.json().catch(() => ({})) as { message?: string };
-      if (!res.ok) throw new Error(payload.message ?? '审核失败');
+      if (!res.ok) throw new Error(payload.message ?? '资料检查失败');
       return payload;
     },
     onSuccess: async () => {
@@ -649,14 +743,55 @@ export default function EditorPage() {
     await publishMutation.mutateAsync();
   }, [existing, isDirty, publishMutation, saveMutation]);
 
+  const handleFork = useCallback(async () => {
+    setError('');
+    await forkMutation.mutateAsync();
+  }, [forkMutation]);
+
   const summaryComplete = background.trim().length > 0 && conclusion.trim().length > 0 && risks.trim().length > 0;
   const missingSummaryFields = [
     !background.trim() ? '背景' : null,
     !conclusion.trim() ? '结论' : null,
     !risks.trim() ? '风险或待验证项' : null,
   ].filter((field): field is string => Boolean(field));
-  const publishDisabled = publishMutation.isPending || !summaryComplete;
-  const reviewDisabled = saving || reviewMutation.isPending;
+  const reviewRequired = existing?.creationMethod === 'ai_research';
+  // The API marks the run that covers the exact current snapshot. Historical
+  // runs remain useful in the audit trail, but must never drive the publish
+  // button or the current-state label after an edit.
+  const latestReviewRun = existing?.reviewRuns?.find((run) => run.isCurrentRevision) ?? null;
+  const publicationGate = existing?.currentReview?.publicationGate ?? null;
+  const researchCoverageLabel = publicationGate?.researchSufficiencyStatus === 'sufficient'
+    ? '已满足'
+    : publicationGate?.researchSufficiencyStatus === 'insufficient'
+      ? '不足'
+      : '未评估';
+  const reviewPassed = existing?.currentReview
+    ? existing.currentReview.status === 'passed'
+    : latestReviewRun
+      ? latestReviewRun.executionStatus === 'completed' && latestReviewRun.outcome === 'clear'
+      : existing?.reviewStatus === 'passed';
+  const reviewPublishable = reviewPassed
+    || publicationGate?.status === 'clear'
+    || publicationGate?.status === 'publish_with_disclosure';
+  const currentReviewIsCurrent = existing?.currentReview?.isCurrentRevision === true;
+  const reviewInstruction = !currentReviewIsCurrent
+    ? '当前稿还没有最新的资料检查结果。保存后可以更新检查。'
+    : existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing'
+      ? '资料正在后台整理；完成后会告诉你哪些内容需要处理。'
+      : publicationGate?.status === 'needs_action'
+      ? `有 ${publicationGate.openCount} 条结论缺少直接依据；请补充资料或修改相关内容。`
+      : publicationGate?.status === 'blocked'
+        ? '来源之间存在不一致；请修改相关结论后再发布。'
+      : publicationGate?.status === 'coverage_insufficient'
+          ? '现有资料还不足以支撑完整报告；请补充资料后再发布。'
+        : publicationGate?.status === 'research_insufficient'
+          ? '现有资料还没有覆盖原问题的关键部分；请补充资料后再发布。'
+        : publicationGate?.status === 'unavailable'
+          ? '资料检查暂未完成；可以稍后重试。'
+          : '当前内容还需要处理后才能发布。';
+  const publishDisabled = publishMutation.isPending || !summaryComplete || (reviewRequired && !reviewPublishable);
+  const reviewInProgress = existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing';
+  const reviewDisabled = saving || reviewMutation.isPending || reviewInProgress;
 
   const editorTools = [
     { label: '加粗', icon: Bold, action: () => applyMarkdown('**', '**', '重点') },
@@ -667,14 +802,29 @@ export default function EditorPage() {
   ] as const;
 
   const sources = existing?.researchSources ?? [];
-  const reviewItems = [
-    { label: '标题说明了研究问题', done: title.trim().length >= 6 },
-    { label: '正文包含可识别的结构', done: outline.length >= 2 },
-    { label: '背景已经填写（必填）', done: background.trim().length > 0 },
-    { label: '结论已经填写（必填）', done: conclusion.trim().length > 0 },
-    { label: '风险或待验证项已经填写（必填）', done: risks.trim().length > 0 },
-    { label: '至少保留一个来源', done: sources.length > 0 },
-  ];
+  const publicationStatus = !summaryComplete
+    ? {
+        label: '需要补充内容',
+        detail: `还缺少：${missingSummaryFields.join('、')}。`,
+        tone: 'warning' as const,
+      }
+    : reviewRequired && !reviewPublishable
+      ? {
+          label: currentReviewIsCurrent && (existing?.currentReview?.status === 'queued' || existing?.currentReview?.status === 'reviewing')
+            ? '正在整理资料'
+            : '需要处理',
+          detail: reviewInstruction,
+          tone: 'warning' as const,
+        }
+      : {
+          label: '可以发布',
+          detail: researchCoverageLabel === '未评估'
+            ? '关键内容已有资料；发布前请确认它确实回答了原问题。'
+            : publicationGate?.status === 'publish_with_disclosure'
+              ? `可以发布，但会保留 ${publicationGate.disclosedCount} 条不确定性提示。`
+              : '内容结构完整，关键内容已有可对照资料。',
+          tone: 'success' as const,
+        };
 
   if (!isNew && loadingExisting) {
     return <div className="mx-auto max-w-shell rounded-md border border-border bg-card p-6 text-sm text-muted-foreground" aria-busy="true">正在加载编辑器…</div>;
@@ -693,7 +843,7 @@ export default function EditorPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="truncate text-base font-semibold tracking-normal">
-                {isNew ? '新建调研' : existing?.status === 'published' ? '编辑已发布文章' : '编辑草稿'}
+                {isNew ? '新建调研' : isPublishedAi ? '查看已发布 AI 研究' : existing?.status === 'published' ? '编辑已发布文章' : '编辑草稿'}
               </h1>
               {existing?.status && <StatusBadge kind="research" value={existing.status} />}
               {existing?.creationMethod && (
@@ -711,7 +861,12 @@ export default function EditorPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {(isNew || manualSaveRequired || existing?.status === 'published' || (existing?.status === 'draft' && isDirty)) && (
+          {isPublishedAi ? (
+            <Button type="button" size="sm" onClick={() => void handleFork()} disabled={forkMutation.isPending}>
+              <GitBranch />
+              {forkMutation.isPending ? '创建中…' : '创建修订草稿'}
+            </Button>
+          ) : (isNew || manualSaveRequired || existing?.status === 'published' || (existing?.status === 'draft' && isDirty)) && (
             <Button
               type="button"
               variant="outline"
@@ -742,9 +897,21 @@ export default function EditorPage() {
         </div>
       ) : null}
 
-      {existing?.status === 'draft' && missingSummaryFields.length > 0 ? (
-        <div className="mb-3 rounded-md border border-status-warning-fg/30 bg-status-warning-bg/30 px-3 py-2 text-xs leading-relaxed text-status-warning-fg" role="status">
-          暂不能发布，还缺少：{missingSummaryFields.join('、')}。保存草稿不受影响，补齐后即可发布。
+      {isPublishedAi ? (
+        <div className="mb-3 rounded-md border border-primary/25 bg-primary/[0.04] px-3 py-2.5 text-xs leading-relaxed text-muted-foreground" role="status">
+          <p className="font-medium text-foreground">这是已发布版本，内容保持不变。</p>
+          <p className="mt-0.5">如需修改，请创建修订草稿。新草稿会复制当前资料和引用，并更新资料检查后才能发布。</p>
+        </div>
+      ) : null}
+
+      {existing?.status === 'draft' && (missingSummaryFields.length > 0 || (reviewRequired && !reviewPublishable)) ? (
+        <div className="mb-3 flex items-start gap-2.5 rounded-md border border-status-warning-fg/30 bg-status-warning-bg/30 px-3 py-2.5 text-xs leading-relaxed text-status-warning-fg" role="status">
+          <span className="mt-0.5 size-1.5 shrink-0 rounded-full bg-status-warning-fg" aria-hidden="true" />
+          <div>
+            <p className="font-medium">暂不能发布</p>
+            <p className="mt-0.5">{missingSummaryFields.length > 0 ? `还缺少：${missingSummaryFields.join('、')}。` : reviewInstruction}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">保存草稿不受影响。</p>
+          </div>
         </div>
       ) : null}
 
@@ -813,6 +980,7 @@ export default function EditorPage() {
               id="edit-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              readOnly={isPublishedAi}
               placeholder="给这份调研起一个明确的标题…"
               className="h-auto border-0 bg-transparent px-0 py-1 text-xl font-semibold shadow-none focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
             />
@@ -823,15 +991,15 @@ export default function EditorPage() {
             {editorTools.map((tool) => {
               const Icon = tool.icon;
               return (
-                <Button key={tool.label} type="button" variant="ghost" size="icon-sm" onClick={tool.action} title={tool.label} aria-label={tool.label} disabled={view === 'preview'}>
+                  <Button key={tool.label} type="button" variant="ghost" size="icon-sm" onClick={tool.action} title={tool.label} aria-label={tool.label} disabled={view === 'preview' || isPublishedAi}>
                   <Icon />
                 </Button>
               );
             })}
             <span className="mx-1 h-5 w-px bg-border" />
-            <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('> 需要核对的事实或判断')} title="插入引用块" aria-label="插入引用块" disabled={view === 'preview'}><Quote /></Button>
-            <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('- [ ] 待办事项')} title="插入待办事项" aria-label="插入待办事项" disabled={view === 'preview'}><ListChecks /></Button>
-            <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('| 维度 | 结论 | 证据 |\n| --- | --- | --- |\n| 示例 | 待填写 | 待补充 |')} title="插入对比表" aria-label="插入对比表" disabled={view === 'preview'}><Table2 /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('> 需要核对的事实或判断')} title="插入引用块" aria-label="插入引用块" disabled={view === 'preview' || isPublishedAi}><Quote /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('- [ ] 待办事项')} title="插入待办事项" aria-label="插入待办事项" disabled={view === 'preview' || isPublishedAi}><ListChecks /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('| 维度 | 结论 | 证据 |\n| --- | --- | --- |\n| 示例 | 待填写 | 待补充 |')} title="插入对比表" aria-label="插入对比表" disabled={view === 'preview' || isPublishedAi}><Table2 /></Button>
             <span className="mx-1 h-5 w-px bg-border" />
             <span className="hidden text-[11px] text-muted-foreground sm:inline">Markdown</span>
             <details className="relative ml-1">
@@ -881,6 +1049,7 @@ export default function EditorPage() {
                   id="edit-body"
                   value={body}
                   onChange={(e) => handleBodyChange(e.target.value, e.target.selectionStart)}
+                  readOnly={isPublishedAi}
                   onKeyDown={(e) => {
                     if (!commandState) return;
                     const matches = matchingCommands(commandState.query);
@@ -949,7 +1118,7 @@ export default function EditorPage() {
                   {([
                     { key: 'sources', label: '来源与引用', panelId: 'side-panel-sources' },
                     { key: 'assistant', label: 'AI 助手', panelId: 'side-panel-assistant' },
-                    { key: 'details', label: '发布准备', panelId: 'side-panel-details' },
+                    { key: 'details', label: '文章信息', panelId: 'side-panel-details' },
                     { key: 'versions', label: '版本历史', panelId: 'side-panel-versions' },
                   ] as const).map((item) => (
                     <button
@@ -979,7 +1148,7 @@ export default function EditorPage() {
                       <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted-foreground">“{selectedText}”</p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         <Button type="button" size="xs" variant="outline" onClick={copySelectedQuote}><Quote />复制引用</Button>
-                        <Button type="button" size="xs" variant="ghost" onClick={() => insertBlock(`> ${selectedText.replace(/\n/g, '\n> ')}`)}><Link2 />插入正文</Button>
+                        <Button type="button" size="xs" variant="ghost" onClick={() => insertBlock(`> ${selectedText.replace(/\n/g, '\n> ')}`)} disabled={isPublishedAi}><Link2 />插入正文</Button>
                       </div>
                       {sources.length > 0 && <p className="mt-1.5 text-[11px] text-muted-foreground">请在下方来源卡片中选择要关联的证据。</p>}
                       {flashMessage && <p className="mt-1.5 text-[11px] text-status-success-fg">{flashMessage}</p>}
@@ -1025,7 +1194,7 @@ export default function EditorPage() {
                               </a>
                             )}
                             {selectedAnchor && (
-                              <Button type="button" variant="ghost" size="xs" onClick={() => void citeSelection(source)}>
+                              <Button type="button" variant="ghost" size="xs" onClick={() => void citeSelection(source)} disabled={isPublishedAi}>
                                 <FileText className="size-3" />引用这段
                               </Button>
                             )}
@@ -1034,7 +1203,7 @@ export default function EditorPage() {
                       );
                     }) : (
                     <div className="space-y-2 rounded border border-dashed border-border p-3 text-xs leading-relaxed text-muted-foreground">
-                      <p>暂时没有挂载来源。来源会用于正文引用和事实核验，不会单独出现在发布文章中。</p>
+                      <p>暂时没有挂载来源。来源会用于正文引用和内容对照，不会单独出现在发布文章中。</p>
                       <p className="text-[11px]">
                         添加路径：在「AI 助手」标签里选择「补充来源」即可让模型基于当前正文去搜索并挂载候选来源。
                       </p>
@@ -1072,19 +1241,19 @@ export default function EditorPage() {
                       </Button>
                     ))}
                   </div>
-                  {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-[11px] text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-[11px] text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
+                  {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-[11px] text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-[11px] text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant} disabled={isPublishedAi}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
                   {!selectedText && <p>未选中文本。</p>}
                 </div>
               )}
 
               {sidePanel === 'versions' && (
-                <div id="side-panel-versions" role="tabpanel" aria-label="版本历史" className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-[10px] text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{audit.editor.name}</div>{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-[10px]"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-[11px] text-muted-foreground">状态记录，无字段差异。</p>}
+                <div id="side-panel-versions" role="tabpanel" aria-label="版本历史" className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-[10px] text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{audit.editor.name}</div>{audit.sourceIntent === 'revise' ? <div className="mt-2 rounded border border-primary/15 bg-primary/[0.03] p-2 text-[11px] leading-5"><p className="font-medium text-primary">来自追问修订</p>{audit.sourceQuestion ? <p className="mt-0.5 text-muted-foreground">“{audit.sourceQuestion}”</p> : null}{audit.reason ? <p className="mt-0.5 text-muted-foreground">{audit.reason}</p> : null}</div> : null}{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-[10px]"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-[11px] text-muted-foreground">状态记录，无字段差异。</p>}
                   <Button
                     type="button"
                     size="xs"
                     variant="outline"
                     className="mt-2"
-                    disabled={!audit.prevSnapshot}
+                    disabled={!audit.prevSnapshot || isPublishedAi}
                     onClick={() => {
                       // 恢复是 destructive:覆盖当前未保存修改。先确认避免误触
                       if (window.confirm('恢复该版本会覆盖当前未保存的修改,确认继续?')) {
@@ -1098,8 +1267,8 @@ export default function EditorPage() {
               )}
 
               {sidePanel === 'details' && (
-                <div id="side-panel-details" role="tabpanel" aria-label="发布准备" className="space-y-4">
-                  <p className="text-xs leading-relaxed text-muted-foreground">发布前先补齐研究摘要，再核对事实和来源。保存草稿不受这些检查影响。</p>
+                <div id="side-panel-details" role="tabpanel" aria-label="文章信息" className="space-y-4">
+                  <p className="text-xs leading-relaxed text-muted-foreground">补充文章摘要和标签。保存草稿不受发布状态影响。</p>
                   <div className="space-y-2.5">
                     <p className="text-xs font-medium text-muted-foreground">研究摘要</p>
                     {(
@@ -1111,27 +1280,44 @@ export default function EditorPage() {
                     ).map((f) => (
                       <div key={f.id} className="grid gap-1">
                         <label htmlFor={`edit-${f.id}`} className="text-xs text-muted-foreground">{f.label}</label>
-                        <Textarea id={`edit-${f.id}`} value={f.value} onChange={(e) => f.set(e.target.value)} rows={3} placeholder={f.ph} className="resize-y text-[13px]" />
+                        <Textarea id={`edit-${f.id}`} value={f.value} onChange={(e) => f.set(e.target.value)} readOnly={isPublishedAi} rows={3} placeholder={f.ph} className="resize-y text-[13px]" />
                       </div>
                     ))}
                   </div>
                   <div className="border-t border-border pt-3">
-                    <div className="rounded border border-border bg-muted/20 p-2.5 text-xs">
+                    <div className={cn(
+                      'rounded-md border p-3 text-xs',
+                      publicationStatus.tone === 'success'
+                        ? 'border-status-success-border bg-status-success-bg/25'
+                        : 'border-status-warning-fg/30 bg-status-warning-bg/25',
+                    )}>
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium">事实审核</span>
-                        <span className="text-muted-foreground">{reviewLabel(existing?.reviewStatus)}</span>
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">发布状态</span>
+                        <span className={publicationStatus.tone === 'success' ? 'font-medium text-status-success-fg' : 'font-medium text-status-warning-fg'}>{publicationStatus.label}</span>
                       </div>
-                      {existing?.reviewStatus ? <p className="mt-1 text-[11px] text-muted-foreground">第 {existing.reviewAttempts}/2 轮 · 修正 {existing.reviewSummary?.corrected_count ?? 0} · 未核验 {existing.reviewSummary?.unverified_count ?? 0} · 冲突 {existing.reviewSummary?.contradicted_count ?? 0}</p> : <p className="mt-1 text-[11px] text-muted-foreground">保存后可核验当前版本。</p>}
-                      {existing?.reviewStatus === 'blocked' ? <p className="mt-1 font-medium text-status-failed-fg">存在冲突事实，修订后重新审核才能发布。</p> : null}
+                      <p className="mt-1.5 leading-5 text-muted-foreground">{publicationStatus.detail}</p>
+                      {existing?.status === 'draft' && reviewRequired && !reviewPublishable && summaryComplete && (
+                        <Button type="button" variant="outline" size="sm" className="mt-2.5 w-full bg-background/70" onClick={handleReview} disabled={reviewDisabled}>
+                          <RotateCcw />
+                          {reviewMutation.isPending || reviewInProgress ? '正在检查…' : currentReviewIsCurrent ? '重新检查资料' : '检查当前稿'}
+                        </Button>
+                      )}
+                      {reviewRequired && (
+                        <details className="mt-2.5 border-t border-border/70 pt-2.5">
+                          <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">查看依据详情</summary>
+                          <div className="mt-2 space-y-1.5 text-[11px] leading-5 text-muted-foreground">
+                            <p>资料覆盖：{researchCoverageLabel === '已满足' ? '已覆盖关键部分' : researchCoverageLabel === '不足' ? '还有缺口' : '暂未判断'}</p>
+                            <p>可核对来源：{sources.length} 条</p>
+                            {publicationGate?.status === 'publish_with_disclosure' ? <p>发布后会保留 {publicationGate.disclosedCount} 条不确定性提示。</p> : null}
+                            {currentReviewIsCurrent ? <p>以上状态对应当前正文版本。</p> : <p>正文有过修改，以上状态尚未更新。</p>}
+                          </div>
+                        </details>
+                      )}
                     </div>
-                    {existing?.status === 'draft' && <Button type="button" variant="outline" size="sm" className="mt-2 w-full" onClick={handleReview} disabled={reviewDisabled}><ShieldCheck />{reviewMutation.isPending ? '审核中…' : '重新审核当前版本'}</Button>}
-                    <div className="mt-3 flex items-center justify-between"><span className="text-xs text-muted-foreground">发布前检查</span><span className="text-[11px] text-muted-foreground">完成 {reviewItems.filter((item) => item.done).length}/{reviewItems.length}</span></div>
-                    {!summaryComplete && <p className="mt-2 rounded border border-status-warning-fg/30 bg-status-warning-bg/30 p-2 text-[11px] leading-relaxed text-status-warning-fg">背景、结论、风险或待验证项是发布必填项。补齐后才能发布。</p>}
-                    <div className="mt-2 space-y-1.5">{reviewItems.map((item) => <div key={item.label} className="flex items-start gap-2 text-xs"><span className={`mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full ${item.done ? 'bg-status-success-bg text-status-success-fg' : 'border border-border text-transparent'}`}><Check className="size-3" /></span><span className={item.done ? 'text-foreground' : 'text-muted-foreground'}>{item.label}</span></div>)}</div>
                   </div>
                   <div className="border-t border-border pt-3">
                     <label htmlFor="edit-tags" className="text-xs font-medium text-muted-foreground">标签</label>
-                    <Input id="edit-tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} placeholder="例如: React, TypeScript, 架构" className="mt-1.5" />
+                    <Input id="edit-tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} readOnly={isPublishedAi} placeholder="例如: React, TypeScript, 架构" className="mt-1.5" />
                     {tags.length > 0 && <TagList className="mt-1">{tags.map((t) => <TagChip key={t}>{t}</TagChip>)}</TagList>}
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">用逗号分隔，建议保留 2–5 个检索词。</p>
                   </div>
@@ -1165,7 +1351,11 @@ export default function EditorPage() {
           <DialogHeader>
             <DialogTitle>确认发布调研？</DialogTitle>
             <DialogDescription>
-              发布后团队成员可以阅读和评论。请确认结论、证据和风险已核对。
+              发布后团队成员可以阅读和评论。{publicationGate?.status === 'publish_with_disclosure'
+                ? `当前版本保留 ${publicationGate.disclosedCount} 条已接受的不确定性，请确认它们已反映在风险或后续行动中。`
+                : publicationGate?.status === 'clear' && researchCoverageLabel === '未评估'
+                  ? '关键依据已有，但资料范围没有自动评估；请确认当前资料确实足以回答原始问题。'
+                : '请确认结论、证据和风险已核对。'}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1245,14 +1435,4 @@ function formatDiffValue(value: unknown): string {
   if (Array.isArray(value)) return value.join('、') || '（空）';
   if (value == null) return '（空）';
   return JSON.stringify(value);
-}
-
-function reviewLabel(status: string | null | undefined): string {
-  const labels: Record<string, string> = {
-    passed: '已通过',
-    needs_revision: '需要修订',
-    blocked: '阻止发布',
-    review_unavailable: '审核不可用',
-  };
-  return status ? labels[status] ?? status : '未审核';
 }

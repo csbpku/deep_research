@@ -1,6 +1,6 @@
 'use client';
 
-// /researches/new — 新建调研入口（属于「调研库」的子页面）。
+// /researches/new — 新建调研入口（属于「研究库」的子页面）。
 //
 // 标题用「新建调研」而不是「新建调研库」——
 // 用户来这里是要写一篇研究，不是要建一座图书馆。
@@ -87,7 +87,7 @@ export default function NewResearchPage() {
       <div className="mx-auto max-w-shell">
         <nav className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           <Link href="/researches" className="hover:text-foreground hover:underline">
-            调研库
+            研究库
           </Link>
           <span>/</span>
           <span>新建</span>
@@ -105,7 +105,7 @@ export default function NewResearchPage() {
           <button
             type="button"
             onClick={() => setMode('create')}
-            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-accent/25 p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:to-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-md border border-border bg-card p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <div className="flex items-center gap-2">
               <FilePlus2 className="size-4 text-primary" />
@@ -118,7 +118,7 @@ export default function NewResearchPage() {
 
           <Link
             href="/researches/import"
-            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-lg border border-border bg-gradient-to-br from-card to-accent/25 p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:to-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-md border border-border bg-card p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <div className="flex items-center gap-2">
               <Upload className="size-4 text-primary" />

@@ -6,6 +6,7 @@ node_modules/
 .next/
 out/
 .next-e2e*/
+apps/web/.next-*/
 apps/web/tmp/
 apps/web/.next-topic-repair/
 digest-*.md

@@ -1,7 +1,7 @@
 // BFF handler: POST /api/admin/radar/[id]/create-research — Admin 从雷达候选预填生成调研草稿。
 //
 // 契约源：
-//   - docs/agent-prompts/week5-engineer-a.md §任务 3
+//   - docs/archive/2026-09-08-agent-prompts/week5-engineer-a.md §任务 3
 //   - apps/web/prisma/schema.prisma: Research + ResearchSource + AdminAction
 //
 // 行为：requireAdmin → 校验 summary → 在 $transaction 内创建 research(draft,

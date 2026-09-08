@@ -269,7 +269,7 @@ export function BottomSheet({
         <>
           <header
             data-sheet-header
-            className="flex cursor-grab select-none items-center gap-2.5 rounded-tl-[16px] border-b border-[var(--ink-rule)] bg-white px-5 py-3.5"
+            className="flex cursor-grab select-none items-center gap-2.5 rounded-tl-[16px] border-b border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 py-3.5"
           >
             <GripVertical className="size-4 shrink-0 cursor-grab select-none text-[var(--ink-faint)]" aria-hidden />
             <h2 className="flex-1 font-sans text-[15px] font-semibold">{title}</h2>
@@ -297,7 +297,7 @@ export function BottomSheet({
           <div className="flex min-h-0 flex-1 overflow-hidden">{children}</div>
 
           {footer ? (
-            <div className="flex flex-shrink-0 gap-2 border-t border-[var(--ink-rule)] bg-white px-6 py-3">
+            <div className="flex flex-shrink-0 gap-2 border-t border-[var(--ink-rule)] bg-[var(--ink-page)] px-6 py-3">
               {footer}
             </div>
           ) : null}

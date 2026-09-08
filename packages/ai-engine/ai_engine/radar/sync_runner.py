@@ -32,6 +32,10 @@ from ai_engine.markdown_pipeline import normalize_markdown
 from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.candidate_filter import filter_candidate
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
+from ai_engine.radar.enrichment_contract import (
+    enrichment_review_reset_assignments,
+    initial_enrichment_status,
+)
 from ai_engine.radar.source_manager import SourceFetcher, fetch_source, load_enabled_sources
 from ai_engine.server.share import _infer_title, html_to_markdown
 
@@ -129,6 +133,10 @@ def _classify_original_kind(source_type: str, url: str) -> str:
     if "arxiv.org/abs/" in u or "huggingface.co/papers/" in u or source_type in ("arxiv", "huggingface_papers"):
         return "arxiv"
     if source_type in ("github", "github_trending") or "github.com" in u:
+        if _re.search(r"github\.com/[^/]+/[^/]+/issues/\d+(?:/|$)", u):
+            return "github_issue"
+        if _re.search(r"github\.com/[^/]+/[^/]+/pull/\d+(?:/|$)", u):
+            return "github_pr"
         if "/releases/tag/" in u:
             return "github_release"
         # repo root: github.com/{owner}/{repo} (optionally trailing slash)
@@ -757,7 +765,7 @@ async def _retry_existing_summary_content(
             '"originalFetchedAt" = now(), "originalBytes" = %s, '
             '"originalSha256" = %s, "summaryDate" = CURRENT_DATE, '
             '"publishedAt" = %s, "syncRunId" = %s, '
-            '"tags" = array_remove(array_remove("tags", \'github_content_pending\'), \'content_pending\'), '
+            f'{enrichment_review_reset_assignments()}, '
             '"updatedAt" = now() '
             'WHERE "id" = %s',
             (
@@ -867,14 +875,25 @@ async def _insert_candidate(
     title = candidate_title or _infer_title(fetched, markdown)
 
     merged_tags = list(candidate.tags) + list(extra_tags)
-    if _is_fetch_failure_shell(markdown):
+    if _is_fetch_failure_shell(
+        markdown,
+        source_type=source.source_type,
+        url=candidate.url,
+    ):
         merged_tags.append("fetch_failed_shell")
+    # HN-aggregator / Reddit-news stubs are a known source of fetch-partial
+    # noise (the upstream article is paywalled). Tag them here so the scorer
+    # and admin queue can short-circuit to the noise tier without a brief LLM
+    # call, and ops can drop them in bulk via tag filter.
+    if _is_paywall_stub(markdown):
+        merged_tags.append("paywall_stub")
     persisted_distilled = (
         distilled if distilled is not None and not distilled.is_default else None
     )
+    durable_enrichment_status = initial_enrichment_status(
+        persisted_distilled.tier if persisted_distilled is not None else None
+    )
     if persisted_distilled is not None:
-        if persisted_distilled.must_read:
-            merged_tags.append("must_read")
         if persisted_distilled.tier:
             merged_tags.append(f"tier_{persisted_distilled.tier}")
         if persisted_distilled.veto:
@@ -914,14 +933,15 @@ async def _insert_candidate(
                     '"ingestionTokenCount", "tags", "status", "relevanceScore", '
                     '"timelinessScore", "sourceQualityScore", "scoreVersion", '
                     '"scoreReason", "distilledScore", "distilledTotal", "distilledTier", '
-                    '"distilledMustRead", "distilledProfile", "interpretation", "syncRunId", '
+                    '"distilledProfile", "interpretation", "syncRunId", '
                     '"originalMarkdown", "originalKind", "originalFetchedAt", '
                     '"originalBytes", "originalSha256", '
-                    '"createdAt", "updatedAt") '
+                    '"createdAt", "updatedAt", "enrichmentStatus", '
+                    '"enrichmentNextRetryAt") '
                     "VALUES (%s, %s, %s, %s, %s, 'daily', %s, %s, %s, %s, %s, %s::text[], "
                     "'candidate', %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, "
-                    "%s, %s, now(), %s, %s, "
-                    "now(), now()) "
+                    "%s, now(), %s, %s, now(), now(), %s, "
+                    "CASE WHEN %s = 'pending' THEN now() ELSE NULL END) "
                     'ON CONFLICT ("canonicalUrl") DO NOTHING RETURNING "id"',
                     (
                         str(uuid.uuid4()),
@@ -944,6 +964,8 @@ async def _insert_candidate(
                             persisted_distilled,
                             limited_score=limited_score,
                             markdown=markdown,
+                            source_type=source.source_type,
+                            url=candidate.url,
                         ),
                         (
                             json.dumps(persisted_distilled.to_dict(), ensure_ascii=False)
@@ -959,7 +981,6 @@ async def _insert_candidate(
                             else None
                         ),
                         persisted_distilled.tier if persisted_distilled is not None else None,
-                        persisted_distilled.must_read if persisted_distilled is not None else None,
                         persisted_distilled.profile if persisted_distilled is not None else None,
                         interpretation[:2000],
                         run_id,
@@ -967,6 +988,8 @@ async def _insert_candidate(
                         original_kind,
                         original_bytes,
                         content_sha256,
+                        durable_enrichment_status,
+                        durable_enrichment_status,
                     ),
                 )
             ).fetchone()
@@ -979,6 +1002,8 @@ def _build_score_reason(
     *,
     limited_score: bool = False,
     markdown: str = "",
+    source_type: str | None = None,
+    url: str | None = None,
 ) -> str:
     """Return the reason for the score that the UI actually displays."""
     reason = ""
@@ -993,7 +1018,11 @@ def _build_score_reason(
             "低置信度初筛：正文不足1000字符，仅用于排序和是否值得继续抓取。"
             + reason
         )[:500]
-    shell_label = _shell_content_label(markdown)
+    shell_label = _shell_content_label(
+        markdown,
+        source_type=source_type,
+        url=url,
+    )
     if shell_label:
         reason = (
             "抓取失败: "
@@ -1064,6 +1093,24 @@ def _is_low_quality_content(text: str) -> bool:
     return any(marker in lowered for marker in _LOW_QUALITY_MARKERS)
 
 
+# HN-aggregator / Reddit-news paywall stubs land in our fetcher as a one-line
+# string like "HN submission | 46 points | 8 comments" because the upstream
+# article (NYT / Economist / Gates Notes) is behind a paywall. Tagging them
+# `paywall_stub` lets ops spot them in candidate queues and lets the scorer
+# short-circuit to the noise tier before spending a brief LLM call.
+_PAYWALL_STUB_PATTERN = _re.compile(
+    r"^(?:hn\s+submission|reddit\s+homepage)\s*\|\s*\d+\s*points?\s*\|\s*\d+\s*comments?\s*$",
+    _re.IGNORECASE,
+)
+
+
+def _is_paywall_stub(text: str | None) -> bool:
+    """Return True for one-line aggregator stubs whose real article is paywalled."""
+    if not text:
+        return False
+    return bool(_PAYWALL_STUB_PATTERN.match(text.strip()))
+
+
 def _scoreability(content: str) -> str | None:
     """Classify content before scoring.
 
@@ -1087,15 +1134,28 @@ def _scoreability(content: str) -> str | None:
     )
 
 
-def _shell_content_label(text: str) -> str | None:
+def _shell_content_label(
+    text: str,
+    *,
+    source_type: str | None = None,
+    url: str | None = None,
+) -> str | None:
     """Classify a fetched page as a known fetch-failure shell.
 
     Returns a short Chinese label suitable for prefixing ``scoreReason`` so
     the UI can distinguish "real noise" from "fetch failure noise". Returns
     ``None`` when the text does not match a known shell pattern.
+
+    GitHub READMEs are real content even when they mention sponsor or
+    promotional phrases, so the shell heuristic does not apply to them.
     """
     lowered = (text or "").lower()
     if not lowered:
+        return None
+    if (
+        (source_type or "").startswith("github")
+        or (url or "").find("github.com/") >= 0
+    ):
         return None
     if any(
         marker in lowered
@@ -1135,8 +1195,16 @@ def _shell_content_label(text: str) -> str | None:
     return None
 
 
-def _is_fetch_failure_shell(text: str) -> bool:
-    return _shell_content_label(text) is not None
+def _is_fetch_failure_shell(
+    text: str,
+    *,
+    source_type: str | None = None,
+    url: str | None = None,
+) -> bool:
+    return (
+        _shell_content_label(text, source_type=source_type, url=url)
+        is not None
+    )
 
 
 def _content_fetch_failure_reason(

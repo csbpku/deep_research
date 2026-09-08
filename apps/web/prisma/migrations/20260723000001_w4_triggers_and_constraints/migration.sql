@@ -1,6 +1,6 @@
 -- Week 4 [db] follow-up: search_docs tsvector + trigger + share_submissions constraints
 -- 配套: schema.prisma 已添加 model (search_docs / share_submissions)
--- 契约: docs/contracts/fetch-url-safety.md, docs/IMPLEMENTATION_PLAN.md §六
+-- 契约: docs/contracts/fetch-url-safety.md, docs/archive/2026-09-08-implementation-plan.md §六
 -- 注意: zhparser 装机本机受阻（PG16 SDK14 vs SDK26 + scws 未装），本 migration 用 simple 字典。
 --      W5 装上 zhparser 后加新 migration：CREATE EXTENSION + 重建触发器换 chinese_zh。
 --

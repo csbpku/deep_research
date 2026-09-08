@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
 import { getCurrentUser } from '@/lib/auth/session';
+import { collapseTopicIssues } from '@/lib/topics';
 import { TopicsFilter } from './TopicsFilter';
 import { parseTopicFilter, type TopicFilterKey } from './topic-filter-options';
 
@@ -27,6 +28,7 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
   const sp = await searchParams;
   const filter = parseTopicFilter(sp.filter);
   const user = await getCurrentUser();
+  const anonymousFollowedFilter = filter === 'followed' && !user;
 
   const tierFilter = filter === 'hot' || filter === 'warming' || filter === 'emerging'
     ? { tier: filter }
@@ -35,26 +37,28 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
     ? { followers: { some: { userId: user.id } } }
     : {};
 
-  const topics = await prisma.topic.findMany({
-    where: {
-      enabled: true,
-      ...tierFilter,
-      ...followedFilter,
-    },
-    orderBy: [{ tier: 'asc' }, { candidateCount: 'desc' }, { updatedAt: 'desc' }],
-    take: 80,
-    select: {
-      id: true,
-      slug: true,
-      name: true,
-      summary: true,
-      tier: true,
-      candidateCount: true,
-      sourceCount: true,
-      lastSyncedAt: true,
-      aggregationWindowEnd: true,
-    },
-  });
+  const topics = anonymousFollowedFilter
+    ? []
+    : await prisma.topic.findMany({
+        where: {
+          enabled: true,
+          ...tierFilter,
+          ...followedFilter,
+        },
+        orderBy: [{ tier: 'asc' }, { candidateCount: 'desc' }, { updatedAt: 'desc' }],
+        take: 80,
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          summary: true,
+          tier: true,
+          candidateCount: true,
+          sourceCount: true,
+          lastSyncedAt: true,
+          aggregationWindowEnd: true,
+        },
+      });
 
   // 不同筛选形态下的「未读议题」徽章总和，便于顶部 chip 展示。
   const unreadByFilter: Partial<Record<TopicFilterKey, number>> = {};
@@ -67,15 +71,41 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
     if (followedTopicIds.length > 0) {
       const unreadRows = await prisma.topicIssue.findMany({
         where: { topicId: { in: followedTopicIds }, status: 'active' },
-        select: { topicId: true, lastSeenAt: true },
+        select: {
+          topicId: true,
+          id: true,
+          title: true,
+          proposition: true,
+          kind: true,
+          importanceScore: true,
+          lastSeenAt: true,
+          candidates: { select: { summaryId: true } },
+        },
       });
       let totalUnread = 0;
       const lastViewByTopic = new Map(allFollows.map((f) => [f.topicId, f.lastViewedAt] as const));
+      const rowsByTopic = new Map<string, typeof unreadRows>();
       for (const row of unreadRows) {
-        const lastViewedAt = lastViewByTopic.get(row.topicId) ?? null;
-        if (!lastViewedAt || row.lastSeenAt.getTime() > lastViewedAt.getTime()) {
-          totalUnread += 1;
-        }
+        const rows = rowsByTopic.get(row.topicId) ?? [];
+        rows.push(row);
+        rowsByTopic.set(row.topicId, rows);
+      }
+      for (const [topicId, rows] of rowsByTopic) {
+        const publicIssues = collapseTopicIssues(
+          rows.map((row) => ({
+            id: row.id,
+            kind: row.kind,
+            title: row.title,
+            proposition: row.proposition,
+            candidateIds: (row.candidates ?? []).map((candidate) => candidate.summaryId),
+            importanceScore: row.importanceScore,
+            lastSeenAt: row.lastSeenAt,
+          })),
+        );
+        const lastViewedAt = lastViewByTopic.get(topicId) ?? null;
+        totalUnread += publicIssues.filter((issue) => (
+          !lastViewedAt || issue.lastSeenAt > lastViewedAt
+        )).length;
       }
       unreadByFilter.followed = totalUnread;
     } else {
@@ -91,16 +121,24 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
           description="把分散的雷达信号聚成可持续追踪的研究脉络；先看正在升温的专题，再进入综述、热点议题和团队研究。"
           actions={
             <Link href="/me/topics" className="text-sm text-primary hover:underline">
-              {user ? '我的关注' : '查看我的'}
+              {user ? '我的专题总览' : '登录后查看我的专题'}
             </Link>
           }
         />
         <TopicsFilter unreadByFilter={unreadByFilter} />
         <EmptyState
-          title={filter === 'followed' ? '还没有关注任何专题' : '暂无专题'}
+          title={
+            filter === 'followed'
+              ? user
+                ? '还没有关注任何专题'
+                : '登录后查看已关注专题'
+              : '暂无专题'
+          }
           description={
             filter === 'followed'
-              ? '到下方「全部专题」点开一个再关注；专题内的热点议题会自动聚合并按未读顺序展示。'
+              ? user
+                ? '到下方「全部专题」点开一个再关注；专题内的热点议题会自动聚合并按未读顺序展示。'
+                : '登录后即可查看自己关注的专题和未读热点议题。'
               : '下一轮雷达同步将自动建组。'
           }
         />
@@ -118,7 +156,16 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
       : Promise.resolve([] as Array<{ topicId: string; lastViewedAt: Date | null }>),
     prisma.topicIssue.findMany({
       where: { topicId: { in: topicIds }, status: 'active' },
-      select: { topicId: true, lastSeenAt: true },
+      select: {
+        topicId: true,
+        id: true,
+        title: true,
+        proposition: true,
+        kind: true,
+        importanceScore: true,
+        lastSeenAt: true,
+        candidates: { select: { summaryId: true } },
+      },
     }),
     prisma.researchTopic.findMany({
       where: { topicId: { in: topicIds } },
@@ -133,11 +180,34 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
   ]);
 
   const followedMap = new Map(follows.map((f) => [f.topicId, f.lastViewedAt] as const));
-  const activeIssueDatesByTopic = new Map<string, Date[]>();
+  const issueRowsByTopic = new Map<string, Array<{
+    id: string;
+    title: string;
+    proposition: string;
+    kind: string;
+    importanceScore: number;
+    lastSeenAt: Date;
+    candidateIds: string[];
+  }>>();
   for (const row of issueStats) {
-    const list = activeIssueDatesByTopic.get(row.topicId) ?? [];
-    list.push(row.lastSeenAt);
-    activeIssueDatesByTopic.set(row.topicId, list);
+    const list = issueRowsByTopic.get(row.topicId) ?? [];
+    list.push({
+      id: row.id,
+      title: row.title,
+      proposition: row.proposition,
+      kind: row.kind,
+      importanceScore: row.importanceScore,
+      lastSeenAt: row.lastSeenAt,
+      candidateIds: (row.candidates ?? []).map((candidate) => candidate.summaryId),
+    });
+    issueRowsByTopic.set(row.topicId, list);
+  }
+  const activeIssueDatesByTopic = new Map<string, Date[]>();
+  for (const [topicId, rows] of issueRowsByTopic) {
+    activeIssueDatesByTopic.set(
+      topicId,
+      collapseTopicIssues(rows).map((issue) => issue.lastSeenAt),
+    );
   }
   const researchByTopic = new Map<string, { id: string; title: string; status: string }>();
   for (const row of latestResearch) {
@@ -157,7 +227,7 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
         description="把分散的雷达信号聚成可持续追踪的研究脉络；先看正在升温的专题，再进入综述、热点议题和团队研究。"
         actions={
           <Link href="/me/topics" className="text-sm text-primary hover:underline">
-            {user ? '我的关注' : '查看我的'}
+            {user ? '我的专题总览' : '登录后查看我的专题'}
           </Link>
         }
       />
@@ -204,9 +274,13 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
                         已有团队研究：{research.title.slice(0, 32)}
                       </p>
                     ) : null}
-                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                      <span>{t.candidateCount} 候选 · {t.sourceCount} 来源</span>
-                      <span>{t.lastSyncedAt ? new Date(t.lastSyncedAt).toLocaleDateString('zh-CN') : '待同步'}</span>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      <span>{t.candidateCount} 条相关内容</span>
+                      <span>{activeIssueDatesByTopic.get(t.id)?.length ?? 0} 个活跃议题</span>
+                      <span>{t.sourceCount} 个采集渠道</span>
+                      <span className="ml-auto shrink-0">
+                        {t.lastSyncedAt ? new Date(t.lastSyncedAt).toLocaleDateString('zh-CN') : '待同步'}
+                      </span>
                     </div>
                   </CardContent>
                 </Card>

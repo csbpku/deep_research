@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
+    "dev": "next dev --turbopack -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint",
@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test --config ./playwright.config.ts",
     "test:e2e:headed": "playwright test --config ./playwright.config.ts --headed",
+    "perf:first-visit": "node scripts/production-like-first-visit.mjs",
     "db:deploy": "prisma migrate deploy",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",

@@ -21,6 +21,8 @@ import type { NextRequest } from 'next/server';
 import {
   CreateAiJobInput,
   CreateAiJobInputV2,
+  type ResearchBrief,
+  type ResearchScope,
 } from '@deep-research/shared/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
@@ -57,6 +59,44 @@ function briefFallbackTopic(
 ): string {
   const candidate = (brief?.question ?? v1Topic ?? '').trim();
   return candidate.slice(0, 200);
+}
+
+function scopeInstruction(scope: ResearchScope | undefined): string {
+  if (!scope) return '';
+  const timeRange = scope.timeRange.preset === 'custom'
+    ? `${scope.timeRange.from ?? '?'} 至 ${scope.timeRange.to ?? '?'}`
+    : ({ any: '不限时间', '7d': '最近 7 天', '30d': '最近 30 天', '90d': '最近 90 天', '1y': '最近 1 年' }[scope.timeRange.preset] ?? '不限时间');
+  return [
+    '[用户确认的检索限定]',
+    `- 时间范围：${timeRange}`,
+    ...(scope.regions.length > 0 ? [`- 地区偏好：${scope.regions.join('、')}`] : []),
+    ...(scope.technologyVersions.length > 0 ? [`- 技术版本偏好：${scope.technologyVersions.join('、')}`] : []),
+    ...(scope.retrievalNotes ? [`- 其他检索限定：${scope.retrievalNotes}`] : []),
+    '这些内容用于指导资料检索、筛选和结论判断，不等同于网页级硬过滤。无法确认是否符合时，明确标记“范围未确认”，不要把推测写成事实。',
+  ].join('\n');
+}
+
+function briefInstruction(brief: ResearchBrief | undefined): string {
+  if (!brief) return '';
+  const lines = [
+    '[用户确认的研究计划]',
+    `- 研究目标：${brief.objective}`,
+    `- 核心问题：${brief.question}`,
+    ...(brief.questionsToAnswer.length > 0
+      ? ['- 必须回答的问题：', ...brief.questionsToAnswer.map((item) => `  - ${item}`)]
+      : []),
+    ...(brief.comparisonOptions.length > 0
+      ? ['- 必须比较的对象或方案：', ...brief.comparisonOptions.map((item) => `  - ${item}`)]
+      : []),
+    ...(brief.constraints.length > 0
+      ? ['- 已知约束：', ...brief.constraints.map((item) => `  - ${item}`)]
+      : []),
+    ...(brief.successCriteria.length > 0
+      ? ['- 用户定义的完成标准：', ...brief.successCriteria.map((item) => `  - ${item}`)]
+      : []),
+    '研究时优先覆盖这些问题；每个问题都要寻找可回链的直接证据。没有足够证据时保留为待核验，不要用相邻资料替代。',
+  ];
+  return lines.join('\n');
 }
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -107,15 +147,29 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
 
   const topic = briefFallbackTopic(v2?.brief, v1?.topic);
   const reportType = v2?.reportType ?? v1?.reportType ?? 'research_report';
+  const reportLength = v2?.reportLength ?? v1?.reportLength ?? (reportType === 'summary_brief' ? 'brief' : 'deep');
+  const maxUrlsToScrape = v2?.maxUrlsToScrape ?? v1?.maxUrlsToScrape ?? null;
   const sourcePolicy = v2?.sourcePolicy ?? v1?.sourcePolicy ?? 'prefer_user_sources';
   const sourceRefs = v2?.sourceRefs ?? v1?.sourceRefs ?? [];
   const objective = v2?.brief?.objective ?? (v1 ? 'investigate' : 'investigate');
   const primaryTopicId = v2?.primaryTopicId ?? v2?.brief?.primaryTopicId ?? null;
-  const brief = v2?.brief ?? null;
+  // 把用户明确指定的资料也写入 brief.contextRefs。引擎运行时可能会
+  // 追加 auto radar refs；结果页据此才能区分“用户选的”与“系统参考的”。
+  const brief = v2?.brief
+    ? {
+        ...v2.brief,
+        contextRefs: Array.from(new Map(
+          [...v2.brief.contextRefs, ...sourceRefs].map((ref) => [`${ref.type}:${ref.value}`, ref]),
+        ).values()),
+      }
+    : null;
   const context = v2?.context ?? v1?.context ?? null;
   const idempotencyKey = v2?.idempotencyKey ?? v1?.idempotencyKey ?? null;
   const conversationId = v2?.conversationId ?? v1?.conversationId ?? null;
   const conversation = v2?.conversation ?? v1?.conversation ?? [];
+  const engineContext = [context?.trim(), briefInstruction(brief ?? undefined), scopeInstruction(brief?.scope)]
+    .filter(Boolean)
+    .join('\n\n') || null;
 
   // 1. 落库 AiResearchJob（先有 id，方便后续埋点 / 草稿关联）
   let jobId: string;
@@ -126,6 +180,13 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         topic,
         context,
         reportType,
+        // Keep the persisted artifact contract aligned with the requested
+        // output. The engine may finish after this BFF-created row exists;
+        // leaving the default "markdown" here makes a successful slides
+        // run fail the terminal-state database check.
+        artifactType: reportType === 'slides' ? 'slides' : 'markdown',
+        reportLength,
+        maxUrlsToScrape,
         sourcePolicy,
         objective,
         brief: brief ?? undefined,
@@ -194,8 +255,10 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     job_id: jobId,
     requester_id: u.id,
     topic,
-    context: context ?? null,
+    context: engineContext,
     report_type: reportType,
+    report_length: reportLength,
+    max_urls_to_scrape: maxUrlsToScrape,
     source_policy: sourcePolicy,
     idempotency_key: idempotencyKey,
     source_refs: sourceRefs.map((r) => ({

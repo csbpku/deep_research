@@ -3,10 +3,21 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Pin, PinOff, Loader2 } from 'lucide-react';
+import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
 
-export function TopicFollowButton({ slug, initialFollowed }: { slug: string; initialFollowed: boolean }) {
+export function TopicFollowButton({
+  slug,
+  initialFollowed,
+  isAuthenticated = true,
+  onFollowChange,
+}: {
+  slug: string;
+  initialFollowed: boolean;
+  isAuthenticated?: boolean;
+  onFollowChange?: (followed: boolean) => void;
+}) {
   const [followed, setFollowed] = useState(initialFollowed);
   const toggle = useMutation({
     mutationFn: async (next: boolean) => {
@@ -17,13 +28,29 @@ export function TopicFollowButton({ slug, initialFollowed }: { slug: string; ini
       }
       return r.json();
     },
-    onSuccess: (_, next) => setFollowed(next),
+    onSuccess: (_, next) => {
+      setFollowed(next);
+      onFollowChange?.(next);
+    },
   });
+
+  if (!isAuthenticated) {
+    return (
+      <Button asChild type="button" size="sm" variant="outline" className="min-h-11 sm:min-h-9">
+        <Link href={`/signin?callbackUrl=${encodeURIComponent(`/topics/${slug}`)}`}>
+          <Pin className="size-4" />
+          登录后关注
+        </Link>
+      </Button>
+    );
+  }
+
   return (
     <Button
       type="button"
       size="sm"
       variant={followed ? 'outline' : 'default'}
+      className="min-h-11 sm:min-h-9"
       disabled={toggle.isPending}
       onClick={() => toggle.mutate(!followed)}
     >

@@ -25,7 +25,7 @@ export default function ImportPage() {
     <div className="mx-auto max-w-measure">
       <nav className="mb-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <Link href="/researches" className="hover:text-foreground hover:underline">
-          调研库
+          研究库
         </Link>
         <span>/</span>
         <Link href="/researches/new" className="hover:text-foreground hover:underline">

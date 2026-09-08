@@ -3,7 +3,7 @@
 // Admin 控制台客户端组件 —— Week 8：仪表板 + 调研库管理 + 3 个审核队列。
 // 由 app/admin/page.tsx（Server Component）做鉴权拦截后渲染。
 
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -16,14 +16,17 @@ import {
   Check,
   CheckCircle2,
   CircleAlert,
+  ChevronDown,
   DollarSign,
   Eye,
+  EyeOff,
   Library,
   Lightbulb,
   Link2,
   LoaderCircle,
   ListFilter,
   MessageSquare,
+  MoreHorizontal,
   Pencil,
   Play,
   RefreshCw,
@@ -59,9 +62,16 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { formatSourceType } from '@/lib/radar/source-labels';
+import { cleanResearchText } from '@/lib/research-markdown-cleanup';
 import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
 import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 import LlmUsageConsole from './llm-usage/LlmUsageConsole';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 export const ADMIN_TAB_KEYS = [
   'dashboard',
@@ -78,7 +88,7 @@ type Tab = typeof ADMIN_TAB_KEYS[number];
 const TABS: { key: Tab; label: string; icon: typeof RadarIcon }[] = [
   { key: 'dashboard', label: '仪表板', icon: ShieldCheck },
   { key: 'radar', label: '雷达治理', icon: RadarIcon },
-  { key: 'researches', label: '调研库', icon: Library },
+  { key: 'researches', label: '研究库', icon: Library },
   { key: 'topics', label: '主题提议', icon: Sparkles },
   { key: 'shares', label: '用户分享', icon: Link2 },
   { key: 'comments', label: '评论提名', icon: Lightbulb },
@@ -318,7 +328,7 @@ interface AdminResearchListResponse {
 export default function AdminConsole() {
   const [tab, setTab] = useState<Tab>('dashboard');
   return (
-    <div className="mx-auto max-w-shell">
+    <div className="mx-auto w-full max-w-shell">
       <header className="mb-4">
         <h1 className="flex items-center gap-2 text-xl font-semibold tracking-normal">
           <ShieldCheck className="size-5 text-destructive" />
@@ -330,7 +340,21 @@ export default function AdminConsole() {
       </header>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <TabsList className="w-full justify-start overflow-x-auto">
+        <div className="mb-3 sm:hidden">
+          <Select value={tab} onValueChange={(v) => setTab(v as Tab)}>
+            <SelectTrigger aria-label="Admin 模块">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TABS.map((item) => (
+                <SelectItem key={item.key} value={item.key}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <TabsList className="hidden w-full justify-start overflow-x-auto sm:flex">
           {TABS.map((t) => {
             const Icon = t.icon;
             return (
@@ -574,7 +598,40 @@ function DashboardTab() {
 
   return (
     <div>
-      <div className="mb-4 grid grid-cols-2 gap-2 xl:grid-cols-4">
+      <section className="mb-4 overflow-hidden rounded-md border border-border bg-card">
+        <div className="border-b border-border px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+                <CircleAlert className="size-4 text-primary" />
+                异常优先
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">先处理会阻塞内容质量和研究交付的事项。</p>
+            </div>
+            <span className="text-[11px] text-muted-foreground">
+              仪表板每 5 秒刷新
+            </span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3 xl:grid-cols-5">
+        <StatCard
+          label={
+            <span className="inline-flex items-center gap-1">
+              <CircleAlert className="size-3" />
+              今日异常
+            </span>
+          }
+          value={
+            d.pendingReviews.total
+            + d.jobs.failedLast24h
+            + d.jobs.failedImportJobs
+            + d.radar.monitor.latest.failed
+            + d.radar.monitor.latest.partial
+          }
+          hint={`雷达失败 ${d.radar.monitor.latest.failed + d.radar.monitor.latest.partial} · AI 失败 ${d.jobs.failedLast24h}`}
+          tone="primary"
+          className="rounded-none border-0 p-3"
+        />
         <StatCard
           label={
             <span className="inline-flex items-center gap-1">
@@ -589,47 +646,52 @@ function DashboardTab() {
             </span>
           }
           tone={d.pendingReviews.total > 0 ? 'primary' : 'default'}
-          className="p-3"
+          className="rounded-none border-0 p-3"
         />
         <StatCard
           label={
             <span className="inline-flex items-center gap-1">
-              <Library className="size-3" />
-              本周新增
+              <RadarIcon className="size-3" />
+              雷达待治理
             </span>
           }
-          value={d.content.newResearchesThisWeek}
-          hint="已发布调研库"
-          className="p-3"
+          value={d.radar.monitor.failedUniqueItems}
+          hint={`待评分 ${d.radar.monitor.readingLevels.pending} · 待补全 ${d.radar.monitor.governance.skipReasons.contentFetchFailed}`}
+          tone={d.radar.monitor.failedUniqueItems > 0 ? 'primary' : 'default'}
+          className="rounded-none border-0 p-3"
         />
         <StatCard
           label={
             <span className="inline-flex items-center gap-1">
               <Sparkles className="size-3" />
-              AI 调研
+              AI 调研失败
             </span>
           }
-          value={`${d.jobs.submittedLast24h} / 24h`}
-          hint={`失败 ${d.jobs.failedLast24h} · 导入失败 ${d.jobs.failedImportJobs}`}
-          className="p-3"
+          value={d.jobs.failedLast24h + d.jobs.failedImportJobs}
+          hint={`过去 24h 提交 ${d.jobs.submittedLast24h}`}
+          tone={d.jobs.failedLast24h + d.jobs.failedImportJobs > 0 ? 'primary' : 'default'}
+          className="rounded-none border-0 p-3"
         />
         <StatCard
           label={
             <span className="inline-flex items-center gap-1">
               <DollarSign className="size-3" />
-              本月成本
+              本月 AI 成本
             </span>
           }
           value={`$${d.cost.monthUsd}`}
-          hint="AI 调研"
-          className="p-3"
+          hint="用于观察成本异常，趋势见用量页"
+          className="col-span-2 rounded-none border-0 p-3 xl:col-span-1"
         />
       </div>
+      </section>
 
-      <div className="mb-4 rounded-md border border-border bg-card/50 p-3">
-        <header className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-          <Sparkles className="size-4 text-primary" /> 认知闭环 V2 · 近 7 天
-        </header>
+      <details className="group mb-4 rounded-md border border-border bg-card/50">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-1.5"><Sparkles className="size-4 text-primary" />认知闭环 V2 · 近 7 天</span>
+          <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
+        </summary>
+        <div className="border-t border-border p-3">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard
             label={<span>专题被关注</span>}
@@ -674,7 +736,17 @@ function DashboardTab() {
           />
         </div>
       </div>
+      </details>
 
+      <details className="group mb-4 overflow-hidden rounded-md border border-border bg-card">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-1.5"><RadarIcon className="size-4 text-muted-foreground" />雷达运行明细</span>
+          <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+            异常 {attentionCount} · 进入后查看逐源状态
+            <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
+          </span>
+        </summary>
+        <div className="border-t border-border p-3">
       <RadarMonitorPanel monitor={d.radar.monitor} generatedAt={d.generatedAt} />
       <RadarScoringRules />
 
@@ -988,6 +1060,8 @@ function DashboardTab() {
           </>
         )}
       </section>
+        </div>
+      </details>
 
       <p className="mt-4 text-xs text-muted-foreground">
         数据生成时间：{new Date(d.generatedAt).toLocaleString('zh-CN')} · 每 30s 自动刷新
@@ -1082,69 +1156,80 @@ function RadarMonitorPanel({
         </p>
       </div>
 
-      <div className="grid gap-0 divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-        <RadarMonitorSection title="阅读等级分布" hint={`${levelTotal} 条今日写入内容`}>
-          <div className="space-y-2">
-            {([
-              ['核心材料', monitor.readingLevels.collection, 'bg-tier-collection'],
-              ['推荐精读', monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
-              ['速览', monitor.readingLevels.skim, 'bg-tier-skim'],
-              ['不推荐', monitor.readingLevels.noise, 'bg-tier-noise'],
-              ['待评分', monitor.readingLevels.pending, 'bg-muted-foreground'],
-            ] as const).map(([label, count, color]) => (
-              <div key={label} className="grid grid-cols-[68px_1fr_30px] items-center gap-2 text-xs">
-                <span className="text-muted-foreground">{label}</span>
-                <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
-                  <div className={cn('h-full', color)} style={{ width: `${(count / maxLevel) * 100}%` }} />
-                </div>
-                <span className="text-right font-mono tabular-nums">{count}</span>
+      <details className="group border-t border-border">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+          <span>查看详细分布与异常原因</span>
+          <span className="flex items-center gap-2 text-[11px] font-normal text-muted-foreground">
+            {levelTotal} 条内容 · {monitor.runs.failures.length} 类失败
+            <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
+          </span>
+        </summary>
+        <div>
+          <div className="grid gap-0 divide-y divide-border border-t border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+            <RadarMonitorSection title="阅读等级分布" hint={`${levelTotal} 条今日写入内容`}>
+              <div className="space-y-2">
+                {([
+                  ['核心材料', monitor.readingLevels.collection, 'bg-tier-collection'],
+                  ['推荐精读', monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
+                  ['速览', monitor.readingLevels.skim, 'bg-tier-skim'],
+                  ['不推荐', monitor.readingLevels.noise, 'bg-tier-noise'],
+                  ['待评分', monitor.readingLevels.pending, 'bg-muted-foreground'],
+                ] as const).map(([label, count, color]) => (
+                  <div key={label} className="grid grid-cols-[68px_1fr_30px] items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">{label}</span>
+                    <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+                      <div className={cn('h-full', color)} style={{ width: `${(count / maxLevel) * 100}%` }} />
+                    </div>
+                    <span className="text-right font-mono tabular-nums">{count}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </RadarMonitorSection>
+            </RadarMonitorSection>
 
-        <RadarMonitorSection title="评分分布" hint={`${scoreTotal} 条今日写入内容`}>
-          <div className="space-y-2">
-            {monitor.scoreDistribution.map((bucket) => (
-              <div key={bucket.label} className="grid grid-cols-[52px_1fr_30px] items-center gap-2 text-xs">
-                <span className="text-muted-foreground">{bucket.label}</span>
-                <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
-                  <div className="h-full bg-primary" style={{ width: `${(bucket.count / maxScore) * 100}%` }} />
-                </div>
-                <span className="text-right font-mono tabular-nums">{bucket.count}</span>
+            <RadarMonitorSection title="评分分布" hint={`${scoreTotal} 条今日写入内容`}>
+              <div className="space-y-2">
+                {monitor.scoreDistribution.map((bucket) => (
+                  <div key={bucket.label} className="grid grid-cols-[52px_1fr_30px] items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">{bucket.label}</span>
+                    <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+                      <div className="h-full bg-primary" style={{ width: `${(bucket.count / maxScore) * 100}%` }} />
+                    </div>
+                    <span className="text-right font-mono tabular-nums">{bucket.count}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            </RadarMonitorSection>
           </div>
-        </RadarMonitorSection>
-      </div>
 
-      <div className="grid gap-0 divide-y divide-border border-t border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-        <RadarMonitorSection title="今日跳过原因（canonicalUrl 去重）">
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span>规则噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.ruleNoise}</strong></span>
-            <span>评分噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.distilledNoise}</strong></span>
-            <span>不可评估 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.unassessable}</strong></span>
-            <span>硬否决 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.hardVeto}</strong></span>
-            <span>抓取失败 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.contentFetchFailed}</strong></span>
-            <span>内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
-            <span>待评分 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.pendingScore}</strong></span>
-            <span>其他 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.other}</strong></span>
+          <div className="grid gap-0 divide-y divide-border border-t border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+            <RadarMonitorSection title="今日跳过原因（canonicalUrl 去重）">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>规则噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.ruleNoise}</strong></span>
+                <span>评分噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.distilledNoise}</strong></span>
+                <span>不可评估 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.unassessable}</strong></span>
+                <span>硬否决 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.hardVeto}</strong></span>
+                <span>抓取失败 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.contentFetchFailed}</strong></span>
+                <span>内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
+                <span>待评分 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.pendingScore}</strong></span>
+                <span>其他 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.other}</strong></span>
+              </div>
+            </RadarMonitorSection>
+            <RadarMonitorSection title="失败原因">
+              {monitor.runs.failures.length === 0 ? (
+                <p className="text-xs text-muted-foreground">今天暂无失败来源。</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {monitor.runs.failures.slice(0, 6).map((failure) => (
+                    <Badge key={failure.code} variant="outline" className="text-destructive">
+                      {failure.code} · {failure.count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </RadarMonitorSection>
           </div>
-        </RadarMonitorSection>
-        <RadarMonitorSection title="失败原因">
-          {monitor.runs.failures.length === 0 ? (
-            <p className="text-xs text-muted-foreground">今天暂无失败来源。</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {monitor.runs.failures.slice(0, 6).map((failure) => (
-                <Badge key={failure.code} variant="outline" className="text-destructive">
-                  {failure.code} · {failure.count}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </RadarMonitorSection>
-      </div>
+        </div>
+      </details>
     </section>
   );
 }
@@ -1171,10 +1256,16 @@ function RadarMonitorSection({
 
 function RadarScoringRules() {
   return (
-    <section className="mb-4 overflow-hidden rounded-md border border-border bg-card">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">评分与阅读等级规则</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+    <details className="group mb-4 overflow-hidden rounded-md border border-border bg-card">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+        <div>
+          <h2 className="text-sm font-semibold">评分与阅读等级规则</h2>
+          <p className="mt-1 text-xs text-muted-foreground">7 个评分维度 · 3 个来源 profile</p>
+        </div>
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
+      </summary>
+      <div className="border-t border-border px-4 py-3">
+        <p className="text-xs leading-5 text-muted-foreground">
           总分为 7 个维度的加权分数（0–100）。阅读等级按来源 profile 使用下表阈值；核心材料还需要满足相关性和工程证据完整度，不是只看总分。
         </p>
       </div>
@@ -1217,7 +1308,7 @@ function RadarScoringRules() {
       <div className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">
         评分维度：信息增量、分析深度、可行动性、事实可信度、时效性、表达质量、综合信号。实际分级还会应用相关性、论文可迁移性、风险和疑似搬运等规则。
       </div>
-    </section>
+    </details>
   );
 }
 
@@ -1281,6 +1372,7 @@ function RadarGovernanceTab() {
     return `${parts.find((part) => part.type === 'year')?.value}-${parts.find((part) => part.type === 'month')?.value}-${parts.find((part) => part.type === 'day')?.value}`;
   });
   const [actionMessage, setActionMessage] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const q = useQuery<RadarDiagnosticListResponse>({
     queryKey: ['admin-radar-diagnostics', kind, status, date, query, sourceType, reasonCode, sort, page, perPage],
     queryFn: async () => {
@@ -1347,7 +1439,58 @@ function RadarGovernanceTab() {
     },
     onError: (error) => setActionMessage((error as Error).message),
   });
+  const bulkActionMut = useMutation({
+    mutationFn: async (action: 'promote' | 'dismiss') => {
+      const responses: Response[] = [];
+      for (const id of selectedIds) {
+        responses.push(await fetch(`/api/admin/radar/diagnostics/${id}/${action}`, { method: 'POST' }));
+      }
+      const failed = responses.find((response) => !response.ok);
+      if (failed) {
+        const body = await failed.json().catch(() => ({ message: '批量操作失败' }));
+        throw new Error((body as { message?: string }).message ?? '批量操作失败');
+      }
+      return selectedIds.length;
+    },
+    onSuccess: (count, action) => {
+      setSelectedIds([]);
+      setActionMessage(`${count} 条内容已${action === 'promote' ? '提升到雷达' : '忽略'}`);
+      queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostics'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostic-counts'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
+    onError: (error) => setActionMessage((error as Error).message),
+  });
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [date, kind, page, perPage, query, reasonCode, sort, sourceType, status]);
   const counts = countsQ.data;
+  const visiblePendingItems = (q.data?.items ?? []).filter(
+    (item) => kind === 'filtered' && item.status === 'pending',
+  );
+  const visiblePendingIds = visiblePendingItems.map((item) => item.id);
+  const allVisibleSelected = visiblePendingIds.length > 0
+    && visiblePendingIds.every((id) => selectedIds.includes(id));
+
+  function toggleSelected(id: string, checked: boolean) {
+    setSelectedIds((current) => checked
+      ? (current.includes(id) ? current : [...current, id])
+      : current.filter((itemId) => itemId !== id));
+  }
+
+  function setPriorityQueue(next: 'priority' | 'failed' | 'score') {
+    setPage(1);
+    if (next === 'failed') {
+      setKind('failed');
+      setStatus('pending');
+      setSort('priority');
+      return;
+    }
+    setKind('filtered');
+    setStatus('pending');
+    setReasonCode('all');
+    setSort(next === 'score' ? 'score' : 'priority');
+  }
 
   return (
     <div className="space-y-4">
@@ -1393,6 +1536,40 @@ function RadarGovernanceTab() {
           去重口径：{q.data.failureRate.failed} 个未恢复失败 / {q.data.failureRate.attempted} 个唯一尝试，目标 &lt; 1%
         </p>
       ) : null}
+
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-primary/[0.035] px-3 py-2.5">
+        <span className="mr-1 text-xs font-semibold">优先队列</span>
+        <Button
+          type="button"
+          size="xs"
+          variant={kind === 'filtered' && sort === 'priority' ? 'default' : 'outline'}
+          onClick={() => setPriorityQueue('priority')}
+        >
+          <Timer />
+          优先处理
+        </Button>
+        <Button
+          type="button"
+          size="xs"
+          variant={kind === 'failed' ? 'destructive' : 'outline'}
+          onClick={() => setPriorityQueue('failed')}
+        >
+          <CircleAlert />
+          失败 / 不可用
+        </Button>
+        <Button
+          type="button"
+          size="xs"
+          variant={kind === 'filtered' && sort === 'score' ? 'default' : 'outline'}
+          onClick={() => setPriorityQueue('score')}
+        >
+          <Activity />
+          低置信度
+        </Button>
+        <span className="text-[11px] text-muted-foreground">
+          先处理失败、待评分和不可评估内容，再看普通噪声。
+        </span>
+      </div>
 
       <section className="overflow-hidden rounded-md border border-border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -1498,6 +1675,7 @@ function RadarGovernanceTab() {
                 <SelectItem value="source">按来源</SelectItem>
                 <SelectItem value="reason">按原因</SelectItem>
                 <SelectItem value="score">按评分</SelectItem>
+                <SelectItem value="priority">优先处理</SelectItem>
               </SelectContent>
             </Select>
             <Select value={perPage} onValueChange={(value) => { setPerPage(value as typeof perPage); setPage(1); }}>
@@ -1532,12 +1710,65 @@ function RadarGovernanceTab() {
             {actionMessage}
           </div>
         ) : null}
+        {kind === 'filtered' && status === 'pending' && visiblePendingIds.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/10 px-4 py-2 text-xs">
+            <label className="inline-flex cursor-pointer items-center gap-2 font-medium">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={(event) => setSelectedIds(event.target.checked ? visiblePendingIds : [])}
+                aria-label="全选当前页待治理内容"
+                className="size-3.5 accent-primary"
+              />
+              全选当前页
+            </label>
+            {selectedIds.length > 0 ? (
+              <>
+                <span className="text-muted-foreground">已选 {selectedIds.length} 条</span>
+                <Button
+                  type="button"
+                  size="xs"
+                  disabled={bulkActionMut.isPending}
+                  onClick={() => bulkActionMut.mutate('promote')}
+                >
+                  <Check />
+                  批量提升
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  disabled={bulkActionMut.isPending}
+                  onClick={() => {
+                    if (window.confirm(`确定忽略选中的 ${selectedIds.length} 条内容吗？`)) {
+                      bulkActionMut.mutate('dismiss');
+                    }
+                  }}
+                >
+                  <EyeOff />
+                  批量忽略
+                </Button>
+              </>
+            ) : (
+              <span className="text-muted-foreground">批量提升或忽略当前页内容</span>
+            )}
+          </div>
+        ) : null}
       {q.isLoading ? <QueueSkeleton /> : null}
       {q.isError ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : null}
       <div className="divide-y divide-border">
         {(q.data?.items ?? []).map((item) => (
           <div key={item.id} className="group px-4 py-3.5 transition-colors hover:bg-muted/20">
             <div className="flex items-start gap-3">
+              {kind === 'filtered' && item.status === 'pending' ? (
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(item.id)}
+                  onChange={(event) => toggleSelected(item.id, event.target.checked)}
+                  aria-label={`选择治理条目：${item.title}`}
+                  className="mt-1 size-3.5 shrink-0 accent-primary"
+                />
+              ) : null}
               <span
                 className={cn(
                   'mt-1.5 size-2 shrink-0 rounded-full',
@@ -1565,26 +1796,38 @@ function RadarGovernanceTab() {
                     <ExternalLink className="size-4" />
                   </a>
                   {kind === 'filtered' && item.status === 'pending' ? (
-                    <>
-                      <Button
-                        type="button"
-                        size="xs"
-                        disabled={actionMut.isPending}
-                        onClick={() => actionMut.mutate({ id: item.id, action: 'promote' })}
-                      >
-                        <Check />
-                        提升到雷达
-                      </Button>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={actionMut.isPending}
-                        onClick={() => actionMut.mutate({ id: item.id, action: 'dismiss' })}
-                      >
-                        忽略
-                      </Button>
-                    </>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={actionMut.isPending}
+                          aria-label={`打开治理操作：${item.title}`}
+                          title="更多治理操作"
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          disabled={actionMut.isPending}
+                          onSelect={() => actionMut.mutate({ id: item.id, action: 'promote' })}
+                        >
+                          <Check />
+                          提升到雷达
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={actionMut.isPending}
+                          className="text-muted-foreground"
+                          onSelect={() => actionMut.mutate({ id: item.id, action: 'dismiss' })}
+                        >
+                          <EyeOff />
+                          忽略
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   ) : null}
                 </div>
               </div>
@@ -1593,7 +1836,11 @@ function RadarGovernanceTab() {
                   {item.reasonMessage}
                 </p>
               ) : null}
-              {item.body ? <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">{item.body}</p> : null}
+              {item.body ? (
+                <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                  {governancePreview(item.body)}
+                </p>
+              ) : null}
               {item.kind === 'failed' && item.errorType ? (
                 <p className="mt-2 inline-flex items-center gap-1 text-xs text-destructive">
                   <FileWarning className="size-3.5" />
@@ -1628,6 +1875,17 @@ function RadarGovernanceTab() {
       </section>
     </div>
   );
+}
+
+function governancePreview(value: string): string {
+  return cleanResearchText(value)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
+    .replace(/<[^>]+>/gu, ' ')
+    .replace(/`{1,3}/gu, '')
+    .replace(/[#>*_~|]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
 
 function GovernanceMetric({
@@ -2177,7 +2435,7 @@ function CommentsTab() {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// 调研库管理
+// 研究库管理
 // ──────────────────────────────────────────────────────────────────────
 
 const RESEARCH_STATUS_OPTIONS = [
@@ -2285,7 +2543,7 @@ function ResearchesTab() {
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="搜索标题、正文或标签…"
-              aria-label="搜索调研库"
+            aria-label="搜索研究库"
               className="pl-9"
             />
           </div>

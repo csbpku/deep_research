@@ -102,6 +102,47 @@ describe('prepareRadarReadingContent', () => {
     );
   });
 
+  it('removes affiliation-only paper front matter before Abstract', () => {
+    const content = prepareRadarReadingContent(
+      [
+        '# Paper title',
+        '',
+        'Heng Wang',
+        '',
+        'Affiliation: Salesforce AI Research',
+        '',
+        'Affiliation: University of Illinois Urbana-Champaign',
+        '',
+        '## Abstract',
+        '',
+        'The paper body starts here.',
+        '',
+        '## 1 Introduction',
+        '',
+        'More body.',
+      ].join('\n'),
+      'Paper title',
+      true,
+    );
+
+    expect(content).toBe('## Abstract\n\nThe paper body starts here.\n\n## 1 Introduction\n\nMore body.');
+  });
+
+  it('removes a line-joined paper metadata prefix before Abstract', () => {
+    const content = [
+      '# A Paper Title',
+      'Jaewoo Ahn ∗,1 Junseo Kim ∗,1 1 Seoul National University {jaewoo.ahn}@vision.snu.ac.kr https://example.org/paper arXiv:2608.30428AbstractStrategic interaction starts here.',
+      '',
+      '## 1 Introduction',
+      '',
+      'More body.',
+    ].join('\n');
+
+    expect(prepareRadarReadingContent(content, 'A Paper Title', true)).toBe(
+      '## Abstract\n\nStrategic interaction starts here.\n\n## 1 Introduction\n\nMore body.',
+    );
+  });
+
   it('makes arXiv prompt placeholders explicit in the reader', () => {
     const content = [
       '###### Abstract',
@@ -121,6 +162,45 @@ describe('prepareRadarReadingContent', () => {
     expect(prepared).toContain('推荐五款最值得买的 [产品] (“Recommend the top five most worth-buying [product]”)');
     expect(prepared).toContain('推荐深圳最值得去的五家 [店铺/服务] (“most worth-visiting places/services in Shenzhen”)');
     expect(prepared).not.toContain('most worth-buying s');
+  });
+
+  it('removes the exported corresponding-author footnote marker', () => {
+    const prepared = prepareRadarReadingContent(
+      '###### Abstract\n\nMain paper text.\n\n**footnotetext: Corresponding authors.**\n\n## 1 Introduction\n\nMore text.',
+      undefined,
+      true,
+    );
+
+    expect(prepared).not.toContain('footnotetext');
+    expect(prepared).toContain('Main paper text.');
+    expect(prepared).toContain('## 1 Introduction');
+  });
+
+  it('removes dagger-prefixed corresponding-author footnotes', () => {
+    const prepared = prepareRadarReadingContent(
+      '###### Abstract\n\nMain paper text.\n\n††footnotetext: Corresponding authors.\n\n## 1 Introduction\n\nMore text.',
+      undefined,
+      true,
+    );
+
+    expect(prepared).not.toContain('footnotetext');
+    expect(prepared).toContain('Main paper text.');
+  });
+
+  it('removes generic extracted author footnotes before the next paper block', () => {
+    const prepared = prepareRadarReadingContent(
+      '###### Abstract\n\nMain paper text.\n\n'
+      + '00footnotetext: Equal contribution.  ‡Equal advising.\n\n'
+      + '![Figure 1](https://example.com/figure.svg)\n\n'
+      + '## 1 Introduction\n\nMore text.',
+      undefined,
+      true,
+    );
+
+    expect(prepared).not.toContain('footnotetext');
+    expect(prepared).not.toContain('Equal contribution');
+    expect(prepared).toContain('![Figure 1](https://example.com/figure.svg)');
+    expect(prepared).toContain('## 1 Introduction');
   });
 
   it('repairs the known arXiv extraction word join in the reader', () => {

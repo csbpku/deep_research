@@ -6,6 +6,7 @@ import { AlertTriangle, Check, CheckCircle2, Clock3, ExternalLink } from 'lucide
 import Link from 'next/link';
 
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
+import { ResearchWebBrief } from '@/components/ai-research/ResearchWebBrief';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
 import { Progress } from '@/components/ui/progress';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -14,7 +15,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi, friendlyMessage } from '@/lib/errors/friendly';
 import { progressPct } from '@/lib/ai-progress';
+import { researchUserStatus } from '@/lib/research-user-status';
 import { cn } from '@/lib/utils';
+import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
+import type { DeepResearchProgress } from '@/lib/ai-progress';
 
 interface InlineJob {
   jobId: string;
@@ -25,8 +29,12 @@ interface InlineJob {
   sourcesCount: number;
   partialSourcesCount: number;
   failedSourcesCount: number;
+  savedSourcesCount?: number;
   draftResearchId: string | null;
   reportType: string | null;
+  reportLength?: 'brief' | 'standard' | 'deep';
+  deliverableStatus?: 'report' | 'evidence_only' | 'none';
+  researchProgress?: DeepResearchProgress | null;
   outputText: string | null;
   errorCode: string | null;
   errorMessage: string | null;
@@ -35,6 +43,17 @@ interface InlineJob {
     title: string;
     content: string | null;
   } | null;
+  sources: Array<{
+    id: string;
+    title: string;
+    snippet?: string | null;
+    score?: number | null;
+    href?: string | null;
+    type?: string;
+    stepCaptured?: string | null;
+    capturedAt?: string;
+  }>;
+  review?: { status?: string | null; error?: string | null; error_code?: string | null } | null;
 }
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
@@ -46,16 +65,6 @@ const STEP_LABELS: Record<string, string> = {
   analyze: '分析对比',
   write: '生成产物',
 };
-
-function labelForStatus(status: string): string {
-  if (status === 'queued') return '排队中';
-  if (status === 'running') return '调研进行中';
-  if (status === 'succeeded') return '已完成';
-  if (status === 'partial') return '部分完成';
-  if (status === 'cancelled') return '已取消';
-  if (status === 'failed') return '失败';
-  return status;
-}
 
 /** 横向阶段 stepper：plan → search → compress → analyze → write。 */
 function StepStepper({ currentStep, succeeded }: { currentStep: string | null; succeeded: boolean }) {
@@ -155,7 +164,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
 
   if (query.isLoading) {
     return (
-      <section className="rounded-xl border border-border bg-background p-4" aria-label="调研状态">
+      <section className="rounded-md border border-border bg-background p-4" aria-label="调研状态">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="mt-3 h-2 w-full" />
         <Skeleton className="mt-4 h-12 w-full" />
@@ -165,7 +174,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
 
   if (query.isError || !query.data) {
     return (
-      <section className="rounded-xl border border-destructive/25 bg-destructive/5 p-4" role="alert">
+      <section className="rounded-md border border-destructive/25 bg-destructive/5 p-4" role="alert">
         <div className="flex items-center gap-2 text-sm font-medium text-destructive">
           <AlertTriangle className="size-4" />
           调研状态暂时不可读
@@ -182,16 +191,54 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
     status: job.status,
     finalStatus: job.finalStatus,
     currentStep: job.currentStep,
+    researchProgress: job.researchProgress,
   });
+  // Deep runs expose captured evidence through the live progress payload
+  // before the durable source count catches up. Never fall back to
+  // sourcesCount here: that is a discovered-page count, not proof that a
+  // body was fetched and can be inspected.
+  const evidenceCount = Math.max(
+    job.partialSourcesCount ?? 0,
+    job.researchProgress?.sourcesCaptured ?? 0,
+  );
+  const evidenceOnly = job.deliverableStatus === 'evidence_only';
+  const userStatus = researchUserStatus({
+    status,
+    reportType: job.reportType,
+    hasReport: Boolean(job.artifact?.content || job.outputText),
+    reviewStatus: job.review?.status,
+    deliverableStatus: job.deliverableStatus,
+    capturedSourcesCount: evidenceCount,
+  });
+  const reviewUnavailable = userStatus.code === 'review_unavailable';
+  const deliverableLabel = evidenceOnly
+    ? '资料摘要'
+    : status === 'partial'
+      ? '阶段性研究稿'
+      : job.reportType === 'slides'
+        ? 'Slides 提纲'
+        : job.reportType === 'web_brief'
+          ? '网页简报'
+        : job.reportType === 'summary_brief'
+          ? '快速判断'
+          : '研究稿';
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-background" aria-label="调研状态">
+    <section className="overflow-hidden rounded-md border border-border bg-background" aria-label="调研状态">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            {terminal && status === 'succeeded' ? <CheckCircle2 className="size-4 text-status-succeeded-fg" /> : <Clock3 className="size-4 text-primary" />}
-            <span className="text-sm font-semibold">{terminal ? '调研结果已回到当前页面' : '调研正在当前页面运行'}</span>
-            <StatusBadge kind="job" value={labelForStatus(status)} label={labelForStatus(status)} />
+            {userStatus.code === 'failed' || userStatus.code === 'needs_revision'
+              ? <AlertTriangle className="size-4 text-warning-fg" />
+              : userStatus.code === 'ready'
+                ? <CheckCircle2 className="size-4 text-status-succeeded-fg" />
+                : terminal
+                  ? <AlertTriangle className="size-4 text-warning-fg" />
+                  : <Clock3 className="size-4 text-primary" />}
+            <span className="text-sm font-semibold">
+              {terminal ? userStatus.label : '正在研究'}
+            </span>
+            <StatusBadge kind="job" value={userStatus.code === 'ready' ? 'succeeded' : userStatus.code === 'failed' ? 'failed' : 'partial'} label={userStatus.label} />
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">{job.topic ?? '当前调研'}</p>
         </div>
@@ -204,16 +251,23 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
       <div className="space-y-4 p-4">
         <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} />
 
-        <div className="flex items-center justify-end text-xs text-muted-foreground">
+        {reviewUnavailable ? (
+          <div className="rounded-lg border border-warning-border/60 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg" role="status">
+            <strong className="font-medium">{userStatus.description}</strong>
+            <span className="ml-1.5">可以打开完整任务查看依据，或稍后重新检查。</span>
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Progress value={pct} className="h-1.5 w-32 sm:w-48" />
           <span className="font-mono tabular-nums">{pct}%</span>
         </div>
-        <Progress value={pct} />
 
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
-            来源 <span className="ml-1 font-mono tabular-nums text-foreground">{job.sourcesCount}</span>
+            已抓取正文 <span className="ml-1 font-mono tabular-nums text-foreground">{evidenceCount}</span>
           </span>
-          {job.partialSourcesCount > 0 ? (
+          {terminal && status === 'partial' && job.partialSourcesCount > 0 ? (
             <span className="inline-flex items-center rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-[11px] text-warning-fg">
               部分 <span className="ml-1 font-mono tabular-nums">{job.partialSourcesCount}</span>
             </span>
@@ -224,13 +278,43 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
             </span>
           ) : null}
           <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
-            {job.reportType === 'slides' ? '演示稿' : job.reportType === 'summary_brief' ? '简报' : '研究稿'}
+            {deliverableLabel}
           </span>
         </div>
 
-        {status === 'failed' ? (
-          <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm text-destructive">
-            {job.errorMessage ?? job.errorCode ?? '调研失败，请打开完整任务查看详情。'}
+        {job.reportLength === 'deep' && job.researchProgress?.mode === 'deep' ? (
+          <DeepResearchProgressCard
+            progress={job.researchProgress}
+            savedSources={job.savedSourcesCount ?? job.sourcesCount}
+            capturedSources={evidenceCount}
+            terminalStatus={status}
+            compact
+          />
+        ) : null}
+
+        {status === 'failed' || status === 'partial' ? (
+          <div className={cn(
+            'rounded-lg border p-3 text-sm',
+            status === 'partial'
+              ? 'border-warning-border/60 bg-warning-bg/40 text-warning-fg'
+              : 'border-destructive/25 bg-destructive/5 text-destructive',
+          )} role="alert">
+            <strong className="font-medium">
+              {evidenceOnly
+                ? '资料已保留，但没有形成可交付结论'
+                : status === 'partial' ? '本次调研提前停止' : '调研失败'}
+            </strong>
+            <span className="ml-2">
+              {job.errorCode ? friendlyMessage({ code: job.errorCode }, '调研未能继续') : '请打开完整任务查看详情。'}
+            </span>
+            {job.errorMessage ? <p className="mt-1.5 text-xs opacity-90">{job.errorMessage}</p> : null}
+            {status === 'partial' ? (
+              <p className="mt-1.5 text-xs opacity-80">
+                {evidenceOnly
+                  ? '已抓取的正文仍可在完整任务中核对；重新运行会重新生成研究稿，不会把这次资料摘要当成结论。'
+                  : '已抓取的正文仍可核对；重新运行会创建一条新的调研任务。'}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -238,12 +322,18 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
           <div className="border-t border-border pt-4">
             {job.artifact.type === 'slides' ? (
               <ArtifactPreview content={job.artifact.content} />
+            ) : job.reportType === 'web_brief' ? (
+              <ResearchWebBrief
+                content={job.artifact.content}
+                sources={job.sources}
+                reviewStatus={job.review?.status}
+              />
             ) : (
-              <MarkdownPreview source={job.artifact.content} className="max-h-[720px] bg-card" />
+              <MarkdownPreview source={job.artifact.content} className="max-h-none overflow-visible bg-card lg:max-h-[720px] lg:overflow-y-auto" />
             )}
           </div>
         ) : status === 'succeeded' && job.outputText ? (
-          <MarkdownPreview source={job.outputText} className="max-h-[720px] bg-card" />
+          <MarkdownPreview source={job.outputText} className="max-h-none overflow-visible bg-card lg:max-h-[720px] lg:overflow-y-auto" />
         ) : null}
 
         {status === 'succeeded' && job.draftResearchId ? (

@@ -134,6 +134,22 @@ async def test_cancel_queued_job_marks_cancelled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_before_queue_task_starts_does_not_start_fake_job() -> None:
+    adapter = FakeAdapter(default_mode="success")
+    req = _request()
+    await adapter.submit(req)
+
+    outcome = await adapter.cancel(req.job_id)
+    await asyncio.sleep(0)
+    final = await adapter.get_status(req.job_id)
+
+    assert outcome.was_queued is True
+    assert outcome.was_running is False
+    assert final.status == AI_JOB_STATUS["CANCELLED"]
+    assert final.attempts == 0
+
+
+@pytest.mark.asyncio
 async def test_cancel_succeeded_raises_not_cancellable() -> None:
     adapter = FakeAdapter(default_mode="success")
     req = _request()

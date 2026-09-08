@@ -8,6 +8,7 @@ import { MessageSquare, Plus, Sparkles } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/StateMessage';
 import type { AiResearchConversationSummary } from '@/lib/ai-research-chat';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { retryOnceAi } from '@/lib/errors/friendly';
@@ -49,7 +50,7 @@ export function AiResearchConversationSidebar({
   }, [activeConversationId]);
 
   return (
-    <aside className="flex min-h-0 flex-col rounded-2xl border border-border bg-card shadow-sm" aria-label="最近对话">
+    <aside className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border bg-card lg:max-h-[18rem]" aria-label="最近对话">
       <div className="border-b border-border p-3">
         <Button
           type="button"
@@ -62,7 +63,7 @@ export function AiResearchConversationSidebar({
           新建对话
         </Button>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-visible p-2 lg:overflow-y-auto">
         <span className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           最近对话
         </span>
@@ -73,12 +74,23 @@ export function AiResearchConversationSidebar({
             ))}
           </div>
         ) : query.isError ? (
-          <p className="px-2 text-xs text-destructive">{friendlyMessage(query.error, '对话列表加载失败')}</p>
-        ) : query.data?.items.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">还没有对话，先提出一个问题吧。</p>
+          <ErrorState
+            className="mx-2"
+            title="对话列表加载失败"
+            description={friendlyMessage(query.error, '请稍后重试。')}
+            action={
+              <Button type="button" size="xs" variant="outline" onClick={() => void query.refetch()}>
+                重试
+              </Button>
+            }
+          />
+        ) : query.data?.items.filter((conversation) => conversation.jobId === null).length === 0 ? (
+          <p className="px-2 py-2 text-xs leading-5 text-muted-foreground">
+            还没有未启动的对话。已启动的研究会在“最近任务”中保留。
+          </p>
         ) : (
           <ul className="space-y-1">
-            {query.data?.items.map((conversation) => {
+            {query.data?.items.filter((conversation) => conversation.jobId === null).map((conversation) => {
               const active = conversation.id === activeConversationId;
               return (
                 <li key={conversation.id}>
@@ -92,7 +104,7 @@ export function AiResearchConversationSidebar({
                   >
                     <MessageSquare className="mt-0.5 size-3.5 shrink-0" />
                     <span className="min-w-0 flex-1">
-                      <span className="line-clamp-2 block leading-5">{conversation.title}</span>
+                      <span className="line-clamp-2 leading-5">{conversation.title}</span>
                       <span className="mt-0.5 block text-[11px] text-muted-foreground/70">
                         {relativeTime(conversation.updatedAt)}
                         {conversation.jobId ? ' · 已启动' : ''}

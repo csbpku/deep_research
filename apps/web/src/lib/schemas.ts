@@ -26,6 +26,11 @@ export const CreateResearchInput = z.object({
 export type CreateResearchInput = z.infer<typeof CreateResearchInput>;
 
 /** 编辑沉淀 */
+const ResearchRevisionContext = z.object({
+  sourceMessageId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(2000).optional(),
+}).strict();
+
 export const UpdateResearchInput = z.object({
   title: z.string().min(1).max(300).optional(),
   body: z.string().min(1).max(50000).optional(),
@@ -33,6 +38,9 @@ export const UpdateResearchInput = z.object({
   conclusion: z.string().max(2000).nullable().optional(),
   risks: z.string().max(2000).nullable().optional(),
   tags: z.array(z.string().min(1).max(40)).max(10).optional(),
+  // 只有 AI 调研追问的“修改报告”动作使用；服务端会重新解析消息和来源，
+  // 不信任客户端提交的 provenance 文本。
+  revisionContext: ResearchRevisionContext.optional(),
 });
 export type UpdateResearchInput = z.infer<typeof UpdateResearchInput>;
 
@@ -83,7 +91,7 @@ export type CreateImportInput = z.infer<typeof CreateImportInput>;
  * - type: 可选，不传=全部
  * - page/per_page: 分页；per_page 上限 50
  *
- * 契约源：docs/agent-prompts/week4-engineer-a.md §任务 2
+ * 契约源：docs/archive/2026-09-08-agent-prompts/week4-engineer-a.md §任务 2
  * 注：摘要/长文/精华来自 published-only search_docs；雷达候选动态查询 summaries。
  */
 export const SearchDocType = {
@@ -134,10 +142,14 @@ export const RadarListQuery = z.object({
     z.array(z.string().trim().min(1).max(32)).min(1),
   ]).optional(),
   status: z.enum(RADAR_STATUS_VALUES).optional(),
+  /** Admin 雷达治理的服务端优先队列；公开雷达不传此参数。 */
+  adminQueue: z.enum(['all', 'pending_score', 'low_confidence']).default('all'),
   quality: z.union([
     z.enum(RADAR_QUALITY_VALUES),
     z.array(z.enum(RADAR_QUALITY_VALUES)).min(1),
-  ]).default(['collection', 'deep_read', 'skim']),
+  // Default excludes skim so the member-facing radar defaults to items
+  // worth deep-reading; the dropdown still lets users widen to skim.
+  ]).default(['collection', 'deep_read']),
   /** 入库时间下限；用于技术雷达的“今天/近 N 天”筛选。 */
   dateFrom: z.coerce.date().optional(),
   page: z.coerce.number().int().min(1).default(1),

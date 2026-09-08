@@ -165,11 +165,25 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       ?? (score as Record<string, unknown>).total;
     return typeof value === 'number' ? value : Number(value ?? -1);
   };
+  const priorityOf = (item: (typeof visibleRows)[number]) => {
+    if (item.kind === 'failed') return 0;
+    return {
+      AI_ENGINE_UNAVAILABLE: 1,
+      CONTENT_FETCH_FAILED: 1,
+      PENDING_SCORE: 2,
+      DISTILLED_UNASSESSABLE: 3,
+      LOW_QUALITY: 4,
+      DISTILLED_HARD_VETO: 5,
+      DISTILLED_NOISE: 6,
+      RULE_NOISE: 7,
+    }[item.reasonCode] ?? 8;
+  };
   visibleRows.sort((a, b) => {
     if (sort === 'oldest') return a.createdAt.getTime() - b.createdAt.getTime();
     if (sort === 'source') return a.source.name.localeCompare(b.source.name) || b.createdAt.getTime() - a.createdAt.getTime();
     if (sort === 'reason') return a.reasonCode.localeCompare(b.reasonCode) || b.createdAt.getTime() - a.createdAt.getTime();
     if (sort === 'score') return scoreOf(b) - scoreOf(a) || b.createdAt.getTime() - a.createdAt.getTime();
+    if (sort === 'priority') return priorityOf(a) - priorityOf(b) || scoreOf(b) - scoreOf(a) || b.createdAt.getTime() - a.createdAt.getTime();
     return b.createdAt.getTime() - a.createdAt.getTime();
   });
 

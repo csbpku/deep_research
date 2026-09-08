@@ -23,6 +23,11 @@ import {
   normalizeRadarQuery,
   shapeCandidate,
 } from '../../../lib/radar/shape';
+import {
+  RADAR_ARTICLE_SOURCE_TYPES,
+  RADAR_COMMUNITY_SOURCE_TYPES,
+  RADAR_RESEARCH_SOURCE_TYPES,
+} from '../../../lib/radar/source-labels';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
 
@@ -79,6 +84,40 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     ? requestedQualityValues
     : requestedQualityValues.filter((value) => value !== 'noise');
   const sourceTypes = Array.isArray(sourceType) ? sourceType : sourceType ? [sourceType] : [];
+  const hackerNewsSource = {
+    name: { contains: 'Hacker News', mode: 'insensitive' as Prisma.QueryMode },
+  } satisfies Prisma.RadarSourceWhereInput;
+  const articleSource = {
+    AND: [
+      { sourceType: { in: [...RADAR_ARTICLE_SOURCE_TYPES] } },
+      { NOT: hackerNewsSource },
+    ],
+  } satisfies Prisma.RadarSourceWhereInput;
+  const communitySource = {
+    OR: [
+      { sourceType: { in: [...RADAR_COMMUNITY_SOURCE_TYPES] } },
+      {
+        AND: [
+          { sourceType: { in: [...RADAR_ARTICLE_SOURCE_TYPES] } },
+          hackerNewsSource,
+        ],
+      },
+    ],
+  } satisfies Prisma.RadarSourceWhereInput;
+  const sourceFilterForCategory = (selectedSource: string): Prisma.SummaryWhereInput[] => {
+    const sourceWhere = selectedSource === 'github'
+      ? { sourceType: { startsWith: 'github' } }
+      : selectedSource === 'research'
+        ? { sourceType: { in: [...RADAR_RESEARCH_SOURCE_TYPES] } }
+        : selectedSource === 'articles'
+          ? articleSource
+          : selectedSource === 'community'
+            ? communitySource
+            : selectedSource === 'shared'
+              ? null
+              : { sourceType: selectedSource };
+    return sourceWhere ? [{ syncRun: { source: sourceWhere } }] : [];
+  };
   const qualityWhere = qualityValues.length === 0 && requestedQualityValues.some(Boolean)
     ? { id: { in: [] } } satisfies Prisma.SummaryWhereInput
     : qualityValues.includes('all')
@@ -94,6 +133,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           ...(qualityValues.includes('pending') ? [{ distilledTier: null }] : []),
         ],
       } satisfies Prisma.SummaryWhereInput;
+  const nonReaderGithubItem = {
+    OR: [
+      { originalKind: { in: ['github_issue', 'github_pr', 'github_release'] } },
+      { canonicalUrl: { contains: '/issues/' } },
+      { canonicalUrl: { contains: '/pull/' } },
+      { canonicalUrl: { contains: '/releases/tag/' } },
+    ],
+  } satisfies Prisma.SummaryWhereInput;
   if ((status === SUMMARY_STATUS.REJECTED || status === SUMMARY_STATUS.ARCHIVED) && u?.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
@@ -111,36 +158,30 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     AND: [
       {
         OR: [
-          { source: 'daily', syncRunId: { not: null } },
+                { source: 'daily', syncRunId: { not: null } },
           { source: 'user', shareSource: { is: { status: 'approved' } } },
         ],
       },
       ...(sourceTypes.length > 0
         ? [{
-            OR: sourceTypes.flatMap((selectedSource) => {
-              const sourceTypeFilter = selectedSource === 'github'
-                ? { startsWith: 'github' }
-                : selectedSource === 'research'
-                  ? 'arxiv'
-                : selectedSource === 'articles'
-                  ? { in: ['rss', 'devto', 'vendor_news', 'wechat', 'sitemap_watch'] }
-                  : selectedSource === 'community'
-                    ? { in: ['hackernews', 'producthunt', 'reddit', 'lobsters'] }
-                    : selectedSource === 'shared'
-                      ? '__user_share__'
-                    : selectedSource;
-              return [
-                { syncRun: { source: { sourceType: sourceTypeFilter } } },
-                ...(selectedSource === 'shared'
-                  ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
-                  : selectedSource === 'articles' || selectedSource === 'web_share'
-                  ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
-                  : []),
-              ];
-            }),
-          }]
+          OR: sourceTypes.flatMap((selectedSource) => {
+            return [
+              ...sourceFilterForCategory(selectedSource),
+              ...(selectedSource === 'shared'
+                ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+                : selectedSource === 'articles' || selectedSource === 'web_share'
+                ? [{ source: 'user' as const, shareSource: { is: { status: 'approved' as const } } }]
+                : []),
+            ];
+          }),
+        }]
         : []),
       ...(qualityWhere ? [qualityWhere] : []),
+      // GitHub Issue/PR/Release are governance signals, not durable Radar
+      // reading assets. Keep them in Admin, but do not mix them into the
+      // member-facing stream. URL fallbacks cover historical rows that were
+      // persisted as github_other before the classifier was fixed.
+      { NOT: nonReaderGithubItem },
       // Public radar contains only scored, reader-facing tiers. Noise and
       // pending/unscored rows remain available to Admin governance tools.
       ...(u?.role !== 'admin'
@@ -175,7 +216,6 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   };
 
   const orderBy: Prisma.SummaryOrderByWithRelationInput[] = [
-    { distilledMustRead: { sort: 'desc', nulls: 'last' } },
     { distilledTotal: { sort: 'desc', nulls: 'last' } },
     { createdAt: 'desc' },
   ];
@@ -209,6 +249,13 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         sortOrder: true,
         syncRunId: true,
         source: true,
+        readerQualityStatus: true,
+        readerQualityDetails: true,
+        contentReviewStatus: true,
+        contentReviewRound: true,
+        contentReviewDetails: true,
+        renderReviewStatus: true,
+        renderReviewRound: true,
         sharedBy: { select: { id: true, name: true } },
         syncRun: {
           select: {

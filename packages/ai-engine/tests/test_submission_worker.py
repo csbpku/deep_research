@@ -9,7 +9,13 @@ from typing import Any
 
 import pytest
 
-from ai_engine.radar.submission_worker import _process_one
+from ai_engine.radar.submission_worker import _process_one, _url_kind
+
+
+def test_url_kind_classifies_github_release() -> None:
+    assert _url_kind(
+        "https://github.com/microsoft/agent-lightning/releases/tag/v1.0.1"
+    ) == "github_release"
 
 
 class _FakePool:

@@ -125,13 +125,18 @@ AI_CHAT_ROLE: Final[dict[str, str]] = {
 }
 AiChatRole = Literal["user", "assistant"]
 
-# AI research job `reportType` (DB column is VarChar(40)). The contract uses
-# these two values only — see docs/contracts/api-schemas.md and state-machines.md.
+# AI research job `reportType` (DB column is VarChar(40)). These values are
+# persisted in the queue and rendered differently at the presentation boundary.
 REPORT_TYPE: Final[dict[str, str]] = {
     "RESEARCH_REPORT": "research_report",
     "SUMMARY_BRIEF": "summary_brief",
+    "SLIDES": "slides",
+    "WEB_BRIEF": "web_brief",
+    # Internal claim-scoped retrieval. It persists sources on the job but
+    # must never create a second editable Research draft.
+    "EVIDENCE_SEARCH": "evidence_search",
 }
-ReportType = Literal["research_report", "summary_brief", "slides"]
+ReportType = Literal["research_report", "summary_brief", "slides", "web_brief", "evidence_search"]
 
 # Helpers for partial-job rule (架构 §九 风险 10 / state-machines §1):
 # mid-failure with at least 3 sources → partial; otherwise failed.
@@ -152,8 +157,9 @@ ResearchObjective = Literal[
 RESEARCH_OUTPUT_TYPE: Final[dict[str, str]] = {
     "MARKDOWN": "markdown",
     "SLIDES": "slides",
+    "WEB": "web",
 }
-ResearchOutputType = Literal["markdown", "slides"]
+ResearchOutputType = Literal["markdown", "slides", "web"]
 
 TOPIC_ISSUE_KIND: Final[dict[str, str]] = {
     "EVENT": "event",

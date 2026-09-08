@@ -6,24 +6,28 @@
 // 管理队列才附加状态、排序和管理操作。
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
 import { RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
-import { BookOpenCheck, MessageSquare, Sparkles } from 'lucide-react';
+import { ArrowUpRight, BookOpenCheck, MessageSquare, Sparkles } from 'lucide-react';
 import { CommentSection } from '@/components/CommentSection';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { Button } from '@/components/ui/button';
-import { formatSourceType } from '@/lib/radar/source-labels';
+import { formatSourceType, isHackerNewsSourceName } from '@/lib/radar/source-labels';
 import { cn } from '@/lib/utils';
 
 interface RadarCandidate {
   id: string;
   title: string;
   excerpt: string;
+  excerptDisplay?: 'full' | 'clamp';
   url: string;
   sourceType: string | null;
+  sourceName?: string | null;
   tags: string[];
   status: string;
   publishedAt: string | null;
@@ -53,8 +57,6 @@ interface RadarCandidateCardProps {
   candidate: RadarCandidate;
   /** 从列表进入详情时携带当前筛选和页码，详情页可准确返回。 */
   detailHref?: string;
-  /** 登录成员操作（例如从候选发起深入调研）；不传则不展示 */
-  memberActions?: React.ReactNode;
   /** Admin 操作按钮组（select/dismiss/retry）；不传则不展示 */
   adminActions?: React.ReactNode;
   /** 当前登录用户（用于评论区交互）；不传则只读 */
@@ -70,8 +72,16 @@ function formatDate(iso: string): string {
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(ts));
 }
 
-function SourcePill({ sourceType }: { sourceType: string | null }) {
-  const label = formatSourceType(sourceType);
+function SourcePill({
+  sourceType,
+  sourceName,
+}: {
+  sourceType: string | null;
+  sourceName?: string | null;
+}) {
+  const label = isHackerNewsSourceName(sourceName)
+    ? formatSourceType('hackernews')
+    : formatSourceType(sourceType);
   return (
     <span
       className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground"
@@ -86,13 +96,15 @@ function SourcePill({ sourceType }: { sourceType: string | null }) {
 export function RadarCandidateCard({
   candidate,
   detailHref,
-  memberActions,
   adminActions,
   currentUserId = null,
   currentUserRole = null,
   compact = false,
 }: RadarCandidateCardProps) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const prefetchStartedRef = useRef(false);
   const interpretation = candidate.interpretation;
   const showExcerpt =
     !interpretation ||
@@ -127,6 +139,25 @@ export function RadarCandidateCard({
     tier === 'noise' && 'border-tier-noise/40 text-tier-noise',
     !tier && 'hidden',
   );
+  const prefetchDetail = () => {
+    if (prefetchStartedRef.current) return;
+    prefetchStartedRef.current = true;
+    // Hover/focus is a stronger intent signal than prefetching every card in
+    // a long list, and also warms the route in Next dev where viewport
+    // prefetching is less predictable.
+    void router.prefetch(resolvedDetailHref);
+    void queryClient.prefetchQuery({
+      queryKey: ['radar', candidate.id],
+      queryFn: async () => {
+        const response = await fetch(`/api/radar/${candidate.id}?surface=summary`, {
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error('雷达详情预取失败');
+        return response.json();
+      },
+      staleTime: 30_000,
+    });
+  };
 
   return (
     <article className={cn(
@@ -136,10 +167,10 @@ export function RadarCandidateCard({
         : 'rounded-md border border-border bg-card p-4 hover:border-primary/30',
     )}>
       <header className="flex flex-wrap items-center gap-2">
-        <SourcePill sourceType={candidate.sourceType} />
+        <SourcePill sourceType={candidate.sourceType} sourceName={candidate.sourceName} />
         {isAdminQueue ? <StatusBadge kind="radar" value={candidate.status} /> : null}
         {contentPending ? (
-          <span className="inline-flex items-center rounded-full border border-amber-300/70 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/30 dark:text-amber-100">
+          <span className="inline-flex items-center rounded-full border border-warning-border/70 bg-warning-bg px-2 py-0.5 text-[11px] font-medium text-warning-fg">
             正文待补抓
           </span>
         ) : null}
@@ -153,6 +184,9 @@ export function RadarCandidateCard({
 
       <Link
         href={resolvedDetailHref}
+        prefetch={false}
+        onMouseEnter={prefetchDetail}
+        onFocus={prefetchDetail}
         className="text-base font-semibold leading-snug tracking-normal hover:text-primary hover:underline"
       >
         {candidate.title}
@@ -160,7 +194,7 @@ export function RadarCandidateCard({
 
       {candidate.topics.length > 0 || candidate.issues.length > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5 pt-1" aria-label="关联专题与议题">
-          {candidate.topics.map((t) => (
+          {candidate.topics.slice(0, 2).map((t) => (
             <Link
               key={`topic-${t.id}`}
               href={`/topics/${t.slug}`}
@@ -189,12 +223,23 @@ export function RadarCandidateCard({
       ) : null}
 
       {candidate.interpretation ? (
-        <p className="line-clamp-2 text-sm leading-7 text-muted-foreground">
+        <p className={cn(
+          'whitespace-pre-line text-sm leading-relaxed text-muted-foreground',
+          compact && 'line-clamp-3',
+        )}>
           <span className="mr-1.5 text-[11px] text-foreground/70">AI 解读：</span>
           {candidate.interpretation}
         </p>
       ) : showExcerpt ? (
-        <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+        // arxiv abstracts / 长文导言（avg_len >= 200 或 ≤3 段）→ 完整显示；
+        // 对话 / 流水账 web_share 内容（多数短段落）→ clamp-5 抑制对话墙。
+        // 服务端 shape.ts 的 classifyExcerptDisplay 已经按 excerpt 段落结构分类。
+        <p className={cn(
+          'whitespace-pre-line text-sm leading-relaxed text-muted-foreground',
+          compact
+            ? 'line-clamp-3'
+            : candidate.excerptDisplay !== 'full' && 'line-clamp-5',
+        )}>
           {candidate.excerpt}
         </p>
       ) : null}
@@ -231,12 +276,15 @@ export function RadarCandidateCard({
             {candidate.commentCount} 条讨论
           </Button>
         ) : null}
-        {memberActions}
         <Link
           href={resolvedDetailHref}
-          className="shrink-0 text-xs font-medium text-primary hover:underline"
+          prefetch={false}
+          onMouseEnter={prefetchDetail}
+          onFocus={prefetchDetail}
+          className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
         >
-          查看详情 →
+          打开详情
+          <ArrowUpRight className="size-3.5" />
         </Link>
       </div>
 

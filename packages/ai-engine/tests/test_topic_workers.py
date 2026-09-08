@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from ai_engine.radar.topic_aggregation_worker import _topic_slug
+from ai_engine.radar.topic_aggregation_worker import ALLOWED_TIERS, _topic_slug
 from ai_engine.radar.topic_clustering import (
     build_candidate_clusters,
     is_metadata_tag,
@@ -32,7 +32,7 @@ from ai_engine.radar.topic_refresh_worker import (
         "profile_engineering", "profile_paper", "profile_news",
         "tier_deep_read", "tier_skim", "tier_collection",
         "github", "arxiv", "huggingface", "devto", "hackernews",
-        "trending", "must_read", "topic_search",
+        "trending", "topic_search",
         "lobsters", "producthunt", "rss", "news",
         "ai", "AI", "llm", "large-language-model", "machinelearning",
         "programming", "opensource", "python", "typescript", "javascript",
@@ -109,6 +109,11 @@ def test_build_candidate_clusters_prefers_specific_tag() -> None:
 def test_topic_slug_canonicalizes_case_and_separators() -> None:
     assert _topic_slug(" Agent Evaluation ") == "agent-evaluation"
     assert _topic_slug("MCP / Security") == "mcp-security"
+
+
+def test_topic_aggregation_only_accepts_deep_read_and_above() -> None:
+    assert ALLOWED_TIERS == {"collection", "deep_read"}
+    assert "skim" not in ALLOWED_TIERS
 
 
 def test_existing_topic_refresh_uses_non_metadata_anchor_tags() -> None:

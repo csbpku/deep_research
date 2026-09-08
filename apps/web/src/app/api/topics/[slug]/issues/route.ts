@@ -9,7 +9,7 @@ import type { TopicIssueStatus } from '@prisma/client';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
-import { findTopicBySlugOrId } from '@/lib/topics';
+import { collapseTopicIssues, findTopicBySlugOrId } from '@/lib/topics';
 import { recordProductEvent } from '@/lib/product-events';
 
 export const dynamic = 'force-dynamic';
@@ -27,6 +27,17 @@ function parseStatus(value: string | null): TopicIssueStatus | 'all' {
   return 'active';
 }
 
+function parseNonNegativeInt(value: string | null, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function parsePageSize(value: string | null): number {
+  const parsed = parseNonNegativeInt(value, 30);
+  return Math.min(Math.max(parsed, 1), 50);
+}
+
 export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> }]>(async (req, ctx) => {
   const { slug } = await ctx.params;
   if (!slug) {
@@ -41,19 +52,20 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
   const url = new URL(req.url);
   const sort = parseSort(url.searchParams.get('sort'));
   const statusFilter = parseStatus(url.searchParams.get('status'));
+  const offset = parseNonNegativeInt(url.searchParams.get('offset'), 0);
+  const count = parsePageSize(url.searchParams.get('count'));
 
   const where: import('@prisma/client').Prisma.TopicIssueWhereInput = {
     topicId: topic.id,
     ...(statusFilter === 'all' ? {} : { status: statusFilter }),
   };
 
-  const issues = await prisma.topicIssue.findMany({
+  const issueRowsRaw = await prisma.topicIssue.findMany({
     where,
     orderBy:
       sort === 'newest'
-        ? [{ lastSeenAt: 'desc' }]
-        : [{ importanceScore: 'desc' }, { lastSeenAt: 'desc' }],
-    take: 30,
+        ? [{ lastSeenAt: 'desc' }, { id: 'asc' }]
+        : [{ importanceScore: 'desc' }, { lastSeenAt: 'desc' }, { id: 'asc' }],
     select: {
       id: true,
       kind: true,
@@ -64,16 +76,18 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
       importanceScore: true,
       firstSeenAt: true,
       lastSeenAt: true,
-      candidates: {
-        select: {
-          summaryId: true,
-          relevanceScore: true,
-          addedAt: true,
-        },
-        take: 8,
-      },
+      candidates: { select: { summaryId: true } },
     },
   });
+
+  const publicIssues = collapseTopicIssues(
+    issueRowsRaw.map((issue) => ({
+      ...issue,
+      candidateIds: issue.candidates.map((candidate) => candidate.summaryId),
+    })),
+  );
+  const total = publicIssues.length;
+  const issues = publicIssues.slice(offset, offset + count);
 
   const user = await getCurrentUser();
   let lastViewedAt: Date | null = null;
@@ -97,15 +111,21 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
   }
 
   return NextResponse.json({
+    total,
+    offset,
+    count,
     issues: issues.map((issue) => ({
-      ...issue,
+      id: issue.id,
+      kind: issue.kind,
+      status: issue.status,
+      title: issue.title,
+      proposition: issue.proposition,
+      summary: issue.summary,
+      importanceScore: issue.importanceScore,
       firstSeenAt: issue.firstSeenAt.toISOString(),
       lastSeenAt: issue.lastSeenAt.toISOString(),
       isUnread: lastViewedAt ? issue.lastSeenAt > lastViewedAt : true,
-      candidates: issue.candidates.map((c) => ({
-        ...c,
-        addedAt: c.addedAt.toISOString(),
-      })),
+      candidates: issue.candidateIds.map((summaryId) => ({ summaryId })),
     })),
   });
 });

@@ -1,4 +1,30 @@
-import { prepareContent } from '@/components/MarkdownContent';
+import {
+  cleanExtractedPlainText,
+  prepareContent,
+  stripExtractedPaperFootnotes,
+} from '@/lib/markdown-content';
+
+export { cleanExtractedPlainText, stripExtractedPaperFootnotes };
+
+/**
+ * Brief fields are rendered as plain text. Reject source Markdown rather than
+ * showing README headings, image badges, or collection-card links as if they
+ * were an AI judgment.
+ */
+export function cleanRadarBrief(value: string): string | null {
+  const raw = decodeRadarTextEntities(value).trim();
+  if (!raw) return null;
+  if (
+    /(?:^|\n)\s*#{1,6}\s+/u.test(raw)
+    || /!\[[^\]]*\]\([^)]+\)/u.test(raw)
+    || (raw.match(/\[[^\]]+\]\([^)]+\)/gu)?.length ?? 0) >= 2
+  ) {
+    return null;
+  }
+  const cleaned = cleanExtractedPlainText(raw);
+  if (cleaned.length < 24) return null;
+  return cleaned;
+}
 
 export function decodeRadarTextEntities(value: string): string {
   const named: Record<string, string> = {
@@ -57,15 +83,63 @@ function removeSourceTitle(content: string, title?: string, paperMode = false): 
 }
 
 function removePaperFrontMatter(content: string): string {
-  const blocks = content.split(/\n{2,}/u).map((block) => block.trim()).filter(Boolean);
-  const abstractIndex = blocks.findIndex((block, index) => (
-    index < 8 && /^#{1,6}\s+(?:abstract|摘要)\b/iu.test(block)
-  ));
-  return abstractIndex > 0 ? blocks.slice(abstractIndex).join('\n\n') : content;
+  const isPaperMetadataPrefix = (prefix: string): boolean => {
+    const value = prefix.trim();
+    if (!value || value.length > 3600) return false;
+
+    const lines = value.split(/\n+/u).map((line) => line.trim()).filter(Boolean);
+    const hasContact = /@/u.test(value);
+    const hasSourceLink = /https?:\/\/|arxiv\s*:/iu.test(value);
+    const hasAffiliation = /\b(?:affiliation\s*:|university|institute|college|school|laboratory|lab|department)\b|大学|学院|研究所|研究院|理工/iu.test(value);
+    const hasAuthorMarkers = /[∗†‡]|\b\d{1,2}(?:\s*,\s*\d{1,2})+\b/u.test(value);
+    const hasCorrespondenceLabel = /correspond(?:ence|ing)|通信作者/iu.test(value);
+    const shortMetadataLines = lines.filter((line) => (
+      line.length <= 240 && !/[.!?。！？]$/u.test(line)
+    )).length;
+
+    // A paper's first real paragraph can mention a URL or an email. Require
+    // several independent metadata signals before removing anything.
+    return (
+      (hasContact && (
+        (hasSourceLink && (hasAffiliation || hasAuthorMarkers))
+        || hasCorrespondenceLabel
+      ))
+      || (hasAffiliation && shortMetadataLines >= 2)
+    );
+  };
+
+  // Normal extraction keeps an Abstract heading, but may place it in the
+  // same Markdown block as the author/affiliation lines. The block-based
+  // version missed that shape, so inspect the prefix before the first heading.
+  const headingMatch = content.match(/(?:^|\n)([ \t]*#{1,6}[ \t]*(?:abstract|摘要)\b)/iu);
+  if (headingMatch && headingMatch.index !== undefined) {
+    const headingStart = headingMatch.index + headingMatch[0].lastIndexOf(headingMatch[1]!);
+    const prefix = content.slice(0, headingStart);
+    const heading = content.slice(headingStart);
+    if (isPaperMetadataPrefix(prefix)) return heading.trimStart();
+  }
+
+  // Some HTML-to-Markdown paths flatten the end of the metadata line into
+  // `arXiv:2608.30428AbstractStrategic...` (or the URL equivalent). Recover
+  // the boundary only when the text before Abstract carries paper metadata.
+  const flattenedMatch = content.match(
+    /(?:arxiv\s*:\s*[^\s]+|https?:\/\/\S+)[^\n]{0,240}?(abstract|摘要)(?=[A-Z\u4e00-\u9fff])/iu,
+  );
+  if (flattenedMatch && flattenedMatch.index !== undefined) {
+    const abstractOffset = flattenedMatch[0].toLowerCase().lastIndexOf(flattenedMatch[1]!.toLowerCase());
+    const abstractStart = flattenedMatch.index + abstractOffset;
+    const prefix = content.slice(0, abstractStart);
+    if (isPaperMetadataPrefix(prefix)) {
+      const body = content.slice(abstractStart + flattenedMatch[1]!.length).trimStart();
+      return `## Abstract\n\n${body}`.trim();
+    }
+  }
+
+  return content;
 }
 
 function normalizePaperReaderArtifacts(content: string): string {
-  return content
+  return stripExtractedPaperFootnotes(content)
     // A converted arXiv appendix can leak a model-instruction template into
     // the reader. Remove only the exact artifact signature.
     .replace(

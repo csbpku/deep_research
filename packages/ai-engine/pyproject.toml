@@ -37,6 +37,7 @@ dependencies = [
     # >=6.0.11 to align with the version that ships transitively with
     # gpt-researcher so we don't bump a transitive package just for this.
     "feedparser>=6.0.11",
+    "curl-cffi>=0.16.2",
 ]
 
 [dependency-groups]

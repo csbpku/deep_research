@@ -1,6 +1,6 @@
 """Week 9 收尾验收：月成本外推脚本的契约测试。
 
-依据：docs/IMPLEMENTATION_PLAN.md §十一
+依据：docs/archive/2026-09-08-implementation-plan.md §十一
   - "月成本按当前试用强度外推不超过 $200"
   - "超过则在试用前降低每日额度"
 

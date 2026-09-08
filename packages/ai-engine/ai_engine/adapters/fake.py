@@ -44,7 +44,7 @@ from ai_engine.contracts.states import (
     AiJobStatus,
 )
 
-FakeMode = Literal["success", "partial", "failed", "timeout"]
+FakeMode = Literal["success", "partial", "partial_after_write", "failed", "timeout"]
 
 
 @dataclass(slots=True)
@@ -261,6 +261,12 @@ class FakeAdapter(ResearchEngineAdapter):
 
     async def _run(self, job: _Job) -> None:
         async with job.lock:
+            # ``submit`` schedules this coroutine asynchronously. A caller can
+            # therefore cancel the job before the queue task gets its first
+            # timeslice. Do not turn that cancelled queue entry back into a
+            # running job (or increment its attempt count).
+            if job.cancel_event.is_set() or job.status == AI_JOB_STATUS["CANCELLED"]:
+                return
             job.status = AI_JOB_STATUS["RUNNING"]  # type: ignore[assignment]
             job.attempts += 1
         try:
@@ -364,6 +370,14 @@ class FakeAdapter(ResearchEngineAdapter):
                 job.body = f"{job.request.topic}\n\n基于已验证来源生成的简要摘要。"
                 job.token_in += 500
                 job.token_out += 800
+                if job.mode == "partial_after_write":
+                    # Exercise the real publication boundary: the report is
+                    # readable, but the terminal job cannot create a draft.
+                    job.status = cast(AiJobStatus, AI_JOB_STATUS["PARTIAL"])
+                    job.error_code = "WORKER_TIMEOUT"
+                    job.error_message = "fake: simulated review timeout"
+                    job.completion_event.set()
+                    raise _ScriptAbort("partial_after_write")
 
 
 class _ScriptAbort(Exception):

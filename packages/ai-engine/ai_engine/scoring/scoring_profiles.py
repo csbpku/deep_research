@@ -1,7 +1,7 @@
 """Scoring profiles for audience-matched Distilled scoring (v2).
 
-Defines how the 7-dimension scoring weights, must_read thresholds, and
-tier behavior shift per audience profile. Profiles are pure data — no
+Defines how the 7-dimension scoring weights and tier thresholds
+shift per audience profile. Profiles are pure data — no
 LLM calls happen here. The active profile is selected at runtime via
 ``active_profile()`` (overridable with the ``SCORING_PROFILE`` env var).
 
@@ -59,7 +59,7 @@ _DIM_AUDIENCE_FIT = "综合信号"
 
 @dataclass(frozen=True)
 class ScoringProfile:
-    """A scoring profile: weights + must_read thresholds + tier thresholds."""
+    """A scoring profile: weights + tier thresholds."""
 
     id: str
     description: str
@@ -69,14 +69,10 @@ class ScoringProfile:
     tier_collection: float
     tier_deep_read: float
     tier_skim: float
-    # must_read total floor
-    must_read_total: float
-    # minimum number of "core" dimensions (信息增量/分析深度/可行动性) at
-    # ≥ 2 to qualify for must_read.
-    must_read_core_count: int
 
 
-# Core dimensions used for must_read counting. Fixed across all profiles.
+# Core dimensions (信息增量 / 分析深度 / 可行动性) carry the highest
+# editorial weight and decide the collection tier.
 _CORE_DIMENSIONS: tuple[str, ...] = (
     _DIM_INFO_INCREMENT,
     _DIM_ANALYSIS_DEPTH,
@@ -106,8 +102,6 @@ PAPER_PROFILE = ScoringProfile(
     tier_collection=88,
     tier_deep_read=60,
     tier_skim=42,
-    must_read_total=86,
-    must_read_core_count=2,
 )
 
 
@@ -135,8 +129,6 @@ ENGINEERING_PROFILE = ScoringProfile(
     tier_collection=90,
     tier_deep_read=55,
     tier_skim=38,
-    must_read_total=82,
-    must_read_core_count=2,
 )
 
 
@@ -164,8 +156,6 @@ NEWS_PROFILE = ScoringProfile(
     tier_collection=82,
     tier_deep_read=52,
     tier_skim=38,
-    must_read_total=79,
-    must_read_core_count=1,
 )
 
 

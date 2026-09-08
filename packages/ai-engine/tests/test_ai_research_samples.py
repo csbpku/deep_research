@@ -1,6 +1,6 @@
 """Week 9 收尾验收：10 个 AI 调研样本。
 
-依据：docs/IMPLEMENTATION_PLAN.md §十一
+依据：docs/archive/2026-09-08-implementation-plan.md §十一
   - "10 个固定 AI 调研样本中 succeeded ≥ 80%、succeeded + partial ≥ 90%、
      failed ≤ 10%"
   - "重复 job 数为 0"

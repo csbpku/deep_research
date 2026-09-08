@@ -19,6 +19,7 @@ import {
   Info,
   Lightbulb,
   Quote,
+  RotateCw,
   Send,
   Sparkles,
   Square,
@@ -26,6 +27,7 @@ import {
 
 import { Button } from '@/components/ui/button';
 import MarkdownContent from '@/components/MarkdownContent';
+import { KnowledgeCardComposer } from '@/components/KnowledgeCardComposer';
 import type { Anchor, ChatMessage, ContextScope } from './useChatSession';
 
 const SUGGESTIONS = [
@@ -88,13 +90,24 @@ function CitationAnchor({
   source: NonNullable<ChatMessage['sources']>[number];
   onSourceClick?: (quote: string, sourceBlockIndex?: number, anchorId?: string) => void;
 }) {
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
   const quote = source.quote ?? '';
   const blockIndex = source.sourceBlockIndex == null ? undefined : Number(source.sourceBlockIndex);
   return (
-    <span className="group relative inline-flex">
+    <span
+      className="group relative inline-flex"
+      onMouseEnter={() => setTooltipOpen(true)}
+      onMouseLeave={() => setTooltipOpen(false)}
+    >
       <button
         type="button"
-        onClick={() => onSourceClick?.(quote, blockIndex, source.anchorId)}
+        onClick={(event) => {
+          setTooltipOpen(false);
+          onSourceClick?.(quote, blockIndex, source.anchorId);
+          event.currentTarget.blur();
+        }}
+        onFocus={() => setTooltipOpen(true)}
+        onBlur={() => setTooltipOpen(false)}
         className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-accent/40 px-1 align-middle text-[11px] font-medium tabular-nums leading-none text-accent-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`引用 ${index + 1}：${quote.slice(0, 60)}${quote.length > 60 ? '…' : ''}`}
       >
@@ -102,7 +115,11 @@ function CitationAnchor({
       </button>
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-72 -translate-x-1/2 translate-y-1 rounded-lg border border-border bg-popover px-3 py-2.5 text-left opacity-0 shadow-lg transition-[opacity,transform] duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100"
+        aria-hidden={!tooltipOpen}
+        className={
+          'pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover px-3 py-2.5 text-left shadow-lg transition-[opacity,transform] duration-150 '
+          + (tooltipOpen ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0')
+        }
       >
         <span className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-method-ai">
           <Quote className="size-3" />
@@ -120,6 +137,7 @@ function CitationAnchor({
 export interface ChatPanelProps {
   messages: ChatMessage[];
   loading: boolean;
+  slowLoading?: boolean;
   sending: boolean;
   slowGeneration?: boolean;
   thinkingStep: number;
@@ -140,6 +158,7 @@ export interface ChatPanelProps {
   selectedAnchor?: Anchor | null;
   onClearSelectedAnchor?: () => void;
   onSourceClick?: (quote: string, sourceBlockIndex?: number, anchorId?: string) => void;
+  sourceLinkLabel?: string;
   contextScope?: ContextScope;
   onContextScopeChange?: (scope: ContextScope) => void;
   hasProjectContext?: boolean;
@@ -149,6 +168,7 @@ export interface ChatPanelProps {
 export function ChatPanel({
   messages,
   loading,
+  slowLoading = false,
   sending,
   slowGeneration = false,
   thinkingStep,
@@ -166,6 +186,7 @@ export function ChatPanel({
   selectedAnchor = null,
   onClearSelectedAnchor,
   onSourceClick,
+  sourceLinkLabel = '打开来源',
   contextScope = 'full',
   onContextScopeChange,
   hasProjectContext = false,
@@ -247,7 +268,7 @@ export function ChatPanel({
                 type="button"
                 disabled={sending}
                 onClick={() => onSubmit(s, selectedAnchor)}
-                className="rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-method-ai/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                className="touch-target rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-method-ai/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
               >
                 {s}
               </button>
@@ -259,7 +280,28 @@ export function ChatPanel({
       {/* Messages */}
       <div ref={messagesRef} className="flex flex-1 flex-col overflow-y-auto bg-card px-4 py-4" aria-live="polite">
         {loading ? (
-          <div className="py-4 text-center text-sm text-muted-foreground">加载会话中…</div>
+          <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center" role="status">
+            <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="size-1.5 animate-pulse rounded-full bg-method-ai" aria-hidden />
+              {slowLoading ? '连接较慢，仍在准备会话…' : '正在准备 AI 讨论…'}
+            </span>
+            <p className="max-w-[28ch] text-xs leading-5 text-muted-foreground">
+              {slowLoading
+                ? '会话还在连接中，可以重新连接；正文阅读不受影响。'
+                : '正在加载已保存的讨论和正文上下文。'}
+            </p>
+            {slowLoading ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                className="mt-1"
+                onClick={onRetryLoad}
+              >
+                重新连接
+              </Button>
+            ) : null}
+          </div>
         ) : err ? (
           <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-4" role="alert">
             <div className="text-sm font-medium text-destructive">AI 讨论暂时无法打开</div>
@@ -282,17 +324,44 @@ export function ChatPanel({
               </div>
             ) : null}
 
-            {messages.map((m) =>
-              m.role === 'user' ? (
-                <div key={m.id} className="mb-6 flex justify-end">
+            {messages.map((m, index) => {
+              const previous = messages[index - 1];
+              const next = messages[index + 1];
+              const isActiveAssistant = m.role === 'assistant'
+                && sending
+                && index === messages.length - 1;
+              const userReplyMissing = m.role === 'user'
+                && !sending
+                && (!next || next.role === 'user');
+              const assistantReplyRetryable = m.role === 'assistant'
+                && !m.content
+                && !sending
+                && previous?.role === 'user';
+
+              return m.role === 'user' ? (
+                <div key={m.id} className="mb-6 flex flex-col items-end">
                   <p className="max-w-[86%] whitespace-pre-wrap break-words text-sm leading-7 text-foreground">{m.content}</p>
+                  {userReplyMissing ? (
+                    <div className="mt-1 flex max-w-[86%] items-center gap-2 text-[11px] text-muted-foreground">
+                      <span role="status">回答未返回</span>
+                      <button
+                        type="button"
+                        onClick={() => onSubmit(m.content)}
+                        disabled={loading || sending}
+                        className="inline-flex items-center gap-1 font-medium text-method-ai hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <RotateCw className="size-3" />
+                        重试回答
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div key={m.id} className="mb-6">
                     {m.content ? (
                       <div>
                         <MarkdownContent content={m.content} compact className="text-sm leading-7" />
-                        {sending ? (
+                        {isActiveAssistant ? (
                           <span className="mt-1 inline-flex items-center gap-2">
                             <span
                               aria-hidden
@@ -315,10 +384,23 @@ export function ChatPanel({
                           </span>
                         ) : null}
                       </div>
-                    ) : sending ? (
-                      <ThinkingPill step={thinkingStep} slow={slowGeneration} onStop={onStop} />
-                    ) : (
-                      <p className="text-sm leading-7 text-muted-foreground">AI 暂时没有返回内容。</p>
+                    ) : isActiveAssistant ? (
+                    <ThinkingPill step={thinkingStep} slow={slowGeneration} onStop={onStop} />
+                  ) : (
+                      <div className="flex flex-wrap items-center gap-2 text-sm leading-7 text-muted-foreground">
+                        <p>AI 暂时没有返回内容。</p>
+                        {assistantReplyRetryable ? (
+                          <button
+                            type="button"
+                            onClick={() => previous?.role === 'user' && onSubmit(previous.content)}
+                            disabled={loading || sending}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-method-ai hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <RotateCw className="size-3" />
+                            重试回答
+                          </button>
+                        ) : null}
+                      </div>
                     )}
 
                     {/* Inline numbered citations + collapsible footer */}
@@ -357,7 +439,7 @@ export function ChatPanel({
                                       rel="noreferrer"
                                       className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-method-ai hover:underline"
                                     >
-                                      <ExternalLink className="size-3" />打开 GitHub 来源
+                                      <ExternalLink className="size-3" />{sourceLinkLabel}
                                     </a>
                                   ) : null}
                                 </div>
@@ -370,14 +452,20 @@ export function ChatPanel({
 
                     {/* Honest "no verifiable citation" hint, downgraded from a banner. */}
                     {m.content && !m.sources?.length && !sending ? (
-                      <p className="mt-2 flex items-center gap-1 text-[11px] leading-5 text-warning-fg">
+                      <p
+                        className="mt-2 flex items-center gap-1 text-[11px] leading-5 text-warning-fg"
+                        title="这条回答没有解析出可以回到正文的引用，请按原文复核。"
+                      >
                         <Info className="size-3 shrink-0" />
-                        未检测到原文引用
+                        未检测到可回链引用，请按原文复核
                       </p>
                     ) : null}
+                    {m.content && !sending && !m.id.startsWith('streaming-') ? (
+                      <KnowledgeCardComposer sourceKind="radar_chat" messageId={m.id} />
+                    ) : null}
                 </div>
-              ),
-            )}
+              );
+            })}
           </>
         )}
       </div>

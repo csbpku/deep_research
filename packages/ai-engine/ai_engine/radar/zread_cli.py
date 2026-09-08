@@ -1,9 +1,9 @@
 """Best-effort Zread CLI adapter for GitHub repository enrichment.
 
-The CLI runs in a temporary shallow checkout. Generated wiki markdown is
-returned as a bounded JSON-friendly payload so the existing ``originalMeta``
-column can remain the storage boundary. A missing CLI or a generation failure
-never fails the radar sync.
+The CLI runs in a commit-keyed checkout. Generated wiki markdown is returned
+as a bounded JSON-friendly payload so the existing ``originalMeta`` column can
+remain the storage boundary. A missing CLI or a generation failure never
+fails the radar sync.
 """
 
 from __future__ import annotations
@@ -34,6 +34,14 @@ def _env_limit(name: str) -> int:
 ZREAD_MAX_BYTES = _env_limit("ZREAD_MAX_BYTES")
 ZREAD_MAX_PAGES = _env_limit("ZREAD_MAX_PAGES")
 ZREAD_PAGE_MAX_BYTES = _env_limit("ZREAD_PAGE_MAX_BYTES")
+
+
+def _work_dir() -> str:
+    """Return a durable CLI workspace so interrupted drafts can resume."""
+    configured = os.environ.get("ZREAD_CLI_WORK_DIR", "").strip()
+    if configured:
+        return configured
+    return str(Path(tempfile.gettempdir()) / "deep-research-zread")
 
 
 def _generate_command(binary: str) -> tuple[str, ...]:
@@ -215,6 +223,11 @@ def _read_wiki(wiki_root: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
         for entry in catalog.values()
         if entry.get("slug") or entry.get("file")
     })
+    catalog_paths = sorted({
+        entry.get("file") or f"{entry['slug']}.md"
+        for entry in catalog.values()
+        if entry.get("file") or entry.get("slug")
+    })
     expected_page_count = max(len(files), catalog_page_count)
     pages: list[dict[str, str]] = []
     total = 0
@@ -273,10 +286,15 @@ def _read_wiki(wiki_root: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
                 page["group"] = path_parts[1]
         pages.append(page)
         total += len(content.encode("utf-8"))
+    saved_paths = {page["path"].replace("\\", "/") for page in pages}
     return pages, {
         "expectedPageCount": expected_page_count,
         "truncated": bool(truncated_pages),
         "truncatedPages": truncated_pages[:100],
+        "catalogPaths": catalog_paths,
+        "coveredPageCount": len(saved_paths.intersection(catalog_paths)),
+        "missingPages": sorted(set(catalog_paths) - saved_paths),
+        "uncatalogedPages": sorted(saved_paths - set(catalog_paths)) if catalog_paths else [],
     }
 
 
@@ -295,6 +313,106 @@ def _read_generated_wiki(wiki_dir: Path) -> tuple[list[dict[str, str]], dict[str
     return pages, completeness, False
 
 
+async def prepare_zread_checkout(
+    *,
+    owner: str,
+    repo: str,
+    branch: str,
+    commit_sha: str | None,
+    work_dir: Path,
+) -> Path:
+    """Create or validate a persistent checkout pinned to ``commit_sha``.
+
+    Zread drafts are commit-specific. A branch clone followed by a later
+    resume can otherwise combine pages generated from different repository
+    revisions, especially when the branch moved between attempts.
+    """
+    repository_url = f"https://github.com/{owner}/{repo}.git"
+    key = re.sub(
+        r"[^A-Za-z0-9._-]+",
+        "_",
+        f"{owner}__{repo}__{commit_sha or branch}",
+    )
+    job_root = work_dir.expanduser().resolve() / key
+    checkout = job_root / repo
+    job_root.mkdir(parents=True, exist_ok=True)
+
+    if not checkout.exists():
+        clone_code, _, clone_err = await _run(
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            branch,
+            repository_url,
+            str(checkout),
+            cwd=job_root,
+            timeout=60.0,
+        )
+        if clone_code != 0:
+            raise RuntimeError(f"git clone failed: {clone_err[-400:]}")
+    elif not (checkout / ".git").exists():
+        raise RuntimeError(f"Zread work dir exists but is not a checkout: {checkout}")
+
+    if not commit_sha:
+        return checkout
+
+    rev_code, rev_out, rev_err = await _run(
+        "git",
+        "rev-parse",
+        "HEAD",
+        cwd=checkout,
+        timeout=30.0,
+    )
+    current_sha = rev_out.strip() if rev_code == 0 else ""
+    if current_sha != commit_sha:
+        # A non-empty Zread directory belongs to another revision. Refuse to
+        # silently reuse it; the caller can choose a fresh commit-keyed work
+        # directory instead of producing a mixed document.
+        if (checkout / ".zread").exists():
+            detail = (rev_err or current_sha or "unknown").strip()
+            raise RuntimeError(
+                f"Zread checkout revision mismatch for {checkout}: "
+                f"expected {commit_sha}, found {detail}; existing draft not reused"
+            )
+        fetch_code, _, fetch_err = await _run(
+            "git",
+            "fetch",
+            "--depth",
+            "1",
+            "origin",
+            commit_sha,
+            cwd=checkout,
+            timeout=60.0,
+        )
+        if fetch_code != 0:
+            raise RuntimeError(f"git fetch commit failed: {fetch_err[-400:]}")
+        checkout_code, _, checkout_err = await _run(
+            "git",
+            "checkout",
+            "--detach",
+            commit_sha,
+            cwd=checkout,
+            timeout=30.0,
+        )
+        if checkout_code != 0:
+            raise RuntimeError(f"git checkout commit failed: {checkout_err[-400:]}")
+    verify_code, verify_out, verify_err = await _run(
+        "git",
+        "rev-parse",
+        "HEAD",
+        cwd=checkout,
+        timeout=30.0,
+    )
+    if verify_code != 0 or verify_out.strip() != commit_sha:
+        raise RuntimeError(
+            f"Zread checkout could not be pinned to {commit_sha}: "
+            f"{(verify_err or verify_out).strip()[-300:]}"
+        )
+    return checkout
+
+
 async def generate_zread_wiki(
     *,
     owner: str,
@@ -302,7 +420,13 @@ async def generate_zread_wiki(
     branch: str,
     commit_sha: str | None,
 ) -> dict[str, Any] | None:
-    """Clone a repo, run ``zread generate``, and return cached wiki pages."""
+    """Clone a repo, run ``zread generate``, and return cached wiki pages.
+
+    ``ZREAD_CLI_WORK_DIR`` enables a durable per-repository checkout. Durable
+    checkouts are resumed with ``--draft resume`` after a timeout, so a later
+    attempt continues from the pages already written by Zread instead of
+    regenerating the whole Wiki.
+    """
     if not _enabled():
         return None
     binary = _binary()
@@ -324,25 +448,23 @@ async def generate_zread_wiki(
     except ValueError:
         timeout_value = 0.0
     timeout = timeout_value if timeout_value > 0 else None
-    repository_url = f"https://github.com/{owner}/{repo}.git"
-    with tempfile.TemporaryDirectory(prefix="deep-research-zread-") as temp_dir:
-        checkout = Path(temp_dir) / repo
-        clone_code, _, clone_err = await _run(
-            "git", "clone", "--depth", "1", "--branch", branch, repository_url, str(checkout),
-            cwd=Path(temp_dir), timeout=60.0,
-        )
-        if clone_code != 0:
-            raise RuntimeError(f"git clone failed: {clone_err[-400:]}")
-
+    async def run_generation(checkout: Path, *, resume: bool) -> dict[str, Any]:
+        command = _generate_command(binary)
+        if resume:
+            command += ("--draft", "resume")
         try:
             generate_code, generate_out, generate_err = await _run(
-                *_generate_command(binary), cwd=checkout, timeout=timeout,
+                *command,
+                cwd=checkout,
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
-            # Zread writes pages incrementally. Preserve the pages already
-            # generated before the timeout instead of deleting the useful
-            # partial document with the temporary checkout.
-            pages, completeness, _ = _read_generated_wiki(checkout / ".zread" / "wiki")
+            # Zread writes pages incrementally. Read the draft before returning
+            # so the caller can persist progress and a durable work dir can
+            # resume from the same checkout on the next attempt.
+            pages, completeness, _ = _read_generated_wiki(
+                checkout / ".zread" / "wiki"
+            )
             if pages:
                 return {
                     "provider": "zread-cli",
@@ -353,7 +475,7 @@ async def generate_zread_wiki(
                     "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "error": "Zread generation stopped after a timeout; showing generated pages",
                     "pageCount": len(pages),
-                    "expectedPageCount": completeness["expectedPageCount"],
+                    **completeness,
                     "truncated": True,
                     "truncatedPages": completeness["truncatedPages"],
                     "pages": pages,
@@ -361,12 +483,11 @@ async def generate_zread_wiki(
             raise
         except asyncio.CancelledError:
             # ``run_enrichment_for_pending`` wraps each candidate in an outer
-            # timeout.  That timeout cancels this coroutine, while ``_run``
-            # first kills the Zread process group and then re-raises the
-            # cancellation.  Read the draft after the child is stopped so the
-            # pages already written by Zread survive as a persisted partial
-            # result instead of being lost with the temporary checkout.
-            pages, completeness, _ = _read_generated_wiki(checkout / ".zread" / "wiki")
+            # timeout. ``_run`` kills the process group first; read the draft
+            # after that so durable mode can resume the generated pages later.
+            pages, completeness, _ = _read_generated_wiki(
+                checkout / ".zread" / "wiki"
+            )
             if pages:
                 return {
                     "provider": "zread-cli",
@@ -377,7 +498,7 @@ async def generate_zread_wiki(
                     "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "error": "Zread generation stopped by the enrichment timeout; showing generated pages",
                     "pageCount": len(pages),
-                    "expectedPageCount": completeness["expectedPageCount"],
+                    **completeness,
                     "truncated": True,
                     "truncatedPages": completeness["truncatedPages"],
                     "pages": pages,
@@ -385,7 +506,9 @@ async def generate_zread_wiki(
             raise
         if generate_code != 0:
             detail = (generate_err or generate_out).strip().replace("\n", " ")[-500:]
-            pages, completeness, _ = _read_generated_wiki(checkout / ".zread" / "wiki")
+            pages, completeness, _ = _read_generated_wiki(
+                checkout / ".zread" / "wiki"
+            )
             if pages:
                 return {
                     "provider": "zread-cli",
@@ -396,31 +519,52 @@ async def generate_zread_wiki(
                     "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "error": f"Zread exited with code {generate_code}: {detail}",
                     "pageCount": len(pages),
-                    "expectedPageCount": completeness["expectedPageCount"],
+                    **completeness,
                     "truncated": True,
                     "truncatedPages": completeness["truncatedPages"],
                     "pages": pages,
                 }
             raise RuntimeError(f"zread generate failed: {detail}")
 
-        pages, completeness, published = _read_generated_wiki(checkout / ".zread" / "wiki")
+        pages, completeness, published = _read_generated_wiki(
+            checkout / ".zread" / "wiki"
+        )
         if not pages:
             raise RuntimeError("zread generated no markdown pages")
 
         return {
             "provider": "zread-cli",
-            "status": "complete" if published and not completeness["truncated"] else "partial",
+            "status": "complete" if (
+                published and not completeness["truncated"]
+                and not completeness.get("missingPages")
+                and len(pages) >= completeness["expectedPageCount"]
+            ) else "partial",
             "repository": f"{owner}/{repo}",
             "commitSha": commit_sha,
             "branch": branch,
             "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "pageCount": len(pages),
-            "expectedPageCount": completeness["expectedPageCount"],
+            **completeness,
             "truncated": completeness["truncated"],
             "truncatedPages": completeness["truncatedPages"],
             **({} if published else {"error": "Zread did not publish a current Wiki; showing generated drafts"}),
             "pages": pages,
         }
 
+    persistent_root = Path(_work_dir())
+    checkout = await prepare_zread_checkout(
+        owner=owner,
+        repo=repo,
+        branch=branch,
+        commit_sha=commit_sha,
+        work_dir=persistent_root,
+    )
+    has_draft = (checkout / ".zread" / "wiki" / "drafts").exists()
+    has_published = (checkout / ".zread" / "wiki" / "current").exists()
+    return await run_generation(
+        checkout,
+        resume=has_draft or has_published,
+    )
 
-__all__ = ["generate_zread_wiki"]
+
+__all__ = ["generate_zread_wiki", "prepare_zread_checkout"]
