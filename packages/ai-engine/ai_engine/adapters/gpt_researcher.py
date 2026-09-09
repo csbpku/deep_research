@@ -4736,6 +4736,37 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 )
                 return
 
+        # Radar sync already fetched and extracted the article before it
+        # reaches the brief stage. If the adapter's second URL probe is
+        # blocked or times out, keep using that trusted caller-provided
+        # context instead of turning a usable candidate into an empty brief.
+        context_for_fallback = (job.request.context or "").strip()
+        if (
+            job.request.report_type == "summary_brief"
+            and not job.sources
+            and context_for_fallback
+        ):
+            ref = next(
+                (
+                    item
+                    for item in job.request.source_refs
+                    if item.get("type") == "url"
+                ),
+                {},
+            )
+            source_value = str(ref.get("value") or f"context:{job.request.job_id}")
+            job.sources.append(
+                AdapterSource(
+                    source_ref={"type": "url", "value": source_value},
+                    canonical_key=source_value,
+                    title=job.request.topic,
+                    snippet=context_for_fallback[:2000],
+                    score=None,
+                    step_captured=cast("AiJobStep", AI_JOB_STEP["SEARCH"]),
+                    evidence_status="fetched",
+                )
+            )
+
         if job.request.source_policy == "only_user_sources" and not job.sources:
             await self._mark_failed(
                 job,

@@ -125,6 +125,52 @@ async def test_locked_user_sources_are_fetched_without_open_web_search(
     assert job.research_progress["sourcesCaptured"] == 1
 
 
+@pytest.mark.asyncio
+async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def blocked_fetch(
+        _ref: dict[str, object],
+        *,
+        request_id: str | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(is_accessible=False, error_code="URL_FETCH_TIMEOUT")
+
+    async def fake_generate_text(**_: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            text="这是基于已抓取正文生成的有效雷达摘要。" * 12,
+            input_tokens=10,
+            output_tokens=20,
+        )
+
+    monkeypatch.setattr(
+        "ai_engine.fetcher.ai_source_urls._fetch_user_url",
+        blocked_fetch,
+    )
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", fake_generate_text)
+    request = ResearchRequest(
+        job_id="radar-brief-context",
+        request_id="radar-brief-context",
+        topic="已有正文的雷达候选",
+        context="正文上下文。" * 200,
+        report_type="summary_brief",
+        source_policy=SOURCE_POLICY["ONLY_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=(
+            {"type": "url", "value": "https://example.com/blocked"},
+        ),
+    )
+    job = _Job(request)
+    adapter = object.__new__(GptResearcherAdapter)
+    adapter._brief_llm = "openai:test"
+
+    await adapter._run_brief(job)
+
+    assert job.status == AI_JOB_STATUS["SUCCEEDED"]
+    assert job.body.startswith("这是基于已抓取正文生成的有效雷达摘要")
+    assert len(job.sources) == 1
+    assert job.sources[0].evidence_status == "fetched"
+
+
 def test_deep_collection_timeout_is_independent_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEEP_RESEARCH_COLLECTION_TIMEOUT_SECONDS", raising=False)
     assert _deep_collection_timeout_seconds() == 900

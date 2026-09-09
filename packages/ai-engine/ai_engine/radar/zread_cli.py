@@ -303,14 +303,91 @@ def _read_generated_wiki(wiki_dir: Path) -> tuple[list[dict[str, str]], dict[str
 
     Zread only updates ``wiki/current`` after the page phase completes. With
     strict generation, a failed page therefore leaves useful pages under
-    ``wiki/drafts`` but no current pointer. Preserve those pages as a partial
-    result instead of falling back to README.
+    ``wiki/drafts`` but no current pointer. A durable checkout can also have
+    an older ``current`` pointer beside a newer draft. Merge both snapshots so
+    the stale pointer cannot hide newly generated pages; draft content wins on
+    path conflicts.
     """
-    pages, completeness = _read_wiki(wiki_dir / "current")
-    if pages:
-        return pages, completeness, True
-    pages, completeness = _read_wiki(wiki_dir / "drafts")
-    return pages, completeness, False
+    current_pages, current_completeness = _read_wiki(wiki_dir / "current")
+    draft_pages, draft_completeness = _read_wiki(wiki_dir / "drafts")
+    if not current_pages:
+        return (
+            draft_pages,
+            draft_completeness,
+            _wiki_snapshot_complete(
+                draft_pages,
+                draft_completeness,
+                require_catalog=True,
+            ),
+        )
+    if not draft_pages:
+        return current_pages, current_completeness, True
+
+    # The draft is the active write set. Keep old current pages that the
+    # draft has not touched yet, while letting the draft replace same-path
+    # content. Prefer its catalog whenever it exists because it describes the
+    # page set the current generation is trying to complete.
+    merged_by_path = {
+        str(page["path"]).replace("\\", "/"): page
+        for page in current_pages
+        if page.get("path")
+    }
+    merged_by_path.update(
+        {
+            str(page["path"]).replace("\\", "/"): page
+            for page in draft_pages
+            if page.get("path")
+        }
+    )
+    pages = [merged_by_path[path] for path in sorted(merged_by_path)]
+    catalog_paths = (
+        draft_completeness.get("catalogPaths")
+        or current_completeness.get("catalogPaths")
+    )
+    catalog_set = set(catalog_paths or [])
+    page_paths = {str(page["path"]).replace("\\", "/") for page in pages}
+    missing_pages = sorted(catalog_set - page_paths) if catalog_set else []
+    completeness = {
+        "expectedPageCount": max(len(pages), len(catalog_set)),
+        "truncated": bool(
+            current_completeness.get("truncated")
+            or draft_completeness.get("truncated")
+        ),
+        "truncatedPages": sorted(
+            set(current_completeness.get("truncatedPages") or [])
+            | set(draft_completeness.get("truncatedPages") or [])
+        )[:100],
+        "catalogPaths": sorted(catalog_set),
+        "coveredPageCount": len(catalog_set & page_paths),
+        "missingPages": missing_pages,
+        "uncatalogedPages": sorted(page_paths - catalog_set) if catalog_set else [],
+    }
+    # A complete draft is usable even when Zread has not advanced the current
+    # pointer yet. This matters after a process interruption during publish.
+    draft_complete = _wiki_snapshot_complete(
+        draft_pages,
+        draft_completeness,
+        require_catalog=True,
+    )
+    return pages, completeness, bool(draft_complete or current_pages)
+
+
+def _wiki_snapshot_complete(
+    pages: list[dict[str, Any]],
+    completeness: dict[str, Any],
+    *,
+    require_catalog: bool = False,
+) -> bool:
+    """Return whether the local files cover the generated catalog."""
+    if not pages or completeness.get("truncated") or completeness.get("missingPages"):
+        return False
+    if require_catalog and not completeness.get("catalogPaths"):
+        return False
+    try:
+        expected = int(completeness.get("expectedPageCount") or 0)
+    except (TypeError, ValueError):
+        return False
+    return len(pages) >= expected
 
 
 async def prepare_zread_checkout(
@@ -468,7 +545,9 @@ async def generate_zread_wiki(
             if pages:
                 return {
                     "provider": "zread-cli",
-                    "status": "partial",
+                    "status": "complete" if _wiki_snapshot_complete(
+                        pages, completeness, require_catalog=True,
+                    ) else "partial",
                     "repository": f"{owner}/{repo}",
                     "commitSha": commit_sha,
                     "branch": branch,
@@ -491,7 +570,9 @@ async def generate_zread_wiki(
             if pages:
                 return {
                     "provider": "zread-cli",
-                    "status": "partial",
+                    "status": "complete" if _wiki_snapshot_complete(
+                        pages, completeness, require_catalog=True,
+                    ) else "partial",
                     "repository": f"{owner}/{repo}",
                     "commitSha": commit_sha,
                     "branch": branch,
@@ -512,7 +593,9 @@ async def generate_zread_wiki(
             if pages:
                 return {
                     "provider": "zread-cli",
-                    "status": "partial",
+                    "status": "complete" if _wiki_snapshot_complete(
+                        pages, completeness, require_catalog=True,
+                    ) else "partial",
                     "repository": f"{owner}/{repo}",
                     "commitSha": commit_sha,
                     "branch": branch,
@@ -535,9 +618,7 @@ async def generate_zread_wiki(
         return {
             "provider": "zread-cli",
             "status": "complete" if (
-                published and not completeness["truncated"]
-                and not completeness.get("missingPages")
-                and len(pages) >= completeness["expectedPageCount"]
+                published and _wiki_snapshot_complete(pages, completeness)
             ) else "partial",
             "repository": f"{owner}/{repo}",
             "commitSha": commit_sha,

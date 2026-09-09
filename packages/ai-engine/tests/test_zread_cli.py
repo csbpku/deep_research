@@ -91,6 +91,54 @@ def test_read_generated_wiki_uses_drafts_before_current_is_published(tmp_path: P
     assert completeness["expectedPageCount"] == 1
 
 
+def test_read_generated_wiki_merges_newer_draft_over_stale_current(
+    tmp_path: Path,
+) -> None:
+    wiki = tmp_path / ".zread" / "wiki"
+    version = wiki / "versions" / "old"
+    version.mkdir(parents=True)
+    (version / "1-overview.md").write_text(
+        "# Overview\n\nOld content.", encoding="utf-8"
+    )
+    (version / "2-runtime.md").write_text(
+        "# Runtime\n\nOld runtime.", encoding="utf-8"
+    )
+    (wiki / "current").write_text("versions/old\n", encoding="utf-8")
+
+    drafts = wiki / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "wiki.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {"slug": "1-overview", "file": "1-overview.md"},
+                    {"slug": "2-runtime", "file": "2-runtime.md"},
+                    {"slug": "3-new", "file": "3-new.md"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (drafts / "1-overview.md").write_text(
+        "# Overview\n\nFresh content.", encoding="utf-8"
+    )
+    (drafts / "2-runtime.md").write_text(
+        "# Runtime\n\nFresh runtime.", encoding="utf-8"
+    )
+    (drafts / "3-new.md").write_text("# New\n\nNew page.", encoding="utf-8")
+
+    pages, completeness, published = _read_generated_wiki(wiki)
+
+    by_path = {page["path"]: page["content"] for page in pages}
+    assert published is True
+    assert len(pages) == 3
+    assert completeness["expectedPageCount"] == 3
+    assert completeness["coveredPageCount"] == 3
+    assert completeness["missingPages"] == []
+    assert by_path["1-overview.md"].endswith("Fresh content.")
+    assert by_path["3-new.md"].endswith("New page.")
+
+
 def test_catalog_gap_is_not_filled_by_an_unrelated_old_page(tmp_path: Path) -> None:
     drafts = tmp_path / "drafts"
     drafts.mkdir()

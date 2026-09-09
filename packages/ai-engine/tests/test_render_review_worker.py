@@ -69,6 +69,19 @@ async def test_queue_render_review_is_limited_to_approved_high_value_enrichment(
 
 
 @pytest.mark.asyncio
+async def test_missing_runtime_script_degrades_to_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(rw, "_repo_root", lambda: tmp_path)
+
+    result = await rw._run_browser_script(
+        summary_id="summary-1",
+        round_number=1,
+    )
+
+    assert result["status"] == "unavailable"
+    assert str(result["error"]).startswith("script_not_found:")
+
+
+@pytest.mark.asyncio
 async def test_run_render_review_persists_browser_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

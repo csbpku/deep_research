@@ -38,7 +38,14 @@ RENDER_REVIEW_MAX_ROUNDS = 2
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    file_path = Path(__file__).resolve()
+    # Source checkouts have the monorepo root four levels up, while the
+    # production AI image starts at /app and does not ship apps/web. Resolve
+    # by marker instead of assuming one filesystem layout.
+    for parent in file_path.parents:
+        if (parent / "apps" / "web" / "scripts" / "radar-render-review.mjs").is_file():
+            return parent
+    return file_path.parent
 
 
 def render_review_script() -> Path:
