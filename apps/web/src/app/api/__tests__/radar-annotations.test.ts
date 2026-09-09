@@ -33,13 +33,13 @@ const USER = {
   disabledAt: null,
 };
 
-function request() {
+function request(kind: 'highlight' | 'comment' | 'highlight_comment' = 'highlight') {
   return new NextRequest('http://localhost/api/radar/annotations', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       summaryId: '22222222-2222-2222-2222-222222222222',
-      kind: 'highlight',
+      kind,
       quote: 'A saved quote',
       startOffset: 0,
       endOffset: 13,
@@ -80,6 +80,37 @@ describe('POST /api/radar/annotations', () => {
       '22222222-2222-2222-2222-222222222222',
       USER.id,
       'highlight',
+      'A saved quote',
+      0,
+      13,
+      null,
+      null,
+    );
+  });
+
+  it('allows the highlight_comment annotation kind', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: '22222222-2222-2222-2222-222222222222',
+      status: 'published',
+    });
+
+    const response = await POST(request('highlight_comment'));
+
+    expect(response.status).toBe(201);
+    expect(mocks.queryRawUnsafe).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('AND "quote" = $3 AND kind = $4'),
+      '22222222-2222-2222-2222-222222222222',
+      USER.id,
+      'A saved quote',
+      'highlight_comment',
+    );
+    expect(mocks.queryRawUnsafe).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('INSERT INTO radar_annotations'),
+      '22222222-2222-2222-2222-222222222222',
+      USER.id,
+      'highlight_comment',
       'A saved quote',
       0,
       13,
