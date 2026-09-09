@@ -65,6 +65,11 @@ COPY --from=build --chown=nextjs:nodejs /repo/apps/web/next.config.ts apps/web/n
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/node_modules apps/web/node_modules
 COPY --from=build --chown=nextjs:nodejs /repo/node_modules node_modules
 COPY --from=build --chown=nextjs:nodejs /repo/packages packages
+# The entrypoint runs migrations and the idempotent admin bootstrap at startup.
+# Keep only the runtime source they need instead of shipping the full app source.
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/prisma apps/web/prisma
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/scripts/bootstrap-admin.ts apps/web/scripts/bootstrap-admin.ts
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/src/lib/auth/invitation.ts apps/web/src/lib/auth/invitation.ts
 COPY --chown=nextjs:nodejs scripts/docker-entrypoint-web.sh /entrypoint.sh
 
 WORKDIR /repo/apps/web
