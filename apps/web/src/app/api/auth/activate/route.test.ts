@@ -29,9 +29,9 @@ import { POST } from './route';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getWebEnv.mockReturnValue({
-    ALLOWED_EMAIL_DOMAINS: ['example.com', 'gmail.com'],
+    ALLOWED_EMAIL_DOMAINS: ['example.com', 'gmail.com', 'shopee.com'],
     AUTH_INVITE_CODE: 'invite-2026',
-    BOOTSTRAP_ADMIN_EMAIL: 'csbpkuyp@gmail.com',
+    BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
   });
   mocks.hashPassword.mockResolvedValue('scrypt$16384$8$1$salt$hash');
   mocks.findUnique.mockResolvedValue(null);
@@ -77,7 +77,7 @@ describe('POST /api/auth/activate', () => {
     mocks.create.mockResolvedValueOnce({ id: 'user-1', role: 'admin' });
     const response = await POST(
       request({
-        email: 'csbpkuyp@gmail.com',
+        email: 'shaobo.chen@shopee.com',
         inviteCode: 'invite-2026',
         password: 'correct horse battery staple',
       }),
@@ -87,7 +87,7 @@ describe('POST /api/auth/activate', () => {
     expect(await response.json()).toEqual({ ok: true, role: 'admin' });
     expect(mocks.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        email: 'csbpkuyp@gmail.com',
+        email: 'shaobo.chen@shopee.com',
         role: 'admin',
       }),
       select: { id: true, role: true },
@@ -103,7 +103,7 @@ describe('POST /api/auth/activate', () => {
 
     const response = await POST(
       request({
-        email: 'csbpkuyp@gmail.com',
+        email: 'shaobo.chen@shopee.com',
         inviteCode: 'invite-2026',
         password: 'correct horse battery staple',
       }),

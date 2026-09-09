@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 
-export const DEFAULT_BOOTSTRAP_ADMIN_EMAIL = 'csbpkuyp@gmail.com';
+export const DEFAULT_BOOTSTRAP_ADMIN_EMAIL = 'shaobo.chen@shopee.com';
 
 /**
  * Resolve the bootstrap admin email without making an empty env value disable

@@ -374,7 +374,7 @@ run_interactive_prompts() {
   configure_auth_access
 
   # P1-A1: collect initial Admin email (must belong to allowlist).
-  local default_bootstrap="csbpkuyp@gmail.com"
+  local default_bootstrap="shaobo.chen@shopee.com"
   prompt "Initial Admin email (type off to disable bootstrap)" "$default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
   BOOTSTRAP_ADMIN_EMAIL=""
   if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
@@ -492,7 +492,7 @@ GH_TOKEN=${GH_TOKEN_VAL}
 PRODUCTHUNT_API_TOKEN=${PH_TOKEN_VAL}
 
 # P1-A1: initial Admin bootstrap
-BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-csbpkuyp@gmail.com}
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}
 ENVFILE
 }
 
@@ -830,7 +830,7 @@ if [[ "$MODE" != "quick" ]]; then
   # P1-A1: initial Admin
   configure_auth_access
 
-  local_default_bootstrap="csbpkuyp@gmail.com"
+  local_default_bootstrap="shaobo.chen@shopee.com"
   prompt "Initial Admin email (type off to disable bootstrap)" "$local_default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
   BOOTSTRAP_ADMIN_EMAIL=""
   if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
@@ -887,7 +887,7 @@ else
   PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
   EMAIL_DOMAINS="gmail.com"
   AUTH_INVITE_CODE_VAL="quick-local-invite"
-  BOOTSTRAP_ADMIN_EMAIL="csbpkuyp@gmail.com"
+  BOOTSTRAP_ADMIN_EMAIL="shaobo.chen@shopee.com"
   ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""; OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""; ADAPTER_VAL="fake"
   MINIMAX_KEY=""; MINIMAX_BASE_URL_VAL=""; DEEPSEEK_KEY=""; DEEPSEEK_BASE_URL_VAL=""
   FALLBACK_LLM_VAL=""
@@ -925,7 +925,7 @@ AUTH_INVITE_CODE=${AUTH_INVITE_CODE_VAL}
 MAX_UPLOAD_SIZE_MB=5
 TIME_VALUE_USD_PER_HOUR=50
 # P1-A1: initial Admin bootstrap
-BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-csbpkuyp@gmail.com}
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}
 WEBENV
 info "apps/web/.env created"
 

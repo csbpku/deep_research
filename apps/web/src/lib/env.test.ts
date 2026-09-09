@@ -18,7 +18,7 @@ describe('parseWebEnv', () => {
     expect(env.TIME_VALUE_USD_PER_HOUR).toBe(50);
     expect(env.ALLOWED_EMAIL_DOMAINS).toEqual(['example.com', 'foo.org']);
     expect(env.AUTH_INVITE_CODE).toBe('');
-    expect(env.BOOTSTRAP_ADMIN_EMAIL).toBe('csbpkuyp@gmail.com');
+    expect(env.BOOTSTRAP_ADMIN_EMAIL).toBe('shaobo.chen@shopee.com');
   });
 
   it('accepts missing Google OAuth credentials (local UI mode)', () => {

@@ -6,7 +6,7 @@
 //
 // Contract (P1-A1):
 //   - Reads BOOTSTRAP_ADMIN_EMAIL + ALLOWED_EMAIL_DOMAINS from env.
-//   - Defaults to csbpkuyp@gmail.com; explicit "off"/"disabled" skips bootstrap.
+//   - Defaults to shaobo.chen@shopee.com; explicit "off"/"disabled" skips bootstrap.
 //   - Validates the email belongs to an allowed domain (allowlist reuse).
 //   - Upserts the user; promotes to admin **only if there is no admin yet** or the
 //     user is already admin. Never demotes an existing admin.

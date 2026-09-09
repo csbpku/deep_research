@@ -50,7 +50,7 @@ pnpm --filter @deep-research/web build
 
 1. 配置 `ALLOWED_EMAIL_DOMAINS` 和服务端 `AUTH_INVITE_CODE`，登录页只允许这些域名通过邀请码激活并登录，公开注册已关闭。
 2. 密码使用 Node `crypto.scrypt` 哈希保存；最小长度为 12 个字符。
-3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `csbpkuyp@gmail.com`；该初始管理员如果尚未设置密码，可在登录页用该邮箱和邀请码完成一次激活。
+3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`；该初始管理员如果尚未设置密码，可在登录页用该邮箱和邀请码完成一次激活。
 4. Google OAuth 是可选 provider；启用时，本地 redirect URI 使用 `http://localhost:3000/api/auth/callback/google`。
 5. 公网使用邮箱密码登录前必须启用 HTTPS；HTTP 只适合本机或受控内网联调。
 

@@ -2,7 +2,7 @@
 # Docker entrypoint for web: run Prisma migrations, then idempotently bootstrap
 # the initial Admin (P1-A1), then start Next.js.
 #
-# Bootstrap uses csbpkuyp@gmail.com by default (+ ALLOWED_EMAIL_DOMAINS for the
+# Bootstrap uses shaobo.chen@shopee.com by default (+ ALLOWED_EMAIL_DOMAINS for the
 # allowlist). Set BOOTSTRAP_ADMIN_EMAIL=off to skip it explicitly.
 set -e
 

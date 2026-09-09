@@ -136,7 +136,7 @@ curl -fsS http://localhost:3000/api/healthz
 curl -fsS http://localhost:4000/healthz
 ```
 
-使用邮箱密码登录时，先确认 `ALLOWED_EMAIL_DOMAINS` 包含邮箱域名，并在登录页的“邀请码激活”中输入 `AUTH_INVITE_CODE` 设置密码；激活后即可正常登录，公开注册接口会固定拒绝。`--quick` 生成的配置不会注册 Google provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `csbpkuyp@gmail.com`，首次启动会幂等创建/提升该 Admin；如果该账号尚未设置密码，可用同一邮箱和邀请码完成一次激活。
+使用邮箱密码登录时，先确认 `ALLOWED_EMAIL_DOMAINS` 包含邮箱域名，并在登录页的“邀请码激活”中输入 `AUTH_INVITE_CODE` 设置密码；激活后即可正常登录，公开注册接口会固定拒绝。`--quick` 生成的配置不会注册 Google provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`，首次启动会幂等创建/提升该 Admin；如果该账号尚未设置密码，可用同一邮箱和邀请码完成一次激活。
 
 未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
