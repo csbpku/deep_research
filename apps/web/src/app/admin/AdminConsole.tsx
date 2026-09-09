@@ -2803,7 +2803,7 @@ function UsersTab() {
   if (q.isLoading) return <QueueSkeleton />;
   if (q.isError) return <p className="text-sm text-destructive">{(q.error as Error).message}</p>;
   const items = q.data?.items ?? [];
-  if (items.length === 0) return <EmptyState title="还没有成员" description="成员由 SSO / 邀请注册后自动加入。" />;
+  if (items.length === 0) return <EmptyState title="还没有成员" description="成员由 Google 登录或邀请码激活后自动加入。" />;
   return (
     <div>
       {actionError ? (

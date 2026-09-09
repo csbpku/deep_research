@@ -173,6 +173,11 @@ async def main() -> int:
     )
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument(
+        "--remote-first",
+        action="store_true",
+        help="probe public Zread before resuming an existing local CLI draft",
+    )
+    parser.add_argument(
         "--item-timeout",
         type=float,
         default=900.0,
@@ -190,6 +195,8 @@ async def main() -> int:
         help="allow explicitly selected manual rows to re-enter enrichment",
     )
     args = parser.parse_args()
+    if args.remote_first:
+        os.environ["ZREAD_RETRY_REMOTE_FIRST"] = "1"
 
     dsn = os.environ.get(
         "DATABASE_URL",
@@ -212,22 +219,42 @@ async def main() -> int:
         )
         print(f"remaining_retryable: {len(remaining)}")
         if args.external and remaining:
-            enriched = 0
-            for index, summary_id in enumerate(remaining, start=1):
-                completed = await run_enrichment_for_pending(
-                    store.pool,
-                    limit=1,
-                    summary_ids=(summary_id,),
-                    concurrency=max(1, args.concurrency),
-                    item_timeout=args.item_timeout,
-                    force=True,
-                )
-                enriched += completed
+            concurrency = max(1, args.concurrency)
+
+            async def _run_one(index: int, summary_id: str) -> int:
+                try:
+                    completed = await run_enrichment_for_pending(
+                        store.pool,
+                        limit=1,
+                        summary_ids=(summary_id,),
+                        concurrency=1,
+                        item_timeout=args.item_timeout,
+                        force=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep other repairs moving
+                    print(
+                        f"external_progress: {index}/{len(remaining)} "
+                        f"id={summary_id} error={type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    return 0
                 print(
                     f"external_progress: {index}/{len(remaining)} "
                     f"id={summary_id} successful={completed}",
                     flush=True,
                 )
+                return completed
+
+            enriched = 0
+            for offset in range(0, len(remaining), concurrency):
+                batch = remaining[offset : offset + concurrency]
+                results = await asyncio.gather(
+                    *(
+                        _run_one(offset + position + 1, summary_id)
+                        for position, summary_id in enumerate(batch)
+                    )
+                )
+                enriched += sum(results)
             print(f"external_successful_enrichment: {enriched}")
             print(
                 "remaining_retryable:",

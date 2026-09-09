@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ./scripts/setup.sh                  # interactive, auto-detects best mode
-#   ./scripts/setup.sh --quick          # non-interactive: fake adapter, no API keys, no Google login
+#   ./scripts/setup.sh --quick          # non-interactive: fake adapter, no API keys, email/password login
 #   ./scripts/setup.sh --docker         # interactive + Docker Compose build & deploy
 #   ./scripts/setup.sh --vps --domain example.com  # generate VPS deployment pack
 #
@@ -107,6 +107,20 @@ prompt_choice() {
   local choice
   read -rp "$(echo -e "${CYAN}Choose [1-${#options[@]}]${NC}: ")" choice
   printf -v "$var_name" '%s' "${choice:-1}"
+}
+
+configure_auth_access() {
+  local env_file=".env"
+  if [[ "$MODE" == "vps" ]]; then
+    env_file="deploy/.env"
+  elif [[ "$MODE" == "interactive" ]]; then
+    env_file="apps/web/.env"
+  fi
+  local existing_invite_code
+  existing_invite_code="$(read_env_value "$env_file" AUTH_INVITE_CODE)"
+  prompt_secret "Password account invite code (blank = generate)" AUTH_INVITE_CODE_INPUT
+  AUTH_INVITE_CODE_VAL="${AUTH_INVITE_CODE_INPUT:-${existing_invite_code:-$(gen_secret)}}"
+  info "Invite code configured in the generated env file (not printed)"
 }
 
 read_env_value() {
@@ -357,10 +371,11 @@ run_interactive_prompts() {
   prompt "Deploy URL (for NextAuth callback)" "$deploy_url_default" DEPLOY_URL
   prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
   validate_non_empty "$EMAIL_DOMAINS" "ALLOWED_EMAIL_DOMAINS"
+  configure_auth_access
 
   # P1-A1: collect initial Admin email (must belong to allowlist).
-  local default_bootstrap="admin@${EMAIL_DOMAINS%%,*}"
-  prompt "Initial Admin email (P1-A1 bootstrap; blank to skip)" "$default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
+  local default_bootstrap="csbpkuyp@gmail.com"
+  prompt "Initial Admin email (type off to disable bootstrap)" "$default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
   BOOTSTRAP_ADMIN_EMAIL=""
   if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
     BOOTSTRAP_ADMIN_EMAIL="$(printf '%s' "$BOOTSTRAP_ADMIN_EMAIL_INPUT" | tr '[:upper:]' '[:lower:]')"
@@ -398,9 +413,9 @@ run_interactive_prompts() {
     RETRIEVER_VAL="tavily"
   fi
 
-  prompt_choice "Configure Google OAuth login?" OAUTH_CHOICE \
+  prompt_choice "Configure optional Google OAuth login?" OAUTH_CHOICE \
     "Yes — I have Client ID / Secret (from Google Cloud Console)" \
-    "Skip (login disabled; browse public pages only)"
+    "Skip (use email/password login only)"
 
   case "$OAUTH_CHOICE" in
     1)
@@ -442,6 +457,7 @@ POSTGRES_PASSWORD=${PG_PASS}
 NEXTAUTH_SECRET=${AUTH_SECRET}
 NEXTAUTH_URL=${DEPLOY_URL}
 ALLOWED_EMAIL_DOMAINS=${EMAIL_DOMAINS}
+AUTH_INVITE_CODE=${AUTH_INVITE_CODE_VAL}
 
 # LLM
 AI_ENGINE_ADAPTER=${ADAPTER_VAL}
@@ -475,8 +491,8 @@ GOOGLE_CLIENT_SECRET=${GOOGLE_SECRET}
 GH_TOKEN=${GH_TOKEN_VAL}
 PRODUCTHUNT_API_TOKEN=${PH_TOKEN_VAL}
 
-# P1-A1: initial Admin bootstrap (empty => skip)
-BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+# P1-A1: initial Admin bootstrap
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-csbpkuyp@gmail.com}
 ENVFILE
 }
 
@@ -492,7 +508,7 @@ if [[ "$MODE" == "auto" ]]; then
 
   echo ""
   echo -e "${BOLD}Choose a setup mode:${NC}"
-  echo "  1) Quick  — fake adapter, zero keys, browse public pages without login"
+  echo "  1) Quick  — fake adapter, zero keys, email/password login"
   echo "  2) Docker — Docker Compose, interactive config, full stack"
   echo "  3) Local  — interactive, bare-metal dev (Node + Python + PostgreSQL)"
   echo "  4) VPS    — generate deployment pack for remote VPS"
@@ -653,7 +669,7 @@ VPSSCRIPT
   echo ""
 
   if [[ -z "$GOOGLE_ID" ]]; then
-    echo -e "  ${YELLOW}Google OAuth: not configured.${NC}"
+    echo -e "  ${YELLOW}Google OAuth: not configured.${NC} (email/password login remains available)"
     echo "  To enable, get credentials at https://console.cloud.google.com/apis/credentials"
     echo "  Callback URL: ${DEPLOY_URL}/api/auth/callback/google"
   fi
@@ -749,7 +765,7 @@ if [[ "$MODE" == "docker" ]]; then
     echo -e "  AI research uses mock data, no API costs."
   fi
   if [[ -z "$GOOGLE_ID" ]]; then
-    echo -e "  ${YELLOW}Google OAuth: not configured${NC} (browse public pages only)"
+    echo -e "  ${YELLOW}Google OAuth: not configured${NC} (use email/password login)"
   fi
 
   exit 0
@@ -796,6 +812,7 @@ info "All prerequisites satisfied"
 
 GH_TOKEN_VAL=""
 PH_TOKEN_VAL=""
+AUTH_INVITE_CODE_VAL=""
 
 if [[ "$MODE" != "quick" ]]; then
   step "Configuration"
@@ -811,8 +828,10 @@ if [[ "$MODE" != "quick" ]]; then
   prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
 
   # P1-A1: initial Admin
-  local_default_bootstrap="admin@${EMAIL_DOMAINS%%,*}"
-  prompt "Initial Admin email (P1-A1 bootstrap; blank to skip)" "$local_default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
+  configure_auth_access
+
+  local_default_bootstrap="csbpkuyp@gmail.com"
+  prompt "Initial Admin email (type off to disable bootstrap)" "$local_default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
   BOOTSTRAP_ADMIN_EMAIL=""
   if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
     BOOTSTRAP_ADMIN_EMAIL="$(printf '%s' "$BOOTSTRAP_ADMIN_EMAIL_INPUT" | tr '[:upper:]' '[:lower:]')"
@@ -850,9 +869,9 @@ if [[ "$MODE" != "quick" ]]; then
     RETRIEVER_VAL="tavily"
   fi
 
-  prompt_choice "Configure Google OAuth login?" OAUTH_CHOICE \
+  prompt_choice "Configure optional Google OAuth login?" OAUTH_CHOICE \
     "Yes — I have Client ID / Secret (from Google Cloud Console)" \
-    "Skip (login disabled; browse public pages only)"
+    "Skip (use email/password login only)"
 
   case "$OAUTH_CHOICE" in
     1)
@@ -867,6 +886,8 @@ if [[ "$MODE" != "quick" ]]; then
 else
   PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
   EMAIL_DOMAINS="gmail.com"
+  AUTH_INVITE_CODE_VAL="quick-local-invite"
+  BOOTSTRAP_ADMIN_EMAIL="csbpkuyp@gmail.com"
   ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""; OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""; ADAPTER_VAL="fake"
   MINIMAX_KEY=""; MINIMAX_BASE_URL_VAL=""; DEEPSEEK_KEY=""; DEEPSEEK_BASE_URL_VAL=""
   FALLBACK_LLM_VAL=""
@@ -900,10 +921,11 @@ AI_ENGINE_URL=http://localhost:4000
 GOOGLE_CLIENT_ID=${GOOGLE_ID}
 GOOGLE_CLIENT_SECRET=${GOOGLE_SECRET}
 ALLOWED_EMAIL_DOMAINS=${EMAIL_DOMAINS}
+AUTH_INVITE_CODE=${AUTH_INVITE_CODE_VAL}
 MAX_UPLOAD_SIZE_MB=5
 TIME_VALUE_USD_PER_HOUR=50
-# P1-A1: initial Admin bootstrap (blank => skip; assign via Admin console)
-BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+# P1-A1: initial Admin bootstrap
+BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-csbpkuyp@gmail.com}
 WEBENV
 info "apps/web/.env created"
 
@@ -987,7 +1009,7 @@ echo "  pnpm dev:web    →  http://localhost:3000"
 echo "  pnpm dev:ai     →  http://localhost:4000  (separate terminal)"
 echo ""
 if [[ -z "$GOOGLE_ID" ]]; then
-  echo "  Google OAuth: not configured (browse public pages only; actions require login)"
+  echo "  Google OAuth: not configured (email/password login is available)"
   echo "  To enable: https://console.cloud.google.com/apis/credentials"
   echo "  Callback: http://localhost:3000/api/auth/callback/google"
 fi

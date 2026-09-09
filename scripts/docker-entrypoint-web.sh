@@ -2,9 +2,8 @@
 # Docker entrypoint for web: run Prisma migrations, then idempotently bootstrap
 # the initial Admin (P1-A1), then start Next.js.
 #
-# Bootstrap requires BOOTSTRAP_ADMIN_EMAIL (+ ALLOWED_EMAIL_DOMAINS for the
-# allowlist). If unset the script logs [skip] and proceeds — the Admin role is
-# then assigned manually via the Admin console (P1-A3).
+# Bootstrap uses csbpkuyp@gmail.com by default (+ ALLOWED_EMAIL_DOMAINS for the
+# allowlist). Set BOOTSTRAP_ADMIN_EMAIL=off to skip it explicitly.
 set -e
 
 NEXT_BIN="/repo/node_modules/next/dist/bin/next"
@@ -28,8 +27,8 @@ node "$PRISMA_BIN" migrate deploy --schema /repo/apps/web/prisma/schema.prisma 2
   echo "[entrypoint] Migration failed, continuing anyway (DB may already be migrated)"
 }
 
-if [ -n "${BOOTSTRAP_ADMIN_EMAIL:-}" ]; then
-  echo "[entrypoint] Bootstrapping initial Admin (BOOTSTRAP_ADMIN_EMAIL set)..."
+if [ "${BOOTSTRAP_ADMIN_EMAIL:-}" != "off" ] && [ "${BOOTSTRAP_ADMIN_EMAIL:-}" != "disabled" ]; then
+  echo "[entrypoint] Bootstrapping initial Admin..."
   cd /repo/apps/web
   node "$PRISMA_BIN" generate --schema /repo/apps/web/prisma/schema.prisma >/dev/null 2>&1 || true
   if [ -x /repo/node_modules/.bin/tsx ]; then
@@ -42,7 +41,7 @@ if [ -n "${BOOTSTRAP_ADMIN_EMAIL:-}" ]; then
     echo "[entrypoint] tsx not found; skipping bootstrap-admin (run pnpm bootstrap:admin manually)"
   fi
 else
-  echo "[entrypoint] BOOTSTRAP_ADMIN_EMAIL unset; skipping initial Admin bootstrap"
+  echo "[entrypoint] BOOTSTRAP_ADMIN_EMAIL disabled; skipping initial Admin bootstrap"
 fi
 
 echo "[entrypoint] Starting Next.js..."

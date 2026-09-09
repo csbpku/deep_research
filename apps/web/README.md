@@ -8,7 +8,7 @@ Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/�
 - AI 调研：研究稿、快速判断、Slides 提纲、独立网页简报；深度任务会展示实际证据进度，运行中/部分完成的研究稿可读但仍受事实审核和发布门禁约束。
 - 雷达阅读：摘要先行、正文延迟加载、文章地图与选文动作；高价值 enrichment 的内容审核和真实浏览器渲染审核状态会单独展示，日报生成链路已移除。
 - API：researches、knowledge、imports、radar、shares、search、AI research、chat session/message、auth 与 admin routes；包含任务取消、研究审核、知识卡片提炼和雷达文档刷新。
-- 基础设施：NextAuth Google OAuth、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma；开发环境默认使用 `.next-dev`，隔离构建可用 `NEXT_DIST_DIR`。
+- 基础设施：NextAuth JWT + scrypt 邮箱密码登录、可选 Google OAuth、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma；开发环境默认使用 `.next-dev`，隔离构建可用 `NEXT_DIST_DIR`。
 
 ## 目录
 
@@ -46,12 +46,13 @@ pnpm --filter @deep-research/web build
 
 不要在 README 固化测试数量；以当前命令输出和 CI 为准。
 
-## Google OAuth
+## 登录
 
-1. 创建 Google OAuth Web Client。
-2. 本地 redirect URI 使用 `http://localhost:3000/api/auth/callback/google`。
-3. 将配置写入 `apps/web/.env`，变量名以 `docs/contracts/env-and-scripts.md` 和 `.env.example` 为准。
-4. 使用 `ALLOWED_EMAIL_DOMAINS` 限制允许登录的邮箱域。
+1. 配置 `ALLOWED_EMAIL_DOMAINS` 和服务端 `AUTH_INVITE_CODE`，登录页只允许这些域名通过邀请码激活并登录，公开注册已关闭。
+2. 密码使用 Node `crypto.scrypt` 哈希保存；最小长度为 12 个字符。
+3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `csbpkuyp@gmail.com`；该初始管理员如果尚未设置密码，可在登录页用该邮箱和邀请码完成一次激活。
+4. Google OAuth 是可选 provider；启用时，本地 redirect URI 使用 `http://localhost:3000/api/auth/callback/google`。
+5. 公网使用邮箱密码登录前必须启用 HTTPS；HTTP 只适合本机或受控内网联调。
 
 ## 边界
 

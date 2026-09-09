@@ -17,6 +17,8 @@ describe('parseWebEnv', () => {
     expect(env.MAX_UPLOAD_SIZE_MB).toBe(5);
     expect(env.TIME_VALUE_USD_PER_HOUR).toBe(50);
     expect(env.ALLOWED_EMAIL_DOMAINS).toEqual(['example.com', 'foo.org']);
+    expect(env.AUTH_INVITE_CODE).toBe('');
+    expect(env.BOOTSTRAP_ADMIN_EMAIL).toBe('csbpkuyp@gmail.com');
   });
 
   it('accepts missing Google OAuth credentials (local UI mode)', () => {

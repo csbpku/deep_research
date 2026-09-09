@@ -1442,11 +1442,16 @@ async def enrich_github_candidate(
     # unrelated network dependency and could replace a useful local draft
     # with a different/partial public catalog. New repositories still keep
     # the normal remote-first policy.
+    retry_remote_first = os.environ.get(
+        "ZREAD_RETRY_REMOTE_FIRST",
+        "0",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     existing_cli_draft = (
         isinstance(existing_zread, dict)
         and existing_zread.get("provider") == "zread-cli"
         and isinstance(existing_zread.get("pages"), list)
         and bool(existing_zread.get("pages"))
+        and not retry_remote_first
     )
     zread_payload = existing_zread if (
         not force

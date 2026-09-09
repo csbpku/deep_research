@@ -70,7 +70,7 @@ flowchart LR
 
 - Web：Next.js 15、TypeScript、Tailwind CSS、shadcn/ui、TanStack Query。
 - 编辑器：react-md-editor。
-- Auth：NextAuth.js + Google OAuth。
+- Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；邮箱密码账号通过 allowlist + 邀请码激活，公开注册关闭。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
 - AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计。
 - 数据源：Tavily、arxiv（可选 MCP）、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；可选只读 sidecar：AnythingLLM 雷达/聊天集成、GBrain MCP 知识检索。

@@ -53,7 +53,7 @@ UI/UX 状态不等于业务功能端到端通过：`🟡` 和 `⏸` 会明确保
 
 | ID | 功能 | 主路径 | 必测边界 | 覆盖证据 | 状态 |
 |---|---|---|---|---|---|
-| `ACC-01` | 登录与权限 | 登录 → 首页 → 用户菜单 | 匿名访问私有资源；普通成员访问 Admin；失效会话 | `public-flows.spec.ts`、`contract.spec.ts` | ✅ |
+| `ACC-01` | 登录与权限 | Google 登录或邀请码激活邮箱密码 → 首页 → 用户菜单 | 非 allowlist 邮箱；错误邀请码；公开注册被拒绝；错误密码；匿名访问私有资源；普通成员访问 Admin；失效会话 | `public-flows.spec.ts`、认证 API/密码单测、`contract.spec.ts` | 🔁 |
 | `ACC-02` | 全站导航与首访 | 首页进入雷达、专题、研究库、AI 调研、我的 | 空态、慢加载、路由返回、窄屏不溢出 | `home-flows.spec.ts`、`a11y-axe.spec.ts` | ✅ |
 | `ACC-03` | 我的空间与偏好 | `/me` 查看草稿、通知、关注和设置 | 空数据、保存失败、权限变化 | `apps/web/src/components/me/` 相关测试 | 🟡 |
 
@@ -170,6 +170,6 @@ uv run pytest tests/test_enrichment_worker.py tests/test_structured_html.py -q
 ## 当前边界
 
 - `✅` 只表示当前主路径有证据，不代表所有来源、所有外部服务和所有移动设备都已通过。
-- 真实 AI、Google OAuth、Confluence OAuth、Tavily、GitHub/Zread 和生产部署必须单独记录外部依赖状态。
+- 真实 AI、可选 Google OAuth、Confluence OAuth、Tavily、GitHub/Zread 和生产部署必须单独记录外部依赖状态；邮箱密码登录不依赖 Google OAuth，但公网验收必须使用 HTTPS。
 - 数据库、worker、来源抓取和审核的“已写代码”不能替代真实状态迁移、租约恢复、失败隔离和页面呈现验收。
 - `.next-*`、报告、缓存和其他无关工作树改动不属于本清单的清理对象。

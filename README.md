@@ -97,7 +97,7 @@ launchd 托管的 AI engine 使用稳定模式（不随代码文件自动重启�
 | 部署 | Docker Compose + nginx 1.27（HTTP-only，TLS 模板待签发），本地/单 VPS |
 | 工具链 | pnpm workspace（10+）、uv、ruff + mypy、tsc、GitHub Actions CI |
 
-外部依赖：Anthropic / OpenAI（按 adapter）、Tavily；Google OAuth 仅真实登录需要，本地快速模式可省略。
+外部依赖：Anthropic / OpenAI（按 adapter）、Tavily；登录支持邮箱密码，Google OAuth 可选。
 
 ## 本地部署
 
@@ -106,7 +106,8 @@ launchd 托管的 AI engine 使用稳定模式（不随代码文件自动重启�
 - 原生模式：Node.js ≥ 20.11、pnpm ≥ 10、Python ≥ 3.11、uv、PostgreSQL 16。
 - Docker 模式：Docker Engine 24+ 与 Compose v2；建议至少 2 vCPU / 4 GB RAM。
 - 真实 AI：一个受支持 provider 的 API key，以及 Tavily key（或将 `RETRIEVER=duckduckgo`）。只验 UI 可用 `AI_ENGINE_ADAPTER=fake`。
-- Google OAuth（可选，真实登录需要）：创建 Web application，并登记 `http://localhost:3000/api/auth/callback/google`。
+- 邮箱密码登录：将 `ALLOWED_EMAIL_DOMAINS` 配置为允许激活/登录的邮箱域，并通过 `AUTH_INVITE_CODE` 控制首次激活；公开注册已关闭，生产环境必须使用 HTTPS。
+- Google OAuth（可选）：创建 Web application，并登记 `http://localhost:3000/api/auth/callback/google`。
 
 ### 原生启动
 
@@ -118,7 +119,7 @@ cd deep_research
 # 2. 检测环境、安装依赖、生成 env、建库并执行 migration
 ./scripts/setup.sh
 
-# 不配 AI key / Google OAuth，只验证产品 UI 与流程（登录页提示 OAuth 未配置）
+# 不配 AI key / Google OAuth，只验证产品 UI 与流程（可用邀请码激活邮箱密码登录）
 ./scripts/setup.sh --quick
 
 # 3. 起服务（两个终端）
@@ -135,7 +136,7 @@ curl -fsS http://localhost:3000/api/healthz
 curl -fsS http://localhost:4000/healthz
 ```
 
-启用真实登录前，先在 Google OAuth 控制台登记回调 URL，确认 `ALLOWED_EMAIL_DOMAINS` 包含登录邮箱域名。`--quick` 生成的配置不会注册 Google provider，登录页会提示 OAuth 未配置。`BOOTSTRAP_ADMIN_EMAIL` 可在首次启动时幂等创建/提升初始 Admin；也可稍后由已有 Admin 在成员管理中调整角色。
+使用邮箱密码登录时，先确认 `ALLOWED_EMAIL_DOMAINS` 包含邮箱域名，并在登录页的“邀请码激活”中输入 `AUTH_INVITE_CODE` 设置密码；激活后即可正常登录，公开注册接口会固定拒绝。`--quick` 生成的配置不会注册 Google provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `csbpkuyp@gmail.com`，首次启动会幂等创建/提升该 Admin；如果该账号尚未设置密码，可用同一邮箱和邀请码完成一次激活。
 
 未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
@@ -146,7 +147,7 @@ curl -fsS http://localhost:4000/healthz
 ```bash
 cp .env.example .env
 # 至少替换 POSTGRES_PASSWORD、NEXTAUTH_SECRET、INTERNAL_SERVICE_TOKEN，
-# 并填写 ALLOWED_EMAIL_DOMAINS、Google OAuth 和所选 AI provider 凭证。
+# 并填写 ALLOWED_EMAIL_DOMAINS 和所选 AI provider 凭证；Google OAuth 可选。
 docker compose --env-file .env -f infra/docker-compose.yml config --quiet
 docker compose --env-file .env -f infra/docker-compose.yml up -d --build
 curl -fsS http://localhost:3000/api/healthz      # web
@@ -171,8 +172,8 @@ cd packages/ai-engine && uv run pytest -q && uv run ruff check . && uv run mypy 
 
 1. DNS：将域名的 `A/AAAA` 记录指向 VPS；先等待解析生效。
 2. 主机：安装 Docker Engine/Compose，克隆到 `/opt/deep_research`，只允许 SSH、80、443 入站；不要放行 3000、4000、5432。
-3. Secrets：复制 `.env.example` 为 `.env`，权限设为 `600`；用 `openssl rand -hex 32` 分别生成数据库、NextAuth 和内部服务令牌。设置 `NEXTAUTH_URL=https://research.example.com`，并把 Google OAuth 回调登记为 `https://research.example.com/api/auth/callback/google`。
-4. 配置：填写 `ALLOWED_EMAIL_DOMAINS`、`BOOTSTRAP_ADMIN_EMAIL`、AI provider 与检索凭证。`.env` 不提交 Git，不写入镜像。
+3. Secrets：复制 `.env.example` 为 `.env`，权限设为 `600`；用 `openssl rand -hex 32` 分别生成数据库、NextAuth 和内部服务令牌。设置 `NEXTAUTH_URL=https://research.example.com`。如启用 Google OAuth，再登记 `https://research.example.com/api/auth/callback/google`。
+4. 配置：填写 `ALLOWED_EMAIL_DOMAINS`、`AUTH_INVITE_CODE`、`BOOTSTRAP_ADMIN_EMAIL`、AI provider 与检索凭证。`.env` 不提交 Git，不写入镜像。邮箱密码账号在登录页通过邀请码激活。
 5. TLS：用 Certbot/acme.sh 签发 `fullchain.pem` 与 `privkey.pem`，放入 `infra/certs/`（私钥 `0600`）；将 Compose 的 nginx mount 从 `infra/nginx.conf` 切换为 `infra/nginx-tls.conf`。证书签发前不要公开登录流量。
 6. 启动：先校验配置，再构建启动；检查容器、HTTPS 和两项 health endpoint。
 

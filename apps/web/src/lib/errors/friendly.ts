@@ -128,6 +128,10 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
       return { message: '当前邮箱不在允许名单内' };
     case ERROR_CODES.AUTH_ACCOUNT_DISABLED:
       return { message: '账号已停用' };
+    case ERROR_CODES.AUTH_INVITE_INVALID:
+      return { message: '邀请码无效或已关闭' };
+    case ERROR_CODES.AUTH_REGISTRATION_DISABLED:
+      return { message: '公开注册已关闭，请使用邀请码激活' };
     case ERROR_CODES.PERMISSION_DENIED:
       return { message: '没有权限执行该操作' };
 

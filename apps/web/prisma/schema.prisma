@@ -183,6 +183,7 @@ model User {
   email       String    @unique @db.Citext
   name        String    @db.VarChar(80)
   avatarUrl   String?   @db.VarChar(2048)
+  passwordHash String?  @db.VarChar(255)
   role        UserRole  @default(member)
   disabledAt  DateTime? @db.Timestamptz(3)
   // P1-C: per-user preferences (JsonB). Empty object by default; 应用层

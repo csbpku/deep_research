@@ -8,6 +8,7 @@
 // 两个凭证都为空（登录禁用），生产部署必须显式配置。
 
 import { z } from 'zod';
+import { DEFAULT_BOOTSTRAP_ADMIN_EMAIL } from './auth/invitation';
 
 const csvDomains = z
   .string()
@@ -51,6 +52,8 @@ const webEnvSchema = z
     GOOGLE_CLIENT_ID: z.string().default(''),
     GOOGLE_CLIENT_SECRET: z.string().default(''),
     ALLOWED_EMAIL_DOMAINS: csvDomains,
+    AUTH_INVITE_CODE: z.string().default(''),
+    BOOTSTRAP_ADMIN_EMAIL: z.string().default(DEFAULT_BOOTSTRAP_ADMIN_EMAIL),
 
     MAX_UPLOAD_SIZE_MB: positiveInt.default('5'),
     TIME_VALUE_USD_PER_HOUR: positiveNumber.default('50'),

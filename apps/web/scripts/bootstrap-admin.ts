@@ -6,7 +6,7 @@
 //
 // Contract (P1-A1):
 //   - Reads BOOTSTRAP_ADMIN_EMAIL + ALLOWED_EMAIL_DOMAINS from env.
-//   - If unset, exits 0 with [skip] log (first deploy / SSO admin already exists).
+//   - Defaults to csbpkuyp@gmail.com; explicit "off"/"disabled" skips bootstrap.
 //   - Validates the email belongs to an allowed domain (allowlist reuse).
 //   - Upserts the user; promotes to admin **only if there is no admin yet** or the
 //     user is already admin. Never demotes an existing admin.
@@ -18,6 +18,7 @@
 //   DATABASE_URL=... tsx scripts/bootstrap-admin.ts
 
 import { PrismaClient, type UserRole } from '@prisma/client';
+import { bootstrapAdminEmail } from '../src/lib/auth/invitation';
 
 const prisma = new PrismaClient();
 
@@ -55,13 +56,10 @@ async function main(): Promise<Outcome> {
   const emailRaw = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim() ?? '';
   const allow = csvDomains(process.env.ALLOWED_EMAIL_DOMAINS);
 
-  if (!emailRaw) {
-    return { kind: 'skipped_no_bootstrap_email', reason: 'BOOTSTRAP_ADMIN_EMAIL 未设置' };
-  }
   if (emailRaw.toLowerCase() === 'disabled' || emailRaw.toLowerCase() === 'off') {
     return { kind: 'skipped_disabled_bootstrap_email', reason: 'BOOTSTRAP_ADMIN_EMAIL 被显式关闭' };
   }
-  const email = emailRaw.toLowerCase();
+  const email = bootstrapAdminEmail(emailRaw) ?? '';
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
     throw new Error(`BOOTSTRAP_ADMIN_EMAIL 非法: ${emailRaw}`);
   }

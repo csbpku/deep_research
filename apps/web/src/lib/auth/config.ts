@@ -1,4 +1,4 @@
-// NextAuth v5 配置 —— Google OAuth（可禁用）+ JWT 策略。
+// NextAuth v5 配置 —— 密码登录 + 可选 Google OAuth + JWT 策略。
 //
 // 关键决策（Week 1 复评 ADR 0002 + 当前 schema freeze）：
 //   - schema 已 freeze，且**没有** Account / Session / VerificationToken 表。
@@ -8,8 +8,8 @@
 //   - signIn callback 做邮箱 allowlist + disabledAt 双重校验，未通过直接 false，
 //     NextAuth 会跳到 ?error=AccessDenied 页面。
 //
-// E2E 模式（process.env.E2E === '1'）：额外启用 Credentials provider
-//   允许用 email 直登，方便 Playwright 注入 session。
+// 正式 password Credentials provider 使用数据库里的 scrypt 哈希。
+// E2E 模式（process.env.E2E === '1'）额外启用 e2e-credentials，方便 Playwright 注入 session。
 //
 // 注意：env 解析在 lib/env.ts 完成；本文件只引用 getWebEnv()。
 
@@ -19,12 +19,40 @@ import Credentials from 'next-auth/providers/credentials';
 import { getWebEnv } from '../env';
 import { prisma } from '../db';
 import { canEstablishSession, isEmailAllowed } from './allowlist';
+import { verifyPassword } from './password';
+import { isBootstrapAdminEmail } from './invitation';
 import { log } from '../log';
 
 const isE2E = process.env.E2E === '1';
 
 export const authConfig: NextAuthConfig = {
   providers: [
+    Credentials({
+      id: 'password',
+      name: 'Email and password',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
+      },
+      async authorize(credentials) {
+        const email = (credentials?.email as string | undefined)?.trim().toLowerCase();
+        const password = credentials?.password as string | undefined;
+        if (!email || !password) return null;
+
+        const u = await prisma.user.findUnique({ where: { email } });
+        if (!u || !u.passwordHash || !canEstablishSession(u)) return null;
+        if (!(await verifyPassword(password, u.passwordHash))) return null;
+
+        return {
+          id: u.id,
+          email: u.email,
+          name: u.name,
+          role: u.role,
+          image: u.avatarUrl,
+          disabledAt: u.disabledAt,
+        };
+      },
+    }),
     ...(isE2E
       ? [
           Credentials({
@@ -135,11 +163,12 @@ export const authConfig: NextAuthConfig = {
             email,
             name: user.name ?? email.split('@')[0],
             avatarUrl: user.image ?? null,
-            role: 'member',
+            role: isBootstrapAdminEmail(email, env.BOOTSTRAP_ADMIN_EMAIL) ? 'admin' : 'member',
           },
           update: {
             name: user.name ?? undefined,
             avatarUrl: user.image ?? undefined,
+            role: isBootstrapAdminEmail(email, env.BOOTSTRAP_ADMIN_EMAIL) ? 'admin' : undefined,
           },
         });
         token.uid = u.id;
@@ -208,11 +237,15 @@ function isAccountActiveForSession(disabledAt: Date | null): boolean {
   return disabledAt === null;
 }
 
-function envHash(env: { GOOGLE_CLIENT_ID: string; NEXTAUTH_SECRET: string }): string {
-  // 把 env 关键字段拼成短 hash，env 变化时让旧 token 失效；避免 secret 轮换后旧 JWT 残留。
+function envHash(env: {
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  NEXTAUTH_SECRET: string;
+}): string {
+  // 把认证关键字段拼成短 hash，env 变化时让旧 token 失效；避免 secret 轮换后旧 JWT 残留。
   // 这里只用 env 字段，不引入 hash 库，保持依赖最小。
   let h = 0;
-  const s = env.GOOGLE_CLIENT_ID + '|' + env.NEXTAUTH_SECRET;
+  const s = env.GOOGLE_CLIENT_ID + '|' + env.GOOGLE_CLIENT_SECRET + '|' + env.NEXTAUTH_SECRET;
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return String(h);
 }
