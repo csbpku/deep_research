@@ -32,7 +32,7 @@ pnpm db:generate
 pnpm dev:web                 # http://localhost:3000
 ```
 
-首次启动前，在仓库根目录执行 `./scripts/setup.sh --quick`（或准备好 `.env` 后执行 `pnpm db:deploy`），确保 PostgreSQL 已在 `localhost:5432` 运行。若使用 launchd 常驻 Web，则先执行 `pnpm --filter @deep-research/web build`，因为模板启动的是 `next start` 而不是开发服务器。
+首次启动前，在仓库根目录执行 `./scripts/setup.sh --quick`（或准备好 `.env` 后执行 `pnpm db:deploy`），确保 PostgreSQL 已在 `localhost:5432` 运行。setup 会自动补齐默认雷达源；手工只执行 migration 时，可运行 `pnpm --filter @deep-research/web bootstrap:radar`。若使用 launchd 常驻 Web，则先执行 `pnpm --filter @deep-research/web build`，因为模板启动的是 `next start` 而不是开发服务器。
 
 数据库 schema 和 migration 是共享契约；除非任务明确授权，不创建、修改或执行 migration。
 
@@ -53,6 +53,10 @@ pnpm --filter @deep-research/web build
 3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`；该初始管理员如果尚未设置密码，可在登录页用该邮箱和邀请码完成一次激活。
 4. Google OAuth 是可选 provider；启用时，本地 redirect URI 使用 `http://localhost:3000/api/auth/callback/google`。
 5. 公网使用邮箱密码登录前必须启用 HTTPS；HTTP 只适合本机或受控内网联调。
+
+## Radar bootstrap
+
+`apps/web/scripts/bootstrap-radar-sources.ts` 是安装和容器启动共用的幂等入口。它会补齐 `DEFAULT_RADAR_SOURCES` 中缺失的固定 ID，不会更新已存在的 `radar_sources` 行；管理员可以继续在控制台调整启停和配置。
 
 ## 边界
 

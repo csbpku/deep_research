@@ -369,7 +369,7 @@ run_interactive_prompts() {
   fi
 
   prompt "Deploy URL (for NextAuth callback)" "$deploy_url_default" DEPLOY_URL
-  prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
+  prompt "Email domain allowlist (comma-separated)" "gmail.com,shopee.com" EMAIL_DOMAINS
   validate_non_empty "$EMAIL_DOMAINS" "ALLOWED_EMAIL_DOMAINS"
   configure_auth_access
 
@@ -673,6 +673,11 @@ VPSSCRIPT
     echo "  To enable, get credentials at https://console.cloud.google.com/apis/credentials"
     echo "  Callback URL: ${DEPLOY_URL}/api/auth/callback/google"
   fi
+  echo ""
+  echo -e "  Initial Admin: ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}"
+  echo "  First login: choose invite-code activation and set the Admin password once."
+  echo "  Invite code: stored in deploy/.env as AUTH_INVITE_CODE (not printed by setup)."
+  echo "  Admin console: ${DEPLOY_URL}/admin"
 
   exit 0
 fi
@@ -738,6 +743,22 @@ if [[ "$MODE" == "docker" ]]; then
     fail "Migration failed. Run inside container: docker compose -f infra/docker-compose.yml exec web pnpm db:deploy"
   fi
 
+  step "Ensuring initial Admin"
+  if docker compose -f infra/docker-compose.yml exec -T web \
+    /repo/node_modules/.bin/tsx /repo/apps/web/scripts/bootstrap-admin.ts; then
+    info "Initial Admin ensured"
+  else
+    warn "Could not bootstrap the initial Admin; inspect web logs and ALLOWED_EMAIL_DOMAINS"
+  fi
+
+  step "Ensuring default radar sources"
+  if docker compose -f infra/docker-compose.yml exec -T web \
+    /repo/node_modules/.bin/tsx /repo/apps/web/scripts/bootstrap-radar-sources.ts; then
+    info "Default radar sources ensured"
+  else
+    warn "Could not seed default radar sources; inspect web logs before using the Radar"
+  fi
+
   pnpm db:generate 2>/dev/null && info "Prisma client generated" || true
 
   step "Checking service health"
@@ -767,6 +788,11 @@ if [[ "$MODE" == "docker" ]]; then
   if [[ -z "$GOOGLE_ID" ]]; then
     echo -e "  ${YELLOW}Google OAuth: not configured${NC} (use email/password login)"
   fi
+  echo ""
+  echo -e "  Initial Admin: ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}"
+  echo "  First login: choose invite-code activation and set the Admin password once."
+  echo "  Invite code: stored in .env as AUTH_INVITE_CODE (not printed by setup)."
+  echo "  Admin console: ${DEPLOY_URL}/admin"
 
   exit 0
 fi
@@ -825,7 +851,7 @@ if [[ "$MODE" != "quick" ]]; then
   prompt_secret "PostgreSQL password" PG_PASS_INPUT
   PG_PASS="${PG_PASS_INPUT:-postgres}"
 
-  prompt "Email domain allowlist (comma-separated)" "gmail.com" EMAIL_DOMAINS
+  prompt "Email domain allowlist (comma-separated)" "gmail.com,shopee.com" EMAIL_DOMAINS
 
   # P1-A1: initial Admin
   configure_auth_access
@@ -885,7 +911,7 @@ if [[ "$MODE" != "quick" ]]; then
   esac
 else
   PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
-  EMAIL_DOMAINS="gmail.com"
+  EMAIL_DOMAINS="gmail.com,shopee.com"
   AUTH_INVITE_CODE_VAL="quick-local-invite"
   BOOTSTRAP_ADMIN_EMAIL="shaobo.chen@shopee.com"
   ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""; OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""; ADAPTER_VAL="fake"
@@ -982,6 +1008,17 @@ if pg_isready -h "$PG_HOST" -p "$PG_PORT" >/dev/null 2>&1; then
   DATABASE_URL="$DB_URL" pnpm db:deploy || fail "Migration failed — check DATABASE_URL in apps/web/.env"
   info "Migrations applied"
   DATABASE_URL="$DB_URL" pnpm db:generate && info "Prisma client generated" || true
+  step "Ensuring initial Admin"
+  BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}" \
+    ALLOWED_EMAIL_DOMAINS="$EMAIL_DOMAINS" \
+    DATABASE_URL="$DB_URL" \
+    pnpm --filter @deep-research/web bootstrap:admin \
+    || fail "Initial Admin bootstrap failed — check ALLOWED_EMAIL_DOMAINS and BOOTSTRAP_ADMIN_EMAIL"
+  info "Initial Admin ensured"
+  step "Ensuring default radar sources"
+  DATABASE_URL="$DB_URL" pnpm --filter @deep-research/web bootstrap:radar \
+    || fail "Default radar source bootstrap failed"
+  info "Default radar sources ensured"
 else
   fail "PostgreSQL not detected at ${PG_HOST}:${PG_PORT} — start PostgreSQL, then rerun ./scripts/setup.sh"
 fi
@@ -1007,6 +1044,11 @@ echo ""
 echo -e "${BOLD}Start services:${NC}"
 echo "  pnpm dev:web    →  http://localhost:3000"
 echo "  pnpm dev:ai     →  http://localhost:4000  (separate terminal)"
+echo ""
+echo -e "${BOLD}Initial Admin:${NC} ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}"
+echo "First login: choose invite-code activation and set the Admin password once."
+echo "Invite code: stored in apps/web/.env as AUTH_INVITE_CODE (not printed by setup)."
+echo "Admin console: http://localhost:3000/admin"
 echo ""
 if [[ -z "$GOOGLE_ID" ]]; then
   echo "  Google OAuth: not configured (email/password login is available)"

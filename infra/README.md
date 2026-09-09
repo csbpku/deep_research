@@ -37,7 +37,7 @@
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个镜像。
 2. 推送到 `ghcr.io/csbpku/deep-research/web:<commit-sha>` 和 `ai-engine:<commit-sha>`，同时更新 `latest`。
 3. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS。
-4. VPS 拉取固定 SHA 镜像，使用现有 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy` 和幂等 Admin bootstrap。
+4. VPS 拉取固定 SHA 镜像，使用现有 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
 5. 通过 `/healthz` 和 `/ai-healthz` 做发布后检查；失败时尝试恢复上一个镜像 SHA。
 
 镜像回滚不等于数据库回滚。迁移必须保持向前兼容；需要恢复 schema 时，先使用已有 PostgreSQL 备份/恢复流程。

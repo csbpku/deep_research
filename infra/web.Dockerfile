@@ -69,6 +69,8 @@ COPY --from=build --chown=nextjs:nodejs /repo/packages packages
 # Keep only the runtime source they need instead of shipping the full app source.
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/prisma apps/web/prisma
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/scripts/bootstrap-admin.ts apps/web/scripts/bootstrap-admin.ts
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/scripts/bootstrap-radar-sources.ts apps/web/scripts/bootstrap-radar-sources.ts
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/scripts/default-radar-sources.ts apps/web/scripts/default-radar-sources.ts
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/src/lib/auth/invitation.ts apps/web/src/lib/auth/invitation.ts
 COPY --chown=nextjs:nodejs scripts/docker-entrypoint-web.sh /entrypoint.sh
 

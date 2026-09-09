@@ -3,9 +3,10 @@
 --
 -- 生成时间: 2026-08-12
 -- 当前源数量: 22
--- 注意：本文件使用 ON CONFLICT (id) DO UPDATE，因此可安全重复运行，
--- 会在已有 ID 存在时更新 name + config + sourceType，而不是跳过。
--- 数据库是运行时的权威配置源，seed.sql 仅在初始部署或重置后执行。
+-- 注意：本文件使用 ON CONFLICT (id) DO NOTHING，因此可安全重复运行，
+-- 不会覆盖管理员已经修改、停用或删除的运行时配置。
+-- 新安装优先调用 apps/web/scripts/bootstrap-radar-sources.ts；本文件保留为
+-- 没有 Node/tsx 环境时的手工兼容入口。
 
 BEGIN;
 
@@ -125,11 +126,7 @@ VALUES
    '{"feedUrl": "https://www.qbitai.com/feed", "maxResults": 10, "maxAgeHours": 72, "applyAiFilter": true}'::jsonb,
    true, now())
 
-ON CONFLICT (id) DO UPDATE SET
-  name = EXCLUDED.name,
-  "sourceType" = EXCLUDED."sourceType",
-  config = EXCLUDED.config,
-  "updatedAt" = now();
+ON CONFLICT (id) DO NOTHING;
 
 COMMIT;
 

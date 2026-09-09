@@ -127,6 +127,16 @@ pnpm dev:web     # → http://localhost:3000
 pnpm dev:ai      # → http://localhost:4000
 ```
 
+安装脚本会在 migration 后自动补齐默认雷达信息源：共 22 个稳定 source 定义，其中一部分默认停用以避免重复或低质量抓取。信息源配置保存在 `radar_sources` 数据表，不依赖 API key；GitHub token、Product Hunt token 只用于增强对应源。这个初始化是幂等的，只创建缺失行，不会覆盖 Admin 在控制台修改过的 `enabled/config`。
+
+容器启动时 Web entrypoint 也会执行同一个默认源 bootstrap，因此 `git clone` + `./scripts/setup.sh`、本地 Docker 和 GHCR/VPS 部署使用同一套初始化逻辑。
+
+首次安装后：
+
+1. 初始管理员默认是 `shaobo.chen@shopee.com`，setup 会把它创建或提升为 Admin。
+2. 登录页选择“邀请码激活”，输入该邮箱和 `.env` 中的 `AUTH_INVITE_CODE`，设置一次密码。
+3. 之后使用邮箱密码登录，管理后台地址为 `/admin`。邀请码不会打印到日志。
+
 首次启动或切换分支后，可显式复核数据库与服务：
 
 ```bash
@@ -155,7 +165,7 @@ curl -fsS http://localhost:4000/healthz          # ai-engine
 docker compose --env-file .env -f infra/docker-compose.yml ps
 ```
 
-容器启动时 Web entrypoint 自动执行 `prisma migrate deploy` 和可选的 Admin bootstrap。PostgreSQL 只绑定 `127.0.0.1:5432`；生产环境不要改成公网监听。完整环境变量清单见 [`.env.example`](./.env.example)。
+容器启动时 Web entrypoint 自动执行 `prisma migrate deploy`、Admin bootstrap 和默认雷达信息源 bootstrap。PostgreSQL 只绑定 `127.0.0.1:5432`；生产环境不要改成公网监听。完整环境变量清单见 [`.env.example`](./.env.example)。
 
 ### 验证
 
@@ -173,7 +183,7 @@ cd packages/ai-engine && uv run pytest -q && uv run ruff check . && uv run mypy 
 1. DNS：将域名的 `A/AAAA` 记录指向 VPS；先等待解析生效。
 2. 主机：安装 Docker Engine/Compose，克隆到 `/opt/deep_research`，只允许 SSH、80、443 入站；不要放行 3000、4000、5432。
 3. Secrets：复制 `.env.example` 为 `.env`，权限设为 `600`；用 `openssl rand -hex 32` 分别生成数据库、NextAuth 和内部服务令牌。设置 `NEXTAUTH_URL=https://research.example.com`。如启用 Google OAuth，再登记 `https://research.example.com/api/auth/callback/google`。
-4. 配置：填写 `ALLOWED_EMAIL_DOMAINS`、`AUTH_INVITE_CODE`、`BOOTSTRAP_ADMIN_EMAIL`、AI provider 与检索凭证。`.env` 不提交 Git，不写入镜像。邮箱密码账号在登录页通过邀请码激活。
+4. 配置：填写 `ALLOWED_EMAIL_DOMAINS`、`AUTH_INVITE_CODE`、`BOOTSTRAP_ADMIN_EMAIL`、AI provider 与检索凭证。默认管理员邮箱必须属于 `ALLOWED_EMAIL_DOMAINS`。`.env` 不提交 Git，不写入镜像。邮箱密码账号在登录页通过邀请码激活。
 5. TLS：用 Certbot/acme.sh 签发 `fullchain.pem` 与 `privkey.pem`，放入 `infra/certs/`（私钥 `0600`）；将 Compose 的 nginx mount 从 `infra/nginx.conf` 切换为 `infra/nginx-tls.conf`。证书签发前不要公开登录流量。
 6. 启动：先校验配置，再构建启动；检查容器、HTTPS 和两项 health endpoint。
 

@@ -17,7 +17,8 @@
     "db:generate": "prisma generate",
     "db:reset": "prisma migrate reset --force",
     "db:seed:e2e": "tsx prisma/seed-e2e.ts",
-    "bootstrap:admin": "tsx scripts/bootstrap-admin.ts"
+    "bootstrap:admin": "tsx scripts/bootstrap-admin.ts",
+    "bootstrap:radar": "tsx scripts/bootstrap-radar-sources.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.0",

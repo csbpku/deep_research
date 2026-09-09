@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Docker entrypoint for web: run Prisma migrations, then idempotently bootstrap
-# the initial Admin (P1-A1), then start Next.js.
+# the initial Admin and default radar sources, then start Next.js.
 #
 # Bootstrap uses shaobo.chen@shopee.com by default (+ ALLOWED_EMAIL_DOMAINS for the
 # allowlist). Set BOOTSTRAP_ADMIN_EMAIL=off to skip it explicitly.
@@ -42,6 +42,15 @@ if [ "${BOOTSTRAP_ADMIN_EMAIL:-}" != "off" ] && [ "${BOOTSTRAP_ADMIN_EMAIL:-}" !
   fi
 else
   echo "[entrypoint] BOOTSTRAP_ADMIN_EMAIL disabled; skipping initial Admin bootstrap"
+fi
+
+echo "[entrypoint] Ensuring default radar sources..."
+if [ -x /repo/node_modules/.bin/tsx ]; then
+  DATABASE_URL="$DATABASE_URL" \
+    /repo/node_modules/.bin/tsx /repo/apps/web/scripts/bootstrap-radar-sources.ts \
+    || echo "[entrypoint] bootstrap-radar-sources returned non-zero (see logs above); continuing"
+else
+  echo "[entrypoint] tsx not found; skipping default radar source bootstrap"
 fi
 
 echo "[entrypoint] Starting Next.js..."
