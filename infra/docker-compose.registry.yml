@@ -1,0 +1,22 @@
+# Registry-image override for production deployments.
+#
+# Combine with docker-compose.yml:
+#   docker compose \
+#     --env-file .env \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.registry.yml \
+#     up -d --no-build
+#
+# WEB_IMAGE and AI_ENGINE_IMAGE should be immutable registry references, ideally
+# tagged with the Git commit SHA. Runtime secrets remain in the host .env file.
+
+services:
+  web:
+    image: ${WEB_IMAGE:?set WEB_IMAGE to a registry image}
+    # Compose's !reset removes the local build definition from the base file.
+    # This keeps an accidental `up` from rebuilding on the VPS.
+    build: !reset null
+
+  ai-engine:
+    image: ${AI_ENGINE_IMAGE:?set AI_ENGINE_IMAGE to a registry image}
+    build: !reset null

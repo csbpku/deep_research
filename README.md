@@ -190,7 +190,21 @@ curl -fsS https://research.example.com/ai-healthz
 
 部署后必须实际登录一次，确认 Admin 仪表板、雷达同步、文件导入和 AI 调研可用。日志用 `docker compose ... logs --since=30m web ai-engine nginx` 查看。
 
-备份、升级和回滚：每天运行 `infra/pg-backup.sh` 并把备份复制到异机/对象存储；定期在隔离库执行 `infra/pg-restore.sh`。升级前先备份并记录当前 Git SHA/镜像，`git pull` 后重建；若健康检查或 smoke 失败，切回原 SHA/镜像并恢复兼容备份。
+#### GitHub Actions + GHCR 快速部署
+
+仓库提供 `.github/workflows/deploy.yml`。它在 `CI` 成功后自动构建两个 Linux/amd64 镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；VPS 上的 `.env`、数据库卷、证书和日志不会被覆盖。失败时工作流会尝试恢复上一次记录的镜像 SHA。
+
+首次启用需要在 GitHub `Settings → Environments → production` 配置：
+
+- Secrets：`VPS_HOST`、`VPS_USER`、`VPS_SSH_KEY`、`VPS_KNOWN_HOSTS`
+- 如果 GHCR 包保持私有，再加 `GHCR_USERNAME`、`GHCR_READ_TOKEN`
+- Variable：`VPS_DEPLOY_PATH`，不填时默认 `/opt/deep_research`
+
+部署用户需要能运行 Docker。建议使用专用非 root 用户和仅用于部署的 SSH key；`VPS_KNOWN_HOSTS` 应保存固定的 SSH 主机指纹，工作流不会关闭 host key 校验。`120.76.248.204` 可以作为 `VPS_HOST`，不需要域名才能完成镜像部署。
+
+之后只要把代码推送到 `main`，CI 通过就会自动部署。也可以在 Actions 页面手动运行 `Deploy`。镜像回滚不回滚数据库 schema，新增迁移必须保持向前兼容。
+
+备份、升级和回滚：每天运行 `infra/pg-backup.sh` 并把备份复制到异机/对象存储；定期在隔离库执行 `infra/pg-restore.sh`。升级前先备份；如果需要数据库恢复，使用 `infra/pg-restore.sh`，不要把镜像回滚当成数据库回滚。
 
 ## 仓库布局
 

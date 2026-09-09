@@ -82,6 +82,9 @@ infra/wewe-rss/data/
 infra/logs/
 infra/certs/
 
+# Registry deploy marker written on the VPS
+.deployed-image-tag
+
 # 测试产物
 apps/web/test-results/
 apps/web/playwright-report/
