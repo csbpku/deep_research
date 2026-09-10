@@ -210,10 +210,14 @@ jobs:
             -f infra/docker-compose.registry.yml)
           previous_tag="$(cat .deployed-image-tag 2>/dev/null || true)"
 
+          is_release_tag() {
+            [[ "$1" =~ ^[0-9a-f]{40}$ ]]
+          }
+
           rollback() {
             status=$?
             echo "[deploy] release failed; preserving logs and attempting image rollback" >&2
-            if [ -n "$previous_tag" ]; then
+            if is_release_tag "$previous_tag"; then
               export WEB_IMAGE="ghcr.io/csbpku/deep-research/web:$previous_tag"
               export AI_ENGINE_IMAGE="ghcr.io/csbpku/deep-research/ai-engine:$previous_tag"
               export RENDER_REVIEW_IMAGE="ghcr.io/csbpku/deep-research/render-review:$previous_tag"
@@ -221,6 +225,8 @@ jobs:
                 "${compose[@]}" pull web ai-engine render-review || true
               timeout --signal=TERM --kill-after=30s 5m \
                 "${compose[@]}" up -d --no-build --remove-orphans || true
+            else
+              echo "[deploy] no valid previous registry SHA; skipping image rollback" >&2
             fi
             "${compose[@]}" ps || true
             exit "$status"
@@ -252,10 +258,23 @@ jobs:
           echo "[deploy] starting services; web entrypoint will apply migrations"
           "${compose[@]}" up -d --no-build --remove-orphans
           echo "[deploy] waiting for public health endpoints"
-          curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
-            http://127.0.0.1/healthz >/dev/null
-          curl --fail --silent --show-error --retry 20 --retry-delay 3 --retry-connrefused \
-            http://127.0.0.1/ai-healthz >/dev/null
+          wait_for_endpoint() {
+            local label="$1"
+            local url="$2"
+            local attempt
+            for attempt in $(seq 1 40); do
+              if curl --fail --silent --show-error --max-time 10 "$url" >/dev/null; then
+                echo "[deploy] $label is healthy (attempt $attempt/40)"
+                return 0
+              fi
+              echo "[deploy] $label not ready (attempt $attempt/40); retrying in 3 seconds" >&2
+              sleep 3
+            done
+            echo "[deploy] $label did not become healthy within 120 seconds" >&2
+            return 1
+          }
+          wait_for_endpoint web http://127.0.0.1/healthz
+          wait_for_endpoint ai http://127.0.0.1/ai-healthz
           printf '%s\n' "$IMAGE_TAG" > .deployed-image-tag
           trap - ERR
           "${compose[@]}" ps
