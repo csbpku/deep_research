@@ -19,15 +19,17 @@ up via ``original_kind="arxiv"`` (HF exposes the arxiv id like '2608.10720').
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
+import os
 from typing import Any
 
 import httpx
 
+from ai_engine.radar.huggingface import huggingface_endpoint
 from ai_engine.radar.models import RadarCandidate
 
-_HF_DAILY_PAPERS = "https://huggingface.co/api/daily_papers"
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -60,6 +62,53 @@ def _author_names(raw_authors: Any, limit: int = 5) -> str:
     return ", ".join(names)
 
 
+def _timeout_seconds(config: Mapping[str, Any], default: float = 30.0) -> float:
+    raw = config.get("timeoutSeconds", os.environ.get("HUGGINGFACE_TIMEOUT_SECONDS", default))
+    try:
+        return max(5.0, min(120.0, float(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _retry_count(config: Mapping[str, Any]) -> int:
+    raw = config.get("retries", os.environ.get("HUGGINGFACE_FETCH_RETRIES", "2"))
+    try:
+        return max(0, min(4, int(raw)))
+    except (TypeError, ValueError):
+        return 2
+
+
+async def _get_daily_papers(
+    http: httpx.AsyncClient,
+    *,
+    params: Mapping[str, Any],
+    timeout: float,
+    retries: int,
+) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            resp = await http.get(
+                huggingface_endpoint("/api/daily_papers"),
+                params=dict(params),
+                headers={"User-Agent": "deep-research-radar/0.1"},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            last_error = exc
+        except httpx.HTTPStatusError as exc:
+            if not (exc.response.status_code == 429 or exc.response.status_code >= 500):
+                raise
+            last_error = exc
+        if attempt < retries:
+            await asyncio.sleep(min(3.0, 0.5 * (attempt + 1)))
+    if last_error is not None:
+        raise last_error
+    return []
+
+
 async def fetch_huggingface_papers(
     config: Mapping[str, Any],
     *,
@@ -71,19 +120,20 @@ async def fetch_huggingface_papers(
     hf_cap = max(1, min(50, int(config.get("number_of_papers", max_results))))
     max_age_hours = max(1, int(config.get("maxAgeHours", 96)))
     min_keywords = max(0, int(config.get("minKeywordOverlap", 0)))
+    request_timeout = _timeout_seconds(config, timeout)
+    retries = _retry_count(config)
 
     owns_client = client is None
-    http = client or httpx.AsyncClient(timeout=timeout)
+    http = client or httpx.AsyncClient(timeout=request_timeout)
     candidates: list[RadarCandidate] = []
 
     try:
-        resp = await http.get(
-            _HF_DAILY_PAPERS,
+        data = await _get_daily_papers(
+            http,
             params={"number_of_papers": hf_cap},
-            headers={"User-Agent": "deep-research-radar/0.1"},
+            timeout=request_timeout,
+            retries=retries,
         )
-        resp.raise_for_status()
-        data = resp.json()
         if not isinstance(data, list):
             return candidates
 

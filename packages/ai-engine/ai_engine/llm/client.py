@@ -167,6 +167,20 @@ def is_quota_error(exc: BaseException) -> bool:
     )
 
 
+def is_provider_policy_error(exc: BaseException) -> bool:
+    """Whether the provider rejected this request for a model policy reason.
+
+    MiniMax currently reports input safety rejection as HTTP 422 with a
+    ``new_sensitive`` marker. This is not fixed by retrying the same model,
+    but a configured fallback model may still be able to answer the request.
+    Keep the match narrow so unrelated validation errors remain non-retryable.
+    """
+    if getattr(exc, "status_code", None) != 422:
+        return False
+    detail = str(exc).lower()
+    return "new_sensitive" in detail or "input sensitive" in detail
+
+
 def is_retryable_llm_error(exc: BaseException) -> bool:
     """Whether a configured fallback model may recover this provider failure."""
     # The provider SDK can surface a dropped streaming/socket write as a
@@ -177,6 +191,8 @@ def is_retryable_llm_error(exc: BaseException) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
     if is_quota_error(exc):
+        return True
+    if is_provider_policy_error(exc):
         return True
     if getattr(exc, "status_code", None) in {408, 409, 500, 502, 503, 504}:
         return True
@@ -304,6 +320,8 @@ async def generate_text(
 
 
 def _fallback_reason(error: BaseException) -> str:
+    if is_provider_policy_error(error):
+        return "provider_policy_block"
     if is_quota_error(error):
         return "quota_or_rate_limit"
     if getattr(error, "status_code", None) in {500, 502, 503, 504}:

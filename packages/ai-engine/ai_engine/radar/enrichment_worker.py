@@ -45,6 +45,7 @@ from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import resolve_spec
 from ai_engine.radar.distilled_scorer import _parse_llm_response
 from ai_engine.radar.enrichment_contract import enrichment_review_reset_assignments
+from ai_engine.radar.huggingface import huggingface_endpoint
 from ai_engine.radar.reader_quality import evaluate_reader_quality
 from ai_engine.radar.review_reconciliation import finalize_enrichment
 
@@ -105,11 +106,54 @@ ENRICHMENT_RETRY_MAX_SECONDS = max(
         minimum=30,
     ),
 )
+ENRICHMENT_RATE_LIMIT_COOLDOWN_SECONDS = _env_int(
+    "RADAR_ENRICHMENT_RATE_LIMIT_COOLDOWN_SECONDS",
+    21600,
+    minimum=900,
+)
+_UPSTREAM_RATE_LIMIT_COOLDOWN_UNTIL: dict[str, float] = {}
 _RETURNING_ID = ' RETURNING "id"'
 
 
 class EnrichmentLeaseLost(RuntimeError):
     """Raised when a late worker no longer owns the summary lease."""
+
+
+def _is_upstream_rate_limit(
+    error_code: str | None,
+    error_message: str | None = None,
+) -> bool:
+    code = (error_code or "").upper()
+    if code in {"UPSTREAM_RATE_LIMITED", "ZREAD_RATE_LIMITED"}:
+        return True
+    text = (error_message or "").lower()
+    return (
+        "429" in text
+        or "rate limit" in text
+        or "rate_limit" in text
+        or "token plan" in text
+        or "quota" in text
+    )
+
+
+def _remember_upstream_rate_limit(source_kind: str | None) -> None:
+    """Pause only the source kind that hit an upstream rate limit."""
+    if not source_kind:
+        return
+    cooldown_until = time.monotonic() + ENRICHMENT_RATE_LIMIT_COOLDOWN_SECONDS
+    _UPSTREAM_RATE_LIMIT_COOLDOWN_UNTIL[source_kind] = max(
+        _UPSTREAM_RATE_LIMIT_COOLDOWN_UNTIL.get(source_kind, 0.0),
+        cooldown_until,
+    )
+
+
+def _upstream_rate_limit_cooldown_active(source_kind: str | None) -> bool:
+    if not source_kind:
+        return False
+    return time.monotonic() < _UPSTREAM_RATE_LIMIT_COOLDOWN_UNTIL.get(
+        source_kind,
+        0.0,
+    )
 
 
 def _lease_guard(
@@ -700,8 +744,8 @@ async def _fetch_huggingface_model_readme(
     if parsed is None:
         return None
     owner, model = parsed
-    api_url = (
-        "https://huggingface.co/api/models/"
+    api_url = huggingface_endpoint(
+        "/api/models/"
         f"{quote(owner, safe='')}/{quote(model, safe='')}"
     )
     try:
@@ -712,8 +756,8 @@ async def _fetch_huggingface_model_readme(
         sha = str(metadata.get("sha") or "").strip()
         if not sha:
             return None
-        readme_url = (
-            f"https://huggingface.co/{quote(owner, safe='')}/"
+        readme_url = huggingface_endpoint(
+            f"/{quote(owner, safe='')}/"
             f"{quote(model, safe='')}/resolve/{quote(sha, safe='')}/README.md"
         )
         readme_doc = await safe_fetch(readme_url, timeout=15.0)
@@ -1287,17 +1331,49 @@ def _merge_zread_pages(
                 new_by_path[path] = page
     merged: list[dict[str, Any]] = list(new_pages)
     seen_paths = set(new_by_path.keys())
+    catalog_paths = {
+        str(path).replace("\\", "/")
+        for path in (new_zread.get("catalogPaths") or [])
+        if path
+    }
     for page in existing_pages:
         if not isinstance(page, dict):
             continue
         path = page.get("path")
         if not path or path in seen_paths:
             continue
+        # Retain historical pages even when a later partial catalog uses a
+        # different outline. They remain readable evidence, but the coverage
+        # fields below deliberately exclude them from the current catalog.
         merged.append(page)
         seen_paths.add(path)
     merged_payload = dict(new_zread)
     merged_payload["pages"] = merged
     merged_payload["pageCount"] = len(merged)
+    if catalog_paths:
+        page_paths = {
+            str(page.get("path") or "").replace("\\", "/")
+            for page in merged
+            if isinstance(page, dict) and page.get("path")
+        }
+        missing_pages = sorted(catalog_paths - page_paths)
+        merged_payload["catalogPageCount"] = len(catalog_paths)
+        merged_payload["coveredPageCount"] = len(catalog_paths - set(missing_pages))
+        merged_payload["missingPages"] = missing_pages
+        merged_payload["retainedPageCount"] = len(page_paths - catalog_paths)
+        # ``expectedPageCount`` is the total readable pages plus the current
+        # catalog gap. This keeps old pages visible without allowing their
+        # count to make an incomplete current catalog look complete.
+        merged_payload["expectedPageCount"] = len(page_paths) + len(missing_pages)
+        if missing_pages:
+            merged_payload["status"] = "partial"
+        elif not merged_payload.get("truncated") and not merged_payload.get("mixedCommits"):
+            # A timeout can happen after every catalog page is already durable
+            # but before Zread publishes ``current``. Promote that snapshot
+            # deterministically instead of sending complete work back through
+            # another LLM generation.
+            merged_payload["status"] = "complete"
+            merged_payload["expectedPageCount"] = len(page_paths)
     if existing_commit and new_commit and existing_commit != new_commit:
         merged_payload["previousCommitSha"] = existing_commit
         merged_payload["mixedCommits"] = True
@@ -2728,6 +2804,31 @@ async def _run_enrichment_for_pending(
 
     Returns count of successfully enriched rows.
     """
+    ignore_rate_limit_cooldown = os.environ.get(
+        "RADAR_ENRICHMENT_IGNORE_RATE_LIMIT_COOLDOWN",
+        "0",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not ignore_rate_limit_cooldown:
+        blocked_source_kinds = tuple(
+            kind
+            for kind in source_kinds
+            if _upstream_rate_limit_cooldown_active(kind)
+        )
+        if blocked_source_kinds:
+            source_kinds = tuple(
+                kind for kind in source_kinds
+                if kind not in blocked_source_kinds
+            )
+            logger.warning(
+                "ai-engine.radar.enrichment.rate_limit_cooldown_active",
+                extra={
+                    "blocked_source_kinds": blocked_source_kinds,
+                    "eligible_source_kinds": source_kinds,
+                    "cooldown_seconds": ENRICHMENT_RATE_LIMIT_COOLDOWN_SECONDS,
+                },
+            )
+            if not source_kinds:
+                return 0
     enrichment_concurrency = max(
         1,
         concurrency
@@ -2847,6 +2948,17 @@ async def _run_enrichment_for_pending(
              'WHERE sh."publishedSummaryId" = "summaries"."id" '
              'AND sh."status" = \'approved\'))'
     )
+    rate_limit_guard = (
+        ""
+        if force
+        else (
+            'AND NOT EXISTS (SELECT 1 FROM "summaries" AS rate_limited '
+            'WHERE rate_limited."enrichmentErrorCode" IN '
+            '(\'UPSTREAM_RATE_LIMITED\', \'ZREAD_RATE_LIMITED\') '
+            'AND rate_limited."enrichmentNextRetryAt" > now() '
+            'AND rate_limited."originalKind" = "summaries"."originalKind") '
+        )
+    )
     # The CTE + UPDATE is one PostgreSQL statement. It is an atomic per-row
     # claim even when the process-level advisory lock is removed later.
     claim_sql = (
@@ -2860,6 +2972,7 @@ async def _run_enrichment_for_pending(
         'COALESCE("tags", ARRAY[]::text[]) '
         '@> ARRAY[\'repo_digest\']::text[]) '
         f'AND {source_filter} '
+        f"{rate_limit_guard}"
         f"{summary_filter}"
         f"{run_filter}"
         # Retryable work is recovery debt. Serve it before fresh candidates
@@ -2937,12 +3050,23 @@ async def _run_enrichment_for_pending(
         *,
         attempts: int,
         claim_id: str,
+        source_kind: str,
         error_code: str,
         error_message: str,
     ) -> None:
-        terminal = attempts >= ENRICHMENT_MAX_ATTEMPTS
+        rate_limited = _is_upstream_rate_limit(error_code, error_message)
+        if rate_limited:
+            _remember_upstream_rate_limit(source_kind)
+        terminal = attempts >= ENRICHMENT_MAX_ATTEMPTS and not rate_limited
         status = "manual" if terminal else "retryable"
-        delay = _retry_delay_seconds(attempts)
+        delay = (
+            max(
+                _retry_delay_seconds(attempts),
+                ENRICHMENT_RATE_LIMIT_COOLDOWN_SECONDS,
+            )
+            if rate_limited
+            else _retry_delay_seconds(attempts)
+        )
         async with pool.connection() as conn:
             await conn.execute(
                 'UPDATE "summaries" SET '
@@ -2976,12 +3100,27 @@ async def _run_enrichment_for_pending(
         *,
         attempts: int,
         claim_id: str,
+        source_kind: str,
         retryable: bool,
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> None:
-        terminal = retryable and attempts >= ENRICHMENT_MAX_ATTEMPTS
-        delay = _retry_delay_seconds(attempts)
+        rate_limited = _is_upstream_rate_limit(error_code, error_message)
+        if rate_limited:
+            _remember_upstream_rate_limit(source_kind)
+        terminal = (
+            retryable
+            and attempts >= ENRICHMENT_MAX_ATTEMPTS
+            and not rate_limited
+        )
+        delay = (
+            max(
+                _retry_delay_seconds(attempts),
+                ENRICHMENT_RATE_LIMIT_COOLDOWN_SECONDS,
+            )
+            if rate_limited
+            else _retry_delay_seconds(attempts)
+        )
         async with pool.connection() as conn:
             await conn.execute(
                 'UPDATE "summaries" SET '
@@ -3123,8 +3262,22 @@ async def _run_enrichment_for_pending(
                     zread = payload.get("zread")
                     if not _zread_pages_complete(zread):
                         source_retryable = True
-                        source_error_code = "ZREAD_INCOMPLETE"
-                        source_error_message = "Zread document is partial or failed"
+                        zread_error_code = (
+                            str(zread.get("errorCode") or "").strip()
+                            if isinstance(zread, dict)
+                            else ""
+                        )
+                        source_error_code = zread_error_code or "ZREAD_INCOMPLETE"
+                        source_error_message = (
+                            str(zread.get("error") or "").strip()
+                            if isinstance(zread, dict)
+                            else ""
+                        ) or "Zread document is partial or failed"
+                        if _is_upstream_rate_limit(
+                            source_error_code,
+                            source_error_message,
+                        ):
+                            _remember_upstream_rate_limit(kind)
                 finalization: dict[str, Any] = {}
                 try:
                     # Source writes are claim-guarded, but review
@@ -3174,6 +3327,7 @@ async def _run_enrichment_for_pending(
                     summary_id,
                     attempts=attempts,
                     claim_id=claim_id,
+                    source_kind=kind,
                     retryable=source_retryable,
                     error_code=source_error_code,
                     error_message=source_error_message,
@@ -3207,6 +3361,7 @@ async def _run_enrichment_for_pending(
                     summary_id,
                     attempts=attempts,
                     claim_id=claim_id,
+                    source_kind=kind,
                     error_code=type(exc).__name__,
                     error_message=str(exc),
                 )
@@ -3249,6 +3404,7 @@ async def _run_enrichment_for_pending(
                 summary_id,
                 attempts=attempts,
                 claim_id=claim_id,
+                source_kind=kind,
                 error_code="ENRICHMENT_TIMEOUT",
                 error_message=f"item exceeded {effective_item_timeout:.0f}s timeout",
             )

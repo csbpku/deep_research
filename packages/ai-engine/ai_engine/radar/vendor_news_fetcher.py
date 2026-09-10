@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import yaml  # type: ignore[import-untyped]  # types-PyYAML not in pyproject; OSS dependency only used here
 
+from ai_engine.radar.huggingface import rewrite_huggingface_url
 from ai_engine.radar.models import RadarCandidate
 
 logger = logging.getLogger("vendor_news_fetcher")
@@ -131,25 +132,40 @@ def _save_state(state: dict[str, dict[str, str]]) -> None:
     tmp.replace(path)
 
 
-async def _fetch_sitemap(url: str, *, client: httpx.AsyncClient) -> str:
-    resp = await client.get(url, timeout=15.0)
+async def _fetch_sitemap(
+    url: str,
+    *,
+    client: httpx.AsyncClient,
+    timeout: float = 15.0,
+) -> str:
+    resp = await client.get(url, timeout=timeout)
     resp.raise_for_status()
     return resp.text
 
 
-def _vendor_source_url(cfg: Mapping[str, Any]) -> str:
+def _vendor_source_url(
+    vendor: str | Mapping[str, Any],
+    cfg: Mapping[str, Any] | None = None,
+) -> str:
     """Pick the actual XML source for a vendor: RSS if available, else sitemap.
 
     The YAML uses ``rss_url`` for sources that publish a feed (OpenAI, DeepMind,
     Mistral, Hugging Face) and ``sitemap_url`` for HTML-only vendors (Anthropic,
     xAI). The rest of the fetcher treats both as an XML/RSS document to parse.
     """
+    # Keep the old one-argument helper shape for scripts/tests that used the
+    # fetcher before vendor-specific URL rewriting was introduced.
+    if cfg is None:
+        cfg = vendor if isinstance(vendor, Mapping) else {}
+        vendor_name = ""
+    else:
+        vendor_name = str(vendor)
     rss = cfg.get("rss_url")
     if isinstance(rss, str) and rss:
-        return rss
+        return rewrite_huggingface_url(rss) if vendor_name == "huggingface_blog" else rss
     sitemap = cfg.get("sitemap_url")
     if isinstance(sitemap, str) and sitemap:
-        return sitemap
+        return rewrite_huggingface_url(sitemap) if vendor_name == "huggingface_blog" else sitemap
     raise ValueError(f"vendor config missing rss_url and sitemap_url: {cfg.get('name', '?')}")
 
 
@@ -315,12 +331,31 @@ async def check_and_fetch_vendor_news(
         follow_redirects=True,
     )
     max_age_hours = lookback_hours or int(cfg.get("max_age_hours", _VENDOR_NEWS_MAX_AGE_HOURS))
+    request_timeout = 15.0
+    if vendor == "huggingface_blog":
+        try:
+            request_timeout = max(
+                5.0,
+                min(120.0, float(os.environ.get("HUGGINGFACE_TIMEOUT_SECONDS", "30"))),
+            )
+        except ValueError:
+            request_timeout = 30.0
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     candidates: list[RadarCandidate] = []
 
     try:
         # 1. Fetch vendor XML source (RSS if vendor publishes one, else sitemap).
-        xml = await _fetch_sitemap(_vendor_source_url(cfg), client=http)
+        source_url = _vendor_source_url(vendor, cfg)
+        if vendor == "huggingface_blog":
+            xml = await _fetch_sitemap(
+                source_url,
+                client=http,
+                timeout=request_timeout,
+            )
+        else:
+            # Keep the original helper call shape for integrations that
+            # provide a small test/client adapter around the fetcher.
+            xml = await _fetch_sitemap(source_url, client=http)
         current_urls = _parse_sitemap(xml, cfg["url_pattern"])
 
         # 2. Diff with previous state
@@ -366,7 +401,12 @@ async def check_and_fetch_vendor_news(
         # 5. Fetch new/changed pages
         for url, pub_dt in new_or_changed:
             try:
-                resp = await http.get(url)
+                request_url = (
+                    rewrite_huggingface_url(url)
+                    if vendor == "huggingface_blog"
+                    else url
+                )
+                resp = await http.get(request_url, timeout=request_timeout)
                 resp.raise_for_status()
                 text = _extract_article_text(resp.text)
                 if len(text) < 100 or _is_protection_shell(text):

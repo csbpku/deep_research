@@ -58,7 +58,7 @@ VALUES
 
   -- 9 — Hugging Face Trending Models (likes7d sort, 30 max)
   ('a0000000-0000-0000-0000-000000000009', 'Hugging Face Trending Models', 'huggingface_models',
-   '{"sort": "likes7d", "max_results": 30}'::jsonb,
+   '{"sort": "likes7d", "max_results": 30, "timeoutSeconds": 30, "retries": 2}'::jsonb,
    true, now()),
 
   -- 10 — Anthropic Official News (sitemap, 72h window, statefile-deduped)
@@ -73,7 +73,7 @@ VALUES
 
   -- 12 — Hugging Face Daily Papers (20 max, 96h lookback)
   ('a0000000-0000-0000-0000-000000000012', 'Hugging Face Daily Papers', 'huggingface_papers',
-   '{"maxResults": 20, "maxAgeHours": 96, "number_of_papers": 50, "minKeywordOverlap": 0}'::jsonb,
+   '{"maxResults": 20, "maxAgeHours": 96, "number_of_papers": 50, "minKeywordOverlap": 0, "timeoutSeconds": 30, "retries": 2}'::jsonb,
    true, now()),
 
   -- 13 — OpenReview accepted papers (paused: repeated polling produced no scored output)

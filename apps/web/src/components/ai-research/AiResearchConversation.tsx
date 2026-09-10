@@ -31,6 +31,7 @@ import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { writeLastSubmitted } from '@/lib/last-submitted';
+import { createUuid } from '@/lib/uuid';
 import { cn } from '@/lib/utils';
 
 interface RadarSeed {
@@ -518,7 +519,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             sourcePolicy,
             sourceRefs: effectiveSourceRefs,
             primaryTopicId: brief.primaryTopicId ?? topicIdQuery ?? undefined,
-            idempotencyKey: crypto.randomUUID(),
+            idempotencyKey: createUuid(),
             conversationId: currentConversationId ?? undefined,
             conversation: conversationSnapshot,
           }
@@ -529,7 +530,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             reportLength: reportType === 'summary_brief' ? 'brief' : reportLength,
             sourcePolicy,
             sourceRefs: effectiveSourceRefs,
-            idempotencyKey: crypto.randomUUID(),
+            idempotencyKey: createUuid(),
             conversationId: currentConversationId ?? undefined,
             conversation: conversationSnapshot,
           };

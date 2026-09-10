@@ -592,6 +592,39 @@ def test_incomplete_zread_preserves_pages_across_commit_change() -> None:
     assert merged["previousCommitSha"] == "old"
 
 
+def test_incomplete_zread_retains_old_pages_without_counting_them_as_covered() -> None:
+    merged = ew._merge_zread_pages(
+        {
+            "commitSha": "old",
+            "pages": [
+                {"path": "1-overview.md", "content": "old overview"},
+                {"path": "legacy-only.md", "content": "old outline"},
+            ],
+        },
+        {
+            "commitSha": "new",
+            "catalogPaths": ["1-overview.md", "2-runtime.md"],
+            "pages": [{"path": "1-overview.md", "content": "fresh overview"}],
+            "pageCount": 1,
+            "expectedPageCount": 2,
+            "missingPages": ["2-runtime.md"],
+            "status": "partial",
+        },
+    )
+
+    assert merged is not None
+    assert {page["path"] for page in merged["pages"]} == {
+        "1-overview.md",
+        "legacy-only.md",
+    }
+    assert merged["pages"][0]["content"] == "fresh overview"
+    assert merged["catalogPageCount"] == 2
+    assert merged["coveredPageCount"] == 1
+    assert merged["retainedPageCount"] == 1
+    assert merged["missingPages"] == ["2-runtime.md"]
+    assert merged["expectedPageCount"] == 3
+
+
 @pytest.mark.parametrize("overrides", [
     {"status": "partial"},
     {"missingPages": ["2-runtime.md"]},
@@ -1064,6 +1097,95 @@ async def test_run_enrichment_for_pending_dispatches_all_default_kinds(
     assert succeeded == 6
     assert set(calls) == set(kinds)
     assert set(reviewed) == set(kinds)
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_cooldown_only_blocks_the_affected_source_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(rows=[{
+        "id": "id-rss",
+        "canonicalUrl": "https://example.com/rss",
+        "originalKind": "rss",
+        "distilledTier": "deep_read",
+    }])
+
+    monkeypatch.setattr(
+        ew,
+        "_upstream_rate_limit_cooldown_active",
+        lambda source_kind: source_kind == "github_repo",
+    )
+
+    async def fake_enrich(
+        pool: Any,
+        *,
+        summary_id: str,
+        canonical_url: str,
+        force: bool = False,
+        lease_owner: str | None = None,
+        claim_id: str | None = None,
+    ) -> dict[str, Any]:
+        del pool, summary_id, canonical_url, force, lease_owner, claim_id
+        return {"ok": True}
+
+    async def fake_finalize(
+        pool: Any,
+        *,
+        summary_id: str,
+        force_review: bool = False,
+    ) -> dict[str, Any]:
+        del pool, summary_id, force_review
+        return {"quality_status": "ready", "review": None}
+
+    monkeypatch.setattr(ew, "enrich_web_candidate", fake_enrich)
+    monkeypatch.setattr(ew, "finalize_enrichment", fake_finalize)
+
+    succeeded = await ew.run_enrichment_for_pending(pool, limit=10)
+
+    assert succeeded == 1
+    claim_sql, params = next(
+        execution
+        for execution in pool.connection_value.executions
+        if "WITH candidates AS" in execution[0]
+    )
+    assert params[:7] == (
+        "arxiv",
+        "github_other",
+        "github_issue",
+        "github_pr",
+        "github_release",
+        "rss",
+        "web_share",
+    )
+    assert "rate_limited.\"originalKind\" = \"summaries\".\"originalKind\"" in claim_sql
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_cooldown_returns_without_claiming_when_all_sources_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(rows=[{
+        "id": "id-repo",
+        "canonicalUrl": "https://github.com/acme/repo",
+        "originalKind": "github_repo",
+        "distilledTier": "deep_read",
+    }])
+
+    monkeypatch.setattr(
+        ew,
+        "_upstream_rate_limit_cooldown_active",
+        lambda source_kind: source_kind == "github_repo",
+    )
+
+    assert await ew.run_enrichment_for_pending(
+        pool,
+        source_kinds=("github_repo",),
+        limit=1,
+    ) == 0
+    assert not any(
+        "WITH candidates AS" in sql
+        for sql, _ in pool.connection_value.executions
+    )
 
 
 async def test_run_enrichment_for_pending_filters_current_sync_runs(

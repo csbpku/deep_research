@@ -162,6 +162,8 @@ export const DEFAULT_RADAR_SOURCES: readonly DefaultRadarSource[] = [
     config: {
       sort: 'likes7d',
       max_results: 30,
+      timeoutSeconds: 30,
+      retries: 2,
     },
     enabled: true,
   },
@@ -194,6 +196,8 @@ export const DEFAULT_RADAR_SOURCES: readonly DefaultRadarSource[] = [
       maxAgeHours: 96,
       number_of_papers: 50,
       minKeywordOverlap: 0,
+      timeoutSeconds: 30,
+      retries: 2,
     },
     enabled: true,
   },

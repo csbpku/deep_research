@@ -344,7 +344,18 @@ async def _repair_one(
         commit_sha=commit_sha,
         work_dir=work_dir,
     )
-    if recover_catalog and not _catalog_page_count(checkout):
+    local_pages, local_completeness, _ = _read_generated_wiki(
+        checkout / ".zread" / "wiki"
+    )
+    local_catalog_count = len(local_completeness.get("catalogPaths") or [])
+    local_complete = bool(
+        local_pages
+        and local_catalog_count
+        and not local_completeness.get("truncated")
+        and not local_completeness.get("missingPages")
+        and len(local_pages) >= int(local_completeness.get("expectedPageCount") or 0)
+    )
+    if recover_catalog and not local_catalog_count:
         recovered_catalog = _recover_catalog_from_links(old_zread)
         if recovered_catalog is None:
             raise RuntimeError("historical catalog cannot be unambiguously recovered from stored links")
@@ -356,35 +367,67 @@ async def _repair_one(
         (audit_dir / "recovered-catalog.json").write_text(
             json.dumps(recovered_catalog, ensure_ascii=False), encoding="utf-8"
         )
+        local_pages, local_completeness, _ = _read_generated_wiki(
+            checkout / ".zread" / "wiki"
+        )
+        local_catalog_count = len(local_completeness.get("catalogPaths") or [])
+        local_complete = bool(
+            local_pages
+            and local_catalog_count
+            and not local_completeness.get("truncated")
+            and not local_completeness.get("missingPages")
+            and len(local_pages) >= int(local_completeness.get("expectedPageCount") or 0)
+        )
     warmup_error = None
-    try:
-        first = None
-        if not _catalog_page_count(checkout):
-            first = await generate_zread_wiki(
+    first = None
+    second = None
+    seeded = 0
+    catalog_count = local_catalog_count
+    candidate: dict[str, Any] | None = None
+    if local_complete:
+        candidate = {
+            "provider": "zread-cli",
+            "status": "complete",
+            "repository": f"{owner}/{repo}",
+            "commitSha": commit_sha,
+            "branch": branch,
+            "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pageCount": len(local_pages),
+            **local_completeness,
+            "pages": local_pages,
+        }
+    else:
+        try:
+            if not local_catalog_count:
+                first = await generate_zread_wiki(
+                    owner=owner,
+                    repo=repo,
+                    branch=branch,
+                    commit_sha=commit_sha,
+                )
+        except Exception as exc:  # noqa: BLE001 - resume can continue from catalog
+            first = None
+            warmup_error = f"{type(exc).__name__}: {exc}"
+        catalog_count = _catalog_page_count(checkout)
+        if isinstance(first, dict) and _zread_pages_complete(first):
+            seeded = 0
+        else:
+            seeded = _seed_db_pages(checkout, old_zread)
+            os.environ["ZREAD_CLI_TIMEOUT_SECONDS"] = str(resume_timeout)
+            second = await generate_zread_wiki(
                 owner=owner,
                 repo=repo,
                 branch=branch,
                 commit_sha=commit_sha,
             )
-    except Exception as exc:  # noqa: BLE001 - resume can continue from catalog
-        first = None
-        warmup_error = f"{type(exc).__name__}: {exc}"
-    catalog_count = _catalog_page_count(checkout)
-    if isinstance(first, dict) and _zread_pages_complete(first):
-        seeded = 0
-        second = None
-    else:
-        seeded = _seed_db_pages(checkout, old_zread)
-        os.environ["ZREAD_CLI_TIMEOUT_SECONDS"] = str(resume_timeout)
-        second = await generate_zread_wiki(
-            owner=owner,
-            repo=repo,
-            branch=branch,
-            commit_sha=commit_sha,
-        )
-    candidate = second or first
+        candidate = second or first
     if not isinstance(candidate, dict):
         raise RuntimeError(f"{owner}/{repo}: Zread returned no payload")
+    if second and second.get("status") == "complete":
+        candidate["expectedPageCount"] = max(
+            int(candidate.get("expectedPageCount") or 0),
+            catalog_count,
+        )
     if recover_catalog:
         candidate["catalogSource"] = "stored-page-cross-references"
     (audit_dir / "latest-candidate.json").write_text(
@@ -399,7 +442,7 @@ async def _repair_one(
     return {
         "repo": f"{owner}/{repo}",
         "seeded": seeded,
-        "catalogPages": catalog_count,
+        "catalogPages": local_catalog_count if local_complete else catalog_count,
         "first": {
             "status": first.get("status") if isinstance(first, dict) else None,
             "pages": first.get("pageCount") if isinstance(first, dict) else None,

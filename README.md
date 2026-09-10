@@ -202,7 +202,7 @@ curl -fsS https://research.example.com/ai-healthz
 
 #### GitHub Actions + GHCR 快速部署
 
-仓库提供 `.github/workflows/deploy.yml`。它在 `CI` 成功后自动构建两个 Linux/amd64 镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；VPS 上的 `.env`、数据库卷、证书和日志不会被覆盖。失败时工作流会尝试恢复上一次记录的镜像 SHA。
+仓库提供 `.github/workflows/deploy.yml`。它在 `CI` 成功后自动构建 Web、AI engine、render-review 三个 Linux/amd64 镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；VPS 上的 `.env`、数据库卷、证书和日志不会被覆盖。失败时工作流会尝试恢复上一次记录的镜像 SHA。
 
 首次启用需要在 GitHub `Settings → Environments → production` 配置：
 

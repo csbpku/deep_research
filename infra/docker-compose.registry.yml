@@ -7,7 +7,8 @@
 #     -f infra/docker-compose.registry.yml \
 #     up -d --no-build
 #
-# WEB_IMAGE and AI_ENGINE_IMAGE should be immutable registry references, ideally
+# WEB_IMAGE, AI_ENGINE_IMAGE, and RENDER_REVIEW_IMAGE should be immutable
+# registry references, ideally
 # tagged with the Git commit SHA. Runtime secrets remain in the host .env file.
 
 services:
@@ -19,4 +20,8 @@ services:
 
   ai-engine:
     image: ${AI_ENGINE_IMAGE:?set AI_ENGINE_IMAGE to a registry image}
+    build: !reset null
+
+  render-review:
+    image: ${RENDER_REVIEW_IMAGE:?set RENDER_REVIEW_IMAGE to a registry image}
     build: !reset null

@@ -82,6 +82,49 @@ async def test_missing_runtime_script_degrades_to_unavailable(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_render_review_sidecar_receives_summary_and_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"status": "approved", "summary": "ok"}
+
+    class _Client:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        async def post(self, url: str, **kwargs: Any) -> _Response:
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            return _Response()
+
+    monkeypatch.setenv("RADAR_RENDER_REVIEW_SERVICE_URL", "http://render-review:4100/")
+    monkeypatch.setenv("RADAR_RENDER_REVIEW_BASE_URL", "http://web:3000")
+    monkeypatch.setattr(rw.httpx, "AsyncClient", _Client)
+
+    result = await rw._run_browser_script(summary_id="summary-1", round_number=2)
+
+    assert result["status"] == "approved"
+    assert captured["url"] == "http://render-review:4100/review"
+    assert captured["kwargs"]["json"] == {
+        "summaryId": "summary-1",
+        "round": 2,
+        "baseUrl": "http://web:3000",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_render_review_persists_browser_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -88,6 +88,8 @@ infra/certs/
 # 测试产物
 apps/web/test-results/
 apps/web/playwright-report/
+test-results/
+playwright-report/
 
 # Colima / lima / docker temp binaries (local testing only)
 /.bin/

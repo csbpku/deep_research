@@ -4,6 +4,7 @@
 #   - postgres (16-alpine)：业务库 + 两个任务队列 + 全文索引
 #   - web (apps/web)：Next.js 15 + BFF + Prisma client
 #   - ai-engine (packages/ai-engine)：FastAPI + workers
+#   - render-review：Node + Chromium sidecar，执行真实页面审核
 #   - nginx (1.27-alpine)：TLS 终止 + 反代
 #
 # 重要约定（架构 §十三 §3）：
@@ -162,9 +163,18 @@ services:
       RADAR_ENRICHMENT_HEARTBEAT_SECONDS: ${RADAR_ENRICHMENT_HEARTBEAT_SECONDS:-60}
       RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS: ${RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS:-600}
       RADAR_ENRICHMENT_LEASE_SECONDS: ${RADAR_ENRICHMENT_LEASE_SECONDS:-900}
-      # The AI image does not ship Node/Chromium or the web render-review
-      # script. Keep this opt-in for Docker until a browser sidecar is used.
-      RADAR_RENDER_REVIEW_ENABLED: ${RADAR_RENDER_REVIEW_ENABLED:-0}
+      RADAR_RENDER_REVIEW_ENABLED: ${RADAR_RENDER_REVIEW_ENABLED:-1}
+      RADAR_RENDER_REVIEW_SERVICE_URL: ${RADAR_RENDER_REVIEW_SERVICE_URL:-http://render-review:4100}
+      # This is the Compose-internal Web address; do not inherit a native
+      # developer value such as 127.0.0.1 into the sidecar.
+      RADAR_RENDER_REVIEW_BASE_URL: http://web:3000
+      RADAR_RENDER_REVIEW_INTERVAL_SECONDS: ${RADAR_RENDER_REVIEW_INTERVAL_SECONDS:-30}
+      RADAR_RENDER_REVIEW_BATCH_SIZE: ${RADAR_RENDER_REVIEW_BATCH_SIZE:-1}
+      RADAR_RENDER_REVIEW_TIMEOUT_SECONDS: ${RADAR_RENDER_REVIEW_TIMEOUT_SECONDS:-150}
+      RADAR_RENDER_REVIEW_STALE_MINUTES: ${RADAR_RENDER_REVIEW_STALE_MINUTES:-30}
+      HUGGINGFACE_BASE_URL: ${HUGGINGFACE_BASE_URL:-https://huggingface.co}
+      HUGGINGFACE_TIMEOUT_SECONDS: ${HUGGINGFACE_TIMEOUT_SECONDS:-30}
+      HUGGINGFACE_FETCH_RETRIES: ${HUGGINGFACE_FETCH_RETRIES:-2}
       RADAR_SYNC_CRON_TIME: ${RADAR_SYNC_CRON_TIME:-02:00}
       URL_FETCH_MAX_BYTES: ${URL_FETCH_MAX_BYTES:-2097152}
       URL_FETCH_TIMEOUT_SECONDS: ${URL_FETCH_TIMEOUT_SECONDS:-10}
@@ -178,10 +188,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      render-review:
+        condition: service_started
     volumes:
       - ./logs/ai-engine:/var/log/ai-engine
       - import-tmp:/data/import-tmp
     # HEALTHCHECK 已写在 Dockerfile 内
+
+  render-review:
+    build:
+      context: ..
+      dockerfile: infra/render-review.Dockerfile
+    restart: unless-stopped
+    environment:
+      RENDER_REVIEW_PORT: 4100
+      RADAR_RENDER_REVIEW_BASE_URL: http://web:3000
+      RADAR_RENDER_REVIEW_TIMEOUT_SECONDS: ${RADAR_RENDER_REVIEW_TIMEOUT_SECONDS:-150}
+    expose:
+      - "4100"
 
   nginx:
     image: nginx:1.27-alpine
@@ -196,6 +220,7 @@ services:
     depends_on:
       - web
       - ai-engine
+      - render-review
 
 volumes:
   postgres-data:

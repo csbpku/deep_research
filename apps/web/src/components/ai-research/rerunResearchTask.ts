@@ -1,4 +1,5 @@
 import { writeLastSubmitted } from '@/lib/last-submitted';
+import { createUuid } from '@/lib/uuid';
 
 export interface RerunnableResearchTask {
   jobId: string;
@@ -37,7 +38,7 @@ export async function rerunResearchTask(item: RerunnableResearchTask): Promise<s
       ...(details?.context ? { context: details.context } : {}),
       sourcePolicy: item.sourcePolicy,
       sourceRefs: item.sourceRefs,
-      idempotencyKey: crypto.randomUUID(),
+      idempotencyKey: createUuid(),
     }),
   });
   if (!response.ok) {

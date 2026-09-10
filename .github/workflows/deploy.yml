@@ -81,6 +81,26 @@ jobs:
           cache-from: type=gha,scope=ai-image
           cache-to: type=gha,mode=max,scope=ai-image
 
+      - name: Prepare render-review image metadata
+        id: render-review-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAMESPACE }}/render-review
+          tags: |
+            type=raw,value=${{ env.IMAGE_TAG }}
+            type=raw,value=latest
+
+      - name: Build and push render-review image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/render-review.Dockerfile
+          push: true
+          tags: ${{ steps.render-review-meta.outputs.tags }}
+          labels: ${{ steps.render-review-meta.outputs.labels }}
+          cache-from: type=gha,scope=render-review-image
+          cache-to: type=gha,mode=max,scope=render-review-image
+
   deploy:
     name: Deploy tested images to VPS
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
@@ -94,6 +114,7 @@ jobs:
       IMAGE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       WEB_IMAGE: ghcr.io/csbpku/deep-research/web:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       AI_ENGINE_IMAGE: ghcr.io/csbpku/deep-research/ai-engine:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      RENDER_REVIEW_IMAGE: ghcr.io/csbpku/deep-research/render-review:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/deep_research' }}
@@ -175,6 +196,7 @@ jobs:
              IMAGE_TAG=$(quote_for_shell "$IMAGE_TAG") \
              WEB_IMAGE=$(quote_for_shell "$WEB_IMAGE") \
              AI_ENGINE_IMAGE=$(quote_for_shell "$AI_ENGINE_IMAGE") \
+             RENDER_REVIEW_IMAGE=$(quote_for_shell "$RENDER_REVIEW_IMAGE") \
              bash -s" <<'REMOTE_SCRIPT'
           set -Eeuo pipefail
 
@@ -194,7 +216,8 @@ jobs:
             if [ -n "$previous_tag" ]; then
               export WEB_IMAGE="ghcr.io/csbpku/deep-research/web:$previous_tag"
               export AI_ENGINE_IMAGE="ghcr.io/csbpku/deep-research/ai-engine:$previous_tag"
-              "${compose[@]}" pull web ai-engine || true
+              export RENDER_REVIEW_IMAGE="ghcr.io/csbpku/deep-research/render-review:$previous_tag"
+              "${compose[@]}" pull web ai-engine render-review || true
               "${compose[@]}" up -d --no-build --remove-orphans || true
             fi
             "${compose[@]}" ps || true
@@ -205,7 +228,7 @@ jobs:
           echo "[deploy] validating compose configuration"
           "${compose[@]}" config --quiet
           echo "[deploy] pulling $IMAGE_TAG"
-          "${compose[@]}" pull web ai-engine
+          "${compose[@]}" pull web ai-engine render-review
           echo "[deploy] starting services; web entrypoint will apply migrations"
           "${compose[@]}" up -d --no-build --remove-orphans
           echo "[deploy] waiting for public health endpoints"

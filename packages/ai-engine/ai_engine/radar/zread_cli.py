@@ -36,6 +36,10 @@ ZREAD_MAX_PAGES = _env_limit("ZREAD_MAX_PAGES")
 ZREAD_PAGE_MAX_BYTES = _env_limit("ZREAD_PAGE_MAX_BYTES")
 
 
+class ZreadRateLimitedError(RuntimeError):
+    """Raised when the CLI's upstream LLM allowance is exhausted."""
+
+
 def _work_dir() -> str:
     """Return a durable CLI workspace so interrupted drafts can resume."""
     configured = os.environ.get("ZREAD_CLI_WORK_DIR", "").strip()
@@ -84,6 +88,19 @@ def _binary() -> str | None:
 
 async def _run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, str]:
     command = list(args)
+    zread_log_path: Path | None = None
+    zread_log_offset = 0
+    if len(command) >= 2 and command[1] == "generate":
+        configured_log = os.environ.get("ZREAD_LOG_PATH", "").strip()
+        zread_log_path = (
+            Path(configured_log).expanduser()
+            if configured_log
+            else Path.home() / ".zread" / "log" / "zread.log"
+        )
+        try:
+            zread_log_offset = zread_log_path.stat().st_size
+        except OSError:
+            zread_log_offset = 0
     if command and command[0].endswith(".js"):
         command.insert(0, shutil.which("node") or "node")
     process = await asyncio.create_subprocess_exec(
@@ -96,11 +113,47 @@ async def _run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, 
         # pipes open and making the parent wait forever.
         start_new_session=(os.name == "posix"),
     )
+    communicate_task: asyncio.Task[tuple[bytes, bytes]] | None = None
     try:
-        if timeout is None:
-            stdout, stderr = await process.communicate()
-        else:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        communicate_task = asyncio.create_task(process.communicate())
+        started_at = time.monotonic()
+        while not communicate_task.done():
+            if zread_log_path is not None and _zread_log_has_rate_limit(
+                zread_log_path,
+                offset=zread_log_offset,
+            ):
+                if os.name == "posix":
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    process.kill()
+                try:
+                    await asyncio.wait_for(communicate_task, timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                raise ZreadRateLimitedError(
+                    "Zread CLI stopped after upstream LLM rate limit (HTTP 429)"
+                )
+            if timeout is not None and time.monotonic() - started_at >= timeout:
+                communicate_task.cancel()
+                try:
+                    await communicate_task
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                raise asyncio.TimeoutError
+            wait_seconds = 1.0
+            if timeout is not None:
+                wait_seconds = min(
+                    wait_seconds,
+                    max(0.05, timeout - (time.monotonic() - started_at)),
+                )
+            try:
+                await asyncio.wait_for(asyncio.shield(communicate_task), wait_seconds)
+            except asyncio.TimeoutError:
+                continue
+        stdout, stderr = await communicate_task
     except asyncio.CancelledError:
         if os.name == "posix":
             try:
@@ -110,7 +163,10 @@ async def _run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, 
         else:
             process.kill()
         try:
-            await asyncio.wait_for(process.communicate(), timeout=5.0)
+            if communicate_task is not None:
+                await asyncio.wait_for(asyncio.shield(communicate_task), timeout=5.0)
+            else:
+                await asyncio.wait_for(process.communicate(), timeout=5.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             # Do not turn a timeout into a second indefinite wait.  The
             # caller records this repo as failed and the batch continues.
@@ -125,11 +181,30 @@ async def _run(*args: str, cwd: Path, timeout: float | None) -> tuple[int, str, 
         else:
             process.kill()
         try:
-            await asyncio.wait_for(process.communicate(), timeout=5.0)
+            if communicate_task is not None:
+                await asyncio.wait_for(asyncio.shield(communicate_task), timeout=5.0)
+            else:
+                await asyncio.wait_for(process.communicate(), timeout=5.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             pass
         raise
     return process.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+
+
+def _zread_log_has_rate_limit(path: Path, *, offset: int) -> bool:
+    """Detect a fresh upstream quota failure without waiting for CLI exit."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(max(0, offset))
+            text = handle.read()
+    except OSError:
+        return False
+    lowered = text.lower()
+    return (
+        "429 too many requests" in lowered
+        or "rate_limit_error" in lowered
+        or "token plan 用量上限" in lowered
+    )
 
 
 def _page_title(content: str, fallback: str) -> str:
@@ -298,6 +373,24 @@ def _read_wiki(wiki_root: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
     }
 
 
+def _wiki_snapshot_rank(
+    pages: list[dict[str, Any]],
+    completeness: dict[str, Any],
+) -> tuple[float, int, int]:
+    """Rank incomplete snapshots by trustworthy catalog coverage."""
+    catalog_paths = set(completeness.get("catalogPaths") or [])
+    covered = len(
+        catalog_paths
+        & {
+            str(page.get("path") or "").replace("\\", "/")
+            for page in pages
+            if page.get("path")
+        }
+    )
+    coverage = covered / len(catalog_paths) if catalog_paths else 0.0
+    return coverage, covered, len(pages)
+
+
 def _read_generated_wiki(wiki_dir: Path) -> tuple[list[dict[str, str]], dict[str, Any], bool]:
     """Read the published Wiki, or drafts when generation failed mid-run.
 
@@ -323,20 +416,57 @@ def _read_generated_wiki(wiki_dir: Path) -> tuple[list[dict[str, str]], dict[str
     if not draft_pages:
         return current_pages, current_completeness, True
 
+    current_complete = _wiki_snapshot_complete(
+        current_pages,
+        current_completeness,
+        require_catalog=True,
+    )
+    draft_complete = _wiki_snapshot_complete(
+        draft_pages,
+        draft_completeness,
+        require_catalog=True,
+    )
+    # A failed later attempt may leave a tiny, incompatible draft beside a
+    # fully published snapshot. Do not let that draft reinterpret the
+    # published catalog and make a complete checkout look partial.
+    if current_complete and not draft_complete:
+        return current_pages, current_completeness, True
+
+    # A later failed attempt can also have a different catalog (for example
+    # after a generator outline change). If it covers substantially less of
+    # its own catalog, do not let that incompatible draft hide a stronger
+    # published snapshot. Same-catalog drafts still flow through the merge
+    # below, so they can add pages to an older current version.
+    if (
+        current_pages
+        and _wiki_snapshot_rank(current_pages, current_completeness)
+        > _wiki_snapshot_rank(draft_pages, draft_completeness)
+    ):
+        current_catalog = set(current_completeness.get("catalogPaths") or [])
+        draft_catalog = set(draft_completeness.get("catalogPaths") or [])
+        overlap = len(current_catalog & draft_catalog)
+        smaller_catalog = min(len(current_catalog), len(draft_catalog))
+        if not smaller_catalog or overlap * 2 < smaller_catalog:
+            return current_pages, current_completeness, True
+
     # The draft is the active write set. Keep old current pages that the
     # draft has not touched yet, while letting the draft replace same-path
     # content. Prefer its catalog whenever it exists because it describes the
     # page set the current generation is trying to complete.
+    draft_catalog = set(draft_completeness.get("catalogPaths") or [])
+    allowed_paths = draft_catalog or None
     merged_by_path = {
         str(page["path"]).replace("\\", "/"): page
         for page in current_pages
         if page.get("path")
+        and (allowed_paths is None or str(page["path"]).replace("\\", "/") in allowed_paths)
     }
     merged_by_path.update(
         {
             str(page["path"]).replace("\\", "/"): page
             for page in draft_pages
             if page.get("path")
+            and (allowed_paths is None or str(page["path"]).replace("\\", "/") in allowed_paths)
         }
     )
     pages = [merged_by_path[path] for path in sorted(merged_by_path)]
@@ -364,11 +494,6 @@ def _read_generated_wiki(wiki_dir: Path) -> tuple[list[dict[str, str]], dict[str
     }
     # A complete draft is usable even when Zread has not advanced the current
     # pointer yet. This matters after a process interruption during publish.
-    draft_complete = _wiki_snapshot_complete(
-        draft_pages,
-        draft_completeness,
-        require_catalog=True,
-    )
     return pages, completeness, bool(draft_complete or current_pages)
 
 
@@ -555,11 +680,41 @@ async def generate_zread_wiki(
                     "error": "Zread generation stopped after a timeout; showing generated pages",
                     "pageCount": len(pages),
                     **completeness,
-                    "truncated": True,
+                "truncated": True,
                     "truncatedPages": completeness["truncatedPages"],
                     "pages": pages,
                 }
             raise
+        except ZreadRateLimitedError as exc:
+            pages, completeness, _ = _read_generated_wiki(
+                checkout / ".zread" / "wiki"
+            )
+            payload: dict[str, Any] = {
+                "provider": "zread-cli",
+                "status": "complete" if _wiki_snapshot_complete(
+                    pages,
+                    completeness,
+                    require_catalog=True,
+                ) else "partial",
+                "repository": f"{owner}/{repo}",
+                "commitSha": commit_sha,
+                "branch": branch,
+                "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "error": str(exc),
+                "errorCode": "UPSTREAM_RATE_LIMITED",
+                "pageCount": len(pages),
+                **completeness,
+                "pages": pages,
+            }
+            if pages:
+                payload["truncated"] = True
+                payload["truncatedPages"] = completeness["truncatedPages"]
+                return payload
+            return {
+                **payload,
+                "status": "failed",
+                "pages": [],
+            }
         except asyncio.CancelledError:
             # ``run_enrichment_for_pending`` wraps each candidate in an outer
             # timeout. ``_run`` kills the process group first; read the draft
@@ -648,4 +803,8 @@ async def generate_zread_wiki(
     )
 
 
-__all__ = ["generate_zread_wiki", "prepare_zread_checkout"]
+__all__ = [
+    "ZreadRateLimitedError",
+    "generate_zread_wiki",
+    "prepare_zread_checkout",
+]

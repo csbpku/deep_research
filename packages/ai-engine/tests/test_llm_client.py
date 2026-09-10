@@ -5,7 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from ai_engine.llm.client import generate_text, is_retryable_llm_error
+from ai_engine.llm.client import (
+    generate_text,
+    is_provider_policy_error,
+    is_retryable_llm_error,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -185,6 +189,16 @@ def test_transport_disconnects_are_retryable() -> None:
     assert is_retryable_llm_error(ConnectionResetError("connection reset by peer")) is True
 
 
+def test_only_known_provider_policy_422_is_retryable() -> None:
+    class PolicyError(Exception):
+        status_code = 422
+
+    assert is_provider_policy_error(PolicyError("input new_sensitive (1026)")) is True
+    assert is_retryable_llm_error(PolicyError("input new_sensitive (1026)")) is True
+    assert is_provider_policy_error(PolicyError("invalid schema field")) is False
+    assert is_retryable_llm_error(PolicyError("invalid schema field")) is False
+
+
 async def test_generate_text_falls_back_after_quota_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -235,6 +249,56 @@ async def test_generate_text_falls_back_after_quota_error(
     assert getattr(audit_events[0], "status") == "failed"
     assert getattr(audit_events[0], "error_kind") == "quota"
     assert getattr(audit_events[-1], "used_fallback") is True
+
+
+async def test_generate_text_falls_back_after_provider_policy_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_models: list[str] = []
+    audit_events: list[object] = []
+
+    class PolicyError(Exception):
+        status_code = 422
+
+    class Messages:
+        async def create(self, **kwargs: object) -> object:
+            model = str(kwargs["model"])
+            captured_models.append(model)
+            if model == "MiniMax-M3":
+                raise PolicyError("input new_sensitive (1026)")
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="policy fallback ok")],
+                usage=SimpleNamespace(input_tokens=7, output_tokens=3),
+                model="deepseek-v4-flash",
+                stop_reason="end_turn",
+            )
+
+    class Client:
+        def __init__(self, **_: object) -> None:
+            self.messages = Messages()
+
+    async def record(event: object) -> None:
+        audit_events.append(event)
+
+    monkeypatch.setattr("anthropic.AsyncAnthropic", Client)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", record)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_FALLBACK_LLM", "anthropic:deepseek-v4-flash")
+
+    result = await generate_text(
+        llm_spec="anthropic:MiniMax-M3",
+        user_prompt="hello",
+        operation="test.policy_fallback",
+    )
+
+    assert result.text == "policy fallback ok"
+    assert captured_models == [
+        "MiniMax-M3",
+        "MiniMax-M3",
+        "deepseek-v4-flash",
+    ]
+    assert getattr(audit_events[-1], "used_fallback") is True
+    assert getattr(audit_events[-1], "fallback_reason") == "provider_policy_block"
 
 
 async def test_generate_text_falls_back_after_provider_502(

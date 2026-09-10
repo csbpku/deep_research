@@ -25,6 +25,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 logger = logging.getLogger("ai_engine.radar.render_review_worker")
 
 RENDER_REVIEW_STATUSES = frozenset({
@@ -277,6 +279,14 @@ async def _run_browser_script(
     summary_id: str,
     round_number: int,
 ) -> dict[str, Any]:
+    service_url = os.environ.get("RADAR_RENDER_REVIEW_SERVICE_URL", "").strip()
+    if service_url:
+        return await _run_browser_service(
+            service_url,
+            summary_id=summary_id,
+            round_number=round_number,
+        )
+
     script = render_review_script()
     node = shutil.which(os.environ.get("RADAR_RENDER_REVIEW_NODE", "node"))
     if node is None:
@@ -353,6 +363,56 @@ async def _run_browser_script(
             f"stderr={stderr.decode('utf-8', errors='replace')[-500:]}"
         ),
     }
+
+
+async def _run_browser_service(
+    service_url: str,
+    *,
+    summary_id: str,
+    round_number: int,
+) -> dict[str, Any]:
+    """Delegate browser work to the Node/Chromium sidecar in production."""
+    timeout_seconds = max(
+        30,
+        int(os.environ.get("RADAR_RENDER_REVIEW_TIMEOUT_SECONDS", "150")),
+    )
+    base_url = os.environ.get(
+        "RADAR_RENDER_REVIEW_BASE_URL",
+        "http://127.0.0.1:3000",
+    )
+    endpoint = service_url.rstrip("/") + "/review"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds + 5) as client:
+            response = await client.post(
+                endpoint,
+                json={
+                    "summaryId": summary_id,
+                    "round": round_number,
+                    "baseUrl": base_url,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        parsed = _json_object(payload)
+        if parsed is not None:
+            return parsed
+        return {
+            "status": "unavailable",
+            "summary": "浏览器 sidecar 返回了无法解析的结果。",
+            "error": "invalid_sidecar_payload",
+        }
+    except httpx.TimeoutException:
+        return {
+            "status": "unavailable",
+            "summary": "浏览器 sidecar 审核超时，内容仍需人工复核页面。",
+            "error": f"sidecar_timeout:{timeout_seconds}s",
+        }
+    except (httpx.HTTPError, ValueError) as exc:
+        return {
+            "status": "unavailable",
+            "summary": "浏览器 sidecar 暂时不可用。",
+            "error": f"{type(exc).__name__}:{str(exc)[:300]}",
+        }
 
 
 async def _persist_result(
