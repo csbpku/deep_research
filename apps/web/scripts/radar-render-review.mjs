@@ -28,7 +28,13 @@ function finding(code, severity, message, evidence = null) {
 
 function isIgnorableFailedRequest(request) {
   const url = request.url();
-  return url.startsWith('data:') || url.startsWith('blob:') || url.includes('/favicon');
+  const errorText = request.failure()?.errorText;
+  // Next.js may abort speculative RSC/prefetch requests when the page
+  // navigates or replaces a segment. That is not a failed reader resource.
+  return url.startsWith('data:')
+    || url.startsWith('blob:')
+    || url.includes('/favicon')
+    || errorText === 'net::ERR_ABORTED';
 }
 
 async function inspectViewport(browser, viewport) {
@@ -206,7 +212,12 @@ async function inspectViewport(browser, viewport) {
   if (/正文渲染中|正在加载雷达详情|文章地图加载中/iu.test(diagnostics.skeletonText)) {
     findings.push(finding('loading_state_stuck', 'blocking', '等待窗口结束后页面仍停留在加载占位状态。', diagnostics.skeletonText));
   }
-  const brokenImages = (diagnostics.images ?? []).filter((image) => !image.complete || image.naturalWidth === 0);
+  // Lazy images can legitimately still be pending when the browser review
+  // samples the DOM. Treat only a completed image with zero intrinsic width
+  // as broken; request failures are already captured above.
+  const brokenImages = (diagnostics.images ?? []).filter(
+    (image) => image.complete && image.naturalWidth === 0,
+  );
   if (brokenImages.length > 0) {
     findings.push(finding(
       'broken_image',
