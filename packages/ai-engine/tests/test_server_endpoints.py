@@ -27,6 +27,7 @@ from ai_engine.server.app import (
     _merge_auto_radar_refs,
     _is_idempotency_replay,
     _enrichment_recovery_interval_seconds,
+    _enrichment_worker_count,
     _llm_recovery_interval_seconds,
     _llm_recovery_limit,
     _claims_from_review_inventory,
@@ -59,6 +60,11 @@ def test_recovery_config_is_bounded_and_tolerates_invalid_env(
     assert _enrichment_recovery_interval_seconds() == 60.0
     monkeypatch.setenv("RADAR_ENRICHMENT_RECOVERY_INTERVAL_SECONDS", "1")
     assert _enrichment_recovery_interval_seconds() == 30.0
+
+    monkeypatch.setenv("RADAR_ENRICHMENT_CONCURRENCY", "invalid")
+    assert _enrichment_worker_count() == 2
+    monkeypatch.setenv("RADAR_ENRICHMENT_CONCURRENCY", "0")
+    assert _enrichment_worker_count() == 1
 
 
 def test_review_timeout_keeps_inventory_as_unresolved_claims() -> None:

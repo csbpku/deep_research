@@ -1410,6 +1410,15 @@ export default function RadarDetailPage() {
               AI 讨论
             </Button>
           ) : null}
+          {canInteract ? (
+            <Link
+              href={`/ai-research?seed=${encodeURIComponent(d.id)}`}
+              className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/5 px-2.5 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              <Sparkles className="size-3.5" />
+              深入调研
+            </Link>
+          ) : null}
           <a
             href={d.url}
             target="_blank"

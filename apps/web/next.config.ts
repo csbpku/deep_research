@@ -7,6 +7,10 @@ import path from 'node:path';
 // 详见 docs/decisions/2026-07-17-no-double-proxy.md。
 const config: NextConfig = {
   reactStrictMode: true,
+  // The Next.js dev tools button sits at the bottom-left by default. It can
+  // overlap real controls in narrow Playwright viewports, so keep it out of
+  // browser acceptance runs without changing the normal local dev experience.
+  ...(process.env.E2E === '1' ? { devIndicators: false } : {}),
   // Keep development output separate from production builds and stale/corrupt
   // artifacts. NEXT_DIST_DIR remains available for CI and isolated builds.
   distDir: process.env.NEXT_DIST_DIR ?? (process.env.NODE_ENV === 'development' ? '.next-dev' : '.next'),

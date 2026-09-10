@@ -276,6 +276,16 @@ export function RadarCandidateCard({
             {candidate.commentCount} 条讨论
           </Button>
         ) : null}
+        {currentUserId ? (
+          <Link
+            href={`/ai-research?seed=${encodeURIComponent(candidate.id)}`}
+            prefetch={false}
+            className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            深入调研
+            <Sparkles className="size-3.5" />
+          </Link>
+        ) : null}
         <Link
           href={resolvedDetailHref}
           prefetch={false}

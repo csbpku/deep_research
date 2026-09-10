@@ -1080,6 +1080,17 @@ def _enrichment_recovery_interval_seconds() -> float:
         return 60.0
 
 
+def _enrichment_worker_count() -> int:
+    """Return the number of independent durable enrichment consumers."""
+    try:
+        return max(
+            1,
+            int(os.environ.get("RADAR_ENRICHMENT_CONCURRENCY", "2")),
+        )
+    except (TypeError, ValueError):
+        return 2
+
+
 async def _enrichment_recovery_loop(app_instance: FastAPI) -> None:
     """Reclaim crashed enrichment leases independently of long source calls."""
     from ai_engine.radar.enrichment_worker import recover_expired_enrichment_leases
@@ -1136,67 +1147,102 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
 
     interval = _llm_recovery_interval_seconds()
     limit = _llm_recovery_limit()
+    worker_count = _enrichment_worker_count()
+    consumer_idle_interval = min(
+        30.0,
+        _enrichment_recovery_interval_seconds(),
+    )
     log = structlog.get_logger("ai_engine.llm_recovery")
     log.info(
         "ai-engine.llm_recovery.started",
         interval_seconds=interval,
         limit=limit,
+        enrichment_workers=worker_count,
     )
 
-    async def _run_once() -> None:
-        lock = getattr(app_instance.state, "radar_sync_lock", None)
-        if lock is None:
-            raise RuntimeError("radar sync lock is not initialized")
-        async with lock:
-            scored = await score_missing_candidates(
-                app_instance.state.db_pool,
-                limit=limit,
-            )
-            enriched = await run_enrichment_for_pending(
-                app_instance.state.db_pool,
-                limit=limit,
-            )
-            rescored = (
-                await score_missing_candidates(
-                    app_instance.state.db_pool,
-                    limit=limit,
-                )
-                if enriched > 0
-                else 0
-            )
-        log.info(
-            "ai-engine.llm_recovery.completed",
-            interval_seconds=interval,
-            limit=limit,
-            scored=scored,
-            enriched=enriched,
-            rescored=rescored,
-        )
+    stats = {"enriched": 0}
+    stats_lock = asyncio.Lock()
 
-    # Recovery is a durable queue consumer. A process restart must perform a
-    # bounded pass immediately; waiting for the default two-hour interval
-    # leaves expired leases and retryable rows stranded after every restart.
-    while True:
-        try:
-            await _run_once()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "ai-engine.llm_recovery.failed",
-                error_type=type(exc).__name__,
-                error_message=str(exc)[:500],
-                interval_seconds=interval,
-            )
-        try:
-            await asyncio.sleep(interval)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.warning(
-                "ai-engine.llm_recovery.sleep_failed",
-                error_type=type(exc).__name__,
-            )
+    async def _enrichment_consumer(worker_index: int) -> None:
+        """Keep one durable claim slot busy without blocking its siblings."""
+        while True:
+            try:
+                enriched = await run_enrichment_for_pending(
+                    app_instance.state.db_pool,
+                    limit=1,
+                    concurrency=1,
+                )
+                if enriched:
+                    async with stats_lock:
+                        stats["enriched"] += enriched
+                else:
+                    await asyncio.sleep(consumer_idle_interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "ai-engine.llm_recovery.enrichment_consumer_failed",
+                    worker_index=worker_index,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc)[:500],
+                )
+                await asyncio.sleep(consumer_idle_interval)
+
+    consumers = [
+        asyncio.create_task(
+            _enrichment_consumer(index),
+            name=f"radar-enrichment-consumer-{index}",
+        )
+        for index in range(worker_count)
+    ]
+    try:
+        # Scoring is periodic work, while enrichment is a durable queue with
+        # independent consumers. A slow Zread/remote call must not hold the
+        # radar sync lock or prevent other source kinds from being claimed.
+        while True:
+            try:
+                lock = getattr(app_instance.state, "radar_sync_lock", None)
+                if lock is None:
+                    raise RuntimeError("radar sync lock is not initialized")
+                async with lock:
+                    scored = await score_missing_candidates(
+                        app_instance.state.db_pool,
+                        limit=limit,
+                    )
+                async with stats_lock:
+                    enriched = stats["enriched"]
+                    stats["enriched"] = 0
+                log.info(
+                    "ai-engine.llm_recovery.completed",
+                    interval_seconds=interval,
+                    limit=limit,
+                    scored=scored,
+                    enriched=enriched,
+                    rescored=0,
+                    enrichment_workers=worker_count,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "ai-engine.llm_recovery.failed",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc)[:500],
+                    interval_seconds=interval,
+                )
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "ai-engine.llm_recovery.sleep_failed",
+                    error_type=type(exc).__name__,
+                )
+    finally:
+        for consumer in consumers:
+            consumer.cancel()
+        await asyncio.gather(*consumers, return_exceptions=True)
 
 
 async def _render_review_loop(app_instance: FastAPI) -> None:
