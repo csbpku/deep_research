@@ -89,7 +89,7 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
     await page.getByRole('button', { name: '开始调研' }).click();
     await expect(page).toHaveURL(/\/ai-research$/);
-    await expect(page.getByText('调研正在当前页面运行')).toBeVisible();
+    await expect(page.getByRole('region', { name: '本次研究收据' })).toContainText('本次研究已提交');
   });
 
   test('history empty state uses EmptyState (not raw text)', async ({ page }) => {
@@ -196,8 +196,8 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
-    await expect(page.getByText('研究稿')).toBeVisible();
-    await expect(page.getByText('网页搜索 + 我提供的资料')).toBeVisible();
+    await expect(page.getByRole('button', { name: /研究稿.*完整调研、引用和可编辑草稿/u })).toBeVisible();
+    await expect(page.getByRole('button', { name: /网页搜索 \+ 已选资料/u })).toBeVisible();
   });
 
   test('research artifact card defaults to markdown research draft', async ({ page }) => {
