@@ -1,10 +1,16 @@
-FROM node:20-bookworm
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-RUN npm init -y \
-    && npm install --no-fund --no-audit @playwright/test@1.62.0 \
-    && npx playwright install --with-deps chromium \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      chromium \
+      fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm init -y \
+    && npm install --no-fund --no-audit --omit=dev @playwright/test@1.62.0 \
+    && npm cache clean --force \
     && useradd --create-home --uid 1001 renderreview \
     && chown -R renderreview:renderreview /app
 
@@ -13,7 +19,8 @@ COPY infra/render-review-server.mjs /app/render-review-server.mjs
 
 ENV NODE_ENV=production \
     RENDER_REVIEW_PORT=4100 \
-    RADAR_RENDER_REVIEW_BASE_URL=http://web:3000
+    RADAR_RENDER_REVIEW_BASE_URL=http://web:3000 \
+    RADAR_RENDER_REVIEW_EXECUTABLE_PATH=/usr/bin/chromium
 
 USER renderreview
 

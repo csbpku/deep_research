@@ -279,7 +279,11 @@ async function inspectViewport(browser, viewport) {
 
 let browser;
 try {
-  browser = await chromium.launch({ headless: true });
+  const launchOptions = { headless: true };
+  if (process.env.RADAR_RENDER_REVIEW_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.RADAR_RENDER_REVIEW_EXECUTABLE_PATH;
+  }
+  browser = await chromium.launch(launchOptions);
   const viewportsResults = [];
   for (const viewport of viewports) {
     viewportsResults.push(await inspectViewport(browser, viewport));
