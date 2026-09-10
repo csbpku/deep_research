@@ -86,6 +86,7 @@ jobs:
         with: { version: 10.0.0 }
       - uses: actions/setup-node@v6
         with: { node-version: 24, cache: pnpm }
+      - uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -102,6 +103,45 @@ jobs:
       - name: Seed minimal test data
         run: pnpm --filter @deep-research/web db:seed:e2e
         continue-on-error: true  # 大多数测试兼容空库；只在跨模块 list/detail 联动时需要
+
+      - name: Sync fake AI engine dependencies
+        working-directory: packages/ai-engine
+        run: uv sync --frozen
+
+      - name: Start fake AI engine
+        working-directory: packages/ai-engine
+        env:
+          AI_ENGINE_ADAPTER: fake
+          JOB_RUNNER_BACKEND: db
+          AI_JOB_WORKER_ENABLED: "1"
+          SHARE_WORKER_ENABLED: "0"
+          FACT_REVIEW_WORKER_ENABLED: "0"
+          EVIDENCE_RECONCILIATION_ENABLED: "0"
+          IMPORT_WORKER_ENABLED: "0"
+          RADAR_SYNC_CRON_ENABLED: "0"
+          RADAR_ENRICHMENT_RECOVERY_ENABLED: "0"
+          LLM_RECOVERY_ENABLED: "0"
+          RADAR_RENDER_REVIEW_ENABLED: "0"
+          RADAR_REVIEW_RECONCILIATION_ENABLED: "0"
+          SUBMISSION_WORKER_ENABLED: "0"
+          TOPIC_PROPOSAL_ENABLED: "0"
+          TOPIC_SYNTHESIS_ENABLED: "0"
+          TOPIC_ISSUE_ENABLED: "0"
+        run: |
+          uv run uvicorn ai_engine.server.app:app --host 127.0.0.1 --port 4000 > "$RUNNER_TEMP/ai-engine.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ai-engine.pid"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4000/healthz > /dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat "$RUNNER_TEMP/ai-engine.pid")" 2>/dev/null; then
+              cat "$RUNNER_TEMP/ai-engine.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ai-engine.log"
+          exit 1
 
       - name: Cache Playwright browsers
         id: playwright-cache
@@ -136,6 +176,21 @@ jobs:
           name: playwright-test-results
           path: apps/web/test-results
           retention-days: 14
+
+      - name: Upload fake AI engine log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fake-ai-engine-log
+          path: ${{ runner.temp }}/ai-engine.log
+          retention-days: 14
+
+      - name: Stop fake AI engine
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/ai-engine.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/ai-engine.pid")" || true
+          fi
 
   python-e2e:
     name: python (pytest -m e2e)

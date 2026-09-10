@@ -78,11 +78,19 @@ def test_deep_timeout_has_precedence_when_both_budgets_are_configured() -> None:
 
 def test_db_ai_lease_covers_deep_budget_with_recovery_margin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEP_RESEARCH_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("WORKER_LEASE_SECONDS", "1020")
     store = DbJobStore(
         dsn="postgresql://postgres:postgres@localhost:5432/deep_research",
-        lease_seconds=1020,
     )
     assert store._lease_seconds == 1920
+
+
+def test_db_ai_explicit_lease_can_be_short_for_recovery_tests() -> None:
+    store = DbJobStore(
+        dsn="postgresql://postgres:postgres@localhost:5432/deep_research",
+        lease_seconds=1,
+    )
+    assert store._lease_seconds == 1
 
 
 @pytest.mark.asyncio

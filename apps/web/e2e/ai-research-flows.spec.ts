@@ -261,7 +261,7 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.goto(`/ai-research/${jobId}`);
     await expect(page.getByText('Slides 提纲已生成，可继续编辑或追问。')).toBeVisible();
     await expect(page.getByLabel('Slides 提纲预览')).toHaveCount(1);
-    await expect(page.getByText('3 页')).toBeVisible();
+    await expect(page.getByText('3 页', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '编辑 Slides 提纲' })).toBeVisible();
   });
 
@@ -315,8 +315,8 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
     await page.goto(`/ai-research/${jobId}`);
     await expect(page.getByRole('heading', { name: '快速判断已生成，但未找到资料' })).toBeVisible();
-    await expect(page.getByText('无证据')).toBeVisible();
-    await expect(page.getByText('仅模型摘录')).toBeVisible();
+    await expect(page.getByText('无证据', { exact: true })).toBeVisible();
+    await expect(page.getByText('仅模型摘录', { exact: true })).toBeVisible();
     await expect(page.getByText('生成摘要', { exact: true })).toBeVisible();
     await expect(page.getByText('本轮未保存可核对资料')).toBeVisible();
     await expect(page.getByText('100%', { exact: true })).toHaveCount(0);

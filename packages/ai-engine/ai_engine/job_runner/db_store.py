@@ -230,15 +230,19 @@ class DbJobStore(JobStore):
         # renew it every 15s, so keeping it close to a few missed heartbeats
         # lets a restarted worker reclaim an orphaned job promptly instead of
         # leaving the UI stuck for the full research timeout.
-        configured_lease_seconds = lease_seconds or int(
-            os.environ.get("WORKER_LEASE_SECONDS", "180")
-        )
+        explicit_lease_seconds = lease_seconds is not None
+        if explicit_lease_seconds:
+            assert lease_seconds is not None
+            configured_lease_seconds = lease_seconds
+        else:
+            configured_lease_seconds = int(os.environ.get("WORKER_LEASE_SECONDS", "180"))
+        configured_lease_seconds = max(1, configured_lease_seconds)
         # A deep research job has an explicit end-to-end budget which is
         # longer than the historical five-minute/default lease. The lease is
         # only a crash-recovery window, but it must still cover the budget so
         # the reaper cannot take a healthy job away while it is writing or
         # reviewing. Keep 120s for the worker to persist its terminal state.
-        if table_name == AI_TABLE:
+        if table_name == AI_TABLE and not explicit_lease_seconds:
             try:
                 deep_budget = int(os.environ.get("DEEP_RESEARCH_TIMEOUT_SECONDS", "1200"))
             except (TypeError, ValueError):
