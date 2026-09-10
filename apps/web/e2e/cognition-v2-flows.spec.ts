@@ -161,7 +161,7 @@ test.describe('AI Research V2 brief', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
 
     // Brief 卡片应出现
-    await expect(page.getByText('研究计划', { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('研究方案', { exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole('button', { name: '快速概览', exact: true })).toBeVisible();
   });
 });

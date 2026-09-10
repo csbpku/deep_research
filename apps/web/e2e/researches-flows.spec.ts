@@ -47,7 +47,8 @@ test.describe('Research flows', () => {
 
     try {
       await page.goto('/researches?tab=draft');
-      await expect(page.getByRole('button', { name: `删除草稿：${title}` })).toBeVisible();
+      await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: `打开草稿操作：${title}` })).toBeVisible();
 
       await page.goto(`/researches/${draft.id}`);
       await page.getByRole('button', { name: `删除草稿：${title}` }).click();

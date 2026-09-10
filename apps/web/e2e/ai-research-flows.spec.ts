@@ -317,6 +317,8 @@ test.describe('AI Research parent (UI polish)', () => {
     await expect(page.getByRole('heading', { name: '快速判断已生成，但未找到资料' })).toBeVisible();
     await expect(page.getByText('无证据', { exact: true })).toBeVisible();
     await expect(page.getByText('仅模型摘录', { exact: true })).toBeVisible();
+    // 研究步骤默认收在“查看研究详情”里；先展开再断言摘要步骤。
+    await page.getByText('查看研究详情', { exact: true }).click();
     await expect(page.getByText('生成摘要', { exact: true })).toBeVisible();
     await expect(page.getByText('本轮未保存可核对资料')).toBeVisible();
     await expect(page.getByText('100%', { exact: true })).toHaveCount(0);

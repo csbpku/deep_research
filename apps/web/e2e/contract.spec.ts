@@ -78,14 +78,15 @@ test.describe('UI 重设计 · 契约守护', () => {
     expect(feedbackCount, CONTRACT_FAIL('radar 反馈组 aria-label 丢失').message).toBeGreaterThanOrEqual(0);
   });
 
-  test('ai-research 列表含「调研历史」与 Rerun 按钮文本', async ({ page }) => {
+  test('ai-research 列表含最近任务与调研历史入口', async ({ page }) => {
     await page.goto('/ai-research');
-    // 历史表头是折叠在 form 下面，必须滚动后查
-    const heading = page.locator('h2', { hasText: '调研历史' });
+    const heading = page.getByRole('heading', { name: '最近任务', exact: true });
     await heading.scrollIntoViewIfNeeded().catch(() => {
-      throw CONTRACT_FAIL('ai-research 缺少「调研历史」标题');
+      throw CONTRACT_FAIL('ai-research 缺少「最近任务」标题');
     });
     await expect(heading).toBeVisible();
+    await page.getByRole('button', { name: '查看全部任务' }).click();
+    await expect(page.getByRole('dialog', { name: '调研历史' })).toBeVisible();
   });
 
   // ── 关键 data-testid（在不知道具体 ID 时按 selector 直接探测） ──
