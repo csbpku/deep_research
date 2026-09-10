@@ -23,18 +23,22 @@ RUN uv sync --no-dev --no-install-project
 FROM --platform=linux/amd64 python:3.11-slim AS runtime
 WORKDIR /app
 
-COPY --from=deps /app/packages/ai-engine/.venv /app/.venv
+RUN useradd -m -u 1001 -U aiuser \
+    && mkdir -p /data/import-tmp \
+    && chown aiuser:aiuser /app /data /data/import-tmp
+
+# Set ownership while files are copied. A recursive chown after copying the
+# venv would duplicate the entire dependency tree in a separate image layer.
+COPY --from=deps --chown=aiuser:aiuser /app/packages/ai-engine/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     AI_ENGINE_HOST=0.0.0.0 \
     AI_ENGINE_PORT=4000
 
-COPY packages/ai-engine /app
-
-RUN useradd -m -u 1001 aiuser \
-    && mkdir -p /data/import-tmp \
-    && chown -R aiuser /app /data
+COPY --chown=aiuser:aiuser packages/ai-engine/ai_engine /app/ai_engine
+COPY --chown=aiuser:aiuser packages/ai-engine/configs /app/configs
+COPY --chown=aiuser:aiuser packages/ai-engine/scripts /app/scripts
 USER aiuser
 
 EXPOSE 4000

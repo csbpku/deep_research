@@ -16,6 +16,13 @@ __pycache__
 .pytest_cache
 **/.pytest_cache
 .mypy_cache
+**/.mypy_cache
 .ruff_cache
+**/.ruff_cache
+packages/ai-engine/tests
+packages/ai-engine/reports
+packages/ai-engine/.pytest_cache
+packages/ai-engine/.mypy_cache
+packages/ai-engine/.ruff_cache
 playwright-report
 test-results
