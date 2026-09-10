@@ -230,20 +230,25 @@ jobs:
           echo "[deploy] validating compose configuration"
           "${compose[@]}" config --quiet
           echo "[deploy] pulling $IMAGE_TAG"
-          pull_succeeded=0
-          for attempt in 1 2 3; do
-            echo "[deploy] image pull attempt $attempt/3 (15 minute limit)"
-            if timeout --signal=TERM --kill-after=30s 15m \
-              "${compose[@]}" pull web ai-engine render-review; then
-              pull_succeeded=1
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              echo "[deploy] image pull failed or timed out; retrying in 15 seconds" >&2
-              sleep 15
-            fi
-          done
-          test "$pull_succeeded" -eq 1
+          pull_one_image() {
+            local service="$1"
+            local attempt
+            for attempt in 1 2 3; do
+              echo "[deploy] pulling $service (attempt $attempt/3; 15 minute limit)"
+              if timeout --signal=TERM --kill-after=30s 15m \
+                "${compose[@]}" pull "$service"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "[deploy] $service pull failed or timed out; retrying in 15 seconds" >&2
+                sleep 15
+              fi
+            done
+            return 1
+          }
+          pull_one_image web
+          pull_one_image ai-engine
+          pull_one_image render-review
           echo "[deploy] starting services; web entrypoint will apply migrations"
           "${compose[@]}" up -d --no-build --remove-orphans
           echo "[deploy] waiting for public health endpoints"
