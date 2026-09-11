@@ -4,7 +4,7 @@
 #   - postgres (16-alpine)：业务库 + 两个任务队列 + 全文索引
 #   - web (apps/web)：Next.js 15 + BFF + Prisma client
 #   - ai-engine (packages/ai-engine)：FastAPI + workers
-#   - render-review：Node + Chromium sidecar，执行真实页面审核
+#   - render-review（可选 browser-review profile）：Node + Chromium sidecar，执行真实页面审核
 #   - nginx (1.27-alpine)：TLS 终止 + 反代
 #
 # 重要约定（架构 §十三 §3）：
@@ -71,6 +71,7 @@ services:
       AUTH_INVITE_CODE: ${AUTH_INVITE_CODE:?set AUTH_INVITE_CODE in .env}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?set in .env}
+      RADAR_RENDER_REVIEW_ENABLED: ${RADAR_RENDER_REVIEW_ENABLED:-0}
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-5}
       TIME_VALUE_USD_PER_HOUR: ${TIME_VALUE_USD_PER_HOUR:-50}
     ports:
@@ -167,7 +168,9 @@ services:
       RADAR_ENRICHMENT_HEARTBEAT_SECONDS: ${RADAR_ENRICHMENT_HEARTBEAT_SECONDS:-60}
       RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS: ${RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS:-600}
       RADAR_ENRICHMENT_LEASE_SECONDS: ${RADAR_ENRICHMENT_LEASE_SECONDS:-900}
-      RADAR_RENDER_REVIEW_ENABLED: ${RADAR_RENDER_REVIEW_ENABLED:-1}
+      # Browser rendering is an opt-in production capability. Content review,
+      # reader quality and enrichment remain enabled when this is off.
+      RADAR_RENDER_REVIEW_ENABLED: ${RADAR_RENDER_REVIEW_ENABLED:-0}
       RADAR_RENDER_REVIEW_SERVICE_URL: ${RADAR_RENDER_REVIEW_SERVICE_URL:-http://render-review:4100}
       # This is the Compose-internal Web address; do not inherit a native
       # developer value such as 127.0.0.1 into the sidecar.
@@ -192,14 +195,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      render-review:
-        condition: service_started
     volumes:
       - ./logs/ai-engine:/var/log/ai-engine
       - import-tmp:/data/import-tmp
     # HEALTHCHECK 已写在 Dockerfile 内
 
   render-review:
+    profiles: ["browser-review"]
     build:
       context: ..
       dockerfile: infra/render-review.Dockerfile
@@ -224,7 +226,6 @@ services:
     depends_on:
       - web
       - ai-engine
-      - render-review
 
 volumes:
   postgres-data:

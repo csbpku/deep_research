@@ -24,6 +24,7 @@ from ai_engine.radar.reader_quality import READER_QUALITY_VERSION
 from ai_engine.radar.render_review_worker import (
     RENDER_REVIEW_TRANSIENT_MAX_ROUNDS,
     queue_render_review,
+    render_review_enabled,
 )
 
 logger = logging.getLogger("ai_engine.radar.review_reconciliation")
@@ -98,7 +99,7 @@ async def review_enriched_summary(
         quality_manual = False
 
     queued = False
-    if review_status in {"approved", "needs_manual_review"}:
+    if render_review_enabled() and review_status in {"approved", "needs_manual_review"}:
         queued = await queue_render_review(
             pool,
             summary_id=summary_id,
@@ -357,18 +358,19 @@ async def run_review_reconciliation_once(
         if outcome["render_queued"]:
             render_queued += 1
 
-    render_queued += await _queue_missing_render_reviews(
-        pool,
-        limit=batch_limit,
-    )
-    render_queued += await _queue_transient_unavailable_render_reviews(
-        pool,
-        limit=batch_limit,
-    )
-    render_queued += await _queue_stale_render_reviews(
-        pool,
-        limit=batch_limit,
-    )
+    if render_review_enabled():
+        render_queued += await _queue_missing_render_reviews(
+            pool,
+            limit=batch_limit,
+        )
+        render_queued += await _queue_transient_unavailable_render_reviews(
+            pool,
+            limit=batch_limit,
+        )
+        render_queued += await _queue_stale_render_reviews(
+            pool,
+            limit=batch_limit,
+        )
     return ReviewReconciliationResult(
         candidates=len(candidate_ids) + quality_refreshed,
         content_claimed=content_claimed,

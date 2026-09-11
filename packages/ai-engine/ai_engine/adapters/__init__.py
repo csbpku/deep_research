@@ -14,6 +14,10 @@ The factory `build_adapter()` reads `AI_ENGINE_ADAPTER` (default:
 gpt_researcher) so tests and CI can opt into `fake` with zero API keys.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from ai_engine.adapters.base import (
     AdapterCancelOutcome,
     AdapterHealth,
@@ -25,11 +29,19 @@ from ai_engine.adapters.base import (
     build_adapter,
 )
 
-# Lazy re-export so tests that don't need gpt-researcher don't import it.
-try:  # pragma: no cover — defensive
-    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter  # noqa: F401
-except ImportError:  # pragma: no cover
-    GptResearcherAdapter = None  # type: ignore[assignment,misc]
+# Keep the vendor adapter genuinely lazy. Importing ``ai_engine.adapters`` is
+# part of the FastAPI startup path, while radar-only workers do not need the
+# gpt-researcher dependency tree until a research job is actually executed.
+if TYPE_CHECKING:
+    from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+
+def __getattr__(name: str) -> object:
+    if name == "GptResearcherAdapter":
+        from ai_engine.adapters.gpt_researcher import GptResearcherAdapter
+
+        return GptResearcherAdapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "AdapterCancelOutcome",

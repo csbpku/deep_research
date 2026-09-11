@@ -108,6 +108,7 @@ interface RadarDetail {
   contentReviewStatus: string | null;
   contentReviewDetails: unknown;
   contentReviewRound: number;
+  renderReviewEnabled: boolean;
   renderReviewStatus: string | null;
   renderReviewRound: number;
   githubItemMeta: RadarGithubItemMeta | null;
@@ -995,8 +996,10 @@ export default function RadarDetailPage() {
               ? 'text-status-partial-fg'
               : 'text-[var(--ink-accent)]'
       }>
-        {!d.renderReviewStatus
-          ? '页面审核未完成'
+        {!d.renderReviewEnabled
+          ? '页面审核未启用'
+          : !d.renderReviewStatus
+            ? '页面审核未完成'
           : d.renderReviewStatus === 'approved'
           ? '桌面与移动端已通过'
           : d.renderReviewStatus === 'needs_manual_review'
@@ -1007,7 +1010,7 @@ export default function RadarDetailPage() {
                 ? '审核中'
                 : '排队中'}
       </span>
-      {d.renderReviewRound > 0 ? <span>第 {d.renderReviewRound}/2 轮</span> : null}
+      {d.renderReviewEnabled && d.renderReviewRound > 0 ? <span>第 {d.renderReviewRound}/2 轮</span> : null}
     </div>
   ) : null;
   const isTechnicalArticlePage = contentKindLabel.short === '技术文章';

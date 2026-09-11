@@ -1,0 +1,28 @@
+# Optional registry override for the real-browser presentation audit.
+#
+# Enable explicitly with:
+#   COMPOSE_PROFILES=browser-review docker compose \
+#     --env-file .env \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.registry.yml \
+#     -f infra/docker-compose.registry-render-review.yml \
+#     up -d
+#
+# The default VPS deployment intentionally does not include this file.
+
+services:
+  web:
+    environment:
+      RADAR_RENDER_REVIEW_ENABLED: "1"
+
+  ai-engine:
+    depends_on:
+      render-review:
+        condition: service_started
+    environment:
+      RADAR_RENDER_REVIEW_ENABLED: "1"
+      RADAR_RENDER_REVIEW_SERVICE_URL: http://render-review:4100
+
+  render-review:
+    image: ${RENDER_REVIEW_IMAGE:?set RENDER_REVIEW_IMAGE to a registry image}
+    build: !reset null

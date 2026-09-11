@@ -7,8 +7,7 @@
 #     -f infra/docker-compose.registry.yml \
 #     up -d --no-build
 #
-# WEB_IMAGE, AI_ENGINE_IMAGE, and RENDER_REVIEW_IMAGE should be immutable
-# registry references, ideally
+# WEB_IMAGE and AI_ENGINE_IMAGE should be immutable registry references, ideally
 # tagged with the Git commit SHA. Runtime secrets remain in the host .env file.
 
 services:
@@ -17,11 +16,27 @@ services:
     # Compose's !reset removes the local build definition from the base file.
     # This keeps an accidental `up` from rebuilding on the VPS.
     build: !reset null
+    environment:
+      RADAR_RENDER_REVIEW_ENABLED: "0"
+      NODE_OPTIONS: "--max-old-space-size=256"
 
   ai-engine:
     image: ${AI_ENGINE_IMAGE:?set AI_ENGINE_IMAGE to a registry image}
     build: !reset null
-
-  render-review:
-    image: ${RENDER_REVIEW_IMAGE:?set RENDER_REVIEW_IMAGE to a registry image}
-    build: !reset null
+    environment:
+      # Keep the small VPS deployment free of the Chromium sidecar even when
+      # an older host .env still contains RADAR_RENDER_REVIEW_ENABLED=1.
+      RADAR_RENDER_REVIEW_ENABLED: "0"
+      RADAR_RENDER_REVIEW_SERVICE_URL: ""
+      # The VPS has 2 vCPUs and 1.8 GiB RAM. Keep background work bounded so
+      # a radar burst cannot starve the API or PostgreSQL. Local development
+      # keeps the higher-throughput defaults from docker-compose.yml.
+      DB_POOL_MIN_SIZE: "1"
+      DB_POOL_MAX_SIZE: "4"
+      RADAR_SOURCE_CONCURRENCY: "2"
+      RADAR_CANDIDATE_CONCURRENCY: "1"
+      RADAR_LLM_CONCURRENCY: "3"
+      RADAR_SCORING_CONCURRENCY: "2"
+      RADAR_ENRICHMENT_CONCURRENCY: "1"
+      RADAR_CONTENT_RECOVERY_LIMIT: "2"
+      LLM_RECOVERY_LIMIT: "10"

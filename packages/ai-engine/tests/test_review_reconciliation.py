@@ -92,6 +92,72 @@ async def test_review_enriched_summary_runs_quality_then_content_then_render(
 
 
 @pytest.mark.asyncio
+async def test_review_enriched_summary_keeps_content_review_when_browser_review_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def claim(*_: Any, **__: Any) -> bool:
+        calls.append("claim")
+        return True
+
+    async def quality(*_: Any, **__: Any) -> ReaderQuality:
+        calls.append("quality")
+        return _quality()
+
+    async def review(*_: Any, **__: Any) -> Any:
+        calls.append("content")
+        return SimpleNamespace(status="approved", round=1, cycle_id="cycle")
+
+    async def should_not_queue(*_: Any, **__: Any) -> bool:
+        raise AssertionError("disabled browser review must not enqueue Chromium work")
+
+    monkeypatch.setenv("RADAR_RENDER_REVIEW_ENABLED", "0")
+    monkeypatch.setattr(rr, "claim_content_review", claim)
+    monkeypatch.setattr(rr, "load_and_persist_reader_quality", quality)
+    monkeypatch.setattr(rr, "run_content_review_cycle", review)
+    monkeypatch.setattr(rr, "queue_render_review", should_not_queue)
+
+    result = await rr.review_enriched_summary(object(), summary_id="summary-1")
+
+    assert calls == ["claim", "quality", "content"]
+    assert result is not None
+    assert result["content_status"] == "approved"
+    assert result["render_queued"] is False
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_does_not_requeue_browser_work_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([])
+    called = False
+
+    async def should_not_queue(*_: Any, **__: Any) -> int:
+        nonlocal called
+        called = True
+        raise AssertionError("disabled browser review must not reconcile render queues")
+
+    async def no_rows(*_: Any, **__: Any) -> list[str]:
+        return []
+
+    async def no_refresh(*_: Any, **__: Any) -> int:
+        return 0
+
+    monkeypatch.setenv("RADAR_RENDER_REVIEW_ENABLED", "0")
+    monkeypatch.setattr(rr, "_review_candidates", no_rows)
+    monkeypatch.setattr(rr, "_refresh_stale_reader_quality", no_refresh)
+    monkeypatch.setattr(rr, "_queue_missing_render_reviews", should_not_queue)
+    monkeypatch.setattr(rr, "_queue_transient_unavailable_render_reviews", should_not_queue)
+    monkeypatch.setattr(rr, "_queue_stale_render_reviews", should_not_queue)
+
+    result = await rr.run_review_reconciliation_once(pool, limit=2)
+
+    assert result.render_queued == 0
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_quality_failure_never_calls_llm_and_still_queues_browser_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

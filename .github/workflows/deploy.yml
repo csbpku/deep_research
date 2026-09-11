@@ -81,26 +81,6 @@ jobs:
           cache-from: type=gha,scope=ai-image
           cache-to: type=gha,mode=max,scope=ai-image
 
-      - name: Prepare render-review image metadata
-        id: render-review-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAMESPACE }}/render-review
-          tags: |
-            type=raw,value=${{ env.IMAGE_TAG }}
-            type=raw,value=latest
-
-      - name: Build and push render-review image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: infra/render-review.Dockerfile
-          push: true
-          tags: ${{ steps.render-review-meta.outputs.tags }}
-          labels: ${{ steps.render-review-meta.outputs.labels }}
-          cache-from: type=gha,scope=render-review-image
-          cache-to: type=gha,mode=max,scope=render-review-image
-
   deploy:
     name: Deploy tested images to VPS
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
@@ -114,7 +94,6 @@ jobs:
       IMAGE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       WEB_IMAGE: ghcr.io/csbpku/deep-research/web:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       AI_ENGINE_IMAGE: ghcr.io/csbpku/deep-research/ai-engine:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-      RENDER_REVIEW_IMAGE: ghcr.io/csbpku/deep-research/render-review:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/deep_research' }}
@@ -165,6 +144,7 @@ jobs:
           scp \
             infra/docker-compose.yml \
             infra/docker-compose.registry.yml \
+            infra/docker-compose.registry-render-review.yml \
             infra/nginx.conf \
             infra/nginx-tls.conf \
             infra/import-tmp-cleanup.sh \
@@ -196,7 +176,6 @@ jobs:
              IMAGE_TAG=$(quote_for_shell "$IMAGE_TAG") \
              WEB_IMAGE=$(quote_for_shell "$WEB_IMAGE") \
              AI_ENGINE_IMAGE=$(quote_for_shell "$AI_ENGINE_IMAGE") \
-             RENDER_REVIEW_IMAGE=$(quote_for_shell "$RENDER_REVIEW_IMAGE") \
              bash -s" <<'REMOTE_SCRIPT'
           set -Eeuo pipefail
 
@@ -220,9 +199,8 @@ jobs:
             if is_release_tag "$previous_tag"; then
               export WEB_IMAGE="ghcr.io/csbpku/deep-research/web:$previous_tag"
               export AI_ENGINE_IMAGE="ghcr.io/csbpku/deep-research/ai-engine:$previous_tag"
-              export RENDER_REVIEW_IMAGE="ghcr.io/csbpku/deep-research/render-review:$previous_tag"
               timeout --signal=TERM --kill-after=30s 10m \
-                "${compose[@]}" pull web ai-engine render-review || true
+                "${compose[@]}" pull web ai-engine || true
               timeout --signal=TERM --kill-after=30s 5m \
                 "${compose[@]}" up -d --no-build --remove-orphans || true
             else
@@ -258,14 +236,11 @@ jobs:
           web_pull_pid=$!
           pull_one_image ai-engine >"$pull_log_dir/ai-engine.log" 2>&1 &
           ai_pull_pid=$!
-          pull_one_image render-review >"$pull_log_dir/render-review.log" 2>&1 &
-          render_pull_pid=$!
 
           pull_failed=0
           if ! wait "$web_pull_pid"; then pull_failed=1; fi
           if ! wait "$ai_pull_pid"; then pull_failed=1; fi
-          if ! wait "$render_pull_pid"; then pull_failed=1; fi
-          for service in web ai-engine render-review; do
+          for service in web ai-engine; do
             echo "[deploy] $service pull log"
             cat "$pull_log_dir/$service.log"
           done

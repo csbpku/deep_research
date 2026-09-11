@@ -262,6 +262,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       : null;
     return NextResponse.json({
       ...responseCandidate,
+      renderReviewEnabled: process.env.RADAR_RENDER_REVIEW_ENABLED === '1',
       body: null,
       originalMarkdown: null,
       originalMeta: null,
@@ -274,6 +275,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
   return NextResponse.json({
     ...responseCandidate,
+    renderReviewEnabled: process.env.RADAR_RENDER_REVIEW_ENABLED === '1',
     sourceOutline: tier === 'skim'
       ? buildSourceOutline({
           title: shaped.title,

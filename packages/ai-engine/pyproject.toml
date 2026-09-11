@@ -11,7 +11,6 @@ dependencies = [
     "psycopg[binary,pool]>=3.2.0",
     "tenacity>=9.0.0",
     "structlog>=24.4.0",
-    "arxiv-mcp-server>=0.1.0; platform_system != 'Windows'",
     # ADR 0004 复评 (2026-07-27): 主引擎切换为 gpt-researcher (0.15.x)。
     # litellm 锁定 <1.90 避免 Rust 编译 (maturin/cargo)。
     # langchain-anthropic 让 gpt-researcher 支持 Anthropic LLM provider。
@@ -20,7 +19,6 @@ dependencies = [
     "langchain-anthropic>=0.3.0",
     "langchain-openai>=0.3.0",
     "langchain-community>=0.3.0",
-    "faiss-cpu>=1.8.0",
     "tiktoken>=0.7.0",
     "json-repair>=0.30.0",
     "beautifulsoup4>=4.12.0",
