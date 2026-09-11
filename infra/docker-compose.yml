@@ -134,6 +134,13 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-}
       DEEPSEEK_API_KEY_HEAVY: ${DEEPSEEK_API_KEY_HEAVY:-}
       DEEPSEEK_BASE_URL_HEAVY: ${DEEPSEEK_BASE_URL_HEAVY:-}
+      # Optional AnythingLLM discussion backend. Keep the key in the host
+      # .env; never bake it into the image or commit it to the repository.
+      ANYTHINGLLM_URL: ${ANYTHINGLLM_URL:-}
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
+      ANYTHINGLLM_WORKSPACE: ${ANYTHINGLLM_WORKSPACE:-}
+      ANYTHINGLLM_ENABLED: ${ANYTHINGLLM_ENABLED:-true}
+      ANYTHINGLLM_RADAR_IDS: ${ANYTHINGLLM_RADAR_IDS:-}
       # Radar 源 token（缺失时对应源快速失败，不影响其他源）
       GH_TOKEN: ${GH_TOKEN:-}
       PRODUCTHUNT_API_TOKEN: ${PRODUCTHUNT_API_TOKEN:-}
