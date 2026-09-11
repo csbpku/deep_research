@@ -208,4 +208,4 @@ async def test_render_reconciliation_requeues_transient_sidecar_failures(
     assert '"renderReviewStatus" = \'unavailable\'' in sql
     assert "LIKE \'ConnectError:%%\'" in sql
     assert "TRANSIENT_UNAVAILABLE_RETRY" in sql
-    assert params == (2, 3)
+    assert params == (rr.RENDER_REVIEW_TRANSIENT_MAX_ROUNDS, 3)

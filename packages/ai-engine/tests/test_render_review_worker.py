@@ -206,6 +206,7 @@ async def test_claim_next_generates_a_unique_render_review_token() -> None:
     assert claimed == ("summary-1", 1, "sha-1", "claim-1")
     sql, _ = pool.connection_value.executions[0]
     assert '"renderReviewClaimId" = gen_random_uuid()' in sql
+    assert 'TRANSIENT_UNAVAILABLE_RETRY' in sql
     assert '"renderReviewClaimId"' in sql.split("RETURNING", 1)[1]
 
 

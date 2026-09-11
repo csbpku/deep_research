@@ -37,6 +37,9 @@ RENDER_REVIEW_STATUSES = frozenset({
     "unavailable",
 })
 RENDER_REVIEW_MAX_ROUNDS = 2
+# A sidecar outage is not a page finding. Allow one recovery attempt after the
+# normal review budget, while keeping page-level failures capped at two rounds.
+RENDER_REVIEW_TRANSIENT_MAX_ROUNDS = 3
 
 
 def _repo_root() -> Path:
@@ -233,7 +236,10 @@ async def _claim_next(pool: Any) -> tuple[str, int, str | None, str] | None:
             'AND "contentReviewStatus" IN (\'approved\', \'needs_manual_review\') '
             'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
             'AND COALESCE("originalMarkdown", \'\') <> \'\' '
-            'AND "renderReviewRound" < %s '
+            'AND "renderReviewRound" < CASE '
+            'WHEN "renderReviewStatus" = \'queued\' '
+            'AND "renderReviewDetails"->>\'reason\' = \'TRANSIENT_UNAVAILABLE_RETRY\' '
+            'THEN %s ELSE %s END '
             'AND ('
             '"renderReviewStatus" = \'queued\' '
             'OR ('
@@ -246,7 +252,11 @@ async def _claim_next(pool: Any) -> tuple[str, int, str | None, str] | None:
             ') '
             'RETURNING "id", "renderReviewRound", "originalSha256", '
             '"renderReviewClaimId"',
-            (RENDER_REVIEW_MAX_ROUNDS, stale_minutes * 60),
+            (
+                RENDER_REVIEW_TRANSIENT_MAX_ROUNDS,
+                RENDER_REVIEW_MAX_ROUNDS,
+                stale_minutes * 60,
+            ),
         )
         row = await cursor.fetchone()
     if not row:
@@ -545,6 +555,7 @@ async def render_review_loop(pool: Any) -> None:
 
 __all__ = [
     "RENDER_REVIEW_MAX_ROUNDS",
+    "RENDER_REVIEW_TRANSIENT_MAX_ROUNDS",
     "queue_render_review",
     "retry_render_review",
     "render_review_enabled",

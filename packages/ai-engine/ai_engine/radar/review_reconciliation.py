@@ -21,7 +21,10 @@ from ai_engine.radar.content_reviewer import (
 )
 from ai_engine.radar.reader_quality import load_and_persist_reader_quality
 from ai_engine.radar.reader_quality import READER_QUALITY_VERSION
-from ai_engine.radar.render_review_worker import queue_render_review
+from ai_engine.radar.render_review_worker import (
+    RENDER_REVIEW_TRANSIENT_MAX_ROUNDS,
+    queue_render_review,
+)
 
 logger = logging.getLogger("ai_engine.radar.review_reconciliation")
 
@@ -309,7 +312,7 @@ async def _queue_transient_unavailable_render_reviews(
                 '"renderReviewedAt" = NULL, "updatedAt" = now() '
                 'FROM candidates WHERE "summaries"."id" = candidates."id" '
                 'RETURNING "summaries"."id"',
-                (2, max(1, limit)),
+                (RENDER_REVIEW_TRANSIENT_MAX_ROUNDS, max(1, limit)),
             )
         ).fetchall()
     return len(rows)
