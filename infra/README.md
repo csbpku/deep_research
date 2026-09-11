@@ -10,13 +10,30 @@
 - `pg-backup.sh`：定期 `pg_dump` + 保留最新 7 个备份文件（不是按天数清理）。
 - `pg-restore.sh`：恢复脚本，支持 `--yes` 强制覆盖；恢复后做行数校验。
 - `import-tmp-cleanup.sh`：24h 导入临时清理，默认 dry-run，加 `--apply` 才真删。
-- `web.Dockerfile`：Next.js 多阶段构建（deps → build → runner），内置 HEALTHCHECK。
+- `web.Dockerfile`：Next.js 多阶段构建（deps → build → runner），生产使用 standalone
+  server + 隔离的 Prisma/tsx 运行时依赖，内置 HEALTHCHECK。
 - `ai-engine.Dockerfile`：Python 3.11 + uv 多阶段构建，内置 HEALTHCHECK。
 - `render-review.Dockerfile`：Node 20 + Playwright Chromium sidecar，内置 HEALTHCHECK。
 - Web BFF 已实现 `/api/healthz` liveness 端点（`apps/web/src/app/api/healthz/route.ts`）。
 - AI engine `/healthz` 已存在（W1）。
 
 本地默认运行方式是原生 PostgreSQL + `pnpm dev:web` / `pnpm dev:ai`；Docker Compose 是独立的部署/恢复演练拓扑，不是本地默认依赖。
+
+## Web 镜像体积
+
+Web 生产镜像不再复制整个 pnpm hoisted workspace。Next.js 构建开启
+`output: 'standalone'` 后，runner 只带 tracing 得出的服务端依赖、静态资源和
+启动期需要的 Prisma/tsx 依赖；迁移、默认管理员和默认雷达源 bootstrap 的行为保持不变。
+这同时减少首次发布需要传输的字节数和 VPS 上的镜像占用。构建验证时应比较：
+
+```bash
+docker image inspect deep-research-web --format '{{.Size}}'
+docker history --no-trunc deep-research-web
+```
+
+standalone 镜像仍要求构建阶段使用完整依赖；优化目标是 runner 镜像，不是牺牲构建
+缓存或本地开发依赖。根目录 `.dockerignore` 还会排除本地历史 `.next-*` 构建目录，
+避免把工作区残留发送给远程 Docker builder。
 
 ## AI engine 镜像体积
 
@@ -50,6 +67,10 @@ AI engine 镜像偏大的原因有两层：
 3. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS。
 4. VPS 拉取固定 SHA 镜像，使用现有 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
 5. 通过 `/healthz` 和 `/ai-healthz` 做发布后检查；失败时尝试恢复上一个镜像 SHA。
+
+发布脚本会并行拉取三个服务镜像，再统一启动 Compose；单个镜像仍保留
+15 分钟超时和 3 次重试，失败时沿用原有回滚流程。这样发布耗时主要取决于最慢的
+一个镜像，而不是三个镜像的下载时间之和。
 
 镜像回滚不等于数据库回滚。迁移必须保持向前兼容；需要恢复 schema 时，先使用已有 PostgreSQL 备份/恢复流程。
 

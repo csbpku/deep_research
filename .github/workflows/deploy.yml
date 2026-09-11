@@ -252,9 +252,27 @@ jobs:
             done
             return 1
           }
-          pull_one_image web
-          pull_one_image ai-engine
-          pull_one_image render-review
+          pull_log_dir="$(mktemp -d)"
+          trap 'rm -rf "$pull_log_dir"' EXIT
+          pull_one_image web >"$pull_log_dir/web.log" 2>&1 &
+          web_pull_pid=$!
+          pull_one_image ai-engine >"$pull_log_dir/ai-engine.log" 2>&1 &
+          ai_pull_pid=$!
+          pull_one_image render-review >"$pull_log_dir/render-review.log" 2>&1 &
+          render_pull_pid=$!
+
+          pull_failed=0
+          if ! wait "$web_pull_pid"; then pull_failed=1; fi
+          if ! wait "$ai_pull_pid"; then pull_failed=1; fi
+          if ! wait "$render_pull_pid"; then pull_failed=1; fi
+          for service in web ai-engine render-review; do
+            echo "[deploy] $service pull log"
+            cat "$pull_log_dir/$service.log"
+          done
+          if [ "$pull_failed" -ne 0 ]; then
+            echo "[deploy] one or more image pulls failed" >&2
+            exit 1
+          fi
           echo "[deploy] starting services; web entrypoint will apply migrations"
           "${compose[@]}" up -d --no-build --remove-orphans
           echo "[deploy] waiting for public health endpoints"

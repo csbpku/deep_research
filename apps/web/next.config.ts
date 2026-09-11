@@ -7,6 +7,9 @@ import path from 'node:path';
 // 详见 docs/decisions/2026-07-17-no-double-proxy.md。
 const config: NextConfig = {
   reactStrictMode: true,
+  // Production containers only need the traced server bundle instead of the
+  // full workspace node_modules tree.
+  output: 'standalone',
   // The Next.js dev tools button sits at the bottom-left by default. It can
   // overlap real controls in narrow Playwright viewports, so keep it out of
   // browser acceptance runs without changing the normal local dev experience.

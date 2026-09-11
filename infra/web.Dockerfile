@@ -13,7 +13,7 @@ WORKDIR /repo
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 # Use hoisted node_modules — Next.js needs flat structure for internal requires
-RUN echo "node-linker=hoisted" > .npmrc
+RUN printf "node-linker=hoisted\ninject-workspace-packages=true\n" > .npmrc
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
 
@@ -41,10 +41,15 @@ ENV GOOGLE_CLIENT_SECRET=placeholder
 ENV ALLOWED_EMAIL_DOMAINS=example.com
 RUN cd apps/web && pnpm build
 
+# Create an isolated production dependency tree for the startup-only Prisma
+# migration/bootstrap commands. The Next standalone bundle has its own traced
+# runtime dependencies and does not need the hoisted workspace tree.
+RUN pnpm deploy --filter '@deep-research/web' --prod /runtime
+
 # ──────────────────────────── Stage 3: runner ──────────────────────────
 FROM --platform=linux/amd64 node:20-alpine AS runner
 RUN apk add --no-cache openssl
-WORKDIR /repo
+WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -54,19 +59,16 @@ ENV HOSTNAME=0.0.0.0
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 RUN mkdir -p /data/import-tmp && chown -R nextjs:nodejs /data
 
-COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next apps/web/.next
+# Next standalone preserves the monorepo-relative app path under /app.
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /repo/apps/web/.next/static apps/web/.next/static
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/public apps/web/public
-COPY --from=build --chown=nextjs:nodejs /repo/apps/web/package.json apps/web/package.json
-COPY --from=build --chown=nextjs:nodejs /repo/apps/web/next.config.ts apps/web/next.config.ts
-# The workspace package links are required at runtime.  The pnpm store under
-# /repo/node_modules/.pnpm contains the packages, but the Next bundle resolves
-# react/next from apps/web/node_modules first.  Omitting these links makes the
-# container start but every App Router/BFF request fail with MODULE_NOT_FOUND.
-COPY --from=build --chown=nextjs:nodejs /repo/apps/web/node_modules apps/web/node_modules
-COPY --from=build --chown=nextjs:nodejs /repo/node_modules node_modules
-COPY --from=build --chown=nextjs:nodejs /repo/packages packages
-# The entrypoint runs migrations and the idempotent admin bootstrap at startup.
-# Keep only the runtime source they need instead of shipping the full app source.
+
+# Keep only production dependencies needed by Prisma and the TypeScript
+# bootstrap scripts. The standalone bundle supplies the Next server runtime.
+COPY --from=build --chown=nextjs:nodejs /runtime/node_modules node_modules
+
+# The entrypoint runs migrations and the idempotent admin/radar bootstraps.
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/prisma apps/web/prisma
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/scripts/bootstrap-admin.ts apps/web/scripts/bootstrap-admin.ts
 COPY --from=build --chown=nextjs:nodejs /repo/apps/web/scripts/bootstrap-radar-sources.ts apps/web/scripts/bootstrap-radar-sources.ts

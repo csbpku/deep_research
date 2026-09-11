@@ -11,6 +11,8 @@ infra/certs
 docs
 .next
 **/.next
+.next-*
+**/.next-*
 __pycache__
 **/__pycache__
 .pytest_cache
