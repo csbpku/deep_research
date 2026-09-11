@@ -1143,6 +1143,9 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
     retry/fallback policy.
     """
     from ai_engine.radar.candidate_postprocessor import score_missing_candidates
+    from ai_engine.radar.content_pending_recovery import (
+        recover_content_pending_candidates,
+    )
     from ai_engine.radar.enrichment_worker import run_enrichment_for_pending
 
     interval = _llm_recovery_interval_seconds()
@@ -1205,6 +1208,9 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
                 if lock is None:
                     raise RuntimeError("radar sync lock is not initialized")
                 async with lock:
+                    content_recovery = await recover_content_pending_candidates(
+                        app_instance.state.db_pool,
+                    )
                     scored = await score_missing_candidates(
                         app_instance.state.db_pool,
                         limit=limit,
@@ -1217,7 +1223,8 @@ async def _llm_recovery_loop(app_instance: FastAPI) -> None:
                     interval_seconds=interval,
                     limit=limit,
                     scored=scored,
-                    enriched=enriched,
+                    enriched=enriched + content_recovery.enriched,
+                    content_recovery=content_recovery.to_dict(),
                     rescored=0,
                     enrichment_workers=worker_count,
                 )

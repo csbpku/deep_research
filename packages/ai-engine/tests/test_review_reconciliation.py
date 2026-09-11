@@ -191,3 +191,21 @@ async def test_render_reconciliation_requeues_legacy_audits_without_snapshot_has
     assert '"renderReviewStatus" IN' in sql
     assert 'IS DISTINCT FROM "originalSha256"' in sql
     assert params == (3,)
+
+
+@pytest.mark.asyncio
+async def test_render_reconciliation_requeues_transient_sidecar_failures(
+) -> None:
+    pool = _Pool([{"id": "summary-sidecar"}])
+
+    count = await rr._queue_transient_unavailable_render_reviews(
+        pool,
+        limit=3,
+    )
+
+    assert count == 1
+    sql, params = pool.connection_value.executions[0]
+    assert '"renderReviewStatus" = \'unavailable\'' in sql
+    assert "ConnectError:" in sql
+    assert "TRANSIENT_UNAVAILABLE_RETRY" in sql
+    assert params == (2, 3)

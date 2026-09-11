@@ -260,6 +260,61 @@ async def _queue_stale_render_reviews(pool: Any, *, limit: int) -> int:
     return queued
 
 
+async def _queue_transient_unavailable_render_reviews(
+    pool: Any,
+    *,
+    limit: int,
+) -> int:
+    """Retry sidecar/infrastructure failures without retrying page findings.
+
+    ``unavailable`` is terminal for a review attempt, but a temporary sidecar
+    outage should not permanently hide a healthy page. Preserve the current
+    round so the normal two-round cap still applies; page-level failures do
+    not match this allow-list and remain manual.
+    """
+    transient_error = (
+        '"renderReviewDetails"->>\'error\' LIKE \'ConnectError:%\' '
+        'OR "renderReviewDetails"->>\'error\' LIKE \'sidecar_timeout:%\' '
+        'OR "renderReviewDetails"->>\'error\' = \'node_not_found\' '
+        'OR "renderReviewDetails"->>\'error\' LIKE \'script_not_found:%\' '
+        'OR "renderReviewDetails"->>\'error\' = \'invalid_sidecar_payload\''
+    )
+    async with pool.connection() as conn:
+        rows = await (
+            await conn.execute(
+                'WITH candidates AS ('
+                'SELECT "id" FROM "summaries" '
+                'WHERE "distilledTier" IN (\'collection\', \'deep_read\') '
+                'AND "contentReviewStatus" IN (\'approved\', \'needs_manual_review\') '
+                'AND "renderReviewStatus" = \'unavailable\' '
+                'AND "renderReviewRound" < %s '
+                'AND "renderReviewDetails"->>\'contentSha256\' '
+                'IS NOT DISTINCT FROM "originalSha256" '
+                'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
+                'AND COALESCE("originalMarkdown", \'\') <> \'\' '
+                'AND (' + transient_error + ') '
+                'ORDER BY "createdAt" ASC LIMIT %s FOR UPDATE SKIP LOCKED'
+                ') UPDATE "summaries" SET '
+                '"renderReviewStatus" = \'queued\', '
+                '"renderReviewSummary" = jsonb_build_object('
+                '\'status\', \'queued\', '
+                '\'round\', "renderReviewRound", '
+                '\'message\', \'sidecar 已恢复，重新执行浏览器审核。\', '
+                '\'reason\', \'TRANSIENT_UNAVAILABLE_RETRY\'), '
+                '"renderReviewDetails" = COALESCE("renderReviewDetails", \'{}\'::jsonb) '
+                '|| jsonb_build_object('
+                '\'status\', \'queued\', '
+                '\'reason\', \'TRANSIENT_UNAVAILABLE_RETRY\', '
+                '\'previousError\', "renderReviewDetails"->>\'error\'), '
+                '"renderReviewedAt" = NULL, "updatedAt" = now() '
+                'FROM candidates WHERE "summaries"."id" = candidates."id" '
+                'RETURNING "summaries"."id"',
+                (2, max(1, limit)),
+            )
+        ).fetchall()
+    return len(rows)
+
+
 async def run_review_reconciliation_once(
     pool: Any,
     *,
@@ -300,6 +355,10 @@ async def run_review_reconciliation_once(
             render_queued += 1
 
     render_queued += await _queue_missing_render_reviews(
+        pool,
+        limit=batch_limit,
+    )
+    render_queued += await _queue_transient_unavailable_render_reviews(
         pool,
         limit=batch_limit,
     )
