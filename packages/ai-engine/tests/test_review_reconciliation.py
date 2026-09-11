@@ -206,6 +206,6 @@ async def test_render_reconciliation_requeues_transient_sidecar_failures(
     assert count == 1
     sql, params = pool.connection_value.executions[0]
     assert '"renderReviewStatus" = \'unavailable\'' in sql
-    assert "ConnectError:" in sql
+    assert "LIKE \'ConnectError:%%\'" in sql
     assert "TRANSIENT_UNAVAILABLE_RETRY" in sql
     assert params == (2, 3)

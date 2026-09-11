@@ -273,10 +273,10 @@ async def _queue_transient_unavailable_render_reviews(
     not match this allow-list and remain manual.
     """
     transient_error = (
-        '"renderReviewDetails"->>\'error\' LIKE \'ConnectError:%\' '
-        'OR "renderReviewDetails"->>\'error\' LIKE \'sidecar_timeout:%\' '
+        '"renderReviewDetails"->>\'error\' LIKE \'ConnectError:%%\' '
+        'OR "renderReviewDetails"->>\'error\' LIKE \'sidecar_timeout:%%\' '
         'OR "renderReviewDetails"->>\'error\' = \'node_not_found\' '
-        'OR "renderReviewDetails"->>\'error\' LIKE \'script_not_found:%\' '
+        'OR "renderReviewDetails"->>\'error\' LIKE \'script_not_found:%%\' '
         'OR "renderReviewDetails"->>\'error\' = \'invalid_sidecar_payload\''
     )
     async with pool.connection() as conn:
