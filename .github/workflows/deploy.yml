@@ -140,8 +140,9 @@ jobs:
         run: |
           set -euo pipefail
           target="$VPS_USER@$VPS_HOST"
-          ssh "$target" "mkdir -p -- '$VPS_DEPLOY_PATH/infra'"
-          scp \
+          ssh_options=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes -o ConnectTimeout=30)
+          ssh "${ssh_options[@]}" "$target" "mkdir -p -- '$VPS_DEPLOY_PATH/infra'"
+          scp "${ssh_options[@]}" \
             infra/docker-compose.yml \
             infra/docker-compose.registry.yml \
             infra/docker-compose.registry-render-review.yml \
@@ -158,19 +159,21 @@ jobs:
         run: |
           set -euo pipefail
           target="$VPS_USER@$VPS_HOST"
+          ssh_options=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes -o ConnectTimeout=30)
           username=$(printf '%q' "$GHCR_USERNAME")
           printf '%s' "$GHCR_READ_TOKEN" \
-            | ssh "$target" "docker login ghcr.io --username $username --password-stdin"
+            | ssh "${ssh_options[@]}" "$target" "docker login ghcr.io --username $username --password-stdin"
 
       - name: Pull, migrate, and health-check
         shell: bash
         run: |
           set -euo pipefail
           target="$VPS_USER@$VPS_HOST"
+          ssh_options=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes -o ConnectTimeout=30)
           quote_for_shell() {
             printf '%q' "$1"
           }
-          ssh \
+          ssh "${ssh_options[@]}" \
             "$target" \
             "DEPLOY_PATH=$(quote_for_shell "$VPS_DEPLOY_PATH") \
              IMAGE_TAG=$(quote_for_shell "$IMAGE_TAG") \
