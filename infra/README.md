@@ -2,7 +2,7 @@
 
 该目录保存目标部署拓扑和运维脚本。Week 8 完成初版，可作为部署基线。
 
-## 当前状态（2026-09-10）
+## 当前状态（2026-09-11）
 
 - `docker-compose.yml`：核心四服务拓扑，另提供可选的 `browser-review` Chromium profile。
 - `docker-compose.registry.yml`：默认生产覆盖文件，使用 GHCR 中按 commit SHA 固定的 Web / AI engine 镜像，不在 VPS 上重新构建。

@@ -171,7 +171,7 @@ SMOKE_MATRIX: list[dict[str, Any]] = [
         "fetcher_name": "vendor_changelog",
         "config": {
             "vendor": "openai",
-            "sources": ["https://platform.openai.com/docs/changelog"],
+            "sources": ["https://developers.openai.com/api/docs/changelog"],
             "title_pattern": "<h2[^>]*>(.*?)</h2>",
             "max_entries": 5,
         },
@@ -181,8 +181,7 @@ SMOKE_MATRIX: list[dict[str, Any]] = [
         "fetcher_name": "vendor_changelog",
         "config": {
             "vendor": "anthropic",
-            "sources": ["https://docs.anthropic.com/en/release-notes/"],
-            "title_pattern": "<h[1-3][^>]*>(.*?)</h[1-3]>",
+            "sources": ["https://platform.claude.com/docs/en/release-notes/feed.xml"],
             "allow_path_regex": "/release-notes/",
             "max_entries": 5,
         },

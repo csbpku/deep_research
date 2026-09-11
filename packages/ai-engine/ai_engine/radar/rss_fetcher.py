@@ -164,7 +164,11 @@ async def fetch_rss_candidates(
     # (e.g. OpenAI News, Anthropic News, Google AI Blog) to skip the check.
     apply_ai_filter = bool(config.get("applyAiFilter", True))
     candidates: list[RadarCandidate] = []
-    for item in items[:max_results]:
+    # Apply filtering/age gates before the result cap. Mixed feeds such as
+    # Hacker News commonly place unrelated stories before the AI items.
+    for item in items:
+        if len(candidates) >= max_results:
+            break
         link = item.get("link", "").strip()
         if not link:
             continue

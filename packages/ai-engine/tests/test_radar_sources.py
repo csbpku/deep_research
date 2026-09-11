@@ -10,7 +10,11 @@ import pytest
 
 from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError
 from ai_engine.radar.arxiv_fetcher import fetch_arxiv_candidates
-from ai_engine.radar.community_fetcher import _parse_reddit_rss
+from ai_engine.radar.community_fetcher import (
+    _parse_reddit_rss,
+    fetch_devto_candidates,
+    fetch_hackernews_candidates,
+)
 from ai_engine.radar.github import fetch_github
 from ai_engine.radar.hn_algolia_fetcher import fetch_hn_algolia
 from ai_engine.radar.huggingface_papers_fetcher import fetch_huggingface_papers
@@ -128,6 +132,73 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     assert items[0].content_origin == "rss"
 
 
+async def test_rss_ai_filter_applies_result_cap_after_filtering() -> None:
+    xml = b"""<?xml version="1.0"?><rss><channel>
+    <item><title>Unrelated story</title><link>https://example.com/noise</link>
+    <description>Generic software release.</description>
+    <pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate></item>
+    <item><title>OpenAI ships a useful update</title><link>https://example.com/ai</link>
+    <description>LLM platform update.</description>
+    <pubDate>Tue, 25 Aug 2026 12:01:00 GMT</pubDate></item>
+    </channel></rss>"""
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(xml, url=url)
+
+    items = await fetch_rss_candidates(
+        {"feedUrl": "https://feed.example/rss", "maxResults": 1},
+        fetcher=fake_fetch,
+    )
+    assert [item.url for item in items] == ["https://example.com/ai"]
+
+
+async def test_hackernews_filter_considers_story_text() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/topstories.json"):
+            return httpx.Response(200, json=[1])
+        return httpx.Response(
+            200,
+            json={
+                "id": 1,
+                "type": "story",
+                "title": "Question",
+                "text": "A detailed discussion of LLM inference performance.",
+                "url": "https://example.com/story",
+                "time": int(datetime.now(timezone.utc).timestamp()),
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_hackernews_candidates(
+            {"max_results": 5, "scan_size": 1},
+            client=client,
+        )
+    assert len(items) == 1
+
+
+async def test_devto_filter_considers_description() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{
+                "url": "https://dev.to/example/neutral-title",
+                "title": "Question",
+                "description": "A practical guide to LLM inference and deployment.",
+                "published_at": "2026-08-25T12:00:00Z",
+                "positive_reactions_count": 3,
+                "comments_count": 1,
+                "tag_list": ["llm"],
+            }],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_devto_candidates(
+            {"tags": ["llm"], "max_results": 5},
+            client=client,
+        )
+    assert len(items) == 1
+
+
 def test_reddit_rss_keeps_post_body_when_json_fallback_is_unavailable() -> None:
     xml = """<?xml version="1.0"?><feed><entry>
     <title>Technical LLM post</title>
@@ -139,6 +210,22 @@ def test_reddit_rss_keeps_post_body_when_json_fallback_is_unavailable() -> None:
     items = _parse_reddit_rss(xml, "LocalLLaMA", 10, 0)
     assert len(items) == 1
     assert "quantization" in items[0].snippet
+
+
+def test_reddit_rss_applies_limit_after_ai_filtering() -> None:
+    xml = """<?xml version="1.0"?><feed>
+    <entry><title>Generic question</title>
+    <link href="https://www.reddit.com/r/LocalLLaMA/comments/noise/"/>
+    <content type="html">&lt;p&gt;A generic discussion.&lt;/p&gt;</content>
+    <published>2026-08-25T01:00:00Z</published></entry>
+    <entry><title>Another question</title>
+    <link href="https://www.reddit.com/r/LocalLLaMA/comments/ai/"/>
+    <content type="html">&lt;p&gt;A post about LLM inference throughput and quantization.&lt;/p&gt;</content>
+    <published>2026-08-25T01:00:00Z</published></entry>
+    </feed>"""
+    items = _parse_reddit_rss(xml, "LocalLLaMA", 1, 0)
+    assert len(items) == 1
+    assert items[0].url.endswith("/ai/")
 
 
 async def test_hn_rss_shell_is_collapsed_into_metadata_snippet() -> None:
@@ -956,6 +1043,103 @@ async def test_vendor_changelog_anchor_extractor_handles_anthropic_html() -> Non
     assert "claude-opus-5" in titles_by_slug
     assert "Claude Opus 5" in titles_by_slug["claude-opus-5"]
     assert "claude-fable-5" in titles_by_slug
+
+
+async def test_vendor_changelog_extracts_openai_structured_entries(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_file = tmp_path / "vendor_changelog_state.json"
+    monkeypatch.setenv("VENDOR_CHANGELOG_STATE_PATH", str(state_file))
+    html = """
+    <nav><h3>Solutions</h3><h3>Partners</h3></nav>
+    <h1 class="_ChangelogTitle_f3xd6_29">Changelog</h1>
+    <h3 class="_ChangelogSectionTitle_f3xd6_43">September, 2026</h3>
+    <div class="mt-5"><div class="grid">
+      <div class="_Badge_10t5o_1">Sep 10</div>
+      <div class="_MarkdownContent_abpsh_1 _ChangelogMarkdown_f3xd6_19">
+        <p>Released the Agents API in public beta.</p>
+      </div>
+    </div></div>
+    <div class="mt-5"><div class="grid">
+      <div class="_Badge_10t5o_1">Sep 1</div>
+      <div class="_MarkdownContent_abpsh_1 _ChangelogMarkdown_f3xd6_19">
+        <p>Connections to api.openai.com can now use IPv6.</p>
+      </div>
+    </div></div>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=html.encode())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_vendor_changelog(
+            {
+                "vendor": "openai",
+                "sources": ["https://developers.openai.com/api/docs/changelog"],
+                "max_entries": 30,
+                "title_pattern": "<h2[^>]*>(.*?)</h2>",
+            },
+            client=client,
+        )
+    assert len(items) == 2
+    assert "Agents API" in items[0].title
+    assert "Solutions" not in "\n".join(item.title for item in items)
+    assert all(item.url.startswith("https://developers.openai.com/api/docs/changelog#") for item in items)
+    assert items[0].published_at == datetime(2026, 9, 10, tzinfo=timezone.utc)
+
+
+async def test_vendor_changelog_extracts_anthropic_rss_entries(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_file = tmp_path / "vendor_changelog_state.json"
+    monkeypatch.setenv("VENDOR_CHANGELOG_STATE_PATH", str(state_file))
+    xml = """<?xml version="1.0"?><rss><channel>
+    <item>
+      <title>Claude Platform release notes — September 10, 2026</title>
+      <link>https://platform.claude.com/docs/en/release-notes/overview#september-10-2026</link>
+      <pubDate>Thu, 10 Sep 2026 00:00:00 GMT</pubDate>
+    </item>
+    </channel></rss>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=xml.encode())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        items = await fetch_vendor_changelog(
+            {
+                "vendor": "anthropic",
+                "sources": ["https://platform.claude.com/docs/en/release-notes/feed.xml"],
+                "max_entries": 30,
+                "allow_path_regex": "/release-notes/",
+            },
+            client=client,
+        )
+    assert len(items) == 1
+    assert items[0].url.endswith("#september-10-2026")
+    assert items[0].published_at == datetime(2026, 9, 10, tzinfo=timezone.utc)
+
+
+async def test_vendor_changelog_card_parser_uses_release_note_links() -> None:
+    html = """
+    <div data-cds="Card" id="claude-opus-5">
+      <div><a href="/docs/en/release-notes/system-prompts/claude-opus-5">Claude Opus 5</a></div>
+    </div>
+    <div data-cds="Card" id="claude-fable-5">
+      <div><a href="/docs/en/release-notes/system-prompts/claude-fable-5">Claude Fable 5</a></div>
+    </div>
+    """
+    from ai_engine.radar.vendor_changelog_fetcher import _extract_card_entries
+
+    entries = _extract_card_entries(
+        html,
+        "https://platform.claude.com/docs/en/release-notes/system-prompts/overview",
+    )
+    assert [(entry.slug, entry.title) for entry in entries] == [
+        ("claude-opus-5", "Claude Opus 5"),
+        ("claude-fable-5", "Claude Fable 5"),
+    ]
 
 
 async def test_vendor_changelog_falls_back_to_title_pattern_when_no_anchor() -> None:

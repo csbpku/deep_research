@@ -191,3 +191,39 @@ async def test_fetch_applies_lastmod_window_to_sitemap_only_vendor(
     assert len(candidates) == 2
     assert all("old" not in c.url for c in candidates)
     assert saved["anthropic"]  # state persisted with current urls
+
+
+@pytest.mark.asyncio
+async def test_fetch_failure_does_not_advance_vendor_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient article outage must remain eligible for the next poll."""
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(hours=1)).isoformat()
+    sitemap = (
+        "<urlset><url><loc>https://www.anthropic.com/news/recent</loc>"
+        f"<lastmod>{recent}</lastmod></url></urlset>"
+    )
+
+    async def fake_sitemap(url: str, *, client: object) -> str:
+        return sitemap
+
+    monkeypatch.setattr("ai_engine.radar.vendor_news_fetcher._fetch_sitemap", fake_sitemap)
+    monkeypatch.setattr("ai_engine.radar.vendor_news_fetcher._load_state", lambda: {})
+    saved: dict[str, object] = {}
+    monkeypatch.setattr(
+        "ai_engine.radar.vendor_news_fetcher._save_state",
+        lambda state: saved.update(state),
+    )
+
+    class FailingClient:
+        async def get(self, url: str, **kwargs: object) -> object:
+            raise OSError("temporary article outage")
+
+    candidates = await check_and_fetch_vendor_news(
+        "anthropic",
+        lookback_hours=72,
+        client=FailingClient(),  # type: ignore[arg-type]
+    )
+    assert candidates == []
+    assert saved["anthropic"] == {}

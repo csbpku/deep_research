@@ -22,6 +22,7 @@ import httpx
 import yaml  # type: ignore[import-untyped]  # types-PyYAML not in pyproject; OSS dependency only used here
 
 from ai_engine.radar.huggingface import rewrite_huggingface_url
+from ai_engine.radar.ai_keyword_filter import is_ai_related
 from ai_engine.radar.models import RadarCandidate
 
 logger = logging.getLogger("vendor_news_fetcher")
@@ -391,14 +392,16 @@ async def check_and_fetch_vendor_news(
             new_or_changed.sort(key=lambda x: x[1], reverse=True)
             new_or_changed = new_or_changed[:_FIRST_RUN_MAX_FETCH]
 
-        # 3. Persist state
-        state[vendor] = current_urls
-        _save_state(state)
-
-        # 4. Parse RSS metadata for fallback (when HTML pages require JS)
+        # Parse RSS metadata for fallback (when HTML pages require JS).
         rss_metadata = _parse_rss_items(xml) if "<item>" in xml else {}
 
-        # 5. Fetch new/changed pages
+        # Only advance state for new/changed URLs after a successful article
+        # capture or an explicit RSS fallback. Persisting the whole sitemap
+        # before the fetch made one transient outage permanently suppress
+        # retries until the vendor changed its lastmod.
+        handled_urls: set[str] = set()
+
+        # Fetch new/changed pages
         for url, pub_dt in new_or_changed:
             try:
                 request_url = (
@@ -420,6 +423,11 @@ async def check_and_fetch_vendor_news(
                     if rss_title or desc:
                         title = rss_title or _infer_title(desc, url)
                         snippet = desc[:500] if desc else title
+                        if cfg.get("ai_filter", True) and not is_ai_related(
+                            f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
+                        ):
+                            handled_urls.add(url)
+                            continue
                         candidates.append(RadarCandidate(
                             title=title[:300],
                             url=url,
@@ -429,9 +437,15 @@ async def check_and_fetch_vendor_news(
                             tags=cfg["tags"],
                             source_quality_hint=cfg["quality_hint"],
                         ))
+                        handled_urls.add(url)
                     continue
                 title = _infer_title(text, url)
                 snippet = text[:500].replace("\n", " ")
+                if cfg.get("ai_filter", True) and not is_ai_related(
+                    f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
+                ):
+                    handled_urls.add(url)
+                    continue
                 candidates.append(RadarCandidate(
                     title=title,
                     url=url,
@@ -441,6 +455,7 @@ async def check_and_fetch_vendor_news(
                     tags=cfg["tags"],
                     source_quality_hint=cfg["quality_hint"],
                 ))
+                handled_urls.add(url)
             except Exception as exc:
                 # Last resort: use RSS metadata if HTML fetch failed entirely
                 meta = rss_metadata.get(url, {})
@@ -451,6 +466,11 @@ async def check_and_fetch_vendor_news(
                 if rss_title or desc:
                     title = rss_title or _infer_title(desc, url)
                     snippet = desc[:500] if desc else title
+                    if cfg.get("ai_filter", True) and not is_ai_related(
+                        f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
+                    ):
+                        handled_urls.add(url)
+                        continue
                     candidates.append(RadarCandidate(
                         title=title[:300],
                         url=url,
@@ -460,8 +480,16 @@ async def check_and_fetch_vendor_news(
                         tags=cfg["tags"],
                         source_quality_hint=cfg["quality_hint"],
                     ))
+                    handled_urls.add(url)
                 else:
                     logger.warning("vendor_news_fetch_failed", extra={"url": url, "error": str(exc)})
+
+        state[vendor] = {
+            url: lastmod
+            for url, lastmod in current_urls.items()
+            if previous.get(url) == lastmod or url in handled_urls
+        }
+        _save_state(state)
 
         logger.info(
             "vendor_news_checked",

@@ -108,12 +108,12 @@ VALUES
 
   -- 19 — OpenAI Changelog (anchor-extractor + legacy title_pattern fallback)
   ('a0000000-0000-0000-0000-000000000019', 'OpenAI Changelog', 'vendor_changelog',
-   '{"vendor": "openai", "sources": ["https://platform.openai.com/docs/changelog"], "max_entries": 30, "title_pattern": "<h2[^>]*>(.*?)</h2>"}'::jsonb,
+   '{"vendor": "openai", "sources": ["https://developers.openai.com/api/docs/changelog"], "max_entries": 30, "title_pattern": "<h2[^>]*>(.*?)</h2>"}'::jsonb,
    true, now()),
 
-  -- 20 — Anthropic Release Notes (anchor-extractor only, no title_pattern)
+  -- 20 — Anthropic Release Notes (official RSS)
   ('a0000000-0000-0000-0000-000000000020', 'Anthropic Release Notes', 'vendor_changelog',
-   '{"vendor": "anthropic", "sources": ["https://docs.anthropic.com/en/release-notes/"], "max_entries": 30, "allow_path_regex": "/release-notes/"}'::jsonb,
+   '{"vendor": "anthropic", "sources": ["https://platform.claude.com/docs/en/release-notes/feed.xml"], "max_entries": 30, "allow_path_regex": "/release-notes/"}'::jsonb,
    true, now()),
 
   -- 21 — Product Hunt AI Tools (paused: sustained noise with no high-priority output)
@@ -121,9 +121,9 @@ VALUES
    '{"fetch_count": 60, "max_results": 20, "max_age_hours": 48}'::jsonb,
    false, now()),
 
-  -- 22 — 量子位 (QbitAI) RSS (72h window, AI-filtered, lower volume)
+  -- 22 — 量子位 (QbitAI) RSS (72h window, AI-only editorial feed)
   ('a0000000-0000-0000-0000-000000000022', '量子位 (QbitAI)', 'rss',
-   '{"feedUrl": "https://www.qbitai.com/feed", "maxResults": 10, "maxAgeHours": 72, "applyAiFilter": true}'::jsonb,
+   '{"feedUrl": "https://www.qbitai.com/feed", "maxResults": 10, "maxAgeHours": 72, "applyAiFilter": false}'::jsonb,
    true, now())
 
 ON CONFLICT (id) DO NOTHING;

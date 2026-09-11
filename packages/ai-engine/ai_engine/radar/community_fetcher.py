@@ -3,78 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
+from ai_engine.radar.ai_keyword_filter import is_ai_related
 from ai_engine.radar.models import RadarCandidate
 
-# AI keyword filter (source-side, mirrors agents-radar/src/hn.ts).
-# Used by HN/Reddit/Dev.to fetchers to drop obviously-non-AI items at fetch
-# time. Lobste.rs already pulls only t/ai + t/ml tag pages -- it does not
-# filter here.
-
-_AI_KEYWORD_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(p, re.IGNORECASE)
-    for p in (
-        r"\bai\b",
-        r"\ba\.i\.\b",
-        r"\bllm(s)?\b",
-        r"\bml\b",
-        r"\bmachine learning\b",
-        r"\bdeep learning\b",
-        r"\bneural\b",
-        r"\btransformer(s)?\b",
-        r"\blanguage model(s)?\b",
-        r"\bfoundation model(s)?\b",
-        r"\brag\b",
-        r"\bagent(s|ic)?\b",
-        r"\bopenai\b",
-        r"\banthropic\b",
-        r"\bclaude\b",
-        r"\bchatgpt\b",
-        r"\bgemini\b",
-        r"\bminimax\b",
-        r"\bgrok\b",
-        r"\bdeepseek\b",
-        r"\bkimi\b",
-        r"\bqwen\b",
-        r"\bcopilot\b",
-        r"\bhugging ?face\b",
-        r"\blangchain\b",
-        r"\blanggraph\b",
-        r"\bllamaindex\b",
-        r"\bvector (db|database|store)\b",
-        r"\bembedding(s)?\b",
-        r"\bfine[- ]tune(d|ing)?\b",
-        r"\binference\b",
-        r"\bprompt\b",
-        r"\brlhf\b",
-        r"\balignment\b",
-        r"\bagentic\b",
-        r"\bmcp\b",
-        r"\bmodel context protocol\b",
-        r"\bvibe coding\b",
-        r"\b人工智能\b",
-        r"\b大模型\b",
-        r"\b智能体\b",
-        r"\b微调\b",
-        r"\b向量(数据库|检索)\b",
-    )
-)
-
-
-def _is_ai_related(corpus: str) -> bool:
-    """Return True if any AI keyword pattern matches ``corpus`` (case-insensitive)."""
-    if not corpus:
-        return False
-    for pat in _AI_KEYWORD_PATTERNS:
-        if pat.search(corpus):
-            return True
-    return False
+# Backwards-compatible private name used by RSS and existing tests.
+_is_ai_related = is_ai_related
 
 
 # ── Hacker News (official Firebase API, mirrors agents-radar/src/hn.ts) ──
@@ -141,7 +80,7 @@ async def fetch_hackernews_candidates(
                 title = str(item.get("title") or "").strip()[:300]
                 if not title:
                     continue
-                corpus = f"{title} {item.get('url') or ''}"
+                corpus = f"{title} {item.get('url') or ''} {item.get('text') or ''}"
                 if not _is_ai_related(corpus):
                     continue
                 external_url = (item.get("url") or "").strip()
@@ -191,15 +130,14 @@ def _parse_reddit_rss(xml_text: str, sub: str, max_per: int, cutoff_ts: float) -
     entries = _re.findall(r"<entry>(.*?)</entry>", xml_text, _re.DOTALL)
     if not entries:
         entries = _re.findall(r"<item>(.*?)</item>", xml_text, _re.DOTALL)
-    for entry in entries[:max_per]:
+    for entry in entries:
+        if len(candidates) >= max_per:
+            break
         title_m = _re.search(r"<title>(.*?)</title>", entry, _re.DOTALL)
         link_m = _re.search(r'<link[^>]*href="([^"]+)"', entry) or _re.search(r"<link>(.*?)</link>", entry, _re.DOTALL)
         published_m = _re.search(r"<published>(.*?)</published>", entry) or _re.search(r"<pubDate>(.*?)</pubDate>", entry, _re.DOTALL)
         title = (title_m.group(1) if title_m else "").strip()[:300]
         if not title:
-            continue
-        # Source-side AI keyword filter.
-        if not _is_ai_related(title):
             continue
         item_url = (link_m.group(1) if link_m else "").strip()
         if not item_url:
@@ -209,12 +147,17 @@ def _parse_reddit_rss(xml_text: str, sub: str, max_per: int, cutoff_ts: float) -
             or _re.search(r"<description[^>]*>(.*?)</description>", entry, _re.DOTALL)
         )
         snippet = f"Reddit r/{sub}"
+        raw_content = ""
         if content_m:
             raw_content = _html.unescape(content_m.group(1))
             raw_content = _re.sub(r"<[^>]+>", " ", raw_content)
             raw_content = " ".join(raw_content.split())
             if len(raw_content) >= 40:
                 snippet = raw_content[:2_000]
+        # Source-side AI keyword filter. Include the post body because
+        # community titles are often intentionally terse.
+        if not _is_ai_related(f"{title}\n{raw_content if content_m else ''}"):
+            continue
         published = None
         if published_m:
             raw_date = published_m.group(1).strip()
@@ -278,15 +221,21 @@ async def fetch_reddit_candidates(
             if used_rss:
                 continue
             children = data.get("data", {}).get("children", []) if isinstance(data, dict) else []
-            for child in children[:max_per]:
+            subreddit_count = 0
+            for child in children:
+                if subreddit_count >= max_per:
+                    break
                 item = child.get("data", {}) if isinstance(child, dict) else {}
                 if not isinstance(item, dict) or item.get("stickied"):
                     continue
                 title = (item.get("title") or "").strip()[:300]
                 if not title:
                     continue
-                # Source-side AI keyword filter.
-                if not _is_ai_related(title):
+                # Source-side AI keyword filter. Include selftext because
+                # Reddit titles are frequently generic ("Question", "Help").
+                if not _is_ai_related(
+                    f"{title}\n{item.get('selftext') or ''}\n{item.get('url') or ''}"
+                ):
                     continue
                 created = item.get("created_utc")
                 published = None
@@ -310,6 +259,7 @@ async def fetch_reddit_candidates(
                     tags=("reddit", f"r/{sub}"),
                     source_quality_hint=0.75,
                 ))
+                subreddit_count += 1
             await asyncio.sleep(2)
     finally:
         if owns_client:
@@ -432,9 +382,15 @@ async def fetch_devto_candidates(
                 title = (item.get("title") or "").strip()[:300]
                 if not title:
                     continue
+                description = (item.get("description") or "").strip()[:500]
+                tags_item = item.get("tag_list", [])
+                tag_corpus = " ".join(
+                    str(tag) for tag in tags_item if isinstance(tags_item, list) and isinstance(tag, str)
+                )
                 # Source-side AI keyword filter (Dev.to tag pages sometimes
-                # include non-AI posts tagged programmatically).
-                if not _is_ai_related(title):
+                # include non-AI posts tagged programmatically). Include the
+                # description and tag list so a terse title is not discarded.
+                if not _is_ai_related(f"{title}\n{description}\n{tag_corpus}"):
                     continue
                 pub_str = item.get("published_at")
                 published = None
@@ -445,10 +401,8 @@ async def fetch_devto_candidates(
                         pass
                 if cutoff is not None and published is not None and published.timestamp() < cutoff:
                     continue
-                description = (item.get("description") or "").strip()[:500]
                 reactions = int(item.get("positive_reactions_count") or 0)
                 comments = int(item.get("comments_count") or 0)
-                tags_item = item.get("tag_list", [])
                 tags_tuple: tuple[str, ...] = ("devto",)
                 if isinstance(tags_item, list):
                     tags_tuple = ("devto",) + tuple(str(t).lower() for t in tags_item if isinstance(t, str))

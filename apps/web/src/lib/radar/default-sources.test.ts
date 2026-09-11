@@ -47,4 +47,12 @@ describe('default radar source bootstrap', () => {
     expect(result).toEqual({ configured: 22, created: 21 });
     expect(rows.get(existingId)).toEqual({ name: 'Custom source name', enabled: false });
   });
+
+  it('does not keyword-filter the QbitAI editorial feed', () => {
+    const qbit = DEFAULT_RADAR_SOURCES.find((source) => source.id.endsWith('022'));
+    expect(qbit?.config).toMatchObject({
+      feedUrl: 'https://www.qbitai.com/feed',
+      applyAiFilter: false,
+    });
+  });
 });

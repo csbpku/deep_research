@@ -287,7 +287,7 @@ export const DEFAULT_RADAR_SOURCES: readonly DefaultRadarSource[] = [
     sourceType: 'vendor_changelog',
     config: {
       vendor: 'openai',
-      sources: ['https://platform.openai.com/docs/changelog'],
+      sources: ['https://developers.openai.com/api/docs/changelog'],
       max_entries: 30,
       title_pattern: '<h2[^>]*>(.*?)</h2>',
     },
@@ -299,7 +299,7 @@ export const DEFAULT_RADAR_SOURCES: readonly DefaultRadarSource[] = [
     sourceType: 'vendor_changelog',
     config: {
       vendor: 'anthropic',
-      sources: ['https://docs.anthropic.com/en/release-notes/'],
+      sources: ['https://platform.claude.com/docs/en/release-notes/feed.xml'],
       max_entries: 30,
       allow_path_regex: '/release-notes/',
     },
@@ -324,7 +324,9 @@ export const DEFAULT_RADAR_SOURCES: readonly DefaultRadarSource[] = [
       feedUrl: 'https://www.qbitai.com/feed',
       maxResults: 10,
       maxAgeHours: 72,
-      applyAiFilter: true,
+      // QbitAI is already an AI-only editorial feed. A second keyword gate
+      // drops valid stories such as world-model and AI-conference coverage.
+      applyAiFilter: false,
     },
     enabled: true,
   },
