@@ -8,6 +8,7 @@ publishing candidates automatically.
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import hashlib
 import json
 import logging
@@ -75,6 +76,9 @@ RADAR_CONTENT_RETRY_BACKOFF_SECONDS = max(
     0.0, float(os.environ.get("RADAR_CONTENT_RETRY_BACKOFF_SECONDS", "1.0"))
 )
 RADAR_SOURCE_RETRIES = max(0, int(os.environ.get("RADAR_SOURCE_RETRIES", "2")))
+RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES = max(
+    1, int(os.environ.get("RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES", "5"))
+)
 RADAR_SOURCE_RETRY_BACKOFF_SECONDS = max(
     0.0, float(os.environ.get("RADAR_SOURCE_RETRY_BACKOFF_SECONDS", "10"))
 )
@@ -665,10 +669,11 @@ async def _finish_run(
             'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
             (run_id,),
         )
-        # PR1 radar-source-health: surface per-source failure state.
-        # A "completed" run resets the streak; any "failed" or "partial" run
-        # carrying an error_code bumps consecutive_failures + records the
-        # most recent failure for the admin dashboard.
+        # Source health is deliberately stricter than candidate diagnostics.
+        # A partial run with some usable candidates is not a source outage and
+        # must not trip the circuit breaker because one item timed out. Only a
+        # fully failed run, or a partial run that fetched nothing, increments
+        # the streak. A clean run resets it and reopens an auto-paused source.
         if status == "completed":
             await conn.execute(
                 'UPDATE "radar_sources" SET '
@@ -676,24 +681,43 @@ async def _finish_run(
                 '"lastErrorCode" = NULL, '
                 '"lastErrorMessage" = NULL, '
                 '"lastErrorAt" = NULL, '
+                '"autoPausedAt" = NULL, '
+                '"autoPauseReason" = NULL, '
                 '"updatedAt" = now() '
                 'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
                 (run_id,),
             )
-        elif error_code:
+        elif error_code and (status == "failed" or (status == "partial" and total_fetched == 0)):
             await conn.execute(
                 'UPDATE "radar_sources" SET '
                 '"consecutiveFailures" = "consecutiveFailures" + 1, '
                 '"lastErrorCode" = %s, '
                 '"lastErrorMessage" = %s, '
                 '"lastErrorAt" = now(), '
+                '"autoPausedAt" = CASE WHEN "consecutiveFailures" + 1 >= '
+                f'{RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES} THEN COALESCE("autoPausedAt", now()) '
+                'ELSE "autoPausedAt" END, '
+                '"autoPauseReason" = CASE WHEN "consecutiveFailures" + 1 >= '
+                f'{RADAR_SOURCE_MAX_CONSECUTIVE_FAILURES} THEN COALESCE("autoPauseReason", %s) '
+                'ELSE "autoPauseReason" END, '
                 '"updatedAt" = now() '
                 'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
                 (
                     error_code,
                     error_message[:500] if error_message else None,
+                    error_message[:500] if error_message else error_code,
                     run_id,
                 ),
+            )
+        elif error_code and status == "partial":
+            # Preserve the last observed candidate-level error for diagnosis,
+            # but do not change the source-level failure streak.
+            await conn.execute(
+                'UPDATE "radar_sources" SET '
+                '"lastErrorCode" = %s, "lastErrorMessage" = %s, '
+                '"lastErrorAt" = now(), "updatedAt" = now() '
+                'WHERE "id" = (SELECT "sourceId" FROM "radar_sync_runs" WHERE "id" = %s)',
+                (error_code, error_message[:500] if error_message else None, run_id),
             )
         await conn.commit()
 
@@ -867,7 +891,9 @@ async def _insert_candidate(
     distilled: Any | None = None,
     limited_score: bool = False,
 ) -> bool:
-    candidate_title = (candidate.title or "").strip()
+    candidate_title = _html.unescape(candidate.title or "").strip()
+    if str(source.config.get("vendor") or "").lower() == "anthropic":
+        candidate_title = _re.sub(r"\s*\\\s*anthropic\s*$", "", candidate_title, flags=_re.IGNORECASE).strip()
     # RSS feeds occasionally provide a missing-title placeholder. Treat it as
     # missing so the fetched page title can be recovered from HTML/Markdown.
     if candidate_title.casefold() in {"untitled", "(no title)", "no title"}:
@@ -2107,14 +2133,17 @@ async def run_radar_sync(
     embedding_scorer: EmbeddingScorerFn | None = None,
     source_concurrency: int | None = None,
     candidate_concurrency: int | None = None,
+    include_auto_paused: bool = False,
 ) -> RadarSyncResult:
     """Run all enabled sources independently and return source-level results."""
 
     if triggered_by not in {"cron", "admin"}:
         raise ValueError("triggered_by must be cron or admin")
-    sources = await load_enabled_sources(pool)
-    if source_ids is not None:
-        sources = [source for source in sources if source.id in source_ids]
+    sources = await load_enabled_sources(
+        pool,
+        source_ids=source_ids,
+        include_auto_paused=include_auto_paused,
+    )
     engine = adapter or build_adapter()
     batch_id = str(uuid.uuid4())
     source_semaphore = asyncio.Semaphore(max(1, source_concurrency or RADAR_SOURCE_CONCURRENCY))
@@ -2262,6 +2291,7 @@ async def retry_radar_run(
         pool,
         triggered_by="admin",
         source_ids={source_id},
+        include_auto_paused=True,
         adapter=adapter,
         fetchers=fetchers,
         document_fetcher=document_fetcher,

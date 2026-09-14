@@ -1364,7 +1364,12 @@ def test_finish_run_failed_records_error_and_increments() -> None:
         # The increment UPDATE must carry the error_code as a bound parameter.
         matched = [entry for entry in pool.connection_value.executions if '"consecutiveFailures" + 1' in entry[0]]
         assert len(matched) == 1, pool.connection_value.executions
-        assert matched[0][1] == ("UPSTREAM_RATE_LIMITED", "HTTP 429 from arxiv api", "run-x"), matched[0]
+        assert matched[0][1] == (
+            "UPSTREAM_RATE_LIMITED",
+            "HTTP 429 from arxiv api",
+            "HTTP 429 from arxiv api",
+            "run-x",
+        ), matched[0]
 
     asyncio.run(_scenario())
 

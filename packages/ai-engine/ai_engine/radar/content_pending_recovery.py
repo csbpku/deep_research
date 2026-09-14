@@ -48,16 +48,39 @@ async def _select_ids(pool: Any, *, limit: int) -> tuple[str, ...]:
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
+                'WITH exhausted AS ( '
+                'UPDATE "summaries" SET '
+                '"status" = \'archived\', '
+                '"enrichmentStatus" = \'manual\', '
+                '"enrichmentErrorCode" = \'CONTENT_RECOVERY_EXHAUSTED\', '
+                '"enrichmentErrorMessage" = \'content recovery attempt limit reached\', '
+                '"enrichmentNextRetryAt" = NULL, '
+                '"enrichmentLockedBy" = NULL, '
+                '"enrichmentLeaseExpiresAt" = NULL, '
+                '"enrichmentHeartbeatAt" = NULL, '
+                '"tags" = CASE WHEN "tags" @> ARRAY[\'content_recovery_exhausted\']::text[] '
+                'THEN "tags" ELSE array_append(COALESCE("tags", ARRAY[]::text[]), '
+                '\'content_recovery_exhausted\') END, '
+                '"updatedAt" = now() '
+                'WHERE "source" = \'daily\' AND "syncRunId" IS NOT NULL '
+                'AND "status" IN (\'candidate\', \'published\') '
+                'AND "distilledScore" IS NULL '
+                'AND "tags" @> ARRAY[\'content_pending\']::text[] '
+                'AND COALESCE("enrichmentStatus", \'\') <> \'running\' '
+                'AND COALESCE("enrichmentAttempts", 0) >= %s '
+                'RETURNING "id" '
+                ') '
                 'SELECT s."id" FROM "summaries" s '
                 'WHERE s."source" = \'daily\' '
                 'AND s."syncRunId" IS NOT NULL '
+                'AND s."status" IN (\'candidate\', \'published\') '
                 'AND s."distilledScore" IS NULL '
                 'AND s."tags" @> ARRAY[\'content_pending\']::text[] '
                 'AND COALESCE(s."enrichmentStatus", \'\') <> \'running\' '
                 'AND COALESCE(s."enrichmentAttempts", 0) < %s '
                 'AND s."updatedAt" < now() - make_interval(mins => %s) '
                 'ORDER BY s."updatedAt" ASC, s."createdAt" ASC LIMIT %s',
-                (max_attempts, cooldown_minutes, max(1, limit)),
+                (max_attempts, max_attempts, cooldown_minutes, max(1, limit)),
             )
         ).fetchall()
     return tuple(str(row["id"]) for row in rows)

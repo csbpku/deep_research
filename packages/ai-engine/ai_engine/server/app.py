@@ -953,6 +953,7 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
                     await conn.execute(
                         'SELECT "id", "sourceType", "config", "lastSyncAt" '
                         'FROM "radar_sources" WHERE "enabled" = true '
+                        'AND "autoPausedAt" IS NULL '
                         'ORDER BY "createdAt" ASC'
                     )
                 ).fetchall()

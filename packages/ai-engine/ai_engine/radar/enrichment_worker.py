@@ -3057,7 +3057,10 @@ async def _run_enrichment_for_pending(
         rate_limited = _is_upstream_rate_limit(error_code, error_message)
         if rate_limited:
             _remember_upstream_rate_limit(source_kind)
-        terminal = attempts >= ENRICHMENT_MAX_ATTEMPTS and not rate_limited
+        # Rate limits are cooldown-worthy, but they are still bounded
+        # failures. Without this cap a permanently exhausted provider keeps a
+        # row in retryable forever and the database accumulates recovery debt.
+        terminal = attempts >= ENRICHMENT_MAX_ATTEMPTS
         status = "manual" if terminal else "retryable"
         delay = (
             max(
@@ -3108,11 +3111,7 @@ async def _run_enrichment_for_pending(
         rate_limited = _is_upstream_rate_limit(error_code, error_message)
         if rate_limited:
             _remember_upstream_rate_limit(source_kind)
-        terminal = (
-            retryable
-            and attempts >= ENRICHMENT_MAX_ATTEMPTS
-            and not rate_limited
-        )
+        terminal = retryable and attempts >= ENRICHMENT_MAX_ATTEMPTS
         delay = (
             max(
                 _retry_delay_seconds(attempts),

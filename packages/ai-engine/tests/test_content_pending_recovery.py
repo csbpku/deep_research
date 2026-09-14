@@ -67,7 +67,7 @@ async def test_content_pending_recovery_refetches_then_scores(
     sql, params = pool.connection_value.executions[0]
     assert "'content_pending'" in sql
     assert '"enrichmentAttempts"' in sql
-    assert params == (3, 15, 2)
+    assert params == (3, 3, 15, 2)
 
 
 @pytest.mark.asyncio

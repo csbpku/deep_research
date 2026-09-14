@@ -1001,6 +1001,10 @@ model RadarSource {
   lastErrorMessage    String?   @db.VarChar(500)
   lastErrorAt         DateTime? @db.Timestamptz(3)
   consecutiveFailures Int       @default(0)
+  // Automatic circuit breaker state. enabled remains operator intent;
+  // an auto-paused source can be explicitly retried.
+  autoPausedAt       DateTime? @db.Timestamptz(3)
+  autoPauseReason    String?   @db.VarChar(500)
   createdAt  DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
 
@@ -1483,6 +1487,14 @@ model Topic {
   synthesisPayload       Json?     @db.JsonB
   synthesisErrorCode     String?   @db.VarChar(64)
   synthesisErrorMessage  String?   @db.VarChar(500)
+  // ADR 0010: durable topic-issue cursor. The worker must not call the LLM
+  // forever for the same candidate snapshot after an upstream failure.
+  issueLastCandidateAt   DateTime? @db.Timestamptz(3)
+  issueLastAttemptAt     DateTime? @db.Timestamptz(3)
+  issueFailureCount      Int       @default(0)
+  issueNextRetryAt       DateTime? @db.Timestamptz(3)
+  issueLastErrorCode     String?   @db.VarChar(64)
+  issueLastErrorMessage  String?   @db.VarChar(500)
   isPreset               Boolean   @default(false)
   keywords               Json      @default("[]")
   refreshCron            String    @default("06:00") @db.VarChar(16)
@@ -1498,6 +1510,7 @@ model Topic {
 
   @@index([tier, candidateCount(sort: Desc), updatedAt(sort: Desc)])
   @@index([aggregationWindowEnd(sort: Desc)])
+  @@index([issueNextRetryAt])
   @@map("topics")
 }
 

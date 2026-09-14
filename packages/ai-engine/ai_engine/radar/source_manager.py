@@ -112,13 +112,35 @@ _HANDLERS: dict[str, SourceFetcher] = {
 }
 
 
-async def load_enabled_sources(pool: Any) -> list[RadarSource]:
+async def load_enabled_sources(
+    pool: Any,
+    *,
+    source_ids: set[str] | None = None,
+    include_auto_paused: bool = False,
+) -> list[RadarSource]:
+    """Load operator-enabled sources that are not circuit-breaker paused.
+
+    Manual retry is the explicit escape hatch for an auto-paused source. It
+    passes ``include_auto_paused=True`` and a concrete source id, so a bad
+    upstream cannot silently re-enter the normal scheduler fan-out.
+    """
+    clauses = ['"enabled" = true']
+    params: list[Any] = []
+    if not include_auto_paused:
+        clauses.append('"autoPausedAt" IS NULL')
+    if source_ids is not None:
+        if not source_ids:
+            return []
+        clauses.append('"id" = ANY(%s::uuid[])')
+        params.append(list(source_ids))
+    where = " AND ".join(clauses)
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
                 'SELECT "id", "name", "sourceType", "config" '
-                'FROM "radar_sources" WHERE "enabled" = true '
-                'ORDER BY "createdAt" ASC'
+                f'FROM "radar_sources" WHERE {where} '
+                'ORDER BY "createdAt" ASC',
+                tuple(params),
             )
         ).fetchall()
     sources: list[RadarSource] = []

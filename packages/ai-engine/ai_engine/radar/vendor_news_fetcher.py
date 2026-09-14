@@ -325,6 +325,20 @@ def _extract_article_title(html: str) -> str | None:
     return value[:200] if len(value) > 5 else None
 
 
+def _clean_vendor_title(value: str, vendor: str) -> str:
+    """Decode HTML entities and remove a site-brand suffix from page chrome."""
+    title = _html.unescape(value or "")
+    title = _re.sub(r"\s+", " ", title).strip()
+    if vendor:
+        title = _re.sub(
+            rf"\s*\\\s*{_re.escape(vendor)}\s*$",
+            "",
+            title,
+            flags=_re.IGNORECASE,
+        ).strip()
+    return title[:300]
+
+
 async def check_and_fetch_vendor_news(
     vendor: str,
     *,
@@ -436,7 +450,7 @@ async def check_and_fetch_vendor_news(
                         desc = ""
                     rss_title = meta.get("title", "").strip()
                     if rss_title or desc:
-                        title = _html.unescape(rss_title) or _infer_title(desc, url)
+                        title = _clean_vendor_title(rss_title, vendor) or _infer_title(desc, url)
                         snippet = desc[:500] if desc else title
                         if cfg.get("ai_filter", True) and not is_ai_related(
                             f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
@@ -454,7 +468,7 @@ async def check_and_fetch_vendor_news(
                         ))
                         handled_urls.add(url)
                     continue
-                title = article_title or _infer_title(text, url)
+                title = _clean_vendor_title(article_title or "", vendor) or _infer_title(text, url)
                 snippet = text[:500].replace("\n", " ")
                 if cfg.get("ai_filter", True) and not is_ai_related(
                     f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
@@ -479,7 +493,7 @@ async def check_and_fetch_vendor_news(
                 if _is_protection_shell(desc):
                     desc = ""
                 if rss_title or desc:
-                    title = _html.unescape(rss_title) or _infer_title(desc, url)
+                    title = _clean_vendor_title(rss_title, vendor) or _infer_title(desc, url)
                     snippet = desc[:500] if desc else title
                     if cfg.get("ai_filter", True) and not is_ai_related(
                         f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"

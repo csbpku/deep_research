@@ -68,6 +68,9 @@ async def _fetch_candidate_clusters(pool: Any, since: datetime) -> list[dict[str
                     AND (s."publishedAt" >= %s OR s."createdAt" >= %s)
                     AND s."distilledTier" = ANY(%s)
                     AND (s."distilledTotal" IS NULL OR s."distilledTotal" >= %s)
+                    AND s."enrichmentStatus" = 'ready'
+                    AND s."readerQualityStatus" = 'ready'
+                    AND s."contentReviewStatus" = 'approved'
                 )
                 SELECT "summaryId", "originalKind", "title", "tag"
                 FROM windowed, unnest("tags") AS "tag"

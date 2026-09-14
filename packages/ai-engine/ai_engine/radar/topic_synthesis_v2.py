@@ -218,6 +218,9 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s
+                  AND s."enrichmentStatus" = 'ready'
+                  AND s."readerQualityStatus" = 'ready'
+                  AND s."contentReviewStatus" = 'approved'
                 ORDER BY tc."addedAt" DESC
                 LIMIT 12
                 """,

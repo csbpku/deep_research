@@ -156,6 +156,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         lastErrorMessage: true,
         lastErrorAt: true,
         lastSyncAt: true,
+        autoPausedAt: true,
+        autoPauseReason: true,
       } as unknown as never,
     }),
     // ADR 0010: 认知闭环 V2 关键产品事件计数
@@ -368,6 +370,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         lastErrorMessage: string | null;
         lastErrorAt: Date | null;
         lastSyncAt: Date | null;
+        autoPausedAt: Date | null;
+        autoPauseReason: string | null;
       }>).map((source) => ({
         id: source.id,
         name: source.name,
@@ -377,6 +381,8 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         lastErrorMessage: source.lastErrorMessage,
         lastErrorAt: source.lastErrorAt?.toISOString() ?? null,
         lastSyncAt: source.lastSyncAt?.toISOString() ?? null,
+        autoPausedAt: source.autoPausedAt?.toISOString() ?? null,
+        autoPauseReason: source.autoPauseReason,
       })),
       monitor: {
         date: shanghaiDate,

@@ -9,11 +9,19 @@ import pytest
 
 from ai_engine.radar.vendor_news_fetcher import (
     _coerce_utc,
+    _clean_vendor_title,
     _extract_article_title,
     _load_vendor_configs,
     _vendor_source_url,
     check_and_fetch_vendor_news,
 )
+
+
+def test_vendor_title_decodes_entities_and_removes_brand_suffix() -> None:
+    assert _clean_vendor_title(
+        "Claude Mythos Preview&#x27;s cybersecurity capabilities \\ Anthropic",
+        "anthropic",
+    ) == "Claude Mythos Preview's cybersecurity capabilities"
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "vendor_news.yml"

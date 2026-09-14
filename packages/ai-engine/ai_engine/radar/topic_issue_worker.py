@@ -37,6 +37,12 @@ WINDOW_DAYS = 14
 MAX_TOPICS_PER_RUN = 8
 LLM_TIMEOUT_SECONDS = 50.0
 LLM_RETRY_DELAY_SECONDS = 1.5
+ISSUE_MAX_ATTEMPTS = max(
+    1, int(os.environ.get("TOPIC_ISSUE_MAX_ATTEMPTS", "3"))
+)
+ISSUE_RETRY_BACKOFF_SECONDS = max(
+    60, int(os.environ.get("TOPIC_ISSUE_RETRY_BACKOFF_SECONDS", "900"))
+)
 
 # 单一权威例外允许的原稿类型
 AUTHORITATIVE_KINDS = frozenset(
@@ -200,6 +206,9 @@ async def _fetch_topic_inputs(
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s AND tc."addedAt" >= %s
+                  AND s."enrichmentStatus" = 'ready'
+                  AND s."readerQualityStatus" = 'ready'
+                  AND s."contentReviewStatus" = 'approved'
                 ORDER BY tc."addedAt" DESC
                 LIMIT 24
                 """,
@@ -225,6 +234,10 @@ async def _fetch_topic_inputs(
         "id": str(topic["id"]),
         "name": str(topic["name"]),
         "tier": str(topic["tier"] or "emerging"),
+        "candidateAt": max(
+            (r["addedAt"] for r in rows if r["addedAt"] is not None),
+            default=None,
+        ),
     }
     return topic_dict, out
 
@@ -504,7 +517,7 @@ async def _persist_issue(
     return issue_id
 
 
-async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
+async def _process_topic(pool: Any, topic_id: str) -> dict[str, Any]:
     window_start = datetime.now(UTC) - timedelta(days=WINDOW_DAYS)
     topic, rows = await _fetch_topic_inputs(pool, topic_id, window_start)
     if not topic or not rows:
@@ -548,13 +561,11 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
             llm_error = exc
             retryable = is_retryable_llm_error(exc)
             logger.warning(
-                "ai-engine.radar.topic_issue.llm_failed",
-                extra={
-                    "topic_id": topic_id,
-                    "attempt": attempt + 1,
-                    "retryable": retryable,
-                    "error": sanitize_llm_error(exc),
-                },
+                "ai-engine.radar.topic_issue.llm_failed topic_id=%s attempt=%s retryable=%s error=%s",
+                topic_id,
+                attempt + 1,
+                retryable,
+                sanitize_llm_error(exc),
             )
             if not retryable or attempt == 1:
                 break
@@ -570,15 +581,14 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
                 "skipped": 0,
                 "fallback": 0,
                 "failed": 1,
+                "candidateAt": topic.get("candidateAt"),
             }
         raw = {"issues": [fallback]}
         logger.warning(
-            "ai-engine.radar.topic_issue.degraded",
-            extra={
-                "topic_id": topic_id,
-                "error": sanitize_llm_error(llm_error) if llm_error else "unknown",
-                "candidate_count": len(new_rows),
-            },
+            "ai-engine.radar.topic_issue.degraded topic_id=%s candidate_count=%s error=%s",
+            topic_id,
+            len(new_rows),
+            sanitize_llm_error(llm_error) if llm_error else "unknown",
         )
 
     assert raw is not None  # fallback or successful model parse above
@@ -593,12 +603,9 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
             used_fallback = True
             issues = [fallback]
             logger.warning(
-                "ai-engine.radar.topic_issue.degraded",
-                extra={
-                    "topic_id": topic_id,
-                    "error": "empty_or_invalid_model_payload",
-                    "candidate_count": len(new_rows),
-                },
+                "ai-engine.radar.topic_issue.degraded topic_id=%s candidate_count=%s error=empty_or_invalid_model_payload",
+                topic_id,
+                len(new_rows),
             )
     created = 0
     skipped = 0
@@ -655,11 +662,83 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
         # considered for persistence.
         "fallback": int(used_fallback and (created > 0 or skipped > 0)),
         "failed": int(used_fallback and created == 0 and skipped == 0),
+        "candidateAt": topic.get("candidateAt"),
     }
 
 
+async def _record_topic_attempt(
+    pool: Any,
+    topic_id: str,
+    candidate_at: datetime | None,
+    *,
+    failed: bool,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Advance the durable topic-issue cursor after one bounded attempt.
+
+    A successful fallback is still a useful projection and advances the
+    cursor. A hard failure retries only a few times; after the cap the cursor
+    advances to this input snapshot and waits for a genuinely new candidate.
+    """
+    if candidate_at is None:
+        return
+    async with pool.connection() as conn:
+        if failed:
+            await conn.execute(
+                'UPDATE "topics" SET '
+                '"issueLastAttemptAt" = now(), '
+                '"issueFailureCount" = LEAST("issueFailureCount" + 1, %s), '
+                '"issueNextRetryAt" = CASE WHEN "issueFailureCount" + 1 < %s '
+                'THEN now() + (%s || \' seconds\')::interval ELSE NULL END, '
+                '"issueLastCandidateAt" = CASE WHEN "issueFailureCount" + 1 >= %s '
+                'THEN %s ELSE "issueLastCandidateAt" END, '
+                '"issueLastErrorCode" = %s, "issueLastErrorMessage" = %s, '
+                '"updatedAt" = now() WHERE "id" = %s',
+                (
+                    ISSUE_MAX_ATTEMPTS,
+                    ISSUE_MAX_ATTEMPTS,
+                    str(ISSUE_RETRY_BACKOFF_SECONDS),
+                    ISSUE_MAX_ATTEMPTS,
+                    candidate_at,
+                    error_code or "TOPIC_ISSUE_FAILED",
+                    (error_message or "topic issue clustering failed")[:500],
+                    topic_id,
+                ),
+            )
+        else:
+            await conn.execute(
+                'UPDATE "topics" SET "issueLastCandidateAt" = %s, '
+                '"issueLastAttemptAt" = now(), "issueFailureCount" = 0, '
+                '"issueNextRetryAt" = NULL, "issueLastErrorCode" = NULL, '
+                '"issueLastErrorMessage" = NULL, "updatedAt" = now() '
+                'WHERE "id" = %s',
+                (candidate_at, topic_id),
+            )
+
+
+async def _latest_candidate_at(pool: Any, topic_id: str) -> datetime | None:
+    async with pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                """
+                SELECT max(tc."addedAt") AS "candidateAt"
+                FROM "topic_candidates" tc
+                JOIN "summaries" s ON s."id" = tc."summaryId"
+                WHERE tc."topicId" = %s
+                  AND tc."addedAt" >= now() - (%s || ' days')::interval
+                  AND s."enrichmentStatus" = 'ready'
+                  AND s."readerQualityStatus" = 'ready'
+                  AND s."contentReviewStatus" = 'approved'
+                """,
+                (topic_id, str(WINDOW_DAYS)),
+            )
+        ).fetchone()
+    return row.get("candidateAt") if row else None
+
+
 async def _claim_topics(pool: Any, limit: int) -> list[str]:
-    """挑候选 topic：过去 14 天新增 candidate >= 3 或有 authoritative must-read。"""
+    """Pick topics with new eligible input or a due bounded retry."""
     async with pool.connection() as conn:
         conn.row_factory = dict_row
         rows = await (
@@ -669,10 +748,17 @@ async def _claim_topics(pool: Any, limit: int) -> list[str]:
                 FROM "topics" t
                 WHERE t."enabled" = true
                   AND t."candidateCount" >= 1
+                  AND (t."issueNextRetryAt" IS NULL OR t."issueNextRetryAt" <= now())
                   AND (
                     EXISTS (
                       SELECT 1 FROM "topic_candidates" tc
-                      WHERE tc."topicId" = t."id" AND tc."addedAt" >= now() - (%s || ' days')::interval
+                      JOIN "summaries" s ON s."id" = tc."summaryId"
+                      WHERE tc."topicId" = t."id"
+                        AND tc."addedAt" >= now() - (%s || ' days')::interval
+                        AND tc."addedAt" > COALESCE(t."issueLastCandidateAt", to_timestamp(0))
+                        AND s."enrichmentStatus" = 'ready'
+                        AND s."readerQualityStatus" = 'ready'
+                        AND s."contentReviewStatus" = 'approved'
                     )
                   )
                 ORDER BY t."updatedAt" DESC
@@ -709,12 +795,29 @@ async def run_topic_issue_worker(
                 },
             )
             failed_total += 1
+            candidate_at = await _latest_candidate_at(pool, topic_id)
+            await _record_topic_attempt(
+                pool,
+                topic_id,
+                candidate_at,
+                failed=True,
+                error_code=type(exc).__name__.upper()[:64],
+                error_message=sanitize_llm_error(exc),
+            )
             continue
         created_total += stats["created"]
         skipped_total += stats["skipped"]
         considered_total += stats["considered"]
         fallback_total += stats.get("fallback", 0)
         failed_total += stats.get("failed", 0)
+        await _record_topic_attempt(
+            pool,
+            topic_id,
+            stats.get("candidateAt"),
+            failed=bool(stats.get("failed", 0)),
+            error_code="TOPIC_ISSUE_LLM_FAILED" if stats.get("failed", 0) else None,
+            error_message="LLM failed and no valid fallback was available" if stats.get("failed", 0) else None,
+        )
     logger.info(
         "ai-engine.radar.topic_issue.done",
         extra={

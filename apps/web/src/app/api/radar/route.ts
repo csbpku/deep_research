@@ -141,6 +141,32 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       { canonicalUrl: { contains: '/releases/tag/' } },
     ],
   } satisfies Prisma.SummaryWhereInput;
+  // Public radar is a reader-facing product surface. A high-value card is
+  // visible only after source enrichment, deterministic reader-quality, and
+  // content review all agree. Render review is intentionally omitted here:
+  // production may disable Chromium and that optional gate must not hide good
+  // source content. Approved user shares retain their existing visibility.
+  const publicQualityGate: Prisma.SummaryWhereInput = {
+    OR: [
+      {
+        source: 'user',
+        shareSource: { is: { status: 'approved' } },
+      },
+      {
+        source: 'daily',
+        syncRunId: { not: null },
+        OR: [
+          { distilledTier: 'skim' },
+          {
+            distilledTier: { in: ['collection', 'deep_read'] },
+            enrichmentStatus: 'ready',
+            readerQualityStatus: 'ready',
+            contentReviewStatus: 'approved',
+          },
+        ],
+      },
+    ],
+  };
   if ((status === SUMMARY_STATUS.REJECTED || status === SUMMARY_STATUS.ARCHIVED) && u?.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.PERMISSION_DENIED,
@@ -182,10 +208,11 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       // member-facing stream. URL fallbacks cover historical rows that were
       // persisted as github_other before the classifier was fixed.
       { NOT: nonReaderGithubItem },
-      // Public radar contains only scored, reader-facing tiers. Noise and
-      // pending/unscored rows remain available to Admin governance tools.
+      // Public radar contains only scored, reader-facing tiers with the
+      // quality gate above. Noise, pending and incomplete rows remain in
+      // Admin governance tools.
       ...(u?.role !== 'admin'
-        ? [{ distilledTier: { in: ['collection', 'deep_read', 'skim'] } }]
+        ? [publicQualityGate]
         : []),
       // Recent repository activity is rendered inside the project reader.
       // Keep legacy daily digest rows out of the main stream so one repo has
@@ -249,6 +276,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         sortOrder: true,
         syncRunId: true,
         source: true,
+        enrichmentStatus: true,
         readerQualityStatus: true,
         readerQualityDetails: true,
         contentReviewStatus: true,

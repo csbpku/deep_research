@@ -142,8 +142,13 @@ export function buildSearchSql(args: BuildSearchArgs): {
         AND s."syncRunId" IS NOT NULL
         AND s.status::text <> 'archived'
         AND (
-          s."distilledTier" IN ('collection', 'deep_read', 'skim')
-          OR s.tags @> ARRAY['admin_promoted']::text[]
+          s."distilledTier" = 'skim'
+          OR (
+            s."distilledTier" IN ('collection', 'deep_read')
+            AND s."enrichmentStatus" = 'ready'
+            AND s."readerQualityStatus" = 'ready'
+            AND s."contentReviewStatus" = 'approved'
+          )
         )
         AND (
           (

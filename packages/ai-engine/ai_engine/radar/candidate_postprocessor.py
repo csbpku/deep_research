@@ -76,6 +76,7 @@ async def score_missing_candidates(
                 'LEFT JOIN "radar_sync_runs" rr ON rr."id" = s."syncRunId" '
                 'LEFT JOIN "radar_sources" rs ON rs."id" = rr."sourceId" '
                 + where_prefix +
+                'AND s."status" IN (\'candidate\', \'published\') '
                 'AND ((s."source" = \'daily\' AND s."syncRunId" IS NOT NULL) '
                 'OR (s."source" = \'user\' AND s."status" IN '
                 '(\'candidate\', \'published\') AND EXISTS ('

@@ -112,6 +112,7 @@ const radarDetailSummarySelect = {
   sortOrder: true,
   syncRunId: true,
   source: true,
+  enrichmentStatus: true,
   shareSource: { select: { status: true } },
   originalKind: true,
   readerQualityStatus: true,
@@ -203,6 +204,23 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   });
   const tier = summary.distilledTier ?? shaped.distilledScore?.tier ?? null;
   if ((tier === 'noise' || tier === null) && u?.role !== 'admin') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '雷达候选不存在',
+      requestId,
+    });
+  }
+  const isPublicAutomaticHighValue =
+    isAutomaticRadar && tier !== 'skim' && tier !== 'noise' && tier !== null;
+  if (
+    isPublicAutomaticHighValue &&
+    u?.role !== 'admin' &&
+    !(
+      summary.enrichmentStatus === 'ready' &&
+      summary.readerQualityStatus === 'ready' &&
+      summary.contentReviewStatus === 'approved'
+    )
+  ) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',

@@ -97,6 +97,9 @@ async def _generate_for_topic(pool: Any, topic_id: str) -> bool:
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s
+                  AND s."enrichmentStatus" = 'ready'
+                  AND s."readerQualityStatus" = 'ready'
+                  AND s."contentReviewStatus" = 'approved'
                 ORDER BY tc."addedAt" DESC
                 LIMIT 20
                 """,

@@ -145,6 +145,9 @@ async def refresh_existing_topics(
                   AND ("publishedAt" >= %s OR "createdAt" >= %s)
                   AND "distilledTier" = ANY(%s)
                   AND ("distilledTotal" IS NULL OR "distilledTotal" >= 0)
+                  AND "enrichmentStatus" = 'ready'
+                  AND "readerQualityStatus" = 'ready'
+                  AND "contentReviewStatus" = 'approved'
                 """,
                 (since, since, list(ALLOWED_TIERS)),
             )
@@ -187,6 +190,9 @@ async def refresh_existing_topics(
                     s."status" IN ('candidate', 'published')
                     AND (s."publishedAt" >= %s OR s."createdAt" >= %s)
                     AND s."distilledTier" = ANY(%s)
+                    AND s."enrichmentStatus" = 'ready'
+                    AND s."readerQualityStatus" = 'ready'
+                    AND s."contentReviewStatus" = 'approved'
                   )
                 RETURNING tc."id"
                 """,
