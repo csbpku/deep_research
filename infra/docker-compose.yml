@@ -175,6 +175,14 @@ services:
       RADAR_ENRICHMENT_HEARTBEAT_SECONDS: ${RADAR_ENRICHMENT_HEARTBEAT_SECONDS:-60}
       RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS: ${RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS:-600}
       RADAR_ENRICHMENT_LEASE_SECONDS: ${RADAR_ENRICHMENT_LEASE_SECONDS:-900}
+      # GitHub repo enrichment order: public Zread -> local zread CLI -> README.
+      # The CLI is installed in the AI image; its checkout/drafts survive
+      # container replacement through this dedicated volume.
+      ZREAD_REMOTE_ENABLED: ${ZREAD_REMOTE_ENABLED:-1}
+      ZREAD_CLI_ENABLED: ${ZREAD_CLI_ENABLED:-1}
+      ZREAD_CLI_BIN: ${ZREAD_CLI_BIN:-zread}
+      ZREAD_CLI_WORK_DIR: ${ZREAD_CLI_WORK_DIR:-/data/zread}
+      ZREAD_CLI_TIMEOUT_SECONDS: ${ZREAD_CLI_TIMEOUT_SECONDS:-7200}
       # Browser rendering is an opt-in production capability. Content review,
       # reader quality and enrichment remain enabled when this is off.
       RADAR_RENDER_REVIEW_ENABLED: ${RADAR_RENDER_REVIEW_ENABLED:-0}
@@ -205,6 +213,7 @@ services:
     volumes:
       - ./logs/ai-engine:/var/log/ai-engine
       - import-tmp:/data/import-tmp
+      - zread-work:/data/zread
     # HEALTHCHECK 已写在 Dockerfile 内
 
   render-review:
@@ -237,3 +246,4 @@ services:
 volumes:
   postgres-data:
   import-tmp:
+  zread-work:

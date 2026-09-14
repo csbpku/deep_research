@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import signal
@@ -19,6 +20,8 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("ai_engine.radar.zread_cli")
 
 def _env_limit(name: str) -> int:
     """Read an optional positive resource limit; zero means unlimited."""
@@ -633,6 +636,13 @@ async def generate_zread_wiki(
         return None
     binary = _binary()
     if not binary:
+        logger.warning(
+            "ai-engine.radar.enrichment.zread_cli_unavailable",
+            extra={
+                "reason": "binary_not_found",
+                "configured_binary": os.environ.get("ZREAD_CLI_BIN", "zread"),
+            },
+        )
         return None
 
     # A repository wiki is a multi-step generation job (catalog + one page at

@@ -23,9 +23,21 @@ RUN uv sync --no-dev --no-install-project
 FROM --platform=linux/amd64 python:3.11-slim AS runtime
 WORKDIR /app
 
-RUN useradd -m -u 1001 -U aiuser \
-    && mkdir -p /data/import-tmp \
-    && chown aiuser:aiuser /app /data /data/import-tmp
+# The optional local Zread fallback is invoked as a subprocess by the Python
+# enrichment worker. Keep it in the AI image (without Chromium) so the
+# remote -> CLI -> README fallback order is real in production. Git is needed
+# for commit-pinned resumable checkouts; Node/npm are only used when a CLI job
+# starts.
+ARG ZREAD_CLI_VERSION=0.2.13
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git nodejs npm \
+    && npm install --global --no-fund --no-audit "zread_cli@${ZREAD_CLI_VERSION}" \
+    && command -v zread \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1001 -U aiuser \
+    && mkdir -p /data/import-tmp /data/zread \
+    && chown aiuser:aiuser /app /data /data/import-tmp /data/zread
 
 # Set ownership while files are copied. A recursive chown after copying the
 # venv would duplicate the entire dependency tree in a separate image layer.
