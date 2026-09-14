@@ -9,6 +9,7 @@ import pytest
 
 from ai_engine.radar.vendor_news_fetcher import (
     _coerce_utc,
+    _extract_article_title,
     _load_vendor_configs,
     _vendor_source_url,
     check_and_fetch_vendor_news,
@@ -121,6 +122,19 @@ def test_coerce_utc_assumes_utc_for_naive_dates() -> None:
 def test_coerce_utc_rejects_garbage() -> None:
     assert _coerce_utc("") is None
     assert _coerce_utc("not-a-date") is None
+
+
+def test_article_title_prefers_h1_and_decodes_html_entities() -> None:
+    html = (
+        "<html><head><title>Claude Mythos Preview&#x27;s cybersecurity "
+        r"capabilities \ Anthropic</title></head>"
+        "<body><h1>Assessing Claude Mythos Preview’s cybersecurity capabilities</h1>"
+        "</body></html>"
+    )
+
+    assert _extract_article_title(html) == (
+        "Assessing Claude Mythos Preview’s cybersecurity capabilities"
+    )
 
 
 class _FakeResponse:

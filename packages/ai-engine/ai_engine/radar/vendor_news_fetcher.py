@@ -9,6 +9,7 @@ vendor is a YAML edit + a new ``radar_sources`` row, not a code change.
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import os
 import re as _re
@@ -224,11 +225,9 @@ def _extract_article_text(html: str) -> str:
     text = _re.sub(r"<nav[^>]*>.*?</nav>", "", text, flags=_re.DOTALL)
     text = _re.sub(r"<footer[^>]*>.*?</footer>", "", text, flags=_re.DOTALL)
     text = _re.sub(r"<[^>]+>", "\n", text)
-    text = _re.sub(r"&nbsp;", " ", text)
-    text = _re.sub(r"&amp;", "&", text)
-    text = _re.sub(r"&lt;", "<", text)
-    text = _re.sub(r"&gt;", ">", text)
-    text = _re.sub(r"&quot;", '"', text)
+    # Decode named and numeric entities after stripping tags. Vendor page
+    # titles and article text otherwise leak values such as ``&#x27;``.
+    text = _html.unescape(text)
     text = _re.sub(r"\n\s*\n", "\n\n", text)
     lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) > 5]
     return "\n".join(lines)
@@ -304,11 +303,26 @@ def _coerce_utc(value: str) -> datetime | None:
 def _infer_title(text: str, url: str) -> str:
     lines = text.strip().split("\n")
     for line in lines:
-        line = line.strip()
+        line = _html.unescape(line).strip()
         if line and 5 < len(line) < 200:
             return line[:200]
     path = url.rstrip("/").split("/")[-1]
     return path.replace("-", " ").replace("_", " ").title()[:200]
+
+
+def _extract_article_title(html: str) -> str | None:
+    """Prefer the semantic article heading over a site-wide HTML title."""
+    match = _re.search(
+        r"<h1\b[^>]*>(.*?)</h1>",
+        html,
+        flags=_re.DOTALL | _re.IGNORECASE,
+    )
+    if not match:
+        return None
+    value = _re.sub(r"<[^>]+>", " ", match.group(1))
+    value = _html.unescape(value)
+    value = _re.sub(r"\s+", " ", value).strip()
+    return value[:200] if len(value) > 5 else None
 
 
 async def check_and_fetch_vendor_news(
@@ -411,6 +425,7 @@ async def check_and_fetch_vendor_news(
                 )
                 resp = await http.get(request_url, timeout=request_timeout)
                 resp.raise_for_status()
+                article_title = _extract_article_title(resp.text)
                 text = _extract_article_text(resp.text)
                 if len(text) < 100 or _is_protection_shell(text):
                     # HTML extraction failed (JS-required pages like OpenAI).
@@ -421,7 +436,7 @@ async def check_and_fetch_vendor_news(
                         desc = ""
                     rss_title = meta.get("title", "").strip()
                     if rss_title or desc:
-                        title = rss_title or _infer_title(desc, url)
+                        title = _html.unescape(rss_title) or _infer_title(desc, url)
                         snippet = desc[:500] if desc else title
                         if cfg.get("ai_filter", True) and not is_ai_related(
                             f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
@@ -439,7 +454,7 @@ async def check_and_fetch_vendor_news(
                         ))
                         handled_urls.add(url)
                     continue
-                title = _infer_title(text, url)
+                title = article_title or _infer_title(text, url)
                 snippet = text[:500].replace("\n", " ")
                 if cfg.get("ai_filter", True) and not is_ai_related(
                     f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
@@ -464,7 +479,7 @@ async def check_and_fetch_vendor_news(
                 if _is_protection_shell(desc):
                     desc = ""
                 if rss_title or desc:
-                    title = rss_title or _infer_title(desc, url)
+                    title = _html.unescape(rss_title) or _infer_title(desc, url)
                     snippet = desc[:500] if desc else title
                     if cfg.get("ai_filter", True) and not is_ai_related(
                         f"{title}\n{snippet}\n{' '.join(cfg['tags'])}"
