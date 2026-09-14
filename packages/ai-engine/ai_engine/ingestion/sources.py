@@ -126,7 +126,9 @@ async def fetch_arxiv(
 
     Error classification (raised as `RuntimeError` with redacted message
     in `exc.args[0]`; callers map to a contract code via ``_safe_error_code``):
-    - ``arxiv_rate_limited``  — HTTP 429 / 503 with Retry-After
+    - ``arxiv_rate_limited``  — HTTP 429 / 503 with Retry-After when the
+      official RSS fallback is also unavailable; an empty RSS snapshot is
+      treated as a valid no-new-items result
     - ``arxiv_http_error``    — any other non-2xx response
     - ``arxiv_timeout``       — httpx.TimeoutException
     - ``arxiv_network``       — httpx.ConnectError / DNS / TLS / socket
@@ -156,18 +158,51 @@ async def fetch_arxiv(
                     await asyncio.sleep(_ARXIV_MIN_REQUEST_INTERVAL)
                 resp = await client.get(query_url)
             except httpx.TimeoutException as exc:
+                fallback = await _fetch_arxiv_rss_fallback(
+                    client=client,
+                    categories=cats,
+                    max_results=max_results,
+                )
+                if fallback:
+                    logger.warning(
+                        "ai-engine.ingestion.arxiv_api_timeout_rss_fallback",
+                        extra={"categories": cats, "results": len(fallback)},
+                    )
+                    return fallback
                 logger.warning(
                     "ai-engine.ingestion.arxiv_timeout",
                     extra={"categories": cats, "timeout_s": timeout},
                 )
                 raise RuntimeError(f"arxiv_timeout:{type(exc).__name__}") from exc
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                fallback = await _fetch_arxiv_rss_fallback(
+                    client=client,
+                    categories=cats,
+                    max_results=max_results,
+                )
+                if fallback:
+                    logger.warning(
+                        "ai-engine.ingestion.arxiv_api_network_rss_fallback",
+                        extra={"categories": cats, "results": len(fallback)},
+                    )
+                    return fallback
                 logger.warning(
                     "ai-engine.ingestion.arxiv_network",
                     extra={"categories": cats, "error_type": type(exc).__name__},
                 )
                 raise RuntimeError(f"arxiv_network:{type(exc).__name__}") from exc
             except httpx.HTTPError as exc:
+                fallback = await _fetch_arxiv_rss_fallback(
+                    client=client,
+                    categories=cats,
+                    max_results=max_results,
+                )
+                if fallback:
+                    logger.warning(
+                        "ai-engine.ingestion.arxiv_api_http_rss_fallback",
+                        extra={"categories": cats, "results": len(fallback)},
+                    )
+                    return fallback
                 logger.warning(
                     "ai-engine.ingestion.arxiv_http_error",
                     extra={"categories": cats, "error_type": type(exc).__name__},
@@ -209,11 +244,32 @@ async def fetch_arxiv(
                         extra={"categories": cats, "results": len(fallback)},
                     )
                     return fallback
-                raise RuntimeError(f"arxiv_rate_limited:{resp.status_code}")
+                # The API is often rate-limited during arXiv's quiet window,
+                # while the official RSS feed is reachable but has no new
+                # entries (notably over weekends). Do not amplify that into
+                # repeated failed source runs; an empty RSS snapshot is a
+                # valid "no new candidates" result and remains observable in
+                # the warning above.
+                logger.warning(
+                    "ai-engine.ingestion.arxiv_api_rate_limited_empty_rss",
+                    extra={"categories": cats, "status": resp.status_code},
+                )
+                return results
             break
 
         assert resp is not None  # noqa: S101 — loop always assigns
         if resp.status_code >= 400:
+            fallback = await _fetch_arxiv_rss_fallback(
+                client=client,
+                categories=cats,
+                max_results=max_results,
+            )
+            if fallback:
+                logger.warning(
+                    "ai-engine.ingestion.arxiv_api_http_rss_fallback",
+                    extra={"categories": cats, "results": len(fallback)},
+                )
+                return fallback
             logger.warning(
                 "ai-engine.ingestion.arxiv_http_error",
                 extra={"categories": cats, "status": resp.status_code},

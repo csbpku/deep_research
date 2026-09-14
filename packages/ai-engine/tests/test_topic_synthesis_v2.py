@@ -10,6 +10,7 @@ from ai_engine.radar.topic_issue_worker import (
     AUTHORITATIVE_KINDS,
     _authoritative_count,
     _build_issue_prompt,
+    _fallback_issue,
     _distinct_sources,
     _meets_authoritative_threshold,
     _meets_normal_threshold,
@@ -286,6 +287,24 @@ def test_build_issue_prompt_includes_kind_and_tier() -> None:
     assert "uuid-x" in prompt
     assert "kind=arxiv" in prompt
     assert "tier=deep_read" in prompt
+
+
+def test_fallback_issue_is_traceable_and_bounded() -> None:
+    topic = {"name": "智能体评测", "tier": "hot"}
+    rows = [
+        _make_row(sid=f"id-{index}", kind="rss", host=f"source-{index}.dev", tier="skim")
+        for index in range(8)
+    ]
+    rows[0]["distilledTier"] = "deep_read"
+    rows[1]["originalKind"] = "arxiv"
+    issue = _fallback_issue(topic, rows)
+
+    assert issue is not None
+    assert issue["kind"] == "event"
+    assert issue["title"] == "智能体评测：近期进展"
+    assert len(issue["summaryIds"]) == 6
+    assert set(issue["summaryIds"]) <= {row["id"] for row in rows}
+    assert "智能体评测" in issue["proposition"]
 
 
 def test_parse_payload_handles_fenced() -> None:

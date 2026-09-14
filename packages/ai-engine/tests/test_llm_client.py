@@ -199,6 +199,13 @@ def test_only_known_provider_policy_422_is_retryable() -> None:
     assert is_retryable_llm_error(PolicyError("invalid schema field")) is False
 
 
+def test_minimax_overload_529_is_retryable() -> None:
+    class OverloadedError(Exception):
+        status_code = 529
+
+    assert is_retryable_llm_error(OverloadedError("overloaded_error")) is True
+
+
 async def test_generate_text_falls_back_after_quota_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

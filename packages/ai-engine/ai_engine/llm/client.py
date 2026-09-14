@@ -194,7 +194,10 @@ def is_retryable_llm_error(exc: BaseException) -> bool:
         return True
     if is_provider_policy_error(exc):
         return True
-    if getattr(exc, "status_code", None) in {408, 409, 500, 502, 503, 504}:
+    # MiniMax uses HTTP 529 for overloaded clusters. Treat it like the other
+    # transient provider 5xx responses so the configured fallback can answer
+    # short utility jobs instead of making every topic worker drop coverage.
+    if getattr(exc, "status_code", None) in {408, 409, 500, 502, 503, 504, 529}:
         return True
     detail = f"{type(exc).__name__}: {exc}".lower()
     return any(
@@ -324,7 +327,7 @@ def _fallback_reason(error: BaseException) -> str:
         return "provider_policy_block"
     if is_quota_error(error):
         return "quota_or_rate_limit"
-    if getattr(error, "status_code", None) in {500, 502, 503, 504}:
+    if getattr(error, "status_code", None) in {500, 502, 503, 504, 529}:
         return "provider_5xx"
     return "connection_or_timeout"
 

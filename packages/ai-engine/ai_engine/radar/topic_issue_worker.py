@@ -23,7 +23,11 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ai_engine.llm.client import generate_text
+from ai_engine.llm.client import (
+    generate_text,
+    is_retryable_llm_error,
+    sanitize_llm_error,
+)
 from psycopg.rows import dict_row
 
 logger = logging.getLogger("ai_engine.radar.topic_issue_worker")
@@ -32,6 +36,7 @@ WORKER_ID = f"topic-issue-worker-{os.getpid()}"
 WINDOW_DAYS = 14
 MAX_TOPICS_PER_RUN = 8
 LLM_TIMEOUT_SECONDS = 50.0
+LLM_RETRY_DELAY_SECONDS = 1.5
 
 # 单一权威例外允许的原稿类型
 AUTHORITATIVE_KINDS = frozenset(
@@ -277,6 +282,59 @@ def _build_issue_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def _fallback_issue(
+    topic: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Build a conservative, fully traceable issue when LLM clustering is down.
+
+    This is intentionally not a semantic replacement for the model. It uses
+    the topic selected by the existing governance pipeline and cites only
+    persisted candidates, so a provider outage does not make the worker
+    silently lose all issue coverage or invent unsupported details.
+    """
+    if not candidates:
+        return None
+
+    ranked = sorted(
+        candidates,
+        key=lambda row: (
+            row.get("distilledTier") == "deep_read",
+            row.get("originalKind") in AUTHORITATIVE_KINDS,
+            len(str(row.get("interpretation") or "")),
+            str(row.get("addedAt") or ""),
+        ),
+        reverse=True,
+    )
+    selected = ranked[:6]
+    topic_name = str(topic.get("name") or "该主题").strip() or "该主题"
+    titles = [
+        str(row.get("title") or "").strip().replace("\n", " ")
+        for row in selected
+    ]
+    titles = [title[:48] for title in titles if title]
+    if not titles:
+        return None
+
+    if len(titles) == 1:
+        evidence = f"代表性候选：{titles[0]}。"
+    else:
+        evidence = "；".join(titles[:3])
+        if len(titles) > 3:
+            evidence += "等"
+        evidence = f"代表性候选包括：{evidence}。"
+    proposition = (
+        f"近14天围绕“{topic_name}”出现可追溯的主题进展，"
+        f"当前聚类暂以候选标题作为证据，{evidence}"
+    )[:1000]
+    return {
+        "kind": "event",
+        "title": f"{topic_name}：近期进展"[:200],
+        "proposition": proposition,
+        "summaryIds": [str(row["id"]) for row in selected if row.get("id")],
+    }
+
+
 def _parse_payload(raw: str) -> dict[str, Any]:
     """Parse JSON despite common model wrappers, while rejecting truncation."""
     s = raw.strip()
@@ -464,28 +522,81 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
 
     active_issues = await _existing_active_issues(pool, topic_id)
 
-    try:
-        result = await asyncio.wait_for(
-            generate_text(
-                user_prompt=_build_issue_prompt(topic["name"], new_rows),
-                tier="light",
-                max_tokens=2000,
-                timeout=LLM_TIMEOUT_SECONDS,
-                disable_thinking=True,
-                operation="radar.topic_issue_cluster",
-            ),
-            timeout=LLM_TIMEOUT_SECONDS + 5,
-        )
-        raw = _parse_payload(result.text)
-    except Exception as exc:
-        logger.warning(
-            "ai-engine.radar.topic_issue.failed",
-            extra={"topic_id": topic_id, "error": type(exc).__name__},
-        )
-        return {"considered": len(new_rows), "created": 0, "skipped": 0}
+    raw: dict[str, Any] | None = None
+    llm_error: BaseException | None = None
+    for attempt in range(2):
+        try:
+            result = await asyncio.wait_for(
+                generate_text(
+                    user_prompt=_build_issue_prompt(topic["name"], new_rows),
+                    tier="light",
+                    max_tokens=2000,
+                    timeout=LLM_TIMEOUT_SECONDS,
+                    disable_thinking=True,
+                    operation="radar.topic_issue_cluster",
+                ),
+                timeout=LLM_TIMEOUT_SECONDS + 5,
+            )
+            raw = _parse_payload(result.text)
+            break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            llm_error = exc
+            retryable = is_retryable_llm_error(exc)
+            logger.warning(
+                "ai-engine.radar.topic_issue.llm_failed",
+                extra={
+                    "topic_id": topic_id,
+                    "attempt": attempt + 1,
+                    "retryable": retryable,
+                    "error": sanitize_llm_error(exc),
+                },
+            )
+            if not retryable or attempt == 1:
+                break
+            await asyncio.sleep(LLM_RETRY_DELAY_SECONDS)
 
-    # Keep one clustering run bounded even when the model ignores the 1-3 issue instruction.
+    used_fallback = raw is None
+    if used_fallback:
+        fallback = _fallback_issue(topic, new_rows)
+        if fallback is None:
+            return {
+                "considered": len(new_rows),
+                "created": 0,
+                "skipped": 0,
+                "fallback": 0,
+                "failed": 1,
+            }
+        raw = {"issues": [fallback]}
+        logger.warning(
+            "ai-engine.radar.topic_issue.degraded",
+            extra={
+                "topic_id": topic_id,
+                "error": sanitize_llm_error(llm_error) if llm_error else "unknown",
+                "candidate_count": len(new_rows),
+            },
+        )
+
+    assert raw is not None  # fallback or successful model parse above
+    # Keep one clustering run bounded even when the model ignores the 1-3 issue
+    # instruction. A syntactically valid but unusable payload is still a model
+    # failure: do not silently turn it into a successful no-op.
     issues = _normalize_issues(raw, valid_ids)[:3]
+    if not issues and not used_fallback:
+        fallback = _fallback_issue(topic, new_rows)
+        if fallback is not None:
+            raw = {"issues": [fallback]}
+            used_fallback = True
+            issues = [fallback]
+            logger.warning(
+                "ai-engine.radar.topic_issue.degraded",
+                extra={
+                    "topic_id": topic_id,
+                    "error": "empty_or_invalid_model_payload",
+                    "candidate_count": len(new_rows),
+                },
+            )
     created = 0
     skipped = 0
     for issue in issues:
@@ -531,7 +642,13 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
             )
         else:
             skipped += 1
-    return {"considered": len(new_rows), "created": created, "skipped": skipped}
+    return {
+        "considered": len(new_rows),
+        "created": created,
+        "skipped": skipped,
+        "fallback": int(used_fallback and created > 0),
+        "failed": int(used_fallback and created == 0),
+    }
 
 
 async def _claim_topics(pool: Any, limit: int) -> list[str]:
@@ -571,27 +688,43 @@ async def run_topic_issue_worker(
     created_total = 0
     skipped_total = 0
     considered_total = 0
+    fallback_total = 0
+    failed_total = 0
     for topic_id in topic_ids:
         try:
             stats = await _process_topic(pool, topic_id)
         except Exception as exc:
             logger.warning(
                 "ai-engine.radar.topic_issue.exception",
-                extra={"topic_id": topic_id, "error": type(exc).__name__},
+                extra={
+                    "topic_id": topic_id,
+                    "error": sanitize_llm_error(exc),
+                },
             )
+            failed_total += 1
             continue
         created_total += stats["created"]
         skipped_total += stats["skipped"]
         considered_total += stats["considered"]
+        fallback_total += stats.get("fallback", 0)
+        failed_total += stats.get("failed", 0)
     logger.info(
         "ai-engine.radar.topic_issue.done",
-        extra={"processed": len(topic_ids), "created": created_total, "skipped": skipped_total},
+        extra={
+            "processed": len(topic_ids),
+            "created": created_total,
+            "skipped": skipped_total,
+            "fallback": fallback_total,
+            "failed": failed_total,
+        },
     )
     return {
         "processed": len(topic_ids),
         "considered": considered_total,
         "created": created_total,
         "skipped": skipped_total,
+        "fallback": fallback_total,
+        "failed": failed_total,
     }
 
 

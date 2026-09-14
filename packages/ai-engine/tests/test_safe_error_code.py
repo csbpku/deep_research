@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from typing import Any
 
 import psycopg
 import httpx
@@ -178,7 +179,9 @@ async def test_fetch_arxiv_sets_descriptive_user_agent() -> None:
     assert items, "expected at least one item from a valid Atom response"
 
 
-async def test_fetch_arxiv_raises_typed_errors_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_arxiv_returns_empty_when_rate_limited_and_rss_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from ai_engine.ingestion.sources import fetch_arxiv
 
     response = httpx.Response(
@@ -196,11 +199,10 @@ async def test_fetch_arxiv_raises_typed_errors_on_rate_limit(monkeypatch: pytest
     monkeypatch.setattr(sources_mod.asyncio, "sleep", no_wait)
     sources_mod.httpx.AsyncClient = lambda **kw: original(transport=transport, **kw)
     try:
-        with pytest.raises(RuntimeError) as excinfo:
-            await fetch_arxiv(max_results=5, categories=["cs.AI"])
+        items = await fetch_arxiv(max_results=5, categories=["cs.AI"])
     finally:
         sources_mod.httpx.AsyncClient = original
-    assert "arxiv_rate_limited" in str(excinfo.value)
+    assert items == []
 
 
 async def test_fetch_arxiv_raises_typed_errors_on_http_error() -> None:
@@ -221,6 +223,47 @@ async def test_fetch_arxiv_raises_typed_errors_on_http_error() -> None:
     finally:
         sources_mod.httpx.AsyncClient = original
     assert "arxiv_http_error" in str(excinfo.value)
+
+
+async def test_fetch_arxiv_uses_rss_when_api_is_rate_limited_and_rss_has_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.ingestion import sources as sources_mod
+    from ai_engine.ingestion.sources import fetch_arxiv
+
+    api_response = httpx.Response(
+        429,
+        headers={"retry-after": "1"},
+        content=b"rate limit",
+        request=httpx.Request("GET", "https://x"),
+    )
+    transport = _StubTransport(api_response)
+    async def fake_rss_fallback(**_: object) -> list[dict[str, Any]]:
+        return _rss_items()
+
+    monkeypatch.setattr(sources_mod, "_fetch_arxiv_rss_fallback", fake_rss_fallback)
+    original = sources_mod.httpx.AsyncClient
+    monkeypatch.setattr(sources_mod.httpx, "AsyncClient", lambda **kw: original(transport=transport, **kw))
+    monkeypatch.setattr(sources_mod.asyncio, "sleep", lambda *_: _noop())
+
+    items = await fetch_arxiv(max_results=5, categories=["cs.AI"])
+
+    assert items == _rss_items()
+
+
+async def _noop() -> None:
+    return None
+
+
+def _rss_items() -> list[dict[str, Any]]:
+    return [
+        {
+            "title": "RSS paper",
+            "url": "https://arxiv.org/abs/2501.00001",
+            "snippet": "abstract",
+            "published_at": "2026-01-01T00:00:00Z",
+        },
+    ]
 
 
 async def test_fetch_arxiv_returns_empty_on_2xx_no_entries() -> None:
