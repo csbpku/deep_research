@@ -394,6 +394,48 @@ def test_agent_preserves_unmapped_findings_as_manual_review() -> None:
     assert len(result.findings) == 1
     assert result.findings[0].code == "agent_unclassified_issue"
     assert result.findings[0].repairable is False
+    assert result.findings[0].severity == "warning"
+
+
+def test_agent_maps_structural_aliases_to_blocking_contracts() -> None:
+    result = cr._parse_agent_review({
+        "status": "needs_repair",
+        "summary": "结构问题",
+        "findings": [{
+            "code": "table_column_mismatch",
+            "severity": "warning",
+            "repairable": False,
+            "message": "表格列数不一致",
+        }],
+    })
+
+    assert result.findings[0].code == "malformed_table"
+    assert result.findings[0].severity == "blocking"
+
+
+@pytest.mark.asyncio
+async def test_cycle_approves_warning_only_agent_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool("A clean article with a generic image alt text.")
+
+    async def warning_review(**_: Any) -> cr.AgentReview:
+        return _agent(
+            "needs_manual_review",
+            findings=(cr.ContentFinding(
+                code="agent_unclassified_issue",
+                severity="warning",
+                message="generic image alt text",
+            ),),
+        )
+
+    monkeypatch.setattr(cr, "_review_with_agent", warning_review)
+
+    result = await cr.run_content_review_cycle(pool, summary_id="summary-1")
+
+    assert result.status == "approved"
+    assert result.round == 1
+    assert result.details["rounds"][0]["warnings"]
 
 
 def test_agent_maps_truncation_description_to_manual_finding() -> None:

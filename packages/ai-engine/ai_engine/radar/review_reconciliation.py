@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_engine.radar.content_reviewer import (
+    CONTENT_REVIEW_POLICY_VERSION,
     claim_content_review,
     persist_quality_manual_review,
     run_content_review_cycle,
@@ -164,6 +165,7 @@ async def _review_candidates(pool: Any, *, limit: int) -> list[str]:
                 'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
                 'AND ('
                 '"contentReviewStatus" IS NULL '
+                'OR "contentReviewSummary"->>\'policyVersion\' IS DISTINCT FROM %s '
                 'OR ("contentReviewStatus" = \'reviewing\' AND '
                 '"contentReviewStartedAt" < now() - make_interval(secs => %s)) '
                 'OR ("contentReviewStatus" = \'needs_manual_review\' AND '
@@ -175,7 +177,7 @@ async def _review_candidates(pool: Any, *, limit: int) -> list[str]:
                 '"originalSha256")'
                 ') '
                 'ORDER BY "createdAt" ASC LIMIT %s',
-                (max(300, int(os.environ.get(
+                (CONTENT_REVIEW_POLICY_VERSION, max(300, int(os.environ.get(
                     "RADAR_CONTENT_REVIEW_STALE_MINUTES", "30",
                 )) * 60), limit),
             )

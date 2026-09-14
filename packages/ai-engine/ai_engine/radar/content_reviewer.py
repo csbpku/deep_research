@@ -42,6 +42,7 @@ Severity = Literal["blocking", "warning", "info"]
 
 MAX_REVIEW_ROUNDS = 2
 MAX_PROMPT_CHARS = 20_000
+CONTENT_REVIEW_POLICY_VERSION = "2.1"
 CONTENT_REVIEW_STALE_MINUTES = max(
     5,
     int(os.environ.get("RADAR_CONTENT_REVIEW_STALE_MINUTES", "30")),
@@ -61,6 +62,63 @@ _KNOWN_CODES = _SAFE_REPAIR_CODES | frozenset({
     "unclosed_image_markdown",
     "truncated_content",
 })
+
+# The agent is allowed to report a richer vocabulary than the deterministic
+# checker.  Unknown *cosmetic* findings must not become blocking solely because
+# the vocabulary has not been added to this module yet.  Findings that can
+# actually break the reader surface are normalized to the closest blocking
+# contract below; everything else remains an auditable warning.
+_BLOCKING_AGENT_ALIASES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"(?:table|chart).*(?:mismatch|missing|structure|flatten|"
+            r"concatenat|column|pipe)|(?:flattened|concatenated)_"
+            r"(?:chart|table)_(?:text|data)|table_header_conflict",
+            re.IGNORECASE,
+        ),
+        "malformed_table",
+    ),
+    (
+        re.compile(
+            r"mermaid_(?:error|syntax|edge_label|html_in_node)|"
+            r"(?:mermaid|diagram).*(?:syntax|render).*(?:error|invalid)",
+            re.IGNORECASE,
+        ),
+        "mermaid_render_error",
+    ),
+    (
+        re.compile(
+            r"html_extraction_(?:resid|artifact)|ltx_|foreignobject",
+            re.IGNORECASE,
+        ),
+        "html_extraction_artifact",
+    ),
+    (
+        re.compile(
+            r"latex_(?:residue|text_command)|latex_text_command_in_text",
+            re.IGNORECASE,
+        ),
+        "latex_text_command",
+    ),
+    (
+        re.compile(
+            r"footnotetext|footnotemark|footnote_markers_as_text",
+            re.IGNORECASE,
+        ),
+        "extracted_footnote",
+    ),
+    (
+        re.compile(
+            r"(?:broken|invalid|unclosed)_image|image_(?:url|markdown)_broken",
+            re.IGNORECASE,
+        ),
+        "broken_image",
+    ),
+    (
+        re.compile(r"truncat|cut[_ ]?off|incomplete", re.IGNORECASE),
+        "truncated_content",
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,43 +440,53 @@ def _parse_agent_review(payload: dict[str, Any]) -> AgentReview:
         else "needs_manual_review"
     )
     findings: list[ContentFinding] = []
-    unknown_codes: list[str] = []
     raw_findings = payload.get("findings")
     if isinstance(raw_findings, list):
         for raw in raw_findings:
             if not isinstance(raw, dict):
                 continue
-            code = str(raw.get("code") or "").strip()
+            source_code = str(raw.get("code") or "").strip()
             message = str(raw.get("message") or "审核 Agent 发现展示风险。")[:500]
-            if (
-                code not in _KNOWN_CODES
-                and re.search(
-                    r"(?i)truncat|cut off|incomplete|截断|不完整|未结束",
-                    f"{code} {message}",
-                )
-            ):
-                code = "truncated_content"
-            if code not in _KNOWN_CODES:
-                if code:
-                    unknown_codes.append(code[:120])
-                continue
+            evidence = str(raw.get("evidence") or "").strip()
+            code = source_code if source_code in _KNOWN_CODES else ""
+            combined = f"{source_code} {message} {evidence}"
+            if not code:
+                for pattern, canonical_code in _BLOCKING_AGENT_ALIASES:
+                    if pattern.search(combined):
+                        code = canonical_code
+                        break
+            if not code:
+                code = "agent_unclassified_issue"
             severity = raw.get("severity")
             if severity not in {"blocking", "warning", "info"}:
                 severity = "warning"
+            # Canonical blocking contracts always win over an agent's overly
+            # optimistic severity. Unknown/cosmetic issues are warnings: they
+            # remain visible in the audit payload but do not stop publication.
+            if code in {
+                "extracted_footnote",
+                "latex_text_command",
+                "mathml_annotation_duplicate",
+                "broken_image",
+                "unclosed_image_markdown",
+                "malformed_table",
+                "table_math_duplicate",
+                "mermaid_render_error",
+                "html_extraction_artifact",
+                "truncated_content",
+            }:
+                severity = "blocking"
+            elif code in {"html_nbsp_entity", "agent_unclassified_issue"}:
+                severity = "warning"
+            if code != source_code and source_code:
+                evidence = f"{evidence} [agent_code={source_code}]".strip()
             findings.append(_finding(
                 code,
                 cast(Severity, severity),
                 message,
                 repairable=bool(raw.get("repairable")),
-                evidence=str(raw.get("evidence")) if raw.get("evidence") else None,
+                evidence=evidence or None,
             ))
-    if unknown_codes:
-        findings.append(_finding(
-            "agent_unclassified_issue",
-            "blocking",
-            "审核 Agent 报告了未映射的展示问题，需要人工确认后再扩展安全修复白名单。",
-            evidence=", ".join(dict.fromkeys(unknown_codes)),
-        ))
     return AgentReview(
         available=True,
         status=status,
@@ -437,8 +505,8 @@ def _ensure_actionable_agent_review(review: AgentReview) -> AgentReview:
         findings=(
             _finding(
                 "agent_unclassified_issue",
-                "blocking",
-                "审核 Agent 判定内容存在展示风险，但没有返回可识别的具体问题。",
+                "warning",
+                "审核 Agent 未给出可识别的具体问题，按 warning 保留审计信息。",
             ),
         ),
         error=review.error,
@@ -466,6 +534,11 @@ async def _review_with_agent(
         '格式：{"status":"approved|needs_repair|needs_manual_review",'
         '"summary":"...", "findings":[{"code":"...", "severity":"blocking|warning|info",'
         '"repairable":true, "message":"...", "evidence":"..."}]}。'
+        "blocking 只用于会破坏阅读或说明正文不完整的问题：真实的坏图片/未闭合图片、"
+        "表格结构损坏、Mermaid 语法/渲染错误、HTML 抽取器残留、真实截断、"
+        "未清理的 LaTeX 文本命令或 footnotetext。"
+        "图片 alt 文本语言/描述性、作者块排版、链接/引用细节、空 inline code、"
+        "自定义组件标签、轻微空白和标题间距属于 warning/info，不得因此 needs_manual_review。"
         "repairable 只能用于确定不会改变原文事实的展示清洗。"
         "审核输入可能是带有明确边界标记的摘录；不要把摘录边界、"
         "MIDDLE CONTENT OMITTED 或 BEGINNING EXCERPT 的句子中断误判为原文截断。"
@@ -725,6 +798,7 @@ async def claim_content_review(
     else:
         eligibility = (
             '("contentReviewStatus" IS NULL OR '
+            '("contentReviewSummary"->>\'policyVersion\' IS DISTINCT FROM %s) OR '
             '("contentReviewStatus" = \'reviewing\' AND '
             '"contentReviewStartedAt" < now() - '
             f'make_interval(secs => {CONTENT_REVIEW_STALE_MINUTES * 60})) OR '
@@ -749,7 +823,10 @@ async def claim_content_review(
                 'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
                 f'AND {eligibility} '
                 'RETURNING "contentReviewClaimId"',
-                (summary_id,),
+                (
+                    summary_id,
+                    *(() if force else (CONTENT_REVIEW_POLICY_VERSION,)),
+                ),
             )
         ).fetchone()
     if not row:
@@ -768,6 +845,7 @@ async def persist_quality_manual_review(
     """Persist a deterministic reader-quality failure without using an LLM."""
     details = {
         "reason": "reader_quality_gate",
+        "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
         "quality": dict(quality),
         "rounds": [{
             "round": 1,
@@ -814,6 +892,7 @@ async def persist_quality_manual_review(
                 json.dumps({
                     "status": "needs_manual_review",
                     "reason": "reader_quality_gate",
+                    "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
                     "quality": dict(quality),
                 }, ensure_ascii=False),
                 json.dumps(details, ensure_ascii=False),
@@ -896,6 +975,7 @@ async def run_content_review_cycle(
     if not markdown.strip():
         empty_details: dict[str, Any] = {
             "cycleId": cycle_id,
+            "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
             "rounds": [{
                 "round": 1,
                 "status": "needs_manual_review",
@@ -915,7 +995,11 @@ async def run_content_review_cycle(
             claim_id=claim_id,
             status="needs_manual_review",
             round_number=1,
-            summary={"status": "needs_manual_review", "reason": "empty_content"},
+            summary={
+                "status": "needs_manual_review",
+                "reason": "empty_content",
+                "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
+            },
             details=empty_details,
         )
         return ReviewCycleResult("needs_manual_review", 1, cycle_id, empty_details)
@@ -951,14 +1035,19 @@ async def run_content_review_cycle(
             final_status = "needs_manual_review"
             final_round = round_number
             break
-        if not merged and agent.status == "approved":
+        blocking = tuple(
+            item for item in merged if item.severity == "blocking"
+        )
+        repairable = tuple(item for item in merged if item.repairable)
+        if not blocking and not repairable:
             round_record["status"] = "approved"
+            if merged:
+                round_record["warnings"] = [item.to_dict() for item in merged]
             rounds.append(round_record)
             final_status = "approved"
             final_round = round_number
             break
 
-        repairable = tuple(item for item in merged if item.repairable)
         repaired = repair_content(markdown, repairable) if repairable else markdown
         if repaired != markdown and round_number < MAX_REVIEW_ROUNDS:
             await _persist_repaired_markdown(
@@ -984,6 +1073,7 @@ async def run_content_review_cycle(
             final_round = round_number
             reviewing_details: dict[str, Any] = {
                 "cycleId": cycle_id,
+                "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
                 "rounds": rounds,
                 "maxRounds": MAX_REVIEW_ROUNDS,
             }
@@ -1003,6 +1093,22 @@ async def run_content_review_cycle(
             )
             continue
 
+        # Warnings are retained in the audit record but do not force manual
+        # review.  Only an unresolved blocking finding can keep a high-value
+        # item out of the public stream.
+        if not blocking:
+            round_record["status"] = "approved"
+            round_record["warnings"] = [item.to_dict() for item in merged]
+            round_record["repair"] = {
+                "codes": [item.code for item in repairable],
+                "changed": repaired != markdown,
+                "blockedBy": "warning_only",
+            }
+            rounds.append(round_record)
+            final_status = "approved"
+            final_round = round_number
+            break
+
         round_record["status"] = "needs_manual_review"
         round_record["repair"] = {
             "codes": [item.code for item in repairable],
@@ -1020,6 +1126,7 @@ async def run_content_review_cycle(
 
     details: dict[str, Any] = {
         "cycleId": cycle_id,
+        "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
         "rounds": rounds,
         "maxRounds": MAX_REVIEW_ROUNDS,
     }
@@ -1035,6 +1142,7 @@ async def run_content_review_cycle(
             "status": final_status,
             "findingCount": len(final_findings),
             "rounds": len(rounds),
+            "policyVersion": CONTENT_REVIEW_POLICY_VERSION,
             "contentSha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         },
         details=details,
