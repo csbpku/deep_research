@@ -293,7 +293,9 @@ describe('GET /api/radar', () => {
     expect(await r.json()).toMatchObject({ items: [], total: 0 });
     expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
-        AND: expect.arrayContaining([{ distilledTier: { in: ['collection', 'deep_read', 'skim'] } }]),
+        AND: expect.arrayContaining([
+          { OR: [{ distilledTier: { in: ['collection', 'deep_read'] } }] },
+        ]),
       }),
     }));
     expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
@@ -345,7 +347,6 @@ describe('GET /api/radar', () => {
       where: expect.objectContaining({
         AND: expect.arrayContaining([
           { id: { in: [] } },
-          { distilledTier: { in: ['collection', 'deep_read', 'skim'] } },
         ]),
       }),
     }));
@@ -423,6 +424,9 @@ describe('GET /api/radar', () => {
       timelinessScore: 0.83,
       sourceQualityScore: 0.76,
       distilledTier: 'deep_read',
+      enrichmentStatus: 'ready',
+      readerQualityStatus: 'ready',
+      contentReviewStatus: 'approved',
       selectionReason: null,
       sortOrder: null,
       syncRunId: 'run-1',
@@ -544,6 +548,7 @@ describe('GET /api/radar/[id]', () => {
       interpretation: 'cover', scoreReason: 'high', scoreVersion: 'v1',
       relevanceScore: 0.9, timelinessScore: 0.8, sourceQualityScore: 0.7,
       distilledTier: 'deep_read',
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
       syncRun: { id: 'r', completedAt: new Date(), source: { sourceType: 'arxiv', name: 'arXiv' } },
@@ -570,6 +575,7 @@ describe('GET /api/radar/[id]', () => {
       interpretation: 'cover', scoreReason: null, scoreVersion: null,
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
       distilledTier: 'deep_read',
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
       syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'RSS' } },
@@ -637,6 +643,7 @@ describe('GET /api/radar/[id]', () => {
       createdAt: new Date(), interpretation: 'quick read', scoreReason: null,
       scoreVersion: null, relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
       distilledTier: 'deep_read', selectionReason: null, sortOrder: null, syncRunId: 'r',
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       source: 'daily', originalKind: 'arxiv', repoSummary: null,
       highlights: { summary: 'highlights', highlights: [], keyQuote: null },
       tldr: 'paper tldr', sections: [{ title: 'Intro', level: 2, startOffset: 0 }],
@@ -673,6 +680,7 @@ describe('GET /api/radar/[id]', () => {
       createdAt: new Date(), interpretation: 'quick read', scoreReason: null,
       scoreVersion: null, relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
       distilledTier: 'deep_read', selectionReason: null, sortOrder: null, syncRunId: 'r',
+      enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       source: 'daily', originalKind: 'rss', originalMarkdown: '# Full article',
       originalMeta: { provider: 'rss' }, arxivAnalysis: null, figures: null, authors: [],
       repoSummary: null, highlights: null, tldr: null, sections: null,
