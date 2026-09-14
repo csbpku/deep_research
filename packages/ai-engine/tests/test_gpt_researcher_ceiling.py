@@ -11,6 +11,7 @@ from ai_engine.adapters.gpt_researcher import (
     _append_run_audit,
     _append_captured_evidence_to_context,
     _build_grounded_report_prompt,
+    _has_explicit_comparison,
     _format_internal_sources_for_query,
     _REPORT_LENGTH_PRESETS,
     _resolve_run_ceiling,
@@ -220,6 +221,22 @@ def test_grounded_report_prompt_requires_a_decision_surface_for_comparisons() ->
     assert "## 证据覆盖与冲突" in prompt
     assert "本轮未确认" in prompt
     assert "只输出报告正文" in prompt
+
+
+def test_grounded_report_prompt_covers_generic_infrastructure_comparisons() -> None:
+    topic = "GHCR 固定 SHA 镜像 vs VPS 本地构建：比较带宽、回滚和磁盘空间"
+    prompt = _build_grounded_report_prompt(
+        {"mode": "deep", "pagesVisited": 12, "sourcesDiscovered": 10},
+        [],
+        topic=topic,
+    )
+
+    assert _has_explicit_comparison(topic)
+    assert "## 对比矩阵" in prompt
+    assert "## 分方案发现" in prompt
+    assert "## 取舍与结论" in prompt
+    assert "## 下一步行动" in prompt
+    assert "带宽或资源成本" in prompt
 
 
 def test_slides_prompt_has_a_page_level_content_contract() -> None:

@@ -79,6 +79,16 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.ready).toBe(true);
   });
 
+  it('从 vs 问题中提取两个对比方案', async () => {
+    const res = await planPost(buildReq({
+      question: 'GHCR 固定 SHA 镜像 vs VPS 本地构建：比较带宽、回滚和磁盘空间',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.objective).toBe('decide');
+    expect(body.brief.comparisonOptions).toEqual(['GHCR 固定 SHA 镜像', 'VPS 本地构建']);
+    expect(body.missingFields).not.toContain('comparisonOptions');
+  });
+
   it('推断学习类问题为 learn', async () => {
     const res = await planPost(buildReq({ question: 'GraphRAG 怎么上手？' }) as never, ctx());
     const body = await res.json();

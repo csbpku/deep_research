@@ -246,6 +246,21 @@ _PRODUCT_CAPABILITY_SIGNALS = re.compile(
 )
 
 
+def _has_explicit_comparison(topic: str | None, context: str | None = None) -> bool:
+    """Detect a decision/comparison contract beyond named products.
+
+    The Web planner stores confirmed comparison options in ``context`` while
+    the legacy V1 path often keeps them only in the question, including
+    ``vs`` / ``versus``. Both paths need the same decision-oriented report
+    structure; otherwise a generic infrastructure comparison is silently
+    treated as an open-ended summary.
+    """
+    text = f"{topic or ''}\n{context or ''}"
+    if _COMPARISON_TOPIC_MARKERS.search(text):
+        return True
+    return bool(re.search(r"(?im)^\s*-\s*研究目标：\s*decide\b", text))
+
+
 def _topic_search_terms(value: str) -> tuple[str, ...]:
     """Extract discriminating ASCII terms for a conservative result filter."""
     terms = re.findall(r"[a-z][a-z0-9+.#-]{2,}", value.lower())
@@ -3415,6 +3430,7 @@ def _report_output_contract(
     topic: str | None = None,
     *,
     report_type: str = "research_report",
+    context: str | None = None,
 ) -> str:
     """Describe the smallest useful report, independent of a vendor prompt.
 
@@ -3424,9 +3440,11 @@ def _report_output_contract(
     gap from model memory.
     """
     normalized_type = str(report_type or "research_report").strip().lower()
+    official_comparison = bool(topic and _official_lane_queries(topic, context))
+    generic_comparison = _has_explicit_comparison(topic, context)
 
     if normalized_type == "slides":
-        comparison = bool(topic and _official_lane_queries(topic))
+        comparison = official_comparison or generic_comparison
         comparison_hint = (
             "对于多产品比较，按产品和决策维度组织页面，确保每个产品都有单独的事实页；"
             if comparison
@@ -3443,7 +3461,7 @@ def _report_output_contract(
         )
 
     if normalized_type == "web_brief":
-        comparison = bool(topic and _official_lane_queries(topic))
+        comparison = official_comparison or generic_comparison
         comparison_hint = (
             "如果是多产品比较，关键发现中必须保留可扫描的对比结构，并逐项标出‘本轮未确认’；\n"
             if comparison
@@ -3464,8 +3482,7 @@ def _report_output_contract(
             f"{comparison_hint}"
         )
 
-    comparison = bool(topic and _official_lane_queries(topic))
-    if comparison:
+    if official_comparison:
         return (
             "这是一个多产品能力对比。必须输出完整 Markdown 中文报告，并按以下顺序组织：\n"
             "1. `## 决策摘要`：给出 3-6 条最重要判断，逐条标注‘事实’、‘推断’或‘建议’；\n"
@@ -3476,6 +3493,17 @@ def _report_output_contract(
             "6. `## 未确认项`：列出不能从已抓取正文推出的关键问题；\n"
             "7. `## 对本项目的建议`：只基于前述事实和明确推断给出取舍；\n"
             "8. `## 下一步行动`：给出可执行、可验证的下一步。\n"
+        )
+    if generic_comparison:
+        return (
+            "这是一个明确的方案/路径对比。必须输出完整 Markdown 中文报告，并按以下顺序组织：\n"
+            "1. `## 决策摘要`：先给出当前证据支持的选型结论；如果证据不足，明确写‘暂不能定案’以及缺什么；\n"
+            "2. `## 研究范围与方法`：列出本轮实际覆盖的每个方案、资料边界和证据限制；\n"
+            "3. `## 对比矩阵`：逐项比较用户点名的方案，至少覆盖实现/部署、带宽或资源成本、回滚与恢复、磁盘/运维负担、可靠性和安全；每个单元格没有直接证据就写‘本轮未确认’；\n"
+            "4. `## 分方案发现`：分别说明每个方案的事实、优势、限制和适用前提，不能用一方资料替代另一方；\n"
+            "5. `## 取舍与结论`：把事实、基于事实的推断和建议分开，明确结论适用的前提；\n"
+            "6. `## 证据覆盖与未确认项`：指出哪一方或哪一个关键维度没有可核对正文，不能把未查到当成没有；\n"
+            "7. `## 下一步行动`：给出最小成本、可执行且能区分两种方案的验证动作。\n"
         )
     return (
         "必须输出完整 Markdown 中文报告，并按以下顺序组织：\n"
@@ -3493,12 +3521,13 @@ def _build_grounded_report_prompt(
     *,
     topic: str | None = None,
     report_type: str = "research_report",
+    context: str | None = None,
 ) -> str:
     """Return the report contract, evidence rules, and immutable run receipt."""
     return (
         "请把研究结果写成面向决策的中文报告。只输出报告正文，不要输出思考过程、写作计划、"
         "拒答、‘请提供原报告’之类的说明，也不要把资料列表当成结论。\n\n"
-        f"{_report_output_contract(topic, report_type=report_type)}\n"
+        f"{_report_output_contract(topic, report_type=report_type, context=context)}\n"
         "证据规则：报告只能把已抓取正文中的内容写成事实；研究上下文里的 URL、搜索结果摘要"
         "和模型记忆只能作为待核验线索。每个重要判断都要尽量紧邻支持它的来源编号（如 [S3]）；"
         "只能使用证据包中的编号，不要自行拼接或改写 URL。没有直接证据就写‘本轮未确认’，不要用常识补齐。明确区分事实、"
@@ -4039,6 +4068,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                             sources_for_report,
                             topic=job.request.topic,
                             report_type=job.request.report_type,
+                            context=job.request.context,
                         ),
                         report_length=job.request.report_length,
                         request_id=job.request.request_id,
@@ -4254,6 +4284,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                             sources_for_report,
                             topic=job.request.topic,
                             report_type=job.request.report_type,
+                            context=job.request.context,
                         ),
                         report_length=job.request.report_length,
                         request_id=job.request.request_id,

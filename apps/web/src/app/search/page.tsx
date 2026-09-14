@@ -79,18 +79,39 @@ function SearchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const initialQ = searchParams.get('q') ?? '';
-  const initialType = searchParams.get('type') || ALL;
-  const initialPage = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1);
-
-  const [q, setQ] = useState(initialQ);
-  const [submittedQ, setSubmittedQ] = useState(initialQ);
-  const [type, setType] = useState<string>(initialType);
-  const [page, setPage] = useState(initialPage);
+  // The URL is the committed search state. Keeping a second submittedQ/type/
+  // page state here allowed a navigation (back/forward, a pasted URL, or a
+  // router refresh) to leave the visible result set one query behind.
+  const submittedQ = searchParams.get('q') ?? '';
+  const type = searchParams.get('type') || ALL;
+  const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1);
+  const [q, setQ] = useState(submittedQ);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [requestKey, setRequestKey] = useState(0);
+
+  // Preserve an in-progress edit while changing tabs, but restore the input
+  // when the committed query itself changes through navigation or refresh.
+  useEffect(() => {
+    setQ(submittedQ);
+  }, [submittedQ]);
+
+  const replaceSearch = useCallback((next: {
+    q?: string;
+    type?: string;
+    page?: number;
+  }) => {
+    const params = new URLSearchParams();
+    const nextQ = next.q ?? submittedQ;
+    const nextType = next.type ?? type;
+    const nextPage = next.page ?? page;
+    if (nextQ) params.set('q', nextQ);
+    if (nextType !== ALL) params.set('type', nextType);
+    if (nextPage > 1) params.set('page', String(nextPage));
+    const qs = params.toString();
+    router.replace(qs ? `/search?${qs}` : '/search');
+  }, [page, router, submittedQ, type]);
 
   const detailHref = useCallback((row: SearchRow) => {
     const base = row.type === 'radar'
@@ -106,23 +127,22 @@ function SearchContent() {
     return `${base}?returnTo=${encodeURIComponent(returnTo)}`;
   }, [searchParams]);
 
-  // 同步 query string（不刷页面，仅 router.replace）
-  useEffect(() => {
-    const params = new URLSearchParams();
-    if (submittedQ) params.set('q', submittedQ);
-    if (type !== ALL) params.set('type', type);
-    if (page > 1) params.set('page', String(page));
-    const qs = params.toString();
-    router.replace(qs ? `/search?${qs}` : '/search');
-  }, [submittedQ, type, page, router]);
-
   // 拉取结果
   useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+
     if (!submittedQ) {
       setData(null);
+      setError(null);
+      setLoading(false);
       return;
     }
-    let cancelled = false;
+    // Do not leave a previous query's rows visible while the new query is in
+    // flight. AbortController also prevents a slow response from consuming
+    // the browser connection and complements the active guard for runtimes
+    // that do not abort a fetch immediately.
+    setData(null);
     setLoading(true);
     setError(null);
     const params = new URLSearchParams();
@@ -130,7 +150,7 @@ function SearchContent() {
     if (type !== ALL) params.set('type', type);
     params.set('page', String(page));
     params.set('per_page', '20');
-    fetch(`/api/search?${params.toString()}`)
+    fetch(`/api/search?${params.toString()}`, { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -139,26 +159,27 @@ function SearchContent() {
         return res.json() as Promise<SearchResponse>;
       })
       .then((body) => {
-        if (!cancelled) setData(body);
+        if (active) setData(body);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : '搜索失败');
+        if (!active || (err instanceof DOMException && err.name === 'AbortError')) return;
+        setError(err instanceof Error ? err.message : '搜索失败');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (active) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      active = false;
+      controller.abort();
     };
   }, [submittedQ, type, page, requestKey]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      setSubmittedQ(q.trim());
-      setPage(1);
+      replaceSearch({ q: q.trim(), page: 1 });
     },
-    [q],
+    [q, replaceSearch],
   );
 
   const totalPages = data?.totalPages ?? 0;
@@ -188,8 +209,7 @@ function SearchContent() {
       <Tabs
         value={type}
         onValueChange={(v) => {
-          setType(v);
-          setPage(1);
+          replaceSearch({ type: v, page: 1 });
         }}
       >
         <TabsList className="w-full justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -278,7 +298,7 @@ function SearchContent() {
             <Pagination
               page={page}
               totalPages={totalPages}
-              onPageChange={setPage}
+              onPageChange={(nextPage) => replaceSearch({ page: nextPage })}
               disabled={loading}
             />
           </>

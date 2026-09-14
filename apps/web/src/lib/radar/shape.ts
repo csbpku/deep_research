@@ -11,6 +11,7 @@ import {
   DistilledScoreSchema,
   type DistilledScore,
 } from '@deep-research/shared/schemas';
+import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
 
 export type RadarFeedbackCount = {
   useful: number;
@@ -164,7 +165,10 @@ export function shapeCandidate(input: {
   const githubItemMeta = parseGithubItemMeta(s.originalMeta);
   return {
     id: s.id,
-    title: s.title,
+    // Older radar rows can contain HTML entities from RSS/vendor extraction.
+    // Normalize at the API boundary so every list/card consumer sees the same
+    // readable title, including historical rows that are not re-enriched.
+    title: cleanResearchLabel(s.title),
     excerpt: excerptOf(s.body, 1200),
     excerptDisplay: classifyExcerptDisplay(excerptOf(s.body, 1200)),
     body: input.includeBody === false ? null : s.body,

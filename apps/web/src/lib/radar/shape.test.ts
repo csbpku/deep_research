@@ -289,6 +289,34 @@ describe('parseGithubItemMeta', () => {
 });
 
 describe('shapeCandidate', () => {
+  it('decodes legacy HTML entities in radar titles', () => {
+    const shaped = shapeCandidate({
+      summary: {
+        id: 'summary-title-1',
+        title: 'Claude Preview&#x27;s capabilities',
+        body: 'Body',
+        url: 'https://example.com',
+        tags: [],
+        status: 'candidate',
+        summaryDate: new Date('2026-08-26T00:00:00Z'),
+        publishedAt: null,
+        createdAt: new Date('2026-08-26T00:00:00Z'),
+        interpretation: null,
+        scoreReason: null,
+        scoreVersion: null,
+        relevanceScore: null,
+        timelinessScore: null,
+        sourceQualityScore: null,
+        distilledScore: null,
+        selectionReason: null,
+        sortOrder: null,
+        syncRunId: null,
+      },
+    });
+
+    expect(shaped.title).toBe("Claude Preview's capabilities");
+  });
+
   it('does not expose legacy GitHub activity data in the detail payload', () => {
     const shaped = shapeCandidate({
       summary: {

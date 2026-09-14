@@ -65,7 +65,11 @@ function splitPlanItems(value: string): string[] {
 
 function inferComparisonOptions(question: string): string[] {
   const comparison = question.match(/(?:比较|对比|compare)\s+(.+?)(?=[:：。！？!?]|$)/iu);
-  if (!comparison) return [];
+  if (!comparison) {
+    const versus = question.match(/(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?=[:：。！？!?]|$)/iu);
+    if (!versus) return [];
+    return Array.from(new Set(splitPlanItems(`${versus[1]}、${versus[2]}`)));
+  }
   return Array.from(new Set(splitPlanItems(comparison[1])));
 }
 

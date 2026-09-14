@@ -236,6 +236,21 @@ describe('buildSearchSql', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('shapeSearchRow', () => {
+  it('decodes legacy HTML entities in result titles', () => {
+    const shaped = shapeSearchRow({
+      id: 'radar:1',
+      type: 'radar',
+      refId: '1',
+      title: 'Claude Preview&#x27;s capabilities',
+      snippet: 'body',
+      highlighted: 'body',
+      publishedAt: new Date('2026-09-01T00:00:00Z'),
+      rank: 1,
+    });
+
+    expect(shaped.title).toBe("Claude Preview's capabilities");
+  });
+
   it('converts Date to ISO string', () => {
     const d = new Date('2026-07-23T10:00:00Z');
     const shaped = shapeSearchRow({

@@ -8,6 +8,7 @@
 //   - 全部结果中，已发布雷达只保留 radar 形态，避免与 summary 重复
 
 import type { Prisma } from '@prisma/client';
+import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
 
 /**
  * 搜索参数。
@@ -223,7 +224,7 @@ export function shapeSearchRow(row: {
     id: row.id,
     type: row.type,
     refId: row.refId,
-    title: row.title,
+    title: cleanResearchLabel(row.title),
     snippet: row.snippet,
     highlighted: sanitizeSearchHighlight(row.highlighted),
     publishedAt: row.publishedAt.toISOString(),
