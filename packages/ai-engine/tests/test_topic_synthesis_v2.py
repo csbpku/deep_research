@@ -221,6 +221,23 @@ def test_normalize_issues_filters_invalid_summary_ids() -> None:
     assert out[0]["summaryIds"] == ["good"]
 
 
+def test_normalize_issues_accepts_candidate_ids_alias() -> None:
+    out = _normalize_issues(
+        {
+            "issues": [
+                {
+                    "kind": "event",
+                    "title": "Alias",
+                    "proposition": "A traceable issue",
+                    "candidateIds": ["good"],
+                },
+            ],
+        },
+        {"good"},
+    )
+    assert out[0]["summaryIds"] == ["good"]
+
+
 def test_near_duplicate_issues_require_evidence_overlap_and_related_claims() -> None:
     benchmark = {
         "kind": "problem",

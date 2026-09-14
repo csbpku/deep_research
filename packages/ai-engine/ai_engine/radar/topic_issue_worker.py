@@ -371,9 +371,12 @@ def _normalize_issues(raw: dict[str, Any], valid_ids: set[str]) -> list[dict[str
             continue
         title = str(item.get("title") or "").strip()[:200]
         proposition = str(item.get("proposition") or "").strip()[:1000]
+        # Some compatible models use the prompt's semantic name rather than
+        # the historical field name.  Accept both aliases, but still filter
+        # strictly against the candidates in this run.
         summary_ids = [
             str(x).strip()
-            for x in (item.get("summaryIds") or [])
+            for x in (item.get("summaryIds") or item.get("candidateIds") or [])
             if str(x).strip() in valid_ids
         ]
         if not title or not proposition or not summary_ids:
@@ -646,8 +649,12 @@ async def _process_topic(pool: Any, topic_id: str) -> dict[str, int]:
         "considered": len(new_rows),
         "created": created,
         "skipped": skipped,
-        "fallback": int(used_fallback and created > 0),
-        "failed": int(used_fallback and created == 0),
+        # A degraded issue that is deduplicated or rejected by the existing
+        # governance threshold is not an LLM failure.  Count it as fallback
+        # coverage and reserve failed for a fallback that could not even be
+        # considered for persistence.
+        "fallback": int(used_fallback and (created > 0 or skipped > 0)),
+        "failed": int(used_fallback and created == 0 and skipped == 0),
     }
 
 
