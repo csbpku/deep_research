@@ -23,6 +23,7 @@ import {
   type ResearchOutputSource,
 } from '@/components/ai-research/ResearchOutputViews';
 import { extractResearchTitle, cleanEvidenceSnippet } from '@/lib/research-report';
+import { compactResearchCitations } from '@/lib/research-citations';
 import { researchUserStatus } from '@/lib/research-user-status';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 import { cn } from '@/lib/utils';
@@ -43,11 +44,13 @@ export interface ResearchWebBriefProps {
  * 可以各自优化，而事实仍然只有一份。
  */
 export function ResearchWebBrief({ content, sources = [], title, reviewStatus, showQualityStatus = true }: ResearchWebBriefProps) {
-  const sections = extractSections(content);
-  const summary = extractDecisionSummaryDetails(content);
-  const risks = extractBulletsFromSections(content, /风险|局限|挑战|代价|注意|限制|risk|limitation/iu);
-  const actions = extractBulletsFromSections(content, /行动|下一步|建议|验证|落地|action|recommendation|next/iu);
+  const displayContent = compactResearchCitations(content, sources);
+  const sections = extractSections(displayContent);
+  const summary = extractDecisionSummaryDetails(displayContent);
+  const risks = extractBulletsFromSections(displayContent, /风险|局限|挑战|代价|注意|限制|risk|limitation/iu);
+  const actions = extractBulletsFromSections(displayContent, /行动|下一步|建议|验证|落地|action|recommendation|next/iu);
   const evidenceMap = extractEvidenceMap(content, sources);
+  const bibliography = sections.find((section) => /参考文献|参考资料|references?|bibliography/iu.test(section.heading));
   const inspectableSources = sources.filter((source) => source.href && source.snippet?.trim()).length;
   const findings = sections
     .filter((section) => section.level >= 2 && !isMetaSection(section.heading) && hasSectionContent(section.body))
@@ -213,6 +216,15 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
                 {sources.length > 8 ? <p className="mt-3 text-center text-[11px] text-muted-foreground">已展示前 8 条来源；其余 {sources.length - 8} 条资料仍保留在研究过程的资料账本中。</p> : null}
               </>
             ) : <p className="mt-4 text-sm text-muted-foreground">本轮没有保存可核对来源。</p>}
+            {bibliography ? (
+              <div className="mt-6 border-t border-border pt-5">
+                <h3 className="text-sm font-semibold">参考文献</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">正文中的编号引用可回到这里；来源标题链接会在新标签页打开原始页面。</p>
+                <div className="mt-3 prose max-w-none text-sm [&_ul]:my-0 [&_li]:my-1">
+                  <MarkdownContent content={bibliography.body.join('\n').trim()} compact />
+                </div>
+              </div>
+            ) : null}
           </section>
         </div>
 

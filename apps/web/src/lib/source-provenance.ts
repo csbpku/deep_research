@@ -45,9 +45,52 @@ const STANDARD_HOSTS = new Set([
   'unicode.org',
 ]);
 
+// A source can only be called "official documentation" when its hostname is
+// on a maintained first-party allowlist. A /docs path, a page title, or a
+// model-provided `official_document` type is not proof of ownership.
+const OFFICIAL_DOC_HOSTS = new Set([
+  'ai.google.dev',
+  'certbot.eff.org',
+  'cloud.google.com',
+  'developer.chrome.com',
+  'developer.mozilla.org',
+  'developers.google.com',
+  'developers.openai.com',
+  'docs.anthropic.com',
+  'docs.aws.amazon.com',
+  'docs.docker.com',
+  'docs.gitlab.com',
+  'docs.github.com',
+  'docs.python.org',
+  'duckdb.org',
+  'kubernetes.io',
+  'learn.microsoft.com',
+  'nextjs.org',
+  'nginx.org',
+  'nodejs.org',
+  'openai.com',
+  'platform.openai.com',
+  'postgresql.org',
+  'react.dev',
+  'sqlite.org',
+  'vercel.com',
+]);
+
 const REPOSITORY_HOSTS = new Set(['github.com', 'gitlab.com', 'codeberg.org', 'bitbucket.org', 'sourceforge.net']);
 const PAPER_HOSTS = new Set(['doi.org', 'arxiv.org', 'aclanthology.org', 'semanticscholar.org']);
-const DIRECTORY_HOSTS = new Set(['zread.ai', 'hub.docker.com', 'npmjs.com', 'www.npmjs.com', 'pypi.org', 'libraries.io']);
+const DIRECTORY_HOSTS = new Set([
+  'aardio.com',
+  'coddy.tech',
+  'hub.docker.com',
+  'libraries.io',
+  'npmjs.com',
+  'pypi.org',
+  'readthedocs.io',
+  'runebook.dev',
+  'typeerror.org',
+  'w3cub.com',
+  'zread.ai',
+]);
 const COMMUNITY_HOSTS = new Set([
   'stackoverflow.com',
   'stackexchange.com',
@@ -78,17 +121,20 @@ function parseUrl(value: string | null | undefined): URL | null {
 
 function classifyHost(host: string, pathAndTitle: string, type: string | null | undefined): SourceProvenanceKind {
   const normalizedType = type?.toLocaleLowerCase() ?? '';
-  if (normalizedType.includes('official_repository')) return 'repository';
-  if (normalizedType.includes('official_document')) return 'official_docs';
-  if (normalizedType.includes('standard')) return 'standard';
-  if (normalizedType.includes('community')) return 'community';
-  if (normalizedType === 'doi' || normalizedType === 'arxiv' || hostMatches(host, PAPER_HOSTS)) return 'paper';
   if (hostMatches(host, STANDARD_HOSTS) || /\b(?:rfc|iso|ecma|w3c|whatwg|tc39)\b|标准|规范/iu.test(pathAndTitle)) return 'standard';
   if (hostMatches(host, REPOSITORY_HOSTS)) return 'repository';
+  if (normalizedType === 'doi' || normalizedType === 'arxiv' || hostMatches(host, PAPER_HOSTS)) return 'paper';
   if (hostMatches(host, DIRECTORY_HOSTS) || /(?:mirror|registry|directory|目录|镜像)/iu.test(pathAndTitle)) return 'directory';
   if (hostMatches(host, COMMUNITY_HOSTS) || /(?:stackoverflow|reddit|forum|community|讨论|社区|博客|blog)/iu.test(pathAndTitle)) return 'community';
-  if (/^(?:docs?|developer|developers|dev|reference)\./iu.test(host) || /(?:\/docs?(?:\/|$)|\/reference(?:\/|$)|官方文档|official documentation)/iu.test(pathAndTitle)) return 'official_docs';
-  if (/(?:官方|official|vendor|厂商|产品资料)/iu.test(pathAndTitle)) return 'vendor';
+  if (hostMatches(host, OFFICIAL_DOC_HOSTS)) return 'official_docs';
+  // The type field is advisory metadata from a retriever/model. It may
+  // upgrade a known first-party hostname, but it must never override the
+  // domain checks above and turn an arbitrary mirror into official material.
+  if (normalizedType.includes('official_repository')) return 'web';
+  if (normalizedType.includes('official_document')) return 'web';
+  if (normalizedType.includes('standard')) return 'web';
+  if (normalizedType.includes('community')) return 'community';
+  if (/(?:vendor|厂商|产品资料)/iu.test(normalizedType) || /(?:vendor|厂商|产品资料)/iu.test(pathAndTitle)) return 'vendor';
   return 'web';
 }
 
@@ -104,11 +150,11 @@ export function classifySourceProvenance(input: {
   const kind = host
     ? classifyHost(host, context, input.type)
     : normalizedType.includes('official_repository')
-      ? 'repository'
+      ? 'web'
       : normalizedType.includes('official_document')
-        ? 'official_docs'
+        ? 'web'
         : normalizedType.includes('standard')
-          ? 'standard'
+          ? 'web'
           : normalizedType.includes('community')
             ? 'community'
             : 'web';

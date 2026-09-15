@@ -81,6 +81,7 @@ infra/wewe-rss/data/
 # docker compose 启动时在宿主机创建的挂载目录
 infra/logs/
 infra/certs/
+infra/certbot/
 
 # Registry deploy marker written on the VPS
 .deployed-image-tag

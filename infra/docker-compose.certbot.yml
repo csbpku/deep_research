@@ -1,0 +1,17 @@
+# Compatibility override for VPS hosts whose base Compose file predates the
+# tracked Certbot service. It only adds the ACME webroot and one-shot client.
+
+services:
+  nginx:
+    volumes:
+      - ./certbot/www:/var/www/certbot:ro
+
+  certbot:
+    build:
+      context: .
+      dockerfile: certbot.Dockerfile
+    image: deep-research-certbot:local
+    profiles: ["certbot"]
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot

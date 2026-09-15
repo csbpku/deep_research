@@ -2,12 +2,12 @@
 
 FastAPI/Python 服务，负责 AI 调研适配、异步任务、技术雷达抓取与解读、导入/分享 worker、SSRF-safe URL fetch，以及摘要上下文 AI 讨论。
 
-## 当前能力（2026-09-04）
+## 当前能力
 
 - `adapters/`：统一 `ResearchEngineAdapter` 协议，当前运行时使用
   `gpt_researcher`，`fake` 仅用于测试/CI 或无凭证的 UI walkthrough。
 - `job_runner/`：内存/数据库 store、幂等 replay、日配额、lease、reaper、深度研究检查点和独立事实审核队列。
-- `radar/`：GitHub、arXiv、RSS source 管理、抓取、同步、解释、内容呈现审核和真实浏览器渲染审核流水线。
+- `radar/`：GitHub、arXiv、RSS source 管理、抓取、同步、解释、reader quality 和内容审核流水线；真实浏览器渲染审核是可选 profile。
 - `fetcher/`：SSRF-safe URL fetch 与 source URL 处理（gpt-researcher 内部使用 Tavily/DuckDuckGo 作为 retriever；该配置来自 `RETRIEVER` env，不再走我们 fetcher 目录）。
 - `server/`：health、AI job、独立 fact-review worker、radar sync、share submission 和 chat endpoints。
 - 顶层 worker：文件导入与分享提交处理。

@@ -1451,6 +1451,52 @@ def _deterministic_claim_floor(report: str) -> int:
     return 1 if _report_requires_claim_review(report) else 0
 
 
+def _fallback_claims_from_report(report: str) -> tuple[ClaimVerdict, ...]:
+    """Keep a conservative unresolved ledger when claim extraction is empty.
+
+    This is deliberately not a second fact extractor. It only preserves
+    sentence-shaped text with durable fact markers (numbers, versions, URLs,
+    or named products) so an empty model response cannot make a long report
+    look as if it had no claims. Every row remains ``unverified`` and
+    ``not_judged``; no evidence relationship is invented here.
+    """
+    body = _report_body_without_references(report)
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"(?<=[。！？.!?])\s+|\n+", body):
+        sentence = re.sub(r"\s+", " ", raw).strip(" -*•\t")
+        if len(sentence) < 24 or sentence.startswith("#"):
+            continue
+        has_fact_marker = bool(
+            re.search(r"\d", sentence)
+            or re.search(r"(?:github\.com|npmjs\.com|pypi\.org|arxiv\.org|doi\.org)", sentence, re.IGNORECASE)
+            or re.search(r"\b(?:Claude|Gemini|ChatGPT|OpenAI|Google|Anthropic|GitHub|npm|PyPI|arXiv)\b", sentence)
+        )
+        if not has_fact_marker:
+            continue
+        key = sentence.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(sentence)
+        if len(candidates) >= 24:
+            break
+    return tuple(
+        ClaimVerdict(
+            claim_id=f"fallback-{index}",
+            claim=sentence,
+            risk="medium",
+            verdict="unverified",
+            evidence=None,
+            reason="声明抽取没有返回可审核清单；这条内容已保留，但尚未完成逐条证据判断。",
+            judgment_status="not_judged",
+            execution_error_code="empty_claim_inventory",
+            claim_type="external_fact",
+        )
+        for index, sentence in enumerate(candidates, start=1)
+    )
+
+
 def _review_outcome(result: ReviewResult) -> Literal["clear", "attention", "blocked", "unavailable"]:
     """Map operational review state and claim findings to a product outcome."""
     if result.status == "review_unavailable":
@@ -1995,6 +2041,19 @@ class DefaultResearchReviewer:
                 llm_result = _parse_review_payload(_extract_json_object(legacy_generated.text))
                 if _report_requires_claim_review(report):
                     llm_result = replace(llm_result, coverage_status="insufficient")
+                    if not llm_result.claims:
+                        # The legacy compatibility call is allowed to fail,
+                        # but an empty response must not erase the report's
+                        # visible factual worklist. Preserve a bounded,
+                        # explicitly unresolved fallback ledger instead.
+                        fallback_claims = _fallback_claims_from_report(report)
+                        if fallback_claims:
+                            llm_result = replace(
+                                llm_result,
+                                claims=fallback_claims,
+                                error="声明抽取返回空结果，已保留未确认事实句",
+                                error_code="invalid_output",
+                            )
             else:
                 # Phase 2: adjudicate only the external-fact subset against
                 # the captured ledger. Each bounded batch has its own retry
@@ -2061,7 +2120,7 @@ class DefaultResearchReviewer:
                     retry_raw,
                 )
                 exc = retry_exc
-                fallback_claims = [*deterministic, *citation_ledger]
+                fallback_claims = (*deterministic, *citation_ledger)
                 # A malformed reviewer response is a reviewer failure, not
                 # proof that the report passed. Keep deterministic findings
                 # and explicit citation relationships visible, but label

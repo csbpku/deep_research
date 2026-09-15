@@ -1,7 +1,8 @@
 # AI技术调研平台 · 架构方案
 
-> 版本：v4.0 · 2026-09-04
+> 版本：v4.0 · 2026-09-14
 > 本文件描述当前系统架构、数据模型、安全边界与部署拓扑；只记录现状，不写演进过程。
+> 一页技术摘要见 [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md)。
 
 ---
 
@@ -73,7 +74,7 @@ flowchart LR
 - Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；邮箱密码账号通过 allowlist + 邀请码激活，公开注册关闭。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
 - AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计。
-- 数据源：Tavily、arxiv（可选 MCP）、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；可选只读 sidecar：AnythingLLM 雷达/聊天集成、GBrain MCP 知识检索。
+- 数据源：Tavily、arxiv、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；可选只读 sidecar：AnythingLLM 雷达/聊天集成、GBrain MCP 知识检索。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
 
 ### 部署拓扑
@@ -225,7 +226,7 @@ flowchart LR
 - 抓取正文先经过正文抽取、Markdown 转换和 deterministic normalizer，再保存为 `originalMarkdown`。
 - `originalSha256` 是正文版本锚点；翻译、AI 阅读和高亮结果必须携带对应 source hash，不能覆盖原文。
 - Web 端统一使用 `MarkdownContent` renderer；原始 HTML 默认跳过，URL 协议只允许 `http`、`https`、`mailto`。
-- `collection/deep_read` enrichment 完成后先执行内容呈现审核，再进入独立的真实浏览器渲染审核；内容审核和渲染审核都最多两轮，浏览器不可用标记 `unavailable`，不把审核失败伪装成 enrichment 失败。
+- `collection/deep_read` enrichment 完成后先执行 reader quality 和内容呈现审核；真实浏览器渲染审核属于可选 `browser-review` profile，不进入默认生产流程。历史浏览器 `unavailable` 不代表当前内容审核失败，也不应把审核失败伪装成 enrichment 失败。
 - 雷达详情公开读取；反馈、评论、AI 聊天和深入调研仍走登录权限。
 
 ### 文件导入

@@ -173,7 +173,9 @@ services:
       RADAR_SCORING_CONCURRENCY: ${RADAR_SCORING_CONCURRENCY:-8}
       RADAR_ENRICHMENT_CONCURRENCY: ${RADAR_ENRICHMENT_CONCURRENCY:-2}
       RADAR_ENRICHMENT_HEARTBEAT_SECONDS: ${RADAR_ENRICHMENT_HEARTBEAT_SECONDS:-60}
-      RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS: ${RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS:-600}
+      # 0 delegates the budget to the durable source worker/Zread CLI. Set a
+      # positive value only when an operator explicitly wants an outer cap.
+      RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS: ${RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS:-0}
       RADAR_ENRICHMENT_LEASE_SECONDS: ${RADAR_ENRICHMENT_LEASE_SECONDS:-900}
       # GitHub repo enrichment order: public Zread -> local zread CLI -> README.
       # The CLI is installed in the AI image; its checkout/drafts survive
@@ -240,10 +242,20 @@ services:
       # can select nginx-tls.conf without changing this tracked topology.
       - ./${NGINX_CONFIG:-nginx.conf}:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
+      - ./certbot/www:/var/www/certbot:ro
       - ./logs/nginx:/var/log/nginx
     depends_on:
       - web
       - ai-engine
+
+  # One-shot ACME client. Run with:
+  #   docker compose --profile certbot run --rm certbot certonly ...
+  certbot:
+    image: certbot/certbot
+    profiles: ["certbot"]
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
 
 volumes:
   postgres-data:

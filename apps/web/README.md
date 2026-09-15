@@ -2,7 +2,7 @@
 
 Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/内容工作流和 Prisma 数据访问。跨运行时契约以根目录 `docs/contracts/`、`packages/shared/` 和 `apps/web/prisma/schema.prisma` 为准。
 
-## 当前能力（2026-09-04）
+## 当前能力
 
 - 页面：技术雷达与详情、主题、研究库/知识卡片、文件导入、AI 调研、搜索、登录和 Admin。
 - AI 调研：研究稿、快速判断、Slides 提纲、独立网页简报；深度任务会展示实际证据进度，运行中/部分完成的研究稿可读但仍受事实审核和发布门禁约束。

@@ -58,6 +58,19 @@ export interface ResearchSufficiency {
   recommendation: StructuredRecommendationQuality;
 }
 
+export interface ResearchSufficiencyGapGroup {
+  option: string;
+  dimensions: string[];
+}
+
+export interface ResearchSufficiencyGapSummary {
+  /** Number of missing option × dimension cells in the decision matrix. */
+  cellCount: number;
+  groups: ResearchSufficiencyGapGroup[];
+  /** Non-matrix gaps, deduplicated while preserving their first occurrence. */
+  otherGaps: string[];
+}
+
 export interface ResearchSufficiencySource {
   id?: string | null;
   canonicalKey?: string | null;
@@ -110,6 +123,51 @@ const DIMENSION_ALIASES: Record<string, string[]> = {
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase().replace(/[\u200b\uFEFF]/gu, '').replace(/[\s\p{P}\p{S}]+/gu, '').trim();
+}
+
+function dedupeLabels(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = normalize(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Turn the matrix's Cartesian-product gaps into a reader-sized summary.
+ *
+ * The matrix remains the source of truth, but displaying all of its cells in
+ * one sentence makes a large comparison look like duplicated model output.
+ * Keep the grouping deterministic so the progress card and the result page
+ * explain the same missing evidence in the same order.
+ */
+export function summarizeResearchSufficiencyGaps(
+  input: Pick<ResearchSufficiency, 'missing' | 'matrix'>,
+): ResearchSufficiencyGapSummary {
+  const matrix = input.matrix;
+  const missingCells = matrix?.cells.filter((cell) => cell.state !== 'evidence') ?? [];
+  const matrixGapKeys = new Set(
+    (matrix?.missingCells ?? missingCells.map((cell) => `${cell.option} × ${cell.dimension}`))
+      .map((value) => normalize(value)),
+  );
+  const groups: ResearchSufficiencyGapGroup[] = [];
+  const byOption = new Map<string, ResearchSufficiencyGapGroup>();
+  for (const cell of missingCells) {
+    let group = byOption.get(cell.option);
+    if (!group) {
+      group = { option: cell.option, dimensions: [] };
+      byOption.set(cell.option, group);
+      groups.push(group);
+    }
+    if (!group.dimensions.includes(cell.dimension)) group.dimensions.push(cell.dimension);
+  }
+  const matrixOptions = new Set((matrix?.options ?? []).map((option) => normalize(option)));
+  const otherGaps = dedupeLabels(input.missing.filter((gap) => (
+    !matrixGapKeys.has(normalize(gap)) && !matrixOptions.has(normalize(gap))
+  )));
+  return { cellCount: missingCells.length, groups, otherGaps };
 }
 
 function asciiTokens(value: string): string[] {

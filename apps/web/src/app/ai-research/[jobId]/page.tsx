@@ -74,7 +74,10 @@ import { ResearchChatPanel } from '@/components/ai-research/ResearchChatPanel';
 import { AiResearchWorkspaceSidebar } from '@/components/ai-research/AiResearchWorkspaceSidebar';
 import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
 import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
-import type { ResearchSufficiency } from '@/lib/research-sufficiency';
+import {
+  summarizeResearchSufficiencyGaps,
+  type ResearchSufficiency,
+} from '@/lib/research-sufficiency';
 import { classifySourceProvenance } from '@/lib/source-provenance';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 import type { ResearchBrief, ResearchScope } from '@deep-research/shared/schemas';
@@ -1286,7 +1289,12 @@ function checkpointGaps(s: AiJobStatus, isTerminal: boolean): string[] {
     });
   gaps.push(...coverageGaps);
   if (s.researchSufficiency?.status === 'insufficient') {
-    gaps.push(`研究计划缺口：还没有为${s.researchSufficiency.missing.join('、')}保存可核对资料。`);
+    const gapSummary = summarizeResearchSufficiencyGaps(s.researchSufficiency);
+    if (gapSummary.cellCount > 0) {
+      gaps.push(`研究计划缺口：还有 ${gapSummary.cellCount} 个方案 × 决策维度覆盖单元格待补证。`);
+      gaps.push(...gapSummary.groups.map((group) => `${group.option}：待补 ${group.dimensions.join('、')}`));
+    }
+    gaps.push(...gapSummary.otherGaps.map((gap) => `研究计划缺口：${gap}`));
   }
   if (isTerminal && s.reportType === 'summary_brief') {
     gaps.push('本轮是轻量摘要，不建立正式研究稿的声明账本；需要核验结论时建议重新运行“研究稿”。');
@@ -1383,6 +1391,9 @@ function ReviewPanel({
     claims,
     decisions,
   });
+  const sufficiencyGapSummary = researchSufficiency
+    ? summarizeResearchSufficiencyGaps(researchSufficiency)
+    : null;
   const pendingClaims = claims.filter((claim) => (
     claimIsFactual(claim)
     && claimDisplayStatus(claim) !== 'supported'
@@ -1621,7 +1632,33 @@ function ReviewPanel({
       {researchSufficiency?.status === 'insufficient' ? (
         <div className="mb-3 rounded-md border border-warning-border/70 bg-warning-bg/[0.22] px-3 py-2.5 text-xs leading-5 text-warning-fg">
           <p className="font-medium">资料范围还有缺口</p>
-          <p className="mt-0.5">当前结果还没有覆盖：{researchSufficiency.missing.join('、')}。如果要做完整比较，请补充这些资料。</p>
+          <p className="mt-0.5">
+            {sufficiencyGapSummary?.cellCount
+              ? `当前还有 ${sufficiencyGapSummary.cellCount} 个方案 × 决策维度覆盖单元格待补证。`
+              : '当前结果还有待补证的资料范围。'}
+            {' '}如果要做完整比较，请补充这些资料。
+          </p>
+          {sufficiencyGapSummary && sufficiencyGapSummary.groups.length > 0 ? (
+            <details className="mt-2 rounded border border-warning-border/50 bg-background/35 px-2.5 py-2">
+              <summary className="cursor-pointer font-medium">按方案查看待补维度</summary>
+              <div className="mt-2 space-y-1.5 text-[11px] leading-5">
+                {sufficiencyGapSummary.groups.map((group) => (
+                  <p key={group.option}>
+                    <span className="font-medium">{group.option}</span>
+                    <span className="ml-1.5">{group.dimensions.join('、')}</span>
+                  </p>
+                ))}
+              </div>
+            </details>
+          ) : null}
+          {sufficiencyGapSummary && sufficiencyGapSummary.otherGaps.length > 0 ? (
+            <details className="mt-2 rounded border border-warning-border/50 bg-background/35 px-2.5 py-2">
+              <summary className="cursor-pointer font-medium">查看其他缺口</summary>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-5">
+                {sufficiencyGapSummary.otherGaps.map((gap) => <li key={gap}>{gap}</li>)}
+              </ul>
+            </details>
+          ) : null}
           <Link href="/ai-research" className="mt-1 inline-flex font-medium text-primary hover:underline">补充资料并重新研究</Link>
         </div>
       ) : null}

@@ -77,6 +77,21 @@ describe('ResearchOutputViews', () => {
     expect(html.split('先做灰度验证').length - 1).toBe(1);
   });
 
+  it('keeps web brief citations short and renders their references below the evidence section', () => {
+    const href = 'https://builder.ai2sql.io/blog/duckdb-vs-sqlite-vs-postgresql';
+    const html = renderToStaticMarkup(createElement(ResearchOutputViews, {
+      content: `# Research title\n\n## 结论\n\nDuckDB 仅有一条对比证据 [长链接](${href})。`,
+      artifactType: 'markdown',
+      presentationType: 'web',
+      sources: [{ id: 'source-1', title: 'DuckDB vs SQLite vs PostgreSQL', href, snippet: '可核对正文' }],
+    }));
+
+    expect(html).toContain('href="#bib-1"');
+    expect(html).toContain('id="bib-1"');
+    expect(html).toContain('正文中的编号引用可回到这里');
+    expect(html).toContain('>DuckDB vs SQLite vs PostgreSQL</a>');
+  });
+
   it('passes the review state into the independent web brief', () => {
     const html = renderToStaticMarkup(createElement(ResearchOutputViews, {
       content: '# Research title\n\n## 结论\n\n先做灰度验证。',

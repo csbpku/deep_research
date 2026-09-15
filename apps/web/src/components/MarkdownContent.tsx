@@ -10,6 +10,7 @@ import MermaidDiagram, { isMermaidSource } from './MermaidDiagram';
 
 import { cn } from '@/lib/utils';
 import { prepareContent } from '@/lib/markdown-content';
+import { compactResearchCitations, type ResearchCitationSource } from '@/lib/research-citations';
 import 'katex/dist/katex.min.css';
 import 'highlight.js/styles/github.css';
 
@@ -68,6 +69,7 @@ function ReferenceLink({
         {...props}
         href={href}
         className={className}
+        aria-label={`${label} ${reactNodeText(children)}`.trim()}
         onFocus={showPreview}
         onBlur={() => setPreview(null)}
       >
@@ -134,6 +136,14 @@ function containsImageNode(node: unknown): boolean {
   const candidate = node as { tagName?: string; children?: unknown[] };
   if (candidate.tagName === 'img') return true;
   return candidate.children?.some(containsImageNode) ?? false;
+}
+
+function reactNodeText(node: React.ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeText).join('');
+  if (React.isValidElement<{ children?: React.ReactNode }>(node)) return reactNodeText(node.props.children);
+  return '';
 }
 
 const components: Components = {
@@ -214,7 +224,7 @@ const components: Components = {
           {...props}
           href={href}
           label={href.startsWith('#bib') ? '参考文献' : '脚注'}
-          className={cn(className, 'font-medium text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary')}
+          className={cn(className, 'font-medium text-primary underline decoration-primary/35 underline-offset-2 hover:decoration-primary focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary')}
         >
           {children}
         </ReferenceLink>
@@ -242,6 +252,15 @@ const components: Components = {
         </a>
       </MarkdownInsideLinkContext.Provider>
     );
+  },
+
+  // Citation markers point to a stable list item in the reader-facing
+  // bibliography. The marker is intentionally part of the Markdown text so
+  // the same target remains keyboard and screen-reader navigable.
+  li: ({ children, node, ...props }) => {
+    void node;
+    const marker = /^\s*\[(\d+)\](?:\s|$)/u.exec(reactNodeText(children));
+    return <li {...props} id={marker ? `bib-${marker[1]}` : undefined}>{children}</li>;
   },
 
   // prose 默认的 pre 不折行，长 URL / 长日志会把布局撑破。
@@ -284,6 +303,8 @@ export default function MarkdownContent({
   className,
   compact = false,
   onLinkClick,
+  compactCitations = false,
+  citationSources = [],
 }: {
   content: string;
   className?: string;
@@ -291,7 +312,14 @@ export default function MarkdownContent({
   compact?: boolean;
   /** Optional surface-specific link interception; ordinary links remain new-tab links by default. */
   onLinkClick?: MarkdownLinkClickHandler;
+  /** Compact source-backed external links into reader-facing bibliography markers. */
+  compactCitations?: boolean;
+  citationSources?: readonly ResearchCitationSource[];
 }) {
+  const displayContent = compactCitations
+    ? compactResearchCitations(content, citationSources)
+    : content;
+
   return (
     <div
       className={cn(
@@ -318,7 +346,7 @@ export default function MarkdownContent({
           urlTransform={transformMarkdownUrl}
           components={components}
         >
-          {prepareContent(content)}
+          {prepareContent(displayContent)}
         </ReactMarkdown>
       </MarkdownLinkClickContext.Provider>
     </div>

@@ -1,8 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluateResearchSufficiency } from './research-sufficiency';
+import { evaluateResearchSufficiency, summarizeResearchSufficiencyGaps } from './research-sufficiency';
 
 describe('evaluateResearchSufficiency', () => {
+  it('summarizes matrix gaps by option instead of repeating the Cartesian product', () => {
+    const result = evaluateResearchSufficiency({
+      brief: {
+        objective: 'decide',
+        comparisonOptions: ['PostgreSQL 16', 'SQLite 3.45+'],
+        decisionDimensions: ['效果与适用范围', '网络/性能实测', '回滚与恢复'],
+      },
+      sources: [],
+      reportContent: null,
+    });
+    const summary = summarizeResearchSufficiencyGaps(result);
+
+    expect(summary.cellCount).toBe(6);
+    expect(summary.groups).toEqual([
+      {
+        option: 'PostgreSQL 16',
+        dimensions: ['效果与适用范围', '网络/性能实测', '回滚与恢复'],
+      },
+      {
+        option: 'SQLite 3.45+',
+        dimensions: ['效果与适用范围', '网络/性能实测', '回滚与恢复'],
+      },
+    ]);
+    expect(summary.otherGaps).toEqual([]);
+  });
+
+  it('deduplicates non-matrix gaps while preserving their first occurrence', () => {
+    const summary = summarizeResearchSufficiencyGaps({
+      missing: ['官方资料', '官方资料', '结构化推荐（缺少：置信度）'],
+      matrix: null,
+    });
+    expect(summary.otherGaps).toEqual(['官方资料', '结构化推荐（缺少：置信度）']);
+  });
+
   it('does not use a raw source count to claim that an explicit comparison is covered', () => {
     const result = evaluateResearchSufficiency({
       brief: {

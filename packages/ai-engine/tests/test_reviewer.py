@@ -202,6 +202,38 @@ async def test_dynamic_resolver_failure_still_builds_full_inventory_without_dupl
 
 
 @pytest.mark.asyncio
+async def test_empty_claim_inventory_keeps_long_report_facts_as_unresolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def empty_review(**_: object) -> SimpleNamespace:
+        return SimpleNamespace(text='{"status":"passed","claims":[],"revision_instructions":[]}')
+
+    monkeypatch.setattr("ai_engine.reviewer.generate_text", empty_review)
+    result = await DefaultResearchReviewer().review(
+        """# 数据库选型
+
+        PostgreSQL 16 支持并发写入，SQLite 3.45+ 适合单机部署。该报告包含 16 个关键判断，
+            但本轮没有完成声明抽取，因此任何数字都不能直接视为已核实。这里补充一段足够长的
+            研究正文，模拟真实长文中的部署、恢复、成本和性能比较；这些内容都应该被保留下来，
+            但在审核服务没有返回声明清单时只能显示为未确认，不能被系统默认为已经完成核验。
+            研究者还需要知道哪些数据来自原始文档，哪些数据只是社区经验，哪些结论需要在目标
+            VPS 上重新测试。即使模型给出了完整的段落，也不能因为正文存在就把来源数量当成
+            证据强度，更不能因为审核调用返回成功就把空账本解释为没有可审核的事实。这个门禁
+            必须在真实长文中稳定生效。还应记录发布时间、来源类型、反例、失败率、磁盘空间、
+            回滚步骤和验证耗时，确保后续读者知道哪些结论已经完成核对，哪些结论仍然只是待办事项。""",
+        (_source("https://example.com/source"),),
+        "PostgreSQL 16 与 SQLite 3.45+",
+    )
+
+    assert result.status == "needs_revision"
+    assert result.coverage_status == "insufficient"
+    assert result.claims
+    assert result.factual_claim_count == len(result.claims)
+    assert all(claim.verdict == "unverified" for claim in result.claims)
+    assert all(claim.judgment_status == "not_judged" for claim in result.claims)
+
+
+@pytest.mark.asyncio
 async def test_multiple_repositories_are_not_cross_matched(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fail_if_called(*_: object, **__: object) -> None:
         raise AssertionError("ambiguous repositories must not call a resolver")

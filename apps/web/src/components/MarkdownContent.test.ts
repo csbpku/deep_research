@@ -33,6 +33,26 @@ describe('MarkdownContent links', () => {
     expect(html).toContain('>Source.</a>');
   });
 
+  it('renders compact research citations as in-page numeric markers with a bibliography target', () => {
+    const href = 'https://builder.ai2sql.io/blog/duckdb-vs-sqlite-vs-postgresql';
+    const html = renderToStaticMarkup(
+      createElement(MarkdownContent, {
+        content: `正文 [长标题](${href})。`,
+        compactCitations: true,
+        citationSources: [{ title: 'DuckDB vs SQLite vs PostgreSQL', href }],
+      }),
+    );
+
+    expect(html).toContain('href="#bib-1"');
+    expect(html).toContain('>1</a>');
+    expect(html).toContain('aria-label="参考文献 1"');
+    expect(html).toContain('focus-visible:outline-2');
+    expect(html).toContain('id="bib-1"');
+    expect(html).toContain('>DuckDB vs SQLite vs PostgreSQL</a>');
+    expect(html).toContain(`href="${href}"`);
+    expect(html).toContain('target="_blank"');
+  });
+
   it('does not render dangerous URL protocols or raw HTML', () => {
     const html = renderToStaticMarkup(
       createElement(MarkdownContent, {

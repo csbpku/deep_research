@@ -94,7 +94,7 @@ export function ResearchOutputViews({ content, artifactType, sources = [], evide
       ) : null}
       <div role="tabpanel" aria-label={tabs.find((tab) => tab.value === active)?.label ?? '研究产物'}>
         {active === 'summary' ? <SummaryView summary={summary} /> : null}
-        {active === 'report' ? <MarkdownPreview source={content} className="max-h-none overflow-visible lg:max-h-[720px] lg:overflow-y-auto" /> : null}
+        {active === 'report' ? <MarkdownPreview source={content} compactCitations citationSources={sources} className="max-h-none overflow-visible lg:max-h-[720px] lg:overflow-y-auto" /> : null}
         {active === 'outline' ? (
           outline.length > 0 ? (
             <ol className="space-y-2 border-l border-border pl-4 text-sm">

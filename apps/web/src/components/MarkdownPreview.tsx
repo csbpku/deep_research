@@ -5,6 +5,7 @@ import React from 'react';
 
 import MarkdownContent from './MarkdownContent';
 import { cn } from '@/lib/utils';
+import { compactResearchCitations, type ResearchCitationSource } from '@/lib/research-citations';
 
 interface TextSelection {
   quote: string;
@@ -16,6 +17,8 @@ interface Props {
   source: string;
   onTextSelect?: (selection: TextSelection | null) => void;
   className?: string;
+  compactCitations?: boolean;
+  citationSources?: readonly ResearchCitationSource[];
 }
 
 /**
@@ -26,8 +29,9 @@ interface Props {
  * The wrapper only owns the bounded preview surface and optional selection
  * reporting used by future citation/annotation flows.
  */
-export function MarkdownPreview({ source, onTextSelect, className }: Props) {
+export function MarkdownPreview({ source, onTextSelect, className, compactCitations = false, citationSources = [] }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const displaySource = compactCitations ? compactResearchCitations(source, citationSources) : source;
 
   useEffect(() => {
     if (!onTextSelect) return;
@@ -73,7 +77,12 @@ export function MarkdownPreview({ source, onTextSelect, className }: Props) {
         className,
       )}
     >
-      <MarkdownContent content={source} compact />
+      {compactCitations && displaySource !== source ? (
+        <p role="note" className="mb-4 border-b border-border/70 pb-3 text-[11px] leading-5 text-muted-foreground">
+          正文引用已折叠为编号；点击编号可跳到文末参考文献，悬停或聚焦可预览来源。
+        </p>
+      ) : null}
+      <MarkdownContent content={displaySource} compact />
     </div>
   );
 }

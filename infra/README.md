@@ -55,7 +55,10 @@ AI engine 镜像偏大的原因有两层：
 | `docker-compose.yml` | 核心四服务 + 可选浏览器 profile | 本地构建 / 运行时基线 |
 | `docker-compose.registry.yml` | Web / AI engine GHCR 镜像覆盖 | 默认生产部署使用 |
 | `docker-compose.registry-render-review.yml` | 可选 render-review GHCR 覆盖 | 需要真实浏览器审核时使用 |
+| `docker-compose.certbot.yml` | ACME webroot / Certbot 兼容覆盖 | 首次签证与续期使用 |
+| `certbot.Dockerfile` | Certbot + 阿里云 DNS 插件镜像 | DNS-01 自动续期使用 |
 | `nginx.conf` | 反代、限制和访问日志 | 配置就绪 |
+| `certbot-renew.sh` | ACME 证书续期并 reload nginx | 配合 cron 或 systemd timer |
 | `web.Dockerfile` | Web 镜像 | 已在 VPS 真实构建、启动和健康检查 |
 | `ai-engine.Dockerfile` | AI engine 镜像 | 已在 VPS 真实构建、启动和健康检查 |
 | `render-review.Dockerfile` | Node/Chromium 页面审核 sidecar | 可选 profile，按需构建和启用 |
@@ -138,9 +141,70 @@ GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Envir
 
 ### TLS 选择
 
-Compose 默认挂载 `nginx.conf`，适合本地 HTTP-only 联调。生产 `.env` 必须设置
-`NGINX_CONFIG=nginx-tls.conf`，并在 `infra/certs/` 放入有效的
-`fullchain.pem` 和 `privkey.pem`（私钥权限 `0600`）。`nginx-tls.conf` 会把 80
-重定向到 443，并添加 HSTS；registry 发布覆盖会保留这个选择，不会再用 HTTP
-配置覆盖生产 nginx。证书、域名和防火墙配置仍需在 VPS 上真实完成后才能宣称
-HTTPS 已验收。
+Compose 默认挂载 `nginx.conf`，适合本地 HTTP-only 联调。生产域名
+`techradar.top` 使用 `nginx-tls.conf`；它把 80 重定向到 443、保留 ACME
+HTTP-01 challenge，并添加 HSTS。registry 发布覆盖会保留这个选择，不会再用
+HTTP 配置覆盖生产 nginx。
+
+首次签发证书时，先让 DNS 的 A 记录指向 VPS，并确保防火墙放行 TCP 80/443：
+
+```bash
+cd /opt/deep-research
+mkdir -p infra/certs infra/certbot/www
+
+# 先用 HTTP-only nginx 提供 ACME challenge
+sed -i.bak 's/^NGINX_CONFIG=.*/NGINX_CONFIG=nginx.conf/' .env
+docker compose --env-file .env -f infra/docker-compose.yml up -d nginx
+
+docker compose --env-file .env -f infra/docker-compose.yml --profile certbot \
+  run --rm certbot certonly \
+  --webroot -w /var/www/certbot \
+  -d techradar.top \
+  --email you@example.com \
+  --agree-tos --no-eff-email
+
+# 切换到 TLS；NEXTAUTH_URL 必须与公开地址一致
+sed -i.bak 's/^NGINX_CONFIG=.*/NGINX_CONFIG=nginx-tls.conf/' .env
+sed -i.bak 's|^NEXTAUTH_URL=.*|NEXTAUTH_URL=https://techradar.top|' .env
+docker compose --env-file .env -f infra/docker-compose.yml up -d --force-recreate nginx
+```
+
+Certbot 证书会保存在 `infra/certs/live/techradar.top/`，不会进入 Git。续期可由
+宿主机 cron 或 systemd timer 每天执行 `infra/certbot-renew.sh`；脚本只有在
+Certbot 成功后才 reload nginx。证书、域名和防火墙配置仍需在 VPS 上真实完成，
+并验证 HTTP 301、HTTPS 健康检查、Secure Cookie 和 HSTS 后才能宣称 HTTPS
+已验收。
+
+### 阿里云 DNS API 自动续期
+
+为专用 RAM 用户授予以下四个动作：`alidns:DescribeDomains`、
+`alidns:DescribeDomainRecords`、`alidns:AddDomainRecord` 和
+`alidns:DeleteDomainRecord`。将凭据保存为 `infra/certs/aliyun.ini`，权限设为
+`600`，不要提交到 Git：
+
+```ini
+dns_aliyun_access_key = <AccessKey ID>
+dns_aliyun_access_key_secret = <AccessKey Secret>
+```
+
+构建 `certbot.Dockerfile` 后，首次使用 DNS-01 签发并写入 renewal lineage：
+
+```bash
+docker compose --env-file .env \
+  -f infra/docker-compose.yml \
+  -f infra/docker-compose.certbot.yml \
+  --profile certbot build certbot
+
+docker compose --env-file .env \
+  -f infra/docker-compose.yml \
+  -f infra/docker-compose.certbot.yml \
+  --profile certbot run --rm certbot certonly \
+  --authenticator dns-aliyun \
+  --dns-aliyun-credentials /etc/letsencrypt/aliyun.ini \
+  --dns-aliyun-propagation-seconds 60 \
+  --cert-name techradar.top \
+  -d techradar.top
+```
+
+之后每天运行 `infra/certbot-renew.sh` 即可自动创建 DNS TXT、续期并 reload
+nginx；建议用 `flock` 防止 cron 重复执行。

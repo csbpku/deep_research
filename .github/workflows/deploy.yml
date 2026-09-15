@@ -146,8 +146,11 @@ jobs:
             infra/docker-compose.yml \
             infra/docker-compose.registry.yml \
             infra/docker-compose.registry-render-review.yml \
+            infra/docker-compose.certbot.yml \
+            infra/certbot.Dockerfile \
             infra/nginx.conf \
             infra/nginx-tls.conf \
+            infra/certbot-renew.sh \
             infra/import-tmp-cleanup.sh \
             infra/pg-backup.sh \
             infra/pg-restore.sh \

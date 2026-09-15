@@ -645,7 +645,11 @@ async def _review_one_item(store: JobStore, work: ReviewWorkItem) -> None:
             },
         })
         async def review_progress(phase: str, payload: dict[str, object]) -> None:
-            await checkpoint({"phase": phase, phase: payload})
+            # Keep the phase discriminator and its payload explicit. The
+            # previous duplicate-key literal was valid Python but obscured
+            # that the dynamic phase key is the recovery boundary used by
+            # _claims_from_review_inventory().
+            await checkpoint({"phase": phase, **{phase: payload}})
 
         try:
             reviewer_llm = os.environ.get("FACT_REVIEWER_LLM")

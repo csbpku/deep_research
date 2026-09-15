@@ -89,6 +89,22 @@ launchctl bootout gui/$(id -u)/com.deep-research.ai
 
 launchd 托管的 AI engine 使用稳定模式（不随代码文件自动重启）；需要开发热重载时再单独运行 `pnpm dev:ai`。日志位于 `/tmp/deep-research-web*.log` 和 `/tmp/deep-research-ai*.log`。
 
+彻底停掉本机常驻环境时，还要停止 Homebrew PostgreSQL：
+
+```bash
+brew services stop postgresql@16
+```
+
+恢复时按 PostgreSQL → AI engine → Web 的顺序执行：
+
+```bash
+brew services start postgresql@16
+launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.deep-research.ai.plist"
+launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.deep-research.web.plist"
+```
+
+`launchd` 模板的 `KeepAlive=true` 会自动重启子进程；只杀 PID 不等于彻底停止。完整的本地服务生命周期、检查命令和文档分层见 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md)。
+
 | 层 | 选型 |
 |---|---|
 | Frontend / BFF | Next.js 15（App Router）、React 19、TypeScript、Vitest、Playwright、NextAuth、Prisma |
@@ -229,7 +245,7 @@ curl -fsS https://research.example.com/ai-healthz
 
 ## 当前状态
 
-技术方案、数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)；最新进度、测试基线与 follow-up 见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)（本地知识层）。本 README 只维护现状，不记录演进过程。
+当前技术方案摘要见 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md)；数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)；带日期的测试、部署和线上证据见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)。本 README 只维护使用入口，不记录演进过程。
 
 ## 贡献
 
