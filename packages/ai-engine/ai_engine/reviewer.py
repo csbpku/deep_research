@@ -31,6 +31,7 @@ from ai_engine.fact_resolvers import (
     resolve_pypi_package,
 )
 from ai_engine.llm.client import generate_text
+from ai_engine.untrusted_text import sanitize_external_instruction_text
 
 ReviewStatus = Literal["passed", "needs_revision", "blocked", "review_unavailable"]
 ReviewProgressCallback = Callable[[str, dict[str, object]], Awaitable[None]]
@@ -935,9 +936,15 @@ def _review_source_text(
     lines: list[str] = []
     remaining = max(0, max_chars)
     for index, source in enumerate(sources, start=1):
-        title = " ".join((source.title or source.canonical_key or "来源").split())[:120]
+        title, _ = sanitize_external_instruction_text(
+            " ".join((source.title or source.canonical_key or "来源").split())
+        )
+        title = title[:120]
         url = source.canonical_key[:240]
-        excerpt = " ".join((source.snippet or "").split())[:420]
+        excerpt, _ = sanitize_external_instruction_text(
+            " ".join((source.snippet or "").split())
+        )
+        excerpt = excerpt[:420]
         line = f"- source_id={index}; title={title}; url={url}\n  摘录：{excerpt or '(本轮没有保存原文摘录，不能据此标记 verified)'}"
         if len(line) <= remaining:
             lines.append(line)

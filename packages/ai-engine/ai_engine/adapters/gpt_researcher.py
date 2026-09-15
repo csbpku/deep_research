@@ -80,6 +80,10 @@ from ai_engine.reviewer import (
     ClaimVerdict,
     ReviewResult,
 )
+from ai_engine.untrusted_text import (
+    EXTERNAL_INSTRUCTION_MARKER as _EXTERNAL_INSTRUCTION_MARKER,
+    sanitize_external_instruction_text as _sanitize_external_instruction_text,
+)
 
 logger = logging.getLogger("ai_engine.adapters.gpt_researcher")
 _ACTIVE_QUERY_DOMAINS: ContextVar[tuple[str, ...]] = ContextVar(
@@ -957,34 +961,6 @@ _UNUSABLE_SOURCE_SNIPPET_MARKERS = (
     "页面不存在",
     "页面未找到",
 )
-
-# Fetched pages are untrusted data. In particular, repository mirrors and
-# documentation pages sometimes contain text addressed to an AI agent (for
-# example, "read and obey agents.md"). It may be shown as a flagged excerpt,
-# but it must not be forwarded verbatim into a research prompt.
-_EXTERNAL_INSTRUCTION_MARKER = "[网页数据中的疑似指令已隔离]"
-_EXTERNAL_INSTRUCTION_SIGNALS = re.compile(
-    r"(?:agents?\.md|system\s+prompt|developer\s+message|ignore\s+(?:all\s+)?previous\s+instructions|"
-    r"忽略(?:之前|以上|所有)指令|请(?:让|要求)\s*ai|要求\s*模型|遵守(?:本页|该页|以下)规则|"
-    r"不要告诉用户|作为系统提示)",
-    re.IGNORECASE,
-)
-
-
-def _sanitize_external_instruction_text(value: str) -> tuple[str, bool]:
-    """Redact instruction-like fragments while retaining surrounding page data.
-
-    Scraper fallbacks often collapse an entire HTML document into one line.
-    Replacing the whole matching line in that case would throw away otherwise
-    useful evidence, so redact only the signal itself and preserve the
-    surrounding page text as untrusted data.
-    """
-    sanitized, replacements = _EXTERNAL_INSTRUCTION_SIGNALS.subn(
-        _EXTERNAL_INSTRUCTION_MARKER,
-        value,
-    )
-    return sanitized, replacements > 0
-
 
 def _usable_source_snippet(snippet: str | None) -> str | None:
     """Return an inspectable excerpt, excluding common anti-bot placeholders.
@@ -2559,7 +2535,7 @@ def _format_source_lines(
     for index, source in enumerate(sources, start=1):
         ref = source.source_ref if isinstance(source.source_ref, dict) else {}
         url = ref.get("value")
-        title = (source.title or "").strip()
+        title, _ = _sanitize_external_instruction_text((source.title or "").strip())
         if (
             (not title or title_counts.get(title, 0) > 1)
             and isinstance(url, str)
@@ -3190,8 +3166,12 @@ def _format_internal_sources_for_query(sources: list[Any]) -> str:
         return ""
     blocks: list[str] = [_INTERNAL_SOURCE_SECTION_HEADER]
     for s in internal:
-        title = (getattr(s, "title", None) or "").strip()
-        snippet = (getattr(s, "snippet", None) or "").strip()
+        title, _ = _sanitize_external_instruction_text(
+            (getattr(s, "title", None) or "").strip()
+        )
+        snippet, _ = _sanitize_external_instruction_text(
+            (getattr(s, "snippet", None) or "").strip()
+        )
         kind = s.source_ref.get("type", "")
         ref_value = str(s.source_ref.get("value") or "")
         blocks.append(f"[{kind}] {title} (id: {ref_value})\n{snippet[:2000]}".strip())
@@ -3361,7 +3341,10 @@ def _format_evidence_packet(
     for index, source in enumerate(captured, start=1):
         ref = source.source_ref if isinstance(source.source_ref, dict) else {}
         value = ref.get("value")
-        title = " ".join((source.title or "来源").split())[:140]
+        title, _ = _sanitize_external_instruction_text(
+            " ".join((source.title or "来源").split())
+        )
+        title = title[:140]
         location = str(value)[:260] if isinstance(value, str) else source.canonical_key[:260]
         excerpt = _usable_source_snippet(source.snippet)
         line = (
