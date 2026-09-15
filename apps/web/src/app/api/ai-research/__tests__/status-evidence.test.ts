@@ -52,6 +52,45 @@ beforeEach(() => {
 });
 
 describe('GET /api/ai-research/[jobId] evidence workspace', () => {
+  it('keeps execution success separate from insufficient research coverage', async () => {
+    mocks.jobFindUnique.mockResolvedValue({
+      requesterId: USER_ID,
+      context: null,
+      sourceRefs: [],
+      brief: {
+        objective: 'decide',
+        question: 'A 与 B 的取舍',
+        scope: { timeRange: { preset: '30d' }, regions: [], technologyVersions: [] },
+        constraints: [],
+        questionsToAnswer: ['应该选哪一个？'],
+        comparisonOptions: ['A', 'B'],
+        successCriteria: ['有明确推荐'],
+        sourcePolicy: 'prefer_user_sources',
+        contextRefs: [],
+        outputType: 'markdown',
+      },
+      conversation: [],
+      partialSources: [],
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: {
+        title: 'A 与 B 的研究稿',
+        body: '# 结论\n\n建议先验证。',
+        audit: [],
+        researchSources: [],
+        reviewRuns: [],
+      },
+      aiResearchSources: [],
+      _count: { aiResearchSources: 0 },
+    });
+
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+
+    expect(payload.finalStatus).toBe('succeeded');
+    expect(payload.deliverableStatus).toBe('report');
+    expect(payload.researchSufficiency.status).toBe('insufficient');
+  });
+
   it('hides a job owned by another user', async () => {
     mocks.jobFindUnique.mockResolvedValue({ requesterId: 'someone-else' });
     const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });

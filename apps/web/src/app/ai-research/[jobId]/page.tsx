@@ -316,7 +316,10 @@ export default function AiJobStatusPage() {
     },
     retry: retryOnceAi,
     refetchInterval: (data) => {
-      if (data.state.status === 'error') return false;
+      // A transient BFF/engine timeout must not turn a long-running research
+      // task into a dead page. Keep polling when a last-known-good snapshot
+      // exists; an initial failure also gets a bounded retry cadence.
+      if (data.state.status === 'error') return data.state.data ? 10_000 : 5_000;
       const s = data?.state.data;
       if (!s) return 5_000;
       // 研究已完成后，独立事实审核仍需短暂轮询；审核终态才停止。
@@ -429,7 +432,7 @@ export default function AiJobStatusPage() {
         variant="workbench"
         title={
           <span aria-live="polite" aria-atomic="true">
-            {q.isError ? '无法加载调研' : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
+            {q.isError && !q.data ? '无法加载调研' : q.data?.finalStatus && TERMINAL.has(q.data.finalStatus) ? '调研结果' : '调研进行中'}
           </span>
         }
         description={
@@ -465,9 +468,9 @@ export default function AiJobStatusPage() {
 
       <div className="mt-4 grid items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="order-1 min-w-0 lg:order-2">
-          {q.isLoading ? (
+          {q.isLoading && !q.data ? (
             <JobStatusSkeleton />
-          ) : q.isError ? (
+          ) : q.isError && !q.data ? (
             <EmptyState
               title="加载失败"
               description={friendlyMessage(q.error, '请稍后重试')}
@@ -479,6 +482,15 @@ export default function AiJobStatusPage() {
             />
           ) : q.data ? (
             <StatusBody s={q.data} />
+          ) : null}
+          {q.isError && q.data ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-3 rounded-md border border-warning-border/70 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg"
+            >
+              状态同步暂时失败，已保留上次成功状态；任务可能仍在后台运行，系统会继续重试。
+            </div>
           ) : null}
         </div>
         <div className="order-2 lg:order-1">

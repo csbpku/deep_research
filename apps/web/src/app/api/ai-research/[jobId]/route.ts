@@ -376,12 +376,11 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   const evidenceOnly = isEvidenceOnlyResearchOutput(rawReportContent);
   // Older jobs could persist the evidence digest behind a `succeeded` status.
   // Derive the user-facing status from the actual deliverable so a source
-  // list can never masquerade as a completed report.
-  const effectiveFinalStatus = (
-    (evidenceOnly || (up.final_status === 'succeeded' && researchSufficiency.status === 'insufficient'))
-      ? 'partial'
-      : up.final_status
-  ) ?? null;
+  // list can never masquerade as a completed report. Research sufficiency is
+  // a separate quality/publication gate: it must not rewrite a successful
+  // execution into `partial`, otherwise the reader cannot tell whether the
+  // pipeline failed or simply produced a report that still needs evidence.
+  const effectiveFinalStatus = evidenceOnly ? 'partial' : (up.final_status ?? null);
   const reportVersion = 1 + (draftResearch?.audit?.length ?? 0);
   const cleanedReportContent = rawReportContent
     ? cleanResearchReportForReader(
