@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, ExternalLink, Eye, FileCode2, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Code2, ExternalLink, Eye, FileCode2, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 
 import MarkdownContent from '../MarkdownContent';
 import { isZreadRepository, ZREAD_SAMPLE_URL } from './radar-repository';
@@ -14,6 +14,7 @@ import {
 } from './radar-reading-blocks';
 import { highlightAnnotationQuotes } from './RadarOriginalArticle';
 import { repoSummariesOverlap } from './RadarRepoSummary';
+import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 
 export { isZreadRepository, ZREAD_SAMPLE_URL };
 
@@ -386,6 +387,10 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
     });
     return indices;
   }, [annotations, pages]);
+  const externalInstructionPages = useMemo(
+    () => pages.filter((page) => hasExternalInstructionSignal(page.content)),
+    [pages],
+  );
 
   const groupedPages = useMemo(() => {
     const groups = new Map<string, Map<string, Array<(typeof pages)[number]>>>();
@@ -641,6 +646,29 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
               : `当前项目文档为部分缓存（${cachedPageLabel}），未覆盖的章节不会被标记为已读。`}
             {meta?.zread?.error ? ` ${meta.zread.error}` : ''}
           </span>
+        </div>
+      ) : null}
+
+      {externalInstructionPages.length > 0 ? (
+        <div
+          data-testid="external-content-warning"
+          className="mb-7 flex items-start gap-2 rounded-md border border-warning-border/70 bg-warning-bg px-4 py-3 text-xs leading-5 text-warning-fg"
+          role="note"
+        >
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <div className="min-w-0">
+            <p className="font-medium">{externalContentLabel('网页数据中的疑似指令') ?? '发现疑似网页指令'}</p>
+            <p className="mt-0.5">
+              以下内容来自外部网页，仅作为项目文档数据展示，不会改变研究指令或系统行为。
+              {externalInstructionPages.length > 1 ? ` 受影响章节：${externalInstructionPages.length} 个。` : ' 受影响章节：1 个。'}
+            </p>
+            <details className="mt-1.5">
+              <summary className="cursor-pointer underline decoration-dotted underline-offset-2">查看受影响章节</summary>
+              <ul className="mt-1 list-inside list-disc text-[11px]">
+                {externalInstructionPages.map((page) => <li key={page.id}>{page.title || page.path || '未命名页面'}</li>)}
+              </ul>
+            </details>
+          </div>
         </div>
       ) : null}
 

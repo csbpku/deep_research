@@ -74,6 +74,7 @@ import { AiResearchWorkspaceSidebar } from '@/components/ai-research/AiResearchW
 import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
 import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
 import type { ResearchSufficiency } from '@/lib/research-sufficiency';
+import { classifySourceProvenance } from '@/lib/source-provenance';
 import type { ResearchBrief, ResearchScope } from '@deep-research/shared/schemas';
 
 interface AiJobStatus {
@@ -897,6 +898,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               sources={s.sources ?? []}
               discoveredTotal={s.sourcesCount}
               capturedTotal={capturedSources}
+              independentSourceCount={s.researchSufficiency?.independentSourceCount ?? 0}
               failed={s.failedSourcesCount}
               running={!isTerminal}
               reportLength={s.reportLength}
@@ -994,6 +996,7 @@ function EvidencePanel({
   sources,
   discoveredTotal,
   capturedTotal,
+  independentSourceCount,
   failed,
   running,
   reportLength,
@@ -1001,6 +1004,7 @@ function EvidencePanel({
   sources: AiJobStatus['sources'];
   discoveredTotal: number;
   capturedTotal: number;
+  independentSourceCount: number;
   failed: number;
   running: boolean;
   reportLength: 'brief' | 'standard' | 'deep';
@@ -1023,6 +1027,7 @@ function EvidencePanel({
           <span className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
           <span className="truncate">
             检索线索 {discoveredTotal} · 可引用证据 {capturedTotal}
+            {capturedTotal > 0 ? ` · 独立域名 ${independentSourceCount}` : ''}
             {failed > 0 ? ` · ${failed} 条未取到正文` : ''}
           </span>
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
@@ -1030,6 +1035,9 @@ function EvidencePanel({
       </button>
       {expanded ? (
         <div className="border-t border-border px-3 py-3">
+          <p className="mb-3 px-1 text-[11px] leading-5 text-muted-foreground">
+            来源等级按域名、页面路径和来源类型推断；同一域名的页面只计为一个独立来源，不等同于结论已被证明。
+          </p>
           {sources.length === 0 ? (
             <p className="px-1 py-3 text-xs text-muted-foreground">
               {running
@@ -1044,6 +1052,10 @@ function EvidencePanel({
             <ul className="grid gap-2 md:grid-cols-2">
               {sources.map((source) => (
                 <li key={source.id} className="min-w-0 rounded-lg border border-border bg-background px-3 py-2.5">
+                  {(() => {
+                    const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
+                    return (
+                      <>
                   <div className="flex items-start justify-between gap-2">
                     {source.href ? (
                       <a
@@ -1063,10 +1075,15 @@ function EvidencePanel({
                   <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
+                    <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
+                    <span aria-hidden>·</span>
                     <span>{stepLabel(source.stepCaptured)}</span>
                     <span aria-hidden>·</span>
                     <span title={source.capturedAt}>抓取 {formatCapturedAt(source.capturedAt)}</span>
                   </div>
+                      </>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>
@@ -1669,6 +1686,9 @@ function ReviewPanel({
                   onDecision={recordDecision}
                   reviewUnavailable={reviewUnavailable}
                   onChallenge={claimDisplayStatus(claim) === 'supported' ? recordDecision : undefined}
+                  evidenceTask={evidenceTasks[reviewClaimId(claim) ?? '']}
+                  evidenceTaskBusy={evidenceTaskBusy === reviewClaimId(claim)}
+                  onEvidenceTask={requestEvidenceTask}
                 />
               ))}
             </div>
@@ -1769,7 +1789,17 @@ function DecisionCoverageMatrixView({
                   {matrix.dimensions.map((dimension) => {
                     const cell = cellMap.get(`${option}:${dimension}`);
                     const state = cell?.state ?? 'not_found';
-                    return <td key={dimension} className="border-b border-border/50 px-2 py-2"><span className={cn('inline-flex rounded border px-1.5 py-0.5', stateClass[state])}>{stateLabel[state]}{cell?.evidenceCount ? ` · ${cell.evidenceCount}` : ''}</span></td>;
+                    return (
+                      <td key={dimension} className="border-b border-border/50 px-2 py-2">
+                        <span
+                          className={cn('inline-flex rounded border px-1.5 py-0.5', stateClass[state])}
+                          title={cell?.evidenceGap ?? undefined}
+                        >
+                          {stateLabel[state]}{cell?.evidenceCount ? ` · ${cell.evidenceCount}` : ''}
+                        </span>
+                        {cell?.evidenceGap ? <p className="mt-1 max-w-40 text-[10px] leading-4 text-warning-fg">{cell.evidenceGap}</p> : null}
+                      </td>
+                    );
                   })}
                 </tr>
               ))}
@@ -1882,7 +1912,11 @@ function ReviewClaimCard({
           </a>
         ) : <span className="text-muted-foreground">没有可打开的来源</span>}
         {claim.evidence?.observed_at ? <span className="text-muted-foreground">观察时间：{claim.evidence.observed_at}</span> : null}
-        {claim.evidence?.source_type ? <span className="text-muted-foreground">来源类型：{claim.evidence.source_type}</span> : null}
+        {claim.evidence?.source_type ? (
+          <span className="text-muted-foreground">
+            来源类型：{classifySourceProvenance({ href: claim.evidence.source_url, type: claim.evidence.source_type }).label}
+          </span>
+        ) : null}
         {claim.evidence?.published_at ? <span className="text-muted-foreground">发布时间：{claim.evidence.published_at}</span> : null}
         {claim.evidence?.evidence_strength && claim.evidence.evidence_strength !== 'unknown' ? <span className="text-muted-foreground">证据强度：{claim.evidence.evidence_strength}</span> : null}
       </div>
@@ -2011,6 +2045,10 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
             <ul className="mt-3 grid gap-2 md:grid-cols-2" aria-label="可人工核查的来源">
               {inspectableSources.map((source) => (
                 <li key={source.id} className="min-w-0 rounded-md border border-border/70 bg-background/70 px-3 py-2.5">
+                  {(() => {
+                    const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
+                    return (
+                      <>
                   <div className="flex items-start justify-between gap-2">
                     {source.href ? (
                       <a className="min-w-0 text-xs font-medium text-foreground hover:text-primary hover:underline" href={source.href} target="_blank" rel="noreferrer noopener">
@@ -2025,6 +2063,8 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
+                    <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
+                    <span aria-hidden>·</span>
                     <span>抓取于 {formatCapturedAt(source.capturedAt)}</span>
                     {source.href ? (
                       <a className="inline-flex items-center gap-1 text-primary hover:underline" href={source.href} target="_blank" rel="noreferrer noopener">
@@ -2032,6 +2072,9 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                       </a>
                     ) : null}
                   </div>
+                      </>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>

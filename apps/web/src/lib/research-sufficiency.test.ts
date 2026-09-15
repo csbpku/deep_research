@@ -108,6 +108,50 @@ describe('evaluateResearchSufficiency', () => {
     ]));
   });
 
+  it('does not close operational cells from keyword-only documentation', () => {
+    const result = evaluateResearchSufficiency({
+      brief: {
+        objective: 'decide',
+        comparisonOptions: ['VPS'],
+        decisionDimensions: ['网络/性能实测', '磁盘与资源占用', '回滚与恢复'],
+      },
+      sources: [{
+        canonicalKey: 'https://docs.example.com/vps',
+        title: 'VPS deployment guide',
+        snippet: 'VPS supports network performance, disk storage, image build cache, backup, and rollback.',
+      }],
+    });
+
+    expect(result.status).toBe('insufficient');
+    expect(result.matrix?.cells).toEqual(expect.arrayContaining([
+      expect.objectContaining({ dimension: '网络/性能实测', state: 'needs_test', evidenceGap: expect.stringContaining('中位数') }),
+      expect.objectContaining({ dimension: '磁盘与资源占用', state: 'needs_test', evidenceGap: expect.stringContaining('镜像空间') }),
+      expect.objectContaining({ dimension: '回滚与恢复', state: 'needs_test', evidenceGap: expect.stringContaining('真实操作链路') }),
+    ]));
+  });
+
+  it('closes operational cells only when the required measurements are recorded', () => {
+    const result = evaluateResearchSufficiency({
+      brief: {
+        objective: 'decide',
+        comparisonOptions: ['VPS'],
+        decisionDimensions: ['网络/性能实测', '磁盘与资源占用', '回滚与恢复'],
+      },
+      sources: [{
+        canonicalKey: 'https://ops.example.com/vps-runbook',
+        title: 'VPS measured deployment and rollback runbook',
+        snippet: [
+          'VPS network speed test ran 5 times: median 80 Mbps, failure rate 0%, duration 60 seconds.',
+          'Disk budget: image 2 GB, build cache 4 GB, backup 6 GB, rollback version 2 GB.',
+          'Rollback: docker compose pull and docker compose up; elapsed time 45 seconds.',
+        ].join(' '),
+      }],
+    });
+
+    expect(result.status).toBe('sufficient');
+    expect(result.matrix?.cells.every((cell) => cell.state === 'evidence')).toBe(true);
+  });
+
   it('requires all structured recommendation fields for a decision report', () => {
     const result = evaluateResearchSufficiency({
       brief: { objective: 'decide', comparisonOptions: ['A'], decisionDimensions: ['能力'] },

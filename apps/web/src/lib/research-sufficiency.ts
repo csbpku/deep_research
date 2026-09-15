@@ -26,6 +26,8 @@ export interface ResearchCoverageCell {
   evidenceCount: number;
   /** Same-domain mirrors count as one independent evidence cluster. */
   independentSourceCount: number;
+  /** Why a seemingly relevant source is still not enough for this cell. */
+  evidenceGap?: string;
 }
 
 export interface ResearchCoverageMatrix {
@@ -98,7 +100,7 @@ const EMPIRICAL_DIMENSION_SIGNALS = /(实测|性能|网络|测速|带宽|延迟|
 const DIMENSION_ALIASES: Record<string, string[]> = {
   '效果与适用范围': ['效果', '适用', '能力', '功能', 'use case', 'capability'],
   '成本与资源': ['成本', '资源', '价格', '费用', 'token', 'cost'],
-  '网络/性能实测': ['网络', '性能', '测速', '带宽', '延迟', '速度', 'benchmark', 'speed', 'latency'],
+  '网络/性能实测': ['网络', '性能', '测速', '带宽', '延迟', '速度', 'benchmark', 'performance', 'speed', 'latency'],
   '磁盘与资源占用': ['磁盘', '存储', '空间', '内存', 'cpu', '资源占用', 'disk', 'storage'],
   '部署与构建': ['部署', '构建', '镜像', '安装', 'build', 'deploy', 'image', 'install'],
   '回滚与恢复': ['回滚', '恢复', '备份', '版本', 'rollback', 'restore', 'backup', 'recovery'],
@@ -117,6 +119,13 @@ function asciiTokens(value: string): string[] {
 function sourceSearchText(source: ResearchSufficiencySource): string {
   return normalize([source.canonicalKey, source.title, source.description, source.snippet]
     .filter((value): value is string => Boolean(value?.trim())).join(' '));
+}
+
+function sourceEvidenceText(sources: ResearchSufficiencySource[]): string {
+  return sources
+    .flatMap((source) => [source.title, source.description, source.snippet])
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join('\n');
 }
 
 function sourceMatchesOption(option: string, source: ResearchSufficiencySource): boolean {
@@ -162,6 +171,65 @@ function independentCount(sources: ResearchSufficiencySource[]): number {
   return identities.size;
 }
 
+function dimensionMatches(dimension: string, aliases: string[]): boolean {
+  const normalizedDimension = normalize(dimension);
+  return aliases.some((alias) => normalizedDimension.includes(normalize(alias)));
+}
+
+/**
+ * Operational words alone are not measurements. A report that says an image
+ * can be deployed or that rollback exists is useful background, but it cannot
+ * close a decision cell that explicitly asks for a measured network result,
+ * a storage budget, or a timed rollback runbook.
+ */
+function quantitativeEvidenceGaps(dimension: string, sources: ResearchSufficiencySource[]): string[] {
+  if (!sources.length) return [];
+  const text = sourceEvidenceText(sources);
+  if (dimensionMatches(dimension, ['网络', '性能', '测速', '带宽', '延迟', '速度', 'benchmark', 'speed', 'latency'])) {
+    const gaps: string[] = [];
+    if (!/(?:中位数|中位|median|p50|p95|多次|\b\d+\s*(?:次|次测试|runs?|measurements?)\b)/iu.test(text)) {
+      gaps.push('多次测试的中位数（或 p50/p95）');
+    }
+    if (!/(?:失败率|failure\s*rate|失败\s*[:：=]?\s*\d+(?:\.\d+)?\s*%|fail(?:ure|ed)?\s*[:：=]?\s*\d+(?:\.\d+)?\s*%)/iu.test(text)) {
+      gaps.push('失败率');
+    }
+    if (!/(?:耗时|响应时间|duration|时间窗口|\b\d+(?:\.\d+)?\s*(?:ms|毫秒|秒|s|min|分钟|minutes?)\b)/iu.test(text)) {
+      gaps.push('测试时间/耗时');
+    }
+    if (!/(?:速度|带宽|吞吐|throughput|\b\d+(?:\.\d+)?\s*(?:kbps|mbps|gbps|kb\/s|mb\/s|gb\/s)\b)/iu.test(text)) {
+      gaps.push('速度或带宽数值');
+    }
+    return gaps;
+  }
+
+  if (dimensionMatches(dimension, ['磁盘', '存储', '空间', '资源占用', 'disk', 'storage'])) {
+    const gaps: string[] = [];
+    if (!/(?:镜像|image|container).{0,80}(?:\d+(?:\.\d+)?\s*(?:kb|mb|gb|tb|kib|mib|gib|tib)|大小|size)/iu.test(text)) {
+      gaps.push('镜像空间');
+    }
+    if (!/(?:构建缓存|build\s*cache|cache).{0,80}(?:\d+(?:\.\d+)?\s*(?:kb|mb|gb|tb|kib|mib|gib|tib)|大小|size|空间)/iu.test(text)) {
+      gaps.push('构建缓存空间');
+    }
+    if (!/(?:备份|backup).{0,80}(?:\d+(?:\.\d+)?\s*(?:kb|mb|gb|tb|kib|mib|gib|tib)|大小|size|空间)/iu.test(text)) {
+      gaps.push('备份空间');
+    }
+    if (!/(?:回滚版本|rollback\s*version|回滚|rollback).{0,80}(?:\d+(?:\.\d+)?\s*(?:kb|mb|gb|tb|kib|mib|gib|tib)|大小|size|空间|版本)/iu.test(text)) {
+      gaps.push('回滚版本空间');
+    }
+    return gaps;
+  }
+
+  if (dimensionMatches(dimension, ['回滚', '恢复', '备份', 'rollback', 'restore', 'recovery'])) {
+    const gaps: string[] = [];
+    if (!/(?:回滚|rollback|restore|恢复)/iu.test(text)) gaps.push('回滚动作');
+    if (!/(?:docker\s+compose|kubectl|helm|命令|步骤|\bpull\b|\btag\b|\bup\b|\bdown\b|切换|执行)/iu.test(text)) gaps.push('真实操作链路');
+    if (!/(?:耗时|duration|takes?|\b\d+(?:\.\d+)?\s*(?:ms|毫秒|秒|s|min|分钟|minutes?)\b)/iu.test(text)) gaps.push('回滚耗时');
+    return gaps;
+  }
+
+  return [];
+}
+
 function recommendationQuality(brief: SufficiencyBrief | null | undefined, reportContent: string | null | undefined): StructuredRecommendationQuality {
   const requiredFields = RECOMMENDATION_FIELDS.map(([name]) => name);
   if (brief?.objective !== 'decide' || !reportContent?.trim()) {
@@ -190,8 +258,32 @@ export function evaluateResearchSufficiency(input: ResearchSufficiencyInput): Re
   for (const option of options) {
     for (const dimension of dimensions) {
       const matching = capturedSources.filter((source) => sourceMatchesOption(option, source) && sourceMatchesDimension(dimension, source));
-      const state: DecisionCoverageState = matching.length > 0 ? 'evidence' : EMPIRICAL_DIMENSION_SIGNALS.test(dimension) ? 'needs_test' : 'not_found';
-      cells.push({ id: `comparison:${option}:${dimension}`, option, dimension, state, evidenceCount: matching.length, independentSourceCount: independentCount(matching) });
+      const quantitativeGaps = quantitativeEvidenceGaps(dimension, matching);
+      const requiresMeasurement = dimensionMatches(dimension, [
+        '网络', '性能', '测速', '带宽', '延迟', '速度', 'benchmark', 'performance', 'speed', 'latency',
+        '磁盘', '存储', '空间', '资源占用', 'disk', 'storage',
+        '回滚', '恢复', '备份', 'rollback', 'restore', 'recovery',
+      ]);
+      const state: DecisionCoverageState = matching.length > 0 && quantitativeGaps.length === 0
+        ? 'evidence'
+        : EMPIRICAL_DIMENSION_SIGNALS.test(dimension)
+          ? 'needs_test'
+          : 'not_found';
+      cells.push({
+        id: `comparison:${option}:${dimension}`,
+        option,
+        dimension,
+        state,
+        evidenceCount: matching.length,
+        independentSourceCount: independentCount(matching),
+        ...(
+          quantitativeGaps.length > 0
+            ? { evidenceGap: `量化字段缺失：${quantitativeGaps.join('、')}` }
+            : matching.length === 0 && requiresMeasurement
+              ? { evidenceGap: '尚未找到可核对的实测记录' }
+              : {}
+        ),
+      });
     }
   }
   const missingCells = cells.filter((cell) => cell.state !== 'evidence').map((cell) => `${cell.option} × ${cell.dimension}`);
