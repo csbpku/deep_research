@@ -103,7 +103,7 @@ jobs:
       # The images are published by this repository's GITHUB_TOKEN. Prefer the
       # same token for pulls so a stale optional PAT cannot block deployment.
       GHCR_USERNAME: ${{ github.actor }}
-      GHCR_READ_TOKEN: ${{ github.token }}
+      GHCR_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Check out deployment files
         uses: actions/checkout@v6
