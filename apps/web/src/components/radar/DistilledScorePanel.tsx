@@ -25,11 +25,17 @@ const DIMENSION_LABELS: Record<string, string> = {
 interface Props {
   score: DistilledScore;
   compact?: boolean;
+  /** Effective persisted tier; score.tier remains the score-derived target. */
+  effectiveTier?: string | null;
 }
 
-export function DistilledScorePanel({ score, compact = false }: Props) {
-  const tierVisual = tierClasses(score.tier);
-  const tierLabel = TIER_LABELS[score.tier] ?? score.tier;
+export function DistilledScorePanel({ score, compact = false, effectiveTier }: Props) {
+  const displayTier = effectiveTier || score.tier;
+  const tierVisual = tierClasses(displayTier);
+  const tierLabel = TIER_LABELS[displayTier] ?? displayTier;
+  const targetTierLabel = effectiveTier && effectiveTier !== score.tier
+    ? TIER_LABELS[score.tier] ?? score.tier
+    : null;
   const displayScore = score.tierScore ?? score.total;
 
   if (compact) {
@@ -40,24 +46,46 @@ export function DistilledScorePanel({ score, compact = false }: Props) {
             <button
               type="button"
               className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tierVisual.border} ${tierVisual.text}`}
-              aria-label={`Distilled 评分 ${displayScore}，悬停查看详情`}
+              aria-label={`Distilled 评分 ${displayScore}，当前层级 ${tierLabel}，悬停查看详情`}
             >
               <span className="font-sans text-[11px] font-medium">Distilled</span>
               {displayScore}
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="start" className="w-72 max-w-[calc(100vw-2rem)] p-3">
-            <ScoreDetails score={score} tierVisual={tierVisual} tierLabel={tierLabel} />
+            <ScoreDetails
+              score={score}
+              tierVisual={tierVisual}
+              tierLabel={tierLabel}
+              targetTierLabel={targetTierLabel}
+            />
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
     );
   }
 
-  return <ExpandedScorePanel score={score} tierVisual={tierVisual} tierLabel={tierLabel} />;
+  return (
+    <ExpandedScorePanel
+      score={score}
+      tierVisual={tierVisual}
+      tierLabel={tierLabel}
+      targetTierLabel={targetTierLabel}
+    />
+  );
 }
 
-function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: DistilledScore; tierVisual: ReturnType<typeof tierClasses>; tierLabel: string }) {
+function ExpandedScorePanel({
+  score,
+  tierVisual,
+  tierLabel,
+  targetTierLabel,
+}: {
+  score: DistilledScore;
+  tierVisual: ReturnType<typeof tierClasses>;
+  tierLabel: string;
+  targetTierLabel: string | null;
+}) {
   const [open, setOpen] = useState(false);
   const displayScore = score.tierScore ?? score.total;
 
@@ -76,23 +104,45 @@ function ExpandedScorePanel({ score, tierVisual, tierLabel }: { score: Distilled
           {displayScore}
         </span>
         <span className="text-xs text-muted-foreground">查看评分详情</span>
+        <span className={`text-xs font-medium ${tierVisual.text}`}>{tierLabel}</span>
+        {targetTierLabel ? (
+          <span className="text-xs text-muted-foreground">目标：{targetTierLabel}</span>
+        ) : null}
         <ChevronDown className={`ml-auto size-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
         <div className="border-t border-border py-3">
-          <ScoreDetails score={score} tierVisual={tierVisual} tierLabel={tierLabel} />
+          <ScoreDetails
+            score={score}
+            tierVisual={tierVisual}
+            tierLabel={tierLabel}
+            targetTierLabel={targetTierLabel}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function ScoreDetails({ score, tierVisual, tierLabel }: { score: DistilledScore; tierVisual: ReturnType<typeof tierClasses>; tierLabel: string }) {
+function ScoreDetails({
+  score,
+  tierVisual,
+  tierLabel,
+  targetTierLabel,
+}: {
+  score: DistilledScore;
+  tierVisual: ReturnType<typeof tierClasses>;
+  tierLabel: string;
+  targetTierLabel: string | null;
+}) {
   return (
     <div className="space-y-2 text-xs">
       <div className="flex items-center justify-between border-b border-border pb-2">
-        <span className={`font-medium ${tierVisual.text}`}>{tierLabel}</span>
+        <span className={`font-medium ${tierVisual.text}`}>
+          {tierLabel}
+          {targetTierLabel ? <span className="ml-2 font-normal text-muted-foreground">目标：{targetTierLabel}</span> : null}
+        </span>
         <span className="text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
       </div>
       {score.tierScore !== undefined || score.rankingScore !== undefined ? (

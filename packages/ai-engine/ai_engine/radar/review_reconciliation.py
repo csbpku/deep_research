@@ -135,11 +135,15 @@ async def finalize_enrichment(
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                'SELECT "distilledTier" FROM "summaries" WHERE "id" = %s',
+                'SELECT "distilledTier", "distilledTargetTier" '
+                'FROM "summaries" WHERE "id" = %s',
                 (summary_id,),
             )
         ).fetchone()
-    tier = str(row.get("distilledTier") or "") if row else ""
+    tier = (
+        str((row.get("distilledTargetTier") or row.get("distilledTier")) or "")
+        if row else ""
+    )
     review = None
     if tier in {"collection", "deep_read"}:
         review = await review_enriched_summary(

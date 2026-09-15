@@ -44,7 +44,10 @@ from ai_engine.fetcher.safe_fetch import safe_fetch
 from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import resolve_spec
 from ai_engine.radar.distilled_scorer import _parse_llm_response
-from ai_engine.radar.enrichment_contract import enrichment_review_reset_assignments
+from ai_engine.radar.enrichment_contract import (
+    github_zread_is_complete,
+    enrichment_review_reset_assignments,
+)
 from ai_engine.radar.huggingface import huggingface_endpoint
 from ai_engine.radar.reader_quality import evaluate_reader_quality
 from ai_engine.radar.review_reconciliation import finalize_enrichment
@@ -253,7 +256,8 @@ async def recover_expired_enrichment_leases(
             await conn.execute(
                 'WITH expired AS ('
                 'SELECT "id" FROM "summaries" '
-                'WHERE "distilledTier" IN (\'collection\', \'deep_read\') '
+                'WHERE ("distilledTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTargetTier" IN (\'collection\', \'deep_read\')) '
                 'AND "enrichmentStatus" = \'running\' '
                 'AND "enrichmentLeaseExpiresAt" < now() '
                 'ORDER BY "enrichmentLeaseExpiresAt" ASC '
@@ -1384,21 +1388,10 @@ def _zread_pages_complete(payload: Any) -> bool:
     """Return true only when a Zread payload has no catalog page gap."""
     if not isinstance(payload, dict):
         return False
-    if (
-        payload.get("status") != "complete"
-        or payload.get("truncated")
-        or payload.get("missingPages")
-        or payload.get("mixedCommits")
-    ):
-        return False
-    try:
-        page_count = int(payload.get("pageCount") or 0)
-        expected_page_count = int(payload.get("expectedPageCount") or 0)
-    except (TypeError, ValueError):
-        return False
-    if expected_page_count > 0:
-        return page_count >= expected_page_count and bool(payload.get("pages"))
-    return payload.get("status") == "complete" and bool(payload.get("pages"))
+    return github_zread_is_complete({
+        "enrichmentVersion": ENRICHMENT_VERSION,
+        "zread": payload,
+    })
 
 
 def _build_meta_payload(
@@ -2923,7 +2916,8 @@ async def _run_enrichment_for_pending(
     # rows. Explicit --summary-id repairs retain the force escape hatch.
     tier_filter = (
         'TRUE' if force
-        else '"distilledTier" IN (\'collection\', \'deep_read\')'
+        else '("distilledTier" IN (\'collection\', \'deep_read\') '
+             'OR "distilledTargetTier" IN (\'collection\', \'deep_read\'))'
     )
     if run_id is None:
         run_id = str(uuid.uuid4())
@@ -3037,12 +3031,20 @@ async def _run_enrichment_for_pending(
     effective_item_timeout = None if item_timeout == 0 else item_timeout
     if effective_item_timeout is None and item_timeout != 0:
         try:
-            effective_item_timeout = max(
-                30.0,
-                float(os.environ.get("RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS", "600")),
+            configured_timeout = float(
+                os.environ.get("RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS", "0")
+            )
+            # Zread is a durable, incrementally persisted job. A second
+            # fixed outer timeout must not kill it before its own CLI budget
+            # (ZREAD_CLI_TIMEOUT_SECONDS) has elapsed. Operators can still
+            # set a positive value for a deliberately bounded repair run.
+            effective_item_timeout = (
+                max(30.0, configured_timeout)
+                if configured_timeout > 0
+                else None
             )
         except ValueError:
-            effective_item_timeout = 600.0
+            effective_item_timeout = None
     semaphore = asyncio.Semaphore(enrichment_concurrency)
 
     async def _mark_enrichment_retry(
@@ -3074,6 +3076,21 @@ async def _run_enrichment_for_pending(
             await conn.execute(
                 'UPDATE "summaries" SET '
                 '"enrichmentStatus" = %s, '
+                '"distilledTargetTier" = CASE '
+                'WHEN "distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTargetTier" '
+                'WHEN "distilledTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTier" ELSE "distilledTargetTier" END, '
+                '"distilledTier" = CASE WHEN '
+                '"distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTier" IN (\'collection\', \'deep_read\') '
+                'THEN \'skim\' ELSE "distilledTier" END, '
+                '"tags" = CASE WHEN '
+                '"distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTier" IN (\'collection\', \'deep_read\') THEN '
+                'array_append(ARRAY(SELECT tag FROM unnest(COALESCE("tags", ARRAY[]::text[])) AS tag '
+                'WHERE tag NOT LIKE \'tier_%%\'), \'content_pending\') '
+                '|| ARRAY[\'tier_skim\']::text[] ELSE "tags" END, '
                 '"enrichmentLockedBy" = NULL, '
                 '"enrichmentLeaseExpiresAt" = NULL, '
                 '"enrichmentHeartbeatAt" = NULL, '
@@ -3123,27 +3140,57 @@ async def _run_enrichment_for_pending(
         async with pool.connection() as conn:
             await conn.execute(
                 'UPDATE "summaries" SET '
-                '"enrichmentStatus" = CASE WHEN "distilledTier" IN '
-                '(\'collection\', \'deep_read\') THEN %s ELSE NULL END, '
+                '"enrichmentStatus" = CASE WHEN '
+                '"distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTier" IN (\'collection\', \'deep_read\') '
+                'THEN %s ELSE NULL END, '
+                '"distilledTargetTier" = CASE '
+                'WHEN "distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTargetTier" '
+                'WHEN "distilledTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTier" ELSE "distilledTargetTier" END, '
+                '"distilledTier" = CASE '
+                'WHEN NOT %s AND "distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTargetTier" '
+                'WHEN NOT %s AND "distilledTargetTier" IS NULL '
+                'AND "distilledTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTier" '
+                'WHEN %s AND ("distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTier" IN (\'collection\', \'deep_read\')) '
+                'THEN \'skim\' ELSE "distilledTier" END, '
                 '"enrichmentLockedBy" = NULL, '
                 '"enrichmentLeaseExpiresAt" = NULL, '
                 '"enrichmentHeartbeatAt" = NULL, '
                 '"enrichmentClaimId" = NULL, '
-                '"enrichmentNextRetryAt" = CASE WHEN "distilledTier" IN '
-                '(\'collection\', \'deep_read\') AND %s THEN '
+                '"enrichmentNextRetryAt" = CASE WHEN ('
+                '"distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTier" IN (\'collection\', \'deep_read\')) AND %s THEN '
                 'now() + (%s || \' seconds\')::interval ELSE NULL END, '
                 '"enrichmentErrorCode" = %s, '
                 '"enrichmentErrorMessage" = %s, '
+                '"tags" = CASE WHEN '
+                '"distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTier" IN (\'collection\', \'deep_read\') THEN '
+                'ARRAY(SELECT tag FROM unnest(COALESCE("tags", ARRAY[]::text[])) AS tag '
+                'WHERE tag NOT LIKE \'tier_%%\') || ARRAY[\'tier_\' || CASE '
+                'WHEN %s THEN \'skim\' '
+                'WHEN "distilledTargetTier" IN (\'collection\', \'deep_read\') '
+                'THEN "distilledTargetTier" ELSE "distilledTier" END]::text[] '
+                'ELSE "tags" END, '
                 '"updatedAt" = now() '
                 'WHERE "id" = %s AND "enrichmentLockedBy" = %s '
                 'AND "enrichmentClaimId" = %s::uuid '
                 'AND "enrichmentStatus" = \'running\'',
                 (
                     "manual" if terminal else ("retryable" if retryable else "ready"),
+                    retryable,
+                    retryable,
+                    retryable,
                     retryable and not terminal,
                     str(delay),
                     error_code[:64] if error_code else None,
                     error_message[:500] if error_message else None,
+                    retryable,
                     summary_id,
                     ENRICHMENT_WORKER_ID,
                     claim_id,
@@ -3313,13 +3360,17 @@ async def _run_enrichment_for_pending(
                         )
                 except EnrichmentLeaseLost:
                     raise
-                except Exception:
-                    # The source snapshot is already durable. Review
-                    # reconciliation can repair a missing quality/content
-                    # handoff without forcing another expensive source fetch.
+                except Exception as exc:
+                    # The source snapshot is durable, but the enrichment
+                    # contract is not complete until reader quality has been
+                    # persisted. Treat a failed handoff as retryable so a
+                    # transient DB/review error cannot be reported as ready.
+                    source_retryable = True
+                    source_error_code = source_error_code or "ENRICHMENT_FINALIZATION_FAILED"
+                    source_error_message = source_error_message or str(exc)[:500]
                     logger.warning(
                         "ai-engine.radar.enrichment.finalization_failed",
-                        extra={"summary_id": summary_id},
+                        extra={"summary_id": summary_id, "error_type": type(exc).__name__},
                         exc_info=True,
                     )
                 await _mark_enrichment_success(

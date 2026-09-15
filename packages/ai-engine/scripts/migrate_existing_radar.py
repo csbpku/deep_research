@@ -37,7 +37,7 @@ async def main() -> int:
     )
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument(
-        "--item-timeout", type=int, default=600,
+        "--item-timeout", type=int, default=0,
         help="Maximum seconds for one enrichment item before continuing",
     )
     parser.add_argument(
@@ -86,7 +86,7 @@ async def main() -> int:
     args = parser.parse_args()
     limit = max(1, min(10_000, args.limit))
     batch_size = max(1, min(25, args.batch_size))
-    item_timeout = 0 if args.no_item_timeout else max(30, args.item_timeout)
+    item_timeout = 0 if args.no_item_timeout else max(0, args.item_timeout)
 
     store = DbJobStore(dsn=os.environ["DATABASE_URL"])
     await store.open()
@@ -125,7 +125,9 @@ async def main() -> int:
             repo_params = repo_values
         migration_filter = (
             '' if args.force_all_quality or args.retry_zread_failed else
-            'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\' '
+            'AND ("enrichmentStatus" IS DISTINCT FROM \'ready\' '
+            'OR "readerQualityStatus" IS DISTINCT FROM \'ready\' '
+            'OR COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') <> \'2.0\') '
         )
         zread_filter = (
             'AND "originalKind" = \'github_repo\' '
@@ -139,13 +141,15 @@ async def main() -> int:
             if args.all_records
             else 'AND "source" = \'daily\' AND "syncRunId" IS NOT NULL '
             'AND "status" IN (\'candidate\', \'published\') '
-            'AND "distilledTier" IN (\'collection\', \'deep_read\') '
+            'AND ("distilledTier" IN (\'collection\', \'deep_read\') '
+            'OR "distilledTargetTier" IN (\'collection\', \'deep_read\')) '
         )
         query_params: tuple[object, ...] = ((args.kind,) if args.kind else ()) + repo_params + (limit,)
         async with store.pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     'SELECT "id", "title", "originalKind", "distilledTier", '
+                    '"distilledTargetTier", "enrichmentStatus", "readerQualityStatus", '
                     '"distilledTotal" FROM "summaries" '
                     'WHERE 1=1 '
                     + scope_filter +
@@ -156,7 +160,7 @@ async def main() -> int:
                     repo_filter +
                     zread_filter +
                     migration_filter +
-                    'ORDER BY CASE "distilledTier" '
+                    'ORDER BY CASE COALESCE("distilledTargetTier", "distilledTier") '
                     'WHEN \'collection\' THEN 0 WHEN \'deep_read\' THEN 1 '
                     'WHEN \'skim\' THEN 2 ELSE 3 END, '
                     'COALESCE("distilledTotal", 0) DESC, "createdAt" ASC LIMIT %s',
@@ -170,7 +174,8 @@ async def main() -> int:
             return 0
         for row in row_dicts:
             print(
-                f"  {row['id']} | {row['distilledTier'] or 'pending':10s} | "
+                f"  {row['id']} | "
+                f"{row.get('distilledTargetTier') or row['distilledTier'] or 'pending':10s} | "
                 f"{row['originalKind'] or 'unknown':14s} | {str(row['title'])[:80]}"
             )
         if args.dry_run:

@@ -60,6 +60,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
             : diagnostic.contentOrigin === 'web'
               ? 'web'
               : 'api';
+          const targetTier = diagnostic.distilledTier === 'collection'
+            || diagnostic.distilledTier === 'deep_read'
+            ? diagnostic.distilledTier
+            : null;
           const created = await tx.summary.create({
             data: {
               title: diagnostic.title,
@@ -74,7 +78,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
               status: 'candidate',
               distilledScore: diagnostic.distilledScore ?? undefined,
               distilledTotal: total,
-              distilledTier: diagnostic.distilledTier,
+              // A promoted high-value diagnostic is only a score decision at
+              // this point. Keep the public tier at skim until the durable
+              // enrichment worker has produced and quality-checked the full
+              // reader snapshot.
+              distilledTier: targetTier ? 'skim' : diagnostic.distilledTier,
+              distilledTargetTier: targetTier,
+              enrichmentStatus: targetTier ? 'pending' : null,
+              enrichmentNextRetryAt: targetTier ? new Date() : null,
               syncRunId: diagnostic.runId,
               interpretation: (diagnostic.body || '').slice(0, 2000) || null,
               selectionReason: 'Admin 从同步过滤队列人工提升',

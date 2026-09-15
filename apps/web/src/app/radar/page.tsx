@@ -73,6 +73,7 @@ interface RadarCandidateListItem {
   crawledAt: string;
   interpretation: string | null;
   scoreReason: string | null;
+  tier: string | null;
   relevanceScore: number | null;
   timelinessScore: number | null;
   sourceQualityScore: number | null;

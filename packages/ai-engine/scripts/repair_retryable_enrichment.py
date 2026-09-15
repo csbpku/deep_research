@@ -27,7 +27,10 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 from ai_engine.job_runner.db_store import DbJobStore
-from ai_engine.radar.enrichment_contract import enrichment_review_reset_assignments
+from ai_engine.radar.enrichment_contract import (
+    enrichment_review_reset_assignments,
+    github_zread_is_complete,
+)
 from ai_engine.radar.enrichment_worker import (
     _zread_pages_complete,
     _zread_scoring_markdown,
@@ -48,7 +51,8 @@ async def _retryable_rows(pool: Any) -> list[dict[str, Any]]:
                 '"originalMeta", "originalSha256", "readerQualityStatus", '
                 '"readerQualityDetails" '
                 'FROM "summaries" '
-                'WHERE "distilledTier" IN (\'collection\', \'deep_read\') '
+                'WHERE ("distilledTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTargetTier" IN (\'collection\', \'deep_read\')) '
                 'AND "enrichmentStatus" = \'retryable\' '
                 'ORDER BY "enrichmentNextRetryAt" ASC NULLS FIRST, "createdAt" ASC'
             )
@@ -61,6 +65,9 @@ async def _mark_ready(pool: Any, summary_id: str) -> bool:
         cursor = await conn.execute(
             'UPDATE "summaries" SET '
             '"enrichmentStatus" = \'ready\', '
+            '"distilledTier" = CASE '
+            'WHEN "distilledTargetTier" IN (\'collection\', \'deep_read\') '
+            'THEN "distilledTargetTier" ELSE "distilledTier" END, '
             '"enrichmentLockedBy" = NULL, '
             '"enrichmentLeaseExpiresAt" = NULL, '
             '"enrichmentHeartbeatAt" = NULL, '
@@ -137,6 +144,10 @@ async def _deterministic_repair(pool: Any) -> dict[str, int]:
             row.get("readerQualityStatus") == "ready"
             and meta.get("enrichmentVersion") == "2.0"
             and quality_details.get("contentSha256") == row.get("originalSha256")
+            and (
+                row.get("originalKind") != "github_repo"
+                or github_zread_is_complete(meta)
+            )
         ):
             if await _mark_ready(pool, summary_id):
                 reconciled += 1
@@ -156,7 +167,8 @@ async def _remaining_ids(
         rows = await (
             await conn.execute(
                 'SELECT "id" FROM "summaries" '
-                'WHERE "distilledTier" IN (\'collection\', \'deep_read\') '
+                'WHERE ("distilledTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTargetTier" IN (\'collection\', \'deep_read\')) '
                 f'AND "enrichmentStatus" IN ({statuses}) '
                 'ORDER BY "enrichmentNextRetryAt" ASC NULLS FIRST, "createdAt" ASC'
             )

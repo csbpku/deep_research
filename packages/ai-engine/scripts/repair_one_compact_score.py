@@ -16,6 +16,11 @@ from ai_engine.radar.distilled_scorer import (
     build_distilled_score_reason,
     compute_score,
 )
+from ai_engine.radar.enrichment_contract import (
+    effective_tier,
+    is_enrichment_ready,
+    is_enrichment_tier,
+)
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 SUMMARY_ID = "ac7d0a28-621b-45cc-ac2b-c4c7b615c654"
@@ -27,16 +32,18 @@ async def main() -> int:
     await store.open()
     try:
         async with store.pool.connection() as conn:
-            row = dict(
-                await (
-                    await conn.execute(
-                        'SELECT "title", "url", "publishedAt", '
-                        'COALESCE("originalMarkdown", body, title) AS content '
-                        'FROM summaries WHERE "id" = %s',
-                        (SUMMARY_ID,),
-                    )
-                ).fetchone()
-            )
+            raw_row = await (
+                await conn.execute(
+                    'SELECT "title", "url", "publishedAt", "originalKind", '
+                    '"originalMeta", "enrichmentStatus", "readerQualityStatus", '
+                    'COALESCE("originalMarkdown", body, title) AS content '
+                    'FROM summaries WHERE "id" = %s',
+                    (SUMMARY_ID,),
+                )
+            ).fetchone()
+            if raw_row is None:
+                raise RuntimeError(f"summary not found: {SUMMARY_ID}")
+            row = dict(raw_row)
         profile, _ = profile_for_source_url("arxiv", str(row["url"] or ""))
         content = str(row["content"] or "")[:6_000]
         prompt = f"""只输出一个完整 JSON 对象，不要解释、不要 markdown、不要 <think>。
@@ -66,20 +73,43 @@ JSON 键必须为：信息增量,分析深度,可行动性,事实可信度,时�
         if score.is_default:
             raise RuntimeError("compact scorer returned default score")
         total = score.tier_score if score.tier_score is not None else score.total
+        enrichment_ready = is_enrichment_ready(
+            enrichment_status=row.get("enrichmentStatus"),
+            reader_quality_status=row.get("readerQualityStatus"),
+            original_kind=row.get("originalKind") or "arxiv",
+            original_meta=row.get("originalMeta"),
+        )
+        target_tier = score.tier if is_enrichment_tier(score.tier) else None
+        deliverable_tier = effective_tier(
+            score.tier,
+            enrichment_ready=enrichment_ready,
+        )
+        enrichment_status = (
+            "ready" if target_tier and enrichment_ready
+            else "pending" if target_tier
+            else None
+        )
         async with store.pool.connection() as conn:
             await conn.execute(
                 'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, "distilledTier" = %s, '
+                '"distilledTargetTier" = %s, '
                 '"distilledProfile" = %s, '
                 '"scoreReason" = %s, "tags" = array_remove('
                 'COALESCE("tags", ARRAY[]::text[]), \'content_pending\'), '
+                '"enrichmentStatus" = %s, '
+                '"enrichmentNextRetryAt" = CASE WHEN %s = \'pending\' '
+                'THEN now() ELSE NULL END, '
                 '"updatedAt" = now() WHERE "id" = %s',
                 (
                     json.dumps(score.to_dict(), ensure_ascii=False),
                     total,
-                    score.tier,
+                    deliverable_tier,
+                    target_tier,
                     score.profile_id,
                     build_distilled_score_reason(score),
+                    enrichment_status,
+                    enrichment_status,
                     SUMMARY_ID,
                 ),
             )

@@ -1597,7 +1597,102 @@ async def test_partial_github_snapshot_is_retryable(
         and '"enrichmentErrorCode" = %s' in sql
     )
     assert retry_update[0] == "retryable"
-    assert retry_update[3] == "ZREAD_INCOMPLETE"
+    assert retry_update[6] == "ZREAD_INCOMPLETE"
+
+
+@pytest.mark.asyncio
+async def test_successful_enrichment_restores_target_tier_after_quality_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(rows=[{
+        "id": "id-ready",
+        "canonicalUrl": "https://example.com/article",
+        "originalKind": "rss",
+        "distilledTier": "skim",
+        "distilledTargetTier": "deep_read",
+    }])
+
+    async def fake_enrich(
+        pool: Any,
+        *,
+        summary_id: str,
+        canonical_url: str,
+        force: bool = False,
+        lease_owner: str | None = None,
+        claim_id: str | None = None,
+    ) -> dict[str, Any]:
+        del pool, summary_id, canonical_url, force, lease_owner, claim_id
+        return {"ok": True}
+
+    async def fake_finalize(
+        pool: Any,
+        *,
+        summary_id: str,
+        force_review: bool = False,
+    ) -> dict[str, Any]:
+        del pool, summary_id, force_review
+        return {"quality_status": "ready", "review": None}
+
+    monkeypatch.setattr(ew, "enrich_web_candidate", fake_enrich)
+    monkeypatch.setattr(ew, "finalize_enrichment", fake_finalize)
+
+    assert await ew.run_enrichment_for_pending(
+        pool,
+        source_kinds=("rss",),
+        force=True,
+        summary_ids=("id-ready",),
+    ) == 1
+
+    success_sql, success_params = next(
+        (sql, params)
+        for sql, params in pool.connection_value.updates
+        if '"enrichmentStatus" = CASE WHEN' in sql
+        and '"enrichmentErrorCode" = %s' in sql
+    )
+    assert 'THEN "distilledTargetTier"' in success_sql
+    assert success_params[0] == "ready"
+    assert success_params[1:5] == (False, False, False, False)
+
+
+@pytest.mark.asyncio
+async def test_finalization_failure_is_retryable_and_never_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool(rows=[{
+        "id": "id-finalize-failed",
+        "canonicalUrl": "https://example.com/article",
+        "originalKind": "rss",
+        "distilledTier": "skim",
+        "distilledTargetTier": "deep_read",
+    }])
+
+    async def fake_enrich(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        return {"ok": True}
+
+    async def failed_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        raise RuntimeError("reader quality persistence failed")
+
+    monkeypatch.setattr(ew, "enrich_web_candidate", fake_enrich)
+    monkeypatch.setattr(ew, "finalize_enrichment", failed_finalize)
+
+    assert await ew.run_enrichment_for_pending(
+        pool,
+        source_kinds=("rss",),
+        force=True,
+        summary_ids=("id-finalize-failed",),
+    ) == 0
+
+    retry_sql, retry_params = next(
+        (sql, params)
+        for sql, params in pool.connection_value.updates
+        if '"enrichmentStatus" = CASE WHEN' in sql
+        and '"enrichmentErrorCode" = %s' in sql
+    )
+    assert retry_params[0] == "retryable"
+    assert retry_params[6] == "ENRICHMENT_FINALIZATION_FAILED"
+    assert "THEN 'skim'" in retry_sql
 
 
 @pytest.mark.asyncio
@@ -1657,7 +1752,7 @@ async def test_retryable_enrichment_becomes_manual_at_attempt_limit(
         and '"enrichmentErrorCode" = %s' in sql
     )
     assert terminal_update[0] == "manual"
-    assert terminal_update[1] is False
+    assert terminal_update[4] is False
 
 
 @pytest.mark.asyncio
@@ -1724,6 +1819,6 @@ async def test_empty_web_result_downgrade_clears_durable_queue_state(
         sql for sql, _ in pool.connection_value.updates
         if '"enrichmentStatus" = CASE WHEN' in sql
     )
-    assert '"enrichmentStatus" = CASE WHEN "distilledTier" IN' in success_sql
-    assert '"enrichmentNextRetryAt" = CASE WHEN "distilledTier" IN' in success_sql
+    assert '"enrichmentStatus" = CASE WHEN' in success_sql
+    assert '"enrichmentNextRetryAt" = CASE WHEN (' in success_sql
     assert '"distilledTier" = \'skim\'' in downgrade_sql

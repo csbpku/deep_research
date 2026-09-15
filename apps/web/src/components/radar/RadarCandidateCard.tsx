@@ -34,6 +34,8 @@ interface RadarCandidate {
   crawledAt: string;
   interpretation: string | null;
   scoreReason: string | null;
+  /** Effective, persisted reading tier; do not read the score target here. */
+  tier: string | null;
   relevanceScore: number | null;
   timelinessScore: number | null;
   sourceQualityScore: number | null;
@@ -116,7 +118,10 @@ export function RadarCandidateCard({
 
   const isAdminQueue = Boolean(adminActions);
   const resolvedDetailHref = detailHref ?? `/radar/${candidate.id}`;
-  const tier = candidate.distilledScore?.tier ?? null;
+  // ``distilledScore.tier`` is the score target. The persisted ``tier`` is
+  // intentionally skim while enrichment is pending, so the card must render
+  // the deliverable tier rather than promise an unreadable deep read.
+  const tier = candidate.tier ?? null;
   const contentPending = candidate.tags.includes('content_pending');
   const tierScore = candidate.distilledScore?.tierScore
     ?? candidate.distilledScore?.total

@@ -111,7 +111,15 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         syncRunId: { not: null },
         createdAt: { gte: todayStart, lt: tomorrowStart },
       },
-      select: { distilledTotal: true, distilledTier: true },
+      select: {
+        distilledTotal: true,
+        distilledTier: true,
+        distilledTargetTier: true,
+        originalKind: true,
+        originalMeta: true,
+        enrichmentStatus: true,
+        readerQualityStatus: true,
+      },
     }),
     prisma.radarSyncDiagnostic.findMany({
       where: {
@@ -238,6 +246,50 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     { label: '60–79', min: 60, max: 79, count: 0 },
     { label: '80–100', min: 80, max: 100, count: 0 },
   ];
+  const isHighValue = (candidate: { distilledTier: string | null; distilledTargetTier: string | null }) =>
+    candidate.distilledTier === 'collection'
+    || candidate.distilledTier === 'deep_read'
+    || candidate.distilledTargetTier === 'collection'
+    || candidate.distilledTargetTier === 'deep_read';
+  const hasCompleteEnrichment = (candidate: {
+    originalKind: string | null;
+    originalMeta: unknown;
+    enrichmentStatus: string | null;
+    readerQualityStatus: string | null;
+  }) => {
+    if (
+      candidate.enrichmentStatus !== 'ready'
+      || candidate.readerQualityStatus !== 'ready'
+      || !candidate.originalMeta
+      || typeof candidate.originalMeta !== 'object'
+    ) return false;
+    const meta = candidate.originalMeta as Record<string, unknown>;
+    if (meta.enrichmentVersion !== '2.0') return false;
+    if (candidate.originalKind !== 'github_repo') return true;
+    const zread = meta.zread;
+    if (!zread || typeof zread !== 'object') return false;
+    const doc = zread as Record<string, unknown>;
+    const pages = Array.isArray(doc.pages) ? doc.pages : [];
+    const pageCount = Number(doc.pageCount);
+    const expectedPageCount = Number(doc.expectedPageCount);
+    const missingPages = doc.missingPages;
+    const hasInvalidMissingPages = 'missingPages' in doc
+      && (!Array.isArray(missingPages) || missingPages.length > 0);
+    const boolTrue = (value: unknown) => value === true
+      || ['1', 'true', 'yes', 'on'].includes(String(value ?? '').toLowerCase());
+    return doc.provider !== 'github-readme-fallback'
+      && doc.status === 'complete'
+      && !boolTrue(doc.truncated)
+      && !hasInvalidMissingPages
+      && !boolTrue(doc.mixedCommits)
+      && pages.length > 0
+      && Number.isFinite(pageCount)
+      && Number.isFinite(expectedPageCount)
+      && pageCount >= expectedPageCount;
+  };
+  const pendingEnrichment = todayRadarCandidates.filter(
+    (candidate) => isHighValue(candidate) && !hasCompleteEnrichment(candidate),
+  ).length;
   for (const candidate of todayRadarCandidates) {
     if (candidate.distilledTier === 'collection') readingLevels.collection += 1;
     else if (candidate.distilledTier === 'deep_read') readingLevels.deep_read += 1;
@@ -401,6 +453,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         runs: radarRunSummary,
         latest: latestSourceStatus,
         readingLevels,
+        pendingEnrichment,
         scoreDistribution,
         governance: { noise: todayGovernanceNoise, skipReasons: governanceSkipReasons },
         activeSources: todayRadarRuns

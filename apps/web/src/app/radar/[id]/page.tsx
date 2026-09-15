@@ -1036,7 +1036,7 @@ export default function RadarDetailPage() {
         <div className="border-t border-border px-4 py-4">
           {d.distilledScore ? (
             <div className="mb-6">
-              <DistilledScorePanel score={d.distilledScore} />
+              <DistilledScorePanel score={d.distilledScore} effectiveTier={tier} />
             </div>
           ) : d.scoreReason ? (
             <p className="mb-6 text-sm text-muted-foreground">

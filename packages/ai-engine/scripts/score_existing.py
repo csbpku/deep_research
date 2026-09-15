@@ -20,6 +20,11 @@ from ai_engine.radar.distilled_scorer import (
     score_with_llm,
 )
 from ai_engine.radar.sync_runner import _is_low_quality_content
+from ai_engine.radar.enrichment_contract import (
+    effective_tier,
+    is_enrichment_ready,
+    is_enrichment_tier,
+)
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
 _SOURCE_PROFILE: dict[str, str] = {
@@ -105,6 +110,8 @@ async def main() -> int:
             'SELECT "id", "title", "body", "url", "publishedAt", "syncRunId", '
             '  "originalMarkdown", "tags", '
             '  "distilledScore", "distilledProfile", '
+            '  "distilledTargetTier", "originalKind", "originalMeta", '
+            '  "enrichmentStatus", "readerQualityStatus", '
             '  (SELECT s."sourceType" FROM "radar_sync_runs" r '
             '   JOIN "radar_sources" s ON s."id" = r."sourceId" '
             '   WHERE r."id" = "summaries"."syncRunId" LIMIT 1) AS "sourceType" '
@@ -180,20 +187,43 @@ async def main() -> int:
                 print(f"  [{scored:3d}] {str(row['title'])[:60]:<60s} | deferred: incomplete content")
                 continue
             monitor.record(result)
+            enrichment_ready = is_enrichment_ready(
+                enrichment_status=row.get("enrichmentStatus"),
+                reader_quality_status=row.get("readerQualityStatus"),
+                original_kind=row.get("originalKind") or row.get("sourceType"),
+                original_meta=row.get("originalMeta"),
+            )
+            deliverable_tier = effective_tier(
+                result.tier,
+                enrichment_ready=enrichment_ready,
+            )
+            target_tier = result.tier if is_enrichment_tier(result.tier) else None
+            enrichment_status = (
+                "ready" if target_tier and enrichment_ready
+                else "pending" if target_tier
+                else None
+            )
             await conn.execute(
                 'UPDATE "summaries" SET '
                 '"distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, '
                 '"distilledTier" = %s, '
+                '"distilledTargetTier" = %s, '
                 '"distilledProfile" = %s, '
-                '"scoreReason" = %s '
+                '"scoreReason" = %s, '
+                '"enrichmentStatus" = %s, '
+                '"enrichmentNextRetryAt" = CASE WHEN %s = \'pending\' '
+                'THEN now() ELSE NULL END '
                 'WHERE "id" = %s',
                 (
                     json.dumps(result.to_dict(), ensure_ascii=False),
                     result.tier_score if result.tier_score is not None else result.total,
-                    result.tier,
+                    deliverable_tier,
+                    target_tier,
                     result.profile_id,
                     build_distilled_score_reason(result),
+                    enrichment_status,
+                    enrichment_status,
                     row["id"],
                 ),
             )

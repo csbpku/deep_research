@@ -34,6 +34,7 @@ from ai_engine.radar.models import RadarCandidate, RadarSource
 from ai_engine.radar.candidate_filter import filter_candidate
 from ai_engine.radar.pipeline import normalize_candidate, score_candidate
 from ai_engine.radar.enrichment_contract import (
+    effective_tier,
     enrichment_review_reset_assignments,
     initial_enrichment_status,
 )
@@ -919,9 +920,16 @@ async def _insert_candidate(
     durable_enrichment_status = initial_enrichment_status(
         persisted_distilled.tier if persisted_distilled is not None else None
     )
+    scored_target_tier = (
+        persisted_distilled.tier if persisted_distilled is not None else None
+    )
+    deliverable_tier = effective_tier(
+        scored_target_tier,
+        enrichment_ready=False,
+    )
     if persisted_distilled is not None:
-        if persisted_distilled.tier:
-            merged_tags.append(f"tier_{persisted_distilled.tier}")
+        if deliverable_tier:
+            merged_tags.append(f"tier_{deliverable_tier}")
         if persisted_distilled.veto:
             merged_tags.append(f"veto_{persisted_distilled.veto}")
         if persisted_distilled.risk_flag:
@@ -959,13 +967,14 @@ async def _insert_candidate(
                     '"ingestionTokenCount", "tags", "status", "relevanceScore", '
                     '"timelinessScore", "sourceQualityScore", "scoreVersion", '
                     '"scoreReason", "distilledScore", "distilledTotal", "distilledTier", '
+                    '"distilledTargetTier", '
                     '"distilledProfile", "interpretation", "syncRunId", '
                     '"originalMarkdown", "originalKind", "originalFetchedAt", '
                     '"originalBytes", "originalSha256", '
                     '"createdAt", "updatedAt", "enrichmentStatus", '
                     '"enrichmentNextRetryAt") '
                     "VALUES (%s, %s, %s, %s, %s, 'daily', %s, %s, %s, %s, %s, %s::text[], "
-                    "'candidate', %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, "
+                    "'candidate', %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, "
                     "%s, now(), %s, %s, now(), now(), %s, "
                     "CASE WHEN %s = 'pending' THEN now() ELSE NULL END) "
                     'ON CONFLICT ("canonicalUrl") DO NOTHING RETURNING "id"',
@@ -1006,7 +1015,10 @@ async def _insert_candidate(
                             if persisted_distilled is not None
                             else None
                         ),
-                        persisted_distilled.tier if persisted_distilled is not None else None,
+                        deliverable_tier,
+                        scored_target_tier
+                        if scored_target_tier in {"collection", "deep_read"}
+                        else None,
                         persisted_distilled.profile if persisted_distilled is not None else None,
                         interpretation[:2000],
                         run_id,

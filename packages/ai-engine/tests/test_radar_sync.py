@@ -179,6 +179,50 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "仅用于排序，不自动发布" in params[15]
 
 
+async def test_sync_persists_high_score_as_target_but_only_skim_deliverable() -> None:
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate("https://example.com/high-value")]
+
+    async def high_score(title: str, content: str, **kwargs: Any) -> Any:
+        del title, content, kwargs
+        return compute_score(
+            {
+                "信息增量": 3,
+                "分析深度": 3,
+                "可行动性": 3,
+                "事实可信度": 3,
+                "时效性": 3,
+                "表达质量": 3,
+                "综合信号": 3,
+                "direct_relevance": 3,
+                "relevance_evidence": "substantive source",
+            },
+            source_type="rss",
+        )
+
+    result = await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        distilled_scorer=high_score,
+    )
+
+    assert result.runs[0].total_new == 1
+    insert_sql, params = next(
+        item for item in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in item[0]
+    )
+    assert '"distilledTargetTier"' in insert_sql
+    assert params[18] == "skim"
+    assert params[19] in {"deep_read", "collection"}
+    assert params[27] == "pending"
+    assert params[28] == "pending"
+
+
 async def test_create_run_initializes_lease_and_heartbeat() -> None:
     pool = _Pool([])
     source = RadarSource(

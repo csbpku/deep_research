@@ -18,6 +18,11 @@ from typing import Any
 from dotenv import load_dotenv
 
 from ai_engine.job_runner.db_store import DbJobStore
+from ai_engine.radar.enrichment_contract import (
+    effective_tier,
+    is_enrichment_ready,
+    is_enrichment_tier,
+)
 _TIER_SCORE_RE = re.compile(r"分层分=([0-9]+(?:\.[0-9]+)?)")
 _TIER_RE = re.compile(r"分层=([a-z_]+)")
 
@@ -91,6 +96,8 @@ async def main() -> int:
                     'SELECT sm."id", sm."title", sm."url", sm."body", '
                     'sm."originalMarkdown", sm."distilledScore", '
                     'sm."distilledTotal", sm."distilledTier", sm."scoreReason", '
+                    'sm."distilledTargetTier", sm."originalKind", sm."originalMeta", '
+                    'sm."enrichmentStatus", sm."readerQualityStatus", '
                     'rs."sourceType" '
                     'FROM summaries sm '
                     'JOIN radar_sync_runs rr ON rr.id = sm."syncRunId" '
@@ -101,13 +108,31 @@ async def main() -> int:
                     'ORDER BY sm."createdAt" ASC',
                 )
             ).fetchall()
-        changes: list[tuple[str, dict[str, Any], float, str, str]] = []
+        changes: list[
+            tuple[str, dict[str, Any], float, str, str, str | None, str | None, str | None]
+        ] = []
         for raw in rows:
             row = dict(raw)
             row["content"] = str(row.get("originalMarkdown") or row.get("body") or "")
             if not isinstance(row.get("distilledScore"), dict):
                 continue
             payload, total, tier, reason = _rebuild_result(row)
+            enrichment_ready = is_enrichment_ready(
+                enrichment_status=row.get("enrichmentStatus"),
+                reader_quality_status=row.get("readerQualityStatus"),
+                original_kind=row.get("originalKind") or row.get("sourceType"),
+                original_meta=row.get("originalMeta"),
+            )
+            target_tier = tier if is_enrichment_tier(tier) else None
+            deliverable_tier = effective_tier(
+                tier,
+                enrichment_ready=enrichment_ready,
+            )
+            enrichment_status = (
+                "ready" if target_tier and enrichment_ready
+                else "pending" if target_tier
+                else None
+            )
             stored_reason = str(row.get("scoreReason") or "")
             reason_score = _number(
                 (_TIER_SCORE_RE.search(stored_reason) or [None, None])[1]
@@ -128,24 +153,37 @@ async def main() -> int:
             )
             payload_drift = (
                 abs(float(row.get("distilledTotal") or 0) - total) > 0.01
-                or str(row.get("distilledTier") or "") != tier
+                or str(row.get("distilledTier") or "") != (deliverable_tier or "")
+                or str(row.get("distilledTargetTier") or "") != (target_tier or "")
                 or _number(row["distilledScore"].get("tierScore")) is None
                 or abs(float(row["distilledScore"].get("tierScore") or 0) - total) > 0.01
             )
             if reason_drift or payload_drift:
-                changes.append((str(row["id"]), payload, total, tier, reason))
+                changes.append(
+                    (
+                        str(row["id"]), payload, total, tier, reason,
+                        deliverable_tier, target_tier, enrichment_status,
+                    )
+                )
         print(f"candidates={len(rows)} changes={len(changes)} mode={'apply' if args.apply else 'dry-run'}")
         if not args.apply:
-            for summary_id, _payload, total, tier, reason in changes:
+            for summary_id, _payload, total, tier, reason, _deliverable, _target, _status in changes:
                 print(f"{summary_id} | {total:.2f} | {tier} | {reason[:120]}")
             return 0
         async with store.pool.connection() as conn:
-            for summary_id, payload, total, tier, reason in changes:
+            for summary_id, payload, total, tier, reason, deliverable_tier, target_tier, enrichment_status in changes:
                 await conn.execute(
                     'UPDATE summaries SET "distilledScore"=%s::jsonb, '
-                    '"distilledTotal"=%s, "distilledTier"=%s, "scoreReason"=%s, '
-                    '"updatedAt"=now() WHERE id=%s',
-                    (json.dumps(payload, ensure_ascii=False), total, tier, reason, summary_id),
+                    '"distilledTotal"=%s, "distilledTier"=%s, '
+                    '"distilledTargetTier"=%s, "scoreReason"=%s, '
+                    '"enrichmentStatus"=%s, '
+                    '"enrichmentNextRetryAt"=CASE WHEN %s = \'pending\' '
+                    'THEN now() ELSE NULL END, "updatedAt"=now() WHERE id=%s',
+                    (
+                        json.dumps(payload, ensure_ascii=False), total,
+                        deliverable_tier, target_tier, reason,
+                        enrichment_status, enrichment_status, summary_id,
+                    ),
                 )
             await conn.commit()
         print(f"updated={len(changes)}")

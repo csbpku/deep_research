@@ -819,7 +819,8 @@ async def claim_content_review(
                 '"contentReviewClaimId" = gen_random_uuid(), '
                 '"updatedAt" = now() '
                 'WHERE "id" = %s '
-                'AND "distilledTier" IN (\'collection\', \'deep_read\') '
+                'AND ("distilledTier" IN (\'collection\', \'deep_read\') '
+                'OR "distilledTargetTier" IN (\'collection\', \'deep_read\')) '
                 'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
                 f'AND {eligibility} '
                 'RETURNING "contentReviewClaimId"',

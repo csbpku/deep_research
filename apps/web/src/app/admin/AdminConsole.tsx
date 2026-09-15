@@ -170,6 +170,7 @@ interface DashboardData {
         noise: number;
         pending: number;
       };
+      pendingEnrichment: number;
       scoreDistribution: Array<{ label: string; min: number; max: number; count: number }>;
       governance: {
         noise: number;
@@ -656,7 +657,7 @@ function DashboardTab() {
             </span>
           }
           value={d.radar.monitor.failedUniqueItems}
-          hint={`待评分 ${d.radar.monitor.readingLevels.pending} · 待补全 ${d.radar.monitor.governance.skipReasons.contentFetchFailed}`}
+          hint={`待评分 ${d.radar.monitor.readingLevels.pending} · 待补全 ${d.radar.monitor.pendingEnrichment}`}
           tone={d.radar.monitor.failedUniqueItems > 0 ? 'primary' : 'default'}
           className="rounded-none border-0 p-3"
         />

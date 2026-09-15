@@ -41,9 +41,17 @@ function isRepoActivityDigestUrl(url: string | null | undefined): boolean {
   }
 }
 
+function isJsonTrue(value: unknown): boolean {
+  return value === true
+    || ['1', 'true', 'yes', 'on'].includes(String(value ?? '').toLowerCase());
+}
+
 function needsMigration(summary: {
   tags: string[];
   distilledTier: string | null;
+  distilledTargetTier: string | null;
+  enrichmentStatus: string | null;
+  readerQualityStatus: string | null;
   originalKind: string | null;
   url: string | null;
   canonicalUrl: string;
@@ -79,19 +87,45 @@ function needsMigration(summary: {
     ? summary.originalMeta as { enrichmentVersion?: unknown; zread?: unknown }
     : null;
   const versionCurrent = meta?.enrichmentVersion === ENRICHMENT_VERSION;
-  const isHighValue = summary.distilledTier === 'collection' || summary.distilledTier === 'deep_read';
+  const isHighValue = summary.distilledTier === 'collection'
+    || summary.distilledTier === 'deep_read'
+    || summary.distilledTargetTier === 'collection'
+    || summary.distilledTargetTier === 'deep_read';
   if (!isHighValue && versionCurrent) return false;
+  if (isHighValue && (
+    summary.enrichmentStatus !== 'ready'
+    || summary.readerQualityStatus !== 'ready'
+  )) return true;
   if (!meta) return true;
   if (summary.originalKind === 'github_repo') {
     const zread = meta.zread;
     const zreadRecord = zread && typeof zread === 'object'
-      ? zread as { status?: unknown; pages?: unknown }
+      ? zread as {
+          provider?: unknown;
+          status?: unknown;
+          pages?: unknown;
+          missingPages?: unknown;
+          mixedCommits?: unknown;
+          truncated?: unknown;
+          pageCount?: unknown;
+          expectedPageCount?: unknown;
+        }
       : null;
+    const pageCount = Number(zreadRecord?.pageCount);
+    const expectedPageCount = Number(zreadRecord?.expectedPageCount);
     const zreadReady = Boolean(
       zreadRecord
-      && (zreadRecord.status === 'complete' || zreadRecord.status === 'partial')
+      && zreadRecord.provider !== 'github-readme-fallback'
+      && zreadRecord.status === 'complete'
       && Array.isArray(zreadRecord.pages)
-      && zreadRecord.pages.length > 0,
+      && zreadRecord.pages.length > 0
+      && !isJsonTrue(zreadRecord.truncated)
+      && !isJsonTrue(zreadRecord.mixedCommits)
+      && (!Object.prototype.hasOwnProperty.call(zreadRecord, 'missingPages')
+        || (Array.isArray(zreadRecord.missingPages) && zreadRecord.missingPages.length === 0))
+      && Number.isFinite(pageCount)
+      && Number.isFinite(expectedPageCount)
+      && pageCount >= expectedPageCount,
     );
     return !versionCurrent || !zreadReady;
   }
@@ -117,6 +151,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       shareSource: { select: { status: true } },
       tags: true,
       distilledTier: true,
+      distilledTargetTier: true,
+      enrichmentStatus: true,
+      readerQualityStatus: true,
       originalKind: true,
       url: true,
       canonicalUrl: true,

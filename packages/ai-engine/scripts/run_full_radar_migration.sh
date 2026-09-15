@@ -10,8 +10,8 @@ PYTHON="${PYTHON:-$PWD/.venv/bin/python}"
 BATCH_LIMIT="${BATCH_LIMIT:-200}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 CONCURRENCY="${CONCURRENCY:-2}"
-ITEM_TIMEOUT="${ITEM_TIMEOUT:-600}"
-ZREAD_TIMEOUT="${ZREAD_TIMEOUT:-900}"
+ITEM_TIMEOUT="${ITEM_TIMEOUT:-0}"
+ZREAD_TIMEOUT="${ZREAD_TIMEOUT:-7200}"
 LOG_FILE="${LOG_FILE:-/tmp/deep-research-full-radar-migration.log}"
 
 exec >>"$LOG_FILE" 2>&1
@@ -25,9 +25,12 @@ while true; do
       WHERE source = 'daily'
         AND \"syncRunId\" IS NOT NULL
         AND \"status\" IN ('candidate','published')
-        AND \"distilledTier\" IN ('collection','deep_read')
+        AND (\"distilledTier\" IN ('collection','deep_read')
+          OR \"distilledTargetTier\" IN ('collection','deep_read'))
         AND \"originalKind\" IN ('github_repo','github_other','github_release','arxiv','rss','web_share')
-        AND COALESCE(\"originalMeta\"->>'enrichmentVersion','') <> '2.0';
+        AND (\"enrichmentStatus\" IS DISTINCT FROM 'ready'
+          OR \"readerQualityStatus\" IS DISTINCT FROM 'ready'
+          OR COALESCE(\"originalMeta\"->>'enrichmentVersion','') <> '2.0');
     " | tr -d '[:space:]'
   )"
   echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] remaining=$remaining"

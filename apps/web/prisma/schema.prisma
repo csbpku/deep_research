@@ -275,6 +275,9 @@ model Summary {
   distilledScore     Json?    @db.JsonB // Distilled v2 完整结构化评分
   distilledTotal     Float? // Distilled 分层分 0..100（与 distilledTier 判定一致）
   distilledTier      String?  @db.VarChar(16)
+  // Score-derived target tier. distilledTier is the currently deliverable
+  // tier and must stay skim until the source enrichment contract is ready.
+  distilledTargetTier String? @db.VarChar(16)
   distilledProfile   String?  @db.VarChar(16)
   interpretation     String?  @db.VarChar(2000) // AI 一句话解读
   syncRunId          String?  @db.Uuid // radar_sync_runs.id

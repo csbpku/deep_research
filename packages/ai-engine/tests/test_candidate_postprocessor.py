@@ -160,6 +160,40 @@ async def test_score_missing_candidates_allows_limited_abstract_for_triage() -> 
     assert "content_pending" in update_sql
 
 
+async def test_limited_content_cannot_persist_high_value_deliverable_tier() -> None:
+    pool = _Pool([{
+        "id": "summary-limited-high",
+        "title": "Limited source",
+        "body": "abstract",
+        "url": "https://example.com/limited",
+        "publishedAt": None,
+        "originalMarkdown": "A limited but scoreable abstract. " * 18,
+        "tags": ["content_pending"],
+        "sourceType": "rss",
+    }])
+
+    async def fake_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        return replace(
+            default_score(get_profile("news")),
+            total=80.0,
+            effective_total=80.0,
+            ranking_score=80.0,
+            tier_score=80.0,
+            tier="deep_read",
+            is_default=False,
+        )
+
+    scored = await score_missing_candidates(pool, scorer=fake_scorer)
+
+    assert scored == 1
+    update_sql, update_params = pool.connection_value.executions[1]
+    assert '"distilledTier" = %s' in update_sql
+    assert '"distilledTargetTier" = %s' in update_sql
+    assert update_params[2] == "skim"
+    assert update_params[3] == "deep_read"
+    assert update_params[7] is False
+
+
 async def test_score_missing_candidates_retries_complete_content_pending_row() -> None:
     content = (
         "Complete repository documentation with architecture and tests. " * 50
@@ -195,10 +229,10 @@ async def test_score_missing_candidates_retries_complete_content_pending_row() -
     assert scored == 1
     assert calls == 1
     update_sql = pool.connection_value.executions[1][0]
-    assert "array_remove" in update_sql
+    assert "tag NOT IN ('content_pending', 'fetch_failed_shell')" in update_sql
     assert "content_pending" in update_sql
     update_params = pool.connection_value.executions[1][1]
-    assert not str(update_params[4]).startswith("抓取失败:")
+    assert not str(update_params[5]).startswith("抓取失败:")
 
 
 async def test_score_missing_candidates_tags_scored_shell_as_fetch_failure() -> None:
@@ -229,5 +263,5 @@ async def test_score_missing_candidates_tags_scored_shell_as_fetch_failure() -> 
     assert scored == 1
     update_sql, update_params = pool.connection_value.executions[1]
     assert "fetch_failed_shell" in update_sql
-    assert "'fetch_failed_shell') END" in update_sql
-    assert "抓取失败: 推广/重定向页" in str(update_params[4])
+    assert "ARRAY['fetch_failed_shell', 'tier_' || %s]" in update_sql
+    assert "抓取失败: 推广/重定向页" in str(update_params[5])

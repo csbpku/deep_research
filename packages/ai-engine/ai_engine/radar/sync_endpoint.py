@@ -428,6 +428,33 @@ async def list_radar_runs(
         where_clause = 'WHERE r."createdAt" >= %s AND r."createdAt" < %s '
         params.extend((start_at, start_at + timedelta(days=1)))
     params.append(bounded_limit)
+    high_value = '(c."distilledTier" IN (\'collection\', \'deep_read\') '
+    high_value += 'OR c."distilledTargetTier" IN (\'collection\', \'deep_read\'))'
+    complete_enrichment = (
+        'c."enrichmentStatus" = \'ready\' '
+        'AND c."readerQualityStatus" = \'ready\' '
+        'AND COALESCE(c."originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
+        'AND (c."originalKind" <> \'github_repo\' OR ('
+        'COALESCE(c."originalMeta"->\'zread\'->>\'provider\', \'\') '
+        '<> \'github-readme-fallback\' '
+        'AND c."originalMeta"->\'zread\'->>\'status\' = \'complete\' '
+        'AND lower(COALESCE(c."originalMeta"->\'zread\'->>\'truncated\', \'false\')) '
+        'NOT IN (\'1\', \'true\', \'yes\', \'on\') '
+        'AND lower(COALESCE(c."originalMeta"->\'zread\'->>\'mixedCommits\', \'false\')) '
+        'NOT IN (\'1\', \'true\', \'yes\', \'on\') '
+        'AND CASE WHEN NOT (c."originalMeta"->\'zread\' ? \'missingPages\') THEN TRUE '
+        'WHEN jsonb_typeof(c."originalMeta"->\'zread\'->\'missingPages\') = \'array\' '
+        'THEN jsonb_array_length(c."originalMeta"->\'zread\'->\'missingPages\') = 0 '
+        'ELSE FALSE END '
+        'AND CASE WHEN jsonb_typeof(c."originalMeta"->\'zread\'->\'pages\') = \'array\' '
+        'THEN jsonb_array_length(c."originalMeta"->\'zread\'->\'pages\') ELSE 0 END > 0 '
+        'AND CASE '
+        'WHEN COALESCE(c."originalMeta"->\'zread\'->>\'pageCount\', \'\') ~ \'^[0-9]+$\' '
+        'AND COALESCE(c."originalMeta"->\'zread\'->>\'expectedPageCount\', \'\') ~ \'^[0-9]+$\' '
+        'THEN (c."originalMeta"->\'zread\'->>\'pageCount\')::numeric >= '
+        '(c."originalMeta"->\'zread\'->>\'expectedPageCount\')::numeric '
+        'ELSE FALSE END))'
+    )
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
@@ -440,8 +467,8 @@ async def list_radar_runs(
                 'COUNT(c."id")::int AS "candidateCount", '
                 'COUNT(c."id") FILTER (WHERE c."distilledScore" IS NOT NULL)::int AS "scoredCount", '
                 'COUNT(c."id") FILTER (WHERE c."distilledScore" IS NULL)::int AS "pendingScoreCount", '
-                'COUNT(c."id") FILTER (WHERE c."originalMeta" IS NOT NULL)::int AS "enrichedCount", '
-                'COUNT(c."id") FILTER (WHERE c."originalMeta" IS NULL)::int AS "pendingEnrichmentCount" '
+                f'COUNT(c."id") FILTER (WHERE {high_value} AND {complete_enrichment})::int AS "enrichedCount", '
+                f'COUNT(c."id") FILTER (WHERE {high_value} AND NOT ({complete_enrichment}))::int AS "pendingEnrichmentCount" '
                 'FROM "radar_sync_runs" r '
                 'JOIN "radar_sources" s ON s."id" = r."sourceId" '
                 'LEFT JOIN "summaries" c ON c."syncRunId" = r."id" '
