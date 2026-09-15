@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -75,6 +76,7 @@ import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchP
 import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
 import type { ResearchSufficiency } from '@/lib/research-sufficiency';
 import { classifySourceProvenance } from '@/lib/source-provenance';
+import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 import type { ResearchBrief, ResearchScope } from '@deep-research/shared/schemas';
 
 interface AiJobStatus {
@@ -1064,6 +1066,8 @@ function EvidencePanel({
                 <li key={source.id} className="min-w-0 rounded-lg border border-border bg-background px-3 py-2.5">
                   {(() => {
                     const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
+                    const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
+                    const externalInstruction = hasExternalInstructionSignal(sourceText);
                     return (
                       <>
                   <div className="flex items-start justify-between gap-2">
@@ -1081,6 +1085,12 @@ function EvidencePanel({
                     )}
                     {source.href ? <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" /> : null}
                   </div>
+                  {externalInstruction ? (
+                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                      <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
+                    </p>
+                  ) : null}
                   {source.snippet ? <p className="mt-1.5 line-clamp-2 text-[11px] leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 320)}</p> : null}
                   <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
@@ -2057,6 +2067,8 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                 <li key={source.id} className="min-w-0 rounded-md border border-border/70 bg-background/70 px-3 py-2.5">
                   {(() => {
                     const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
+                    const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
+                    const externalInstruction = hasExternalInstructionSignal(sourceText);
                     return (
                       <>
                   <div className="flex items-start justify-between gap-2">
@@ -2070,6 +2082,12 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                     {source.href ? <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
                   </div>
                   <p className="mt-1.5 text-[11px] leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet ?? '', 240)}</p>
+                  {externalInstruction ? (
+                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                      <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
+                    </p>
+                  ) : null}
                   <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
