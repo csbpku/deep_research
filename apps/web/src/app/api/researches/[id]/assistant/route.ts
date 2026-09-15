@@ -38,12 +38,34 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     }
   }
   const startedAt = Date.now();
+  const isWholeDraftCheck = input.operation === 'conclusion_check'
+    || (input.operation === 'fact_check' && !selection);
+  const assistantContextLimit = 256_000;
+  if (isWholeDraftCheck && research.body.length > assistantContextLimit) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '正文超过即时核验容量，无法保证全文覆盖；请先拆分文章，或使用发布前的资料检查。',
+      requestId,
+      details: { field: 'body', maxChars: assistantContextLimit, actualChars: research.body.length },
+    });
+  }
+  // Fact-checking a selected passage only needs the selected passage at the
+  // reviewer boundary. Whole-draft conclusion checks must receive every
+  // character up to the engine contract; the old 30k slice silently judged
+  // only the beginning of long articles.
+  const assistantBody = isWholeDraftCheck ? research.body : research.body.slice(0, 30_000);
+  const isExpensiveCheck = input.operation === 'fact_check' || input.operation === 'conclusion_check';
   const upstream = await fetchAiEngine<{ operation: string; original: string; suggestion: string | null; rationale: string; claims: unknown[]; warnings: string[]; metrics?: { token_input_total?: number; token_output_total?: number; cost_cents?: number } }>({
-    url: `${getWebEnv().AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/research-assistant`, method: 'POST', timeoutMs: 30_000, requestId, context: 'ai.bff.research-assistant',
+    url: `${getWebEnv().AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/research-assistant`,
+    method: 'POST',
+    timeoutMs: isExpensiveCheck ? 120_000 : 30_000,
+    retry: !isExpensiveCheck,
+    signal: req.signal,
+    requestId,
+    context: 'ai.bff.research-assistant',
     body: {
       operation: input.operation,
-      // Keep the synchronous assistant within the engine's context contract.
-      body: research.body.slice(0, 30000),
+      body: assistantBody,
       topic: research.title,
       instruction: input.instruction,
       sources: research.researchSources,

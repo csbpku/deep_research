@@ -157,6 +157,34 @@ describe('POST /api/researches/[id]/assistant', () => {
     }));
   });
 
+  it('does not silently truncate a whole-draft conclusion check', async () => {
+    const body = 'x'.repeat(35_000);
+    mocks.researchFindUnique.mockResolvedValueOnce({
+      id: RESEARCH_ID,
+      title: '研究主题',
+      body,
+      status: 'draft',
+      authorId: USER.id,
+      researchSources: [],
+    });
+
+    const response = await POST(
+      new Request(`http://localhost/api/researches/${RESEARCH_ID}/assistant`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ operation: 'conclusion_check' }),
+      }) as never,
+      { params: Promise.resolve({ id: RESEARCH_ID }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
+      timeoutMs: 120_000,
+      retry: false,
+      body: expect.objectContaining({ body }),
+    }));
+  });
+
   it('returns upstream validation details instead of disguising them as downtime', async () => {
     mocks.fetchAiEngine.mockResolvedValueOnce({
       ok: false,

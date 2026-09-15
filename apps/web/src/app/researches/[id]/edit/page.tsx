@@ -234,6 +234,9 @@ export default function EditorPage() {
   const [bodyHash, setBodyHash] = useState('');
   const [assistantResult, setAssistantResult] = useState<{ operation: string; original: string; suggestion: string | null; rationale: string; claims: Array<{ text: string; verdict: string; evidence?: string }>; warnings: string[] } | null>(null);
   const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantError, setAssistantError] = useState('');
+  const [assistantOperation, setAssistantOperation] = useState<string | null>(null);
+  const assistantAbortRef = useRef<AbortController | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const workbenchRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<'outline' | 'tools' | null>(null);
@@ -477,7 +480,10 @@ export default function EditorPage() {
 
   const runAssistant = useCallback(async (operation: string) => {
     if (!params?.id || !['rewrite', 'summarize', 'counterpoint', 'fact_check', 'conclusion_check'].includes(operation)) return;
-    setAssistantBusy(true); setError('');
+    assistantAbortRef.current?.abort();
+    const controller = new AbortController();
+    assistantAbortRef.current = controller;
+    setAssistantBusy(true); setAssistantOperation(operation); setAssistantError(''); setError('');
     try {
       const res = await fetch(`/api/researches/${params.id}/assistant`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
         operation,
@@ -487,13 +493,32 @@ export default function EditorPage() {
           endOffset: selectedAnchor.endOffset,
           contentHash: selectedAnchor.contentHash,
         } : undefined,
-      }) });
-      const payload = await res.json() as typeof assistantResult & { message?: string; requestId?: string };
-      if (!res.ok) throw new Error(payload.message ?? 'AI 助手暂时不可用');
+      }), signal: controller.signal });
+      const payload = await res.json().catch(() => ({})) as typeof assistantResult & { message?: string; requestId?: string };
+      if (!res.ok) {
+        const requestHint = payload.requestId ? `（请求 ID：${payload.requestId}）` : '';
+        throw new Error(`${payload.message ?? 'AI 助手暂时不可用'}${requestHint}`);
+      }
       setAssistantResult(payload);
-    } catch (assistantError) { setError(assistantError instanceof Error ? assistantError.message : 'AI 助手暂时不可用'); }
-    finally { setAssistantBusy(false); }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setAssistantError('已取消本次 AI 助手请求；没有生成结果，可以重新执行。');
+      } else if (error instanceof TypeError) {
+        setAssistantError('AI 助手连接失败；本次没有生成结果，可以重试。');
+      } else {
+        setAssistantError(error instanceof Error ? error.message : 'AI 助手暂时不可用；可以重试。');
+      }
+    } finally {
+      if (assistantAbortRef.current === controller) assistantAbortRef.current = null;
+      setAssistantBusy(false);
+    }
   }, [params?.id, selectedAnchor]);
+
+  const cancelAssistant = useCallback(() => {
+    assistantAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => () => assistantAbortRef.current?.abort(), []);
 
   const acceptAssistant = useCallback(() => {
     if (isPublishedAi || !assistantResult?.suggestion || !selectedAnchor) return;
@@ -1226,6 +1251,17 @@ export default function EditorPage() {
                 <div id="side-panel-assistant" role="tabpanel" aria-label="AI 助手" className="space-y-3 text-xs text-muted-foreground">
                   <p className="font-medium text-foreground">AI 助手</p>
                   <p>先选中正文，再选择你要完成的任务。AI 只提供建议或核验结果，接受后才会改动正文。</p>
+                  {assistantError ? (
+                    <div role="alert" className="rounded border border-destructive/35 bg-destructive/5 p-2.5 text-destructive">
+                      <p>{assistantError}</p>
+                      {!assistantBusy && assistantOperation ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Button type="button" size="xs" variant="outline" onClick={() => void runAssistant(assistantOperation)}>重试</Button>
+                          <span className="text-[11px] text-muted-foreground">失败不会改动正文。</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {selectedText ? <div className="rounded-md border border-primary/30 bg-primary/10 p-2.5 text-foreground shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"><p className="text-[11px] font-medium text-primary">当前选文</p><p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{selectedText}</p></div> : null}
                   <div className="grid gap-2">
                     {([
@@ -1250,6 +1286,7 @@ export default function EditorPage() {
                       </Button>
                     ))}
                   </div>
+                  {assistantBusy ? <Button type="button" size="xs" variant="ghost" onClick={cancelAssistant}>取消本次请求</Button> : null}
                   {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-[11px] text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-[11px] text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant} disabled={isPublishedAi}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
                   {!selectedText && <p>未选中文本。</p>}
                 </div>

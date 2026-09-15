@@ -31,4 +31,26 @@ describe('fetchAiEngine', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toEqual(expect.objectContaining({ ok: false, code: ERROR_CODES.AI_ENGINE_UNAVAILABLE }));
   });
+
+  it('does not retry an expensive request after the client disconnects', async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(input).toBe('http://ai.test/assistant');
+      controller.abort();
+      expect(init?.signal?.aborted).toBe(true);
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchAiEngine({
+      url: 'http://ai.test/assistant',
+      requestId: 'req-3',
+      context: 'test',
+      retry: true,
+      signal: controller.signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(expect.objectContaining({ ok: false, code: ERROR_CODES.AI_ENGINE_UNAVAILABLE }));
+  });
 });

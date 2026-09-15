@@ -30,6 +30,8 @@ export interface FetchAiEngineOptions {
   headers?: Record<string, string>;
   /** Long-running prefetches should not submit the same expensive request twice. */
   retry?: boolean;
+  /** Abort when the browser/client disconnects from the BFF request. */
+  signal?: AbortSignal;
 }
 
 export interface FetchAiEngineFailure {
@@ -74,9 +76,15 @@ export async function fetchAiEngine<T = unknown>(
 
   const maxAttempts = opts.retry === false ? 1 : 2;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? AI_ENGINE_TIMEOUT_MS);
+    const abortFromCaller = () => ac.abort();
+    if (opts.signal?.aborted) {
+      ac.abort();
+    } else {
+      opts.signal?.addEventListener('abort', abortFromCaller, { once: true });
+    }
     try {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? AI_ENGINE_TIMEOUT_MS);
       upstreamRes = await fetch(opts.url, {
         method,
         headers: {
@@ -87,7 +95,6 @@ export async function fetchAiEngine<T = unknown>(
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         signal: ac.signal,
       });
-      clearTimeout(timer);
       // 不重试 4xx；只重试网络错误 / 5xx
       if (upstreamRes.ok || (upstreamRes.status >= 400 && upstreamRes.status < 500)) {
         break;
@@ -109,7 +116,13 @@ export async function fetchAiEngine<T = unknown>(
         err: serializeError(err),
         url: opts.url,
       });
+    } finally {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', abortFromCaller);
     }
+    // A disconnected browser request must not create a second expensive LLM
+    // call after the first one is aborted.
+    if (opts.signal?.aborted) break;
     if (attempt === 0 && maxAttempts > 1) {
       await new Promise((r) => setTimeout(r, AI_ENGINE_RETRY_DELAY_MS));
     }
