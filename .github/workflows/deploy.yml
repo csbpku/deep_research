@@ -144,10 +144,7 @@ jobs:
           set -euo pipefail
           target="$VPS_USER@$VPS_HOST"
           ssh_options=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20 -o TCPKeepAlive=yes -o ConnectTimeout=30)
-          # setup.sh may have created the deployment tree as root. Reclaim
-          # only the checked-in deployment files before scp; the deploy user
-          # still owns the Compose runtime and never needs a root SSH login.
-          ssh "${ssh_options[@]}" "$target" "sudo mkdir -p -- '$VPS_DEPLOY_PATH/infra' && sudo chown -- \$(id -u):\$(id -g) '$VPS_DEPLOY_PATH/infra' && for file in docker-compose.yml docker-compose.registry.yml docker-compose.registry-render-review.yml docker-compose.certbot.yml certbot.Dockerfile nginx.conf nginx-tls.conf certbot-renew.sh import-tmp-cleanup.sh pg-backup.sh pg-restore.sh; do if [ -e '$VPS_DEPLOY_PATH/infra/'\$file ]; then sudo chown -- \$(id -u):\$(id -g) '$VPS_DEPLOY_PATH/infra/'\$file; fi; done"
+          ssh "${ssh_options[@]}" "$target" "mkdir -p -- '$VPS_DEPLOY_PATH/infra'"
           scp "${ssh_options[@]}" \
             infra/docker-compose.yml \
             infra/docker-compose.registry.yml \
