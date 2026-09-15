@@ -175,6 +175,14 @@ Certbot 成功后才 reload nginx。证书、域名和防火墙配置仍需在 V
 并验证 HTTP 301、HTTPS 健康检查、Secure Cookie 和 HSTS 后才能宣称 HTTPS
 已验收。
 
+### 日志保留
+
+Nginx 的访问日志和错误日志输出到容器 `stdout/stderr`，由 Docker 的
+`json-file` 配置按单文件 10 MiB、最多 5 个文件轮转。这样日志不会因绑定目录
+所在磁盘写满而阻断反向代理；`infra/logs/nginx/` 仍可保留历史文件，但不再是
+线上 Nginx 的写入目标。生产变更后应检查 `docker inspect` 中的 logging 配置和
+`docker logs --tail 20 deep-research-nginx-1`，确认日志可见且没有持续写盘错误。
+
 ### 阿里云 DNS API 自动续期
 
 为专用 RAM 用户授予以下四个动作：`alidns:DescribeDomains`、

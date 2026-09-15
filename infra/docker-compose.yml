@@ -25,10 +25,17 @@
 
 name: deep-research
 
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *json-logging
     environment:
       POSTGRES_USER: postgres
       # W9 code review 修订：此前硬编码 postgres/postgres。改为强制从 .env 注入，
@@ -58,6 +65,7 @@ services:
       context: ..
       dockerfile: infra/web.Dockerfile
     restart: unless-stopped
+    logging: *json-logging
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@${DATABASE_HOST:-postgres}:5432/deep_research
       AI_ENGINE_URL: http://ai-engine:4000
@@ -98,6 +106,7 @@ services:
       context: ..
       dockerfile: infra/ai-engine.Dockerfile
     restart: unless-stopped
+    logging: *json-logging
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@${DATABASE_HOST:-postgres}:5432/deep_research
       JOB_RUNNER_BACKEND: db
@@ -224,6 +233,7 @@ services:
       context: ..
       dockerfile: infra/render-review.Dockerfile
     restart: unless-stopped
+    logging: *json-logging
     environment:
       RENDER_REVIEW_PORT: 4100
       RADAR_RENDER_REVIEW_BASE_URL: http://web:3000
@@ -234,6 +244,7 @@ services:
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
+    logging: *json-logging
     ports:
       - "80:80"
       - "443:443"
