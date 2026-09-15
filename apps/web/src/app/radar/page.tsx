@@ -10,8 +10,8 @@
 
 import { useQueries, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   ArrowUpRight,
   ChevronDown,
@@ -117,6 +117,29 @@ const QUALITY_OPTIONS = [
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 'all'] as const;
 type QualityValue = (typeof QUALITY_OPTIONS)[number]['value'];
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+type RadarView = 'source' | 'ranked';
+
+interface RadarUrlState {
+  q: string;
+  sourceTypes: string[];
+  quality: QualityValue[];
+  dateRange: DateRange;
+  page: number;
+  perPage: PageSize;
+  view: RadarView;
+}
+
+function radarUrlParams(state: RadarUrlState): URLSearchParams {
+  const params = new URLSearchParams();
+  if (state.q) params.set('q', state.q);
+  if (state.sourceTypes.length > 0) params.set('source', state.sourceTypes.join(','));
+  if (state.quality.length > 0) params.set('quality', state.quality.join(','));
+  params.set('date', state.dateRange);
+  params.set('page', String(state.page));
+  params.set('per_page', String(state.perPage));
+  params.set('view', state.view);
+  return params;
+}
 // Default excludes skim so the radar list stays focused on items worth
 // deep-reading. Users can still widen the filter to skim via the dropdown.
 const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read'];
@@ -252,6 +275,8 @@ function RadarMultiSelect({
 }
 
 export default function RadarPage() {
+  const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const me = useCurrentUser();
   const initialQuery = searchParams.get('q') ?? '';
@@ -277,10 +302,30 @@ export default function RadarPage() {
     if (value === 'all') return 'all';
     return [20, 50, 100].includes(Number(value)) ? Number(value) as PageSize : 20;
   });
-  const [view, setView] = useState<'source' | 'ranked'>(
+  const [view, setView] = useState<RadarView>(
     () => searchParams.get('view') === 'source' ? 'source' : 'ranked',
   );
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+
+  // URL is the committed state for a radar view. This keeps a filtered list
+  // shareable and makes a refresh reproduce the same result set.
+  useEffect(() => {
+    const nextQuality = (searchParams.get('quality') ?? '').split(',').filter(
+      (value): value is QualityValue => QUALITY_OPTIONS.some((option) => option.value === value),
+    );
+    const nextDate = searchParams.get('date');
+    const nextPerPage = searchParams.get('per_page');
+    setQ(searchParams.get('q') ?? '');
+    setSearchInput(searchParams.get('q') ?? '');
+    setSourceTypes((searchParams.get('source') ?? '').split(',').filter(Boolean));
+    setQuality(nextQuality.length > 0 ? nextQuality : DEFAULT_QUALITY);
+    setDateRange(DATE_OPTIONS.some((option) => option.value === nextDate) ? nextDate as DateRange : '7d');
+    setPage(Math.max(1, Number(searchParams.get('page')) || 1));
+    setPerPage(nextPerPage === 'all'
+      ? 'all'
+      : [20, 50, 100].includes(Number(nextPerPage)) ? Number(nextPerPage) as PageSize : 20);
+    setView(searchParams.get('view') === 'source' ? 'source' : 'ranked');
+  }, [searchParams]);
 
   const query = useQuery<RadarListResponse>({
     queryKey: ['radar', q, sourceTypes.join(','), quality.join(','), dateRange, page, perPage],
@@ -295,7 +340,6 @@ export default function RadarPage() {
       params.set('per_page', perPage === 'all' ? 'all' : String(perPage));
       return fetchRadar(params);
     },
-    placeholderData: (prev) => prev,
     enabled: view === 'ranked',
   });
 
@@ -345,7 +389,21 @@ export default function RadarPage() {
       .map((option) => option.label)
       .join('、')
     : '全部来源';
+  const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view };
+  const replaceUrlState = (patch: Partial<RadarUrlState>) => {
+    const next = { ...currentUrlState, ...patch };
+    router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
+  };
   const resetFilters = () => {
+    const next: RadarUrlState = {
+      ...currentUrlState,
+      q: '',
+      sourceTypes: [],
+      quality: DEFAULT_QUALITY,
+      dateRange: '7d',
+      page: 1,
+      perPage: 20,
+    };
     setSearchInput('');
     setQ('');
     setSourceTypes([]);
@@ -353,23 +411,18 @@ export default function RadarPage() {
     setDateRange('7d');
     setPage(1);
     setPerPage(20);
+    router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
   };
-  const listState = new URLSearchParams({
-    quality: quality.join(','),
-    date: dateRange,
-    page: String(page),
-    per_page: String(perPage),
-    view,
-  });
-  if (q) listState.set('q', q);
-  if (sourceTypes.length > 0) listState.set('source', sourceTypes.join(','));
+  const listState = radarUrlParams(currentUrlState);
   const detailHref = (summaryId: string) => (
     `/radar/${summaryId}?from=${encodeURIComponent(listState.toString())}`
   );
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setQ(searchInput.trim());
+    const nextQuery = searchInput.trim();
+    setQ(nextQuery);
     setPage(1);
+    replaceUrlState({ q: nextQuery, page: 1 });
   };
 
   return (
@@ -388,7 +441,7 @@ export default function RadarPage() {
                 title="按推荐程度统一排序"
                 aria-label="推荐先看"
                 aria-pressed={view === 'ranked'}
-                onClick={() => setView('ranked')}
+                onClick={() => { setView('ranked'); replaceUrlState({ view: 'ranked', page: 1 }); }}
               >
                 <ListOrdered className="size-3.5" />
                 推荐先看
@@ -401,7 +454,7 @@ export default function RadarPage() {
                 title="按来源浏览内容"
                 aria-label="按来源浏览"
                 aria-pressed={view === 'source'}
-                onClick={() => setView('source')}
+                onClick={() => { setView('source'); replaceUrlState({ view: 'source', page: 1 }); }}
               >
                 <Layers3 className="size-3.5" />
                 按来源浏览
@@ -436,8 +489,10 @@ export default function RadarPage() {
           options={QUALITY_OPTIONS}
           selected={quality}
           onChange={(next) => {
-            setQuality(next.length > 0 ? next as QualityValue[] : DEFAULT_QUALITY);
+            const nextQuality = next.length > 0 ? next as QualityValue[] : DEFAULT_QUALITY;
+            setQuality(nextQuality);
             setPage(1);
+            replaceUrlState({ quality: nextQuality, page: 1 });
           }}
         />
 
@@ -445,7 +500,7 @@ export default function RadarPage() {
           <span>入库时间</span>
           <Select
             value={dateRange}
-            onValueChange={(v) => { setDateRange(v as DateRange); setPage(1); }}
+            onValueChange={(v) => { const nextDateRange = v as DateRange; setDateRange(nextDateRange); setPage(1); replaceUrlState({ dateRange: nextDateRange, page: 1 }); }}
           >
             <SelectTrigger className="w-32" aria-label="入库时间筛选">
               <SelectValue />
@@ -467,6 +522,7 @@ export default function RadarPage() {
           onChange={(next) => {
             setSourceTypes(next);
             setPage(1);
+            replaceUrlState({ sourceTypes: next, page: 1 });
           }}
         />
 
@@ -475,7 +531,7 @@ export default function RadarPage() {
             <span>每页</span>
             <Select
               value={String(perPage)}
-              onValueChange={(v) => { setPerPage(v === 'all' ? 'all' : Number(v) as PageSize); setPage(1); }}
+              onValueChange={(v) => { const nextPerPage = v === 'all' ? 'all' : Number(v) as PageSize; setPerPage(nextPerPage); setPage(1); replaceUrlState({ perPage: nextPerPage, page: 1 }); }}
             >
               <SelectTrigger className="w-24" aria-label="每页展示条数">
                 <SelectValue />
@@ -532,15 +588,17 @@ export default function RadarPage() {
                   options={QUALITY_OPTIONS}
                   selected={quality}
                   onChange={(next) => {
-                    setQuality(next.length > 0 ? next as QualityValue[] : DEFAULT_QUALITY);
+                    const nextQuality = next.length > 0 ? next as QualityValue[] : DEFAULT_QUALITY;
+                    setQuality(nextQuality);
                     setPage(1);
+                    replaceUrlState({ quality: nextQuality, page: 1 });
                   }}
                 />
                 <label className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
                   <span>入库时间</span>
                   <Select
                     value={dateRange}
-                    onValueChange={(v) => { setDateRange(v as DateRange); setPage(1); }}
+                    onValueChange={(v) => { const nextDateRange = v as DateRange; setDateRange(nextDateRange); setPage(1); replaceUrlState({ dateRange: nextDateRange, page: 1 }); }}
                   >
                     <SelectTrigger className="w-36" aria-label="入库时间筛选">
                       <SelectValue />
@@ -561,6 +619,7 @@ export default function RadarPage() {
                   onChange={(next) => {
                     setSourceTypes(next);
                     setPage(1);
+                    replaceUrlState({ sourceTypes: next, page: 1 });
                   }}
                 />
                 {view === 'ranked' ? (
@@ -568,7 +627,7 @@ export default function RadarPage() {
                     <span>每页</span>
                     <Select
                       value={String(perPage)}
-                      onValueChange={(v) => { setPerPage(v === 'all' ? 'all' : Number(v) as PageSize); setPage(1); }}
+                      onValueChange={(v) => { const nextPerPage = v === 'all' ? 'all' : Number(v) as PageSize; setPerPage(nextPerPage); setPage(1); replaceUrlState({ perPage: nextPerPage, page: 1 }); }}
                     >
                       <SelectTrigger className="w-36" aria-label="每页展示条数">
                         <SelectValue />
@@ -635,7 +694,7 @@ export default function RadarPage() {
                     type="button"
                     className="inline-flex shrink-0 items-center gap-1 text-xs text-primary hover:underline"
                     aria-label={`查看全部${group.title}`}
-                    onClick={() => { setSourceTypes([group.sourceType]); setPage(1); setView('ranked'); }}
+                    onClick={() => { setSourceTypes([group.sourceType]); setPage(1); setView('ranked'); replaceUrlState({ sourceTypes: [group.sourceType], page: 1, view: 'ranked' }); }}
                   >
                     查看全部
                     <span className="tabular-nums">({groupQuery.data?.total ?? 0})</span>
@@ -732,7 +791,7 @@ export default function RadarPage() {
         <Pagination
           page={page}
           totalPages={totalPages}
-          onPageChange={setPage}
+          onPageChange={(nextPage) => { setPage(nextPage); replaceUrlState({ page: nextPage }); }}
           disabled={query.isFetching}
         />
       ) : null}
