@@ -62,6 +62,19 @@ describe('ResearchOutputViews', () => {
     });
   });
 
+  it('compacts source-backed links in the default decision summary', () => {
+    const href = 'https://builder.ai2sql.io/blog/duckdb-vs-sqlite-vs-postgresql';
+    const html = renderToStaticMarkup(createElement(ResearchOutputViews, {
+      content: `# Research title\n\n## 结论\n\nDuckDB 的对比证据有限 [长链接](${href})。`,
+      artifactType: 'markdown',
+      sources: [{ id: 'source-1', title: 'DuckDB 对比', href, snippet: '可核对正文' }],
+    }));
+
+    expect(html).toContain('href="#bib-1"');
+    expect(html).toContain('id="bib-1"');
+    expect(html).not.toContain(`[长链接](${href})`);
+  });
+
   it('renders the web brief as an independent reading layout, not a slide preview', () => {
     const html = renderToStaticMarkup(createElement(ResearchOutputViews, {
       content: '# Research title\n\n## 结论\n\n先做灰度验证。\n\n## 风险与限制\n\n- 证据覆盖不足\n\n## 下一步行动\n\n1. 建立基线',

@@ -93,7 +93,7 @@ export function ResearchOutputViews({ content, artifactType, sources = [], evide
         </p>
       ) : null}
       <div role="tabpanel" aria-label={tabs.find((tab) => tab.value === active)?.label ?? '研究产物'}>
-        {active === 'summary' ? <SummaryView summary={summary} /> : null}
+        {active === 'summary' ? <SummaryView summary={summary} sources={sources} /> : null}
         {active === 'report' ? <MarkdownPreview source={content} compactCitations citationSources={sources} className="max-h-none overflow-visible lg:max-h-[720px] lg:overflow-y-auto" /> : null}
         {active === 'outline' ? (
           outline.length > 0 ? (
@@ -187,14 +187,21 @@ export interface SummaryDetails {
   explicit: boolean;
 }
 
-function SummaryView({ summary }: { summary: SummaryDetails }) {
+function SummaryView({ summary, sources }: { summary: SummaryDetails; sources: readonly ResearchOutputSource[] }) {
   return (
     <section className="rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
       <div className="flex items-center gap-2">
         <FileCheck2 className="size-4 text-primary" />
         <h4 className="text-sm font-semibold">{summary.explicit ? '一页判断' : '报告摘录（非结论）'}</h4>
       </div>
-      {summary.text ? <MarkdownPreview source={summary.text} className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto" /> : <EmptyDerivedView text="报告没有摘要或结论章节，请切换到阅读稿查看原文。" />}
+      {summary.text ? (
+        <MarkdownPreview
+          source={summary.text}
+          compactCitations
+          citationSources={sources}
+          className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto"
+        />
+      ) : <EmptyDerivedView text="报告没有摘要或结论章节，请切换到阅读稿查看原文。" />}
       <p className="mt-4 border-t border-primary/10 pt-3 text-[11px] leading-5 text-muted-foreground">
         {summary.explicit
           ? '这是从当前报告的摘要/结论章节提取的阅读视图；完整论证、引用和限定条件请以“阅读稿”为准。'
