@@ -100,8 +100,10 @@ jobs:
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/deep_research' }}
       VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
-      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN || github.token }}
+      # The images are published by this repository's GITHUB_TOKEN. Prefer the
+      # same token for pulls so a stale optional PAT cannot block deployment.
+      GHCR_USERNAME: ${{ github.actor }}
+      GHCR_READ_TOKEN: ${{ github.token }}
     steps:
       - name: Check out deployment files
         uses: actions/checkout@v6
