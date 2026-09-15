@@ -532,6 +532,16 @@ function StatusBody({ s }: { s: AiJobStatus }) {
     s.partialSourcesCount ?? 0,
     s.researchProgress?.sourcesCaptured ?? 0,
   );
+  // Evidence-only / legacy jobs may not have a sufficiency snapshot, but the
+  // source list still needs to communicate independent evidence clusters.
+  // Derive the fallback from normalized provenance keys instead of showing a
+  // misleading "独立域名 0" beside visible captured sources.
+  const visibleIndependentSourceCount = new Set(
+    s.sources
+      .filter((source) => Boolean(source.href))
+      .map((source) => classifySourceProvenance({ href: source.href, type: source.type, title: source.title }).independentKey),
+  ).size;
+  const independentSourceCount = s.researchSufficiency?.independentSourceCount ?? visibleIndependentSourceCount;
 
   // 实时计时 —— 终态停止;长任务(>5min)降级到 30s tick,避免低端机浪费
   const [now, setNow] = useState(() => Date.now());
@@ -898,7 +908,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               sources={s.sources ?? []}
               discoveredTotal={s.sourcesCount}
               capturedTotal={capturedSources}
-              independentSourceCount={s.researchSufficiency?.independentSourceCount ?? 0}
+              independentSourceCount={independentSourceCount}
               failed={s.failedSourcesCount}
               running={!isTerminal}
               reportLength={s.reportLength}
