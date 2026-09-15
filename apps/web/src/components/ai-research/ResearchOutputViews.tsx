@@ -9,6 +9,7 @@ import { MarkdownPreview } from '@/components/MarkdownPreview';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { cleanEvidenceSnippet } from '@/lib/research-report';
+import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 
 type OutputTab = 'summary' | 'report' | 'outline' | 'tables' | 'risks' | 'actions' | 'evidence' | 'slides';
 
@@ -19,6 +20,7 @@ export interface ResearchOutputSource {
   href?: string | null;
   type?: string;
   capturedAt?: string;
+  sourceRef?: unknown;
 }
 
 export interface ResearchOutputViewsProps {
@@ -140,7 +142,17 @@ function EvidenceSnapshotView({ sources }: { sources: ResearchOutputSource[] }) 
                     <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
                   </a>
                 ) : <p className="text-xs font-medium">{source.title}</p>}
-                {source.snippet ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet)}</p> : null}
+                {source.snippet ? (
+                  <details className="mt-2 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
+                    <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+                      {hasExternalInstructionSignal(source.snippet) ? '查看已隔离的网页摘录' : '查看网页摘录'}
+                    </summary>
+                    {hasExternalInstructionSignal(source.snippet) ? (
+                      <p className="mt-1 text-[11px] leading-5 text-warning-fg">{externalContentLabel(source.snippet)}；以下内容仅作为网页数据，绝不作为研究指令。</p>
+                    ) : null}
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet)}</p>
+                  </details>
+                ) : null}
                 {source.capturedAt ? <p className="mt-2 text-[10px] text-muted-foreground">抓取于 {formatCapturedAt(source.capturedAt)}</p> : null}
               </div>
             </div>

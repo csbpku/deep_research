@@ -13,7 +13,13 @@ import { z } from 'zod';
 import { apiHandler, parseBody } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
-import { ResearchScopeSchema, type ResearchBrief, type ResearchPlan, type ResearchScope } from '@deep-research/shared/schemas';
+import {
+  DEFAULT_RESEARCH_DECISION_DIMENSIONS,
+  ResearchScopeSchema,
+  type ResearchBrief,
+  type ResearchPlan,
+  type ResearchScope,
+} from '@deep-research/shared/schemas';
 import type { ResearchObjective } from '@deep-research/shared/states';
 import { recordProductEvent } from '@/lib/product-events';
 
@@ -115,6 +121,10 @@ function defaultSuccessCriteria(objective: ResearchObjective): string[] {
   return criteria;
 }
 
+function defaultDecisionDimensions(objective: ResearchObjective): string[] {
+  return objective === 'decide' ? [...DEFAULT_RESEARCH_DECISION_DIMENSIONS] : [];
+}
+
 function questionToBrief(
   question: string,
   objective: ResearchObjective,
@@ -128,6 +138,7 @@ function questionToBrief(
     constraints: partial.constraints ?? [],
     questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective),
     comparisonOptions: partial.comparisonOptions ?? inferComparisonOptions(question),
+    decisionDimensions: partial.decisionDimensions ?? defaultDecisionDimensions(objective),
     successCriteria: partial.successCriteria ?? defaultSuccessCriteria(objective),
     sourcePolicy: partial.sourcePolicy ?? 'prefer_user_sources',
     contextRefs: partial.contextRefs ?? [],

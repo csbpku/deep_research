@@ -135,6 +135,10 @@ class ClaimEvidence:
     excerpt: str | None
     observed_at: str | None
     resolver: str | None
+    source_type: str | None = None
+    published_at: str | None = None
+    evidence_strength: str = "unknown"
+    counterexamples: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -766,6 +770,8 @@ def _reconcile_unbound_evidence(
                 excerpt=best[2],
                 observed_at=datetime.now(timezone.utc).isoformat(),
                 resolver="captured-source-reconciler",
+                source_type="captured_web",
+                evidence_strength="direct_quote",
             ),
             reason=(
                 "系统已从本轮保存的资料中补全可核对摘录；"
@@ -850,6 +856,8 @@ def _citation_ledger(
                     excerpt=source.snippet,
                     observed_at=observed_at,
                     resolver="captured-source-citation",
+                    source_type="captured_web",
+                    evidence_strength="direct_quote",
                 ),
                 reason=(
                     "报告引用了该来源，但本轮自动审核没有确认原文直接支持这句话；"
@@ -949,12 +957,25 @@ def _review_source_text(
 
 
 def _evidence(claim_id: str, resolved: Any) -> ClaimEvidence:
+    fields = resolved.fields if isinstance(getattr(resolved, "fields", None), dict) else {}
+    source_url = resolved.source_url
+    host = urlsplit(source_url).hostname or ""
+    source_type = "official_api" if str(resolved.resolver).startswith(("github.", "npm.", "pypi.", "arxiv.")) else "resolver"
+    if host.endswith("github.com"):
+        source_type = "official_repository"
+    published_at = next((str(fields[key]) for key in ("published_at", "uploaded_at", "updated_at", "updated") if fields.get(key)), None)
+    raw_counterexamples = fields.get("counterexamples")
+    counterexamples = tuple(str(item) for item in raw_counterexamples if isinstance(item, str)) if isinstance(raw_counterexamples, list) else ()
     return ClaimEvidence(
         claim_id=claim_id,
-        source_url=resolved.source_url,
+        source_url=source_url,
         excerpt=resolved.excerpt,
         observed_at=resolved.observed_at,
         resolver=resolved.resolver,
+        source_type=source_type,
+        published_at=published_at,
+        evidence_strength="high",
+        counterexamples=counterexamples,
     )
 
 
@@ -1234,8 +1255,9 @@ _CLAIM_ADJUDICATION_SYSTEM = """你是研究报告的证据裁判，只能判断
 - unverified：当前证据不足以判断；
 - not_applicable：该声明不是 external_fact。
 verified、contradicted、correctable 必须绑定给定来源中的逐字 excerpt、source_url 和 observed_at；
+同时返回 source_type、published_at、evidence_strength（high|medium|low）和 counterexamples（字符串数组）。
 没有直接摘录时只能返回 unsupported 或 unverified。只输出合法 JSON：
-{"claims":[{"claim_id":"C1","claim":"原声明","verdict":"verified|correctable|contradicted|unsupported|unverified|not_applicable","evidence":{"source_url":null,"excerpt":null,"observed_at":null,"resolver":null},"correction":null,"reason":null}],"revision_instructions":[]}
+{"claims":[{"claim_id":"C1","claim":"原声明","verdict":"verified|correctable|contradicted|unsupported|unverified|not_applicable","evidence":{"source_url":null,"excerpt":null,"observed_at":null,"resolver":null,"source_type":null,"published_at":null,"evidence_strength":"unknown","counterexamples":[]},"correction":null,"reason":null}],"revision_instructions":[]}
 """
 
 _FACT_CHALLENGE_SYSTEM = """你是独立的第二位事实核验员。
@@ -2415,6 +2437,10 @@ def _parse_review_payload(payload: Any) -> ReviewResult:
                 excerpt=str(raw_evidence["excerpt"]) if isinstance(raw_evidence.get("excerpt"), str) else None,
                 observed_at=str(raw_evidence["observed_at"]) if isinstance(raw_evidence.get("observed_at"), str) else None,
                 resolver=str(raw_evidence["resolver"]) if isinstance(raw_evidence.get("resolver"), str) else None,
+                source_type=str(raw_evidence["source_type"]) if isinstance(raw_evidence.get("source_type"), str) else None,
+                published_at=str(raw_evidence["published_at"]) if isinstance(raw_evidence.get("published_at"), str) else None,
+                evidence_strength=str(raw_evidence["evidence_strength"]) if raw_evidence.get("evidence_strength") in {"high", "medium", "low"} else "unknown",
+                counterexamples=tuple(str(item) for item in raw_evidence.get("counterexamples", []) if isinstance(item, str)) if isinstance(raw_evidence.get("counterexamples"), list) else (),
             )
         raw_judgment_status = raw.get("judgment_status")
         judgment_status: ClaimJudgmentStatus = (

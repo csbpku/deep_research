@@ -88,6 +88,12 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
     ...(brief.comparisonOptions.length > 0
       ? ['- 必须比较的对象或方案：', ...brief.comparisonOptions.map((item) => `  - ${item}`)]
       : []),
+    ...(brief.objective === 'decide' && brief.decisionDimensions.length > 0
+      ? [
+          '- 必须逐格覆盖的决策维度（每个方案都要标记：有证据 / 未找到 / 待实测）：',
+          ...brief.decisionDimensions.map((item) => `  - ${item}`),
+        ]
+      : []),
     ...(brief.constraints.length > 0
       ? ['- 已知约束：', ...brief.constraints.map((item) => `  - ${item}`)]
       : []),

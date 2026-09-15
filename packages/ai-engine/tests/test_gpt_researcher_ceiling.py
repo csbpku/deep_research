@@ -266,3 +266,12 @@ def test_web_brief_prompt_is_not_a_slide_outline() -> None:
     assert "## 关键发现" in prompt
     assert "## 下一步行动" in prompt
     assert "不要使用 `Slide N` 标记" in prompt
+    for field in (
+        "推荐方案：",
+        "适用前提：",
+        "不推荐条件：",
+        "置信度：",
+        "未确认风险：",
+        "下一步验证动作：",
+    ):
+        assert field in prompt

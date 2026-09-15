@@ -333,6 +333,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     brief: parsedBrief.success ? parsedBrief.data : null,
     sources: allEvidenceSources,
     sourceCoverage: readSourceCoverage(up.research_progress),
+    reportContent: draftResearch?.body ?? up.output_text ?? null,
     sourcePolicy: job.sourcePolicy,
   });
   const storedSourceRefs = Array.isArray(job.sourceRefs) ? job.sourceRefs : [];
@@ -376,9 +377,11 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   // Older jobs could persist the evidence digest behind a `succeeded` status.
   // Derive the user-facing status from the actual deliverable so a source
   // list can never masquerade as a completed report.
-  const effectiveFinalStatus = evidenceOnly && up.final_status === 'succeeded'
-    ? 'partial'
-    : up.final_status ?? null;
+  const effectiveFinalStatus = (
+    (evidenceOnly || (up.final_status === 'succeeded' && researchSufficiency.status === 'insufficient'))
+      ? 'partial'
+      : up.final_status
+  ) ?? null;
   const reportVersion = 1 + (draftResearch?.audit?.length ?? 0);
   const cleanedReportContent = rawReportContent
     ? cleanResearchReportForReader(

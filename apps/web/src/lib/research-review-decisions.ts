@@ -34,6 +34,10 @@ export interface ReviewClaimForDecision {
     excerpt?: string | null;
     observed_at?: string | null;
     resolver?: string | null;
+    source_type?: string | null;
+    published_at?: string | null;
+    evidence_strength?: string | null;
+    counterexamples?: string[];
   } | null;
 }
 
@@ -123,6 +127,12 @@ export function asReviewClaims(value: unknown): ReviewClaimForDecision[] {
           excerpt: typeof claim.evidence.excerpt === 'string' ? claim.evidence.excerpt : null,
           observed_at: typeof claim.evidence.observed_at === 'string' ? claim.evidence.observed_at : null,
           resolver: typeof claim.evidence.resolver === 'string' ? claim.evidence.resolver : null,
+          source_type: typeof claim.evidence.source_type === 'string' ? claim.evidence.source_type : null,
+          published_at: typeof claim.evidence.published_at === 'string' ? claim.evidence.published_at : null,
+          evidence_strength: typeof claim.evidence.evidence_strength === 'string' ? claim.evidence.evidence_strength : null,
+          counterexamples: Array.isArray(claim.evidence.counterexamples)
+            ? claim.evidence.counterexamples.filter((item): item is string => typeof item === 'string').slice(0, 8)
+            : [],
         }
       : null,
   }));

@@ -45,6 +45,7 @@ interface PlanResponse {
     constraints?: string[];
     questionsToAnswer?: string[];
     comparisonOptions?: string[];
+    decisionDimensions?: string[];
     successCriteria?: string[];
     contextRefs?: ContextSourceRef[];
     primaryTopicId?: string;
@@ -90,6 +91,7 @@ export interface BriefValue {
     constraints: string[];
     questionsToAnswer: string[];
     comparisonOptions: string[];
+    decisionDimensions: string[];
     successCriteria: string[];
     sourcePolicy: 'prefer_user_sources' | 'only_user_sources';
     scope: ResearchScope;
@@ -215,6 +217,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             constraints: data.brief.constraints ?? [],
             questionsToAnswer: data.brief.questionsToAnswer ?? [],
             comparisonOptions: data.brief.comparisonOptions ?? [],
+            decisionDimensions: data.brief.decisionDimensions ?? [],
             successCriteria: data.brief.successCriteria ?? [],
             sourcePolicy: data.brief.sourcePolicy ?? 'prefer_user_sources',
             scope: data.brief.scope ?? emptyScope(),
@@ -334,6 +337,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         constraints: plan!.brief.constraints ?? [],
         questionsToAnswer,
         comparisonOptions,
+        decisionDimensions: plan!.brief.decisionDimensions ?? [],
         successCriteria: plan!.brief.successCriteria ?? [],
         sourcePolicy: plan!.brief.sourcePolicy ?? 'prefer_user_sources',
         scope: {

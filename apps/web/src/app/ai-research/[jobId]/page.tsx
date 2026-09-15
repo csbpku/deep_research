@@ -121,6 +121,7 @@ interface AiJobStatus {
     type: string;
     stepCaptured: string;
     capturedAt: string;
+    sourceRef?: unknown;
   }>;
   artifact: {
     type: 'markdown' | 'slides' | 'table' | 'chart';
@@ -233,6 +234,10 @@ interface ReviewClaim {
     excerpt?: string | null;
     observed_at?: string | null;
     resolver?: string | null;
+    source_type?: string | null;
+    published_at?: string | null;
+    evidence_strength?: string | null;
+    counterexamples?: string[];
   } | null;
 }
 
@@ -1561,6 +1566,9 @@ function ReviewPanel({
 
   return (
     <section aria-label="使用建议">
+      {researchSufficiency?.matrix ? (
+        <DecisionCoverageMatrixView matrix={researchSufficiency.matrix} recommendation={researchSufficiency.recommendation} />
+      ) : null}
       {researchSufficiency?.status === 'insufficient' ? (
         <div className="mb-3 rounded-md border border-warning-border/70 bg-warning-bg/[0.22] px-3 py-2.5 text-xs leading-5 text-warning-fg">
           <p className="font-medium">资料范围还有缺口</p>
@@ -1722,6 +1730,58 @@ function ReviewPanel({
   );
 }
 
+function DecisionCoverageMatrixView({
+  matrix,
+  recommendation,
+}: {
+  matrix: NonNullable<ResearchSufficiency['matrix']>;
+  recommendation: ResearchSufficiency['recommendation'];
+}) {
+  const evidenceCells = matrix.cells.filter((cell) => cell.state === 'evidence').length;
+  const cellMap = new Map(matrix.cells.map((cell) => [`${cell.option}:${cell.dimension}`, cell]));
+  const stateLabel = { evidence: '有证据', not_found: '未找到', needs_test: '待实测' } as const;
+  const stateClass = {
+    evidence: 'border-status-succeeded-border/50 bg-status-succeeded-bg/35 text-status-succeeded-fg',
+    not_found: 'border-border bg-muted/35 text-muted-foreground',
+    needs_test: 'border-warning-border/60 bg-warning-bg/35 text-warning-fg',
+  } as const;
+  return (
+    <details open={!matrix.complete} className="mb-3 rounded-md border border-border/80 bg-background">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs [&::-webkit-details-marker]:hidden">
+        <span className="font-medium">问题覆盖矩阵</span>
+        <span className={cn('text-[11px]', matrix.complete ? 'text-status-succeeded-fg' : 'text-warning-fg')}>
+          {evidenceCells}/{matrix.cells.length} 格有证据
+        </span>
+      </summary>
+      <div className="border-t border-border/70 px-3 pb-3 pt-2.5">
+        <p className="mb-2 text-[11px] leading-5 text-muted-foreground">
+          这是研究完成门禁：每个方案 × 决策维度必须逐格处理；“待实测”不等于“没有问题”。
+        </p>
+        <div className="overflow-x-auto rounded border border-border/70">
+          <table className="min-w-[760px] w-full border-collapse text-[11px]">
+            <thead className="bg-muted/35 text-left text-muted-foreground">
+              <tr><th className="border-b border-border/70 px-2 py-2 font-medium">方案</th>{matrix.dimensions.map((dimension) => <th key={dimension} className="border-b border-border/70 px-2 py-2 font-medium">{dimension}</th>)}</tr>
+            </thead>
+            <tbody>
+              {matrix.options.map((option) => (
+                <tr key={option}>
+                  <th className="border-b border-border/50 px-2 py-2 text-left font-medium text-foreground">{option}</th>
+                  {matrix.dimensions.map((dimension) => {
+                    const cell = cellMap.get(`${option}:${dimension}`);
+                    const state = cell?.state ?? 'not_found';
+                    return <td key={dimension} className="border-b border-border/50 px-2 py-2"><span className={cn('inline-flex rounded border px-1.5 py-0.5', stateClass[state])}>{stateLabel[state]}{cell?.evidenceCount ? ` · ${cell.evidenceCount}` : ''}</span></td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {recommendation.status === 'incomplete' ? <p className="mt-2 text-[11px] text-warning-fg">结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</p> : null}
+      </div>
+    </details>
+  );
+}
+
 function ReviewClaimCard({
   claim,
   jobId,
@@ -1822,7 +1882,11 @@ function ReviewClaimCard({
           </a>
         ) : <span className="text-muted-foreground">没有可打开的来源</span>}
         {claim.evidence?.observed_at ? <span className="text-muted-foreground">观察时间：{claim.evidence.observed_at}</span> : null}
+        {claim.evidence?.source_type ? <span className="text-muted-foreground">来源类型：{claim.evidence.source_type}</span> : null}
+        {claim.evidence?.published_at ? <span className="text-muted-foreground">发布时间：{claim.evidence.published_at}</span> : null}
+        {claim.evidence?.evidence_strength && claim.evidence.evidence_strength !== 'unknown' ? <span className="text-muted-foreground">证据强度：{claim.evidence.evidence_strength}</span> : null}
       </div>
+      {claim.evidence?.counterexamples?.length ? <p className="mt-1.5 text-[11px] leading-5 text-warning-fg">反例/限制：{claim.evidence.counterexamples.join('；')}</p> : null}
       {needsAction ? (
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
           {nextAction === 'reverify_current_sources' && canRequestVerification ? (

@@ -16,7 +16,8 @@ describe('evaluateResearchSufficiency', () => {
     });
 
     expect(result.status).toBe('insufficient');
-    expect(result.missing).toEqual(['Crawlee', 'Firecrawl']);
+    expect(result.missing).toEqual(expect.arrayContaining(['Crawlee', 'Firecrawl']));
+    expect(result.matrix?.complete).toBe(false);
     expect(result.capturedSourceCount).toBe(1);
   });
 
@@ -25,16 +26,17 @@ describe('evaluateResearchSufficiency', () => {
       brief: {
         objective: 'decide',
         comparisonOptions: ['Playwright', 'Crawlee'],
+        decisionDimensions: ['能力'],
       },
       sources: [
-        { title: 'Playwright docs', snippet: 'Playwright browser automation.' },
-        { title: 'Crawlee docs', snippet: 'Crawlee web scraping framework.' },
+        { title: 'Playwright docs', snippet: 'Playwright 能力：browser automation.' },
+        { title: 'Crawlee docs', snippet: 'Crawlee 能力：web scraping framework.' },
       ],
     });
 
     expect(result).toMatchObject({
       status: 'sufficient',
-      basis: 'explicit_comparison',
+      basis: 'decision_matrix',
       coveredCount: 2,
       requiredCount: 2,
     });
@@ -84,5 +86,42 @@ describe('evaluateResearchSufficiency', () => {
     expect(result.status).toBe('insufficient');
     expect(result.basis).toBe('official_coverage');
     expect(result.items[0]).toMatchObject({ label: 'Claude', evidenceCount: 1, covered: false });
+  });
+
+  it('marks a missing operational cell as needs_test instead of allowing a complete comparison', () => {
+    const result = evaluateResearchSufficiency({
+      brief: {
+        objective: 'decide',
+        comparisonOptions: ['GHCR 固定 SHA 镜像', 'VPS 本地构建'],
+        decisionDimensions: ['部署与构建', '回滚与恢复'],
+      },
+      sources: [{
+        canonicalKey: 'https://docs.example.com/deploy',
+        title: 'GHCR 固定 SHA 镜像部署',
+        snippet: 'GHCR 固定 SHA 镜像支持部署与构建，并有 rollback 文档。',
+      }],
+    });
+    expect(result.status).toBe('insufficient');
+    expect(result.matrix?.cells).toEqual(expect.arrayContaining([
+      expect.objectContaining({ option: 'VPS 本地构建', dimension: '部署与构建', state: 'needs_test' }),
+      expect.objectContaining({ option: 'VPS 本地构建', dimension: '回滚与恢复', state: 'needs_test' }),
+    ]));
+  });
+
+  it('requires all structured recommendation fields for a decision report', () => {
+    const result = evaluateResearchSufficiency({
+      brief: { objective: 'decide', comparisonOptions: ['A'], decisionDimensions: ['能力'] },
+      sources: [{ title: 'A 能力', snippet: 'A 能力已经有直接文档依据。' }],
+      reportContent: [
+        '- 推荐方案：A',
+        '- 适用前提：有测试环境',
+        '- 不推荐条件：无法接受成本',
+        '- 置信度：中',
+        '- 未确认风险：网络差异',
+        '- 下一步验证动作：跑基准测试',
+      ].join('\n'),
+    });
+    expect(result.status).toBe('sufficient');
+    expect(result.recommendation.status).toBe('complete');
   });
 });

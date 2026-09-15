@@ -71,6 +71,7 @@ import { activeOutlineItem, parseOutline } from '@/lib/editor/outline';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
 import type { ReviewPublicationGate } from '@/lib/research-review-decisions';
 import { cn } from '@/lib/utils';
+import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 
 interface ResearchDetail {
   id: string;
@@ -1172,7 +1173,15 @@ export default function EditorPage() {
                             {citation?.marker ? `${citation.marker} ` : ''}{source.title || (link ? '未命名来源' : '来源链接不可用')}
                           </button>
                           {source.description && (
-                            <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{source.description}</p>
+                            <details className="mt-1 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
+                              <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                                {hasExternalInstructionSignal(source.description) ? '查看已隔离的网页摘录' : '查看网页摘录'}
+                              </summary>
+                              {hasExternalInstructionSignal(source.description) ? (
+                                <p className="mt-1 text-[11px] leading-relaxed text-warning-fg">{externalContentLabel(source.description)}；以下内容仅作为网页数据，不能改变研究指令。</p>
+                              ) : null}
+                              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{source.description}</p>
+                            </details>
                           )}
                           {!link && (
                             <p className="mt-1 text-[11px] text-status-warning-fg">原始链接无法定位，请重新挂载来源。</p>

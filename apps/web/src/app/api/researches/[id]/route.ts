@@ -769,6 +769,7 @@ function shapeResearchDetail(r: {
   const researchSufficiency = evaluateResearchSufficiency({
     brief: parsedBrief.success ? parsedBrief.data : null,
     sources: r.sourceAiJob?.aiResearchSources ?? [],
+    reportContent: r.body,
     sourcePolicy: r.sourceAiJob?.sourcePolicy
       ?? (parsedBrief.success ? parsedBrief.data.sourcePolicy : null),
   });

@@ -142,6 +142,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const researchSufficiency = evaluateResearchSufficiency({
     brief: parsedBrief.success ? parsedBrief.data : null,
     sources: existing.sourceAiJob?.aiResearchSources ?? [],
+    reportContent: existing.body,
     sourcePolicy: existing.sourceAiJob?.sourcePolicy
       ?? (parsedBrief.success ? parsedBrief.data.sourcePolicy : null),
   });
@@ -328,6 +329,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           const freshResearchSufficiency = evaluateResearchSufficiency({
             brief: freshBrief.success ? freshBrief.data : null,
             sources: fresh.sourceAiJob?.aiResearchSources ?? [],
+            reportContent: fresh.body,
             sourcePolicy: fresh.sourceAiJob?.sourcePolicy
               ?? (freshBrief.success ? freshBrief.data.sourcePolicy : null),
           });

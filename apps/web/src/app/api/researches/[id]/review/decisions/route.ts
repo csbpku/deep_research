@@ -344,6 +344,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     const freshResearchSufficiency = evaluateResearchSufficiency({
       brief: freshBrief.success ? freshBrief.data : null,
       sources: freshResearch.sourceAiJob?.aiResearchSources ?? [],
+      reportContent: freshResearch.body,
       sourcePolicy: freshResearch.sourceAiJob?.sourcePolicy
         ?? (freshBrief.success ? freshBrief.data.sourcePolicy : null),
     });
