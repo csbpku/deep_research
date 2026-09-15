@@ -29,6 +29,7 @@ import { POST } from './route';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getWebEnv.mockReturnValue({
+    NODE_ENV: 'test',
     ALLOWED_EMAIL_DOMAINS: ['example.com', 'gmail.com', 'shopee.com'],
     AUTH_INVITE_CODE: 'invite-2026',
     BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
@@ -48,6 +49,28 @@ function request(body: unknown): Request {
 }
 
 describe('POST /api/auth/activate', () => {
+  it('rejects account activation over HTTP in production', async () => {
+    mocks.getWebEnv.mockReturnValue({
+      NODE_ENV: 'production',
+      ALLOWED_EMAIL_DOMAINS: ['example.com'],
+      AUTH_INVITE_CODE: 'invite-2026',
+      BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
+    });
+
+    const response = await POST(
+      request({
+        email: 'alice@example.com',
+        inviteCode: 'invite-2026',
+        password: 'correct horse battery staple',
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe('AUTH_REQUIRES_HTTPS');
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.hashPassword).not.toHaveBeenCalled();
+  });
+
   it('creates an allowlisted member with the correct invite code', async () => {
     const response = await POST(
       request({

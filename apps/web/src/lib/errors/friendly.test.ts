@@ -37,6 +37,9 @@ describe('friendlyError', () => {
     expect(
       friendlyMessage({ code: ERROR_CODES.UPSTREAM_RATE_LIMITED })
     ).toMatch(/上游服务限流/);
+    expect(
+      friendlyMessage({ code: ERROR_CODES.AUTH_REQUIRES_HTTPS })
+    ).toMatch(/HTTPS/);
   });
 });
 

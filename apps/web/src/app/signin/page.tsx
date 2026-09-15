@@ -2,6 +2,8 @@ import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { signIn } from '@/lib/auth/config';
 import { getWebEnv } from '@/lib/env';
+import { isProductionAuthAllowed } from '@/lib/auth/transport';
+import { headers } from 'next/headers';
 import { PasswordAuthForms } from './PasswordAuthForms';
 
 /**
@@ -16,12 +18,14 @@ export default async function SignInPage({
   searchParams: Promise<{ error?: string; callbackUrl?: string }>;
 }) {
   const sp = await searchParams;
+  const requestHeaders = await headers();
   const error = sp?.error;
   const googleConfigured = Boolean(
     getWebEnv().GOOGLE_CLIENT_ID && getWebEnv().GOOGLE_CLIENT_SECRET,
   );
   const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
+  const authAllowed = isProductionAuthAllowed(requestHeaders, process.env.NODE_ENV);
   // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
   // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
   // 攻击者可构造 /signin?callbackUrl=https://evil.com 做开放重定向钓鱼。
@@ -56,8 +60,12 @@ export default async function SignInPage({
             : '登录失败，请稍后重试或检查账号信息。'}
         </p>
       ) : null}
-      <PasswordAuthForms callbackUrl={callbackUrl} />
-      {googleConfigured ? (
+      {authAllowed ? <PasswordAuthForms callbackUrl={callbackUrl} /> : (
+        <p role="alert" className="mt-6 rounded-lg border border-warning-border bg-warning-bg/40 p-4 text-left text-sm leading-6 text-warning-fg">
+          当前连接未启用 HTTPS。为保护密码和会话，邮箱密码登录与邀请码激活已暂停，请先通过 HTTPS 访问本站。
+        </p>
+      )}
+      {authAllowed && googleConfigured ? (
         <div className="mt-4 border-t border-border pt-4">
           <form action={doSignIn}>
             <Button type="submit" variant="outline" size="lg" className="w-full">
@@ -66,7 +74,7 @@ export default async function SignInPage({
             </Button>
           </form>
         </div>
-      ) : isDevMode ? (
+      ) : authAllowed && isDevMode ? (
         <p className="mt-4 text-xs text-muted-foreground">Google OAuth 未配置，当前使用邮箱密码登录。</p>
       ) : null}
 

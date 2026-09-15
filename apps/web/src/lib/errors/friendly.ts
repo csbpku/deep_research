@@ -132,6 +132,8 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
       return { message: '邀请码无效或已关闭' };
     case ERROR_CODES.AUTH_REGISTRATION_DISABLED:
       return { message: '公开注册已关闭，请使用邀请码激活' };
+    case ERROR_CODES.AUTH_REQUIRES_HTTPS:
+      return { message: '请通过 HTTPS 登录', hint: '为保护密码和会话，HTTP 连接不会开放登录。' };
     case ERROR_CODES.PERMISSION_DENIED:
       return { message: '没有权限执行该操作' };
 

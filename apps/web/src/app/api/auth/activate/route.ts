@@ -9,6 +9,7 @@ import { bootstrapAdminEmail, isInviteCodeValid } from '@/lib/auth/invitation';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
 import { hashPassword, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/auth/password';
+import { isProductionAuthAllowed } from '@/lib/auth/transport';
 
 export const runtime = 'nodejs';
 
@@ -20,6 +21,11 @@ const activateSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const env = getWebEnv();
+  if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url)) {
+    return error(request, ERROR_CODES.AUTH_REQUIRES_HTTPS, '生产环境必须通过 HTTPS 激活账号');
+  }
+
   let input: unknown;
   try {
     input = await request.json();
@@ -37,7 +43,6 @@ export async function POST(request: Request) {
   }
 
   const { email, inviteCode, password, name } = parsed.data;
-  const env = getWebEnv();
   if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) {
     return error(request, ERROR_CODES.AUTH_DOMAIN_NOT_ALLOWED, '该邮箱不在允许名单内');
   }

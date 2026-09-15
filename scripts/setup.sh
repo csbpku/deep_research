@@ -493,6 +493,7 @@ PRODUCTHUNT_API_TOKEN=${PH_TOKEN_VAL}
 
 # P1-A1: initial Admin bootstrap
 BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}
+NGINX_CONFIG=nginx-tls.conf
 ENVFILE
 }
 

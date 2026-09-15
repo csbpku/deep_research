@@ -1,8 +1,8 @@
 # infra/ — 部署与运维脚手架
 
-该目录保存目标部署拓扑和运维脚本。Week 8 完成初版，可作为部署基线。
+该目录保存当前部署拓扑和运维脚本，是本地 Docker、GHCR 和单 VPS 的操作基线。
 
-## 当前状态（2026-09-11）
+## 当前状态（2026-09-14）
 
 - `docker-compose.yml`：核心四服务拓扑，另提供可选的 `browser-review` Chromium profile。
 - `docker-compose.registry.yml`：默认生产覆盖文件，使用 GHCR 中按 commit SHA 固定的 Web / AI engine 镜像，不在 VPS 上重新构建。
@@ -19,6 +19,7 @@
 - AI engine `/healthz` 已存在（W1）。
 
 本地默认运行方式是原生 PostgreSQL + `pnpm dev:web` / `pnpm dev:ai`；Docker Compose 是独立的部署/恢复演练拓扑，不是本地默认依赖。
+macOS launchd 常驻、彻底停止和恢复命令见 [`docs/TECHNICAL_OVERVIEW.md`](../docs/TECHNICAL_OVERVIEW.md#6-本地服务生命周期)。
 
 ## Web 镜像体积
 
@@ -134,3 +135,12 @@ GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Envir
 - 恢复演练脚本：`infra/pg-restore.sh <file> --yes`；恢复后自动校验核心表行数。
 
 完成真实构建与恢复演练前，不把以上项目标为已部署或 live verified。
+
+### TLS 选择
+
+Compose 默认挂载 `nginx.conf`，适合本地 HTTP-only 联调。生产 `.env` 必须设置
+`NGINX_CONFIG=nginx-tls.conf`，并在 `infra/certs/` 放入有效的
+`fullchain.pem` 和 `privkey.pem`（私钥权限 `0600`）。`nginx-tls.conf` 会把 80
+重定向到 443，并添加 HSTS；registry 发布覆盖会保留这个选择，不会再用 HTTP
+配置覆盖生产 nginx。证书、域名和防火墙配置仍需在 VPS 上真实完成后才能宣称
+HTTPS 已验收。

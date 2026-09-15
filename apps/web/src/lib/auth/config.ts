@@ -22,6 +22,7 @@ import { canEstablishSession, isEmailAllowed } from './allowlist';
 import { verifyPassword } from './password';
 import { isBootstrapAdminEmail } from './invitation';
 import { log } from '../log';
+import { isProductionAuthAllowed } from './transport';
 
 const isE2E = process.env.E2E === '1';
 
@@ -34,7 +35,8 @@ export const authConfig: NextAuthConfig = {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
+        if (!isProductionAuthAllowed(request.headers, getWebEnv().NODE_ENV, request.url)) return null;
         const email = (credentials?.email as string | undefined)?.trim().toLowerCase();
         const password = credentials?.password as string | undefined;
         if (!email || !password) return null;

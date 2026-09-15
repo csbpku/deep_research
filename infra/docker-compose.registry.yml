@@ -11,6 +11,12 @@
 # tagged with the Git commit SHA. Runtime secrets remain in the host .env file.
 
 services:
+  nginx:
+    # Preserve the host's explicit TLS choice during registry-image deploys;
+    # otherwise every release would silently put nginx back on HTTP-only.
+    volumes:
+      - ./${NGINX_CONFIG:-nginx.conf}:/etc/nginx/nginx.conf:ro
+
   web:
     image: ${WEB_IMAGE:?set WEB_IMAGE to a registry image}
     # Compose's !reset removes the local build definition from the base file.
