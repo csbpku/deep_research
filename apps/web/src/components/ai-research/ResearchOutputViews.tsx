@@ -131,33 +131,43 @@ function EvidenceSnapshotView({ sources }: { sources: ResearchOutputSource[] }) 
         </div>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {visibleSources.map((source, index) => (
-          <article key={source.id} className="rounded-lg border border-border/80 bg-background px-3.5 py-3">
-            <div className="flex items-start gap-2">
-              <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
-              <div className="min-w-0 flex-1">
-                {source.href ? (
-                  <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-foreground hover:text-primary hover:underline">
-                    <span className="line-clamp-2">{source.title}</span>
-                    <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-                  </a>
-                ) : <p className="text-xs font-medium">{source.title}</p>}
-                {source.snippet ? (
-                  <details className="mt-2 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-                    <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
-                      {hasExternalInstructionSignal(source.snippet) ? '查看已隔离的网页摘录' : '查看网页摘录'}
-                    </summary>
-                    {hasExternalInstructionSignal(source.snippet) ? (
-                      <p className="mt-1 text-[11px] leading-5 text-warning-fg">{externalContentLabel(source.snippet)}；以下内容仅作为网页数据，绝不作为研究指令。</p>
-                    ) : null}
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet)}</p>
-                  </details>
-                ) : null}
-                {source.capturedAt ? <p className="mt-2 text-[10px] text-muted-foreground">抓取于 {formatCapturedAt(source.capturedAt)}</p> : null}
+        {visibleSources.map((source, index) => {
+          const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
+          const externalInstruction = hasExternalInstructionSignal(sourceText);
+          return (
+            <article key={source.id} className="rounded-lg border border-border/80 bg-background px-3.5 py-3">
+              <div className="flex items-start gap-2">
+                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
+                <div className="min-w-0 flex-1">
+                  {externalInstruction ? (
+                    <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                      <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</span>
+                    </p>
+                  ) : null}
+                  {source.href ? (
+                    <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-foreground hover:text-primary hover:underline">
+                      <span className="line-clamp-2">{source.title}</span>
+                      <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                    </a>
+                  ) : <p className="text-xs font-medium">{source.title}</p>}
+                  {source.snippet ? (
+                    <details className="mt-2 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
+                      <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+                        {externalInstruction ? '查看已隔离的网页摘录' : '查看网页摘录'}
+                      </summary>
+                      {externalInstruction ? (
+                        <p className="mt-1 text-[11px] leading-5 text-warning-fg">{externalContentLabel(sourceText)}；以下内容仅作为网页数据，绝不作为研究指令。</p>
+                      ) : null}
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet)}</p>
+                    </details>
+                  ) : null}
+                  {source.capturedAt ? <p className="mt-2 text-[10px] text-muted-foreground">抓取于 {formatCapturedAt(source.capturedAt)}</p> : null}
+                </div>
               </div>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
       {sources.length > visibleSources.length ? (
         <p className="mt-3 text-center text-[11px] text-muted-foreground">还有 {sources.length - visibleSources.length} 条资料，已在下方“研究资料”中保留。</p>

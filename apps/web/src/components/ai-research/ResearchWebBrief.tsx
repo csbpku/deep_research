@@ -24,6 +24,7 @@ import {
 } from '@/components/ai-research/ResearchOutputViews';
 import { extractResearchTitle, cleanEvidenceSnippet } from '@/lib/research-report';
 import { researchUserStatus } from '@/lib/research-user-status';
+import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 import { cn } from '@/lib/utils';
 
 export interface ResearchWebBriefProps {
@@ -186,11 +187,28 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
             {sources.length > 0 ? (
               <>
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  {sources.slice(0, 8).map((source, index) => (
-                    <article key={source.id} className="border border-border bg-card px-4 py-3">
-                      <div className="flex items-start gap-2"><span className="font-mono text-[10px] text-tier-skim">{String(index + 1).padStart(2, '0')}</span><div className="min-w-0 flex-1">{source.href ? <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-primary hover:underline"><span className="line-clamp-2">{source.title}</span><ArrowUpRight className="mt-0.5 size-3 shrink-0" /></a> : <p className="text-xs font-medium">{source.title}</p>}{source.snippet ? <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 360)}</p> : null}<p className="mt-2 text-[10px] text-muted-foreground">{source.capturedAt ? `抓取于 ${formatDate(source.capturedAt)}` : '抓取时间未知'}</p></div></div>
-                    </article>
-                  ))}
+                  {sources.slice(0, 8).map((source, index) => {
+                    const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
+                    const externalInstruction = hasExternalInstructionSignal(sourceText);
+                    return (
+                      <article key={source.id} className="border border-border bg-card px-4 py-3">
+                        <div className="flex items-start gap-2">
+                          <span className="font-mono text-[10px] text-tier-skim">{String(index + 1).padStart(2, '0')}</span>
+                          <div className="min-w-0 flex-1">
+                            {externalInstruction ? (
+                              <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                                <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                                <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</span>
+                              </p>
+                            ) : null}
+                            {source.href ? <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-primary hover:underline"><span className="line-clamp-2">{source.title}</span><ArrowUpRight className="mt-0.5 size-3 shrink-0" /></a> : <p className="text-xs font-medium">{source.title}</p>}
+                            {source.snippet ? <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 360)}</p> : null}
+                            <p className="mt-2 text-[10px] text-muted-foreground">{source.capturedAt ? `抓取于 ${formatDate(source.capturedAt)}` : '抓取时间未知'}</p>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
                 {sources.length > 8 ? <p className="mt-3 text-center text-[11px] text-muted-foreground">已展示前 8 条来源；其余 {sources.length - 8} 条资料仍保留在研究过程的资料账本中。</p> : null}
               </>
