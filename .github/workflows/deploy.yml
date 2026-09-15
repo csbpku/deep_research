@@ -90,6 +90,7 @@ jobs:
       name: production
     permissions:
       contents: read
+      packages: read
     env:
       IMAGE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       WEB_IMAGE: ghcr.io/csbpku/deep-research/web:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
@@ -99,8 +100,8 @@ jobs:
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/deep_research' }}
       VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN || github.token }}
     steps:
       - name: Check out deployment files
         uses: actions/checkout@v6
