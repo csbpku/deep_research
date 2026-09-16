@@ -129,31 +129,6 @@ export default async function SignInPage({
         </form>
       ) : null}
 
-      <details
-        aria-label="本地开发提示"
-        className="mt-8 rounded-lg border border-border bg-card p-4 text-left text-sm text-muted-foreground"
-      >
-        <summary className="cursor-pointer text-foreground">本地开发提示</summary>
-        <ul className="mt-2 list-disc space-y-1 pl-5">
-          <li>
-            Google 回调地址为{' '}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-              {env.NEXTAUTH_URL}/api/auth/callback/google
-            </code>
-            ；GitHub 回调地址为{' '}
-            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-              {env.NEXTAUTH_URL}/api/auth/callback/github
-            </code>
-            。
-          </li>
-          {googleOnly ? (
-            <li>当前部署兼容模式只保留 Google 登录。</li>
-          ) : (
-            <li>邮箱密码账号可直接注册；OAuth 登录不限制邮箱域名。</li>
-          )}
-          <li>已禁用账号无法建立新 session。</li>
-        </ul>
-      </details>
     </div>
   );
 }
