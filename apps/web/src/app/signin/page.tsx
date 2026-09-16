@@ -22,6 +22,7 @@ export default async function SignInPage({
   const error = sp?.error;
   const env = getWebEnv();
   const googleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+  const googleOnly = env.AUTH_GOOGLE_ONLY;
   const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
   const authAllowed = isProductionAuthAllowed(
@@ -56,19 +57,24 @@ export default async function SignInPage({
 
   return (
     <div className="mx-auto max-w-md py-10 text-center">
-      <PageHeader title="登录" description="使用 Google，或使用白名单邮箱和密码登录。" />
+      <PageHeader
+        title="登录"
+        description={googleOnly ? '使用 Google 登录。' : '使用 Google，或使用白名单邮箱和密码登录。'}
+      />
       {error ? (
         <p role="alert" className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-left text-sm text-destructive">
           {error === 'AccessDenied'
-            ? '你的邮箱域不在允许列表内，或账号已被禁用。'
+            ? googleOnly
+              ? 'Google 账号未获准登录，或账号已被禁用。'
+              : '你的邮箱域不在允许列表内，或账号已被禁用。'
             : '登录失败，请稍后重试或检查账号信息。'}
         </p>
       ) : null}
-      {authAllowed ? <PasswordAuthForms callbackUrl={callbackUrl} /> : (
+      {!googleOnly && authAllowed ? <PasswordAuthForms callbackUrl={callbackUrl} /> : !googleOnly ? (
         <p role="alert" className="mt-6 rounded-lg border border-warning-border bg-warning-bg/40 p-4 text-left text-sm leading-6 text-warning-fg">
           当前连接未启用 HTTPS。为保护密码和会话，邮箱密码登录与邀请码激活已暂停，请先通过 HTTPS 访问本站。
         </p>
-      )}
+      ) : null}
       {authAllowed && googleConfigured ? (
         <div className="mt-4 border-t border-border pt-4">
           <form action={doSignIn}>
@@ -78,8 +84,12 @@ export default async function SignInPage({
             </Button>
           </form>
         </div>
-      ) : authAllowed && isDevMode ? (
+      ) : authAllowed && isDevMode && !googleOnly ? (
         <p className="mt-4 text-xs text-muted-foreground">Google OAuth 未配置，当前使用邮箱密码登录。</p>
+      ) : googleOnly && !googleConfigured ? (
+        <p role="alert" className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-left text-sm text-destructive">
+          Google OAuth 尚未配置，当前无法登录。
+        </p>
       ) : null}
 
       {isE2EMode ? (
@@ -105,7 +115,7 @@ export default async function SignInPage({
             为已授权重定向 URI。
           </li>
           <li>Google OAuth 是可选的；邮箱密码账号需要邀请码激活，公开注册已关闭。</li>
-          <li>未在 ALLOWED_EMAIL_DOMAINS 的域名会被拒绝(?error=AccessDenied)。</li>
+          <li>Google-only 生产模式只保留 Google 登录，不读取邮箱域名白名单。</li>
           <li>已禁用账号无法建立新 session。</li>
         </ul>
       </details>

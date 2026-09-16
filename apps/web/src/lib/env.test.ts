@@ -6,6 +6,7 @@ const validBase = {
   NEXTAUTH_SECRET: 'a-very-long-secret-1234567890',
   GOOGLE_CLIENT_ID: 'client-id',
   GOOGLE_CLIENT_SECRET: 'client-secret',
+  AUTH_GOOGLE_ONLY: '0',
   ALLOWED_EMAIL_DOMAINS: 'example.com,foo.org',
 };
 
@@ -17,6 +18,7 @@ describe('parseWebEnv', () => {
     expect(env.MAX_UPLOAD_SIZE_MB).toBe(5);
     expect(env.TIME_VALUE_USD_PER_HOUR).toBe(50);
     expect(env.ALLOWED_EMAIL_DOMAINS).toEqual(['example.com', 'foo.org']);
+    expect(env.AUTH_GOOGLE_ONLY).toBe(false);
     expect(env.AUTH_INVITE_CODE).toBe('');
     expect(env.AUTH_ALLOW_INSECURE_HTTP).toBe(false);
     expect(env.BOOTSTRAP_ADMIN_EMAIL).toBe('shaobo.chen@shopee.com');
@@ -29,10 +31,33 @@ describe('parseWebEnv', () => {
     expect(env.GOOGLE_CLIENT_SECRET).toBe('');
   });
 
-  it('rejects empty ALLOWED_EMAIL_DOMAINS', () => {
+  it('rejects empty ALLOWED_EMAIL_DOMAINS outside Google-only mode', () => {
     expect(() =>
       parseWebEnv({ ...validBase, ALLOWED_EMAIL_DOMAINS: '  ,  ,  ', NODE_ENV: 'development' }),
     ).toThrow(/ALLOWED_EMAIL_DOMAINS/);
+  });
+
+  it('accepts Google-only mode without ALLOWED_EMAIL_DOMAINS', () => {
+    const { ALLOWED_EMAIL_DOMAINS: _domains, ...rest } = validBase;
+    const env = parseWebEnv({
+      ...rest,
+      AUTH_GOOGLE_ONLY: '1',
+      NODE_ENV: 'production',
+    });
+    expect(env.AUTH_GOOGLE_ONLY).toBe(true);
+    expect(env.ALLOWED_EMAIL_DOMAINS).toEqual([]);
+  });
+
+  it('requires Google credentials in Google-only mode', () => {
+    expect(() =>
+      parseWebEnv({
+        ...validBase,
+        GOOGLE_CLIENT_ID: '',
+        GOOGLE_CLIENT_SECRET: '',
+        AUTH_GOOGLE_ONLY: '1',
+        NODE_ENV: 'production',
+      }),
+    ).toThrow(/Google OAuth credentials/);
   });
 
   it('rejects DATABASE_URL that is not postgres://', () => {

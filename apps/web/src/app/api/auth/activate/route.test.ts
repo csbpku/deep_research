@@ -32,6 +32,7 @@ beforeEach(() => {
     NODE_ENV: 'test',
     ALLOWED_EMAIL_DOMAINS: ['example.com', 'gmail.com', 'shopee.com'],
     AUTH_INVITE_CODE: 'invite-2026',
+    AUTH_GOOGLE_ONLY: false,
     BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
   });
   mocks.hashPassword.mockResolvedValue('scrypt$16384$8$1$salt$hash');
@@ -54,6 +55,7 @@ describe('POST /api/auth/activate', () => {
       NODE_ENV: 'production',
       ALLOWED_EMAIL_DOMAINS: ['example.com'],
       AUTH_INVITE_CODE: 'invite-2026',
+      AUTH_GOOGLE_ONLY: false,
       BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
     });
 
@@ -69,6 +71,28 @@ describe('POST /api/auth/activate', () => {
     expect((await response.json()).code).toBe('AUTH_REQUIRES_HTTPS');
     expect(mocks.findUnique).not.toHaveBeenCalled();
     expect(mocks.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects password activation in Google-only mode before reading the request', async () => {
+    mocks.getWebEnv.mockReturnValue({
+      NODE_ENV: 'production',
+      ALLOWED_EMAIL_DOMAINS: [],
+      AUTH_INVITE_CODE: '',
+      AUTH_GOOGLE_ONLY: true,
+      BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
+    });
+
+    const response = await POST(
+      request({
+        email: 'alice@example.com',
+        inviteCode: 'invite-2026',
+        password: 'correct horse battery staple',
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe('AUTH_REGISTRATION_DISABLED');
+    expect(mocks.findUnique).not.toHaveBeenCalled();
   });
 
   it('creates an allowlisted member with the correct invite code', async () => {

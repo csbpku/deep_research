@@ -1,4 +1,4 @@
-// NextAuth v5 配置 —— 密码登录 + 可选 Google OAuth + JWT 策略。
+// NextAuth v5 配置 —— 密码登录 / Google-only OAuth + JWT 策略。
 //
 // 关键决策（Week 1 复评 ADR 0002 + 当前 schema freeze）：
 //   - schema 已 freeze，且**没有** Account / Session / VerificationToken 表。
@@ -28,35 +28,39 @@ const isE2E = process.env.E2E === '1';
 
 export const authConfig: NextAuthConfig = {
   providers: [
-    Credentials({
-      id: 'password',
-      name: 'Email and password',
-      credentials: {
-        email: { label: 'Email', type: 'email' },
-        password: { label: 'Password', type: 'password' },
-      },
-      async authorize(credentials, request) {
-        const env = getWebEnv();
-        if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url, env.AUTH_ALLOW_INSECURE_HTTP)) return null;
-        const email = (credentials?.email as string | undefined)?.trim().toLowerCase();
-        const password = credentials?.password as string | undefined;
-        if (!email || !password) return null;
-        if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
+    ...(getWebEnv().AUTH_GOOGLE_ONLY
+      ? []
+      : [
+          Credentials({
+            id: 'password',
+            name: 'Email and password',
+            credentials: {
+              email: { label: 'Email', type: 'email' },
+              password: { label: 'Password', type: 'password' },
+            },
+            async authorize(credentials, request) {
+              const env = getWebEnv();
+              if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url, env.AUTH_ALLOW_INSECURE_HTTP)) return null;
+              const email = (credentials?.email as string | undefined)?.trim().toLowerCase();
+              const password = credentials?.password as string | undefined;
+              if (!email || !password) return null;
+              if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
 
-        const u = await prisma.user.findUnique({ where: { email } });
-        if (!u || !u.passwordHash || !canEstablishSession(u)) return null;
-        if (!(await verifyPassword(password, u.passwordHash))) return null;
+              const u = await prisma.user.findUnique({ where: { email } });
+              if (!u || !u.passwordHash || !canEstablishSession(u)) return null;
+              if (!(await verifyPassword(password, u.passwordHash))) return null;
 
-        return {
-          id: u.id,
-          email: u.email,
-          name: u.name,
-          role: u.role,
-          image: u.avatarUrl,
-          disabledAt: u.disabledAt,
-        };
-      },
-    }),
+              return {
+                id: u.id,
+                email: u.email,
+                name: u.name,
+                role: u.role,
+                image: u.avatarUrl,
+                disabledAt: u.disabledAt,
+              };
+            },
+          }),
+        ]),
     ...(isE2E
       ? [
           Credentials({
@@ -135,7 +139,9 @@ export const authConfig: NextAuthConfig = {
       // E2E credentials are an explicit local-test-only provider; its fixture
       // domain must not depend on the production Google allowlist. This branch
       // is unreachable unless the web server was started with E2E=1.
-      if (!(isE2E && account?.provider === 'e2e-credentials') && !isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) {
+      const bypassDomainAllowlist =
+        env.AUTH_GOOGLE_ONLY || (isE2E && account?.provider === 'e2e-credentials');
+      if (!bypassDomainAllowlist && !isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) {
         log.warn('auth.signin', 'domain not allowed', {
           provider: account?.provider,
           domain: email.split('@')[1]?.toLowerCase() ?? '',
@@ -245,11 +251,19 @@ function envHash(env: {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   NEXTAUTH_SECRET: string;
+  AUTH_GOOGLE_ONLY: boolean;
 }): string {
   // 把认证关键字段拼成短 hash，env 变化时让旧 token 失效；避免 secret 轮换后旧 JWT 残留。
   // 这里只用 env 字段，不引入 hash 库，保持依赖最小。
   let h = 0;
-  const s = env.GOOGLE_CLIENT_ID + '|' + env.GOOGLE_CLIENT_SECRET + '|' + env.NEXTAUTH_SECRET;
+  const s =
+    env.GOOGLE_CLIENT_ID +
+    '|' +
+    env.GOOGLE_CLIENT_SECRET +
+    '|' +
+    env.NEXTAUTH_SECRET +
+    '|' +
+    (env.AUTH_GOOGLE_ONLY ? 'google-only' : 'password');
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return String(h);
 }

@@ -22,6 +22,9 @@ const activateSchema = z.object({
 
 export async function POST(request: Request) {
   const env = getWebEnv();
+  if (env.AUTH_GOOGLE_ONLY) {
+    return error(request, ERROR_CODES.AUTH_REGISTRATION_DISABLED, '当前部署仅允许使用 Google 登录');
+  }
   if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url, env.AUTH_ALLOW_INSECURE_HTTP)) {
     return error(request, ERROR_CODES.AUTH_REQUIRES_HTTPS, '生产环境必须通过 HTTPS 激活账号');
   }

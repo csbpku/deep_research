@@ -5,21 +5,20 @@
 // OpenAI）禁止出现在 web 进程（env-and-scripts.md §2 "禁止"）。
 //
 // 校验失败必须立即抛出，不允许静默退化。Google OAuth 例外：本地 UI 模式允许
-// 两个凭证都为空（登录禁用），生产部署必须显式配置。
+// 两个凭证都为空（登录禁用），Google-only 模式必须显式配置两个凭证。
 
 import { z } from 'zod';
 import { DEFAULT_BOOTSTRAP_ADMIN_EMAIL } from './auth/invitation';
 
 const csvDomains = z
   .string()
-  .min(1, 'ALLOWED_EMAIL_DOMAINS must not be empty')
+  .default('')
   .transform((s) =>
     s
       .split(',')
       .map((d) => d.trim().toLowerCase())
       .filter(Boolean),
-  )
-  .refine((arr) => arr.length > 0, 'ALLOWED_EMAIL_DOMAINS must contain at least one domain');
+  );
 
 const positiveInt = z
   .string()
@@ -51,6 +50,8 @@ const webEnvSchema = z
 
     GOOGLE_CLIENT_ID: z.string().default(''),
     GOOGLE_CLIENT_SECRET: z.string().default(''),
+    // Google-only mode removes the password and invite authentication surface.
+    AUTH_GOOGLE_ONLY: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
     ALLOWED_EMAIL_DOMAINS: csvDomains,
     AUTH_INVITE_CODE: z.string().default(''),
     // Temporary emergency switch for IP/HTTP-only deployments. Keep disabled
@@ -67,7 +68,23 @@ const webEnvSchema = z
     // this — see docs/archive/2026-09-08-p1-plan.md §"P1-A2" and infra/.env.example.
     INTERNAL_SERVICE_TOKEN: z.string().default(''),
   })
-  .passthrough(); // Next.js 注入大量内部 env keys；只校验已知变量，放过未知 key
+  .passthrough() // Next.js 注入大量内部 env keys；只校验已知变量，放过未知 key
+  .superRefine((env, ctx) => {
+    if (!env.AUTH_GOOGLE_ONLY && env.ALLOWED_EMAIL_DOMAINS.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ALLOWED_EMAIL_DOMAINS'],
+        message: 'ALLOWED_EMAIL_DOMAINS must contain at least one domain unless AUTH_GOOGLE_ONLY=1',
+      });
+    }
+    if (env.AUTH_GOOGLE_ONLY && (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['GOOGLE_CLIENT_ID'],
+        message: 'Google OAuth credentials are required when AUTH_GOOGLE_ONLY=1',
+      });
+    }
+  });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
 
