@@ -115,6 +115,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
             requestId,
             context: 'ai.bff.progress_stream',
             retry: false,
+            // Keep the stream's snapshot read budget aligned with the
+            // durable status endpoint. A transient DB-pool wait should end
+            // one SSE connection only after 15s; polling remains the fallback.
+            timeoutMs: 15_000,
           });
           if (!fetched.ok) {
             send('error', { code: fetched.code, message: fetched.message });

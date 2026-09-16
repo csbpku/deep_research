@@ -9,7 +9,7 @@
 //   1. requireUser（未登录 → 401 AUTH_NOT_AUTHENTICATED）
 //   2. 透传 status / limit / offset 到 ai-engine（querystring 形式）
 //   3. server-side override：requester_id 强制设为 u.id（不能信 client）
-//   4. 反代 GET /api/ai/jobs 给 ai-engine（超时 5s）
+//   4. 反代 GET /api/ai/jobs 给 ai-engine（单次上游等待预算 15s）
 //   5. 把 ai-engine 的 status_code + body 透回；snake_case → camelCase
 //
 // 路由冲突：Next.js 中静态段 /api/ai-research/jobs 优先于动态段
@@ -104,6 +104,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     url: upstream.toString(),
     requestId,
     context: 'ai.bff.list',
+    // The history list is also read from the engine's shared DB pool. Keep
+    // it from reporting a false outage during a long research write burst.
+    timeoutMs: 15_000,
   });
   if (!fetched.ok) {
     return toApiErrorResponse({

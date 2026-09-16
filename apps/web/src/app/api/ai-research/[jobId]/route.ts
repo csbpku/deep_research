@@ -1,8 +1,8 @@
 // BFF handler: 查询 AI 调研任务状态（架构 §七 GET /api/ai-research/{id}/status）。
 //
 // 前端每 5s 轮询本端，本端反代 ai-engine GET /api/ai/jobs/{id}。
-// 验收 4：状态轮询 ≤5s 间隔 —— 由前端 useQuery { refetchInterval: 5000 } 负责，
-// 本端只做无状态透传。
+// 验收 4：状态轮询 ≤5s 间隔 —— 由前端 useQuery { refetchInterval: 5000 } 负责；
+// BFF 的单次上游等待预算独立于轮询间隔，不能用 5s 硬超时截断一次正常状态读取。
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -210,6 +210,11 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     url,
     requestId,
     context: 'ai.bff.status',
+    // A status read is normally fast, but the engine shares its DB pool with
+    // the research worker. On the small VPS a long retrieval/write burst can
+    // briefly queue this read beyond the generic 5s BFF budget. A status
+    // timeout must not turn a still-running job into a dead result page.
+    timeoutMs: 15_000,
   });
   if (!fetched.ok) {
     return toApiErrorResponse({

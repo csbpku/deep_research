@@ -1,5 +1,5 @@
 // 反代 ai-engine 的统一客户端 —— 周五最后再 P1：
-//   - fetch 一次失败 → 自动重试 1 次（间隔 200ms）
+//   - fetch 一次失败 → 自动重试 1 次（间隔 250ms）
 //   - 错误友好化：HTTP 5xx / 网络错误 → `AI_ENGINE_UNAVAILABLE` + 友好中文 message
 //   - JSON 解析失败 → 同上（不再把「返回非 JSON」抛出）
 //

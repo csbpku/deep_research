@@ -86,6 +86,10 @@ describe('GET /api/ai-research/[jobId] evidence workspace', () => {
     const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
     const payload = await response.json();
 
+    expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
+      context: 'ai.bff.status',
+      timeoutMs: 15_000,
+    }));
     expect(payload.finalStatus).toBe('succeeded');
     expect(payload.deliverableStatus).toBe('report');
     expect(payload.researchSufficiency.status).toBe('insufficient');
