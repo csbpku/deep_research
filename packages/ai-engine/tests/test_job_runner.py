@@ -93,6 +93,26 @@ def test_db_ai_explicit_lease_can_be_short_for_recovery_tests() -> None:
     assert store._lease_seconds == 1
 
 
+def test_db_pool_timeout_is_configurable_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DB_POOL_TIMEOUT_SECONDS", "180")
+    store = DbJobStore(
+        dsn="postgresql://postgres:postgres@localhost:5432/deep_research",
+    )
+    assert store._pool_timeout_seconds == 180
+
+    monkeypatch.setenv("DB_POOL_TIMEOUT_SECONDS", "1")
+    short_store = DbJobStore(
+        dsn="postgresql://postgres:postgres@localhost:5432/deep_research",
+    )
+    assert short_store._pool_timeout_seconds == 5
+
+    monkeypatch.setenv("DB_POOL_TIMEOUT_SECONDS", "not-a-number")
+    invalid_store = DbJobStore(
+        dsn="postgresql://postgres:postgres@localhost:5432/deep_research",
+    )
+    assert invalid_store._pool_timeout_seconds == 90
+
+
 @pytest.mark.asyncio
 async def test_build_store_default_is_memory() -> None:
     store = build_store()

@@ -222,6 +222,38 @@ def _resolve_retriever_selection() -> tuple[str, str | None]:
     return "tavily", None
 
 
+# ``ddgs`` uses ``backend="auto"`` by default.  In the current release that
+# means shuffling every enabled engine, including Startpage, on every call.
+# A transient Startpage timeout must not decide whether an otherwise identical
+# research job succeeds, so keep an explicit, ordered allow-list.  Operators
+# can tune the order with ``DDGS_BACKENDS`` (or the singular compatibility
+# name), but the default never includes the unstable random pool.
+_DDGS_BACKEND_ALLOWLIST = frozenset({
+    "duckduckgo",
+    "brave",
+    "google",
+    "mojeek",
+    "yahoo",
+    "yandex",
+})
+_DEFAULT_DDGS_BACKENDS = ("duckduckgo", "brave", "google")
+
+
+def _resolve_ddgs_backends() -> tuple[str, ...]:
+    """Return deterministic DDGS engines, excluding the random auto pool."""
+    raw = os.environ.get("DDGS_BACKENDS", "").strip()
+    if not raw:
+        raw = os.environ.get("DDGS_BACKEND", "").strip()
+    if not raw:
+        return _DEFAULT_DDGS_BACKENDS
+    selected = tuple(dict.fromkeys(
+        item.strip().lower()
+        for item in raw.split(",")
+        if item.strip().lower() in _DDGS_BACKEND_ALLOWLIST
+    ))
+    return selected or _DEFAULT_DDGS_BACKENDS
+
+
 _SEARCH_TOPIC_STOPWORDS = frozenset({
     "about", "against", "and", "best", "compare", "comparison", "deep",
     "docs", "documentation", "for", "from", "guide", "official", "research",
@@ -619,7 +651,12 @@ try:  # pragma: no cover — import-time guard
         removes them.  Add a provider-side ``site:`` restriction and filter
         the returned records again before gpt-researcher sees them.  The
         second check is intentional because search engines may interpret
-        ``site:root.example`` as a wider subdomain query.
+        ``site:root.example`` as a wider subdomain query. The upstream
+        ``Duckduckgo`` adapter delegates to ``ddgs.DDGS.text`` without a
+        backend argument; the current ddgs release then shuffles all enabled
+        engines and can route a request to Startpage. Use an explicit,
+        ordered backend list here so a provider timeout is recoverable and
+        does not make identical jobs randomly succeed or fail.
         """
 
         _records_retrieval_events = False
@@ -647,6 +684,7 @@ try:  # pragma: no cover — import-time guard
             # pass the original scope to it so this remains compatible with
             # both the installed version and the test double.
             self._delegate = _Duckduckgo(scoped_query)
+            self._backends = _resolve_ddgs_backends()
 
         def search(self, max_results: int = 10) -> list[dict[str, Any]]:
             job = _ACTIVE_RESEARCH_JOB.get()
@@ -662,7 +700,23 @@ try:  # pragma: no cover — import-time guard
                     diagnostics["cacheHits"] = int(diagnostics.get("cacheHits", 0) or 0) + 1
                 return list(cache[cache_key])
             try:
-                results = self._delegate.search(max_results=max_results)
+                # gpt-researcher 0.15.x does not expose DDGS's backend
+                # argument and therefore always uses ``backend="auto"``.
+                # Reach the delegate's DDGS instance when available so the
+                # allow-list above is actually enforced. Keep the vendor
+                # method as a compatibility fallback for the test double and
+                # for older retriever implementations without ``ddg``.
+                ddg = getattr(self._delegate, "ddg", None)
+                text_search = getattr(ddg, "text", None)
+                if callable(text_search):
+                    results = text_search(
+                        self.query,
+                        region="wt-wt",
+                        max_results=max_results,
+                        backend=",".join(self._backends),
+                    )
+                else:
+                    results = self._delegate.search(max_results=max_results)
             except Exception:
                 # Keep the same graceful-degradation contract as the vendor
                 # adapter. The shared query boundary records the empty run.

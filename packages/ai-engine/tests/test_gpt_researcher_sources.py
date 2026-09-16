@@ -43,6 +43,7 @@ from ai_engine.adapters.gpt_researcher import (
     _should_use_deep_research,
     _record_retrieval_event,
     _resolve_retriever_selection,
+    _resolve_ddgs_backends,
     _ScopedDuckduckgo,
     _ResilientTavilySearch,
     _filter_search_results_by_topic,
@@ -772,6 +773,53 @@ def test_scoped_duckduckgo_restricts_query_and_filters_results_before_fetch(
     assert result == [
         {"href": "https://openai.com/index/deep-research", "body": "official"}
     ]
+
+
+def test_scoped_duckduckgo_passes_explicit_backend_allowlist_to_ddgs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeDDGS:
+        def text(self, query: str, **kwargs: object) -> list[dict[str, str]]:
+            observed["query"] = query
+            observed.update(kwargs)
+            return [{"href": "https://example.com/evidence", "body": "captured"}]
+
+    class DelegateWithDDGS:
+        def __init__(self, query: str, **_: object) -> None:
+            self.ddg = FakeDDGS()
+
+        def search(self, **_: object) -> list[dict[str, str]]:
+            raise AssertionError("the backend-aware DDGS path should be used")
+
+    monkeypatch.setattr("ai_engine.adapters.gpt_researcher._Duckduckgo", DelegateWithDDGS)
+
+    result = _ScopedDuckduckgo("database comparison").search(max_results=7)
+
+    assert result == [{"href": "https://example.com/evidence", "body": "captured"}]
+    assert observed["query"] == "database comparison"
+    assert observed["region"] == "wt-wt"
+    assert observed["max_results"] == 7
+    assert observed["backend"] == "duckduckgo,brave,google"
+
+
+def test_ddgs_backend_resolution_is_allowlisted_and_deduplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DDGS_BACKENDS", raising=False)
+    monkeypatch.delenv("DDGS_BACKEND", raising=False)
+    assert _resolve_ddgs_backends() == ("duckduckgo", "brave", "google")
+
+    monkeypatch.setenv(
+        "DDGS_BACKENDS",
+        "startpage, BRAVE, brave, unsupported, GOOGLE",
+    )
+    assert _resolve_ddgs_backends() == ("brave", "google")
+
+    monkeypatch.delenv("DDGS_BACKENDS", raising=False)
+    monkeypatch.setenv("DDGS_BACKEND", "mojeek")
+    assert _resolve_ddgs_backends() == ("mojeek",)
 
 
 def test_general_search_filters_obvious_topical_noise_and_surfaces_a_gap() -> None:

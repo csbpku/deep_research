@@ -288,6 +288,13 @@ class DbJobStore(JobStore):
                 code="VALIDATION_FAILED",
                 message="DB pool sizes must satisfy 1 <= min_size <= max_size",
             )
+        try:
+            configured_pool_timeout = float(
+                os.environ.get("DB_POOL_TIMEOUT_SECONDS", "90")
+            )
+        except (TypeError, ValueError):
+            configured_pool_timeout = 90.0
+        self._pool_timeout_seconds = min(max(configured_pool_timeout, 5.0), 300.0)
         self._pool: AsyncConnectionPool | None = None
         self._pool_open: bool = False
         self._reaper_task: asyncio.Task[None] | None = None
@@ -311,6 +318,12 @@ class DbJobStore(JobStore):
                 max_size=self._pool_max_size,
                 kwargs={"row_factory": dict_row},
                 open=False,
+                # The main AI process shares this pool across the research
+                # worker, review worker, radar recovery consumers and API
+                # reads. A brief burst must wait for a connection instead of
+                # turning an otherwise successful long research run into an
+                # opaque PoolTimeout after the default 30 seconds.
+                timeout=self._pool_timeout_seconds,
             )
             await self._pool.open()
             await self._pool.wait()

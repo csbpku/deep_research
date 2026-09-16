@@ -38,7 +38,12 @@ services:
       # a radar burst cannot starve the API or PostgreSQL. Local development
       # keeps the higher-throughput defaults from docker-compose.yml.
       DB_POOL_MIN_SIZE: "1"
-      DB_POOL_MAX_SIZE: "4"
+      # The main process shares this pool across the AI queue, fact review,
+      # radar recovery consumers and API reads. Four connections allowed a
+      # short background burst to exhaust the pool and surface as PoolTimeout
+      # at the end of an otherwise healthy long research run.
+      DB_POOL_MAX_SIZE: "8"
+      DB_POOL_TIMEOUT_SECONDS: "90"
       RADAR_SOURCE_CONCURRENCY: "2"
       RADAR_CANDIDATE_CONCURRENCY: "1"
       RADAR_LLM_CONCURRENCY: "3"
