@@ -3,6 +3,7 @@ import { PageHeader } from '@/components/domain/PageHeader';
 import { signIn } from '@/lib/auth/config';
 import { getWebEnv } from '@/lib/env';
 import { isProductionAuthAllowed } from '@/lib/auth/transport';
+import { Github } from 'lucide-react';
 import { headers } from 'next/headers';
 import { PasswordAuthForms } from './PasswordAuthForms';
 
@@ -22,6 +23,7 @@ export default async function SignInPage({
   const error = sp?.error;
   const env = getWebEnv();
   const googleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+  const githubConfigured = Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET);
   const googleOnly = env.AUTH_GOOGLE_ONLY;
   const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
@@ -44,6 +46,12 @@ export default async function SignInPage({
     await signIn('google', { redirectTo: callbackUrl });
   }
 
+  async function doGithubSignIn() {
+    'use server';
+    if (!githubConfigured) return;
+    await signIn('github', { redirectTo: callbackUrl });
+  }
+
   async function doE2EAdminSignIn() {
     'use server';
     if (process.env.E2E !== '1') return;
@@ -59,14 +67,24 @@ export default async function SignInPage({
     <div className="mx-auto max-w-md py-10 text-center">
       <PageHeader
         title="登录"
-        description={googleOnly ? '使用 Google 登录。' : '使用 Google，或使用白名单邮箱和密码登录。'}
+        description={
+          googleOnly
+            ? '使用 Google 登录。'
+            : googleConfigured && githubConfigured
+              ? '使用 Google、GitHub，或邮箱密码登录。'
+              : googleConfigured
+                ? '使用 Google 或邮箱密码登录。'
+                : githubConfigured
+                  ? '使用 GitHub 或邮箱密码登录。'
+                  : '使用邮箱和密码登录。'
+        }
       />
       {error ? (
         <p role="alert" className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-left text-sm text-destructive">
           {error === 'AccessDenied'
             ? googleOnly
-              ? 'Google 账号未获准登录，或账号已被禁用。'
-              : '你的邮箱域不在允许列表内，或账号已被禁用。'
+              ? 'Google 账号未能完成登录，或账号已被禁用。'
+              : 'OAuth 账号未能完成登录，或账号已被禁用。'
             : '登录失败，请稍后重试或检查账号信息。'}
         </p>
       ) : null}
@@ -75,17 +93,27 @@ export default async function SignInPage({
           当前连接未启用 HTTPS。为保护密码和会话，邮箱密码登录与邀请码激活已暂停，请先通过 HTTPS 访问本站。
         </p>
       ) : null}
-      {authAllowed && googleConfigured ? (
+      {authAllowed && (googleConfigured || githubConfigured) ? (
         <div className="mt-4 border-t border-border pt-4">
-          <form action={doSignIn}>
-            <Button type="submit" variant="outline" size="lg" className="w-full">
-              <GoogleMark />
-              使用 Google 登录
-            </Button>
-          </form>
+          {googleConfigured ? (
+            <form action={doSignIn}>
+              <Button type="submit" variant="outline" size="lg" className="w-full">
+                <GoogleMark />
+                使用 Google 登录
+              </Button>
+            </form>
+          ) : null}
+          {githubConfigured ? (
+            <form action={doGithubSignIn} className={googleConfigured ? 'mt-3' : undefined}>
+              <Button type="submit" variant="outline" size="lg" className="w-full">
+                <Github className="size-4" aria-hidden />
+                使用 GitHub 登录
+              </Button>
+            </form>
+          ) : null}
         </div>
-      ) : authAllowed && isDevMode && !googleOnly ? (
-        <p className="mt-4 text-xs text-muted-foreground">Google OAuth 未配置，当前使用邮箱密码登录。</p>
+      ) : authAllowed && isDevMode && !googleOnly && !googleConfigured && !githubConfigured ? (
+        <p className="mt-4 text-xs text-muted-foreground">OAuth 尚未配置，当前使用邮箱密码登录。</p>
       ) : googleOnly && !googleConfigured ? (
         <p role="alert" className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-left text-sm text-destructive">
           Google OAuth 尚未配置，当前无法登录。
@@ -108,14 +136,21 @@ export default async function SignInPage({
         <summary className="cursor-pointer text-foreground">本地开发提示</summary>
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>
-            启用 Google 登录时，需在 Google Cloud Console 登记{' '}
+            Google 回调地址为{' '}
             <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-              http://localhost:3000/api/auth/callback/google
-            </code>{' '}
-            为已授权重定向 URI。
+              {env.NEXTAUTH_URL}/api/auth/callback/google
+            </code>
+            ；GitHub 回调地址为{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              {env.NEXTAUTH_URL}/api/auth/callback/github
+            </code>
+            。
           </li>
-          <li>Google OAuth 是可选的；邮箱密码账号需要邀请码激活，公开注册已关闭。</li>
-          <li>Google-only 生产模式只保留 Google 登录，不读取邮箱域名白名单。</li>
+          {googleOnly ? (
+            <li>当前部署兼容模式只保留 Google 登录。</li>
+          ) : (
+            <li>邮箱密码账号可直接注册；OAuth 登录不限制邮箱域名。</li>
+          )}
           <li>已禁用账号无法建立新 session。</li>
         </ul>
       </details>

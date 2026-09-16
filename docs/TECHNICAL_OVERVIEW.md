@@ -74,9 +74,9 @@ Web 先创建可追踪任务，AI engine 通过 durable job store 异步执行�
 
 ## 5. 认证与权限
 
-- 公开注册关闭；
-- 邮箱密码账号通过 allowlist + 邀请码首次激活；
-- Google OAuth 可选；生产可用 `AUTH_GOOGLE_ONLY=1` 关闭密码和邀请码登录；
+- 默认开放邮箱密码注册/登录；
+- Google 和 GitHub OAuth 可选，均不限制邮箱域；`AUTH_GOOGLE_ONLY=1` 是兼容旧部署的开关，仅保留 Google；
+- `ALLOWED_EMAIL_DOMAINS` 和 `AUTH_INVITE_CODE` 仅供旧 `/api/auth/activate` 兼容接口使用，不参与公开注册或 OAuth；
 - `shaobo.chen@shopee.com` 是默认 bootstrap Admin；
 - Admin、成员和匿名访问由 Web BFF 服务端校验，前端隐藏不是权限边界；
 - 生产密码登录必须使用 HTTPS。

@@ -5,9 +5,9 @@
 //   - `scripts/docker-entrypoint-web.sh` (Docker compose)
 //
 // Contract (P1-A1):
-//   - Reads BOOTSTRAP_ADMIN_EMAIL + ALLOWED_EMAIL_DOMAINS from env.
+//   - Reads BOOTSTRAP_ADMIN_EMAIL + optional ALLOWED_EMAIL_DOMAINS from env.
 //   - Defaults to shaobo.chen@shopee.com; explicit "off"/"disabled" skips bootstrap.
-//   - Validates the email belongs to an allowed domain (allowlist reuse).
+//   - If a legacy allowlist is present, validates the email against it.
 //   - Upserts the user; promotes to admin **only if there is no admin yet** or the
 //     user is already admin. Never demotes an existing admin.
 //   - Prints an audit-friendly summary, but never the password or full token.

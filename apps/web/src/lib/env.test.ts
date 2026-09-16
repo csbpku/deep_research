@@ -6,6 +6,8 @@ const validBase = {
   NEXTAUTH_SECRET: 'a-very-long-secret-1234567890',
   GOOGLE_CLIENT_ID: 'client-id',
   GOOGLE_CLIENT_SECRET: 'client-secret',
+  GITHUB_CLIENT_ID: 'github-client-id',
+  GITHUB_CLIENT_SECRET: 'github-client-secret',
   AUTH_GOOGLE_ONLY: '0',
   ALLOWED_EMAIL_DOMAINS: 'example.com,foo.org',
 };
@@ -31,10 +33,13 @@ describe('parseWebEnv', () => {
     expect(env.GOOGLE_CLIENT_SECRET).toBe('');
   });
 
-  it('rejects empty ALLOWED_EMAIL_DOMAINS outside Google-only mode', () => {
-    expect(() =>
-      parseWebEnv({ ...validBase, ALLOWED_EMAIL_DOMAINS: '  ,  ,  ', NODE_ENV: 'development' }),
-    ).toThrow(/ALLOWED_EMAIL_DOMAINS/);
+  it('accepts empty ALLOWED_EMAIL_DOMAINS for public registration', () => {
+    const env = parseWebEnv({
+      ...validBase,
+      ALLOWED_EMAIL_DOMAINS: '  ,  ,  ',
+      NODE_ENV: 'development',
+    });
+    expect(env.ALLOWED_EMAIL_DOMAINS).toEqual([]);
   });
 
   it('accepts Google-only mode without ALLOWED_EMAIL_DOMAINS', () => {

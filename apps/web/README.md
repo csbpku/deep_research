@@ -48,10 +48,10 @@ pnpm --filter @deep-research/web build
 
 ## 登录
 
-1. 默认模式配置 `ALLOWED_EMAIL_DOMAINS` 和服务端 `AUTH_INVITE_CODE`，登录页只允许这些域名通过邀请码激活并登录；生产可设置 `AUTH_GOOGLE_ONLY=1` 关闭密码和邀请码路径，公开注册已关闭。
+1. 默认模式支持邮箱密码直接注册/登录；`ALLOWED_EMAIL_DOMAINS` 仅作为旧激活接口的兼容配置，不限制公开注册或 OAuth。设置 `AUTH_GOOGLE_ONLY=1` 可关闭密码和 GitHub 登录，仅保留 Google。
 2. 密码使用 Node `crypto.scrypt` 哈希保存；最小长度为 12 个字符。
-3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`；该初始管理员如果尚未设置密码，可在登录页用该邮箱和邀请码完成一次激活。
-4. Google OAuth 是可选 provider；启用时，本地 redirect URI 使用 `http://localhost:3000/api/auth/callback/google`。Google-only 模式要求 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`，且不需要 `ALLOWED_EMAIL_DOMAINS`。
+3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`；该邮箱首次注册或通过 OAuth 登录时会获得 Admin 角色。
+4. Google 和 GitHub OAuth 都是可选 provider；回调 URI 分别是 `{NEXTAUTH_URL}/api/auth/callback/google` 和 `{NEXTAUTH_URL}/api/auth/callback/github`。Google-only 模式要求 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。
 5. 公网使用邮箱密码登录前必须启用 HTTPS；HTTP 只适合本机或受控内网联调。
 
 ## Radar bootstrap

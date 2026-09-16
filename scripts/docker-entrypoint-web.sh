@@ -2,8 +2,8 @@
 # Docker entrypoint for web: run Prisma migrations, then idempotently bootstrap
 # the initial Admin and default radar sources, then start Next.js.
 #
-# Bootstrap uses shaobo.chen@shopee.com by default (+ ALLOWED_EMAIL_DOMAINS for the
-# allowlist). Set BOOTSTRAP_ADMIN_EMAIL=off to skip it explicitly.
+# Bootstrap uses shaobo.chen@shopee.com by default. Set BOOTSTRAP_ADMIN_EMAIL=off
+# to skip it explicitly.
 set -e
 
 APP_ROOT="/app/apps/web"

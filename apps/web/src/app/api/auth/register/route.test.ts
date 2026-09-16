@@ -1,21 +1,194 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  findUnique: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  hashPassword: vi.fn(),
+  getWebEnv: vi.fn(),
+}));
+
+vi.mock('@/lib/db', () => ({
+  prisma: {
+    user: {
+      findUnique: mocks.findUnique,
+      create: mocks.create,
+      update: mocks.update,
+    },
+  },
+}));
+vi.mock('@/lib/auth/password', () => ({
+  hashPassword: mocks.hashPassword,
+  PASSWORD_MIN_LENGTH: 12,
+  PASSWORD_MAX_LENGTH: 256,
+}));
+vi.mock('@/lib/env', () => ({ getWebEnv: mocks.getWebEnv }));
+
 import { POST } from './route';
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.getWebEnv.mockReturnValue({
+    NODE_ENV: 'test',
+    ALLOWED_EMAIL_DOMAINS: [],
+    AUTH_GOOGLE_ONLY: false,
+    AUTH_ALLOW_INSECURE_HTTP: false,
+    BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
+  });
+  mocks.hashPassword.mockResolvedValue('scrypt$16384$8$1$salt$hash');
+  mocks.findUnique.mockResolvedValue(null);
+  mocks.create.mockResolvedValue({ id: 'user-1', role: 'member' });
+  mocks.update.mockResolvedValue({ id: 'user-1', role: 'member' });
+});
+
+function request(body: unknown, url = 'http://localhost/api/auth/register'): Request {
+  return new Request(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 describe('POST /api/auth/register', () => {
-  it('rejects public registration for every request', async () => {
+  it('creates a member without an email domain allowlist', async () => {
     const response = await POST(
-      new Request('http://localhost/api/auth/register', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          email: 'alice@example.com',
-          password: 'correct horse battery staple',
-        }),
+      request({
+        email: ' Alice@Example.com ',
+        name: 'Alice',
+        password: 'correct horse battery staple',
       }),
     );
-    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ ok: true, role: 'member' });
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: {
+        email: 'alice@example.com',
+        name: 'Alice',
+        passwordHash: 'scrypt$16384$8$1$salt$hash',
+        role: 'member',
+      },
+      select: { id: true, role: true },
+    });
+  });
+
+  it('creates the bootstrap admin directly through registration', async () => {
+    mocks.create.mockResolvedValueOnce({ id: 'user-1', role: 'admin' });
+
+    const response = await POST(
+      request({
+        email: 'shaobo.chen@shopee.com',
+        password: 'correct horse battery staple',
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ ok: true, role: 'admin' });
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        email: 'shaobo.chen@shopee.com',
+        role: 'admin',
+      }),
+      select: { id: true, role: true },
+    });
+  });
+
+  it('sets a password for an existing OAuth-only account', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'oauth-user',
+      passwordHash: null,
+      disabledAt: null,
+    });
+
+    const response = await POST(
+      request({
+        email: 'alice@example.com',
+        name: 'Alice Updated',
+        password: 'correct horse battery staple',
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, role: 'member' });
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'oauth-user' },
+      data: {
+        passwordHash: 'scrypt$16384$8$1$salt$hash',
+        name: 'Alice Updated',
+      },
+      select: { id: true, role: true },
+    });
+  });
+
+  it('rejects an existing password account', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'existing-user',
+      passwordHash: 'already-hashed',
+      disabledAt: null,
+    });
+
+    const response = await POST(
+      request({
+        email: 'alice@other.example',
+        password: 'correct horse battery staple',
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe('AUTH_ACCOUNT_EXISTS');
+    expect(mocks.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects disabled accounts', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'disabled-user',
+      passwordHash: null,
+      disabledAt: new Date('2026-09-01T00:00:00Z'),
+    });
+
+    const response = await POST(
+      request({
+        email: 'alice@example.com',
+        password: 'correct horse battery staple',
+      }),
+    );
 
     expect(response.status).toBe(403);
-    expect(body.code).toBe('AUTH_REGISTRATION_DISABLED');
+    expect((await response.json()).code).toBe('AUTH_ACCOUNT_DISABLED');
+    expect(mocks.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid input', async () => {
+    const response = await POST(
+      request({
+        email: 'not-an-email',
+        password: 'short',
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).code).toBe('VALIDATION_FAILED');
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('keeps public registration disabled in legacy Google-only mode', async () => {
+    mocks.getWebEnv.mockReturnValue({
+      NODE_ENV: 'production',
+      ALLOWED_EMAIL_DOMAINS: [],
+      AUTH_GOOGLE_ONLY: true,
+      AUTH_ALLOW_INSECURE_HTTP: false,
+      BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
+    });
+
+    const response = await POST(
+      request({
+        email: 'alice@example.com',
+        password: 'correct horse battery staple',
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe('AUTH_REGISTRATION_DISABLED');
+    expect(mocks.findUnique).not.toHaveBeenCalled();
   });
 });

@@ -4,8 +4,8 @@
 // 这里只解析 apps/web 自己关心的变量；ai-engine 的 secret（Tavily / Anthropic /
 // OpenAI）禁止出现在 web 进程（env-and-scripts.md §2 "禁止"）。
 //
-// 校验失败必须立即抛出，不允许静默退化。Google OAuth 例外：本地 UI 模式允许
-// 两个凭证都为空（登录禁用），Google-only 模式必须显式配置两个凭证。
+// 校验失败必须立即抛出，不允许静默退化。OAuth provider 均为可选；
+// 未配置的 provider 不会出现在登录页。Google-only 模式仍要求 Google 凭证。
 
 import { z } from 'zod';
 import { DEFAULT_BOOTSTRAP_ADMIN_EMAIL } from './auth/invitation';
@@ -50,7 +50,9 @@ const webEnvSchema = z
 
     GOOGLE_CLIENT_ID: z.string().default(''),
     GOOGLE_CLIENT_SECRET: z.string().default(''),
-    // Google-only mode removes the password and invite authentication surface.
+    GITHUB_CLIENT_ID: z.string().default(''),
+    GITHUB_CLIENT_SECRET: z.string().default(''),
+    // Compatibility mode: removes password and GitHub authentication surfaces.
     AUTH_GOOGLE_ONLY: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
     ALLOWED_EMAIL_DOMAINS: csvDomains,
     AUTH_INVITE_CODE: z.string().default(''),
@@ -70,13 +72,6 @@ const webEnvSchema = z
   })
   .passthrough() // Next.js 注入大量内部 env keys；只校验已知变量，放过未知 key
   .superRefine((env, ctx) => {
-    if (!env.AUTH_GOOGLE_ONLY && env.ALLOWED_EMAIL_DOMAINS.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['ALLOWED_EMAIL_DOMAINS'],
-        message: 'ALLOWED_EMAIL_DOMAINS must contain at least one domain unless AUTH_GOOGLE_ONLY=1',
-      });
-    }
     if (env.AUTH_GOOGLE_ONLY && (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

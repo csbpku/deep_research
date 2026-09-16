@@ -1,4 +1,4 @@
-// NextAuth v5 配置 —— 密码登录 / Google-only OAuth + JWT 策略。
+// NextAuth v5 配置 —— 密码登录 / Google / GitHub OAuth + JWT 策略。
 //
 // 关键决策（Week 1 复评 ADR 0002 + 当前 schema freeze）：
 //   - schema 已 freeze，且**没有** Account / Session / VerificationToken 表。
@@ -14,11 +14,12 @@
 // 注意：env 解析在 lib/env.ts 完成；本文件只引用 getWebEnv()。
 
 import NextAuth, { type NextAuthConfig } from 'next-auth';
-import Google from 'next-auth/providers/google';
 import Credentials from 'next-auth/providers/credentials';
+import GitHub from 'next-auth/providers/github';
+import Google from 'next-auth/providers/google';
 import { getWebEnv } from '../env';
 import { prisma } from '../db';
-import { canEstablishSession, isEmailAllowed } from './allowlist';
+import { canEstablishSession } from './allowlist';
 import { verifyPassword } from './password';
 import { isBootstrapAdminEmail } from './invitation';
 import { log } from '../log';
@@ -44,8 +45,6 @@ export const authConfig: NextAuthConfig = {
               const email = (credentials?.email as string | undefined)?.trim().toLowerCase();
               const password = credentials?.password as string | undefined;
               if (!email || !password) return null;
-              if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
-
               const u = await prisma.user.findUnique({ where: { email } });
               if (!u || !u.passwordHash || !canEstablishSession(u)) return null;
               if (!(await verifyPassword(password, u.passwordHash))) return null;
@@ -75,10 +74,7 @@ export const authConfig: NextAuthConfig = {
               const role = (credentials?.role as 'member' | 'admin' | undefined) ?? 'member';
               if (!email) return null;
               const env = getWebEnv();
-              // This provider exists only for local Playwright runs. Its fixture
-              // address must not be constrained by the production Google
-              // allowlist; Google OAuth still follows the normal check below.
-              if (!isE2E && !isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
+              // This provider exists only for local Playwright runs.
               const u = await prisma.user.upsert({
                 where: { email },
                 create: { email, name: email.split('@')[0], role },
@@ -115,6 +111,21 @@ export const authConfig: NextAuthConfig = {
           }),
         ]
       : []),
+    ...(getWebEnv().AUTH_GOOGLE_ONLY
+      ? []
+      : getWebEnv().GITHUB_CLIENT_ID && getWebEnv().GITHUB_CLIENT_SECRET
+        ? [
+            GitHub({
+              clientId: getWebEnv().GITHUB_CLIENT_ID,
+              clientSecret: getWebEnv().GITHUB_CLIENT_SECRET,
+              authorization: {
+                params: {
+                  scope: 'read:user user:email',
+                },
+              },
+            }),
+          ]
+        : []),
   ],
   // JWT session；详见文件头注释。maxAge 与 cookie 名走 NextAuth 默认。
   session: { strategy: 'jwt', maxAge: 60 * 60 * 24 * 7 },
@@ -125,9 +136,9 @@ export const authConfig: NextAuthConfig = {
   },
   callbacks: {
     /**
-     * Google OAuth callback 进入前的校验。返回 false → NextAuth 跳到 ?error=AccessDenied。
+     * OAuth callback 进入前的校验。返回 false → NextAuth 跳到 ?error=AccessDenied。
      *
-     * 不允许的邮箱域、被禁用账号都拒绝。不在 allowlist 的邮箱连 User 都不创建。
+     * 所有登录方式都要求邮箱可用；被禁用账号拒绝建立新 session。
      */
     async signIn({ user, profile, account }) {
       const email = user.email ?? profile?.email ?? null;
@@ -136,18 +147,6 @@ export const authConfig: NextAuthConfig = {
         return false;
       }
       const env = getWebEnv();
-      // E2E credentials are an explicit local-test-only provider; its fixture
-      // domain must not depend on the production Google allowlist. This branch
-      // is unreachable unless the web server was started with E2E=1.
-      const bypassDomainAllowlist =
-        env.AUTH_GOOGLE_ONLY || (isE2E && account?.provider === 'e2e-credentials');
-      if (!bypassDomainAllowlist && !isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) {
-        log.warn('auth.signin', 'domain not allowed', {
-          provider: account?.provider,
-          domain: email.split('@')[1]?.toLowerCase() ?? '',
-        });
-        return false;
-      }
       // 已存在用户：检查 disabledAt；不存在用户：交给下面的 jwt callback 首次创建。
       const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
       if (!canEstablishSession(existing)) {
@@ -250,6 +249,8 @@ function isAccountActiveForSession(disabledAt: Date | null): boolean {
 function envHash(env: {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
   NEXTAUTH_SECRET: string;
   AUTH_GOOGLE_ONLY: boolean;
 }): string {
@@ -260,6 +261,10 @@ function envHash(env: {
     env.GOOGLE_CLIENT_ID +
     '|' +
     env.GOOGLE_CLIENT_SECRET +
+    '|' +
+    env.GITHUB_CLIENT_ID +
+    '|' +
+    env.GITHUB_CLIENT_SECRET +
     '|' +
     env.NEXTAUTH_SECRET +
     '|' +

@@ -10,13 +10,12 @@ import {
   PASSWORD_MIN_LENGTH,
 } from '@/lib/auth/password-policy';
 
-type Mode = 'signin' | 'activate';
+type Mode = 'signin' | 'register';
 
 export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,19 +28,19 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
     setPending(true);
 
     try {
-      if (mode === 'activate') {
-        const response = await fetch('/api/auth/activate', {
+      if (mode === 'register') {
+        const response = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ email, name, password, inviteCode }),
+          body: JSON.stringify({ email, name, password }),
         });
         const body = (await response.json().catch(() => null)) as {
           message?: string;
         } | null;
         if (!response.ok) {
-          throw new Error(body?.message ?? '激活失败，请检查邮箱和邀请码');
+          throw new Error(body?.message ?? '注册失败，请检查账号信息');
         }
-        setNotice('激活成功，正在登录…');
+        setNotice('注册成功，正在登录…');
       }
 
       const result = await signIn('password', {
@@ -51,7 +50,7 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
         redirectTo: callbackUrl,
       });
       if (!result || result.error) {
-        throw new Error('邮箱或密码不正确，或账号尚未启用密码登录');
+        throw new Error('邮箱或密码不正确，或账号暂未启用密码登录');
       }
       window.location.assign(result.url ?? callbackUrl);
     } catch (cause) {
@@ -79,19 +78,19 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
         <span className="text-muted-foreground">/</span>
         <button
           type="button"
-          className={mode === 'activate' ? 'font-medium text-foreground' : 'text-muted-foreground'}
+          className={mode === 'register' ? 'font-medium text-foreground' : 'text-muted-foreground'}
           onClick={() => {
-            setMode('activate');
+            setMode('register');
             setError(null);
             setNotice(null);
           }}
         >
-          邀请码激活
+          注册账号
         </button>
       </div>
 
       <form onSubmit={submit} className="mt-4 space-y-4">
-        {mode === 'activate' ? (
+        {mode === 'register' ? (
           <div className="space-y-1.5">
             <Label htmlFor="name">名称</Label>
             <Input
@@ -103,22 +102,6 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
               maxLength={80}
               placeholder="可选"
               disabled={pending}
-            />
-          </div>
-        ) : null}
-        {mode === 'activate' ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="inviteCode">邀请码</Label>
-            <Input
-              id="inviteCode"
-              name="inviteCode"
-              type="password"
-              autoComplete="one-time-code"
-              value={inviteCode}
-              onChange={(event) => setInviteCode(event.target.value)}
-              required
-              disabled={pending}
-              placeholder="请输入管理员提供的邀请码"
             />
           </div>
         ) : null}
@@ -141,7 +124,7 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
             id="password"
             name="password"
             type="password"
-            autoComplete={mode === 'activate' ? 'new-password' : 'current-password'}
+            autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             minLength={PASSWORD_MIN_LENGTH}
@@ -149,9 +132,9 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
             required
             disabled={pending}
           />
-          {mode === 'activate' ? (
+          {mode === 'register' ? (
             <p className="text-xs text-muted-foreground">
-              至少 {PASSWORD_MIN_LENGTH} 个字符；邮箱必须在允许名单内。
+              至少 {PASSWORD_MIN_LENGTH} 个字符。
             </p>
           ) : null}
         </div>
@@ -166,7 +149,7 @@ export function PasswordAuthForms({ callbackUrl }: { callbackUrl: string }) {
           </p>
         ) : null}
         <Button type="submit" className="w-full" disabled={pending}>
-          {pending ? '处理中…' : mode === 'activate' ? '激活并登录' : '登录'}
+          {pending ? '处理中…' : mode === 'register' ? '注册并登录' : '登录'}
         </Button>
       </form>
     </section>

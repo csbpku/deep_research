@@ -38,8 +38,10 @@ ENV DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder
 ENV NEXTAUTH_SECRET=placeholder-secret-for-build-only
 ENV GOOGLE_CLIENT_ID=placeholder
 ENV GOOGLE_CLIENT_SECRET=placeholder
+ENV GITHUB_CLIENT_ID=placeholder
+ENV GITHUB_CLIENT_SECRET=placeholder
 ENV AUTH_GOOGLE_ONLY=0
-ENV ALLOWED_EMAIL_DOMAINS=example.com
+ENV ALLOWED_EMAIL_DOMAINS=
 RUN cd apps/web && pnpm build
 
 # Create an isolated production dependency tree for the startup-only Prisma

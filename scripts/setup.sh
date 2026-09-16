@@ -118,9 +118,13 @@ configure_auth_access() {
   fi
   local existing_invite_code
   existing_invite_code="$(read_env_value "$env_file" AUTH_INVITE_CODE)"
-  prompt_secret "Password account invite code (blank = generate)" AUTH_INVITE_CODE_INPUT
-  AUTH_INVITE_CODE_VAL="${AUTH_INVITE_CODE_INPUT:-${existing_invite_code:-$(gen_secret)}}"
-  info "Invite code configured in the generated env file (not printed)"
+  prompt_secret "Legacy activation invite code (blank = disabled)" AUTH_INVITE_CODE_INPUT
+  AUTH_INVITE_CODE_VAL="${AUTH_INVITE_CODE_INPUT:-${existing_invite_code:-}}"
+  if [[ -n "$AUTH_INVITE_CODE_VAL" ]]; then
+    info "Legacy activation invite code configured in the generated env file (not printed)"
+  else
+    info "Legacy activation invite code disabled; public registration is enabled"
+  fi
 }
 
 read_env_value() {
@@ -369,30 +373,15 @@ run_interactive_prompts() {
   fi
 
   prompt "Deploy URL (for NextAuth callback)" "$deploy_url_default" DEPLOY_URL
-  prompt "Email domain allowlist (comma-separated)" "gmail.com,shopee.com" EMAIL_DOMAINS
-  validate_non_empty "$EMAIL_DOMAINS" "ALLOWED_EMAIL_DOMAINS"
+  prompt "Legacy activation email allowlist (optional)" "" EMAIL_DOMAINS
   configure_auth_access
 
-  # P1-A1: collect initial Admin email (must belong to allowlist).
+  # P1-A1: collect initial Admin email.
   local default_bootstrap="shaobo.chen@shopee.com"
   prompt "Initial Admin email (type off to disable bootstrap)" "$default_bootstrap" BOOTSTRAP_ADMIN_EMAIL_INPUT
   BOOTSTRAP_ADMIN_EMAIL=""
   if [[ -n "${BOOTSTRAP_ADMIN_EMAIL_INPUT// }" ]]; then
     BOOTSTRAP_ADMIN_EMAIL="$(printf '%s' "$BOOTSTRAP_ADMIN_EMAIL_INPUT" | tr '[:upper:]' '[:lower:]')"
-    local bootstrap_domain="${BOOTSTRAP_ADMIN_EMAIL##*@}"
-    local matched=false
-    IFS=',' read -r -a _allow <<< "$EMAIL_DOMAINS"
-    for d in "${_allow[@]}"; do
-      d="$(echo "$d" | tr '[:upper:]' '[:lower:]' | xargs)"
-      if [[ "$d" == "$bootstrap_domain" ]]; then
-        matched=true
-        break
-      fi
-    done
-    if [[ "$matched" != "true" ]]; then
-      warn "Initial Admin 域名 $bootstrap_domain 不在 ALLOWED_EMAIL_DOMAINS 内；将留空，需在 Admin 控制台手动设置"
-      BOOTSTRAP_ADMIN_EMAIL=""
-    fi
   fi
 
   configure_llm_provider
@@ -428,6 +417,24 @@ run_interactive_prompts() {
     2)
       GOOGLE_ID=""
       GOOGLE_SECRET=""
+      ;;
+  esac
+
+  prompt_choice "Configure optional GitHub OAuth login?" GITHUB_OAUTH_CHOICE \
+    "Yes — I have Client ID / Secret (from GitHub OAuth Apps)" \
+    "Skip"
+
+  case "$GITHUB_OAUTH_CHOICE" in
+    1)
+      prompt "GitHub OAuth Client ID" "" GITHUB_ID
+      prompt_secret "GitHub OAuth Client Secret" GITHUB_SECRET
+      validate_non_empty "$GITHUB_ID" "GITHUB_CLIENT_ID"
+      validate_non_empty "$GITHUB_SECRET" "GITHUB_CLIENT_SECRET"
+      echo -e "  ${YELLOW}Callback URL to register:${NC} ${DEPLOY_URL}/api/auth/callback/github"
+      ;;
+    2)
+      GITHUB_ID=""
+      GITHUB_SECRET=""
       ;;
   esac
 
@@ -486,6 +493,9 @@ RETRIEVER=${RETRIEVER_VAL}
 # Google OAuth
 GOOGLE_CLIENT_ID=${GOOGLE_ID}
 GOOGLE_CLIENT_SECRET=${GOOGLE_SECRET}
+GITHUB_CLIENT_ID=${GITHUB_ID}
+GITHUB_CLIENT_SECRET=${GITHUB_SECRET}
+AUTH_GOOGLE_ONLY=0
 
 # Optional radar tokens
 GH_TOKEN=${GH_TOKEN_VAL}
@@ -679,9 +689,13 @@ VPSSCRIPT
   echo ""
 
   if [[ -z "$GOOGLE_ID" ]]; then
-    echo -e "  ${YELLOW}Google OAuth: not configured.${NC} (email/password login remains available)"
+    echo -e "  ${YELLOW}Google OAuth: not configured.${NC} (email/password registration remains available)"
     echo "  To enable, get credentials at https://console.cloud.google.com/apis/credentials"
     echo "  Callback URL: ${DEPLOY_URL}/api/auth/callback/google"
+  fi
+  if [[ -z "$GITHUB_ID" ]]; then
+    echo -e "  ${YELLOW}GitHub OAuth: not configured.${NC} (email/password registration remains available)"
+    echo "  Callback URL: ${DEPLOY_URL}/api/auth/callback/github"
   fi
   echo ""
   echo -e "  Initial Admin: ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}"
@@ -796,12 +810,14 @@ if [[ "$MODE" == "docker" ]]; then
     echo -e "  AI research uses mock data, no API costs."
   fi
   if [[ -z "$GOOGLE_ID" ]]; then
-    echo -e "  ${YELLOW}Google OAuth: not configured${NC} (use email/password login)"
+    echo -e "  ${YELLOW}Google OAuth: not configured${NC} (email/password registration remains available)"
+  fi
+  if [[ -z "$GITHUB_ID" ]]; then
+    echo -e "  ${YELLOW}GitHub OAuth: not configured${NC} (email/password registration remains available)"
   fi
   echo ""
   echo -e "  Initial Admin: ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}"
-  echo "  First login: choose invite-code activation and set the Admin password once."
-  echo "  Invite code: stored in .env as AUTH_INVITE_CODE (not printed by setup)."
+  echo "  First login: register with email/password or use an OAuth provider."
   echo "  Admin console: ${DEPLOY_URL}/admin"
 
   exit 0
@@ -921,14 +937,14 @@ if [[ "$MODE" != "quick" ]]; then
   esac
 else
   PG_HOST="${PG_HOST:-localhost}"; PG_PORT="${PG_PORT:-5432}"; PG_USER="${PG_USER:-postgres}"; PG_PASS="${PG_PASS:-postgres}"
-  EMAIL_DOMAINS="gmail.com,shopee.com"
-  AUTH_INVITE_CODE_VAL="quick-local-invite"
+  EMAIL_DOMAINS=""
+  AUTH_INVITE_CODE_VAL=""
   BOOTSTRAP_ADMIN_EMAIL="shaobo.chen@shopee.com"
   ANTHROPIC_KEY=""; ANTHROPIC_BASE_URL_VAL=""; OPENAI_KEY=""; OPENAI_BASE_URL_VAL=""; ADAPTER_VAL="fake"
   MINIMAX_KEY=""; MINIMAX_BASE_URL_VAL=""; DEEPSEEK_KEY=""; DEEPSEEK_BASE_URL_VAL=""
   FALLBACK_LLM_VAL=""
   TAVILY_KEY=""; RETRIEVER_VAL="tavily"
-  GOOGLE_ID=""; GOOGLE_SECRET=""
+  GOOGLE_ID=""; GOOGLE_SECRET=""; GITHUB_ID=""; GITHUB_SECRET=""
   load_existing_llm_config "packages/ai-engine/.env"
   SMART_LLM_VAL="anthropic:deepseek-v4-flash"; FAST_LLM_VAL="$SMART_LLM_VAL"; STRATEGIC_LLM_VAL="$SMART_LLM_VAL"; BRIEF_LLM_VAL="$SMART_LLM_VAL"
 fi
@@ -956,6 +972,9 @@ NEXTAUTH_SECRET=${AUTH_SECRET}
 AI_ENGINE_URL=http://localhost:4000
 GOOGLE_CLIENT_ID=${GOOGLE_ID}
 GOOGLE_CLIENT_SECRET=${GOOGLE_SECRET}
+GITHUB_CLIENT_ID=${GITHUB_ID}
+GITHUB_CLIENT_SECRET=${GITHUB_SECRET}
+AUTH_GOOGLE_ONLY=0
 ALLOWED_EMAIL_DOMAINS=${EMAIL_DOMAINS}
 AUTH_INVITE_CODE=${AUTH_INVITE_CODE_VAL}
 MAX_UPLOAD_SIZE_MB=5
@@ -1023,7 +1042,7 @@ if pg_isready -h "$PG_HOST" -p "$PG_PORT" >/dev/null 2>&1; then
     ALLOWED_EMAIL_DOMAINS="$EMAIL_DOMAINS" \
     DATABASE_URL="$DB_URL" \
     pnpm --filter @deep-research/web bootstrap:admin \
-    || fail "Initial Admin bootstrap failed — check ALLOWED_EMAIL_DOMAINS and BOOTSTRAP_ADMIN_EMAIL"
+    || fail "Initial Admin bootstrap failed — check BOOTSTRAP_ADMIN_EMAIL"
   info "Initial Admin ensured"
   step "Ensuring default radar sources"
   DATABASE_URL="$DB_URL" pnpm --filter @deep-research/web bootstrap:radar \
@@ -1056,14 +1075,17 @@ echo "  pnpm dev:web    →  http://localhost:3000"
 echo "  pnpm dev:ai     →  http://localhost:4000  (separate terminal)"
 echo ""
 echo -e "${BOLD}Initial Admin:${NC} ${BOOTSTRAP_ADMIN_EMAIL:-shaobo.chen@shopee.com}"
-echo "First login: choose invite-code activation and set the Admin password once."
-echo "Invite code: stored in apps/web/.env as AUTH_INVITE_CODE (not printed by setup)."
+echo "First login: register with email/password or use an OAuth provider."
 echo "Admin console: http://localhost:3000/admin"
 echo ""
 if [[ -z "$GOOGLE_ID" ]]; then
-  echo "  Google OAuth: not configured (email/password login is available)"
+  echo "  Google OAuth: not configured (email/password registration is available)"
   echo "  To enable: https://console.cloud.google.com/apis/credentials"
   echo "  Callback: http://localhost:3000/api/auth/callback/google"
+fi
+if [[ -z "$GITHUB_ID" ]]; then
+  echo "  GitHub OAuth: not configured (email/password registration is available)"
+  echo "  Callback: http://localhost:3000/api/auth/callback/github"
 fi
 echo ""
 echo "  Docker alternative: ./scripts/setup.sh --docker"
