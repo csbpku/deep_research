@@ -20,12 +20,16 @@ export default async function SignInPage({
   const sp = await searchParams;
   const requestHeaders = await headers();
   const error = sp?.error;
-  const googleConfigured = Boolean(
-    getWebEnv().GOOGLE_CLIENT_ID && getWebEnv().GOOGLE_CLIENT_SECRET,
-  );
+  const env = getWebEnv();
+  const googleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
   const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
-  const authAllowed = isProductionAuthAllowed(requestHeaders, process.env.NODE_ENV);
+  const authAllowed = isProductionAuthAllowed(
+    requestHeaders,
+    env.NODE_ENV,
+    undefined,
+    env.AUTH_ALLOW_INSECURE_HTTP,
+  );
   // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
   // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
   // 攻击者可构造 /signin?callbackUrl=https://evil.com 做开放重定向钓鱼。

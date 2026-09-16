@@ -53,6 +53,9 @@ const webEnvSchema = z
     GOOGLE_CLIENT_SECRET: z.string().default(''),
     ALLOWED_EMAIL_DOMAINS: csvDomains,
     AUTH_INVITE_CODE: z.string().default(''),
+    // Temporary emergency switch for IP/HTTP-only deployments. Keep disabled
+    // once the public HTTPS endpoint is available again.
+    AUTH_ALLOW_INSECURE_HTTP: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
     BOOTSTRAP_ADMIN_EMAIL: z.string().default(DEFAULT_BOOTSTRAP_ADMIN_EMAIL),
 
     MAX_UPLOAD_SIZE_MB: positiveInt.default('5'),

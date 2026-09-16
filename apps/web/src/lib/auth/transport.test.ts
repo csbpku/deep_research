@@ -13,6 +13,7 @@ describe('authentication transport checks', () => {
     const headers = new Headers({ 'x-forwarded-proto': 'http' });
     expect(isProductionAuthAllowed(headers, 'development', 'http://localhost:3000/signin')).toBe(true);
     expect(isProductionAuthAllowed(headers, 'production', 'http://120.76.248.204/signin')).toBe(false);
+    expect(isProductionAuthAllowed(headers, 'production', 'http://120.76.248.204/signin', true)).toBe(true);
   });
 
   it('accepts direct HTTPS when no proxy header is present', () => {

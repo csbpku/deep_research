@@ -36,10 +36,12 @@ export const authConfig: NextAuthConfig = {
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials, request) {
-        if (!isProductionAuthAllowed(request.headers, getWebEnv().NODE_ENV, request.url)) return null;
+        const env = getWebEnv();
+        if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url, env.AUTH_ALLOW_INSECURE_HTTP)) return null;
         const email = (credentials?.email as string | undefined)?.trim().toLowerCase();
         const password = credentials?.password as string | undefined;
         if (!email || !password) return null;
+        if (!isEmailAllowed(email, env.ALLOWED_EMAIL_DOMAINS)) return null;
 
         const u = await prisma.user.findUnique({ where: { email } });
         if (!u || !u.passwordHash || !canEstablishSession(u)) return null;

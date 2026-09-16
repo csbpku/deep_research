@@ -22,7 +22,7 @@ const activateSchema = z.object({
 
 export async function POST(request: Request) {
   const env = getWebEnv();
-  if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url)) {
+  if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url, env.AUTH_ALLOW_INSECURE_HTTP)) {
     return error(request, ERROR_CODES.AUTH_REQUIRES_HTTPS, '生产环境必须通过 HTTPS 激活账号');
   }
 

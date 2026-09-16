@@ -32,6 +32,11 @@ export function isProductionAuthAllowed(
   headers: Headers,
   nodeEnv: string | undefined = process.env.NODE_ENV,
   requestUrl?: string,
+  allowInsecureHttp = false,
 ): boolean {
-  return nodeEnv !== 'production' || effectiveRequestProtocol(headers, requestUrl) === 'https';
+  return (
+    nodeEnv !== 'production' ||
+    allowInsecureHttp ||
+    effectiveRequestProtocol(headers, requestUrl) === 'https'
+  );
 }
