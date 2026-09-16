@@ -86,7 +86,7 @@ describe('RadarZreadDocument summary presentation', () => {
     expect(html).toContain('刷新文档');
   });
 
-  it('marks instruction-like text in the repository document as external data', () => {
+  it('does not show the instruction warning banner in the repository document', () => {
     const html = renderToStaticMarkup(createElement(RadarZreadDocument, {
       ...baseProps,
       meta: {
@@ -102,8 +102,6 @@ describe('RadarZreadDocument summary presentation', () => {
       },
     }));
 
-    expect(html).toContain('data-testid="external-content-warning"');
-    expect(html).toContain('仅作为项目文档数据展示');
-    expect(html).toContain('不会改变研究指令或系统行为');
+    expect(html).not.toContain('data-testid="external-content-warning"');
   });
 });
