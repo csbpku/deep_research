@@ -70,6 +70,8 @@ async def test_score_missing_candidates_scores_approved_share_content() -> None:
     assert '"share_submissions"' in select_sql
     update_sql, update_params = pool.connection_value.executions[1]
     assert '"distilledScore"' in update_sql
+    assert 'WHEN %s::text IS NULL THEN NULL' in update_sql
+    assert 'WHEN %s::text IS NULL OR %s THEN NULL' in update_sql
     assert update_params[1] == 58.0
 
 

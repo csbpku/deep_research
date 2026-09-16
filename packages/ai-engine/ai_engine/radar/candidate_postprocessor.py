@@ -260,10 +260,10 @@ async def score_missing_candidates(
                 '"distilledProfile" = %s, '
                 '"scoreReason" = %s, '
                 '"enrichmentStatus" = CASE '
-                'WHEN %s IS NULL THEN NULL '
+                'WHEN %s::text IS NULL THEN NULL '
                 'WHEN %s THEN \'ready\' ELSE \'pending\' END, '
                 '"enrichmentNextRetryAt" = CASE '
-                'WHEN %s IS NULL OR %s THEN NULL ELSE now() END, '
+                'WHEN %s::text IS NULL OR %s THEN NULL ELSE now() END, '
                 '"tags" = ' + tags_sql + ', '
                 '"updatedAt" = now() WHERE "id" = %s',
                 (
