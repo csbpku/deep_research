@@ -242,6 +242,10 @@ services:
     logging: *json-logging
     environment:
       STORAGE_DIR: /app/server/storage
+    # Loopback-only host binding supports the SSH tunnel without exposing the
+    # AnythingLLM UI or API on the public network interface.
+    ports:
+      - "127.0.0.1:3001:3001"
     expose:
       - "3001"
     cap_add:
