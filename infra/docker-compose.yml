@@ -4,6 +4,7 @@
 #   - postgres (16-alpine)：业务库 + 两个任务队列 + 全文索引
 #   - web (apps/web)：Next.js 15 + BFF + Prisma client
 #   - ai-engine (packages/ai-engine)：FastAPI + workers
+#   - anythingllm：可选 AI 讨论后端，仅暴露在 Compose 内网
 #   - render-review（可选 browser-review profile）：Node + Chromium sidecar，执行真实页面审核
 #   - nginx (1.27-alpine)：TLS 终止 + 反代
 #
@@ -232,6 +233,28 @@ services:
       - zread-work:/data/zread
     # HEALTHCHECK 已写在 Dockerfile 内
 
+  # AnythingLLM is intentionally internal-only. Configure its model and
+  # workspace through the web UI over an SSH tunnel; the AI engine reaches it
+  # at http://anythingllm:3001 on the Compose network.
+  anythingllm:
+    image: ghcr.io/mintplex-labs/anything-llm:latest
+    restart: unless-stopped
+    logging: *json-logging
+    environment:
+      STORAGE_DIR: /app/server/storage
+    expose:
+      - "3001"
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - anythingllm-storage:/app/server/storage
+      - anythingllm-hotdir:/app/collector/hotdir
+      - anythingllm-outputs:/app/collector/outputs
+    deploy:
+      resources:
+        limits:
+          memory: 900M
+
   render-review:
     profiles: ["browser-review"]
     build:
@@ -277,3 +300,6 @@ volumes:
   postgres-data:
   import-tmp:
   zread-work:
+  anythingllm-storage:
+  anythingllm-hotdir:
+  anythingllm-outputs:

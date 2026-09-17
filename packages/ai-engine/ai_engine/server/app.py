@@ -1724,13 +1724,13 @@ class HealthResponse(BaseModel):
 
 
 def _anythingllm_enabled_for(body: ResearchAssistantBody) -> bool:
-    """Enable the AnythingLLM experiment only for explicitly listed radar IDs."""
+    """Enable AnythingLLM for configured radar IDs, or all when none are listed."""
     if body.operation not in {"guide", "guide_section", "guide_synthesis"} or not body.summary_id:
         return False
     if not os.environ.get("ANYTHINGLLM_URL", "").strip() or not os.environ.get("ANYTHINGLLM_API_KEY", "").strip():
         return False
     configured = {item.strip() for item in os.environ.get("ANYTHINGLLM_RADAR_IDS", "").split(",") if item.strip()}
-    return body.summary_id in configured
+    return not configured or body.summary_id in configured
 
 
 def _extract_json_object(value: str) -> dict[str, object] | None:

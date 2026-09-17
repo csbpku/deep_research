@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from ai_engine.server.app import ResearchAssistantBody, _anythingllm_enabled_for
 from ai_engine.server.chat import _anythingllm_chat_enabled, _anythingllm_usage
 
 
@@ -30,6 +31,21 @@ def test_anythingllm_empty_allowlist_enables_all_configured_radars(
 
     assert _anythingllm_chat_enabled({"id": "radar-1"}) is True
     assert _anythingllm_chat_enabled({"id": "radar-2"}) is True
+
+
+def test_anythingllm_empty_allowlist_enables_all_research_guides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configured(monkeypatch)
+    monkeypatch.setenv("ANYTHINGLLM_RADAR_IDS", "")
+
+    body = ResearchAssistantBody(
+        operation="guide",
+        body="Summarize this radar article.",
+        summaryId="radar-1",
+    )
+
+    assert _anythingllm_enabled_for(body) is True
 
 
 def test_anythingllm_usage_accepts_openai_style_fields() -> None:
