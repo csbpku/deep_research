@@ -463,7 +463,7 @@ jobs:
                 "${compose[@]}" pull web ai-engine || true
               timeout --signal=TERM --kill-after=30s 5m \
                 "${compose[@]}" up -d --no-build --remove-orphans || true
-              "${compose[@]}" exec -T nginx nginx -s reload || true
+              "${compose[@]}" exec -T nginx nginx -s reload </dev/null || true
             else
               echo "[deploy] no valid previous registry SHA; skipping image rollback" >&2
             fi
@@ -520,8 +520,8 @@ jobs:
           "${compose[@]}" up -d --no-build --remove-orphans
           # Nginx resolves Compose service names at startup. Re-resolve them
           # after image replacement changes the web/AI container addresses.
-          "${compose[@]}" exec -T nginx nginx -t
-          "${compose[@]}" exec -T nginx nginx -s reload
+          "${compose[@]}" exec -T nginx nginx -t </dev/null
+          "${compose[@]}" exec -T nginx nginx -s reload </dev/null
           echo "[deploy] waiting for public health endpoints"
           wait_for_endpoint() {
             local label="$1"
