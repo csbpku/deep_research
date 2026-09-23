@@ -5,26 +5,12 @@ import type { SessionUser } from './auth/session';
 import { getCurrentUser } from './auth/session';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { toApiErrorResponse } from './errors';
+export { isAllowedReadingRedirect } from './reading-extension-origin';
 
 const TOKEN_PREFIX = 'dr_reader.';
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 14;
 const CODE_PREFIX = 'dr_reader_code.';
 const CODE_TTL_SECONDS = 5 * 60;
-
-export function isAllowedReadingRedirect(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'chrome-extension:' || url.pathname !== '/callback.html' || url.search || url.hash) return false;
-    const configured = (process.env.READING_EXTENSION_IDS || '').split(',').map((item) => item.trim()).filter(Boolean);
-    // Local unpacked extensions receive a generated id. Keep the convenient
-    // prototype flow in development, while production requires an explicit
-    // Web Store/enterprise extension id allowlist.
-    if (configured.length === 0) return process.env.NODE_ENV !== 'production';
-    return configured.includes(url.hostname);
-  } catch {
-    return false;
-  }
-}
 
 function secret(): string {
   return process.env.NEXTAUTH_SECRET || 'development-reader-secret';

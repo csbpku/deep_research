@@ -11,6 +11,7 @@ import type { ZodSchema } from 'zod';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { toApiErrorResponse } from './errors';
 import { log, withRequestId, serializeError } from './log';
+import { isAllowedReadingExtensionOrigin } from './reading-extension-origin';
 
 /** zod 解析 request body。失败返回 400 NextResponse，成功返回 data。 */
 export async function parseBody<S extends ZodSchema>(
@@ -67,6 +68,8 @@ function _checkOrigin(req: Request): NextResponse | undefined {
   try {
     const candidateHost = new URL(candidate).host;
     if (candidateHost === host) return; // 同源
+    const pathname = new URL(req.url).pathname;
+    if (pathname.startsWith('/api/reading/') && origin && isAllowedReadingExtensionOrigin(origin)) return;
   } catch {
     // 非标准格式，放行（只做 best-effort）
     return;

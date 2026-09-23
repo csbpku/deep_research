@@ -48,6 +48,31 @@ describe('parseBody', () => {
 });
 
 describe('apiHandler', () => {
+  it('accepts a configured Reader extension only for reading API writes', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('READING_EXTENSION_IDS', 'doopmkblckigfncakbfcbeajoamgmkmg');
+    try {
+      const wrapped = apiHandler<[Request]>(async () => NextResponse.json({ ok: true }));
+      const request = (path: string, origin: string) => new Request(`https://techradar.top${path}`, {
+        method: 'POST',
+        headers: { host: 'techradar.top', origin },
+      });
+      const allowed = await wrapped(request('/api/reading/token/exchange', 'chrome-extension://doopmkblckigfncakbfcbeajoamgmkmg'));
+      expect(allowed.status).toBe(200);
+      for (const [path, origin] of [
+        ['/api/ai-research', 'chrome-extension://doopmkblckigfncakbfcbeajoamgmkmg'],
+        ['/api/reading/token/exchange', 'chrome-extension://iiiadhnklhafidcpjmemafbncjadhgng'],
+        ['/api/reading/token/exchange', 'https://evil.example'],
+      ]) {
+        const denied = await wrapped(request(path, origin));
+        expect(denied.status).toBe(403);
+        expect((await denied.json()).code).toBe(ERROR_CODES.CSRF_ORIGIN_MISMATCH);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('returns handler response on success', async () => {
     const wrapped = apiHandler<[Request]>(async () => NextResponse.json({ ok: true }));
     const res = await wrapped(mockReq({}));
