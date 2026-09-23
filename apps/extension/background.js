@@ -1,9 +1,9 @@
 import { boundTaskContext, loadProvider, makeDocument, mergeProcessedIds, mergeTranslationFailures, providerReady, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 import { activationReason } from './activation.js';
+import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js';
 
 const CONTENT_SCRIPT = 'content.js';
-const DEFAULT_WEB_APP_URL = 'http://localhost:3000';
 const RESUME_ALARM = 'deep-research-reader-resume';
 const READING_WINDOW_PREFIX = 'readingWindow:';
 const translationJobs = new Map();
@@ -431,13 +431,7 @@ chrome.alarms?.onAlarm?.addListener((alarm) => {
 async function webAppUrl() {
   const stored = await chrome.storage.local.get(['readerPlatformUrl']);
   const value = typeof stored.readerPlatformUrl === 'string' ? stored.readerPlatformUrl.trim() : '';
-  try {
-    const url = new URL(value || DEFAULT_WEB_APP_URL);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_WEB_APP_URL;
-    return url.toString().replace(/\/$/u, '');
-  } catch {
-    return DEFAULT_WEB_APP_URL;
-  }
+  return resolvePlatformOrigin(value);
 }
 
 function base64Url(bytes) {
@@ -559,9 +553,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const redirect = chrome.runtime.getURL('callback.html');
       await chrome.storage.session.set({ readerPkce: { verifier, state, redirect } });
       const url = `${baseUrl}/reading/connect?redirect=${encodeURIComponent(redirect)}&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256&state=${encodeURIComponent(state)}`;
-      return chrome.tabs.create({ url });
-    }).catch(() => {});
-    return;
+      await chrome.tabs.create({ url });
+      sendResponse?.({ ok: true });
+    }).catch((error) => {
+      sendResponse?.({ ok: false, message: error instanceof Error ? error.message : '无法打开平台授权页' });
+    });
+    return true;
   }
   if (message?.type === 'deep-research:disconnect') {
     chrome.storage.local.remove('readerToken').then(() => {
@@ -574,7 +571,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const state = typeof message.state === 'string' ? message.state : '';
     if (!code || !state) return;
     Promise.all([chrome.storage.session.get(['readerPkce']), webAppUrl()]).then(async ([{ readerPkce }, baseUrl]) => {
-      if (!readerPkce || readerPkce.state !== state || !readerPkce.verifier || !readerPkce.redirect) return;
+      if (!readerPkce || readerPkce.state !== state || !readerPkce.verifier || !readerPkce.redirect) {
+        throw new Error('授权状态无效或已过期，请重新连接');
+      }
       const response = await fetch(`${baseUrl}/api/reading/token/exchange`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -585,7 +584,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.storage.local.set({ readerToken: payload.token });
       await chrome.storage.session.remove('readerPkce');
       chrome.runtime.sendMessage({ type: 'deep-research:connection-state', connected: true }).catch(() => {});
-    }).catch((error) => console.warn('Deep Research authorization exchange failed', error));
+    }).catch((error) => {
+      chrome.runtime.sendMessage({
+        type: 'deep-research:connection-state',
+        connected: false,
+        status: error instanceof Error ? error.message : '平台授权失败，请重新连接',
+      }).catch(() => {});
+      console.warn('Deep Research authorization exchange failed', error);
+    });
     return;
   }
   if (message?.type === 'deep-research:from-page') {

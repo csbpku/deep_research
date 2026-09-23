@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 
@@ -28,6 +28,11 @@ const server = createServer(async (request, response) => {
   if (request.method === 'OPTIONS') {
     response.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': 'GET,POST,OPTIONS' });
     response.end();
+    return;
+  }
+  if (url.pathname === '/healthz') {
+    response.writeHead(200, { 'access-control-allow-origin': '*' });
+    response.end('ok');
     return;
   }
   if (url.pathname === '/fixture.html') {
@@ -119,6 +124,13 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const testExtensionRoot = await mkdtemp('/private/tmp/deep-research-reader-pkce-extension-');
+const testExtensionPath = `${testExtensionRoot}/extension`;
+await cp(extensionPath, testExtensionPath, { recursive: true });
+const testManifestPath = `${testExtensionPath}/manifest.json`;
+const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
+testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), 'http://127.0.0.1/*'])];
+await writeFile(testManifestPath, JSON.stringify(testManifest));
 const executablePath = process.env.CHROME_FOR_TESTING
   || [
     '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -130,7 +142,7 @@ const context = await chromium.launchPersistentContext(`/private/tmp/deep-resear
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
-  args: ['--enable-extensions', `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`, '--no-first-run', '--no-default-browser-check'],
+  args: ['--enable-extensions', `--disable-extensions-except=${testExtensionPath}`, `--load-extension=${testExtensionPath}`, '--no-first-run', '--no-default-browser-check'],
 });
 
 try {
@@ -142,20 +154,43 @@ try {
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
   await page.bringToFront();
-  await serviceWorker.evaluate(async () => {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab?.id) throw new Error('fixture tab is not active');
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
-  });
-  await panel.waitForFunction(() => Boolean(document.querySelector('#page-source')?.textContent), null, { timeout: 10_000 });
+  const localPlatformUrl = `http://127.0.0.1:${port}`;
+  await panel.evaluate(async (url) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('deep-research-reader', 4);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction('settings', 'readwrite');
+      transaction.objectStore('settings').put({ id: 'platformUrl', value: url, updatedAt: new Date().toISOString() });
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  }, localPlatformUrl);
+  await serviceWorker.evaluate(async (url) => chrome.storage.local.set({ readerPlatformUrl: url }), localPlatformUrl);
+  await panel.reload({ waitUntil: 'domcontentloaded' });
+  await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true', null, { timeout: 15_000 });
 
   await panel.bringToFront();
   await panel.locator('#settings-button').click();
   await panel.locator('#mode-platform').click();
   await panel.waitForFunction(() => document.querySelector('#storage-status')?.textContent === '平台模式', null, { timeout: 5_000 });
-  await panel.locator('#platform-url').fill(`http://127.0.0.1:${port}`);
+  if (await panel.locator('#platform-url').count()) throw new Error('平台设置仍要求手动填写地址');
+  if ((await panel.locator('#platform-target').innerText()) !== `127.0.0.1:${port}`) throw new Error('平台目标没有读取已配置的平台来源');
   await panel.locator('#connect-platform').click();
+  // The test-only manifest pre-authorizes localhost so headless Chrome can
+  // inject into the fixture without changing the shipped extension's grants.
+  await serviceWorker.evaluate(async (origin) => {
+    const [tab] = await chrome.tabs.query({ url: `${origin}/fixture.html` });
+    if (!tab?.id) throw new Error('fixture tab is missing');
+    const granted = await chrome.permissions.contains({ origins: [`${origin}/*`] });
+    if (!granted) throw new Error('mock platform host permission was not granted');
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  }, localPlatformUrl);
+  await panel.waitForFunction(() => Boolean(document.querySelector('#page-source')?.textContent), null, { timeout: 10_000 });
   for (let attempt = 0; attempt < 30 && authorizationCodes.size === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
   const [code, record] = authorizationCodes.entries().next().value || [];
   if (!code || !record) throw new Error(`mock authorization page was not opened: ${JSON.stringify(received.requests)}`);
@@ -218,7 +253,17 @@ try {
     { timeout: 10_000 },
   );
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
-  await panel.bringToFront();
+  const saveActionState = await panel.locator('#save-selection').evaluate((node) => {
+    const ancestors = [];
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      ancestors.push({ id: current.id, className: current.className, display: style.display, visibility: style.visibility });
+    }
+    return ancestors;
+  });
+  if (saveActionState.some((item) => item.display === 'none' || item.visibility === 'hidden')) {
+    throw new Error(`save-selection hidden after answer: ${JSON.stringify(saveActionState)}`);
+  }
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#confirm-save').click();

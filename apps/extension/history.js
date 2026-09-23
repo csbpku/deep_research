@@ -1,5 +1,6 @@
 import { readerStore } from './reader-store.js';
 import { renderMarkdown } from './markdown-renderer.js';
+import { resolvePlatformOrigin } from './platform-config.js';
 
 let sessions = [];
 let insights = [];
@@ -33,7 +34,7 @@ function sessionIdentity(session) {
 async function loadCloudSessions() {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
   if (!readerToken) return [];
-  const platformUrl = String(await readerStore.getSetting('platformUrl', 'http://localhost:3000')).replace(/\/$/u, '');
+  const platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''));
   try {
     const response = await fetch(`${platformUrl}/api/reading/session`, {
       headers: { authorization: `Bearer ${readerToken}` },

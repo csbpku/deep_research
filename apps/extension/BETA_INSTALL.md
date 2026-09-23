@@ -1,10 +1,10 @@
 # Deep Research Reader 独立 Beta
 
-这是一个可完全独立安装的 Chrome 扩展试用版。它在原网页中提供全文翻译、图片文字翻译、技术解读、连续追问、引用回跳和本地收藏；有 Deep Research 账号时，还可以选择平台模式，把有界会话和确认过的结论同步到调研平台。平台连接不是安装或使用独立模式的前置条件。
+这是一个可完全独立安装的 Chrome 扩展试用版。它在原网页中提供全文翻译、图片文字翻译、技术解读、连续追问、引用回跳和本地收藏；有 Deep Research 账号时，还可以选择平台模式，把有界会话和确认过的结论同步到调研平台。平台模式默认连接 `https://techradar.top`，无需手填地址，也不是独立模式的前置条件。
 
 ## 安装
 
-1. 解压 `deep-research-reader-beta-0.2.3.zip`。
+1. 解压 `deep-research-reader-beta-0.2.4.zip`。
 2. 打开 Chrome 的 `chrome://extensions`，开启“开发者模式”。
 3. 点击“加载已解压的扩展程序”，选择解压后的目录（目录根部应直接包含 `manifest.json`）。
 4. 打开公开技术文章、官方文档、GitHub README 或 Zread 小节，点击工具栏中的 Reader 图标。

@@ -42,7 +42,7 @@
 
 选段工具条支持键盘操作：`Alt+Shift+T` 翻译、`Alt+Shift+E` 解读、`Alt+Shift+Q` 追问、`Alt+Shift+S` 摘录；部分选段翻译会绑定精确 Range，在选区附近显示短译文，不替换原文。图片放大层和选段工具条均可按 `Esc` 关闭，页面阅读位置保持不变。输入框、密码框和可编辑区域内不会拦截这些快捷键。
 
-平台模式是可选增强，不是独立安装的前置条件。连接后，文本技术问答走平台 `/api/reading/answer/stream`；当前页面 URL、标题、选区或有界正文上下文会在用户发起问答时发送给平台。阅读会话只同步 URL、标题、页面版本、选区、讨论、当前回答和滚动位置；用户确认保存的摘录、笔记、AI 结论和来源写入研究库。网页全文档案、图片字节、全文翻译缓存和 API Key 不进入平台数据库。`npm run e2e:pkce` 默认只输出跳过说明；设置 `READER_PLATFORM_E2E=1` 才运行平台集成验收。
+平台模式是可选增强，不是独立安装的前置条件。插件默认连接 `https://techradar.top`，无需填写平台地址。连接后，文本技术问答走平台 `/api/reading/answer/stream`；当前页面 URL、标题、选区或有界正文上下文会在用户发起问答时发送给平台。阅读会话只同步 URL、标题、页面版本、选区、讨论、当前回答和滚动位置；用户确认保存的摘录、笔记、AI 结论和来源写入研究库。网页全文档案、图片字节、全文翻译缓存和 API Key 不进入平台数据库。`npm run e2e:pkce` 默认只输出跳过说明；设置 `READER_PLATFORM_E2E=1` 才运行平台集成验收。
 
 生产环境必须在 Web 服务设置 `READING_EXTENSION_IDS`（逗号分隔的 Chrome 扩展 ID）来限制授权回调来源。Beta `0.2.3+` 内置固定公钥，手动加载和跨机器安装的扩展 ID 统一为
 `doopmkblckigfncakbfcbeajoamgmkmg`；本地开发未设置时允许临时加载的 `chrome-extension://` 回调页。令牌只在扩展本地存储，PKCE verifier 只在浏览器 session storage 中短暂存在，并可通过禁用账号立即失效。
@@ -74,9 +74,9 @@ Beta 白名单分发时，推荐把 ZIP 上传到 GitHub Release 或对象存储
 
 ```bash
 npm run package:beta
-gh release create reader-v0.2.3 \
-  .output/deep-research-reader-beta-0.2.3.zip \
-  --title "Deep Research Reader Beta 0.2.3"
+gh release create reader-v0.2.4 \
+  .output/deep-research-reader-beta-0.2.4.zip \
+  --title "Deep Research Reader Beta 0.2.4"
 ```
 
 WXT 会在构建时生成 Manifest V3 的 service worker、content script、side panel 和授权回调页。源码目录中的静态 Alpha 文件只作为迁移兼容层同步进构建，不应直接作为发布包加载。

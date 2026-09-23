@@ -1,10 +1,10 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test reader-core.test.mjs activation.test.mjs markdown-renderer.test.mjs",
+    "test": "node --test reader-core.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
     "e2e:live-provider": "READER_LIVE=1 node e2e/smoke.mjs",
     "e2e:worker": "node e2e/worker-smoke.mjs",

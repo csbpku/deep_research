@@ -238,7 +238,7 @@ function ReaderPanel() {
             <span id="platform-status" className="connection-badge">未连接</span>
           </div>
           <p className="small">平台模式下，技术问答使用平台模型；阅读会话和确认保存的结论同步到 PostgreSQL。网页全文、图片字节和翻译缓存仍不会上传。</p>
-          <div className="field"><label htmlFor="platform-url">平台地址</label><input id="platform-url" className="input" placeholder="http://localhost:3000" /></div>
+          <p className="small">目标平台：<strong id="platform-target">techradar.top</strong></p>
           <div className="actions">
             <button id="connect-platform" className="primary">连接平台</button>
             <button id="disconnect-platform" className="danger hidden">断开连接</button>

@@ -17,6 +17,12 @@ import {
   translateImage,
 } from './reader-core.js';
 import { renderMarkdown } from './markdown-renderer.js';
+import {
+  DEFAULT_WEB_APP_URL,
+  LEGACY_LOCAL_WEB_APP_URL,
+  normalizePlatformOrigin,
+  resolvePlatformOrigin,
+} from './platform-config.js';
 
 const $ = (id) => document.getElementById(id);
 let provider = null;
@@ -44,7 +50,7 @@ let activeJobRecord = null;
 let pendingJob = null;
 let failedTranslationItems = [];
 let retryingTranslationId = null;
-let platformUrl = 'http://localhost:3000';
+let platformUrl = DEFAULT_WEB_APP_URL;
 let platformConnected = false;
 let readingMode = 'local';
 let sessionSyncTimer = 0;
@@ -376,16 +382,6 @@ function ensureAnnotationDialog() {
 
 function contextUrl() { return documentContext?.url || pageContext?.url || selectionContext?.url || ''; }
 
-function normalizePlatformOrigin(value) {
-  try {
-    const url = new URL(String(value || '').trim());
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
-    return url.origin;
-  } catch {
-    return '';
-  }
-}
-
 function normalizeRadarSummaryId(value) {
   const candidate = String(value || '').trim();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(candidate)
@@ -406,17 +402,19 @@ function applyRadarEntryContext(context) {
   if (summaryId) radarEntrySummaryId = summaryId;
 
   const configuredOrigin = normalizePlatformOrigin(platformUrl);
-  const canPrefill = !configuredOrigin || configuredOrigin === 'http://localhost:3000';
-  if (hintedOrigin && canPrefill) {
+  const canUseHint = !configuredOrigin
+    || configuredOrigin === LEGACY_LOCAL_WEB_APP_URL
+    || configuredOrigin === DEFAULT_WEB_APP_URL;
+  if (hintedOrigin && canUseHint) {
     platformUrl = hintedOrigin;
-    if ($('platform-url')) $('platform-url').value = hintedOrigin;
+    updatePlatformTarget();
   }
 
   const promptKey = `${summaryId}:${hintedOrigin}`;
   if (!promptKey || promptKey === ':') return;
   if (promptKey === radarEntryPromptKey || platformConnected) return;
   radarEntryPromptKey = promptKey;
-  setNotice('这篇内容来自雷达。平台地址已预填；如需同步，请在设置中明确点击“连接平台”。');
+  setNotice('这篇内容来自调研平台雷达；连接后可同步会话和确认保存的结论。');
 }
 
 function persistJobPatch(job, patch) {
@@ -843,7 +841,7 @@ function renderPage() {
   const scopeNotice = $('scope-notice');
   const scopeWarnings = Array.isArray(context.scopeWarnings) ? context.scopeWarnings.filter(Boolean) : [];
   if (context.entrySource === 'radar') {
-    scopeWarnings.unshift('来自 Deep Research 雷达。平台地址已预填，连接和同步仍需你的明确操作。');
+    scopeWarnings.unshift('来自 Deep Research 雷达。连接和同步仍需你的明确操作。');
   }
   if (scopeNotice) {
     scopeNotice.textContent = scopeWarnings.join('\n');
@@ -1147,7 +1145,7 @@ function setPlatformConnected(connected, message = '') {
   if (!$('platform-status')) return;
   show($('connect-platform'), !connected);
   show($('disconnect-platform'), connected);
-  $('platform-status').textContent = message || (connected ? `已连接 · ${platformUrl}` : '未连接');
+  $('platform-status').textContent = message || (connected ? '已连接 Deep Research' : '未连接');
   $('platform-status').classList.toggle('connected', connected);
   show($('sync-selection'), connected && Boolean(lastSavedInsight));
   show($('sync-session'), connected && Boolean(contextUrl()));
@@ -1156,29 +1154,67 @@ function setPlatformConnected(connected, message = '') {
   renderEmptyState();
 }
 
+function updatePlatformTarget() {
+  if (!$('platform-target')) return;
+  platformUrl = resolvePlatformOrigin(platformUrl, radarEntryPlatformUrl);
+  $('platform-target').textContent = new URL(platformUrl).host;
+}
+
 async function loadPlatformState() {
   if (!$('platform-status')) return;
   const stateRead = platformStateEvents;
-  const configuredUrl = normalizePlatformOrigin(await readerStore.getSetting('platformUrl', ''));
-  platformUrl = configuredUrl || radarEntryPlatformUrl || 'http://localhost:3000';
-  $('platform-url').value = platformUrl;
-  const stored = await chrome.storage.local.get(['readerToken']);
+  const [databaseUrl, localState] = await Promise.all([
+    readerStore.getSetting('platformUrl', ''),
+    chrome.storage.local.get(['readerToken', 'readerPlatformUrl']),
+  ]);
+  const configuredUrl = databaseUrl || localState.readerPlatformUrl || '';
+  platformUrl = resolvePlatformOrigin(configuredUrl, radarEntryPlatformUrl);
+  updatePlatformTarget();
+  let hasToken = Boolean(localState.readerToken);
+  if (normalizePlatformOrigin(configuredUrl) === LEGACY_LOCAL_WEB_APP_URL) {
+    await Promise.all([
+      readerStore.setSetting('platformUrl', platformUrl),
+      chrome.storage.local.set({ readerPlatformUrl: platformUrl }),
+    ]);
+    if (platformUrl !== LEGACY_LOCAL_WEB_APP_URL && hasToken) {
+      await chrome.storage.local.remove('readerToken');
+      hasToken = false;
+    }
+  }
   if (stateRead !== platformStateEvents) return;
-  setPlatformConnected(Boolean(stored.readerToken));
+  setPlatformConnected(hasToken);
 }
 
 async function connectPlatform() {
-  platformUrl = $('platform-url').value.trim().replace(/\/$/u, '');
-  if (!/^https?:\/\//u.test(platformUrl)) {
-    setPlatformConnected(false, '平台地址必须使用 HTTP(S)');
+  platformUrl = resolvePlatformOrigin(platformUrl, radarEntryPlatformUrl);
+  updatePlatformTarget();
+  try {
+    const granted = await requestSpecificOrigin(platformUrl);
+    if (!granted) { setPlatformConnected(false, '没有获得平台访问权限'); return; }
+  } catch (error) {
+    setPlatformConnected(false, error instanceof Error ? error.message : '无法获得平台访问权限');
     return;
   }
-  const granted = await requestSpecificOrigin(platformUrl);
-  if (!granted) { setPlatformConnected(false, '没有获得平台访问权限'); return; }
-  await readerStore.setSetting('platformUrl', platformUrl);
-  await chrome.storage.local.set({ readerPlatformUrl: platformUrl });
-  setPlatformConnected(false, '正在打开平台登录…');
-  chrome.runtime.sendMessage({ type: 'deep-research:connect' }).catch(() => setPlatformConnected(false, '无法打开平台授权页'));
+
+  try {
+    const response = await fetch(`${platformUrl}/healthz`, { cache: 'no-store', signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    setPlatformConnected(false, `无法连接调研平台（${new URL(platformUrl).host}），请检查网络后重试`);
+    return;
+  }
+
+  await Promise.all([
+    readerStore.setSetting('platformUrl', platformUrl),
+    chrome.storage.local.set({ readerPlatformUrl: platformUrl }),
+  ]);
+  setPlatformConnected(false, '正在打开 Deep Research 登录…');
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'deep-research:connect' });
+    if (!result?.ok) throw new Error(result?.message || '无法打开平台授权页');
+  } catch (error) {
+    setPlatformConnected(false, error instanceof Error ? error.message : '无法打开平台授权页');
+  }
 }
 
 async function disconnectPlatform() {
@@ -2484,7 +2520,7 @@ async function init() {
     openDiscussion(activeDiscussionScope(), 'ask');
   });
   $('refresh-library').addEventListener('click', () => void updateLibrary());
-  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice('翻译缓存已清除。', $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm('清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。')) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = 'http://localhost:3000'; setPlatformConnected(false); await loadTargetLanguage(); applyProviderFields(); setNotice('本地阅读数据已清除。', $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); provider = await loadProvider(); await loadTargetLanguage(); if ($('platform-url')) { platformUrl = await readerStore.getSetting('platformUrl', 'http://localhost:3000'); $('platform-url').value = platformUrl; } applyProviderFields(); setNotice('阅读数据已导入。', $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof Error ? error.message : '导入失败', $('settings-notice')); } });
+  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice('翻译缓存已清除。', $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm('清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。')) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false); await loadTargetLanguage(); applyProviderFields(); setNotice('本地阅读数据已清除。', $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); provider = await loadProvider(); await loadTargetLanguage(); platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice('阅读数据已导入。', $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof Error ? error.message : '导入失败', $('settings-notice')); } });
   await updateLibrary();
   void restorePendingPageAction();
   // The content script can report page context before React finishes loading
