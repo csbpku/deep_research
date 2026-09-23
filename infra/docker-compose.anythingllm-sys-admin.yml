@@ -1,0 +1,6 @@
+# Only add this override on hosts where AnythingLLM's optional Chromium
+# sandbox requires SYS_ADMIN. Keep the default service capability-free.
+services:
+  anythingllm:
+    cap_add:
+      - SYS_ADMIN

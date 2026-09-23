@@ -1411,10 +1411,18 @@ async def _topic_proposal_loop(app_instance: FastAPI) -> None:
             )
 
 
+def _api_documentation_enabled() -> bool:
+    return os.environ.get("AI_ENGINE_OPENAPI_ENABLED", "0").strip().lower() in {"1", "true"}
+
+
+_api_docs_enabled = _api_documentation_enabled()
 app = FastAPI(
     title="Deep Research AI Engine",
     version="0.1.0",
     lifespan=_lifespan,
+    openapi_url="/openapi.json" if _api_docs_enabled else None,
+    docs_url="/docs" if _api_docs_enabled else None,
+    redoc_url=None,
 )
 
 from ai_engine.radar.sync_endpoint import router as radar_router  # noqa: E402

@@ -30,6 +30,7 @@ services:
     image: ${AI_ENGINE_IMAGE:?set AI_ENGINE_IMAGE to a registry image}
     build: !reset null
     environment:
+      AI_ENGINE_OPENAPI_ENABLED: "0"
       # Keep the small VPS deployment free of the Chromium sidecar even when
       # an older host .env still contains RADAR_RENDER_REVIEW_ENABLED=1.
       RADAR_RENDER_REVIEW_ENABLED: "0"

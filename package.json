@@ -14,7 +14,15 @@
       "esbuild",
       "prisma",
       "sharp"
-    ]
+    ],
+    "overrides": {
+      "@auth/core": "0.41.3",
+      "baseline-browser-mapping": "2.11.0",
+      "browserslist": "4.28.7",
+      "nanoid@3": "3.3.18",
+      "postcss": "8.5.23",
+      "sharp": "0.35.4"
+    }
   },
   "scripts": {
     "db:deploy": "pnpm --filter @deep-research/web db:deploy",

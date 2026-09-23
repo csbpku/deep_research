@@ -5,6 +5,8 @@ node_modules
 .git
 .env
 **/.env
+.env*
+**/.env*
 infra/backups
 infra/logs
 infra/certs

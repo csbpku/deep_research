@@ -270,6 +270,15 @@ try {
   }
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 10_000 });
+  await serviceWorker.evaluate(async (origin) => {
+    const [tab] = await chrome.tabs.query({ url: `${origin}/fixture.html` });
+    if (!tab?.id) throw new Error('fixture tab is missing before save');
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  }, localPlatformUrl);
+  await panel.waitForTimeout(300);
+  if (await panel.locator('#page-view').isVisible() || await panel.locator('#persistent-composer').isVisible()) {
+    throw new Error('page context update covered the save dialog');
+  }
   await panel.locator('#confirm-save').click();
   try {
     await panel.locator('#sync-selection').waitFor({ state: 'visible', timeout: 10_000 });

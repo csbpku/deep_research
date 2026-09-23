@@ -30,7 +30,7 @@ export default defineConfig({
   manifestVersion: 3,
   manifest: {
     name: 'Deep Research Reader',
-    version: '0.2.5',
+    version: '0.2.6',
     // Stable public key keeps the manually loaded Beta extension ID stable
     // across machines, so platform PKCE can use one production allowlist.
     key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtxMIP3V5lxVc7vAYUePEYM/tvFsFHyymxv+aYmU+sClPIN/U0wOiQcyjf5kWAHHMicir7XQd5tk387537mQJY2bk8kPSkRU0ITHxKXWNsREkkOxzZD6dikADBF/JI6rETy8JGDEo9x83vbYkDebz5cLEVHxFGjQ+PyyxIxrHfeZHcI7ReTHW36FoVl4+1i4wWF5kthRbmfZw8NEstWeJ9ev0CZsPbRp04KNP65uKwMLms0CkDd76WOt1DoO93ZpI8cwME22x2PlW9V2C/cJBIDDz1DTP4fjrfq0oFBQPseaSc2Mf//3KDfWYKuz6zDyhEi/kb475tv0ugJpwjoQy3wIDAQAB',

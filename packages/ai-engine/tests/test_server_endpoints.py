@@ -23,6 +23,7 @@ from httpx import ASGITransport
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.server.app import (
     app,
+    _api_documentation_enabled,
     _make_draft_factory,
     _merge_auto_radar_refs,
     _is_idempotency_replay,
@@ -41,6 +42,13 @@ from ai_engine.job_runner.store import InMemoryJobStore, make_job_snapshot
 # 轮询窗口:5s;fake adapter 正常 51ms 跑完,留余量
 _POLL_TIMEOUT_SECONDS = 5.0
 _POLL_INTERVAL_SECONDS = 0.05
+
+
+def test_api_documentation_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_ENGINE_OPENAPI_ENABLED", raising=False)
+    assert _api_documentation_enabled() is False
+    monkeypatch.setenv("AI_ENGINE_OPENAPI_ENABLED", "1")
+    assert _api_documentation_enabled() is True
 
 
 def test_recovery_config_is_bounded_and_tolerates_invalid_env(

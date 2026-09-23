@@ -827,6 +827,10 @@ function returnLatestAnswerToSource() {
 }
 
 function renderPage() {
+  if (['settings-view', 'save-dialog', 'annotation-dialog'].some((id) => {
+    const view = $(id);
+    return view && !view.classList.contains('hidden');
+  })) return;
   const context = pageContext || documentContext || selectionContext;
   show($('empty-view'), !context);
   show($('page-view'), Boolean(context));

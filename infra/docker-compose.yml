@@ -130,6 +130,7 @@ services:
       JOB_RUNNER_BACKEND: db
       AI_ENGINE_ADAPTER: ${AI_ENGINE_ADAPTER:-gpt_researcher}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?set in .env}
+      AI_ENGINE_OPENAPI_ENABLED: ${AI_ENGINE_OPENAPI_ENABLED:-0}
       # Canonical purpose-based routing. Legacy slots below remain for
       # compatibility with older gpt-researcher integrations.
       RESEARCH_LLM: ${RESEARCH_LLM:-}
@@ -256,7 +257,7 @@ services:
   # workspace through the web UI over an SSH tunnel; the AI engine reaches it
   # at http://anythingllm:3001 on the Compose network.
   anythingllm:
-    image: ghcr.io/mintplex-labs/anything-llm:latest
+    image: ghcr.io/mintplex-labs/anything-llm@sha256:958e09fd9888feb63f69cc6a28bf53887f05055037a80a896abb92bfde91c426
     restart: unless-stopped
     logging: *json-logging
     environment:
@@ -267,8 +268,6 @@ services:
       - "127.0.0.1:3001:3001"
     expose:
       - "3001"
-    cap_add:
-      - SYS_ADMIN
     volumes:
       - anythingllm-storage:/app/server/storage
       - anythingllm-hotdir:/app/collector/hotdir

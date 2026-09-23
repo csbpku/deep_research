@@ -4,7 +4,7 @@
 
 ## 安装
 
-1. 解压 `deep-research-reader-beta-0.2.5.zip`。
+1. 解压 `deep-research-reader-beta-0.2.6.zip`。
 2. 打开 Chrome 的 `chrome://extensions`，开启“开发者模式”。
 3. 点击“加载已解压的扩展程序”，选择解压后的目录（目录根部应直接包含 `manifest.json`）。
 4. 打开公开技术文章、官方文档、GitHub README 或 Zread 小节，点击工具栏中的 Reader 图标。
