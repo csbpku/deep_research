@@ -72,9 +72,10 @@ AI engine 镜像偏大的原因有两层：
 
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。
 2. 推送到 GHCR 对应的两个 `<commit-sha>` 镜像，同时更新 `latest`。
-3. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS。
-4. VPS 拉取固定 SHA 镜像，使用现有 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
-5. 通过 `/healthz` 和 `/ai-healthz` 做发布后检查；失败时尝试恢复上一个镜像 SHA。
+3. 构建并校验 Reader Beta ZIP。版本号来自扩展 manifest；工作流创建不可覆盖的 `reader-v<version>` GitHub Pre-release，并导出资产 SHA-256。扩展源码变更但未升版本，或已有 release 资产缺失/不匹配时，发布失败，不会覆盖旧资产。
+4. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS；只更新 `.env` 中的 `READING_EXTENSION_BETA_URL`、`READING_EXTENSION_BETA_PATH`、`READING_EXTENSION_BETA_VERSION` 和 `READING_EXTENSION_BETA_SHA256`，并在失败回滚时恢复这四项原值。
+5. VPS 拉取固定 SHA 镜像，使用更新后的 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
+6. 通过 `/healthz` 和 `/ai-healthz` 做发布后检查；失败时恢复 Beta 配置并尝试恢复上一个镜像 SHA。
 
 发布脚本会并行拉取两个核心服务镜像，再统一启动 Compose；单个镜像仍保留
 15 分钟超时和 3 次重试，失败时沿用原有回滚流程。这样发布耗时主要取决于最慢的

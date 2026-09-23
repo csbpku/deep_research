@@ -81,10 +81,155 @@ jobs:
           cache-from: type=gha,scope=ai-image
           cache-to: type=gha,mode=max,scope=ai-image
 
+  publish-reader-beta:
+    name: Publish Reader Beta release
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    needs: publish-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      sha256: ${{ steps.release.outputs.sha256 }}
+      url: ${{ steps.release.outputs.url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out tested commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Resolve immutable Beta release
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./apps/extension/package.json').version")"
+          manifest_version="$(node -p "require('./apps/extension/manifest.json').version")"
+          [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || {
+            echo "Extension version must be valid semver" >&2
+            exit 1
+          }
+          test "$package_version" = "$manifest_version" || {
+            echo "Extension package and manifest versions differ" >&2
+            exit 1
+          }
+          tag="reader-v$package_version"
+
+          previous_sha="$(git rev-parse "$SOURCE_SHA^" 2>/dev/null || true)"
+          if [ -n "$previous_sha" ] && ! git diff --quiet "$previous_sha" "$SOURCE_SHA" -- apps/extension ':!apps/extension/README.md'; then
+            previous_version="$(git show "$previous_sha:apps/extension/manifest.json" 2>/dev/null | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(text).version));' || true)"
+            if [ "$previous_version" = "$package_version" ]; then
+              echo "Extension source changed without a version bump; update the extension version before publishing" >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_sha="$(git rev-list -n 1 "$tag")"
+            git diff --quiet "$release_sha" "$SOURCE_SHA" -- apps/extension ':!apps/extension/README.md' || {
+              echo "$tag already points to different extension sources; bump the version" >&2
+              exit 1
+            }
+            is_prerelease="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')"
+            test "$is_prerelease" = true || {
+              echo "$tag already exists but is not a pre-release" >&2
+              exit 1
+            }
+            publish=false
+          else
+            publish=true
+          fi
+
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "asset=deep-research-reader-beta-$package_version.zip" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: Set up pnpm
+        if: steps.metadata.outputs.publish == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        if: steps.metadata.outputs.publish == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Build extension Beta package
+        if: steps.metadata.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm --filter @deep-research/reader-extension build
+          pnpm --filter @deep-research/reader-extension package:beta
+          archive="apps/extension/.output/${{ steps.metadata.outputs.asset }}"
+          unzip -tq "$archive"
+          archive_version="$(unzip -p "$archive" manifest.json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(text).version));')"
+          test "$archive_version" = "${{ steps.metadata.outputs.version }}"
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+        id: build
+
+      - name: Publish versioned pre-release
+        if: steps.metadata.outputs.publish == 'true'
+        id: create_release
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="apps/extension/.output/${{ steps.metadata.outputs.asset }}"
+          sha256="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          notes=$(printf 'Deep Research Reader Beta %s.\n\n- Install the standalone extension from the attached ZIP.\n- Platform mode connects after signing in to Deep Research.\n- SHA-256: `%s`' \
+            "${{ steps.metadata.outputs.version }}" "$sha256")
+          gh release create "${{ steps.metadata.outputs.tag }}" "$archive" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "Deep Research Reader Beta ${{ steps.metadata.outputs.version }}" \
+            --prerelease \
+            --notes "$notes"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Verify existing pre-release asset
+        if: steps.metadata.outputs.publish == 'false'
+        id: existing_release
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_dir="$RUNNER_TEMP/reader-beta-${{ steps.metadata.outputs.version }}"
+          mkdir -p "$archive_dir"
+          gh release download "${{ steps.metadata.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${{ steps.metadata.outputs.asset }}" \
+            --dir "$archive_dir"
+          archive="$archive_dir/${{ steps.metadata.outputs.asset }}"
+          unzip -tq "$archive"
+          archive_version="$(unzip -p "$archive" manifest.json | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(text).version));')"
+          test "$archive_version" = "${{ steps.metadata.outputs.version }}"
+          echo "sha256=$(sha256sum "$archive" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Export Beta release metadata
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "version=${{ steps.metadata.outputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.metadata.outputs.publish }}" = true ]; then
+            sha256="${{ steps.create_release.outputs.sha256 }}"
+          else
+            sha256="${{ steps.existing_release.outputs.sha256 }}"
+          fi
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/$GITHUB_REPOSITORY/releases/download/${{ steps.metadata.outputs.tag }}/${{ steps.metadata.outputs.asset }}" >> "$GITHUB_OUTPUT"
+
   deploy:
     name: Deploy tested images to VPS
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    needs: publish-images
+    needs: [publish-images, publish-reader-beta]
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -95,6 +240,9 @@ jobs:
       IMAGE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       WEB_IMAGE: ghcr.io/csbpku/deep-research/web:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       AI_ENGINE_IMAGE: ghcr.io/csbpku/deep-research/ai-engine:${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      READER_BETA_URL: ${{ needs.publish-reader-beta.outputs.url }}
+      READER_BETA_VERSION: ${{ needs.publish-reader-beta.outputs.version }}
+      READER_BETA_SHA256: ${{ needs.publish-reader-beta.outputs.sha256 }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH || '/opt/deep_research' }}
@@ -119,6 +267,9 @@ jobs:
           test -n "$VPS_KNOWN_HOSTS" || { echo "VPS_KNOWN_HOSTS is required"; exit 1; }
           test -n "$VPS_SSH_KEY" || { echo "VPS_SSH_KEY is required"; exit 1; }
           test -n "$VPS_DEPLOY_PATH" || { echo "VPS_DEPLOY_PATH is required"; exit 1; }
+          test -n "$READER_BETA_URL" || { echo "Reader Beta release URL is required"; exit 1; }
+          test -n "$READER_BETA_VERSION" || { echo "Reader Beta version is required"; exit 1; }
+          [[ "$READER_BETA_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Reader Beta SHA-256 is invalid"; exit 1; }
           if [ -n "$GHCR_READ_TOKEN" ] && [ -z "$GHCR_USERNAME" ]; then
             echo "GHCR_USERNAME is required when GHCR_READ_TOKEN is set"
             exit 1
@@ -185,12 +336,70 @@ jobs:
              IMAGE_TAG=$(quote_for_shell "$IMAGE_TAG") \
              WEB_IMAGE=$(quote_for_shell "$WEB_IMAGE") \
              AI_ENGINE_IMAGE=$(quote_for_shell "$AI_ENGINE_IMAGE") \
+             READER_BETA_URL=$(quote_for_shell "$READER_BETA_URL") \
+             READER_BETA_VERSION=$(quote_for_shell "$READER_BETA_VERSION") \
+             READER_BETA_SHA256=$(quote_for_shell "$READER_BETA_SHA256") \
              bash -s" <<'REMOTE_SCRIPT'
           set -Eeuo pipefail
 
           cd "$DEPLOY_PATH"
           test -f .env
           test -f infra/docker-compose.registry.yml
+          test "$(stat -c '%u' .env)" = "$(id -u)" || {
+            echo "The deployment account must own .env to update Reader Beta metadata without changing file ownership" >&2
+            exit 1
+          }
+
+          beta_env_backup="$(mktemp "$DEPLOY_PATH/.env.reader-beta.XXXXXX")"
+          cp -p .env "$beta_env_backup"
+          chmod 600 "$beta_env_backup"
+          beta_env_updated=0
+
+          set_env_value() {
+            local key="$1" value="$2" tmp mode
+            tmp="$(mktemp "$DEPLOY_PATH/.env.reader-beta-write.XXXXXX")"
+            mode="$(stat -c '%a' .env)"
+            if ! awk -v key="$key" -v value="$value" '
+              BEGIN { prefix = key "="; found = 0 }
+              index($0, prefix) == 1 {
+                if (!found) print prefix value
+                found = 1
+                next
+              }
+              { print }
+              END { if (!found) print prefix value }
+            ' .env > "$tmp"; then
+              rm -f "$tmp"
+              return 1
+            fi
+            chgrp --reference=.env "$tmp"
+            chmod "$mode" "$tmp"
+            mv -f "$tmp" .env
+          }
+
+          remove_env_value() {
+            local key="$1" tmp
+            tmp="$(mktemp "$DEPLOY_PATH/.env.reader-beta-write.XXXXXX")"
+            if ! awk -v key="$key" 'index($0, key "=") != 1 { print }' .env > "$tmp"; then
+              rm -f "$tmp"
+              return 1
+            fi
+            chgrp --reference=.env "$tmp"
+            chmod "$(stat -c '%a' .env)" "$tmp"
+            mv -f "$tmp" .env
+          }
+
+          restore_beta_env() {
+            local key value
+            for key in READING_EXTENSION_BETA_URL READING_EXTENSION_BETA_PATH READING_EXTENSION_BETA_VERSION READING_EXTENSION_BETA_SHA256; do
+              if grep -q "^${key}=" "$beta_env_backup"; then
+                value="$(awk -v key="$key" 'index($0, key "=") == 1 { sub("^[^=]*=", ""); print; exit }' "$beta_env_backup")"
+                set_env_value "$key" "$value"
+              else
+                remove_env_value "$key"
+              fi
+            done
+          }
 
           compose=(docker compose
             --env-file .env
@@ -198,14 +407,13 @@ jobs:
             -f infra/docker-compose.registry.yml)
           previous_tag="$(cat .deployed-image-tag 2>/dev/null || true)"
 
-          is_release_tag() {
-            [[ "$1" =~ ^[0-9a-f]{40}$ ]]
-          }
-
           rollback() {
             status=$?
-            echo "[deploy] release failed; preserving logs and attempting image rollback" >&2
-            if is_release_tag "$previous_tag"; then
+            trap - ERR
+            set +e
+            echo "[deploy] release failed; restoring previous Beta config and attempting image rollback" >&2
+            if [ "$beta_env_updated" -eq 1 ]; then restore_beta_env || true; fi
+            if [[ "$previous_tag" =~ ^[0-9a-f]{40}$ ]]; then
               export WEB_IMAGE="ghcr.io/csbpku/deep-research/web:$previous_tag"
               export AI_ENGINE_IMAGE="ghcr.io/csbpku/deep-research/ai-engine:$previous_tag"
               timeout --signal=TERM --kill-after=30s 10m \
@@ -216,9 +424,16 @@ jobs:
               echo "[deploy] no valid previous registry SHA; skipping image rollback" >&2
             fi
             "${compose[@]}" ps || true
+            rm -f "$beta_env_backup"
             exit "$status"
           }
           trap rollback ERR
+
+          beta_env_updated=1
+          set_env_value READING_EXTENSION_BETA_URL "$READER_BETA_URL"
+          set_env_value READING_EXTENSION_BETA_PATH ""
+          set_env_value READING_EXTENSION_BETA_VERSION "$READER_BETA_VERSION"
+          set_env_value READING_EXTENSION_BETA_SHA256 "$READER_BETA_SHA256"
 
           echo "[deploy] validating compose configuration"
           "${compose[@]}" config --quiet
@@ -278,6 +493,7 @@ jobs:
           wait_for_endpoint web http://127.0.0.1/healthz
           wait_for_endpoint ai http://127.0.0.1/ai-healthz
           printf '%s\n' "$IMAGE_TAG" > .deployed-image-tag
+          rm -f "$beta_env_backup"
           trap - ERR
           "${compose[@]}" ps
           echo "[deploy] release $IMAGE_TAG is healthy"

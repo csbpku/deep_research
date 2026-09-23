@@ -66,18 +66,16 @@ Beta 交付边界见 [PRIVACY.md](./PRIVACY.md)、[COMPATIBILITY.md](./COMPATIBI
 - `npm run package`：生成 Chrome ZIP `.output/deep-researchreader-extension-<version>-chrome.zip`，用于商店上传或分发给测试用户。
 - `npm run package:beta`：把已生成的 `.output/chrome-mv3`、安装说明、隐私边界和兼容矩阵打成 `.output/deep-research-reader-beta-<version>.zip`；这是给个人和小团队解压后加载的独立试用包。
 
-Beta 白名单分发时，推荐把 ZIP 上传到 GitHub Release 或对象存储，再在 Web 服务配置
-`READING_EXTENSION_BETA_URL`、`READING_EXTENSION_BETA_VERSION` 和
-`READING_EXTENSION_BETA_SHA256`。用户统一访问调研平台的
-`/reading/install` 页面，登录后由 `/api/reading/extension/download` 受保护地代理下载；
-不要把本机 `apps/extension/.output` 路径当成用户地址。GitHub Release 的示例命令：
+Beta 白名单分发由仓库的 Deploy 工作流统一发布：CI 成功后，工作流构建并校验 ZIP，
+创建不可覆盖的 `reader-v<version>` GitHub Pre-release，再把下载 URL、版本和 SHA-256
+写入 VPS `.env` 的 `READING_EXTENSION_BETA_*` 配置，最后部署并做健康检查。发布新扩展时，
+必须同步提升 `package.json`、`manifest.json` 和 WXT manifest 的版本；扩展源码变更但未升版
+会让工作流失败。已有版本不会被覆盖，修订必须使用新版本号。
 
-```bash
-npm run package:beta
-gh release create reader-v0.2.4 \
-  .output/deep-research-reader-beta-0.2.4.zip \
-  --title "Deep Research Reader Beta 0.2.4"
-```
+用户统一访问调研平台的 `/reading/install` 页面，登录后由
+`/api/reading/extension/download` 受保护地代理下载；不要把本机
+`apps/extension/.output` 路径当成用户地址。`npm run package:beta` 仍可在本地生成 ZIP，
+用于安装前检查，但不替代工作流中的 Release 发布和平台配置更新。
 
 WXT 会在构建时生成 Manifest V3 的 service worker、content script、side panel 和授权回调页。源码目录中的静态 Alpha 文件只作为迁移兼容层同步进构建，不应直接作为发布包加载。
 
