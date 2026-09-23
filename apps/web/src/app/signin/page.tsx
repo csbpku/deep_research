@@ -25,6 +25,8 @@ export default async function SignInPage({
   const googleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
   const githubConfigured = Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET);
   const googleOnly = env.AUTH_GOOGLE_ONLY;
+  const betaMode = env.AUTH_BETA_MODE;
+  const emailVerification = env.AUTH_EMAIL_VERIFICATION;
   const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
   const authAllowed = isProductionAuthAllowed(
@@ -82,13 +84,21 @@ export default async function SignInPage({
       {error ? (
         <p role="alert" className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-left text-sm text-destructive">
           {error === 'AccessDenied'
-            ? googleOnly
+            ? betaMode
+              ? '当前为 Beta 测试，仅限管理员白名单中的邮箱登录。'
+              : googleOnly
               ? 'Google 账号未能完成登录，或账号已被禁用。'
               : 'OAuth 账号未能完成登录，或账号已被禁用。'
             : '登录失败，请稍后重试或检查账号信息。'}
         </p>
       ) : null}
-      {!googleOnly && authAllowed ? <PasswordAuthForms callbackUrl={callbackUrl} /> : !googleOnly ? (
+      {!googleOnly && authAllowed ? (
+        <PasswordAuthForms
+          callbackUrl={callbackUrl}
+          betaMode={betaMode}
+          emailVerification={emailVerification}
+        />
+      ) : !googleOnly ? (
         <p role="alert" className="mt-6 rounded-lg border border-warning-border bg-warning-bg/40 p-4 text-left text-sm leading-6 text-warning-fg">
           当前连接未启用 HTTPS。为保护密码和会话，邮箱密码登录与邀请码激活已暂停，请先通过 HTTPS 访问本站。
         </p>

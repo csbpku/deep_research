@@ -6,6 +6,7 @@ import { getWebEnv } from '@/lib/env';
 import { prisma } from '@/lib/db';
 import { withRequestId } from '@/lib/log';
 import { RadarIdParam } from '@/lib/schemas';
+import { radarEnrichmentEnabled, radarEnrichmentPauseReason } from '@/lib/radar/runtime-flags';
 
 function isVisibleRadarSummary(summary: {
   source: string;
@@ -20,6 +21,18 @@ function isVisibleRadarSummary(summary: {
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
+  if (!radarEnrichmentEnabled()) {
+    return NextResponse.json(
+      {
+        queued: false,
+        paused: true,
+        code: 'RADAR_ENRICHMENT_PAUSED',
+        message: `雷达 enrichment 当前已暂停（${radarEnrichmentPauseReason()}）。原文保留在数据库中。`,
+        requestId,
+      },
+      { status: 409 },
+    );
+  }
   const parsed = RadarIdParam.safeParse(await ctx.params);
   if (!parsed.success) {
     return NextResponse.json({ message: 'id 必须为 UUID', requestId }, { status: 400 });

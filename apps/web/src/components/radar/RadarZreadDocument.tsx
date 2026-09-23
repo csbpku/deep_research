@@ -4,7 +4,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, ExternalLink, Eye, FileCode2, GitBranch, GitCommitHorizontal, Loader2, RefreshCw, Sparkles, X } from 'lucide-react';
 
 import MarkdownContent from '../MarkdownContent';
-import { isZreadRepository, ZREAD_SAMPLE_URL } from './radar-repository';
+import { isZreadRepository, zreadRepositoryUrl, ZREAD_SAMPLE_URL } from './radar-repository';
 import { cn } from '@/lib/utils';
 import {
   decodeRadarTextEscapes,
@@ -342,7 +342,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
       : provider === 'zread-cli'
         ? 'Zread CLI（历史缓存）'
         : '项目文档';
-  const zreadUrl = repositoryUrl.replace(/^https?:\/\/github\.com\//u, 'https://zread.ai/').replace(/\/$/u, '');
+  const zreadUrl = zreadRepositoryUrl(repositoryUrl);
   const [activeId, setActiveId] = useState('repo-doc-page-0');
   const [retrying, setRetrying] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -884,7 +884,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
       <div className="mt-7 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--ink-rule)] pt-3 text-[10px] text-[var(--ink-faint)]">
         <span>{providerLabel} · {cacheStatus}</span>
         <span>commit {displayCommit === '未生成' ? displayCommit : displayCommit.slice(0, 8)}</span>
-        {provider === 'zread-remote' ? (
+        {provider === 'zread-remote' && zreadUrl ? (
           <a href={zreadUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--ink-accent)] hover:underline">
             查看 Zread 来源 <ExternalLink className="size-3" />
           </a>

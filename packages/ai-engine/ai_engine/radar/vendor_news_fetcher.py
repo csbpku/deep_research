@@ -228,8 +228,25 @@ def _extract_article_text(html: str) -> str:
     # Decode named and numeric entities after stripping tags. Vendor page
     # titles and article text otherwise leak values such as ``&#x27;``.
     text = _html.unescape(text)
+    # Hugging Face's current article shell can leak a Tailwind selector
+    # fragment from a hidden heading into text extraction.
+    text = _re.sub(r"\b[^\s<]{0,80}\]:hidden[^\s<]{0,40}>\s*", " ", text)
     text = _re.sub(r"\n\s*\n", "\n\n", text)
-    lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) > 5]
+    chrome = {
+        "hugging face",
+        "log in",
+        "sign up",
+        "back to articles",
+        "upvote",
+        "follow",
+    }
+    lines = [
+        line.strip()
+        for line in text.split("\n")
+        if line.strip()
+        and len(line.strip()) > 5
+        and line.strip().casefold() not in chrome
+    ]
     return "\n".join(lines)
 
 
@@ -321,6 +338,12 @@ def _extract_article_title(html: str) -> str | None:
         return None
     value = _re.sub(r"<[^>]+>", " ", match.group(1))
     value = _html.unescape(value)
+    value = _re.sub(
+        r"^[^>\n]{0,160}(?:hidden|sr-only|visually-hidden)[^>\n]*>\s*",
+        "",
+        value,
+        flags=_re.IGNORECASE,
+    )
     value = _re.sub(r"\s+", " ", value).strip()
     return value[:200] if len(value) > 5 else None
 

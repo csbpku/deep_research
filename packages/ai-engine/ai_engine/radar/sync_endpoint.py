@@ -177,6 +177,14 @@ async def enqueue_highlights(
     _token: None = Depends(_require_internal_token),
 ) -> dict[str, Any]:
     """Batch re-generate highlights for web/rss candidates."""
+    if not _enrichment_allowed():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RADAR_ENRICHMENT_PAUSED",
+                "message": "雷达 enrichment 当前已暂停，原文保留在数据库中。",
+            },
+        )
     import json as _json
     import structlog
 
@@ -223,6 +231,14 @@ async def enqueue_radar_enrichment(
     _token: None = Depends(_require_internal_token),
 ) -> dict[str, Any]:
     """Queue explicit deep-dive enrichment for selected radar candidates."""
+    if not _enrichment_allowed():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RADAR_ENRICHMENT_PAUSED",
+                "message": "雷达 enrichment 当前已暂停，原文保留在数据库中。",
+            },
+        )
     summary_ids = tuple(dict.fromkeys(body.summary_ids))
     run_id, queued_ids = await request_enrichment_run(
         pool,
@@ -231,21 +247,23 @@ async def enqueue_radar_enrichment(
     )
 
     async def _run_body() -> None:
+        completed_ids: list[str] = []
         enriched = await run_enrichment_for_pending(
             pool,
             limit=len(summary_ids),
             summary_ids=summary_ids,
             force=body.force,
             run_id=run_id,
+            completed_ids=completed_ids,
         )
         rescored = 0
-        if body.force and enriched > 0:
+        if completed_ids:
             from ai_engine.radar.candidate_postprocessor import score_missing_candidates
 
             rescored = await score_missing_candidates(
                 pool,
-                limit=len(summary_ids),
-                summary_ids=summary_ids,
+                limit=len(completed_ids),
+                summary_ids=tuple(completed_ids),
                 rescore=True,
             )
         structlog.get_logger("ai_engine.radar").info(
@@ -279,6 +297,12 @@ async def enqueue_radar_enrichment(
         "summaryIds": list(summary_ids),
         "queuedSummaryIds": queued_ids,
     }
+
+
+def _enrichment_allowed() -> bool:
+    from ai_engine.radar.runtime_flags import radar_enrichment_enabled
+
+    return radar_enrichment_enabled()
 
 
 async def _run_background(

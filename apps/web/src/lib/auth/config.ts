@@ -22,6 +22,7 @@ import { prisma } from '../db';
 import { canEstablishSession } from './allowlist';
 import { verifyPassword } from './password';
 import { isBootstrapAdminEmail } from './invitation';
+import { canCreateAccountInBeta } from './beta-access';
 import { log } from '../log';
 import { isProductionAuthAllowed } from './transport';
 
@@ -151,6 +152,18 @@ export const authConfig: NextAuthConfig = {
       const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
       if (!canEstablishSession(existing)) {
         log.warn('auth.signin', 'account disabled', { email: email.toLowerCase() });
+        return false;
+      }
+      if (!canCreateAccountInBeta({
+        betaMode: env.AUTH_BETA_MODE,
+        email: email.toLowerCase(),
+        existingUser: existing,
+        bootstrapAdminEmail: env.BOOTSTRAP_ADMIN_EMAIL,
+      })) {
+        log.warn('auth.signin', 'account not invited during beta', {
+          email: email.toLowerCase(),
+          provider: account?.provider,
+        });
         return false;
       }
       return true;

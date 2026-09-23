@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from ai_engine.radar.distilled_scorer import (
@@ -13,7 +14,8 @@ from ai_engine.radar.distilled_scorer import (
     build_distilled_score_reason,
     score_with_llm,
 )
-from ai_engine.radar.sync_runner import _scoreability
+from ai_engine.radar.models import RadarCandidate
+from ai_engine.radar.sync_runner import _github_repo_signals, _scoreability
 from ai_engine.radar.sync_runner import _shell_content_label
 from ai_engine.radar.enrichment_contract import (
     effective_tier,
@@ -43,11 +45,54 @@ _SOURCE_PROFILE: dict[str, str] = {
 }
 
 
+def _repo_signals_from_row(row: dict[str, Any], content: str) -> dict[str, Any]:
+    """Rebuild auditable GitHub evidence after enrichment.
+
+    Inline source scoring has the fetcher's repo signals available, while
+    post-enrichment rescoring only has the persisted repository metadata. Keep
+    the same signal shape in both paths so a real README/Zread snapshot can
+    replace the initial landing-page triage score.
+    """
+    meta = row.get("originalMeta")
+    base: dict[str, Any] = {}
+    if isinstance(meta, dict):
+        for key in ("stars", "starsToday", "forks", "openIssues"):
+            value = meta.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                base[key] = value
+        tree = meta.get("tree")
+        if isinstance(tree, list):
+            paths = [
+                str(node.get("path") or "").lower()
+                for node in tree
+                if isinstance(node, dict)
+            ]
+            base["hasTests"] = any(
+                "test" in path or "spec" in path for path in paths
+            )
+            base["hasCiAction"] = any(
+                ".github/workflows/" in path for path in paths
+            )
+            base["hasArchitecture"] = any(
+                token in path
+                for path in paths
+                for token in ("src/", "lib/", "pkg/", "internal/", "architecture")
+            )
+    candidate = RadarCandidate(
+        title=str(row.get("title") or ""),
+        url=str(row.get("url") or ""),
+        repo_signals=base,
+    )
+    return _github_repo_signals(candidate, content)
+
+
 async def score_missing_candidates(
     pool: Any,
     *,
     limit: int = 50,
     summary_ids: tuple[str, ...] | None = None,
+    sync_run_ids: tuple[str, ...] | None = None,
+    original_fetched_since: datetime | None = None,
     rescore: bool = False,
     concurrency: int | None = None,
     scorer: ScoreFn = score_with_llm,
@@ -66,7 +111,19 @@ async def score_missing_candidates(
             placeholders = ",".join(["%s"] * len(summary_ids))
             summary_filter = f'AND s."id" IN ({placeholders}) '
             params = summary_ids
-        score_filter = 's."distilledScore" IS NULL ' if not rescore else 'TRUE '
+        if sync_run_ids:
+            placeholders = ",".join(["%s"] * len(sync_run_ids))
+            summary_filter += f'AND s."syncRunId" IN ({placeholders}) '
+            params += sync_run_ids
+        if original_fetched_since is not None:
+            summary_filter += 'AND s."originalFetchedAt" >= %s '
+            params += (original_fetched_since,)
+        score_filter = (
+            '(s."distilledScore" IS NULL OR COALESCE(s."tags", ARRAY[]::text[]) '
+            "@> ARRAY['score_pending_after_enrichment']::text[]) "
+            if not rescore
+            else 'TRUE '
+        )
         summary_filter = summary_filter.removeprefix('AND ')
         where_prefix = 'WHERE ' + score_filter
         if summary_filter:
@@ -106,7 +163,15 @@ async def score_missing_candidates(
     ) -> tuple[str, DistilledScore | None, str | None, str | None, str | None, bool] | None:
         row = dict(raw)
         source_type = str(row.get("sourceType") or "web_share")
-        profile, _ = profile_for_source_url(source_type, str(row.get("url") or ""))
+        original_kind = str(row.get("originalKind") or "")
+        is_repo = original_kind == "github_repo" or str(
+            row.get("url") or ""
+        ).lower().startswith("https://github.com/")
+        scoring_source_type = "github" if is_repo else source_type
+        profile, _ = profile_for_source_url(
+            scoring_source_type,
+            str(row.get("url") or ""),
+        )
         content = str(
             row.get("originalMarkdown")
             or row.get("body")
@@ -136,9 +201,14 @@ async def score_missing_candidates(
                     str(row.get("title") or ""),
                     content,
                     profile=profile,
-                    source_type=source_type,
+                    source_type=scoring_source_type,
                     url=str(row.get("url") or ""),
                     published_at=row.get("publishedAt"),
+                    structured_signals=(
+                        _repo_signals_from_row(row, content)
+                        if is_repo
+                        else None
+                    ),
                 )
         except Exception as exc:
             logger.warning(
@@ -243,14 +313,16 @@ async def score_missing_candidates(
                 tags_sql = (
                     "ARRAY(SELECT tag FROM unnest(COALESCE(\"tags\", ARRAY[]::text[])) AS tag "
                     "WHERE tag NOT LIKE 'tier_%%' "
-                    "AND tag NOT IN ('content_pending', 'fetch_failed_shell')) "
+                    "AND tag NOT IN ('content_pending', 'fetch_failed_shell', "
+                    "'score_pending_after_enrichment')) "
                     "|| ARRAY['fetch_failed_shell', 'tier_' || %s]::text[]"
                 )
             else:
                 tags_sql = (
                     "ARRAY(SELECT tag FROM unnest(COALESCE(\"tags\", ARRAY[]::text[])) AS tag "
                     "WHERE tag NOT LIKE 'tier_%%' "
-                    "AND tag NOT IN ('content_pending', 'fetch_failed_shell')) "
+                    "AND tag NOT IN ('content_pending', 'fetch_failed_shell', "
+                    "'score_pending_after_enrichment')) "
                     "|| ARRAY['tier_' || %s]::text[]"
                 )
             await conn.execute(

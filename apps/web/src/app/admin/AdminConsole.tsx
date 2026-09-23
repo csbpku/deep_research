@@ -34,6 +34,7 @@ import {
   Search as SearchIcon,
   Star,
   User,
+  UserPlus,
   Radar as RadarIcon,
   ShieldCheck,
   Sparkles,
@@ -2767,6 +2768,8 @@ interface UserListResponse { items: AdminUser[] }
 function UsersTab() {
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null);
   const q = useQuery<UserListResponse>({
     queryKey: ['admin-users'],
     queryFn: async () => {
@@ -2801,16 +2804,74 @@ function UsersTab() {
     onError: (err) => setActionError((err as Error).message),
   });
 
+  const inviteMut = useMutation({
+    mutationFn: async (email: string) => {
+      const r = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await r.json().catch(() => ({})) as {
+        message?: string;
+        noop?: boolean;
+        email?: string;
+      };
+      if (!r.ok) throw new Error(data.message ?? '添加白名单失败');
+      return data;
+    },
+    onSuccess: (data) => {
+      setActionError(null);
+      setInviteEmail('');
+      setInviteNotice(data.noop ? `${data.email ?? '该邮箱'} 已在白名单中` : `${data.email ?? '该邮箱'} 已加入白名单`);
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
+    onError: (err) => {
+      setInviteNotice(null);
+      setActionError((err as Error).message);
+    },
+  });
+
   if (q.isLoading) return <QueueSkeleton />;
   if (q.isError) return <p className="text-sm text-destructive">{(q.error as Error).message}</p>;
   const items = q.data?.items ?? [];
-  if (items.length === 0) return <EmptyState title="还没有成员" description="成员由 Google 登录或邀请码激活后自动加入。" />;
   return (
     <div>
+      <form
+        className="mb-4 flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-end"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setActionError(null);
+          setInviteNotice(null);
+          inviteMut.mutate(inviteEmail);
+        }}
+      >
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">Beta 注册白名单</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">添加后，该邮箱可通过密码注册或 OAuth 首次登录。</p>
+          <Input
+            className="mt-2 max-w-md"
+            type="email"
+            value={inviteEmail}
+            onChange={(event) => setInviteEmail(event.target.value)}
+            placeholder="name@example.com"
+            aria-label="允许注册的邮箱"
+            required
+            disabled={inviteMut.isPending}
+          />
+        </div>
+        <Button type="submit" variant="outline" disabled={inviteMut.isPending || !inviteEmail.trim()}>
+          <UserPlus className="size-4" aria-hidden />
+          {inviteMut.isPending ? '添加中…' : '添加邮箱'}
+        </Button>
+      </form>
       {actionError ? (
         <p className="mb-2 text-xs text-destructive" role="alert">操作失败：{actionError}</p>
       ) : null}
-      <Card>
+      {inviteNotice ? <p className="mb-2 text-xs text-muted-foreground" role="status">{inviteNotice}</p> : null}
+      {items.length === 0 ? (
+        <EmptyState title="还没有成员" description="先添加一个允许注册的邮箱。" />
+      ) : <Card>
         <CardContent className="p-0">
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -2885,7 +2946,7 @@ function UsersTab() {
             </tbody>
           </table>
         </CardContent>
-      </Card>
+      </Card>}
       <p className="mt-2 text-xs text-muted-foreground">
         所有变更落 admin_actions 审计日志；最后一个 active admin 不能降级或禁用。
       </p>

@@ -492,4 +492,56 @@ describe('GET /api/ai-research/[jobId] evidence workspace', () => {
     expect(payload.artifact.content).toContain('A captured paragraph that can be checked by the reader.');
     expect(payload.finalStatus).toBe('partial');
   });
+
+  it('keeps a running job in progress when it has captured bodies but no report yet', async () => {
+    mocks.jobFindUnique.mockResolvedValue({
+      requesterId: USER_ID,
+      context: null,
+      sourceRefs: [{ type: 'url', value: 'https://example.com/running' }],
+      brief: null,
+      conversation: [],
+      partialSources: [],
+      updatedAt: new Date('2026-09-03T00:00:00Z'),
+      draftResearch: null,
+      aiResearchSources: [{
+        id: '77777777-7777-4777-8777-777777777777',
+        title: 'Captured while writing',
+        snippet: 'A captured paragraph while the report writer is still running.',
+        score: 0.9,
+        sourceRef: { type: 'url', value: 'https://example.com/running' },
+        canonicalKey: 'https://example.com/running',
+        stepCaptured: 'search',
+        createdAt: new Date('2026-09-03T00:00:00Z'),
+      }],
+      _count: { aiResearchSources: 1 },
+    });
+    mocks.fetchAiEngine.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        job_id: JOB_ID,
+        status: 'running',
+        final_status: null,
+        current_step: 'write',
+        report_type: 'research_report',
+        topic: 'GraphRAG 选型',
+        output_text: '',
+        draft_research_id: null,
+        sources_count: 1,
+        research_progress: {
+          state: 'analyzing',
+          sourcesCaptured: 1,
+        },
+      },
+    });
+
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+
+    expect(payload.status).toBe('running');
+    expect(payload.finalStatus).toBeNull();
+    expect(payload.deliverableStatus).toBe('none');
+    expect(payload.artifact).toBeNull();
+    expect(payload.capturedSourcesCount).toBe(1);
+  });
 });

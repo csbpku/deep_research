@@ -38,6 +38,10 @@ from ai_engine.radar.enrichment_contract import (
     enrichment_review_reset_assignments,
     initial_enrichment_status,
 )
+from ai_engine.radar.runtime_flags import (
+    browser_reading_mode_enabled,
+    radar_enrichment_enabled,
+)
 from ai_engine.radar.source_manager import SourceFetcher, fetch_source, load_enabled_sources
 from ai_engine.server.share import _infer_title, html_to_markdown
 
@@ -51,7 +55,10 @@ EmbeddingScorerFn = Any  # BatchEmbeddingScorer or None
 # token budget later; truncating the stored source here destroys the reader's
 # ability to inspect the complete document.
 ORIGINAL_MARKDOWN_MAX_BYTES = 256 * 1024
-MIN_BRIEF_OUTPUT_CHARS = 120
+# A radar detail should provide enough context for a reading decision. Keep
+# this below the prompt target so a slightly terse but still useful answer is
+# not discarded in favor of raw source text.
+MIN_BRIEF_OUTPUT_CHARS = 160
 MIN_LIMITED_SCORE_CONTENT_CHARS = 300
 MIN_FULL_SCORE_CONTENT_CHARS = 1_000
 
@@ -59,6 +66,7 @@ MIN_FULL_SCORE_CONTENT_CHARS = 1_000
 DEEPDIVE_ENABLED = os.environ.get("RADAR_DEEPDIVE_ENABLED", "true").lower() in (
     "1", "true", "yes", "on",
 )
+
 
 # Bound concurrent source runs. Candidate-level concurrency and the shared
 # LLM semaphore apply additional limits inside each source.
@@ -453,6 +461,34 @@ def _is_github_repo_candidate(
     )
 
 
+_GITHUB_REPO_LINK_RE = _re.compile(
+    r"https?://(?:www\.)?github\.com/"
+    r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
+    r"(?!(?:/(?:issues|pull|releases|blob|tree|actions|commit|compare|"
+    r"discussions|wiki)(?:[/?#]|$)))"
+    r"(?=[/?#\s),.;:]|$)",
+    _re.IGNORECASE,
+)
+
+
+def _linked_github_repo_url(candidate_url: str, content: str) -> str | None:
+    """Return a repository URL explicitly linked by a project landing page.
+
+    Community feeds often point at a project's marketing/docs site even when
+    the actual unit of engineering interest is its GitHub repository. Treat a
+    linked repository root as the canonical identity, while leaving the
+    discovery source intact. Issues, PRs, releases, and arbitrary GitHub
+    pages are deliberately excluded.
+    """
+    if _classify_original_kind("github", candidate_url) == "github_repo":
+        return candidate_url.split("?", 1)[0].rstrip("/")
+    for match in _GITHUB_REPO_LINK_RE.finditer(content or ""):
+        repo_url = f"https://github.com/{match.group(1).rstrip('/')}"
+        if _classify_original_kind("github", repo_url) == "github_repo":
+            return repo_url
+    return None
+
+
 def _best_content_body(
     interpretation: str,
     markdown: str,
@@ -824,7 +860,7 @@ async def _record_sync_diagnostic(
     """Persist a reviewable record for candidates that never become summaries."""
     original_markdown = None
     original_kind = None
-    if markdown and DEEPDIVE_ENABLED:
+    if markdown and DEEPDIVE_ENABLED and not browser_reading_mode_enabled():
         original_kind = _classify_original_kind(source.source_type, candidate.url)
         original_markdown = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES].decode(
             "utf-8", errors="replace"
@@ -881,6 +917,8 @@ async def _insert_candidate(
     *,
     candidate: RadarCandidate,
     canonical_url: str,
+    stored_url: str | None = None,
+    original_kind_override: str | None = None,
     fetched: FetchedDocument,
     markdown: str,
     interpretation: str,
@@ -892,6 +930,7 @@ async def _insert_candidate(
     distilled: Any | None = None,
     limited_score: bool = False,
 ) -> bool:
+    stored_url = stored_url or candidate.url
     candidate_title = _html.unescape(candidate.title or "").strip()
     if str(source.config.get("vendor") or "").lower() == "anthropic":
         candidate_title = _re.sub(r"\s*\\\s*anthropic\s*$", "", candidate_title, flags=_re.IGNORECASE).strip()
@@ -905,7 +944,7 @@ async def _insert_candidate(
     if _is_fetch_failure_shell(
         markdown,
         source_type=source.source_type,
-        url=candidate.url,
+        url=stored_url,
     ):
         merged_tags.append("fetch_failed_shell")
     # HN-aggregator / Reddit-news stubs are a known source of fetch-partial
@@ -917,7 +956,7 @@ async def _insert_candidate(
     persisted_distilled = (
         distilled if distilled is not None and not distilled.is_default else None
     )
-    durable_enrichment_status = initial_enrichment_status(
+    durable_enrichment_status = None if browser_reading_mode_enabled() else initial_enrichment_status(
         persisted_distilled.tier if persisted_distilled is not None else None
     )
     scored_target_tier = (
@@ -927,6 +966,12 @@ async def _insert_candidate(
         scored_target_tier,
         enrichment_ready=False,
     )
+    if browser_reading_mode_enabled():
+        # A metadata-only candidate is safely browseable, but it has no
+        # evidence for a deep-read promise. Keep the visible deliverable tier
+        # at a conservative skim even when a GitHub metadata scorer returns a
+        # recommendation; retain distilledTargetTier for ranking/governance.
+        deliverable_tier = "skim"
     if persisted_distilled is not None:
         if deliverable_tier:
             merged_tags.append(f"tier_{deliverable_tier}")
@@ -951,8 +996,11 @@ async def _insert_candidate(
     original_markdown: str | None = None
     original_kind: str | None = None
     original_bytes: int | None = None
-    if DEEPDIVE_ENABLED:
-        original_kind = _classify_original_kind(source.source_type, candidate.url)
+    if DEEPDIVE_ENABLED and not browser_reading_mode_enabled():
+        original_kind = (
+            original_kind_override
+            or _classify_original_kind(source.source_type, stored_url)
+        )
         truncated = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES]
         original_markdown = truncated.decode("utf-8", errors="replace")
         original_bytes = len(truncated)
@@ -982,7 +1030,7 @@ async def _insert_candidate(
                         str(uuid.uuid4()),
                         title[:300],
                         body,
-                        candidate.url[:2048],
+                        stored_url[:2048],
                         canonical_url,
                         candidate.content_origin,
                         date.today(),
@@ -1000,7 +1048,7 @@ async def _insert_candidate(
                             limited_score=limited_score,
                             markdown=markdown,
                             source_type=source.source_type,
-                            url=candidate.url,
+                            url=stored_url,
                         ),
                         (
                             json.dumps(persisted_distilled.to_dict(), ensure_ascii=False)
@@ -1097,11 +1145,11 @@ def _clean_content(text: str, min_len: int = 200) -> str:
 def _github_repo_signals(candidate: RadarCandidate, markdown: str) -> dict[str, Any]:
     """Combine source metadata with cheap, auditable README evidence."""
     signals = dict(candidate.repo_signals)
-    if not signals:
+    if not signals and not markdown:
         return {}
     text = markdown or ""
     lowered = text.lower()
-    signals.update({
+    inferred = {
         "readmeChars": len(text),
         "technicalDensity": round(
             sum(1 for token in (
@@ -1114,7 +1162,12 @@ def _github_repo_signals(candidate: RadarCandidate, markdown: str) -> dict[str, 
         "hasCiAction": bool(_re.search(r"github action|github/workflows|ci/cd|continuous integration", lowered)),
         "hasTests": bool(_re.search(r"\btests?\b|pytest|unit test|test suite", lowered)),
         "hasArchitecture": bool(_re.search(r"architecture|tree-sitter|ast|graph|pipeline|incremental", lowered)),
-    })
+    }
+    for key, value in inferred.items():
+        if isinstance(value, bool):
+            signals[key] = bool(signals.get(key)) or value
+        elif key not in signals:
+            signals[key] = value
     return signals
 
 
@@ -1585,7 +1638,11 @@ async def _run_source(
                     existing = await _existing_candidate(pool, normalized.canonical_url)
                     if existing is not None:
                         existing_id = str(existing["id"])
-                        if _needs_content_retry(existing):
+                        # In browser mode the URL is the reading source. An
+                        # old candidate that still has a pending enrichment
+                        # state must not cause the new sync to fetch its body
+                        # as a side effect of merely rediscovering it.
+                        if not browser_reading_mode_enabled() and _needs_content_retry(existing):
                             await _retry_existing_summary_content(
                                 pool,
                                 summary_id=existing_id,
@@ -1621,7 +1678,26 @@ async def _run_source(
                         skipped_rule_noise += 1
                         return
 
-                    if source.source_type == "arxiv" and normalized.snippet.strip():
+                    if browser_reading_mode_enabled():
+                        # Discovery uses source-provided metadata only. The
+                        # browser plugin reads the open URL after a user action.
+                        metadata_parts = [normalized.snippet.strip()]
+                        if raw_candidate.repo_signals:
+                            metadata_parts.append(
+                                "结构化来源信号："
+                                + json.dumps(
+                                    raw_candidate.repo_signals,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                )
+                            )
+                        markdown = "\n\n".join(
+                            part for part in metadata_parts if part
+                        )[:8000]
+                        if not markdown:
+                            markdown = normalized.title.strip()[:8000]
+                        fetched = _snippet_document(raw_candidate.url, markdown)
+                    elif source.source_type == "arxiv" and normalized.snippet.strip():
                         # The arXiv API already returns the abstract. Fetching
                         # every /abs page afterwards multiplies one upstream
                         # request into 50 rate-limited page requests.
@@ -1691,7 +1767,7 @@ async def _run_source(
                                         unavailable_hosts.add(document_host)
                                 raise
                     raw_content = markdown or normalized.snippet
-                    content_failure_reason = _content_fetch_failure_reason(
+                    content_failure_reason = None if browser_reading_mode_enabled() else _content_fetch_failure_reason(
                         raw_content,
                         source.source_type,
                         normalized.title,
@@ -1722,8 +1798,8 @@ async def _run_source(
                         )
                         total_skipped += 1
                         return
-                    metadata_only_fallback = False
-                    low_quality = _is_low_quality_content(raw_content)
+                    metadata_only_fallback = browser_reading_mode_enabled()
+                    low_quality = False if browser_reading_mode_enabled() else _is_low_quality_content(raw_content)
                     brief: Any = None
                     interpretation = ""
                     if low_quality:
@@ -1796,9 +1872,19 @@ async def _run_source(
                     else:
                         brief_context = markdown or normalized.snippet
 
-                    github_repo_candidate = _is_github_repo_candidate(
-                        source,
-                        raw_candidate,
+                    linked_repo_url = _linked_github_repo_url(
+                        raw_candidate.url,
+                        "\n".join((raw_content, markdown, raw_candidate.snippet)),
+                    )
+                    github_repo_candidate = (
+                        _is_github_repo_candidate(source, raw_candidate)
+                        or linked_repo_url is not None
+                    )
+                    persisted_candidate_url = (
+                        linked_repo_url or normalized.canonical_url
+                    )
+                    scoring_source_type = (
+                        "github" if github_repo_candidate else source.source_type
                     )
                     item = {
                         "title": normalized.title,
@@ -1879,7 +1965,7 @@ async def _run_source(
                     ):
                         from ai_engine.scoring.scoring_profiles import profile_for_source
 
-                        profile, _ = profile_for_source(source.source_type)
+                        profile, _ = profile_for_source(scoring_source_type)
                         cleaned = _clean_content(raw_content)
                         scoreability = _scoreability(cleaned)
                         if github_repo_candidate and scoreability is None:
@@ -1899,12 +1985,12 @@ async def _run_source(
                                 normalized.title,
                                 cleaned,
                                 profile=profile,
-                                source_type=source.source_type,
-                                url=normalized.url,
+                                source_type=scoring_source_type,
+                                url=persisted_candidate_url,
                                 published_at=normalized.published_at,
                                 structured_signals=(
                                     _github_repo_signals(raw_candidate, raw_content)
-                                    if source.source_type.startswith("github")
+                                    if github_repo_candidate
                                     else None
                                 ),
                             )
@@ -1931,7 +2017,9 @@ async def _run_source(
                                 markdown=markdown,
                             )
                     extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
-                    if metadata_only_fallback:
+                    if browser_reading_mode_enabled():
+                        extra_tags_list.append("external_reading")
+                    if metadata_only_fallback and not browser_reading_mode_enabled():
                         extra_tags_list.append("content_pending")
                         if source.source_type in {"github", "github_trending"}:
                             extra_tags_list.append("github_content_pending")
@@ -1966,7 +2054,7 @@ async def _run_source(
                             source=source,
                             run_id=run_id,
                             candidate=raw_candidate,
-                            canonical_url=normalized.canonical_url,
+                            canonical_url=persisted_candidate_url,
                             kind="filtered",
                             reason_code=noise_reason_code,
                             reason_message=getattr(distilled_result, "weak_point", None),
@@ -1980,7 +2068,11 @@ async def _run_source(
                     inserted = await _insert_candidate(
                         pool,
                         candidate=raw_candidate,
-                        canonical_url=normalized.canonical_url,
+                        canonical_url=persisted_candidate_url,
+                        stored_url=persisted_candidate_url,
+                        original_kind_override=(
+                            "github_repo" if github_repo_candidate else None
+                        ),
                         fetched=fetched,
                         markdown=markdown,
                         interpretation=interpretation,
@@ -2228,6 +2320,17 @@ async def run_radar_pipeline(
         batch_id=sync_result.batch_id,
         runs=tuple(all_runs),
     )
+    if not radar_enrichment_enabled():
+        # Browser mode deliberately stops after discovery and metadata-based
+        # ordering. The original URL remains the reading source; no automatic
+        # article/Zread fetch, enrichment, or post-enrichment review is queued.
+        return RadarPipelineResult(
+            sync=sync_result,
+            enriched_count=0,
+            enrichment_elapsed_ms=0,
+            enrichment_error=None,
+        )
+
     started = time.monotonic()
     try:
         from ai_engine.radar.candidate_postprocessor import (
@@ -2243,6 +2346,7 @@ async def run_radar_pipeline(
         enriched_count = 0
         enrichment_attempts = RADAR_ENRICHMENT_RETRIES if triggered_by == "cron" else 0
         enrichment_limit = max(50, total_new) if triggered_by == "cron" else max(1, total_new)
+        enrichment_started_at = datetime.now(timezone.utc)
         for attempt in range(enrichment_attempts + 1):
             enriched_count += await run_enrichment_for_pending(
                 pool,
@@ -2258,6 +2362,9 @@ async def run_radar_pipeline(
             await score_missing_candidates(
                 pool,
                 limit=max(20, enriched_count),
+                sync_run_ids=tuple(run.run_id for run in sync_result.runs),
+                original_fetched_since=enrichment_started_at,
+                rescore=True,
             )
         enrichment_error = None
     except Exception as exc:

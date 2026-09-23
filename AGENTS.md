@@ -32,6 +32,12 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - `docs/weekly/`: historical delivery evidence; current behavior belongs in README/contracts, not duplicated here
 - Preserve unrelated working-tree changes. Do not delete branches, worktrees, reports, caches, or temporary artifacts without post-report user confirmation.
 
+## Production VPS Access
+
+- Production VPS `159.223.50.187`: use `deploy` with `~/.ssh/deep-research-actions` for deployment operations; this key is also the one installed in `/home/deploy/.ssh/authorized_keys` and the account can run Docker.
+- Use `root` with `~/.ssh/digitalocean` only for root-level server administration; this key is installed in `/root/.ssh/authorized_keys`.
+- Do not interchange these key/user pairs. `digitalocean` with `deploy` fails because that public key is not authorized for the `deploy` account.
+
 ## Current State
 
 - **入口文档**：[`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md) — 当前技术方案；日期化证据见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)，文档分层见 [`docs/README.md`](./docs/README.md)。

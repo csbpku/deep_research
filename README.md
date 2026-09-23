@@ -11,9 +11,11 @@
 
 **核心能力**
 
-- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选；同步链路为 `sync → enrich → topic refresh`。每条候选附 LLM 轻量解读与多维内容评分（7 个维度每维 0–3 分，加权总分 0–100），归入深入阅读 / 略读 / 收藏等层级；GitHub 仓库候选按 Distilled 层级统一生成 Zread 项目文档，详情页提供「刷新文档」入口（强制重取，失败保留旧缓存）。
+- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选；默认 `browser` 模式只保留来源元数据并打开原文，`enriched` 仅作为显式回滚路径。历史 enrichment 数据继续保留，候选可进入独立阅读插件。
 - **技术专题**：关注长期专题后自动聚合热点议题，生成带可点击引用的综述（tldr / keyChanges / subtopics / openQuestions）；发布调研自动回流专题，`/me/topics` 汇总未读议题与最近研究。
 - **沉淀库**：长文与讨论精华共用同一结构，支持草稿 / 发布 / 全文搜索 / 修改审计。
+- **原网页阅读助手（第一版）**：`apps/extension/` 提供独立的 WXT + React + TypeScript Chrome 116+ MV3 插件。用户在公开技术网页中按需翻译、选段解读、连续追问，并显式保存摘录到研究库；插件不自动抓取或保存整篇正文。运行 `npm run build` 生成可加载的 `.output/chrome-mv3`，`npm run package` 生成 Chrome ZIP。
+- **雷达迁移开关**：`RADAR_READING_MODE=browser` 是默认值；新雷达只保留来源元数据并直接打开原文，停止自动文章/Zread 抓取与 enrichment。设置为 `enriched` 才显式启用旧的服务端正文链路。
 - **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
 - **AI 调研**：对话澄清主题/背景/资料与产物类型，自动推断 objective 并给出 Research Brief 与可复用上下文；启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），草稿必须实际修改过才能发布。
 - **团队讨论 + Admin**：团队讨论常驻雷达正文下方，支持 @成员、回复通知和“我的通知”；成员可把高价值评论提议沉淀为知识卡片。Admin 对雷达做软屏蔽/恢复，而非逐条审批，并处理分享审核、评论提炼、同步状态和失败任务。
@@ -32,7 +34,7 @@ flowchart LR
     end
 
     subgraph Engine["packages/ai-engine · FastAPI + Python"]
-        Radar["雷达同步 sync → 增强 enrich<br/>→ 主题刷新 topic refresh"]
+        Radar["雷达同步 sync → 元数据/评分 → 原文入口<br/>（legacy enrich 显式启用）→ 主题刷新"]
         Research["AI 调研 5 步流水线"]
         Worker["导入 / 分享 worker"]
         Adapter["ResearchEngineAdapter"]
@@ -150,7 +152,7 @@ pnpm dev:ai      # → http://localhost:4000
 首次安装后：
 
 1. 初始管理员默认是 `shaobo.chen@shopee.com`，setup 会把它创建或提升为 Admin。
-2. 登录页选择“邀请码激活”，输入该邮箱和 `.env` 中的 `AUTH_INVITE_CODE`，设置一次密码。
+2. 登录页选择“注册账号”，使用同一邮箱设置一次密码；bootstrap Admin 在 Beta 模式下也保留该入口。
 3. 之后使用邮箱密码登录，管理后台地址为 `/admin`。邀请码不会打印到日志。
 
 首次启动或切换分支后，可显式复核数据库与服务：
@@ -162,7 +164,7 @@ curl -fsS http://localhost:3000/api/healthz
 curl -fsS http://localhost:4000/healthz
 ```
 
-使用邮箱密码登录时，先确认 `ALLOWED_EMAIL_DOMAINS` 包含邮箱域名，并在登录页的“邀请码激活”中输入 `AUTH_INVITE_CODE` 设置密码；激活后即可正常登录，公开注册接口会固定拒绝。`--quick` 生成的配置不会注册 Google provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`，首次启动会幂等创建/提升该 Admin；如果该账号尚未设置密码，可用同一邮箱和邀请码完成一次激活。
+默认支持公开邮箱密码注册。设置 `AUTH_BETA_MODE=1` 后，Admin 需要先在控制台“成员”页添加允许注册的邮箱；密码注册、Google/GitHub 首次开户和旧邀请码激活都会执行同一白名单检查。设置 `AUTH_EMAIL_VERIFICATION=1` 并配置 SMTP 后，密码注册还必须验证 6 位邮箱验证码。`--quick` 生成的配置不会注册 OAuth provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`，首次启动会幂等创建/提升该 Admin，并始终保留首次设置密码或 OAuth 登录的能力。
 
 未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
@@ -199,7 +201,7 @@ cd packages/ai-engine && uv run pytest -q && uv run ruff check . && uv run mypy 
 1. DNS：将域名的 `A/AAAA` 记录指向 VPS；先等待解析生效。
 2. 主机：安装 Docker Engine/Compose，克隆到 `/opt/deep_research`，只允许 SSH、80、443 入站；不要放行 3000、4000、5432。
 3. Secrets：复制 `.env.example` 为 `.env`，权限设为 `600`；用 `openssl rand -hex 32` 分别生成数据库、NextAuth 和内部服务令牌。设置 `NEXTAUTH_URL=https://research.example.com`。如启用 Google OAuth，再登记 `https://research.example.com/api/auth/callback/google`。
-4. 配置：填写 `ALLOWED_EMAIL_DOMAINS`、`AUTH_INVITE_CODE`、`BOOTSTRAP_ADMIN_EMAIL`、AI provider 与检索凭证。默认管理员邮箱必须属于 `ALLOWED_EMAIL_DOMAINS`。`.env` 不提交 Git，不写入镜像。邮箱密码账号在登录页通过邀请码激活。
+4. 配置：按需设置 `AUTH_BETA_MODE`、OAuth、`BOOTSTRAP_ADMIN_EMAIL`、AI provider 与检索凭证；旧激活接口才需要 `ALLOWED_EMAIL_DOMAINS` 与 `AUTH_INVITE_CODE`。`.env` 不提交 Git，不写入镜像。
 5. TLS：用 Certbot/acme.sh 签发 `fullchain.pem` 与 `privkey.pem`，放入 `infra/certs/`（私钥 `0600`）；将 Compose 的 nginx mount 从 `infra/nginx.conf` 切换为 `infra/nginx-tls.conf`。证书签发前不要公开登录流量。
 6. 启动：先校验配置，再构建启动；检查容器、HTTPS 和两项 health endpoint。
 

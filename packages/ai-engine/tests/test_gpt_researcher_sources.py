@@ -132,6 +132,8 @@ async def test_locked_user_sources_are_fetched_without_open_web_search(
 async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    seen: dict[str, object] = {}
+
     async def blocked_fetch(
         _ref: dict[str, object],
         *,
@@ -139,7 +141,8 @@ async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
     ) -> SimpleNamespace:
         return SimpleNamespace(is_accessible=False, error_code="URL_FETCH_TIMEOUT")
 
-    async def fake_generate_text(**_: object) -> SimpleNamespace:
+    async def fake_generate_text(**kwargs: object) -> SimpleNamespace:
+        seen.update(kwargs)
         return SimpleNamespace(
             text="这是基于已抓取正文生成的有效雷达摘要。" * 12,
             input_tokens=10,
@@ -172,6 +175,9 @@ async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
     assert job.body.startswith("这是基于已抓取正文生成的有效雷达摘要")
     assert len(job.sources) == 1
     assert job.sources[0].evidence_status == "fetched"
+    prompt = str(seen["user_prompt"])
+    assert "3-5 句 AI 摘要" in prompt
+    assert "180-360 个中文字符" in prompt
 
 
 def test_deep_collection_timeout_is_independent_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

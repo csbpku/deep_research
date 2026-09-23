@@ -9,6 +9,8 @@ const validBase = {
   GITHUB_CLIENT_ID: 'github-client-id',
   GITHUB_CLIENT_SECRET: 'github-client-secret',
   AUTH_GOOGLE_ONLY: '0',
+  AUTH_BETA_MODE: '0',
+  AUTH_EMAIL_VERIFICATION: '0',
   ALLOWED_EMAIL_DOMAINS: 'example.com,foo.org',
 };
 
@@ -21,6 +23,8 @@ describe('parseWebEnv', () => {
     expect(env.TIME_VALUE_USD_PER_HOUR).toBe(50);
     expect(env.ALLOWED_EMAIL_DOMAINS).toEqual(['example.com', 'foo.org']);
     expect(env.AUTH_GOOGLE_ONLY).toBe(false);
+    expect(env.AUTH_BETA_MODE).toBe(false);
+    expect(env.AUTH_EMAIL_VERIFICATION).toBe(false);
     expect(env.AUTH_INVITE_CODE).toBe('');
     expect(env.AUTH_ALLOW_INSECURE_HTTP).toBe(false);
     expect(env.BOOTSTRAP_ADMIN_EMAIL).toBe('shaobo.chen@shopee.com');
@@ -51,6 +55,48 @@ describe('parseWebEnv', () => {
     });
     expect(env.AUTH_GOOGLE_ONLY).toBe(true);
     expect(env.ALLOWED_EMAIL_DOMAINS).toEqual([]);
+  });
+
+  it('parses closed Beta mode explicitly', () => {
+    const env = parseWebEnv({ ...validBase, AUTH_BETA_MODE: '1', NODE_ENV: 'production' });
+    expect(env.AUTH_BETA_MODE).toBe(true);
+  });
+
+  it('requires SMTP configuration when email verification is enabled', () => {
+    expect(() => parseWebEnv({
+      ...validBase,
+      AUTH_EMAIL_VERIFICATION: '1',
+      NODE_ENV: 'production',
+    })).toThrow(/SMTP_HOST/);
+
+    const env = parseWebEnv({
+      ...validBase,
+      AUTH_EMAIL_VERIFICATION: '1',
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_FROM: 'Research <noreply@example.com>',
+      SMTP_USER: 'mailer',
+      SMTP_PASSWORD: 'secret',
+      NODE_ENV: 'production',
+    });
+    expect(env.AUTH_EMAIL_VERIFICATION).toBe(true);
+    expect(env.SMTP_PORT).toBe(587);
+  });
+
+  it('accepts an empty or HTTP(S) Reader Beta download URL', () => {
+    expect(parseWebEnv({ ...validBase, READING_EXTENSION_BETA_URL: '', NODE_ENV: 'development' }).READING_EXTENSION_BETA_URL).toBe('');
+    expect(parseWebEnv({
+      ...validBase,
+      READING_EXTENSION_BETA_URL: 'https://downloads.example.test/reader.zip',
+      NODE_ENV: 'development',
+    }).READING_EXTENSION_BETA_URL).toBe('https://downloads.example.test/reader.zip');
+  });
+
+  it('rejects non-HTTP Reader Beta URLs', () => {
+    expect(() => parseWebEnv({
+      ...validBase,
+      READING_EXTENSION_BETA_URL: 'file:///tmp/reader.zip',
+      NODE_ENV: 'development',
+    })).toThrow(/READING_EXTENSION_BETA_URL/);
   });
 
   it('requires Google credentials in Google-only mode', () => {

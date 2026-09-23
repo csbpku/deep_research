@@ -211,7 +211,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       // Public radar contains only scored, reader-facing tiers with the
       // quality gate above. Noise, pending and incomplete rows remain in
       // Admin governance tools.
-      ...(u?.role !== 'admin'
+      // The reader page keeps the same quality contract for every role.
+      // Admins see incomplete/pending rows only when the governance surface
+      // requests an explicit status filter.
+      ...(u?.role !== 'admin' || !status
         ? [publicQualityGate]
         : []),
       // Recent repository activity is rendered inside the project reader.
@@ -267,6 +270,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         interpretation: true,
         scoreReason: true,
         scoreVersion: true,
+        originalKind: true,
         relevanceScore: true,
         timelinessScore: true,
         sourceQualityScore: true,

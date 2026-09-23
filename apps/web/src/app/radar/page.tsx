@@ -4,7 +4,7 @@
 //
 // 功能：
 //  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
-//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（核心材料 / 推荐精读）
+//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（核心材料 / 推荐精读 / 速览）
 //  - 分页（Pagination domain component）
 //  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
 
@@ -23,7 +23,9 @@ import {
 } from 'lucide-react';
 
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
+import { RadarPreviewPanel } from '@/components/radar/RadarPreviewPanel';
 import { ShareUrlDialog } from '@/components/radar/ShareUrlDialog';
+import type { ExternalReadingDetail } from '@/components/radar/RadarExternalReadingLanding';
 import { FilterBar } from '@/components/domain/FilterBar';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
@@ -73,6 +75,7 @@ interface RadarCandidateListItem {
   crawledAt: string;
   interpretation: string | null;
   scoreReason: string | null;
+  originalKind: string | null;
   tier: string | null;
   relevanceScore: number | null;
   timelinessScore: number | null;
@@ -128,6 +131,7 @@ interface RadarUrlState {
   page: number;
   perPage: PageSize;
   view: RadarView;
+  selectedId: string | null;
 }
 
 function radarUrlParams(state: RadarUrlState): URLSearchParams {
@@ -139,11 +143,12 @@ function radarUrlParams(state: RadarUrlState): URLSearchParams {
   params.set('page', String(state.page));
   params.set('per_page', String(state.perPage));
   params.set('view', state.view);
+  if (state.selectedId) params.set('open', state.selectedId);
   return params;
 }
-// Default excludes skim so the radar list stays focused on items worth
-// deep-reading. Users can still widen the filter to skim via the dropdown.
-const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read'];
+// Include skim because browser-reading candidates intentionally carry only
+// source metadata until a user opens the original page in the extension.
+const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read', 'skim'];
 
 const DATE_OPTIONS = [
   { value: 'all', label: '全部时间' },
@@ -379,20 +384,41 @@ export default function RadarPage() {
     0,
   );
   const items = query.data?.items ?? [];
+  const selectedId = searchParams.get('open');
+  const availableItems = view === 'ranked'
+    ? items
+    : visibleGroupEntries.flatMap(({ items: groupItems }) => groupItems);
+  const selectedItem = selectedId
+    ? availableItems.find((item) => item.id === selectedId) ?? null
+    : null;
+  const previewQuery = useQuery<ExternalReadingDetail>({
+    queryKey: ['radar-preview', selectedId],
+    enabled: Boolean(selectedId),
+    queryFn: async () => {
+      const response = await fetch(`/api/radar/${encodeURIComponent(selectedId!)}?surface=summary`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({ message: '雷达详情加载失败' }));
+        throw new Error(payload.message ?? '雷达详情加载失败');
+      }
+      return (await response.json()) as ExternalReadingDetail;
+    },
+    initialData: selectedItem ?? undefined,
+    staleTime: 30_000,
+  });
   const totalPages = query.data?.totalPages ?? 1;
   const dateLabel = DATE_OPTIONS.find((option) => option.value === dateRange)?.label ?? '全部时间';
   const qualityLabel = quality.length > 0
     ? QUALITY_OPTIONS.filter((option) => quality.includes(option.value)).map((option) => option.label).join('、')
     : '全部阅读等级';
-  const sourceLabel = sourceTypes.length > 0
-    ? SOURCE_TYPE_FILTER_OPTIONS
-      .filter((option) => sourceTypes.includes(option.value))
-      .map((option) => option.label)
-      .join('、')
-    : '全部来源';
-  const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view };
+  const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view, selectedId };
   const replaceUrlState = (patch: Partial<RadarUrlState>) => {
     const next = { ...currentUrlState, ...patch };
+    const listStateChanged = Object.keys(patch).some((key) => key !== 'selectedId');
+    if (listStateChanged && !Object.prototype.hasOwnProperty.call(patch, 'selectedId')) {
+      next.selectedId = null;
+    }
     router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
   };
   const resetFilters = () => {
@@ -404,6 +430,7 @@ export default function RadarPage() {
       dateRange: '7d',
       page: 1,
       perPage: 20,
+      selectedId: null,
     };
     setSearchInput('');
     setQ('');
@@ -414,7 +441,7 @@ export default function RadarPage() {
     setPerPage(20);
     router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
   };
-  const listState = radarUrlParams(currentUrlState);
+  const listState = radarUrlParams({ ...currentUrlState, selectedId: null });
   const detailHref = (summaryId: string) => (
     `/radar/${summaryId}?from=${encodeURIComponent(listState.toString())}`
   );
@@ -423,14 +450,17 @@ export default function RadarPage() {
     const nextQuery = searchInput.trim();
     setQ(nextQuery);
     setPage(1);
-    replaceUrlState({ q: nextQuery, page: 1 });
+    replaceUrlState({ q: nextQuery, page: 1, selectedId: null });
   };
+  const openPreview = (summaryId: string) => replaceUrlState({ selectedId: summaryId });
+  const closePreview = () => replaceUrlState({ selectedId: null });
 
   return (
     <div className="mx-auto min-w-0 max-w-shell">
       <PageHeader
         title="技术雷达"
-        description="从最近信号中先看最值得打开的内容；也可以按来源浏览。"
+        variant="reading"
+        className="mb-4"
         actions={(
           <div className="flex items-center gap-2">
             <div className="inline-flex items-center rounded-lg border border-border bg-card p-1 shadow-sm" aria-label="雷达展示方式">
@@ -470,9 +500,24 @@ export default function RadarPage() {
         onSubmit={submitSearch}
         className="hidden sm:flex"
         trailing={
-          view === 'ranked'
-            ? query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : undefined
-            : groupedIsFetching ? '加载中…' : `共 ${groupedTotal} 条`
+          <div className="flex items-center gap-2">
+            <span>
+              {view === 'ranked'
+                ? query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : null
+                : groupedIsFetching ? '加载中…' : `共 ${groupedTotal} 条`}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={resetFilters}
+              aria-label="重置筛选"
+              title="重置筛选"
+            >
+              <RotateCcw className="size-3.5" />
+            </Button>
+          </div>
         }
       >
         <Input
@@ -658,25 +703,12 @@ export default function RadarPage() {
         </div>
       </div>
 
-      <div className="mb-4 hidden flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border pb-3 text-xs text-muted-foreground sm:flex">
-        <p className="min-w-0 truncate">
-          当前范围：
-          <span className="font-medium text-foreground">{view === 'ranked' ? '推荐先看' : '按来源浏览'}</span>
-          {' · '}
-          {dateLabel}
-          {' · '}
-          {qualityLabel}
-          {' · '}
-          {sourceLabel}
-          {q ? ` · 搜索“${q}”` : ''}
-        </p>
-        <Button type="button" variant="ghost" size="xs" className="shrink-0" onClick={resetFilters}>
-          <RotateCcw />
-          重置筛选
-        </Button>
-      </div>
-
-      {view === 'source' ? (
+      <div className={cn(
+        'min-w-0',
+        selectedId && 'lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)] lg:items-start lg:gap-5',
+      )}>
+        <div className="min-w-0">
+        {view === 'source' ? (
         <div className="grid min-w-0 gap-4 lg:grid-cols-2">
           {visibleGroupEntries.map(({ group, query: groupQuery, items: groupItems }) => {
             const groupIndex = RADAR_GROUPS.findIndex((item) => item.id === group.id);
@@ -733,6 +765,8 @@ export default function RadarPage() {
                         currentUserId={me.data?.id ?? null}
                         currentUserRole={me.data?.role ?? null}
                         compact
+                        onOpenPreview={openPreview}
+                        selected={selectedId === it.id}
                       />
                     ))}
                   </div>
@@ -763,10 +797,25 @@ export default function RadarPage() {
         />
       ) : items.length === 0 ? (
         <EmptyState
-          title="暂无候选"
-          description="雷达同步尚未产出候选；稍后再来或联系 admin 触发手动同步。"
+          title="当前筛选没有内容"
+          description={dateRange === 'all'
+            ? '试试放宽阅读等级、来源或搜索条件。'
+            : `“${dateLabel}”内没有匹配内容，可以查看全部时间。`}
           action={
-            me.data?.role === 'admin' ? (
+            dateRange !== 'all' ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDateRange('all');
+                  setPage(1);
+                  replaceUrlState({ dateRange: 'all', page: 1 });
+                }}
+              >
+                查看全部时间
+              </Button>
+            ) : me.data?.role === 'admin' ? (
               <Button variant="outline" size="sm" asChild>
                 <a href="/admin/radar">前往后台触发同步</a>
               </Button>
@@ -783,6 +832,8 @@ export default function RadarPage() {
               currentUserId={me.data?.id ?? null}
               currentUserRole={me.data?.role ?? null}
               compact
+              onOpenPreview={openPreview}
+              selected={selectedId === it.id}
             />
           ))}
         </div>
@@ -796,6 +847,32 @@ export default function RadarPage() {
           disabled={query.isFetching}
         />
       ) : null}
+        </div>
+
+        {selectedId ? (
+          <div className="hidden min-w-0 lg:sticky lg:top-4 lg:block lg:self-start">
+            {previewQuery.isLoading && !previewQuery.data ? (
+              <aside className="flex min-h-[26rem] items-center justify-center border border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 text-sm text-[var(--ink-muted)]">
+                正在准备预览…
+              </aside>
+            ) : previewQuery.isError && !previewQuery.data ? (
+              <aside className="border border-[var(--ink-rule)] bg-[var(--ink-page)] p-5" role="alert">
+                <p className="text-sm font-semibold text-[var(--ink-text)]">预览加载失败</p>
+                <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">{String((previewQuery.error as Error).message)}</p>
+                <div className="mt-4 flex items-center gap-3">
+                  <button type="button" onClick={() => void previewQuery.refetch()} className="text-xs font-semibold text-[var(--ink-accent)] hover:underline">重试</button>
+                  <button type="button" onClick={closePreview} className="text-xs text-[var(--ink-muted)] hover:text-[var(--ink-text)]">关闭</button>
+                </div>
+              </aside>
+            ) : previewQuery.data ? (
+              <RadarPreviewPanel
+                detail={previewQuery.data}
+                onClose={closePreview}
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

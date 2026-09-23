@@ -75,6 +75,60 @@ async def test_score_missing_candidates_scores_approved_share_content() -> None:
     assert update_params[1] == 58.0
 
 
+async def test_rescoring_enriched_repo_uses_github_profile_and_signals() -> None:
+    pool = _Pool([{
+        "id": "summary-repo",
+        "title": "Fission-AI/OpenSpec",
+        "body": "repo summary",
+        "url": "https://github.com/Fission-AI/OpenSpec",
+        "publishedAt": None,
+        "originalMarkdown": (
+            "# OpenSpec\n\n"
+            "## Architecture\nThe parser builds a workflow graph.\n\n"
+            "## Tests\npytest and benchmark evaluation are included.\n"
+        ) * 20,
+        "originalKind": "github_repo",
+        "originalMeta": {
+            "stars": 68_000,
+            "tree": [
+                {"path": ".github/workflows/ci.yml"},
+                {"path": "src/parser.py"},
+                {"path": "tests/test_parser.py"},
+            ],
+        },
+        "enrichmentStatus": "ready",
+        "readerQualityStatus": "ready",
+        "sourceType": "rss",
+    }])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        calls.append(kwargs)
+        return replace(
+            default_score(get_profile("engineering")),
+            total=70.0,
+            effective_total=70.0,
+            ranking_score=70.0,
+            tier_score=70.0,
+            tier="deep_read",
+            is_default=False,
+        )
+
+    scored = await score_missing_candidates(
+        pool,
+        rescore=True,
+        concurrency=1,
+        scorer=fake_scorer,
+    )
+
+    assert scored == 1
+    assert calls[0]["source_type"] == "github"
+    assert calls[0]["profile"].id == "engineering"
+    assert calls[0]["structured_signals"]["stars"] == 68_000
+    assert calls[0]["structured_signals"]["hasCiAction"] is True
+    assert calls[0]["structured_signals"]["hasTests"] is True
+
+
 async def test_score_missing_candidates_leaves_default_score_retryable() -> None:
     pool = _Pool([{
         "id": "summary-2",
@@ -230,8 +284,13 @@ async def test_score_missing_candidates_retries_complete_content_pending_row() -
 
     assert scored == 1
     assert calls == 1
+    select_sql = pool.connection_value.executions[0][0]
+    assert "score_pending_after_enrichment" in select_sql
     update_sql = pool.connection_value.executions[1][0]
-    assert "tag NOT IN ('content_pending', 'fetch_failed_shell')" in update_sql
+    assert (
+        "tag NOT IN ('content_pending', 'fetch_failed_shell', "
+        "'score_pending_after_enrichment')"
+    ) in update_sql
     assert "content_pending" in update_sql
     update_params = pool.connection_value.executions[1][1]
     assert not str(update_params[5]).startswith("抓取失败:")

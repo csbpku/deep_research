@@ -6,9 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from ai_engine.llm.client import (
+    ReasoningStreamFilter,
     generate_text,
     is_provider_policy_error,
     is_retryable_llm_error,
+    stream_text,
 )
 
 
@@ -204,6 +206,76 @@ def test_minimax_overload_529_is_retryable() -> None:
         status_code = 529
 
     assert is_retryable_llm_error(OverloadedError("overloaded_error")) is True
+
+
+def test_reasoning_stream_filter_handles_split_tags() -> None:
+    filt = ReasoningStreamFilter()
+    visible = "".join(
+        filt.feed(chunk)
+        for chunk in ("<thi", "nk>private", " thoughts</thi", "nk>答案")
+    ) + filt.finish()
+    assert visible == "答案"
+
+
+async def test_stream_text_uses_provider_stream_and_filters_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Stream:
+        def __init__(self) -> None:
+            self._chunks = [
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="<thi"), finish_reason=None)],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="nk>private</think>答"), finish_reason=None)],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="案"), finish_reason="stop")],
+                    usage=SimpleNamespace(prompt_tokens=8, completion_tokens=2),
+                ),
+            ]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    class Completions:
+        async def create(self, **kwargs: object) -> Stream:
+            captured.update(kwargs)
+            return Stream()
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    monkeypatch.setenv("OPENAI_API_KEY", "local-test")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:8318/v1")
+    deltas: list[str] = []
+
+    async def collect(value: str) -> None:
+        deltas.append(value)
+
+    result = await stream_text(
+        llm_spec="openai:test-stream-model",
+        user_prompt="hello",
+        on_delta=collect,
+    )
+
+    assert result.text == "答案"
+    assert "".join(deltas) == "答案"
+    assert captured["stream"] is True
+    assert result.input_tokens == 8
+    assert result.output_tokens == 2
 
 
 async def test_generate_text_falls_back_after_quota_error(

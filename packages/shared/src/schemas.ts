@@ -155,6 +155,248 @@ export type RecordTimeSavedInput = z.infer<typeof RecordTimeSavedInput>;
 // ADR 0010: Research Brief + 扩展的 AI 调研入参
 
 import { RESEARCH_OBJECTIVE, RESEARCH_OUTPUT_TYPE } from './states';
+
+// 原网页阅读助手契约。正文由浏览器按需提取，服务端只在请求生命周期内处理。
+export const ReadingActionSchema = z.enum(['explain', 'translate', 'ask']);
+export type ReadingAction = z.infer<typeof ReadingActionSchema>;
+
+export const ReadingContextScopeSchema = z.enum(['selection', 'section', 'page']);
+export type ReadingContextScope = z.infer<typeof ReadingContextScopeSchema>;
+
+const ReadingUrlSchema = z.string().url().max(2048).refine(
+  (value) => /^https?:\/\//u.test(value),
+  '原网页阅读只支持 HTTP(S) 页面',
+);
+
+export const SourceAnchorSchema = z.object({
+  quote: z.string().min(1).max(12_000),
+  prefix: z.string().max(500).default(''),
+  suffix: z.string().max(500).default(''),
+  startOffset: z.number().int().min(0).optional(),
+  endOffset: z.number().int().min(0).optional(),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  selectorPath: z.string().max(1000).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.startOffset !== undefined && value.endOffset !== undefined && value.endOffset < value.startOffset) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['endOffset'], message: '锚点结束位置不能早于开始位置' });
+  }
+});
+export type SourceAnchor = z.infer<typeof SourceAnchorSchema>;
+
+export const ReadingContextSchema = z.object({
+  url: ReadingUrlSchema,
+  title: z.string().max(300).default('当前网页'),
+  language: z.string().max(20).default('zh-CN'),
+  scope: ReadingContextScopeSchema.default('selection'),
+  body: z.string().min(1).max(256_000),
+  section: z.string().max(80_000).optional(),
+  selection: SourceAnchorSchema.optional(),
+}).strict().superRefine((value, ctx) => {
+  // A selection scoped request without an anchor would silently fall back to
+  // the whole page in the BFF. Reject it at the shared boundary so the range
+  // displayed by the plugin always matches the text sent to the model.
+  if (value.scope === 'selection' && !value.selection) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['selection'],
+      message: '选段范围需要提供原文锚点',
+    });
+  }
+});
+export type ReadingContext = z.infer<typeof ReadingContextSchema>;
+
+export const ReadingAnswerInputSchema = z.object({
+  action: ReadingActionSchema,
+  context: ReadingContextSchema,
+  prompt: z.string().max(4_000).optional(),
+  history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(8_000) }).strict()).max(20).default([]),
+}).strict().superRefine((value, ctx) => {
+  if (value.action === 'ask' && !value.prompt?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['prompt'], message: '追问需要输入问题' });
+  }
+});
+export type ReadingAnswerInput = z.infer<typeof ReadingAnswerInputSchema>;
+
+export const ReadingTranslateInputSchema = z.object({
+  url: ReadingUrlSchema,
+  title: z.string().max(300).default('当前网页'),
+  language: z.string().max(20).default('zh-CN'),
+  blocks: z.array(z.object({ id: z.string().min(1).max(100), text: z.string().min(1).max(12_000) }).strict()).min(1).max(24),
+}).strict();
+export type ReadingTranslateInput = z.infer<typeof ReadingTranslateInputSchema>;
+
+export const ReadingCitationSchema = z.object({
+  quote: z.string().min(1).max(12_000),
+  url: ReadingUrlSchema,
+  anchor: SourceAnchorSchema.nullable().optional(),
+}).strict();
+export type ReadingCitation = z.infer<typeof ReadingCitationSchema>;
+
+export const ReadingEvidenceSchema = z.object({
+  quote: z.string().min(1).max(12_000),
+  claim: z.string().max(4_000).default(''),
+  anchor: SourceAnchorSchema.optional(),
+}).strict();
+export type ReadingEvidence = z.infer<typeof ReadingEvidenceSchema>;
+
+export const ReadingAnswerSchema = z.object({
+  answer: z.string().max(20_000),
+  background: z.string().max(12_000).default(''),
+  inference: z.string().max(12_000).default(''),
+  limitations: z.array(z.string().max(2_000)).max(8).default([]),
+  evidence: z.array(ReadingEvidenceSchema).max(8).default([]),
+  citations: z.array(ReadingCitationSchema).max(24).default([]),
+  warnings: z.array(z.string().max(2_000)).max(20).default([]),
+  structured: z.boolean().default(false),
+}).strict();
+export type ReadingAnswer = z.infer<typeof ReadingAnswerSchema>;
+
+/** Response shape shared by synchronous and streaming reading adapters. */
+export const ReadingResultSchema = z.object({
+  operation: ReadingActionSchema,
+  original: z.string(),
+  suggestion: z.string().nullable().optional(),
+  reading: ReadingAnswerSchema.nullable().optional(),
+  citations: z.array(ReadingCitationSchema).max(24).default([]),
+  warnings: z.array(z.string()).max(20).default([]),
+  truncated: z.boolean().default(false),
+}).strict();
+export type ReadingResult = z.infer<typeof ReadingResultSchema>;
+
+export const ReadingSaveInputSchema = z.object({
+  url: ReadingUrlSchema,
+  title: z.string().trim().min(1).max(300),
+  quote: z.string().trim().min(1).max(12_000),
+  note: z.string().max(8_000).default(''),
+  aiAnswer: z.string().max(20_000).optional(),
+  anchor: SourceAnchorSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+  // The browser keeps this key stable while a save is being retried. It is
+  // optional for older clients; the BFF generates a key when absent.
+  idempotencyKey: z.string().uuid().optional(),
+}).strict();
+export type ReadingSaveInput = z.infer<typeof ReadingSaveInputSchema>;
+
+// Independent browser-reader contracts. These are local-first records; the
+// API key is intentionally not part of any server-bound schema.
+export const ProviderConfigSchema = z.object({
+  baseUrl: z.string().url().refine((value) => /^https?:\/\//u.test(value), '模型地址必须使用 HTTP(S)'),
+  model: z.string().trim().min(1).max(160),
+  visionModel: z.string().trim().min(1).max(160),
+  language: z.string().trim().min(2).max(20),
+}).strict();
+export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
+
+export const ImageTextRegionSchema = z.object({
+  text: z.string().max(4_000),
+  translation: z.string().max(4_000),
+  x: z.number().min(0),
+  y: z.number().min(0),
+  width: z.number().positive(),
+  height: z.number().positive(),
+}).strict();
+export type ImageTextRegion = z.infer<typeof ImageTextRegionSchema>;
+
+export const ReadingDocumentSchema = z.object({
+  url: ReadingUrlSchema,
+  title: z.string().max(300),
+  version: z.string().max(128).nullable().optional(),
+}).strict();
+export type ReadingDocument = z.infer<typeof ReadingDocumentSchema>;
+
+export const TranslationJobSchema = z.object({
+  id: z.string().min(1).max(160),
+  documentUrl: ReadingUrlSchema,
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional(),
+  kind: z.enum(['text', 'image']),
+  status: z.enum(['queued', 'running', 'completed', 'completed_with_errors', 'failed', 'cancelled', 'stale']),
+  textDone: z.number().int().nonnegative().optional(),
+  textTotal: z.number().int().nonnegative().optional(),
+  imageDone: z.number().int().nonnegative().optional(),
+  imageTotal: z.number().int().nonnegative().optional(),
+  failedItems: z.array(z.object({
+    id: z.string().min(1).max(160),
+    kind: z.enum(['text', 'image']),
+    label: z.string().max(240).optional(),
+    error: z.string().max(2_000),
+  }).strict()).max(160).optional(),
+  warnings: z.array(z.string().max(2_000)).max(20).optional(),
+  workerManaged: z.boolean().optional(),
+  tabId: z.number().int().nonnegative().optional(),
+  updatedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  error: z.string().max(2_000).optional(),
+}).strict();
+export type TranslationJob = z.infer<typeof TranslationJobSchema>;
+
+export const SavedInsightSchema = z.object({
+  id: z.string().min(1).max(160),
+  document: ReadingDocumentSchema,
+  quote: z.string().max(12_000),
+  note: z.string().max(8_000),
+  aiAnswer: z.string().max(20_000).optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+  anchor: SourceAnchorSchema.optional(),
+  createdAt: z.string().datetime(),
+}).strict();
+export type SavedInsight = z.infer<typeof SavedInsightSchema>;
+
+/**
+ * A local-first annotation attached to an exact source anchor.
+ *
+ * An annotation is separate from a saved insight: it is a private reading
+ * mark/note and may be deleted without becoming a reusable knowledge item.
+ */
+export const AnnotationSchema = z.object({
+  id: z.string().min(1).max(160),
+  document: ReadingDocumentSchema,
+  anchor: SourceAnchorSchema,
+  note: z.string().max(8_000).default(''),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime().optional(),
+}).strict();
+export type Annotation = z.infer<typeof AnnotationSchema>;
+
+/**
+ * Explicitly synchronized reading state. The browser keeps this state local
+ * by default; when a user asks to sync, only bounded discussion metadata and
+ * anchors are sent. Full page text, translation cache and image bytes are
+ * deliberately excluded from this contract.
+ */
+export const ReadingSessionStateSchema = z.object({
+  radarSummaryId: z.string().uuid().nullable().optional(),
+  selection: SourceAnchorSchema.nullable().optional(),
+  answer: z.string().max(20_000).default(''),
+  answerStructured: ReadingAnswerSchema.nullable().optional(),
+  discussion: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    content: z.string().max(8_000),
+  }).strict()).max(20).default([]),
+  discussionScope: z.enum(['selection', 'page', 'image']).default('selection'),
+  image: z.object({
+    id: z.string().max(160),
+    src: z.string().url().max(2048).optional().or(z.literal('')),
+    alt: z.string().max(2_000).default(''),
+    width: z.number().finite().nonnegative().max(20_000).default(0),
+    height: z.number().finite().nonnegative().max(20_000).default(0),
+  }).strict().nullable().optional(),
+  scrollY: z.number().finite().nonnegative().max(100_000_000).default(0),
+  scrollHeight: z.number().finite().nonnegative().max(100_000_000).default(0),
+}).strict();
+export type ReadingSessionState = z.infer<typeof ReadingSessionStateSchema>;
+
+export const ReadingSessionSyncInputSchema = z.object({
+  clientId: z.string().uuid(),
+  idempotencyKey: z.string().uuid(),
+  document: ReadingDocumentSchema,
+  state: ReadingSessionStateSchema,
+}).strict();
+export type ReadingSessionSyncInput = z.infer<typeof ReadingSessionSyncInputSchema>;
+
+export const ReadingSessionSchema = ReadingSessionSyncInputSchema.extend({
+  updatedAt: z.string().datetime(),
+}).strict();
+export type ReadingSession = z.infer<typeof ReadingSessionSchema>;
 const SourceRefUrlV2 = z.object({
   type: z.literal('url'),
   value: z.string().url().max(2048),

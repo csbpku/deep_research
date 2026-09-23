@@ -6,6 +6,7 @@ import { prisma } from '@/lib/db';
 import { getWebEnv } from '@/lib/env';
 import { isEmailAllowed } from '@/lib/auth/allowlist';
 import { bootstrapAdminEmail, isInviteCodeValid } from '@/lib/auth/invitation';
+import { canCreateAccountInBeta } from '@/lib/auth/beta-access';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
 import { hashPassword, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/auth/password';
@@ -24,6 +25,9 @@ export async function POST(request: Request) {
   const env = getWebEnv();
   if (env.AUTH_GOOGLE_ONLY) {
     return error(request, ERROR_CODES.AUTH_REGISTRATION_DISABLED, '当前部署仅允许使用 Google 登录');
+  }
+  if (env.AUTH_EMAIL_VERIFICATION) {
+    return error(request, ERROR_CODES.AUTH_REGISTRATION_DISABLED, '请使用邮箱验证码完成注册');
   }
   if (!isProductionAuthAllowed(request.headers, env.NODE_ENV, request.url, env.AUTH_ALLOW_INSECURE_HTTP)) {
     return error(request, ERROR_CODES.AUTH_REQUIRES_HTTPS, '生产环境必须通过 HTTPS 激活账号');
@@ -63,6 +67,18 @@ export async function POST(request: Request) {
   }
   if (existing?.passwordHash) {
     return error(request, ERROR_CODES.AUTH_ACCOUNT_EXISTS, '该邮箱已激活，请直接登录');
+  }
+  if (!canCreateAccountInBeta({
+    betaMode: env.AUTH_BETA_MODE,
+    email,
+    existingUser: existing,
+    bootstrapAdminEmail: env.BOOTSTRAP_ADMIN_EMAIL,
+  })) {
+    return error(
+      request,
+      ERROR_CODES.AUTH_REGISTRATION_DISABLED,
+      '当前为 Beta 测试，仅限管理员白名单中的邮箱注册',
+    );
   }
 
   const passwordHash = await hashPassword(password);

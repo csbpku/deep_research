@@ -2,9 +2,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import { RadarRightPanel } from './RadarRightPanel';
+import { MAP_TIMEOUT_MS, RadarRightPanel } from './RadarRightPanel';
 
 describe('RadarRightPanel', () => {
+  it('keeps the article map request budget aligned with long guide generation', () => {
+    expect(MAP_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
   it('uses a source-only outline surface for skim candidates', () => {
     const html = renderToStaticMarkup(createElement(RadarRightPanel, {
       summaryId: '11111111-1111-4111-8111-111111111111',

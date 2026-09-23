@@ -52,10 +52,20 @@ import {
 
 interface ResearchSourceItem {
   id: string;
-  sourceRef: { type?: string; value?: string } | unknown;
+  sourceRef: { type?: string; value?: string; anchor?: SavedSourceAnchor | null } | unknown;
   canonicalKey: string;
   title: string | null;
   description: string | null;
+}
+
+interface SavedSourceAnchor {
+  quote?: string;
+  prefix?: string;
+  suffix?: string;
+  startOffset?: number;
+  endOffset?: number;
+  contentHash?: string;
+  selectorPath?: string;
 }
 
 interface SourceCommentItem {
@@ -111,6 +121,32 @@ interface AuditEntry {
   reason?: string | null;
   createdAt: string;
   editor: { id: string; name: string };
+}
+
+/** Add a bounded fragment understood by the reader extension. The fragment
+ * is harmless when the extension is not installed and preserves the saved
+ * quote as the source of truth in the research library. */
+function addReaderAnchor(href: string, anchor: SavedSourceAnchor): string {
+  try {
+    const url = new URL(href, window.location.origin);
+    if (!/^https?:$/u.test(url.protocol) || !anchor.quote) return href;
+    const payload = JSON.stringify({
+      quote: anchor.quote.slice(0, 12_000),
+      prefix: anchor.prefix?.slice(0, 500),
+      suffix: anchor.suffix?.slice(0, 500),
+      startOffset: anchor.startOffset,
+      endOffset: anchor.endOffset,
+      contentHash: anchor.contentHash,
+      selectorPath: anchor.selectorPath,
+    });
+    // Keep a documentation section hash intact. The extension also accepts
+    // the legacy hash form, but new links carry the bounded payload in a
+    // query parameter so the site's own fragment navigation still works.
+    url.searchParams.set('deep-research-anchor', payload);
+    return url.toString();
+  } catch {
+    return href;
+  }
 }
 
 export default function ResearchDetailPage() {
@@ -381,14 +417,16 @@ export default function ResearchDetailPage() {
                 <div className="space-y-2">
                   {data.researchSources.map((source) => {
                     const ref = source.sourceRef && typeof source.sourceRef === 'object'
-                      ? source.sourceRef as { type?: string; value?: string }
+                      ? source.sourceRef as { type?: string; value?: string; anchor?: SavedSourceAnchor | null }
                       : {};
                     const link = resolveResearchSourceLink(ref, source.canonicalKey);
                     if (!link) return null;
+                    const anchor = ref.anchor && typeof ref.anchor === 'object' ? ref.anchor : null;
+                    const readerHref = anchor?.quote ? addReaderAnchor(link.href, anchor) : link.href;
                     return (
                       <div key={source.id} className="min-w-0">
                         <a
-                          href={link.href}
+                          href={readerHref}
                           target={link.external ? '_blank' : undefined}
                           rel={link.external ? 'noreferrer' : undefined}
                           className="inline-flex max-w-full items-start gap-1 text-sm text-primary hover:underline"
@@ -398,6 +436,13 @@ export default function ResearchDetailPage() {
                         </a>
                         {source.description ? (
                           <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{cleanResearchText(source.description)}</p>
+                        ) : null}
+                        {anchor?.quote ? (
+                          <div className="mt-2 rounded-md border border-primary/15 bg-primary/[0.03] px-2.5 py-2 text-xs">
+                            <p className="font-medium text-primary">已保存原文锚点</p>
+                            <p className="mt-1 line-clamp-3 leading-5 text-muted-foreground">“{cleanResearchText(anchor.quote)}”</p>
+                            <p className="mt-1 leading-5 text-muted-foreground">打开原文后点击阅读插件会尝试定位；如果正文已变化，插件会明确提示无法准确定位。</p>
+                          </div>
                         ) : null}
                       </div>
                     );

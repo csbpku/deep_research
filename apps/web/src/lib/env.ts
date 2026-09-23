@@ -30,6 +30,18 @@ const positiveNumber = z
   .transform((s) => Number(s))
   .pipe(z.number().positive());
 
+const betaDownloadUrl = z
+  .string()
+  .refine((value) => {
+    if (value === '') return true;
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, 'READING_EXTENSION_BETA_URL must be an HTTP(S) URL');
+
 /** apps/web env schema —— 与 docs/contracts/env-and-scripts.md §2 对齐 */
 const webEnvSchema = z
   .object({
@@ -48,12 +60,37 @@ const webEnvSchema = z
 
     AI_ENGINE_URL: z.string().url('AI_ENGINE_URL must be a URL').default('http://localhost:4000'),
 
+    // Beta Reader distribution. Prefer a release/object-storage URL in
+    // production; a mounted path is useful for self-hosted deployments.
+    READING_EXTENSION_BETA_URL: betaDownloadUrl.default(''),
+    READING_EXTENSION_BETA_PATH: z.string().default(''),
+    READING_EXTENSION_BETA_VERSION: z
+      .string()
+      .regex(/^[A-Za-z0-9._-]+$/, 'READING_EXTENSION_BETA_VERSION contains unsupported characters')
+      .default('0.2.2'),
+    READING_EXTENSION_BETA_SHA256: z
+      .string()
+      .refine(
+        (value) => value === '' || /^[a-f0-9]{64}$/i.test(value),
+        'READING_EXTENSION_BETA_SHA256 must be a SHA-256 hex digest',
+      )
+      .default(''),
+
     GOOGLE_CLIENT_ID: z.string().default(''),
     GOOGLE_CLIENT_SECRET: z.string().default(''),
     GITHUB_CLIENT_ID: z.string().default(''),
     GITHUB_CLIENT_SECRET: z.string().default(''),
     // Compatibility mode: removes password and GitHub authentication surfaces.
     AUTH_GOOGLE_ONLY: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
+    // Closed Beta: new accounts must be pre-created by an Admin.
+    AUTH_BETA_MODE: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
+    AUTH_EMAIL_VERIFICATION: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
+    SMTP_HOST: z.string().default(''),
+    SMTP_PORT: positiveInt.default('587'),
+    SMTP_SECURE: z.enum(['0', '1']).default('0').transform((value) => value === '1'),
+    SMTP_USER: z.string().default(''),
+    SMTP_PASSWORD: z.string().default(''),
+    SMTP_FROM: z.string().default(''),
     ALLOWED_EMAIL_DOMAINS: csvDomains,
     AUTH_INVITE_CODE: z.string().default(''),
     // Temporary emergency switch for IP/HTTP-only deployments. Keep disabled
@@ -78,6 +115,17 @@ const webEnvSchema = z
         path: ['GOOGLE_CLIENT_ID'],
         message: 'Google OAuth credentials are required when AUTH_GOOGLE_ONLY=1',
       });
+    }
+    if (env.AUTH_EMAIL_VERIFICATION) {
+      if (!env.SMTP_HOST) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SMTP_HOST'], message: 'SMTP_HOST is required when AUTH_EMAIL_VERIFICATION=1' });
+      }
+      if (!env.SMTP_FROM) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SMTP_FROM'], message: 'SMTP_FROM is required when AUTH_EMAIL_VERIFICATION=1' });
+      }
+      if (Boolean(env.SMTP_USER) !== Boolean(env.SMTP_PASSWORD)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['SMTP_USER'], message: 'SMTP_USER and SMTP_PASSWORD must be configured together' });
+      }
     }
   });
 

@@ -14,6 +14,7 @@ from typing import Any
 
 from ai_engine.radar.candidate_postprocessor import score_missing_candidates
 from ai_engine.radar.enrichment_worker import run_enrichment_for_pending
+from ai_engine.radar.runtime_flags import radar_enrichment_enabled
 
 
 def _env_int(name: str, default: int, *, minimum: int) -> int:
@@ -93,6 +94,8 @@ async def recover_content_pending_candidates(
     concurrency: int = 1,
 ) -> ContentPendingRecoveryResult:
     """Refetch a bounded batch, then score only successfully captured content."""
+    if not radar_enrichment_enabled():
+        return ContentPendingRecoveryResult()
     batch_limit = limit or _env_int(
         "RADAR_CONTENT_RECOVERY_LIMIT", 5, minimum=1,
     )

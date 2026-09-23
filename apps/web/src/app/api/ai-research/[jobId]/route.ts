@@ -35,6 +35,7 @@ import {
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 
 const IdParam = z.object({ jobId: z.string().uuid() });
+const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
 
 function projectReviewClaims(
   value: unknown,
@@ -363,10 +364,21 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   const storedReportContent = draftResearch?.body?.trim()
     ? draftResearch.body
     : upstreamReportContent ?? null;
+  // A running job can already have a durable source ledger while its report
+  // writer is still in flight. That is progress, not an evidence-only
+  // terminal result. Only construct the read-only fallback snapshot after
+  // the upstream execution has actually reached a terminal state; otherwise
+  // the page briefly turns a live job into “资料已保留/部分完成”.
+  const upstreamFinalStatus = TERMINAL_JOB_STATUSES.has(up.final_status ?? '')
+    ? up.final_status
+    : TERMINAL_JOB_STATUSES.has(up.status)
+      ? up.status
+      : null;
+  const upstreamIsTerminal = upstreamFinalStatus !== null;
   // A late worker timeout can leave a durable evidence ledger without any
   // writer output. Make that work inspectable at the presentation boundary;
   // this is a read-only snapshot, never a synthesized report.
-  const evidenceSnapshot = !storedReportContent
+  const evidenceSnapshot = upstreamIsTerminal && !storedReportContent
     ? buildEvidenceDigest(
         up.topic ?? 'AI 调研',
         evidenceSources.map((source) => ({
@@ -378,14 +390,14 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
       )
     : null;
   const rawReportContent = storedReportContent ?? evidenceSnapshot;
-  const evidenceOnly = isEvidenceOnlyResearchOutput(rawReportContent);
+  const evidenceOnly = upstreamIsTerminal && isEvidenceOnlyResearchOutput(rawReportContent);
   // Older jobs could persist the evidence digest behind a `succeeded` status.
   // Derive the user-facing status from the actual deliverable so a source
   // list can never masquerade as a completed report. Research sufficiency is
   // a separate quality/publication gate: it must not rewrite a successful
   // execution into `partial`, otherwise the reader cannot tell whether the
   // pipeline failed or simply produced a report that still needs evidence.
-  const effectiveFinalStatus = evidenceOnly ? 'partial' : (up.final_status ?? null);
+  const effectiveFinalStatus = evidenceOnly ? 'partial' : upstreamFinalStatus;
   const reportVersion = 1 + (draftResearch?.audit?.length ?? 0);
   const cleanedReportContent = rawReportContent
     ? cleanResearchReportForReader(

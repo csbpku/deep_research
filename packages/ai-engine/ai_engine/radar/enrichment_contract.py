@@ -125,9 +125,11 @@ def enrichment_review_reset_assignments() -> str:
         '"renderReviewStartedAt" = NULL, '
         '"renderReviewClaimId" = NULL, '
         '"renderReviewedAt" = NULL, '
-        '"tags" = array_append('
-        'array_remove(array_remove(COALESCE("tags", ARRAY[]::text[]), '
-        "'content_pending'), 'github_content_pending'), 'content_pending')"
+        '"tags" = array_append(array_append('
+        'array_remove(array_remove(array_remove(COALESCE("tags", ARRAY[]::text[]), '
+        "'content_pending'), 'github_content_pending'), "
+        "'score_pending_after_enrichment'), 'content_pending'), "
+        "'score_pending_after_enrichment')"
     )
 
 

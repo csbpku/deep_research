@@ -217,9 +217,52 @@ model User {
   commentMentions       CommentMention[]
   notificationsReceived Notification[]     @relation("notification_recipient")
   notificationsSent     Notification[]     @relation("notification_actor")
+  readingSessions       ReadingSession[]
 
   @@index([role, disabledAt])
   @@map("users")
+}
+
+// Password registration email ownership challenge. Codes are stored as an
+// HMAC and consumed atomically with account creation.
+model EmailVerificationChallenge {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String    @unique @db.Citext
+  codeHash      String    @db.VarChar(64)
+  attempts      Int       @default(0)
+  requestIpHash String    @db.VarChar(64)
+  expiresAt     DateTime  @db.Timestamptz(3)
+  sentAt        DateTime  @db.Timestamptz(3)
+  consumedAt    DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@index([requestIpHash, sentAt])
+  @@index([expiresAt])
+  @@map("email_verification_challenges")
+}
+
+// Explicitly synchronized browser-reader state. Page text, translation cache
+// and image bytes are never stored here; the extension sends only bounded
+// session metadata after the user requests a sync.
+model ReadingSession {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String   @db.Uuid
+  clientId        String   @db.Uuid
+  documentKey     String   @db.Char(64)
+  documentUrl     String   @db.VarChar(2048)
+  title           String   @db.VarChar(300)
+  documentVersion String?  @db.VarChar(128)
+  state           Json     @db.JsonB
+  lastSyncKey     String   @db.Uuid
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientId, documentKey])
+  @@index([userId, updatedAt(sort: Desc)])
+  @@map("reading_sessions")
 }
 
 model ConfluenceConnection {
@@ -405,6 +448,9 @@ model Research {
   // AI 协助链路（架构 §十二点五 + §五 origin_content_sha256 锁定）
   aiAssisted          Boolean        @default(false)
   creationMethod      CreationMethod @default(manual)
+  // Browser-reading saves use this optional key so a dropped response cannot
+  // create a second knowledge draft when the user retries.
+  readingSaveKey      String?        @db.Uuid
   originContentSha256 String?        @db.Char(64) // 阻止未修改 AI 草稿直接发布
   sourceCommentId     String?        @db.Uuid // type=knowledge 时指向源评论
   // 已发布 AI 研究是稳定的、经过审核的版本；后续编辑创建新的私有草稿。
@@ -446,6 +492,7 @@ model Research {
   @@index([type, publishedAt(sort: Desc)])
   @@index([authorId, status])
   @@index([aiAssisted])
+  @@unique([authorId, readingSaveKey])
   @@index([sourceCommentId])
   @@index([supersedesResearchId])
   @@map("researches")

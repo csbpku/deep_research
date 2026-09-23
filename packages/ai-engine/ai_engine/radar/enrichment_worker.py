@@ -51,6 +51,10 @@ from ai_engine.radar.enrichment_contract import (
 from ai_engine.radar.huggingface import huggingface_endpoint
 from ai_engine.radar.reader_quality import evaluate_reader_quality
 from ai_engine.radar.review_reconciliation import finalize_enrichment
+from ai_engine.radar.runtime_flags import (
+    enrichment_pause_reason,
+    radar_enrichment_enabled,
+)
 
 logger = logging.getLogger("ai_engine.radar.enrichment_worker")
 
@@ -120,6 +124,19 @@ _RETURNING_ID = ' RETURNING "id"'
 
 class EnrichmentLeaseLost(RuntimeError):
     """Raised when a late worker no longer owns the summary lease."""
+
+
+class EnrichmentPaused(RuntimeError):
+    """Raised when the legacy enrichment path is intentionally disabled."""
+
+    code = "RADAR_ENRICHMENT_PAUSED"
+
+
+def _ensure_enrichment_enabled() -> None:
+    if not radar_enrichment_enabled():
+        raise EnrichmentPaused(
+            f"radar enrichment is paused ({enrichment_pause_reason()})",
+        )
 
 
 def _is_upstream_rate_limit(
@@ -606,6 +623,7 @@ async def request_enrichment_run(
     healthy active lease are left alone, so a repeated browser click cannot
     reset work already in progress.
     """
+    _ensure_enrichment_enabled()
     run_id = str(uuid.uuid4())
     async with pool.connection() as conn:
         rows = await (
@@ -2396,9 +2414,12 @@ async def _generate_arxiv_analysis(
         "Do not fabricate numbers or citations — only describe what the paper says. "
         "Output language: simplified Chinese."
     )
+    analysis_context = _build_arxiv_analysis_context(markdown)
     user_prompt = (
         f"标题: {title}\n\n"
-        f"正文 (前 6000 字):\n{markdown[:6000]}\n\n"
+        "正文（按 Abstract、方法、实验/评测、工程实现、结论等章节采样；"
+        "不是只看开头）:\n"
+        f"{analysis_context}\n\n"
         "请按以下 5 个字段输出 JSON (不要 markdown 代码块、不要解释):\n"
         "{\n"
         '  "tldr": "一句话总结，不超过 100 字",\n'
@@ -2522,6 +2543,77 @@ async def _generate_repo_summary(
         return text[:2000]
     except Exception:
         return None
+
+
+_ARXIV_ANALYSIS_CONTEXT_MAX_CHARS = 18_000
+_ARXIV_SECTION_HEADING_RE = _re.compile(
+    r"(?m)^(#{1,6})\s+(.+?)\s*$",
+)
+_ARXIV_ANALYSIS_SECTION_RE = _re.compile(
+    r"(?:method|approach|architecture|model|algorithm|"
+    r"experiment|evaluation|benchmark|result|ablation|"
+    r"implementation|deployment|system|application|conclusion|limitation|"
+    r"方法|方案|模型|算法|实验|评测|基准|结果|消融|实现|部署|系统|应用|"
+    r"结论|局限)",
+    _re.IGNORECASE,
+)
+
+
+def _build_arxiv_analysis_context(
+    markdown: str,
+    *,
+    max_chars: int = _ARXIV_ANALYSIS_CONTEXT_MAX_CHARS,
+) -> str:
+    """Sample a long paper across its evidence-bearing sections.
+
+    The old ``markdown[:6000]`` policy let a long abstract consume the whole
+    analysis budget. Preserve the abstract as context, then add method,
+    experiment/evaluation, implementation, and conclusion sections before the
+    tail. This keeps the generated fields grounded in the parts the reader
+    actually needs.
+    """
+    text = markdown.strip()
+    if len(text) <= max_chars:
+        return text
+
+    headings = list(_ARXIV_SECTION_HEADING_RE.finditer(text))
+    chunks: list[str] = []
+    if headings:
+        first_end = headings[1].start() if len(headings) > 1 else len(text)
+        if (
+            len(headings) > 2
+            and _re.search(r"abstract|摘要", headings[1].group(2), _re.IGNORECASE)
+        ):
+            first_end = headings[2].start()
+        section_budget = max(600, max_chars // 6)
+        chunks.append(text[: min(first_end, section_budget)].strip())
+        for index, heading in enumerate(headings):
+            section_title = heading.group(2).strip()
+            if not _ARXIV_ANALYSIS_SECTION_RE.search(section_title):
+                continue
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+            section = text[heading.start():end].strip()
+            if section:
+                chunks.append(section[:section_budget])
+    else:
+        chunks.append(text[: max(600, max_chars // 2)])
+
+    tail = text[-max(600, max_chars // 6):].strip()
+    if tail:
+        chunks.append("## 文末与结论采样\n\n" + tail)
+
+    selected: list[str] = []
+    used = 0
+    for chunk in chunks:
+        if not chunk:
+            continue
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        clipped = chunk[:remaining]
+        selected.append(clipped)
+        used += len(clipped)
+    return "\n\n---\n\n".join(selected).strip()
 
 async def enrich_arxiv_candidate(
     pool: Any,
@@ -2783,6 +2875,7 @@ async def _run_enrichment_for_pending(
     force: bool = False,
     item_timeout: float | None = None,
     run_id: str | None = None,
+    completed_ids: list[str] | None = None,
 ) -> int:
     """Find candidates that need enrichment and process them.
 
@@ -2797,6 +2890,7 @@ async def _run_enrichment_for_pending(
 
     Returns count of successfully enriched rows.
     """
+    _ensure_enrichment_enabled()
     ignore_rate_limit_cooldown = os.environ.get(
         "RADAR_ENRICHMENT_IGNORE_RATE_LIMIT_COOLDOWN",
         "0",
@@ -3474,6 +3568,12 @@ async def _run_enrichment_for_pending(
             for summary_id, url, kind, attempts, claim_id in candidates
         )
     )
+    if completed_ids is not None:
+        completed_ids.extend(
+            summary_id
+            for (summary_id, *_), completed in zip(candidates, outcomes, strict=True)
+            if completed
+        )
     succeeded = sum(outcomes)
     attempted = len(candidates)
     if attempted < claim_limit or attempted >= limit:
@@ -3486,10 +3586,10 @@ async def _run_enrichment_for_pending(
     # its own completed work.
     remaining_summary_ids = summary_ids
     if summary_ids:
-        completed_ids = {summary_id for summary_id, *_ in candidates}
+        attempted_ids = {summary_id for summary_id, *_ in candidates}
         remaining_summary_ids = tuple(
             summary_id for summary_id in summary_ids
-            if summary_id not in completed_ids
+            if summary_id not in attempted_ids
         )
         if not remaining_summary_ids:
             return succeeded
@@ -3506,6 +3606,7 @@ async def _run_enrichment_for_pending(
         force=force,
         item_timeout=item_timeout,
         run_id=run_id,
+        completed_ids=completed_ids,
     )
 
 
@@ -3520,6 +3621,7 @@ async def run_enrichment_for_pending(
     force: bool = False,
     item_timeout: float | None = None,
     run_id: str | None = None,
+    completed_ids: list[str] | None = None,
 ) -> int:
     """Claim and process durable enrichment work.
 
@@ -3528,6 +3630,7 @@ async def run_enrichment_for_pending(
     per-row lease and claim token, so an unrelated new candidate does not wait
     behind a slow Zread job.
     """
+    _ensure_enrichment_enabled()
     return await _run_enrichment_for_pending(
         pool,
         limit=limit,
@@ -3538,6 +3641,7 @@ async def run_enrichment_for_pending(
         force=force,
         item_timeout=item_timeout,
         run_id=run_id,
+        completed_ids=completed_ids,
     )
 
 

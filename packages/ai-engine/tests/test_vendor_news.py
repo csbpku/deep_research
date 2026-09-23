@@ -145,6 +145,16 @@ def test_article_title_prefers_h1_and_decodes_html_entities() -> None:
     )
 
 
+def test_article_title_removes_hidden_selector_artifact() -> None:
+    html = (
+        '<h1>a]:hidden"> Your Agent Aced the Task. Will It Do It Again?</h1>'
+    )
+
+    assert _extract_article_title(html) == (
+        "Your Agent Aced the Task. Will It Do It Again?"
+    )
+
+
 class _FakeResponse:
     def __init__(self, text: str) -> None:
         self.text = text

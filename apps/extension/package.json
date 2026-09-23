@@ -1,0 +1,44 @@
+{
+  "name": "@deep-research/reader-extension",
+  "version": "0.2.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test reader-core.test.mjs activation.test.mjs markdown-renderer.test.mjs",
+    "e2e:smoke": "node e2e/smoke.mjs",
+    "e2e:live-provider": "READER_LIVE=1 node e2e/smoke.mjs",
+    "e2e:worker": "node e2e/worker-smoke.mjs",
+    "e2e:worker-termination": "node e2e/worker-termination.mjs",
+    "e2e:controls": "node e2e/controls.mjs",
+    "e2e:conversation-history": "node e2e/conversation-history.mjs",
+    "e2e:visual": "node e2e/sidepanel-visual.mjs",
+    "e2e:radar-flow": "node e2e/radar-reader-flow.mjs",
+    "e2e:image-position": "node e2e/image-position.mjs",
+    "e2e:dynamic-failure": "node e2e/dynamic-failure.mjs",
+    "e2e:matrix": "node e2e/compatibility-matrix.mjs",
+    "e2e:live": "node e2e/live-matrix.mjs",
+    "e2e:live-image-corpus": "node e2e/live-image-corpus.mjs",
+    "e2e:live-image-benchmark": "node e2e/live-image-benchmark.mjs",
+    "e2e:live-image-review": "node e2e/live-image-visual-review.mjs",
+    "e2e:pkce": "node e2e/platform-pkce.mjs",
+    "check": "node --check background.js && node --check content.js && node --check reader-store.js && node --check reader-core.js && node --check markdown-renderer.js && node --check sidepanel.js && node --check history.js && node --check scripts/sync-static.mjs",
+    "wxt:prepare": "wxt prepare",
+    "build": "node scripts/sync-static.mjs && wxt build",
+    "build:e2e": "READER_E2E=1 node scripts/sync-static.mjs && READER_E2E=1 wxt build",
+    "package": "node scripts/sync-static.mjs && wxt zip",
+    "package:beta": "node scripts/package-beta.mjs",
+    "typecheck": "wxt prepare && tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@wxt-dev/module-react": "^1.2.2",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3",
+    "wxt": "^0.21.4"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

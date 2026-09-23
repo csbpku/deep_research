@@ -231,6 +231,7 @@ async def test_quality_reconciliation_refreshes_legacy_or_snapshot_mismatched_ro
     assert count == 1
     assert refreshed == ["summary-legacy"]
     sql, params = pool.connection_value.executions[0]
+    assert 'COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\'' in sql
     assert '"readerQualityDetails"->>\'contentSha256\'' in sql
     assert 'IS DISTINCT FROM "originalSha256"' in sql
     assert params == (rr.READER_QUALITY_VERSION, 5)

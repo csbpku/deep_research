@@ -23,6 +23,7 @@ from ai_engine.radar.sync_runner import (
     _extract_article_content,
     _can_use_github_repo_metadata_fallback,
     _classify_original_kind,
+    _linked_github_repo_url,
     _finish_run,
     _generate_brief_with_retry,
     _is_low_quality_content,
@@ -32,6 +33,7 @@ from ai_engine.radar.sync_runner import (
     _scoreability,
     _shell_content_label,
     _strip_reasoning_markup,
+    browser_reading_mode_enabled,
     RadarSyncResult,
     SourceRunResult,
     run_radar_pipeline,
@@ -40,6 +42,14 @@ from ai_engine.radar.sync_runner import (
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.radar.distilled_scorer import compute_score
+
+
+@pytest.fixture(autouse=True)
+def legacy_enrichment_mode_for_existing_sync_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep historical sync tests explicit while production defaults to browser mode."""
+    monkeypatch.setenv("RADAR_READING_MODE", "enriched")
 
 
 @pytest.mark.parametrize(
@@ -54,6 +64,20 @@ from ai_engine.radar.distilled_scorer import compute_score
 )
 def test_classifies_github_item_urls_for_radar_boundary(url: str, expected: str) -> None:
     assert _classify_original_kind("rss", url) == expected
+
+
+def test_detects_github_repo_linked_from_project_landing_page() -> None:
+    assert _linked_github_repo_url(
+        "https://openspec.dev/",
+        "OpenSpec is documented here. Source: https://github.com/Fission-AI/OpenSpec",
+    ) == "https://github.com/Fission-AI/OpenSpec"
+
+
+def test_ignores_non_repository_github_links() -> None:
+    assert _linked_github_repo_url(
+        "https://example.com/article",
+        "Discussion: https://github.com/acme/project/issues/7",
+    ) is None
 
 
 class _Cursor:
@@ -179,7 +203,13 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "仅用于排序，不自动发布" in params[15]
 
 
-async def test_sync_persists_high_score_as_target_but_only_skim_deliverable() -> None:
+async def test_sync_persists_high_score_as_target_but_only_skim_deliverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This assertion exercises the historical enrichment contract. Browser
+    # reading is the production default now, so make the legacy mode explicit
+    # instead of coupling the test to the rollout default.
+    monkeypatch.setenv("RADAR_READING_MODE", "enriched")
     pool = _Pool([_source()])
 
     async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
@@ -617,6 +647,40 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
         "limit": 2,
         "sync_run_ids": ("run-1",),
     }
+
+
+async def test_browser_reading_mode_skips_document_fetch_and_enrichment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The migration switch keeps discovery metadata while deferring reading to the plugin."""
+    monkeypatch.setenv("RADAR_READING_MODE", "browser")
+    assert browser_reading_mode_enabled()
+    pool = _Pool([_source()])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate("https://example.com/browser-reading")]
+
+    async def must_not_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        raise AssertionError(f"browser mode fetched {url}")
+
+    result = await run_radar_pipeline(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=must_not_fetch,
+    )
+
+    assert result.enriched_count == 0
+    assert result.enrichment_error is None
+    insert_sql, insert_params = next(
+        item for item in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in item[0]
+    )
+    assert "external_reading" in insert_params[10]
+    assert insert_params[18] == "skim"
+    assert "originalMarkdown" in insert_sql
+    assert insert_params[23] is None
 
 
 async def test_source_failure_does_not_block_other_source() -> None:

@@ -182,6 +182,8 @@ def test_system_prompt_is_strict() -> None:
     assert "解决一个真实的 AI 项目问题" in SYSTEM_PROMPT
     assert "来源不设绝对上限" in SYSTEM_PROMPT
     assert "单一模型的官方文档若提供具体 prompt" in SYSTEM_PROMPT
+    assert "README 长、章节多" in SYSTEM_PROMPT
+    assert "明确重复同一结论" in SYSTEM_PROMPT
 
 
 def test_user_prompt_contains_rubric_and_meta() -> None:
@@ -228,8 +230,8 @@ def test_user_prompt_meta_includes_domain_published_current() -> None:
     assert "2026-07-30" in prompt
 
 
-def test_version_string_is_v3() -> None:
-    assert DISTILLED_VERSION == "4.7"
+def test_version_string_is_v4_8() -> None:
+    assert DISTILLED_VERSION == "4.8"
 
 
 def test_scoring_content_skips_client_side_docs_shell() -> None:
@@ -811,6 +813,40 @@ def test_weak_point_auto_generated_when_empty() -> None:
     )
     result = compute_score(parsed)
     assert "可行动性" in result.weak_point
+
+
+def test_generic_readme_length_weak_point_is_suppressed() -> None:
+    parsed = _all_zero_parsed(
+        **{
+            "信息增量": 2,
+            "分析深度": 2,
+            "可行动性": 2,
+            "事实可信度": 2,
+            "时效性": 2,
+            "表达质量": 2,
+            "综合信号": 2,
+            "weak_point": "README极长，安全/操作/编辑器配置段落存在重复冗余",
+        }
+    )
+    result = compute_score(parsed)
+    assert result.weak_point == ""
+
+
+def test_weak_point_keeps_concrete_low_dimension_reason() -> None:
+    parsed = _all_zero_parsed(
+        **{
+            "信息增量": 2,
+            "分析深度": 2,
+            "可行动性": 1,
+            "事实可信度": 2,
+            "时效性": 2,
+            "表达质量": 2,
+            "综合信号": 2,
+            "weak_point": "缺少可复现的超时与重试配置",
+        }
+    )
+    result = compute_score(parsed)
+    assert result.weak_point == "缺少可复现的超时与重试配置"
 
 
 # ── default_score / score_with_llm ────────────────────────────────

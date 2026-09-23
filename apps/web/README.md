@@ -6,8 +6,8 @@ Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/�
 
 - 页面：技术雷达与详情、主题、研究库/知识卡片、文件导入、AI 调研、搜索、登录和 Admin。
 - AI 调研：研究稿、快速判断、Slides 提纲、独立网页简报；深度任务会展示实际证据进度，运行中/部分完成的研究稿可读但仍受事实审核和发布门禁约束。
-- 雷达阅读：摘要先行、正文延迟加载、文章地图与选文动作；高价值 enrichment 的内容审核和真实浏览器渲染审核状态会单独展示，日报生成链路已移除。
-- API：researches、knowledge、imports、radar、shares、search、AI research、chat session/message、auth 与 admin routes；包含任务取消、研究审核、知识卡片提炼和雷达文档刷新。
+- 雷达阅读：摘要先行并直接进入原文阅读插件；默认 browser 模式不拉取新正文或创建 enrichment，历史/显式 legacy enrichment 的审核状态仍单独展示，日报生成链路已移除。
+- API：researches、knowledge、imports、radar、shares、search、AI research、chat session/message、auth、admin 与 `/api/reading/*` routes；阅读接口支持按需翻译、原文上下文解读/追问、一次性授权码 + PKCE、流式回答和显式保存摘录草稿。
 - 基础设施：NextAuth JWT + scrypt 邮箱密码登录、可选 Google OAuth（生产可切换 Google-only）、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma；开发环境默认使用 `.next-dev`，隔离构建可用 `NEXT_DIST_DIR`。
 
 ## 目录
@@ -48,11 +48,12 @@ pnpm --filter @deep-research/web build
 
 ## 登录
 
-1. 默认模式支持邮箱密码直接注册/登录；`ALLOWED_EMAIL_DOMAINS` 仅作为旧激活接口的兼容配置，不限制公开注册或 OAuth。设置 `AUTH_GOOGLE_ONLY=1` 可关闭密码和 GitHub 登录，仅保留 Google。
-2. 密码使用 Node `crypto.scrypt` 哈希保存；最小长度为 12 个字符。
-3. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`；该邮箱首次注册或通过 OAuth 登录时会获得 Admin 角色。
-4. Google 和 GitHub OAuth 都是可选 provider；回调 URI 分别是 `{NEXTAUTH_URL}/api/auth/callback/google` 和 `{NEXTAUTH_URL}/api/auth/callback/github`。Google-only 模式要求 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。
-5. 公网使用邮箱密码登录前必须启用 HTTPS；HTTP 只适合本机或受控内网联调。
+1. 默认模式支持邮箱密码直接注册/登录；设置 `AUTH_BETA_MODE=1` 后，新账号必须先由 Admin 在“成员”页加入邮箱白名单，密码注册与 OAuth 首次开户都会执行同一检查。`ALLOWED_EMAIL_DOMAINS` 仅作为旧激活接口的兼容配置。设置 `AUTH_GOOGLE_ONLY=1` 可关闭密码和 GitHub 登录，仅保留 Google。
+2. 设置 `AUTH_EMAIL_VERIFICATION=1` 后，密码注册必须先完成 6 位邮箱验证码校验；同时配置 `SMTP_HOST`、`SMTP_PORT`、`SMTP_SECURE`、`SMTP_FROM`，需要认证的 SMTP 再配置 `SMTP_USER` 与 `SMTP_PASSWORD`。验证码 10 分钟有效、60 秒后可重发，最多尝试 5 次。
+3. 密码使用 Node `crypto.scrypt` 哈希保存；最小长度为 12 个字符。
+4. `BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`；该邮箱首次注册或通过 OAuth 登录时会获得 Admin 角色。
+5. Google 和 GitHub OAuth 都是可选 provider；回调 URI 分别是 `{NEXTAUTH_URL}/api/auth/callback/google` 和 `{NEXTAUTH_URL}/api/auth/callback/github`。Google-only 模式要求 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。
+6. 公网使用邮箱密码登录前必须启用 HTTPS；HTTP 只适合本机或受控内网联调。
 
 ## Radar bootstrap
 

@@ -11,6 +11,38 @@ from ai_engine.fetcher.safe_fetch import FetchedDocument
 from ai_engine.radar import enrichment_worker as ew
 
 
+@pytest.fixture(autouse=True)
+def legacy_enrichment_mode_for_worker_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run legacy worker contracts only under the explicit rollback switch."""
+    monkeypatch.setenv("RADAR_READING_MODE", "enriched")
+    monkeypatch.setenv("RADAR_ENRICHMENT_ENABLED", "1")
+
+
+def test_arxiv_analysis_context_keeps_method_and_experiment_sections() -> None:
+    markdown = (
+        "# Paper\n\n"
+        "## Abstract\n\n" + ("Abstract setup. " * 900) + "\n\n"
+        "## Method\n\n"
+        "The method uses a two-stage retrieval and verifier pipeline.\n\n"
+        "## Experiments\n\n"
+        "On three benchmarks the method improves latency and accuracy.\n\n"
+        "## Deployment\n\n"
+        "The service uses batching, retries, and a production fallback.\n\n"
+        "## Conclusion\n\n"
+        "The approach is useful under the stated constraints.\n"
+    )
+
+    context = ew._build_arxiv_analysis_context(markdown, max_chars=6000)
+
+    assert "## Abstract" in context
+    assert "## Method" in context
+    assert "## Experiments" in context
+    assert "## Deployment" in context
+    assert "## Conclusion" in context
+
+
 class _Cursor:
     def __init__(
         self,
@@ -1093,8 +1125,14 @@ async def test_run_enrichment_for_pending_dispatches_all_default_kinds(
 
     monkeypatch.setattr(ew, "finalize_enrichment", fake_finalize)
 
-    succeeded = await ew.run_enrichment_for_pending(pool, limit=50)
+    completed_ids: list[str] = []
+    succeeded = await ew.run_enrichment_for_pending(
+        pool,
+        limit=50,
+        completed_ids=completed_ids,
+    )
     assert succeeded == 6
+    assert set(completed_ids) == {f"id-{kind}" for kind in kinds}
     assert set(calls) == set(kinds)
     assert set(reviewed) == set(kinds)
 

@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -40,6 +41,62 @@ class TextGenerationResult:
     provider: str
     finish_reason: str | None = None
     truncated: bool = False
+
+
+class ReasoningStreamFilter:
+    """Incrementally remove provider reasoning markup from a text stream.
+
+    Reasoning tags can be split across provider chunks.  Keep a small pending
+    suffix so a partial ``<think>`` marker is never shown to the reader, and
+    drop an unterminated reasoning block when the provider closes the stream.
+    """
+
+    _OPEN = re.compile(r"<(think|analysis|reasoning)(?:\s[^>]*)?>", re.IGNORECASE)
+    _CLOSE = re.compile(r"</(think|analysis|reasoning)\s*>", re.IGNORECASE)
+    # The longest marker we need to keep intact is ``</think>``. A small
+    # suffix gives the UI an early first delta while still handling split tags.
+    _PENDING_LIMIT = 24
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self._reasoning_tag: str | None = None
+
+    def feed(self, value: str) -> str:
+        self._pending += value
+        output: list[str] = []
+        while self._pending:
+            if self._reasoning_tag is not None:
+                closing = self._CLOSE.search(self._pending)
+                if closing is None:
+                    # Do not retain an unbounded private reasoning response.
+                    self._pending = self._pending[-self._PENDING_LIMIT:]
+                    break
+                self._pending = self._pending[closing.end():]
+                self._reasoning_tag = None
+                continue
+
+            opening = self._OPEN.search(self._pending)
+            if opening is not None:
+                output.append(self._pending[:opening.start()])
+                self._pending = self._pending[opening.end():]
+                self._reasoning_tag = opening.group(1).lower()
+                continue
+
+            safe_length = len(self._pending) - self._PENDING_LIMIT
+            if safe_length <= 0:
+                break
+            output.append(self._pending[:safe_length])
+            self._pending = self._pending[safe_length:]
+            break
+        return "".join(output)
+
+    def finish(self) -> str:
+        if self._reasoning_tag is not None:
+            self._pending = ""
+            return ""
+        value = self._pending
+        self._pending = ""
+        return value
 
 
 def _llm_spec(tier: LlmTier, explicit: str | None) -> str:
@@ -322,6 +379,106 @@ async def generate_text(
     raise RuntimeError("no usable LLM route configured")
 
 
+async def stream_text(
+    *,
+    user_prompt: str,
+    system_prompt: str | None = None,
+    llm_spec: str | None = None,
+    tier: LlmTier = "light",
+    max_tokens: int = 1024,
+    timeout: float = 60.0,
+    disable_thinking: bool = False,
+    operation: str = "llm.stream_text",
+    request_id: str | None = None,
+    on_delta: Callable[[str], Awaitable[None]],
+) -> TextGenerationResult:
+    """Stream provider output while preserving the normal routing policy.
+
+    A route may be retried or replaced by the configured fallback only before
+    the first visible delta.  Once text has reached the caller, replaying the
+    prompt would duplicate output, so the original error is surfaced instead.
+    """
+    if os.environ.get("LLM_STREAMING_DISABLED", "0").lower() in {"1", "true", "yes", "on"}:
+        raise NotImplementedError("streaming disabled by provider capability configuration")
+    primary_spec = _llm_spec(tier, llm_spec)
+    fallback_spec = _fallback_spec(primary_spec)
+    retry_count = max(0, int(os.environ.get("LLM_RETRY_ATTEMPTS", "1")))
+    routes = [primary_spec] + ([fallback_spec] if fallback_spec else [])
+    emitted = False
+    last_error: BaseException | None = None
+    total_attempts = 0
+
+    async def emit(value: str) -> None:
+        nonlocal emitted
+        if not value:
+            return
+        emitted = True
+        await on_delta(value)
+
+    for route_index, route_spec in enumerate(routes):
+        used_fallback = route_index > 0
+        purpose: LlmPurpose = "research" if tier == "heavy" else "utility"
+        route = resolve_route(purpose, spec=route_spec, tier=tier)
+        if await _circuit_is_open(route.endpoint_key):
+            last_error = RuntimeError(f"LLM endpoint circuit open: {route.endpoint_key}")
+            continue
+        for retry_index in range(retry_count + 1):
+            total_attempts += 1
+            started_at = time.monotonic()
+            try:
+                result = await _stream_text_once(
+                    llm_spec=route_spec,
+                    user_prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    tier=tier,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    disable_thinking=disable_thinking,
+                    emit=emit,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                last_error = error
+                retryable = is_retryable_llm_error(error)
+                circuit_state = await _circuit_failure(route.endpoint_key, retryable=retryable)
+                await _record_failure(
+                    operation=operation,
+                    request_id=request_id,
+                    llm_spec=route_spec,
+                    fallback_spec=fallback_spec,
+                    used_fallback=used_fallback,
+                    error=error,
+                    started_at=started_at,
+                    primary_model=primary_spec,
+                    fallback_reason=_fallback_reason(error) if used_fallback else None,
+                    attempt_count=total_attempts,
+                    endpoint=route.base_url,
+                    circuit_state=circuit_state,
+                )
+                if emitted or not retryable:
+                    raise
+                continue
+            await _circuit_success(route.endpoint_key)
+            await _record_success(
+                operation=operation,
+                request_id=request_id,
+                result=result,
+                fallback_spec=fallback_spec,
+                used_fallback=used_fallback,
+                started_at=started_at,
+                primary_model=primary_spec,
+                fallback_reason=_fallback_reason(last_error) if used_fallback and last_error else None,
+                attempt_count=total_attempts,
+                endpoint=route.base_url,
+                circuit_state="closed",
+            )
+            return result
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no usable LLM route configured")
+
+
 def _fallback_reason(error: BaseException) -> str:
     if is_provider_policy_error(error):
         return "provider_policy_block"
@@ -465,6 +622,126 @@ async def _generate_text_once(
         provider=provider,
         finish_reason=str(getattr(choice, "finish_reason", "") or "") or None,
         truncated=getattr(choice, "finish_reason", None) in {"length", "max_tokens"},
+    )
+
+
+async def _stream_text_once(
+    *,
+    llm_spec: str,
+    user_prompt: str,
+    system_prompt: str | None,
+    tier: LlmTier,
+    max_tokens: int,
+    timeout: float,
+    disable_thinking: bool,
+    emit: Callable[[str], Awaitable[None]],
+) -> TextGenerationResult:
+    """Run one provider stream and emit only user-facing text deltas."""
+    purpose: LlmPurpose = "research" if tier == "heavy" else "utility"
+    route = resolve_route(purpose, spec=llm_spec, tier=tier)
+    provider = route.vendor
+    model = route.model
+    api_key = route.api_key
+    if not api_key or api_key.startswith("local-"):
+        api_key = f"sk-placeholder-for-{provider}-compatible-proxy"
+    base_url = route.base_url
+    wire_provider = route.protocol
+    reasoning_filter = ReasoningStreamFilter()
+    output_parts: list[str] = []
+    input_tokens = 0
+    output_tokens = 0
+    finish_reason: str | None = None
+
+    async def accept(value: str) -> None:
+        visible = reasoning_filter.feed(value)
+        if visible:
+            output_parts.append(visible)
+            await emit(visible)
+
+    if wire_provider == "anthropic":
+        from anthropic import AsyncAnthropic
+
+        client = _cached_client(
+            AsyncAnthropic,
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": user_prompt}],
+            "timeout": timeout,
+        }
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        if disable_thinking:
+            kwargs["thinking"] = {"type": "disabled"}
+        async with _llm_semaphore():
+            async with client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    await accept(str(text))
+                try:
+                    final = await stream.get_final_message()
+                except Exception:  # pragma: no cover - SDK compatibility
+                    final = None
+        usage = getattr(final, "usage", None)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        finish_reason = str(getattr(final, "stop_reason", "") or "") or None
+        actual_model = str(getattr(final, "model", "") or "") or None
+    else:
+        from openai import AsyncOpenAI
+
+        client = _cached_client(
+            AsyncOpenAI,
+            provider=provider,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        messages: list[ChatCompletionMessageParam] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+        async with _llm_semaphore():
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                stream=True,
+            )
+            async for chunk in response:
+                choices = getattr(chunk, "choices", None) or []
+                if choices:
+                    choice = choices[0]
+                    delta = getattr(choice, "delta", None)
+                    content = getattr(delta, "content", None)
+                    if isinstance(content, str) and content:
+                        await accept(content)
+                    reason = getattr(choice, "finish_reason", None)
+                    if reason:
+                        finish_reason = str(reason)
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        actual_model = str(getattr(response, "model", "") or "") or None
+
+    tail = reasoning_filter.finish()
+    if tail:
+        output_parts.append(tail)
+        await emit(tail)
+    text = "".join(output_parts).strip()
+    return TextGenerationResult(
+        text=text,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        requested_model=model,
+        actual_model=actual_model,
+        provider=provider,
+        finish_reason=finish_reason,
+        truncated=finish_reason in {"length", "max_tokens"},
     )
 
 

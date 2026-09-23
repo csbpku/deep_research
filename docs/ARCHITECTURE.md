@@ -1,6 +1,6 @@
 # AI技术调研平台 · 架构方案
 
-> 版本：v4.0 · 2026-09-14
+> 版本：v4.1 · 2026-09-21
 > 本文件描述当前系统架构、数据模型、安全边界与部署拓扑；只记录现状，不写演进过程。
 > 一页技术摘要见 [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md)。
 
@@ -10,7 +10,7 @@
 
 ### 当前能力
 
-1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；`sync → enrich → topic refresh` 流水线产出轻量解读与多维评分；GitHub 仓库候选按 Distilled 层级生成 Zread 项目文档，详情页提供「刷新文档」入口（强制重取，失败保留旧缓存）。
+1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；默认 `RADAR_READING_MODE=browser` 下，`sync → 元数据/评分 → 原文入口 → topic refresh` 只保留来源元数据和评分，不抓取或持久化新文章/Zread 正文。`enriched` 仅作为显式回滚路径，历史 enrichment 和 Admin 显式刷新仍保留。
 2. **技术专题**：关注专题后自动聚合热点议题，生成带可点击引用的综述（内容 hash 变化触发重算）；发布调研自动回流专题；专题页四标签：概览 / 热点议题 / 相关研究 / 来源。
 3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索、版本审计与恢复、AI Diff 建议与事实核验、三栏研究工作台。
 4. **AI 调研**：对话澄清主题/背景/资料/检索范围/产物类型，规则推断 objective 并返回 Research Brief 与匹配上下文；异步流水线支持研究稿、快速判断、Slides 提纲和网页简报，用户实际修改且当前版本通过事实审核后才能发布。
@@ -205,15 +205,18 @@ AI 产物与审核边界：
 flowchart LR
     T["cron / admin 触发"]
     Sync["radar sync 抓取 + 多源去重"]
-    Enrich["enrich 轻量解读 + 多维评分"]
+    Metadata["来源元数据 + utility brief / distilled score"]
+    Reader["external reading 原文入口"]
+    Enrich["legacy enriched（显式启用）"]
     Topics["主题候选聚合 + AI 综述"]
     Store[("radar summaries + topics")]
 
-    T --> Sync --> Enrich --> Topics --> Store
+    T --> Sync --> Metadata --> Reader --> Topics --> Store
+    Sync -.-> Enrich -.-> Topics
 ```
 
-- 每次同步是 `sync → enrich → topic refresh` 流水线；不生成日报或跨来源日报文章。
-- GitHub curated 即普通 `github` source（repos 模式）：每个 repo 一个候选，完成一次 Distilled 评分后按 collection/deep_read/skim/noise 进入对应治理路径；collection/deep_read 候选由 enrichment 生成 Zread 项目文档缓存，详情页统一走「刷新文档」，强制重取失败时保留旧缓存。
+- 默认同步是 `sync → metadata/score → external reading → topic refresh`；不生成日报或跨来源日报文章。只有显式设置 `RADAR_READING_MODE=enriched` 才进入旧正文抓取链路。
+- GitHub curated 即普通 `github` source（repos 模式）：每个 repo 一个候选，完成一次 Distilled 评分后按 collection/deep_read/skim/noise 进入对应治理路径；默认由原文入口交给 Reader 当前页面理解，不声称已读完整仓库或全部 Wiki。显式 legacy enrichment 仍可生成历史 Zread 文档缓存，详情页失败时保留旧缓存。
 - 雷达候选复用 `summaries`，主题使用 `topics/topic_candidates`；首页直接进入技术雷达，搜索统一进入雷达或调研详情。
 - 每条雷达内容保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分用于雷达排序；Admin 不逐条批准雷达内容。
 - 来源包括预置 GitHub、arxiv、RSS、微信公众号、社区（Hacker News / Product Hunt / Reddit / Lobsters）等，Admin 可启停、手动同步和重试；任一来源失败不阻断其他来源。
@@ -223,10 +226,10 @@ flowchart LR
 
 正文展示约束：
 
-- 抓取正文先经过正文抽取、Markdown 转换和 deterministic normalizer，再保存为 `originalMarkdown`。
-- `originalSha256` 是正文版本锚点；翻译、AI 阅读和高亮结果必须携带对应 source hash，不能覆盖原文。
+- 在默认 browser 模式，雷达不抓取新正文；用户在 Reader 中主动打开原文后，正文只按当前页面和当前任务临时提取。历史或显式 enriched 模式的正文才经过正文抽取、Markdown 转换和 deterministic normalizer，并保存为 `originalMarkdown`。
+- `originalSha256` 是历史/显式 enrichment 正文版本锚点；插件侧使用当前页面内容指纹，翻译、AI 阅读和高亮结果必须绑定对应版本，不能覆盖原文。
 - Web 端统一使用 `MarkdownContent` renderer；原始 HTML 默认跳过，URL 协议只允许 `http`、`https`、`mailto`。
-- `collection/deep_read` enrichment 完成后先执行 reader quality 和内容呈现审核；真实浏览器渲染审核属于可选 `browser-review` profile，不进入默认生产流程。历史浏览器 `unavailable` 不代表当前内容审核失败，也不应把审核失败伪装成 enrichment 失败。
+- `collection/deep_read` 的 legacy enrichment 完成后才执行 reader quality 和内容呈现审核；默认 browser 模式不创建新的 enrichment、reader quality 或呈现审核任务。真实浏览器渲染审核属于可选 `browser-review` profile，不进入默认生产流程。
 - 雷达详情公开读取；反馈、评论、AI 聊天和深入调研仍走登录权限。
 
 ### 文件导入

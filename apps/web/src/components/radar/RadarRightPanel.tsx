@@ -58,7 +58,10 @@ type Annotation = {
   body?: string | null;
   createdAt?: string;
 };
-const MAP_TIMEOUT_MS = 12_000;
+// Article-map generation runs through the Web BFF and can legitimately take
+// longer than a quick interaction, especially for paper-sized sources. Keep
+// this aligned with the prewarm script and production proxy budget.
+export const MAP_TIMEOUT_MS = 300_000;
 
 /** The right rail is deliberately only a document map. The article remains the primary reading surface. */
 export function RadarRightPanel({

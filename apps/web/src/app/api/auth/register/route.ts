@@ -5,10 +5,16 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { prisma } from '@/lib/db';
 import { getWebEnv } from '@/lib/env';
 import { isBootstrapAdminEmail } from '@/lib/auth/invitation';
+import { canCreateAccountInBeta } from '@/lib/auth/beta-access';
 import { hashPassword, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/lib/auth/password';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
 import { isProductionAuthAllowed } from '@/lib/auth/transport';
+import {
+  hashVerificationCode,
+  verificationCodeMatches,
+  VERIFICATION_MAX_ATTEMPTS,
+} from '@/lib/auth/email-verification';
 
 export const runtime = 'nodejs';
 
@@ -16,6 +22,7 @@ const registerSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(320),
   name: z.string().trim().max(80).optional(),
   password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+  verificationCode: z.string().regex(/^\d{6}$/).optional(),
 });
 
 export async function POST(request: Request) {
@@ -43,7 +50,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { email, name, password } = parsed.data;
+  const { email, name, password, verificationCode } = parsed.data;
   const existing = await prisma.user.findUnique({
     where: { email },
     select: { id: true, passwordHash: true, disabledAt: true },
@@ -55,41 +62,97 @@ export async function POST(request: Request) {
   if (existing?.passwordHash) {
     return error(request, ERROR_CODES.AUTH_ACCOUNT_EXISTS, '该邮箱已注册，请直接登录');
   }
+  if (!canCreateAccountInBeta({
+    betaMode: env.AUTH_BETA_MODE,
+    email,
+    existingUser: existing,
+    bootstrapAdminEmail: env.BOOTSTRAP_ADMIN_EMAIL,
+  })) {
+    return error(
+      request,
+      ERROR_CODES.AUTH_REGISTRATION_DISABLED,
+      '当前为 Beta 测试，仅限管理员白名单中的邮箱注册',
+    );
+  }
+
+  let verifiedCodeHash: string | null = null;
+  if (env.AUTH_EMAIL_VERIFICATION) {
+    if (!verificationCode) {
+      return error(request, ERROR_CODES.AUTH_VERIFICATION_INVALID, '请输入 6 位邮箱验证码');
+    }
+    const challenge = await prisma.emailVerificationChallenge.findUnique({ where: { email } });
+    if (!challenge || challenge.consumedAt || challenge.attempts >= VERIFICATION_MAX_ATTEMPTS) {
+      return error(request, ERROR_CODES.AUTH_VERIFICATION_INVALID, '验证码无效，请重新获取');
+    }
+    if (challenge.expiresAt.getTime() <= Date.now()) {
+      return error(request, ERROR_CODES.AUTH_VERIFICATION_EXPIRED, '验证码已过期，请重新获取');
+    }
+    verifiedCodeHash = hashVerificationCode(email, verificationCode, env.NEXTAUTH_SECRET);
+    if (!verificationCodeMatches(verifiedCodeHash, challenge.codeHash)) {
+      await prisma.emailVerificationChallenge.updateMany({
+        where: { id: challenge.id, consumedAt: null, attempts: { lt: VERIFICATION_MAX_ATTEMPTS } },
+        data: { attempts: { increment: 1 } },
+      });
+      return error(request, ERROR_CODES.AUTH_VERIFICATION_INVALID, '验证码无效，请检查后重试');
+    }
+  }
 
   const passwordHash = await hashPassword(password);
   const isBootstrapAdmin = isBootstrapAdminEmail(email, env.BOOTSTRAP_ADMIN_EMAIL);
   try {
-    const user = existing
-      ? await prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            passwordHash,
-            ...(name ? { name } : {}),
-            ...(isBootstrapAdmin ? { role: 'admin' } : {}),
-          },
-          select: { id: true, role: true },
-        })
-      : await prisma.user.create({
-          data: {
+    const persistUser = async (db: Pick<typeof prisma, 'user'>) => existing
+      ? db.user.update({
+        where: { id: existing.id },
+        data: {
+          passwordHash,
+          ...(name ? { name } : {}),
+          ...(isBootstrapAdmin ? { role: 'admin' as const } : {}),
+        },
+        select: { id: true, role: true },
+      })
+      : db.user.create({
+        data: {
+          email,
+          name: name || email.split('@')[0]!.slice(0, 80),
+          passwordHash,
+          role: isBootstrapAdmin ? 'admin' as const : 'member' as const,
+        },
+        select: { id: true, role: true },
+      });
+
+    const user = env.AUTH_EMAIL_VERIFICATION && verifiedCodeHash
+      ? await prisma.$transaction(async (tx) => {
+        const consumed = await tx.emailVerificationChallenge.updateMany({
+          where: {
             email,
-            name: name || email.split('@')[0]!.slice(0, 80),
-            passwordHash,
-            role: isBootstrapAdmin ? 'admin' : 'member',
+            codeHash: verifiedCodeHash!,
+            consumedAt: null,
+            expiresAt: { gt: new Date() },
+            attempts: { lt: VERIFICATION_MAX_ATTEMPTS },
           },
-          select: { id: true, role: true },
+          data: { consumedAt: new Date() },
         });
+        if (consumed.count !== 1) throw new VerificationRaceError();
+        return persistUser(tx);
+      })
+      : await persistUser(prisma);
 
     return NextResponse.json(
       { ok: true, role: user.role },
       { status: existing ? 200 : 201 },
     );
   } catch (cause) {
+    if (cause instanceof VerificationRaceError) {
+      return error(request, ERROR_CODES.AUTH_VERIFICATION_INVALID, '验证码已使用或已失效，请重新获取');
+    }
     if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === 'P2002') {
       return error(request, ERROR_CODES.AUTH_ACCOUNT_EXISTS, '该邮箱已注册，请直接登录');
     }
     throw cause;
   }
 }
+
+class VerificationRaceError extends Error {}
 
 export function GET() {
   return NextResponse.json(

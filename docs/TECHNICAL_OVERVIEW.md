@@ -1,6 +1,6 @@
 # 技术方案总览
 
-> 当前现役技术方案的唯一摘要。更新日期：2026-09-14。
+> 当前现役技术方案的唯一摘要。更新日期：2026-09-18。
 > 真实部署、测试和线上运行证据仍按日期记录在 [`PROJECT_STATUS.md`](./PROJECT_STATUS.md)；
 > 本文不记录开发过程流水账。
 
@@ -12,6 +12,7 @@ Deep Research 是面向个人和小团队的技术调研平台，负责：
 - 对候选做正文抽取、AI 解读、Distilled 评分和阅读等级分层；
 - 按专题聚合候选，生成热点议题和带引用的专题综述；
 - 支持 AI 调研、研究稿、快速判断、Slides 提纲、网页简报和知识卡片；
+- 提供独立 Chrome MV3 原网页阅读助手：在公开技术网页中按需全文翻译（含图片文字覆盖）、选段解读、连续追问、续读和本地收藏；雷达与研究库同步是可选连接；
 - 支持登录、收藏、批注、评论、分享、全文搜索和 Admin 治理。
 
 当前不追求高可用多机部署、异地数据库自动切换或公开注册。生产目标是单 VPS、受控账号、可恢复后台任务和可验证的内容质量。
@@ -24,6 +25,7 @@ Deep Research 是面向个人和小团队的技术调研平台，负责：
 | `packages/ai-engine` | FastAPI、LLM、雷达和后台 worker | `4000` | `ai-engine:4000` |
 | PostgreSQL | 业务数据、队列、全文索引 | `5432` | `postgres:5432` |
 | nginx | 公网反代、上传限制、健康路由 | 可选 | `80/443` |
+| `apps/extension` | 独立 Chrome 侧栏、正文/图片处理、会话与收藏 | 加载解压目录 | Chrome 116+ |
 | AnythingLLM | 可选 AI 讨论后端 | 独立服务 | 独立服务 |
 
 默认生产 Compose 只运行 PostgreSQL、Web、AI engine 和 nginx。Chromium `render-review` 是可选 profile，不属于默认生产资源预算。
@@ -35,14 +37,15 @@ Deep Research 是面向个人和小团队的技术调研平台，负责：
 ```text
 source sync
   -> candidate persistence
-  ->正文抓取 / enrichment
-  -> utility LLM brief + distilled score
-  -> reader quality
-  -> content review
+  -> source metadata + utility LLM brief + distilled score
+  -> external reading entry (browser mode, default)
   -> topic refresh / topic issue
+
+legacy enriched mode (explicit opt-in only)
+  candidate persistence -> 正文抓取 / enrichment -> reader quality -> content review
 ```
 
-每一层都保留自己的状态和失败原因。网络失败、正文不完整、评分缺失、内容审核未完成和主题聚类失败不能互相伪装成成功。
+浏览器模式只对发现、元数据和评分负责；原文理解交给用户主动打开的 Reader。显式启用 legacy enriched mode 时，每一层都保留自己的状态和失败原因。网络失败、正文不完整、评分缺失、内容审核未完成和主题聚类失败不能互相伪装成成功。
 
 ### Enrichment 与审核
 
@@ -57,6 +60,18 @@ source sync
 ### AI 调研
 
 Web 先创建可追踪任务，AI engine 通过 durable job store 异步执行研究、草拟、来源绑定、事实核验和产物入库。HTTP 请求只负责提交、查询和取消，不在请求线程内等待完整研究。
+
+### 原网页阅读
+
+独立 Beta 在用户点击扩展按钮后通过 `activeTab` / `scripting` 注入当前页，提取正文块、选段和正文图片；侧栏直接调用用户配置的 OpenAI-compatible `/chat/completions` 或 Anthropic-compatible `/messages` 接口，不加载 Web iframe、不要求平台账号、不把 API Key 放进网页。正文按块翻译，图片通过视觉模型返回文字区域与坐标，并在原图上生成可移除的译文覆盖层；Anthropic 图片请求在扩展边界转换为 base64，跨域图片无法读取时保留 URL并显示处理失败。正文、图片和页面内容始终按不可信资料处理，排除表单、密码和 `contenteditable`。
+
+侧栏的阅读会话、滚动位置、选段、讨论和收藏存储在 IndexedDB；全文翻译结果只作为有界缓存，API Key 不进入导出数据。当前发布构建使用 WXT + React + TypeScript，生产目录为 `apps/extension/.output/chrome-mv3`。React 负责完整侧栏 UI 树，独立的控制器保留为 content-script、MV3 worker、IndexedDB 和可选平台连接之间的消息边界；这不会把页面状态或模型密钥放回网页。模型供应商能力探测已在设置连接时执行，商店发布仍按范围暂缓。
+
+平台连接是可选层：连接后才调用 `/api/reading/answer`、`/api/reading/answer/stream`、`/api/reading/translate` 和 `/api/reading/save`，将用户确认的成果同步到研究库；平台不可用时，独立翻译、图片处理、讨论和本地收藏仍可用。研究库同步继续保留数据库幂等键和安全锚点校验。雷达的新外部原文入口不依赖 enrichment；`RADAR_READING_MODE=browser` 继续负责停止新正文抓取和自动 enrichment。
+
+Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式权威数据边界和明确非目标见 [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md)。
+
+雷达迁移由 `RADAR_READING_MODE` 控制，默认值为 `browser`。新同步只使用源自身元数据和摘要，不抓取或持久化文章/Zread 正文，也不会进入自动 enrichment/recovery 队列；显式设置为 `enriched` 才运行旧链路。历史行和显式 Admin enrichment 保留，便于渐进迁移和回滚。
 
 ## 4. LLM 路由
 
@@ -74,7 +89,8 @@ Web 先创建可追踪任务，AI engine 通过 durable job store 异步执行�
 
 ## 5. 认证与权限
 
-- 默认开放邮箱密码注册/登录；
+- 默认开放邮箱密码注册/登录；`AUTH_BETA_MODE=1` 时，密码注册和 OAuth 首次开户都只接受 Admin 预先加入白名单的邮箱；
+- `AUTH_EMAIL_VERIFICATION=1` 时，密码注册必须先通过 SMTP 邮件中的一次性验证码；验证码仅以 HMAC 形式持久化，并有过期、重发和尝试次数限制；
 - Google 和 GitHub OAuth 可选，均不限制邮箱域；`AUTH_GOOGLE_ONLY=1` 是兼容旧部署的开关，仅保留 Google；
 - `ALLOWED_EMAIL_DOMAINS` 和 `AUTH_INVITE_CODE` 仅供旧 `/api/auth/activate` 兼容接口使用，不参与公开注册或 OAuth；
 - `shaobo.chen@shopee.com` 是默认 bootstrap Admin；

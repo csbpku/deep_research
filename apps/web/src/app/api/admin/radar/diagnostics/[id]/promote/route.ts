@@ -15,6 +15,7 @@ import {
   writeAdminAction,
 } from '@/lib/radar/admin-actions';
 import { forwardAdminRadarAction } from '@/lib/admin-radar-action';
+import { radarEnrichmentEnabled } from '@/lib/radar/runtime-flags';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(
@@ -25,6 +26,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     const id = (await ctx.params).id;
 
     const actionRequestId = newAdminActionRequestId();
+    const enrichmentEnabled = radarEnrichmentEnabled();
     try {
       const result = await prisma.$transaction(async (tx) => {
         const diagnostic = await tx.radarSyncDiagnostic.findUnique({ where: { id } });
@@ -82,10 +84,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
               // this point. Keep the public tier at skim until the durable
               // enrichment worker has produced and quality-checked the full
               // reader snapshot.
-              distilledTier: targetTier ? 'skim' : diagnostic.distilledTier,
-              distilledTargetTier: targetTier,
-              enrichmentStatus: targetTier ? 'pending' : null,
-              enrichmentNextRetryAt: targetTier ? new Date() : null,
+              distilledTier: enrichmentEnabled && targetTier ? 'skim' : diagnostic.distilledTier,
+              distilledTargetTier: enrichmentEnabled ? targetTier : null,
+              enrichmentStatus: enrichmentEnabled && targetTier ? 'pending' : null,
+              enrichmentNextRetryAt: enrichmentEnabled && targetTier ? new Date() : null,
               syncRunId: diagnostic.runId,
               interpretation: (diagnostic.body || '').slice(0, 2000) || null,
               selectionReason: 'Admin 从同步过滤队列人工提升',
@@ -121,7 +123,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         summaryId: result.promotedSummaryId,
       });
       let enrichmentQueued = false;
-      if (result.promotedSummaryId) {
+      if (enrichmentEnabled && result.promotedSummaryId) {
         try {
           const enrichmentResponse = await forwardAdminRadarAction(
             req,

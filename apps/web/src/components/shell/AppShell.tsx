@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 
 import { getCurrentUser } from '@/lib/auth/session';
+import { ContextualShellBanner } from './ContextualShellBanner';
 import { UnreadIssuesBanner } from './UnreadIssuesBanner';
 import { Topbar } from './Topbar';
 // ⚠️ 必须从 server-safe 模块拿常量：从 './SidebarNav'（'use client'）拿会被 RSC
@@ -34,9 +35,11 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-dvh flex-col">
       <Topbar navItems={navItems} user={navUser} />
-      <Suspense fallback={null}>
-        <UnreadIssuesBanner user={user} />
-      </Suspense>
+      <ContextualShellBanner>
+        <Suspense fallback={null}>
+          <UnreadIssuesBanner user={user} />
+        </Suspense>
+      </ContextualShellBanner>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-y-contain px-4 py-6 sm:px-6">{children}</main>
     </div>
   );

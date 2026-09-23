@@ -29,8 +29,8 @@ Backward compatibility:
   / 表达质量 / 综合信号) are still supported as input. The
   ``dimension_scores`` dict on the result still uses Chinese keys so
   existing serialization to DB and reasoning blocks is unchanged.
-- ``DISTILLED_VERSION`` is bumped to ``"2.0"`` so log readers can detect
-  the upgrade.
+- ``DISTILLED_VERSION`` identifies rubric and post-processing revisions so
+  log readers can distinguish scores produced by different rules.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ from ai_engine.llm.usage_audit import record_llm_degraded
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
 
-DISTILLED_VERSION = "4.7"
+DISTILLED_VERSION = "4.8"
 
 # The old 8k prefix often contained only a client-side documentation shell
 # (navigation, loading placeholders, and footer). Keep enough context for
@@ -415,6 +415,8 @@ GitHub 项目特别注意：README、代码/配置、可复用命令、工作流
 - 3 分是例外，不是“写得不错”的同义词：必须有正文中的充分证据。对一篇普通文章，至少应有两个维度停在 2 分；不要为了让总分好看而把所有维度打满
 - 可行动性=3 需要完整的落地闭环（集成点、配置/代码、验证门禁或运行时行为）；只有实验步骤、观测脚本、问题证明或原则性建议时最高为 2
 - 分析深度=3 需要机制、因果链或非显然取舍，不是信息罗列；事实可信度=3 需要可追溯的原始数据/方法和边界说明，不是文章声称“做过实验”就够；表达质量=3 只给极度克制、几乎无冗余的文章
+- README 长、章节多，或同时包含安全、操作、编辑器配置等不同主题，不能单独作为表达质量扣分依据
+- 只有正文明确重复同一结论并造成查找、理解、维护或复现困难时，才可以降低表达质量；“内容很长”“可能重复”“章节较多”不是充分证据
 - 受众匹配度低于 1.5 的文章，即便其他维度很高（如信息增量 3/分析深度 3），也说明
   它不属于本平台，请在 weak_point 中明确说明原因
 - 不要假定所有含"AI/neural"字眼的项目都面向 AI 工程师
@@ -544,8 +546,11 @@ def build_user_prompt(
 
 ## 评分纪律
 - 每个维度独立评估，对照绝对标准，不参考批内其他文章
-- weak_point 只写最低维度的具体扣分原因，一句话，不超过 30 字
+- weak_point 只写最低维度的、能被正文核对的具体扣分原因，一句话，不超过 30 字
 - 不要解释高分，只解释最低分
+- README 长度、章节数量，以及安全/操作/编辑器配置等不同主题并列出现，不能单独写成弱点
+- 只有明确重复同一内容且影响阅读，才允许写“重复/冗余”；不要用“可能重复”“内容较长”等猜测代替证据
+- 如果最低维度均为 2 分或以上，且没有否决、风险或疑似搬运信号，weak_point 必须填空字符串
 - "综合信号" 这一维度的评判基准是上面评分画像的目标读者，而不是泛化的"信号"
 - GitHub 仓库结构化证据只能校准事实可信度、时效性和工程价值，不能仅凭 stars 把仓库评为重点或深度阅读
 - README 中有明确实现机制、benchmark、测试或 CI/Action 证据时，不要把仓库误判成只有安装命令
@@ -993,6 +998,17 @@ _QUALITY_WEIGHTS: dict[str, int] = {
 # so an overly generous LLM response cannot promote it to collection.
 _COMMUNITY_PRACTICE_SOURCES = frozenset({"devto"})
 
+_GENERIC_WEAK_POINT_RE = re.compile(
+    r"(?:readme|文档|正文|篇幅).{0,18}(?:极?长|过长|冗长|篇幅大)|"
+    r"(?:安全|操作|编辑器(?:配置)?|配置).{0,18}(?:段落|章节).{0,18}(?:重复|冗余)|"
+    r"(?:可能|存在|部分)?(?:重复|冗余)(?:内容|段落|章节)?(?:较多|明显)?$",
+    re.IGNORECASE,
+)
+
+_WEAK_POINT_IMPACT_RE = re.compile(
+    r"(?:导致|造成|影响|难以|不易|无法|读者|查找|定位|理解|维护|复现|导航)",
+)
+
 
 def _weighted_dimension_score(
     scores: dict[str, int],
@@ -1002,6 +1018,39 @@ def _weighted_dimension_score(
         sum(scores[name] * weight / MAX_DIM_SCORE for name, weight in weights.items()),
         2,
     )
+
+
+def _normalize_weak_point(
+    parsed: dict[str, Any],
+    dim_scores: dict[str, int],
+    *,
+    risk_flag: str | None,
+    repost_flag: bool,
+) -> str:
+    """Keep weak points evidence-bound instead of turning every 2 into a flaw.
+
+    The LLM field is intentionally short and therefore cannot carry a full
+    citation. We still reject common low-evidence forms that describe document
+    length or speculate about repetition without naming an impact.
+    """
+    raw = parsed.get("weak_point", "")
+    weak_point = " ".join(str(raw).split())[:100] if raw else ""
+    if weak_point and _GENERIC_WEAK_POINT_RE.search(weak_point):
+        if not _WEAK_POINT_IMPACT_RE.search(weak_point):
+            weak_point = ""
+
+    if weak_point:
+        return weak_point
+    if risk_flag == RISK_SECURITY:
+        return "存在安全风险，需人工复核"
+    if repost_flag and dim_scores.get("信息增量", 0) <= 1:
+        return "疑似重复来源，信息增量受限"
+
+    min_value = min(dim_scores.values(), default=0)
+    if min_value < 2:
+        min_name = min(dim_scores, key=lambda key: dim_scores[key])
+        return f"{min_name}={min_value}分"
+    return ""
 
 
 def _source_priority_bonus(source_type: str | None) -> float:
@@ -1369,10 +1418,12 @@ def compute_score(
         # cannot promote a personal dev.to post into collection.
         tier_score = profile.tier_collection
 
-    weak_point = str(parsed.get("weak_point", ""))[:100]
-    if not weak_point:
-        min_name = min(dim_scores, key=lambda k: dim_scores[k])
-        weak_point = f"{min_name}={dim_scores[min_name]}分"
+    weak_point = _normalize_weak_point(
+        parsed,
+        dim_scores,
+        risk_flag=risk_flag,
+        repost_flag=repost_flag,
+    )
 
     return DistilledScore(
         total=total,

@@ -196,6 +196,12 @@ async def _refresh_stale_reader_quality(pool: Any, *, limit: int) -> int:
             await conn.execute(
                 'SELECT "id" FROM "summaries" '
                 'WHERE "distilledTier" IN (\'collection\', \'deep_read\') '
+                # Browser-reading candidates deliberately have no persisted
+                # enrichment snapshot. Keep them out of the legacy quality
+                # reconciliation pass as well as the content/render passes;
+                # otherwise an idle worker could still write review state for
+                # a row that was meant to remain metadata-only.
+                'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
                 'AND ('
                 'COALESCE("readerQualityDetails"->>\'version\', \'\') '
                 'IS DISTINCT FROM %s '

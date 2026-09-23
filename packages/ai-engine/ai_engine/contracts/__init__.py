@@ -8,6 +8,6 @@ mirror exists, the Web side can read TS constants and the engine side reads
 these Python constants; both must stay in sync with `docs/contracts/*`.
 """
 
-from ai_engine.contracts import errors, states
+from ai_engine.contracts import errors, reading, states
 
-__all__ = ["errors", "states"]
+__all__ = ["errors", "reading", "states"]

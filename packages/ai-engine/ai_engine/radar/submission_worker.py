@@ -31,6 +31,7 @@ from ai_engine.radar.enrichment_worker import (
     request_enrichment_run,
     run_enrichment_for_pending,
 )
+from ai_engine.radar.runtime_flags import radar_enrichment_enabled
 
 logger = logging.getLogger("ai_engine.radar.submission_worker")
 
@@ -385,19 +386,30 @@ async def _process_one(pool: Any, row: dict[str, Any]) -> bool:
         # routes them through the same claim/lease/failure state machine as
         # scheduled radar rows.
         try:
-            if original_kind in DEFAULT_ENRICHMENT_KINDS:
+            if radar_enrichment_enabled() and original_kind in DEFAULT_ENRICHMENT_KINDS:
                 run_id, _ = await request_enrichment_run(
                     pool,
                     summary_ids=(summary_id,),
                     force=True,
                 )
+                completed_ids: list[str] = []
                 await run_enrichment_for_pending(
                     pool,
                     limit=1,
                     summary_ids=(summary_id,),
                     force=True,
                     run_id=run_id,
+                    completed_ids=completed_ids,
                 )
+                if completed_ids:
+                    from ai_engine.radar.candidate_postprocessor import score_missing_candidates
+
+                    await score_missing_candidates(
+                        pool,
+                        limit=len(completed_ids),
+                        summary_ids=tuple(completed_ids),
+                        rescore=True,
+                    )
         except Exception as exc:
             logger.warning(
                 "ai-engine.radar.submission.enrich_failed",
