@@ -50,7 +50,7 @@ const server = createServer(async (request, response) => {
     callback.searchParams.set('code', code);
     callback.searchParams.set('state', state);
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end('<!doctype html><title>Mock login</title><p>Mock login completed. The test will follow the extension callback.</p>');
+    response.end(`<!doctype html><title>Mock login</title><script>window.location.replace(${JSON.stringify(callback.toString())})</script>`);
     return;
   }
   if (url.pathname === '/api/reading/token/exchange' && request.method === 'POST') {
@@ -123,7 +123,7 @@ const server = createServer(async (request, response) => {
 });
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
 
-const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const extensionPath = process.env.READER_E2E_EXTENSION_PATH || new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const testExtensionRoot = await mkdtemp('/private/tmp/deep-research-reader-pkce-extension-');
 const testExtensionPath = `${testExtensionRoot}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
@@ -148,6 +148,14 @@ const context = await chromium.launchPersistentContext(`/private/tmp/deep-resear
 try {
   const serviceWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(serviceWorker.url()).host;
+  const unsolicitedCallback = await context.newPage();
+  await unsolicitedCallback.goto(`http://127.0.0.1:${port}/fixture.html`, { waitUntil: 'domcontentloaded' });
+  await unsolicitedCallback.evaluate((url) => window.location.assign(url), `chrome-extension://${extensionId}/callback.html?token=unsolicited`);
+  await unsolicitedCallback.waitForURL(`chrome-extension://${extensionId}/callback.html?token=unsolicited`);
+  if ((await serviceWorker.evaluate(async () => chrome.storage.local.get('readerToken'))).readerToken) {
+    throw new Error('unsolicited callback stored a reader token');
+  }
+  await unsolicitedCallback.close();
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${port}/fixture.html`, { waitUntil: 'domcontentloaded' });
   await page.bringToFront();
@@ -179,7 +187,9 @@ try {
   await panel.waitForFunction(() => document.querySelector('#storage-status')?.textContent === '平台模式', null, { timeout: 5_000 });
   if (await panel.locator('#platform-url').count()) throw new Error('平台设置仍要求手动填写地址');
   if ((await panel.locator('#platform-target').innerText()) !== `127.0.0.1:${port}`) throw new Error('平台目标没有读取已配置的平台来源');
+  const authorizationPage = context.waitForEvent('page');
   await panel.locator('#connect-platform').click();
+  await authorizationPage;
   // The test-only manifest pre-authorizes localhost so headless Chrome can
   // inject into the fixture without changing the shipped extension's grants.
   await serviceWorker.evaluate(async (origin) => {
@@ -192,13 +202,7 @@ try {
   }, localPlatformUrl);
   await panel.waitForFunction(() => Boolean(document.querySelector('#page-source')?.textContent), null, { timeout: 10_000 });
   for (let attempt = 0; attempt < 30 && authorizationCodes.size === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-  const [code, record] = authorizationCodes.entries().next().value || [];
-  if (!code || !record) throw new Error(`mock authorization page was not opened: ${JSON.stringify(received.requests)}`);
-  const callback = new URL(record.redirect);
-  callback.searchParams.set('code', code);
-  callback.searchParams.set('state', record.state);
-  const callbackPage = await context.newPage();
-  await callbackPage.goto(callback.toString(), { waitUntil: 'domcontentloaded' });
+  if (authorizationCodes.size === 0) throw new Error(`mock authorization page was not opened: ${JSON.stringify(received.requests)}`);
   await panel.locator('#platform-status').waitFor({ state: 'visible', timeout: 15_000 });
   try {
     await panel.waitForFunction(() => document.querySelector('#platform-status')?.textContent?.includes('已连接'), null, { timeout: 15_000 });

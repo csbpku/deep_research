@@ -2166,11 +2166,11 @@ function handleEmptyPrimary() {
 }
 
 function showSettings() {
-  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('settings-view'), true); applyProviderFields(); updateReadingModeUi();
+  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), false); applyProviderFields(); updateReadingModeUi();
 }
 
 function showReading() {
-  show($('settings-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); renderPage(); updateLibrary();
+  show($('settings-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('reader-status-strip'), true); show($('settings-button'), true); renderPage(); updateLibrary();
 }
 
 async function openHistoryPage() {

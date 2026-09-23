@@ -569,7 +569,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'deep-research:exchange-code') {
     const code = typeof message.code === 'string' ? message.code : '';
     const state = typeof message.state === 'string' ? message.state : '';
-    if (!code || !state) return;
+    if (!code || !state) {
+      sendResponse?.({ ok: false, message: '授权参数无效，请重新连接' });
+      return false;
+    }
     Promise.all([chrome.storage.session.get(['readerPkce']), webAppUrl()]).then(async ([{ readerPkce }, baseUrl]) => {
       if (!readerPkce || readerPkce.state !== state || !readerPkce.verifier || !readerPkce.redirect) {
         throw new Error('授权状态无效或已过期，请重新连接');
@@ -584,15 +587,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.storage.local.set({ readerToken: payload.token });
       await chrome.storage.session.remove('readerPkce');
       chrome.runtime.sendMessage({ type: 'deep-research:connection-state', connected: true }).catch(() => {});
+      sendResponse?.({ ok: true });
     }).catch((error) => {
+      const failure = error instanceof Error ? error.message : '平台授权失败，请重新连接';
       chrome.runtime.sendMessage({
         type: 'deep-research:connection-state',
         connected: false,
-        status: error instanceof Error ? error.message : '平台授权失败，请重新连接',
+        status: failure,
       }).catch(() => {});
       console.warn('Deep Research authorization exchange failed', error);
+      sendResponse?.({ ok: false, message: failure });
     });
-    return;
+    return true;
   }
   if (message?.type === 'deep-research:from-page') {
     const pageTabId = sender.tab?.id;

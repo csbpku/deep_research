@@ -12,7 +12,7 @@ function HistoryPage() {
   return (
     <main className={`history-shell${sidePanelSurface ? ' history-sidepanel' : ''}`}>
       <header className="history-header">
-        <div className="history-brand"><span className="history-mark">R</span><span>DEEP RESEARCH READER</span></div>
+        <div className="history-brand"><span className="history-mark">R</span><span className="history-brand-full">DEEP RESEARCH READER</span><span className="history-brand-compact">READER</span></div>
         <div className="history-header-actions">
           <button id="close-history" className="history-quiet-button">返回阅读</button>
           <button id="export-history" className="history-secondary-button">导出当前列表</button>

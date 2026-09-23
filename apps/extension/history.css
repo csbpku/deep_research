@@ -22,6 +22,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--history-acc
 .history-shell { min-height: 100vh; }
 .history-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 42px; border-bottom: 1px solid var(--history-line); background: rgba(255,255,255,.86); }
 .history-brand { display: flex; align-items: center; gap: 10px; color: var(--history-ink-soft); font-size: 11px; font-weight: 800; letter-spacing: .14em; }
+.history-brand-compact { display: none; }
 .history-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px 8px 8px 2px; background: var(--history-ink); color: #fff; font-size: 13px; letter-spacing: 0; }
 .history-header-actions { display: flex; align-items: center; gap: 14px; }
 .history-quiet-button, .history-secondary-button { border: 0; border-radius: 6px; padding: 8px 11px; color: var(--history-ink-soft); background: transparent; font-size: 12px; font-weight: 700; }
@@ -114,6 +115,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--history-acc
 .history-sidepanel .history-header { padding: 12px 14px; }
 .history-sidepanel .history-header-actions { gap: 6px; }
 .history-sidepanel .history-brand { gap: 7px; font-size: 9px; }
+.history-sidepanel .history-brand-full { display: none; }
+.history-sidepanel .history-brand-compact { display: inline; }
+.history-sidepanel .history-header-actions button { padding: 7px 8px; white-space: nowrap; }
 .history-sidepanel .history-mark { width: 24px; height: 24px; font-size: 11px; }
 .history-sidepanel .history-layout { display: block; min-height: 0; }
 .history-sidepanel .history-rail { border-right: 0; border-bottom: 1px solid var(--history-line); padding: 18px 14px 12px; }

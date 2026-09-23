@@ -16,13 +16,15 @@ function ReaderPanel() {
     <main className="shell">
       <header className="masthead">
         <div className="wordmark"><span className="mark">R</span><span>READER / AI WORKBENCH</span></div>
-        <div className="utility">
-          <button id="open-history-header" className="icon-button" title="查看过去的聊天会话和知识结论">聊天记录</button>
-          <span id="storage-status" className="mode-badge">独立模式</span>
-          <span className="status"><i id="status-dot" className="status-dot" /><span id="status-text">未配置模型</span></span>
-          <button id="settings-button" className="icon-button" title="模型与数据设置">设置</button>
-        </div>
+        <nav className="utility" aria-label="阅读操作">
+          <button id="open-history-header" className="header-action" title="查看过去的聊天会话和知识结论">聊天记录</button>
+          <button id="settings-button" className="header-action" title="模型与数据设置">设置</button>
+        </nav>
       </header>
+      <div id="reader-status-strip" className="reader-status-strip" aria-label="当前运行状态">
+        <span id="storage-status" className="mode-badge">独立模式</span>
+        <span className="status"><i id="status-dot" className="status-dot" /><span id="status-text">未配置模型</span></span>
+      </div>
 
       <section id="empty-view" className="empty">
         <div className="eyebrow">原网页阅读助手</div>
@@ -221,8 +223,10 @@ function ReaderPanel() {
       </section>
 
       <section id="settings-view" className="setting-panel hidden">
-        <div className="eyebrow">运行方式</div>
-        <h2>选择数据与模型边界</h2>
+        <div className="settings-view-head">
+          <div><div className="eyebrow">设置</div><h2>模型与数据</h2></div>
+          <button id="close-settings" className="secondary" type="button">返回阅读</button>
+        </div>
         <div className="mode-switch" role="group" aria-label="Reader 运行方式">
           <button id="mode-local" className="mode-option" type="button" aria-pressed="true">
             <strong>独立模式</strong><span>自带模型，本地保存</span>
@@ -260,7 +264,6 @@ function ReaderPanel() {
           <div className="actions"><button id="save-settings" className="primary">保存并测试连接</button></div>
         </section>
         <div id="settings-notice" className="notice hidden" />
-        <div className="actions"><button id="close-settings" className="secondary">返回阅读</button></div>
         <div className="section-label"><h2>本地数据</h2></div>
         <div className="actions"><button id="export-data" className="secondary">导出阅读数据</button><button id="import-data" className="secondary">导入数据</button><button id="clear-cache" className="danger">清除翻译缓存</button><button id="clear-data" className="danger">清除本地数据</button></div>
         <p className="small" style={{ marginTop: 8 }}>卸载扩展前请先导出需要保留的阅读成果；卸载后浏览器本地数据不保证恢复。</p>

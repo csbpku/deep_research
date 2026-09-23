@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 
@@ -20,6 +20,13 @@ await new Promise((resolve, reject) => {
 });
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const testExtensionRoot = await mkdtemp('/private/tmp/deep-research-reader-visual-extension-');
+const testExtensionPath = `${testExtensionRoot}/extension`;
+await cp(extensionPath, testExtensionPath, { recursive: true });
+const testManifestPath = `${testExtensionPath}/manifest.json`;
+const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
+testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), 'http://127.0.0.1/*'])];
+await writeFile(testManifestPath, JSON.stringify(testManifest));
 const executablePath = process.env.CHROME_FOR_TESTING
   || [
     '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -33,8 +40,8 @@ const context = await chromium.launchPersistentContext(`/private/tmp/deep-resear
   viewport: { width: 1280, height: 900 },
   args: [
     '--enable-extensions',
-    `--disable-extensions-except=${extensionPath}`,
-    `--load-extension=${extensionPath}`,
+    `--disable-extensions-except=${testExtensionPath}`,
+    `--load-extension=${testExtensionPath}`,
     '--no-first-run',
     '--no-default-browser-check',
   ],
@@ -164,10 +171,22 @@ try {
   });
   if (!dock.withinViewport || dock.rightGap < -0.5) throw new Error(`right dock is outside the viewport: ${JSON.stringify(dock)}`);
 
+  await panel.setViewportSize({ width: 320, height: 820 });
+  await panel.locator('#open-history-header').click();
+  await panel.waitForURL(`chrome-extension://${extensionId}/reading-history.html?surface=sidepanel`);
+  await panel.screenshot({ path: '/private/tmp/deep-research-reader-history-320.png', fullPage: true });
+  const history320 = await layoutReport(panel, 'history-320');
+  const historyBackTop = await panel.locator('#close-history').evaluate((element) => element.getBoundingClientRect().top);
+  if (historyBackTop > 100) throw new Error('history back action is not in the header');
+  const historyActionHeights = await panel.locator('.history-header-actions button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+  if (historyActionHeights.some((height) => height > 42)) throw new Error(`history header actions wrap at 320px: ${historyActionHeights}`);
+  await panel.locator('#close-history').click();
+  await panel.waitForURL(`chrome-extension://${extensionId}/sidepanel.html`);
+
   console.log(JSON.stringify({
     ok: true,
     extensionId,
-    states: [local320, platform360, article420],
+    states: [local320, platform360, article420, history320],
     pinnedComposer,
     composerOverlap,
     dock,
@@ -178,6 +197,7 @@ try {
       '/private/tmp/deep-research-reader-article-420.png',
       '/private/tmp/deep-research-reader-chat-420.png',
       '/private/tmp/deep-research-reader-chat-420-viewport.png',
+      '/private/tmp/deep-research-reader-history-320.png',
     ],
   }, null, 2));
 } finally {
