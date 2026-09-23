@@ -463,6 +463,7 @@ jobs:
                 "${compose[@]}" pull web ai-engine || true
               timeout --signal=TERM --kill-after=30s 5m \
                 "${compose[@]}" up -d --no-build --remove-orphans || true
+              "${compose[@]}" exec -T nginx nginx -s reload || true
             else
               echo "[deploy] no valid previous registry SHA; skipping image rollback" >&2
             fi
@@ -517,13 +518,18 @@ jobs:
           fi
           echo "[deploy] starting services; web entrypoint will apply migrations"
           "${compose[@]}" up -d --no-build --remove-orphans
+          # Nginx resolves Compose service names at startup. Re-resolve them
+          # after image replacement changes the web/AI container addresses.
+          "${compose[@]}" exec -T nginx nginx -t
+          "${compose[@]}" exec -T nginx nginx -s reload
           echo "[deploy] waiting for public health endpoints"
           wait_for_endpoint() {
             local label="$1"
             local url="$2"
             local attempt
             for attempt in $(seq 1 40); do
-              if curl --fail --silent --show-error --max-time 10 "$url" >/dev/null; then
+              if curl --fail --silent --show-error --max-time 10 \
+                --resolve techradar.top:443:127.0.0.1 "$url" >/dev/null; then
                 echo "[deploy] $label is healthy (attempt $attempt/40)"
                 return 0
               fi
@@ -533,8 +539,17 @@ jobs:
             echo "[deploy] $label did not become healthy within 120 seconds" >&2
             return 1
           }
-          wait_for_endpoint web http://127.0.0.1/healthz
-          wait_for_endpoint ai http://127.0.0.1/ai-healthz
+          wait_for_endpoint web https://techradar.top/healthz
+          wait_for_endpoint ai https://techradar.top/ai-healthz
+          for path in /ai/docs /ai/openapi.json /ai/api/ai/jobs; do
+            status="$(curl --silent --show-error --max-time 10 \
+              --resolve techradar.top:443:127.0.0.1 \
+              -o /dev/null -w '%{http_code}' "https://techradar.top$path")"
+            test "$status" = 404 || {
+              echo "[deploy] public $path returned $status instead of 404" >&2
+              exit 1
+            }
+          done
           printf '%s\n' "$IMAGE_TAG" > .deployed-image-tag
           rm -f "$beta_env_backup"
           trap - ERR
