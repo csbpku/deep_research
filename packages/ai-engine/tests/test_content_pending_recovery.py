@@ -52,6 +52,7 @@ async def test_content_pending_recovery_refetches_then_scores(
 
     monkeypatch.setattr(recovery, "run_enrichment_for_pending", enrich)
     monkeypatch.setattr(recovery, "score_missing_candidates", score)
+    monkeypatch.setattr(recovery, "radar_enrichment_enabled", lambda: True)
 
     result = await recovery.recover_content_pending_candidates(
         pool,
@@ -71,9 +72,25 @@ async def test_content_pending_recovery_refetches_then_scores(
 
 
 @pytest.mark.asyncio
-async def test_content_pending_recovery_is_idle_without_candidates() -> None:
+async def test_content_pending_recovery_is_idle_without_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(recovery, "radar_enrichment_enabled", lambda: True)
     pool = _Pool([])
 
     result = await recovery.recover_content_pending_candidates(pool, limit=2)
 
     assert result.to_dict() == {"selected": 0, "enriched": 0, "scored": 0}
+
+
+@pytest.mark.asyncio
+async def test_content_pending_recovery_is_idle_when_enrichment_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(recovery, "radar_enrichment_enabled", lambda: False)
+    pool = _Pool([{"id": "summary-1"}])
+
+    result = await recovery.recover_content_pending_candidates(pool, limit=2)
+
+    assert result.to_dict() == {"selected": 0, "enriched": 0, "scored": 0}
+    assert pool.connection_value.executions == []
