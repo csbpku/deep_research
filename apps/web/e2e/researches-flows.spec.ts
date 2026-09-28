@@ -29,7 +29,7 @@ test.describe('Research flows', () => {
 
   test('owner can permanently delete a draft after confirmation', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
 

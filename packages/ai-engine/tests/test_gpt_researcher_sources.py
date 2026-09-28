@@ -132,6 +132,7 @@ async def test_locked_user_sources_are_fetched_without_open_web_search(
 async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("ai_engine.adapters.gpt_researcher.BRIEF_CHUNK_TOKEN_BUDGET", 100_000)
     seen: dict[str, object] = {}
 
     async def blocked_fetch(
@@ -158,7 +159,7 @@ async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
         job_id="radar-brief-context",
         request_id="radar-brief-context",
         topic="已有正文的雷达候选",
-        context="正文上下文。" * 200,
+        context="开头上下文。" + "正文上下文。" * 900 + "结尾证据标记。",
         report_type="summary_brief",
         source_policy=SOURCE_POLICY["ONLY_USER_SOURCES"],  # type: ignore[arg-type]
         source_refs=(
@@ -176,8 +177,9 @@ async def test_summary_brief_uses_persisted_context_when_url_probe_fails(
     assert len(job.sources) == 1
     assert job.sources[0].evidence_status == "fetched"
     prompt = str(seen["user_prompt"])
-    assert "3-5 句 AI 摘要" in prompt
-    assert "180-360 个中文字符" in prompt
+    assert "4-7 句 AI 摘要" in prompt
+    assert "250-500 个中文字符" in prompt
+    assert "结尾证据标记。" in prompt
 
 
 def test_deep_collection_timeout_is_independent_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

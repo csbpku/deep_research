@@ -37,7 +37,7 @@ export function RadarDetailIntro({
 
   return (
     <header data-testid="radar-detail-intro" className="mb-6 border-b border-[var(--ink-rule)] pb-5 sm:mb-8 sm:pb-7">
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--ink-muted)] sm:mb-4">
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--ink-muted)] sm:mb-4">
         <span className="min-w-0 break-words" title={discoverySource.full}>
           发现自：{sourceName?.trim() || discoverySource.short}
         </span>
@@ -59,10 +59,10 @@ export function RadarDetailIntro({
 
       {summary ? (
         <div className="mt-4 max-w-4xl border-l-2 border-[var(--ink-accent)] bg-[var(--ink-accent)]/[0.06] px-3 py-2.5 sm:mt-5 sm:px-4 sm:py-3">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">快速判断</p>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">快速判断</p>
           <p
             id="radar-detail-summary"
-            className={summaryExpanded ? 'font-serif text-[14px] leading-6 text-[var(--ink-text)] sm:text-[15px] sm:leading-7' : 'line-clamp-4 font-serif text-[14px] leading-6 text-[var(--ink-text)] sm:line-clamp-none sm:text-[15px] sm:leading-7'}
+            className={summaryExpanded ? 'font-serif text-base leading-6 text-[var(--ink-text)] sm:text-[15px] sm:leading-7' : 'line-clamp-4 font-serif text-base leading-6 text-[var(--ink-text)] sm:line-clamp-none sm:text-[15px] sm:leading-7'}
           >
             {summary}
           </p>
@@ -95,7 +95,7 @@ export function RadarDetailIntro({
       ) : null}
 
       {coverageLabel ? (
-        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--ink-muted)]">
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--ink-muted)]">
           <span className={coverageTone === 'partial' ? 'font-medium text-status-partial-fg' : 'font-medium text-status-succeeded-fg'}>
             {coverageLabel}
           </span>

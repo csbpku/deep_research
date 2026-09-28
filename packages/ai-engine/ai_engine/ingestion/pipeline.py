@@ -74,8 +74,6 @@ async def _generate_brief(
     context = str(item.get("snippet") or "")
     if context_max_chars is not None:
         context = context[: max(1, context_max_chars)]
-    else:
-        context = context[:2000]
     request = ResearchRequest(
         job_id=job_id,
         request_id=f"ingestion-{job_id}",

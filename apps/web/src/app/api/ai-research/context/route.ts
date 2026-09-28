@@ -10,6 +10,9 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
+import { fetchAiEngine } from '@/lib/ai-bff/fetch-ai-engine';
+import { getWebEnv } from '@/lib/env';
+import { withRequestId } from '@/lib/log';
 
 const MAX_RESULTS = 12;
 
@@ -39,6 +42,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     return NextResponse.json({ items: [], topics: [] });
   }
   const topicParam = url.searchParams.get('topicId');
+  const semanticPromise = findSemanticKnowledge(query, u.id, withRequestId(req.headers));
 
   const contentFilter = {
     OR: [
@@ -54,7 +58,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       where: {
         type: 'research',
         AND: [contentFilter],
-        OR: [{ status: 'published' }, { authorId: u.id }],
+        OR: [{ status: 'published' }, { authorId: u.id, status: 'draft' }],
       },
       orderBy: { publishedAt: 'desc' },
       take: MAX_RESULTS,
@@ -73,7 +77,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       where: {
         type: 'knowledge',
         AND: [contentFilter],
-        OR: [{ status: 'published' }, { authorId: u.id }],
+        OR: [{ status: 'published' }, { authorId: u.id, status: 'draft' }],
       },
       orderBy: { publishedAt: 'desc' },
       take: 4,
@@ -139,14 +143,16 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       ? prisma.research.findMany({
           where: {
             id: { in: bookmarkedResearchIds },
-            OR: [{ status: 'published' }, { authorId: u.id }],
+            OR: [{ status: 'published' }, { authorId: u.id, status: 'draft' }],
           },
           select: { id: true, title: true, body: true, background: true, conclusion: true },
         })
       : [],
   ]);
 
+  const semanticItems = await semanticPromise;
   const items: Array<RowBase & { kind: string }> = [
+    ...semanticItems,
     ...researches.slice(0, 6).map((r) => ({
       kind: 'research' as const,
       id: r.id,
@@ -219,6 +225,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     ).values(),
   ).slice(0, 5);
 
+  const seenItemKeys = new Set<string>();
+  const uniqueItems = items.filter((item) => {
+    const key = `${item.kind}:${item.id}`;
+    if (seenItemKeys.has(key)) return false;
+    seenItemKeys.add(key);
+    return true;
+  });
+
   if (topicParam && topics.length === 0) {
     const topic = await prisma.topic.findUnique({
       where: { id: topicParam },
@@ -227,5 +241,59 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     if (topic) topics.push(topic);
   }
 
-  return NextResponse.json({ items, topics });
+  return NextResponse.json({ items: uniqueItems, topics });
 });
+
+async function findSemanticKnowledge(
+  query: string,
+  userId: string,
+  requestId: string,
+): Promise<Array<RowBase & { kind: 'knowledge'; private: true; semanticMatch: true; sourceRefs: ContextSourceRef[] }>> {
+  const env = getWebEnv();
+  if (!env.INTERNAL_SERVICE_TOKEN) return [];
+  try {
+    const result = await fetchAiEngine<{ ids?: unknown }>({
+      url: `${env.AI_ENGINE_URL.replace(/\/$/u, '')}/api/knowledge-index/search`,
+      requestId,
+      method: 'POST',
+      retry: false,
+      timeoutMs: 2_200,
+      headers: { 'x-internal-token': env.INTERNAL_SERVICE_TOKEN },
+      context: 'ai-research.context.semantic-knowledge',
+      body: { userId, query, limit: 4 },
+    });
+    if (!result.ok || !Array.isArray(result.body.ids)) return [];
+    const ids = Array.from(new Set(result.body.ids.filter(
+      (id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/iu.test(id),
+    ))).slice(0, 4);
+    if (!ids.length) return [];
+
+    const rows = await prisma.research.findMany({
+      where: {
+        id: { in: ids },
+        authorId: userId,
+        type: 'knowledge',
+        status: 'draft',
+        knowledgeIndexText: { not: null },
+      },
+      select: { id: true, title: true, body: true, conclusion: true, updatedAt: true },
+    });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return ids.flatMap((id) => {
+      const row = byId.get(id);
+      if (!row) return [];
+      return [{
+        kind: 'knowledge' as const,
+        id: row.id,
+        title: row.title,
+        snippet: (row.conclusion ?? row.body).slice(0, 240),
+        private: true as const,
+        semanticMatch: true as const,
+        sourceRefs: [{ type: 'research' as const, value: row.id, required: false as const }],
+        updatedAt: row.updatedAt.toISOString(),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}

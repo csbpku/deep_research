@@ -5,8 +5,14 @@
   }
   window.__deepResearchReaderLoaded = true;
 
+  // An extension update can leave closed-shadow hosts in the page after the
+  // previous isolated world is invalidated. Remove only transient controls;
+  // translations and user annotations are intentionally preserved.
+  document.querySelectorAll('[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]')
+    .forEach((node) => node.remove());
+
   const MIN_INLINE_IMAGE_CONFIDENCE = 0.75;
-  const READING_BLOCK_SELECTOR = 'h1,h2,h3,h4,p,li,blockquote,pre,td,th,dt,dd';
+  const READING_BLOCK_SELECTOR = 'h1,h2,h3,h4,p,li,blockquote,pre,td,th,dt,dd,figcaption,caption,.sd-k,.sd-kv';
   const ignored = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'BUTTON', 'INPUT', 'TEXTAREA', 'NAV', 'HEADER', 'FOOTER', 'ASIDE']);
   function findRoot() {
     const hostname = location.hostname.toLowerCase();
@@ -30,6 +36,7 @@
   let viewportTimer = 0;
   const blockIds = new WeakMap();
   const imageIds = new WeakMap();
+  const translatedOriginalDisplays = new WeakMap();
   let nextBlockId = 0;
   let nextImageId = 0;
   window.__deepResearchReaderRefresh = () => {
@@ -162,16 +169,13 @@
     const blocks = [];
     nodes.forEach((node) => {
       const text = clean(node.innerText || node.textContent || '');
-      const minimumLength = node.matches('td,th,dt,dd') ? 4 : 20;
-      if (text.length < minimumLength || text.length > 12000) return;
+      if (!text) return;
       const id = stableNodeId(node, 'block', blockIds, () => nextBlockId++);
       node.dataset.deepResearchBlock = id;
       blocks.push({ id, text, kind: node.matches('pre,code') ? 'code' : 'text' });
     });
-    // Keep the complete bounded text map so a selection near the end of a
-    // long document can still receive a strict offset/hash anchor. The page
-    // payload is capped at 256 KiB below, while translation requests use only
-    // the 24 blocks currently in or near the viewport.
+    // Keep every article block so a full-document request does not silently
+    // omit short captions, headings, or long paragraphs.
     return blocks;
   }
 
@@ -382,7 +386,7 @@
     window.__deepResearchReaderRefresh();
     const blocks = extractBlocks();
     const fullBody = blocks.map((block) => block.text).join('\n\n');
-    const body = fullBody.slice(0, 256000);
+    const body = fullBody;
     const translatedBlockIds = blocks
       .filter((block) => {
         const node = document.querySelector(`[data-deep-research-block="${CSS.escape(block.id)}"]`);
@@ -397,7 +401,7 @@
     if (!body) {
       const clone = root.cloneNode(true);
       clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside').forEach((node) => node.remove());
-      fallback = clean(clone.innerText || clone.textContent || '').slice(0, 256000);
+      fallback = clean(clone.innerText || clone.textContent || '');
     }
     const entry = entryContext();
     return {
@@ -408,7 +412,7 @@
       language: 'zh-CN',
       body: body || fallback,
       bodyCharCount: fullBody.length || fallback.length,
-      bodyTruncated: fullBody.length > 256000,
+      bodyTruncated: false,
       blockCount: blocks.length,
       blocks: blocks.slice(0, 24),
       scopeWarnings: scopeWarningsFor(blocks, body || fallback),
@@ -440,11 +444,15 @@
   function fullDocumentContext() {
     const context = pageContext();
     const allBlocks = extractBlocks();
+    const body = allBlocks.map((block) => block.text).join('\n\n');
     return extractImagesForModel().then((imageData) => ({
       ...context,
-      blocks: allBlocks.slice(0, 160),
+      body: body || context.body,
+      bodyCharCount: body.length || context.bodyCharCount,
+      bodyTruncated: false,
+      blocks: allBlocks,
       blockCount: allBlocks.length,
-      blocksTruncated: allBlocks.length > 160,
+      blocksTruncated: false,
       images: imageData.items,
       translatedImageIds: context.translatedImageIds || [],
       imageCandidateCount: imageData.candidates,
@@ -619,7 +627,7 @@
     toolbarHost.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(window.innerWidth - 330, rect.left))}px;top:${Math.max(8, rect.top - 46)}px;`;
     const shadow = toolbarHost.attachShadow({ mode: 'closed' });
     shadow.innerHTML = `
-      <style>:host{all:initial}div{display:flex;gap:4px;max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:5px;border:1px solid #d9ddd5;border-radius:9px;background:#fff;box-shadow:0 5px 18px #20211f2e;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button{border:0;border-radius:5px;background:#fff;color:#30332f;padding:5px 7px;cursor:pointer;white-space:nowrap}button:hover{background:#eff4ff;color:#315fe8}</style>
+      <style>:host{all:initial}div{display:flex;gap:4px;max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:5px;border:1px solid #d9ddd5;border-radius:9px;background:#fff;box-shadow:0 5px 18px #20211f2e;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button{min-height:32px;border:0;border-radius:5px;background:#fff;color:#30332f;padding:5px 7px;cursor:pointer;white-space:nowrap}button:hover{background:#eff4ff;color:#315fe8}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}</style>
       <div role="toolbar" aria-label="Deep Research 阅读操作">
         <button data-action="summary" aria-keyshortcuts="Alt+Shift+S" title="Alt+Shift+S">总结这段</button><button data-action="explain" aria-keyshortcuts="Alt+Shift+E" title="Alt+Shift+E">解释这段</button><button data-action="translate" aria-keyshortcuts="Alt+Shift+T" title="Alt+Shift+T">翻译这段</button><button data-action="ask" aria-keyshortcuts="Alt+Shift+Q" title="Alt+Shift+Q">问这段</button><button data-action="save" aria-keyshortcuts="Alt+Shift+K" title="Alt+Shift+K">摘录</button><button data-action="annotate" aria-keyshortcuts="Alt+Shift+M" title="Alt+Shift+M">标注</button>
       </div>`;
@@ -645,19 +653,19 @@
       <style>
         :host{all:initial}
         .dock{display:grid;gap:5px;padding:4px;border:1px solid rgba(49,89,201,.22);border-radius:10px 3px 3px 10px;background:#fff;box-shadow:0 5px 18px rgba(23,34,53,.16)}
-        button{position:relative;display:grid;width:44px;height:34px;place-items:center;border:0;border-radius:7px;background:#fff;color:#2445a8;cursor:pointer;font:800 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:transform .16s ease,background .16s ease,border-color .16s ease}
+        button{position:relative;display:grid;width:44px;height:36px;place-items:center;border:0;border-radius:7px;background:#fff;color:#2445a8;cursor:pointer;font:800 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:transform .16s ease,background .16s ease,border-color .16s ease}
         button[data-action="open"]{height:40px;border-top:1px solid #e2e7f0;border-radius:7px 3px 3px 7px}
         button:hover{transform:translateX(-2px);border-color:#6f8ee0;background:#eff4ff}
         button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}
         button::after{content:attr(data-tooltip);position:absolute;right:calc(100% + 8px);top:50%;z-index:1;transform:translateY(-50%) translateX(4px);padding:5px 7px;border:1px solid #d9e0f1;border-radius:5px;background:#172235;color:#fff;box-shadow:0 4px 12px rgba(23,34,53,.18);font:700 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s ease,transform .12s ease}
         button:hover::after,button:focus-visible::after{opacity:1;transform:translateY(-50%) translateX(0)}
         .glyph{display:grid;width:24px;height:24px;place-items:center;border-radius:6px 6px 6px 2px;background:#172235;color:#fff;letter-spacing:0}
-        .quick{font-size:10px;color:#3159c9}
+        .quick{color:#3159c9}.quick svg{display:block;width:19px;height:19px}
         @media(prefers-reduced-motion:reduce){button{transition:none}}
       </style>
       <div class="dock" role="toolbar" aria-label="技术文章快捷入口">
-        <button type="button" class="quick" data-action="summary" data-tooltip="总结本页" aria-label="Summary this page：总结本页" title="Summary this page：总结本页"><span aria-hidden="true">总结</span></button>
-        <button type="button" class="quick" data-action="translate" data-tooltip="翻译本页" aria-label="Enable translation：翻译本页" title="Enable translation：翻译本页"><span aria-hidden="true">翻译</span></button>
+        <button type="button" class="quick" data-action="summary" data-tooltip="总结本页" aria-label="总结本页" title="总结本页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg></button>
+        <button type="button" class="quick" data-action="translate" data-tooltip="翻译本页" aria-label="翻译本页" title="翻译本页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 11"/><path d="m4 14 6-6 6 6"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg></button>
         <button type="button" data-action="open" data-tooltip="打开聊天" aria-label="打开聊天" title="打开 Deep Research Reader 聊天侧栏"><span class="glyph">R</span></button>
       </div>`;
     shadow.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
@@ -706,7 +714,11 @@
   }
 
   function send(payload) {
-    chrome.runtime.sendMessage({ type: 'deep-research:from-page', payload }).catch(() => {});
+    try {
+      chrome.runtime.sendMessage({ type: 'deep-research:from-page', payload }).catch(() => {});
+    } catch {
+      // Extension reloads invalidate page contexts before their DOM is replaced.
+    }
   }
 
   async function sendPageContext() {
@@ -1129,12 +1141,12 @@
         // of being detached into a misleading right-hand list.
         const verticalLabel = regionHeight >= 48 && regionHeight >= regionWidth * 2;
         const fontSize = verticalLabel
-          ? Math.max(8, Math.min(18, regionWidth * 0.8 * renderScale))
+          ? Math.max(8, Math.min(18, regionWidth * 0.58 * renderScale))
           : Math.max(8, Math.min(24, regionHeight * 0.5 * renderScale));
         // Opaque fill is intentional: a translucent box leaves source glyphs
         // visible underneath and can create a false bilingual reading. The
         // original image remains one click away through the image control.
-        label.style.cssText = `position:absolute;left:${(x / width) * 100}%;top:${(y / height) * 100}%;width:${(regionWidth / width) * 100}%;min-height:${(regionHeight / height) * 100}%;padding:1px 2px;box-sizing:border-box;background:#fff;color:#10141a;font:600 ${fontSize}px/1.12 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:normal;overflow:hidden;word-break:break-word;${verticalLabel ? 'writing-mode:vertical-rl;text-orientation:mixed;' : ''}`;
+        label.style.cssText = `position:absolute;left:${(x / width) * 100}%;top:${(y / height) * 100}%;width:${(regionWidth / width) * 100}%;min-height:${(regionHeight / height) * 100}%;padding:1px 1px;box-sizing:border-box;background:#fff;color:#10141a;font:600 ${fontSize}px/1.12 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:normal;overflow:hidden;word-break:break-word;${verticalLabel ? 'writing-mode:vertical-rl;text-orientation:mixed;' : ''}`;
         layer.appendChild(label);
       });
       if (!layer.childElementCount) layer = null;
@@ -1387,15 +1399,31 @@
         const node = id === 'selection' && lastSelectionNode?.isConnected
           ? lastSelectionNode
           : document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
-        if (!node || !text || node.nextElementSibling?.hasAttribute('data-deep-research-translation')) return;
+        if (!node || !text || document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`)) return;
         // DOM updates can reorder block ids between the request and the
         // response. Refuse to attach a translation to a different paragraph;
         // the user can retry after the viewport context is refreshed.
         if (typeof sourceText === 'string' && clean(node.innerText || node.textContent || '') !== clean(sourceText)) return;
-        const translated = document.createElement('div');
+        if (getComputedStyle(node).display === 'none') return;
+        const translated = document.createElement(node.tagName.toLowerCase());
+        for (const attribute of ['class', 'style', 'dir', 'lang', 'role']) {
+          const value = node.getAttribute(attribute);
+          if (value !== null) translated.setAttribute(attribute, value);
+        }
+        if (node.matches('td,th')) {
+          for (const attribute of ['colspan', 'rowspan', 'scope', 'headers']) {
+            const value = node.getAttribute(attribute);
+            if (value !== null) translated.setAttribute(attribute, value);
+          }
+        }
         translated.dataset.deepResearchTranslation = 'true';
+        translated.dataset.deepResearchTranslationFor = id;
         translated.textContent = text;
-        translated.style.cssText = 'margin:0.45em 0 1em;padding:0.55em 0.7em;border-left:3px solid #315fe8;background:#eff4ff;color:#30332f;font:inherit;line-height:1.65;';
+        translated.style.setProperty('display', getComputedStyle(node).display);
+        translated.style.setProperty('border-inline-start', '3px solid #3159c9');
+        translated.style.setProperty('padding-inline-start', '0.65em');
+        translatedOriginalDisplays.set(node, node.style.display);
+        node.style.display = 'none';
         node.insertAdjacentElement('afterend', translated);
         appliedCount += 1;
       });
@@ -1410,7 +1438,17 @@
       send({ type: 'deep-research:image-translations-applied', count: appliedCount });
     }
     if (message?.type === 'deep-research:restore-translations') {
-      document.querySelectorAll('[data-deep-research-translation]').forEach((node) => node.remove());
+      document.querySelectorAll('[data-deep-research-translation]').forEach((node) => {
+        const id = node.getAttribute('data-deep-research-translation-for');
+        const original = id
+          ? document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`)
+          : node.previousElementSibling;
+        if (original && translatedOriginalDisplays.has(original)) {
+          original.style.display = translatedOriginalDisplays.get(original) || '';
+          translatedOriginalDisplays.delete(original);
+        }
+        node.remove();
+      });
       removeSelectionTranslation();
       restoreImageTranslations();
       send({ type: 'deep-research:translations-restored' });

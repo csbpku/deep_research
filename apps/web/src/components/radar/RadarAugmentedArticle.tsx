@@ -36,7 +36,7 @@ export function RadarAugmentedArticle({ content, guide, onQuoteClick }: RadarAug
     <article className="space-y-0">
       {guide?.summary ? (
         <div className="mb-6 border-l-2 border-[var(--ink-accent)] bg-[var(--ink-accent)]/[0.06] px-3.5 py-3">
-          <div className="mb-1 font-sans text-[10px] font-semibold uppercase tracking-[0.1em] text-[var(--ink-accent)]">快速理解</div>
+          <div className="mb-1 font-sans text-xs font-semibold uppercase tracking-[0.1em] text-[var(--ink-accent)]">快速理解</div>
           <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{guide.summary}</p>
         </div>
       ) : null}
@@ -50,7 +50,7 @@ export function RadarAugmentedArticle({ content, guide, onQuoteClick }: RadarAug
               <div className="mt-4 space-y-2 border-l-2 border-[var(--ink-accent)]/50 pl-3">
                 {annotations.map((item, annotationIndex) => (
                   <div key={`${item.claim ?? 'annotation'}-${annotationIndex}`} className="bg-[var(--ink-accent)]/[0.05] px-3 py-2.5">
-                    <div className="mb-1 font-sans text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">AI 注释</div>
+                    <div className="mb-1 font-sans text-xs font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">AI 注释</div>
                     {item.claim ? <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{item.claim}</p> : null}
                     {item.whyItMatters ? <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">为什么重要：{item.whyItMatters}</p> : null}
                     {item.evidence ? (
@@ -58,7 +58,7 @@ export function RadarAugmentedArticle({ content, guide, onQuoteClick }: RadarAug
                         type="button"
                         onClick={() => onQuoteClick?.(item.evidence!)}
                         aria-label="查看 AI 依据（滚动到证据来源）"
-                        className="mt-1.5 inline-flex items-center gap-0.5 text-left text-[11px] font-medium text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+                        className="mt-1.5 inline-flex items-center gap-0.5 text-left text-xs font-medium text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
                       >
                         <ListChecks className="size-3" aria-hidden />
                         查看依据

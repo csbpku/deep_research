@@ -141,11 +141,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       { canonicalUrl: { contains: '/releases/tag/' } },
     ],
   } satisfies Prisma.SummaryWhereInput;
-  // Public radar is a reader-facing product surface. A high-value card is
-  // visible only after source enrichment, deterministic reader-quality, and
-  // content review all agree. Render review is intentionally omitted here:
-  // production may disable Chromium and that optional gate must not hide good
-  // source content. Approved user shares retain their existing visibility.
+  // Public high-value rows use one of two contracts: external-reading rows
+  // have an independent discovery score and direct the user to the source;
+  // server-reading rows still require enrichment, reader quality, and review.
+  // Render review is optional and must not hide approved source content.
   const publicQualityGate: Prisma.SummaryWhereInput = {
     OR: [
       {
@@ -157,6 +156,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         syncRunId: { not: null },
         OR: [
           { distilledTier: 'skim' },
+          {
+            distilledTier: { in: ['collection', 'deep_read'] },
+            tags: { has: 'external_reading' },
+          },
           {
             distilledTier: { in: ['collection', 'deep_read'] },
             enrichmentStatus: 'ready',

@@ -83,7 +83,7 @@ describe('SearchQuery schema', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('buildSearchSql', () => {
-  it('produces parameterized SQL with $1..$4 placeholders', () => {
+  it('produces parameterized SQL with query, type, owner, and pagination params', () => {
     const { rowsSql, params } = buildSearchSql({
       q: 'AI',
       type: undefined,
@@ -93,12 +93,13 @@ describe('buildSearchSql', () => {
     expect(rowsSql).toContain('$1');
     expect(rowsSql).toContain('$2');
     expect(rowsSql).toContain('$3');
-    expect(rowsSql).toContain('$4');
-    expect(params).toHaveLength(4);
+    expect(rowsSql).toContain('$5');
+    expect(params).toHaveLength(5);
     expect(params[0]).toBe('AI');
     expect(params[1]).toBeNull(); // type is undefined → null in SQL
-    expect(params[2]).toBe(20);
-    expect(params[3]).toBe(0); // offset = (1-1)*20
+    expect(params[2]).toBeNull(); // anonymous search never sees private drafts
+    expect(params[3]).toBe(20);
+    expect(params[4]).toBe(0); // offset = (1-1)*20
   });
 
   it('uses simple dictionary web search plus trigram fallback', () => {
@@ -140,7 +141,7 @@ describe('buildSearchSql', () => {
       page: 3,
       perPage: 10,
     });
-    expect(params[3]).toBe(20); // (3-1)*10
+    expect(params[4]).toBe(20); // (3-1)*10
   });
 
   it('keeps type as string parameter (no string concat)', () => {
@@ -151,6 +152,21 @@ describe('buildSearchSql', () => {
       perPage: 20,
     });
     expect(params[1]).toBe('long_research');
+  });
+
+  it('includes only the current owner’s private draft research', () => {
+    const { rowsSql, countSql, params } = buildSearchSql({
+      q: 'local-only',
+      userId: '11111111-1111-4111-8111-111111111111',
+      page: 1,
+      perPage: 20,
+    });
+    expect(rowsSql).toContain('FROM researches r');
+    expect(rowsSql).toContain('r."authorId" = $3::uuid');
+    expect(rowsSql).toContain("r.status::text = 'draft'");
+    expect(rowsSql).toContain('true AS "isPrivate"');
+    expect(countSql).toContain('r."authorId" = $3::uuid');
+    expect(params[2]).toBe('11111111-1111-4111-8111-111111111111');
   });
 
   it('does not concatenate q into SQL string', () => {

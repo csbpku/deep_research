@@ -3,6 +3,7 @@
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { ADMIN_TARGET_TYPE, writeAdminAction } from './radar/admin-actions';
 import type { TxClient } from './radar/tx';
+import { queuePersonalKnowledgeIndex } from './personal-knowledge-index';
 
 export type ResearchStatusAction = 'archive' | 'restore';
 
@@ -27,7 +28,7 @@ export async function transitionResearchStatus(
 }> {
   const existing = await tx.research.findUnique({
     where: { id: options.id },
-    select: { id: true, status: true, publishedAt: true },
+    select: { id: true, status: true, publishedAt: true, type: true, authorId: true },
   });
   if (!existing) {
     throw new Error('RESEARCH_NOT_FOUND');
@@ -51,6 +52,14 @@ export async function transitionResearchStatus(
         },
     select: { id: true, status: true, updatedAt: true },
   });
+
+  if (isArchive && existing.type === 'knowledge') {
+    await queuePersonalKnowledgeIndex(tx, {
+      ownerId: existing.authorId,
+      researchId: existing.id,
+      operation: 'delete',
+    });
+  }
 
   await tx.researchAudit.create({
     data: {

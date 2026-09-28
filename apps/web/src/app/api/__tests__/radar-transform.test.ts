@@ -33,11 +33,16 @@ vi.mock('../../../lib/env.js', () => ({
 import { POST } from '../radar/[id]/transform/route';
 
 const SUMMARY_ID = '11111111-1111-4111-8111-111111111111';
+let requestSequence = 0;
 
 function request(mode: 'translate' | 'ai_reading' = 'translate', selection?: string) {
+  requestSequence += 1;
   return new Request(`http://localhost/api/radar/${SUMMARY_ID}/transform`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-forwarded-for': `192.0.2.${requestSequence}`,
+    },
     body: JSON.stringify({ mode, language: 'zh-CN', ...(selection ? { selection } : {}) }),
   }) as unknown as NextRequest;
 }
@@ -82,6 +87,30 @@ beforeEach(() => {
 });
 
 describe('POST /api/radar/[id]/transform', () => {
+  it('does not transform an external-reading metadata summary as if it were full text', async () => {
+    mocks.summaryFindUnique.mockResolvedValueOnce({
+      id: SUMMARY_ID,
+      title: 'External reading',
+      body: 'A source-provided abstract, not the full article.',
+      originalMarkdown: null,
+      originalMeta: null,
+      source: 'daily',
+      syncRunId: 'run-1',
+      distilledTier: 'deep_read',
+      tags: ['external_reading'],
+      shareSource: null,
+    });
+
+    const response = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      message: '该候选仅提供来源摘要初筛；请打开原文并使用 Reader 阅读或翻译。',
+    });
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+    expect(mocks.summaryUpdate).not.toHaveBeenCalled();
+  });
+
   it('allows anonymous transforms and persists a source-hash cache', async () => {
     const first = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
     expect(first.status).toBe(200);

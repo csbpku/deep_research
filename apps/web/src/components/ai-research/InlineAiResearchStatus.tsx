@@ -86,7 +86,7 @@ function StepStepper({ currentStep, succeeded }: { currentStep: string | null; s
             >
               {state === 'done' ? <Check className="size-3" /> : index + 1}
             </span>
-            <span className={cn('text-[11px]', state === 'active' ? 'font-medium text-foreground' : state === 'done' ? 'text-muted-foreground' : 'text-muted-foreground/60')}>
+            <span className={cn('text-xs', state === 'active' ? 'font-medium text-foreground' : state === 'done' ? 'text-muted-foreground' : 'text-muted-foreground/60')}>
               {STEP_LABELS[key]}
             </span>
           </li>
@@ -264,20 +264,20 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground">
             已抓取正文 <span className="ml-1 font-mono tabular-nums text-foreground">{evidenceCount}</span>
           </span>
           {terminal && status === 'partial' && job.partialSourcesCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-[11px] text-warning-fg">
+            <span className="inline-flex items-center rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs text-warning-fg">
               部分 <span className="ml-1 font-mono tabular-nums">{job.partialSourcesCount}</span>
             </span>
           ) : null}
           {job.failedSourcesCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-destructive/25 bg-destructive/5 px-2 py-0.5 text-[11px] text-destructive">
+            <span className="inline-flex items-center rounded-full border border-destructive/25 bg-destructive/5 px-2 py-0.5 text-xs text-destructive">
               失败 <span className="ml-1 font-mono tabular-nums">{job.failedSourcesCount}</span>
             </span>
           ) : null}
-          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground">
             {deliverableLabel}
           </span>
         </div>

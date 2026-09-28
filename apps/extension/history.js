@@ -8,6 +8,7 @@ let activeTab = 'sessions';
 let query = '';
 let toastTimer = 0;
 let activeDetail = null;
+let activeDetailReturnFocus = null;
 const sidePanelSurface = new URLSearchParams(window.location.search).get('surface') === 'sidepanel';
 const pendingSessionKey = 'readerPendingSession';
 
@@ -196,6 +197,9 @@ async function openSession(session, { anchor = null } = {}) {
 }
 
 function renderHistoryDetail(session) {
+  if (!activeDetail) {
+    activeDetailReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   activeDetail = session;
   $('history-list').classList.add('hidden');
   $('history-detail').classList.remove('hidden');
@@ -287,12 +291,15 @@ function renderHistoryDetail(session) {
   } else {
     structured.classList.add('hidden');
   }
+  $('history-detail-title').focus({ preventScroll: true });
 }
 
-function closeHistoryDetail() {
+function closeHistoryDetail({ restoreFocus = true } = {}) {
   activeDetail = null;
   $('history-detail').classList.add('hidden');
   $('history-list').classList.remove('hidden');
+  if (restoreFocus && activeDetailReturnFocus?.isConnected) activeDetailReturnFocus.focus();
+  activeDetailReturnFocus = null;
 }
 
 async function renameSession(session) {
@@ -470,12 +477,18 @@ async function loadData() {
   sessions = Array.from(mergedSessions.values()).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   insights = localInsights;
   render();
+  $('history-tabs').setAttribute('aria-busy', 'false');
+  document.querySelectorAll('[data-history-tab]').forEach((button) => { button.disabled = false; });
 }
 
 function setTab(next) {
-  if (activeDetail) closeHistoryDetail();
+  if (activeDetail) closeHistoryDetail({ restoreFocus: false });
   activeTab = next === 'insights' ? 'insights' : 'sessions';
-  document.querySelectorAll('[data-history-tab]').forEach((button) => button.classList.toggle('active', button.dataset.historyTab === activeTab));
+  document.querySelectorAll('[data-history-tab]').forEach((button) => {
+    const selected = button.dataset.historyTab === activeTab;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
   render();
 }
 

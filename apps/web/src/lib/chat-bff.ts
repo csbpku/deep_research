@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import type { ErrorCode } from '@deep-research/shared/errors';
+import { aiEngineServiceAuthHeaders } from './ai-bff/fetch-ai-engine';
 import { getWebEnv } from './env';
 import { toApiErrorResponse } from './errors';
 import { log, serializeError } from './log';
@@ -85,6 +86,7 @@ export async function fetchChatEngine(
       headers: {
         ...init.headers,
         'x-request-id': requestId,
+        ...aiEngineServiceAuthHeaders(),
       },
       signal: ac.signal,
     });
@@ -123,6 +125,7 @@ export async function streamChatEngine(
         ...init.headers,
         'x-request-id': requestId,
         accept: 'text/event-stream',
+        ...aiEngineServiceAuthHeaders(),
       },
       // No signal — long-lived stream.
     });

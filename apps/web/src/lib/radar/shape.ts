@@ -159,6 +159,8 @@ export function shapeCandidate(input: {
   const s = input.summary;
   const counts = input.feedbackCounts ?? emptyFeedbackCounts();
   const mine = input.myFeedbacks ?? [];
+  const externalReading = s.tags.includes('external_reading');
+  const excerpt = excerptOf(externalReading ? s.interpretation ?? '' : s.body, 1200);
   const distilledScore = parseDistilledScore(s.distilledScore);
   const highlights = parseHighlights(s.highlights);
   const arxivAnalysis = parseArxivAnalysis(s.arxivAnalysis);
@@ -169,9 +171,9 @@ export function shapeCandidate(input: {
     // Normalize at the API boundary so every list/card consumer sees the same
     // readable title, including historical rows that are not re-enriched.
     title: cleanResearchLabel(s.title),
-    excerpt: excerptOf(s.body, 1200),
-    excerptDisplay: classifyExcerptDisplay(excerptOf(s.body, 1200)),
-    body: input.includeBody === false ? null : s.body,
+    excerpt,
+    excerptDisplay: classifyExcerptDisplay(excerpt),
+    body: input.includeBody === false || externalReading ? null : s.body,
     tier: s.distilledTier ?? distilledScore?.tier ?? null,
     url: s.url,
     sourceType: s.syncRun?.source?.sourceType ?? (s.source === 'user' ? 'web_share' : null),
@@ -199,27 +201,27 @@ export function shapeCandidate(input: {
     myFeedbacks: mine,
     commentCount: s._count?.comments ?? 0,
     originalKind: s.originalKind ?? null,
-    originalMarkdown: s.originalMarkdown ?? null,
-    originalMeta: sanitizeOriginalMeta(s.originalMeta ?? null),
-    readerQualityStatus: s.readerQualityStatus ?? null,
-    readerQualityDetails: s.readerQualityDetails ?? null,
-    contentReviewStatus: s.contentReviewStatus ?? null,
-    contentReviewDetails: s.contentReviewDetails ?? null,
-    contentReviewRound: s.contentReviewRound ?? 0,
-    renderReviewStatus: s.renderReviewStatus ?? null,
-    renderReviewRound: s.renderReviewRound ?? 0,
-    githubItemMeta,
-    repoSummary: s.repoSummary ?? null,
-    highlights,
-    arxivAnalysis,
-    tldr: s.tldr ?? null,
-    sections: Array.isArray(s.sections)
+    originalMarkdown: externalReading ? null : s.originalMarkdown ?? null,
+    originalMeta: externalReading ? null : sanitizeOriginalMeta(s.originalMeta ?? null),
+    readerQualityStatus: externalReading ? null : s.readerQualityStatus ?? null,
+    readerQualityDetails: externalReading ? null : s.readerQualityDetails ?? null,
+    contentReviewStatus: externalReading ? null : s.contentReviewStatus ?? null,
+    contentReviewDetails: externalReading ? null : s.contentReviewDetails ?? null,
+    contentReviewRound: externalReading ? 0 : s.contentReviewRound ?? 0,
+    renderReviewStatus: externalReading ? null : s.renderReviewStatus ?? null,
+    renderReviewRound: externalReading ? 0 : s.renderReviewRound ?? 0,
+    githubItemMeta: externalReading ? null : githubItemMeta,
+    repoSummary: externalReading ? null : s.repoSummary ?? null,
+    highlights: externalReading ? null : highlights,
+    arxivAnalysis: externalReading ? null : arxivAnalysis,
+    tldr: externalReading ? null : s.tldr ?? null,
+    sections: !externalReading && Array.isArray(s.sections)
       ? (s.sections as Array<{ title: string; level: number; startOffset: number; page?: number }>)
       : null,
-    figures: Array.isArray(s.figures)
+    figures: !externalReading && Array.isArray(s.figures)
       ? (s.figures as Array<{ page: number; caption?: string; dataUrl?: string }>)
       : null,
-    authors: Array.isArray(s.authors) ? s.authors : [],
+    authors: !externalReading && Array.isArray(s.authors) ? s.authors : [],
     topics: (s.topicLinks ?? []).map((tl) => tl.topic),
     issues: (s.issueCandidates ?? []).map((ic) => ic.issue),
   };
@@ -346,6 +348,7 @@ export function parseDistilledScore(value: unknown): DistilledScore | null {
       audienceFit: dims.audienceFit ?? dims.audience_fit,
     },
     weakPoint: raw.weakPoint ?? raw.weak_point,
+    weakPointEvidence: raw.weakPointEvidence ?? raw.weak_point_evidence,
     veto: raw.veto,
     riskFlags: raw.riskFlags ?? raw.risk_flags ?? [],
     profile: raw.profile,

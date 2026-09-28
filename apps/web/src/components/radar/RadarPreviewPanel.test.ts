@@ -25,8 +25,9 @@ describe('RadarPreviewPanel', () => {
       onClose: () => undefined,
     }));
 
-    expect(html).toContain('快速预览');
+    expect(html).toContain('文章概览');
     expect(html).toContain('AI 摘要');
+    expect(html).toContain('同步时临时读取原文生成摘要和评分；全文不保存在本站');
     expect(html).not.toContain('line-clamp-6');
     expect(html).toContain('为什么值得看');
     expect(html).toContain('打开原文');

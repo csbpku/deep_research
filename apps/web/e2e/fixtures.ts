@@ -9,8 +9,8 @@ import {
   type Page,
 } from '@playwright/test';
 
-const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
-const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? 'e2e-admin@example.com';
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000';
+const ADMIN_EMAIL = 'e2e-admin@e2e.local';
 
 export { expect };
 
@@ -43,6 +43,7 @@ export async function loginWithCredentials(
         csrfToken: csrf.csrfToken,
         email: user.email,
         role: user.role,
+        e2eToken: process.env.E2E_CREDENTIALS_TOKEN ?? '',
         callbackUrl: `${BASE_URL}/`,
       },
     },

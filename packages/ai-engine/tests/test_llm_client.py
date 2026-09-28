@@ -7,11 +7,14 @@ import pytest
 
 from ai_engine.llm.client import (
     ReasoningStreamFilter,
+    TextGenerationResult,
+    generate_vision,
     generate_text,
     is_provider_policy_error,
     is_retryable_llm_error,
     stream_text,
 )
+from ai_engine.llm.token_budget import TokenBudgetExceeded, TokenReservation
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +65,63 @@ async def test_direct_model_profile_uses_its_own_credentials(
         "api_key": "direct-minimax-key",
         "base_url": "https://api.minimaxi.com/v1",
     }
+
+
+async def test_generate_reserves_before_provider_and_settles_reported_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[object, ...]] = []
+    reservation = TokenReservation("11111111-1111-1111-1111-111111111111", 100)
+
+    async def reserve(**kwargs: object) -> TokenReservation:
+        events.append(("reserve", kwargs))
+        return reservation
+
+    async def settle(value: TokenReservation, actual: int) -> None:
+        events.append(("settle", value.id, actual))
+
+    async def provider(**_kwargs: object) -> TextGenerationResult:
+        events.append(("provider",))
+        return TextGenerationResult("ok", 12, 3, "test", "test", "openai")
+
+    async def ignore_audit(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("ai_engine.llm.client.reserve_llm_tokens", reserve)
+    monkeypatch.setattr("ai_engine.llm.client.settle_llm_tokens", settle)
+    monkeypatch.setattr("ai_engine.llm.client._generate_text_once", provider)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore_audit)
+
+    result = await generate_text(
+        user_prompt="question",
+        llm_spec="openai:test-model",
+        max_tokens=40,
+        budget_user_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    assert result.text == "ok"
+    assert [item[0] for item in events] == ["reserve", "provider", "settle"]
+    assert events[-1] == ("settle", reservation.id, 15)
+
+
+async def test_generate_does_not_call_provider_when_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def reject(**_kwargs: object) -> None:
+        raise TokenBudgetExceeded(scope="user", used=99, limit=100, requested=10)
+
+    async def provider(**_kwargs: object) -> TextGenerationResult:
+        raise AssertionError("provider must not be called after budget rejection")
+
+    async def ignore_audit(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("ai_engine.llm.client.reserve_llm_tokens", reject)
+    monkeypatch.setattr("ai_engine.llm.client._generate_text_once", provider)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore_audit)
+
+    with pytest.raises(TokenBudgetExceeded):
+        await generate_text(user_prompt="question", llm_spec="openai:test-model")
 
 
 async def test_generate_text_uses_anthropic_compatible_endpoint(
@@ -148,6 +208,58 @@ async def test_generate_text_uses_openai_compatible_endpoint(
         "api_key": "sk-placeholder-for-openai-compatible-proxy",
         "base_url": "http://localhost:8318/v1",
     }
+
+
+async def test_generate_vision_sends_browser_image_bytes_as_multimodal_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Completions:
+        async def create(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content='{"regions":[]}'),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=100, completion_tokens=12),
+                model="minimax-vision-test",
+            )
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["client"] = kwargs
+            self.chat = SimpleNamespace(completions=Completions())
+
+    async def ignore_audit(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore_audit)
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+    monkeypatch.setenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")
+
+    result = await generate_vision(
+        llm_spec="minimax:MiniMax-VL-01",
+        system_prompt="Translate image text.",
+        user_prompt="Return JSON.",
+        image_media_type="image/png",
+        image_base64="AQID",
+    )
+
+    assert result.text == '{"regions":[]}'
+    assert captured["messages"] == [
+        {"role": "system", "content": "Translate image text."},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Return JSON."},
+            {"type": "image_url", "image_url": {
+                "url": "data:image/png;base64,AQID",
+                "detail": "high",
+            }},
+        ]},
+    ]
+    assert captured["model"] == "MiniMax-VL-01"
 
 
 async def test_generate_text_rejects_unknown_provider() -> None:
@@ -276,6 +388,60 @@ async def test_stream_text_uses_provider_stream_and_filters_reasoning(
     assert captured["stream"] is True
     assert result.input_tokens == 8
     assert result.output_tokens == 2
+
+
+async def test_minimax_stream_requests_usage_in_final_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Stream:
+        def __init__(self) -> None:
+            self._chunks = [
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(content="答复"), finish_reason="stop")],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[],
+                    usage=SimpleNamespace(prompt_tokens=23, completion_tokens=7),
+                ),
+            ]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    class Completions:
+        async def create(self, **kwargs: object) -> Stream:
+            captured.update(kwargs)
+            return Stream()
+
+    class Client:
+        def __init__(self, **_kwargs: object) -> None:
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+    monkeypatch.setenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")
+
+    result = await stream_text(
+        llm_spec="minimax:MiniMax-M3",
+        user_prompt="hello",
+        on_delta=lambda _value: _ignore_delta(),
+    )
+
+    assert captured["stream_options"] == {"include_usage": True}
+    assert result.text == "答复"
+    assert (result.input_tokens, result.output_tokens) == (23, 7)
+
+
+async def _ignore_delta() -> None:
+    return None
 
 
 async def test_generate_text_falls_back_after_quota_error(

@@ -36,7 +36,7 @@ test.describe('Public flows', () => {
 test.describe('Member radar to research flow', () => {
   test('member can open a radar candidate as a prefilled AI research', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
 

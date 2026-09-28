@@ -33,6 +33,7 @@ import { log, withRequestId } from '@/lib/log';
 import { getWebEnv } from '@/lib/env';
 import { prisma } from '@/lib/db';
 import { recordProductEvent } from '@/lib/product-events';
+import { aiEngineServiceAuthHeaders } from '@/lib/ai-bff/fetch-ai-engine';
 
 const AI_ENGINE_TIMEOUT_MS = 10_000;
 
@@ -280,7 +281,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     const timer = setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
     upstreamRes = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Request-Id': requestId,
+        ...aiEngineServiceAuthHeaders(),
+      },
       body: JSON.stringify(upstreamPayload),
       signal: ac.signal,
       cache: 'no-store',

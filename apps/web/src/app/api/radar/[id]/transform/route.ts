@@ -322,6 +322,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       source: true,
       syncRunId: true,
       distilledTier: true,
+      tags: true,
       shareSource: { select: { status: true } },
     },
   });
@@ -333,6 +334,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',
+      requestId,
+    });
+  }
+  if (summary.tags?.includes('external_reading')) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '该候选仅提供来源摘要初筛；请打开原文并使用 Reader 阅读或翻译。',
       requestId,
     });
   }
@@ -447,7 +455,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     const contextEnd = quoteIndex >= 0 ? Math.min(fullContent.length, quoteIndex + content.length + 3500) : Math.min(fullContent.length, 7000);
     const context = fullContent.slice(contextStart, contextEnd);
     const instruction = '解释选中的术语或片段。先给出清晰定义，再结合上下文说明它在本文中的具体含义、涉及的变量/机制以及为什么重要；如果是公式或指标，说明如何理解。不要只复述“这是一个术语”，也不要因为信息有限就直接拒答。只返回面向读者的解释文本。';
-    const explainBody = { operation: 'explain', body: `上下文：\n${context}\n\n选中内容：\n${content}`, topic: summary.title, instruction };
+    const explainBody = { operation: 'explain', requester_id: user?.id, body: `上下文：\n${context}\n\n选中内容：\n${content}`, topic: summary.title, instruction };
     let result = await fetchAiEngine<{ suggestion?: string }>({
       url: aiEngineUrl,
       requestId,
@@ -501,7 +509,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         timeoutMs: 120_000,
         retry: false,
         headers,
-        body: { operation: 'translate', body: chunk, topic: summary.title, instruction },
+        body: { operation: 'translate', requester_id: user?.id, body: chunk, topic: summary.title, instruction },
         context: `radar.translate.chunk.${i}`,
       });
       if (!r.ok && r.message.includes('String should match pattern')) {
@@ -512,7 +520,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           timeoutMs: 120_000,
           retry: false,
           headers,
-          body: { operation: 'rewrite', body: chunk, topic: summary.title, instruction },
+          body: { operation: 'rewrite', requester_id: user?.id, body: chunk, topic: summary.title, instruction },
           context: `radar.translate.chunk.${i}.compat`,
         });
       }
@@ -599,7 +607,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       timeoutMs: 180_000,
       retry: false,
       headers,
-      body: { operation: 'guide', body: guideChunks[0], topic: summary.title, summaryId: summary.id },
+      body: { operation: 'guide', requester_id: user?.id, body: guideChunks[0], topic: summary.title, summaryId: summary.id },
       context: 'radar.ai_reading.v2',
     });
     if (!result.ok) {
@@ -616,7 +624,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         timeoutMs: 180_000,
         retry: false,
         headers,
-        body: { operation: 'guide_section', body: guideChunks[i], topic: summary.title, summaryId: summary.id },
+        body: { operation: 'guide_section', requester_id: user?.id, body: guideChunks[i], topic: summary.title, summaryId: summary.id },
         context: `radar.ai_reading.v2.section.${i}`,
       });
       const sectionGuide = result.ok ? normalizeGuide(result.body.guide) : null;
@@ -659,7 +667,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         timeoutMs: 180_000,
         retry: false,
         headers,
-        body: { operation: 'guide_synthesis', body: synthesisBody, topic: summary.title, summaryId: summary.id },
+        body: { operation: 'guide_synthesis', requester_id: user?.id, body: synthesisBody, topic: summary.title, summaryId: summary.id },
         context: 'radar.ai_reading.v2.synthesis',
       });
       guide = synthesis.ok ? normalizeGuide(synthesis.body.guide) : null;

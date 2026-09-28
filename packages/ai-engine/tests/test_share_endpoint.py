@@ -30,7 +30,11 @@ async def _make_client() -> AsyncIterator[httpx.AsyncClient]:
     app_module._adapter_singleton = lambda: adapter  # type: ignore[assignment]
     transport = ASGITransport(app=app)
     try:
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"x-internal-token": "test-only-ai-engine-token"},
+        ) as client:
             yield client
     finally:
         app_module._adapter_singleton = original  # type: ignore[assignment]

@@ -15,6 +15,45 @@ test.describe('Radar flows', () => {
     expect(res?.status()).toBe(200);
     // 列表骨架或空态：页面上至少有标题
     await expect(page.locator('body')).toContainText(/雷达|radar/i);
+    await expect(page.getByRole('button', { name: '阅读等级筛选' }))
+      .toContainText('核心材料、推荐精读');
+  });
+
+  test('candidate title opens an in-place overview across narrow and desktop layouts', async ({ page }) => {
+    const filters = 'quality=collection%2Cdeep_read%2Cskim&date=all&page=1&per_page=20&view=ranked';
+    const radarResponse = await page.request.get(`/api/radar?${filters}`);
+    expect(radarResponse.ok()).toBe(true);
+    const radar = await radarResponse.json() as {
+      items: Array<{ title: string }>;
+    };
+    test.skip(radar.items.length === 0, '需要至少一条雷达候选验证文章概览');
+
+    for (const viewport of [{ width: 764, height: 900 }, { width: 1280, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto(`/radar?${filters}`);
+
+      const firstCandidate = page.locator('article').first();
+      await expect(firstCandidate.getByRole('link').first()).toHaveText(radar.items[0].title);
+      await expect(firstCandidate.getByText('阅读简报', { exact: true })).toHaveCount(0);
+      await firstCandidate.getByRole('link').first().click();
+      await expect.poll(() => new URL(page.url()).searchParams.get('open')).toBeTruthy();
+
+      const preview = viewport.width < 1024
+        ? page.getByRole('dialog')
+        : page.getByRole('complementary', { name: '文章概览' });
+      await expect(preview).toContainText('AI 摘要');
+      await expect(preview.getByRole('button', { name: '关闭预览' })).toBeVisible();
+      if (viewport.width < 1024) {
+        const bounds = await preview.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeGreaterThanOrEqual(viewport.height - 2);
+      }
+
+      await preview.getByRole('button', { name: '关闭预览' }).click();
+      await expect.poll(() => new URL(page.url()).searchParams.get('open')).toBeNull();
+      expect(new URL(page.url()).searchParams.get('date')).toBe('all');
+      expect(new URL(page.url()).searchParams.get('page')).toBe('1');
+    }
   });
 
   test('committed search state is reproducible after a second query and refresh', async ({ page }) => {

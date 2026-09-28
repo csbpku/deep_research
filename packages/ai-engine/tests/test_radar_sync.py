@@ -38,6 +38,7 @@ from ai_engine.radar.sync_runner import (
     SourceRunResult,
     run_radar_pipeline,
     _retryable_latest_source_ids,
+    _record_sync_diagnostic,
     run_radar_sync,
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -249,8 +250,11 @@ async def test_sync_persists_high_score_as_target_but_only_skim_deliverable(
     assert '"distilledTargetTier"' in insert_sql
     assert params[18] == "skim"
     assert params[19] in {"deep_read", "collection"}
-    assert params[27] == "pending"
+    assert params[25] is True
+    assert params[27] is not None
     assert params[28] == "pending"
+    assert params[29] == "pending"
+    assert insert_sql.count("%s") == len(params)
 
 
 async def test_create_run_initializes_lease_and_heartbeat() -> None:
@@ -649,38 +653,173 @@ async def test_run_radar_pipeline_enriches_only_current_runs(
     }
 
 
-async def test_browser_reading_mode_skips_document_fetch_and_enrichment(
+async def test_browser_reading_mode_uses_full_text_transiently_without_persisting_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The migration switch keeps discovery metadata while deferring reading to the plugin."""
+    """Sync may read full text for scoring while Reader remains the reading surface."""
     monkeypatch.setenv("RADAR_READING_MODE", "browser")
     assert browser_reading_mode_enabled()
-    pool = _Pool([_source()])
+    pool = _Pool([_source(source_type="github")])
+    full_text = (
+        "The repository implements a production-grade agent runtime with "
+        "documented architecture, tested execution paths, and operational "
+        "tradeoffs. "
+    ) * 8
+    fetched_urls: list[str] = []
+    scored_content: list[str] = []
 
     async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
-        return [_candidate("https://example.com/browser-reading")]
+        return [_candidate("https://github.com/acme/browser-reading")]
 
-    async def must_not_fetch(url: str, **kwargs: Any) -> FetchedDocument:
-        raise AssertionError(f"browser mode fetched {url}")
+    async def high_score(title: str, content: str, **kwargs: Any) -> Any:
+        del title, kwargs
+        scored_content.append(content)
+        return compute_score(
+            {
+                "信息增量": 3,
+                "分析深度": 3,
+                "可行动性": 3,
+                "事实可信度": 3,
+                "时效性": 3,
+                "表达质量": 3,
+                "综合信号": 3,
+                "direct_relevance": 3,
+                "relevance_evidence": "repository metadata and project signals",
+            },
+            source_type="github",
+        )
+
+    async def fetch_full_source(url: str, **kwargs: Any) -> FetchedDocument:
+        del kwargs
+        fetched_urls.append(url)
+        html = f'<article class="markdown-body"><p>{full_text}</p></article>'
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=html.encode(),
+            content_type="text/html",
+            elapsed_ms=5,
+            redirect_count=0,
+        )
 
     result = await run_radar_pipeline(
         pool,
         triggered_by="admin",
         adapter=FakeAdapter(),
-        fetchers={"rss": fetcher},
-        document_fetcher=must_not_fetch,
+        fetchers={"github": fetcher},
+        document_fetcher=fetch_full_source,
+        distilled_scorer=high_score,
     )
 
     assert result.enriched_count == 0
     assert result.enrichment_error is None
+    assert fetched_urls == ["https://github.com/acme/browser-reading"]
+    assert len(scored_content) == 1
+    assert "production-grade agent runtime" in scored_content[0]
     insert_sql, insert_params = next(
         item for item in pool.connection_value.executions
         if 'INSERT INTO "summaries"' in item[0]
     )
     assert "external_reading" in insert_params[10]
-    assert insert_params[18] == "skim"
+    assert insert_params[18] in {"deep_read", "collection"}
+    assert insert_params[18] == insert_params[19]
     assert "originalMarkdown" in insert_sql
     assert insert_params[23] is None
+    assert insert_params[25] is False
+    assert insert_params[26] is None
+    assert insert_params[27] is None
+    assert "CASE WHEN %s THEN now() ELSE NULL END" in insert_sql
+    assert insert_sql.count("%s") == len(insert_params)
+    assert full_text not in str(insert_params)
+
+
+async def test_browser_reading_mode_fetches_arxiv_full_html_for_scoring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", "browser")
+    pool = _Pool([_source("arxiv-source", "arxiv")])
+    abstract = (
+        "This paper evaluates retrieval-augmented agents on a benchmark, "
+        "compares sparse and dense retrieval, reports measured task results, "
+        "and discusses limitations and deployment tradeoffs. "
+    ) * 5
+    full_paper = (
+        "## Method\n\nThe full paper describes its evaluation protocol, "
+        "dataset construction, baseline comparisons, ablations, and "
+        "limitations beyond the abstract. "
+    ) * 12
+    scored_content: list[str] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(
+            title="Evaluating Retrieval-Augmented Agents",
+            url="https://arxiv.org/abs/2609.12345",
+            snippet=abstract,
+            published_at=datetime.now(timezone.utc),
+            content_origin="arxiv",
+        )]
+
+    async def high_score(title: str, content: str, **kwargs: Any) -> Any:
+        del title, kwargs
+        scored_content.append(content)
+        return compute_score(
+            {
+                "信息增量": 3,
+                "分析深度": 3,
+                "可行动性": 3,
+                "事实可信度": 3,
+                "时效性": 3,
+                "表达质量": 3,
+                "综合信号": 3,
+                "direct_relevance": 3,
+                "relevance_evidence": "The abstract reports benchmark comparisons and limitations.",
+            },
+            source_type="arxiv",
+        )
+
+    fetched_urls: list[str] = []
+
+    async def fetch_full_paper(url: str, **kwargs: Any) -> FetchedDocument:
+        del kwargs
+        fetched_urls.append(url)
+        html = f"<html><body><article>{full_paper}</article></body></html>"
+        return FetchedDocument(
+            url=url,
+            final_ip="93.184.216.34",
+            status=200,
+            headers={"content-type": "text/html"},
+            content=html.encode(),
+            content_type="text/html",
+            elapsed_ms=5,
+            redirect_count=0,
+        )
+
+    await run_radar_pipeline(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"arxiv": fetcher},
+        document_fetcher=fetch_full_paper,
+        distilled_scorer=high_score,
+    )
+
+    assert len(scored_content) == 1
+    assert fetched_urls
+    assert fetched_urls[0] == "https://arxiv.org/html/2609.12345"
+    assert "full paper describes its evaluation protocol" in scored_content[0]
+    _insert_sql, insert_params = next(
+        item for item in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in item[0]
+    )
+    assert "external_reading" in insert_params[10]
+    assert insert_params[18] == insert_params[19]
+    assert not insert_params[15].startswith("来源摘要初筛：")
+    assert insert_params[23] is None
+    assert insert_params[27] is None
+    assert full_paper not in str(insert_params)
 
 
 async def test_source_failure_does_not_block_other_source() -> None:
@@ -1263,6 +1402,27 @@ def test_extract_article_content_preserves_structure_with_trafilatura() -> None:
     assert "[source link](https://example.com)" in result
 
 
+def test_article_extraction_fallback_keeps_content_past_old_8k_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai_engine.radar.structured_html.structured_html_to_markdown",
+        lambda _html, _url: "",
+    )
+    monkeypatch.setattr("trafilatura.extract", lambda *_args, **_kwargs: None)
+    body = "Readable body. " + ("x" * 9_000) + " FINAL_SECTION_EVIDENCE"
+    html = f'<article class="markdown-body"><p>{body}</p></article>'
+
+    result = _extract_article_content(
+        html,
+        "https://github.com/acme/project",
+        "github",
+        max_chars=16_000,
+    )
+
+    assert "FINAL_SECTION_EVIDENCE" in result
+
+
 def test_preferred_document_urls_prefers_arxiv_native_html() -> None:
     urls = _preferred_document_urls(
         "https://arxiv.org/abs/2608.26094",
@@ -1276,6 +1436,38 @@ def test_scoreability_allows_limited_abstract_content() -> None:
     assert _scoreability("x" * 600) == "limited"
     assert _scoreability("x" * 299) is None
     assert _scoreability("x" * 1200) == "full"
+
+
+async def test_browser_mode_diagnostics_never_persist_fetched_full_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", "browser")
+    pool = _Pool([])
+    source = RadarSource(id="source-1", name="RSS", source_type="rss", config={})
+    candidate = RadarCandidate(
+        title="An article",
+        url="https://example.com/article",
+        snippet="A bounded source snippet.",
+    )
+    full_text = "This is the transiently fetched full source body. " * 100
+
+    await _record_sync_diagnostic(
+        pool,
+        source=source,
+        run_id="run-1",
+        candidate=candidate,
+        canonical_url=candidate.url,
+        kind="filtered",
+        reason_code="TEST",
+        body=full_text,
+        markdown=full_text,
+    )
+
+    _sql, params = pool.connection_value.executions[0]
+    assert params[7] == candidate.snippet
+    assert params[8] is None
+    assert "external_reading" in params[12]
+    assert full_text not in str(params)
 
 
 def test_shell_content_label_classifies_known_shells() -> None:

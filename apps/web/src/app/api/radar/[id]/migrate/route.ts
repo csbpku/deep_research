@@ -61,6 +61,7 @@ function needsMigration(summary: {
   originalMeta: unknown;
   highlights: unknown;
 }): boolean {
+  if (summary.tags.includes('external_reading')) return false;
   if (summary.tags.includes(MIGRATION_TAG)) return false;
   if (
     summary.originalKind === 'github_repo'

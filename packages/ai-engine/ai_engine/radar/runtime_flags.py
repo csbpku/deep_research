@@ -10,7 +10,7 @@ _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 def browser_reading_mode_enabled() -> bool:
-    """Return whether new radar rows defer original reading to Reader."""
+    """Return whether full text is transient-only and user reading uses Reader."""
     return os.environ.get("RADAR_READING_MODE", "browser").strip().lower() in _BROWSER_READING_MODES
 
 
@@ -18,8 +18,10 @@ def radar_enrichment_enabled() -> bool:
     """Return whether any server-side radar enrichment may execute.
 
     The explicit switch is an emergency stop and wins over the reading mode.
-    Without it, the browser-reading mode is the safe default while the
-    historical ``enriched`` mode remains an explicit rollback path.
+    Without it, browser-reading mode still fetches source text transiently for
+    sync-time summaries and scoring, but does not persist full text or run
+    follow-up enrichment. The historical ``enriched`` mode is an explicit
+    opt-in for server-side reader assets.
     """
     configured = os.environ.get("RADAR_ENRICHMENT_ENABLED")
     if configured is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -455,6 +456,43 @@ async def test_review_checkpoint_persists_inventory_before_adjudication(
         "legacy_verdict": None,
     }]
     assert result.claims[0].verdict == "verified"
+
+
+@pytest.mark.asyncio
+async def test_long_review_inventory_covers_tail_and_reserves_before_first_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    prompts: list[str] = []
+    monkeypatch.setenv("RESEARCH_REVIEW_CHUNK_TOKENS", "1000")
+
+    @asynccontextmanager
+    async def reserve(**kwargs: object):
+        events.append("reserve")
+        assert int(kwargs["estimated_tokens"]) > 0
+        yield SimpleNamespace(actual_tokens=0)
+
+    async def inventory(**kwargs: object) -> SimpleNamespace:
+        events.append("generate")
+        prompts.append(str(kwargs["user_prompt"]))
+        return SimpleNamespace(text='{"coverage_status":"complete","claims":[]}')
+
+    monkeypatch.setattr("ai_engine.reviewer.reserve_llm_token_task", reserve)
+    monkeypatch.setattr("ai_engine.reviewer.generate_text", inventory)
+    report = f"REPORT_START\n\n{'long technical paragraph. ' * 6_000}\n\nREPORT_END"
+
+    result = await DefaultResearchReviewer().review(
+        report,
+        (_source("https://example.com/source"),),
+        "long report",
+    )
+
+    assert len(prompts) > 2
+    assert "REPORT_START" in "\n".join(prompts)
+    assert "REPORT_END" in "\n".join(prompts)
+    assert events[0] == "reserve"
+    assert events[1] == "generate"
+    assert result.coverage_status == "insufficient"
 
 
 @pytest.mark.asyncio

@@ -130,7 +130,7 @@ async def score_missing_candidates(
             where_prefix += 'AND ' + summary_filter
         rows = await (
             await conn.execute(
-                'SELECT s."id", s."title", s."body", s."url", '
+                'SELECT s."id", s."title", s."body", s."interpretation", s."url", '
                 's."publishedAt", s."originalMarkdown", s."tags", '
                 's."originalKind", s."originalMeta", s."enrichmentStatus", '
                 's."readerQualityStatus", '
@@ -160,8 +160,9 @@ async def score_missing_candidates(
 
     async def _score(
         raw: Any,
-    ) -> tuple[str, DistilledScore | None, str | None, str | None, str | None, bool] | None:
+    ) -> tuple[str, DistilledScore | None, str | None, str | None, str | None, bool, bool] | None:
         row = dict(raw)
+        external_reading = "external_reading" in (row.get("tags") or [])
         source_type = str(row.get("sourceType") or "web_share")
         original_kind = str(row.get("originalKind") or "")
         is_repo = original_kind == "github_repo" or str(
@@ -173,23 +174,33 @@ async def score_missing_candidates(
             str(row.get("url") or ""),
         )
         content = str(
-            row.get("originalMarkdown")
+            (row.get("interpretation") if external_reading else None)
+            or row.get("originalMarkdown")
             or row.get("body")
             or row.get("title")
             or ""
         )
-        shell_label = _shell_content_label(
+        shell_label = None if external_reading else _shell_content_label(
             content,
             source_type=source_type,
             url=str(row.get("url") or ""),
         )
         scoreability = _scoreability(content)
         if scoreability is None:
+            if external_reading:
+                logger.info(
+                    "ai-engine.radar.postprocess.metadata_insufficient_for_score",
+                    extra={"summary_id": str(row["id"]), "source_type": source_type},
+                )
+                return None
             logger.info(
                 "ai-engine.radar.postprocess.score_deferred_incomplete_content",
                 extra={"summary_id": str(row["id"]), "source_type": source_type},
             )
-            return str(row["id"]), None, None, shell_label, None, False
+            return str(row["id"]), None, None, shell_label, None, False, external_reading
+        if external_reading:
+            # Even a long provider abstract is not the full source document.
+            scoreability = "limited"
         if scoreability == "limited":
             logger.info(
                 "ai-engine.radar.postprocess.score_limited_content",
@@ -227,6 +238,7 @@ async def score_missing_candidates(
         deliverable_tier = effective_tier(
             result.tier,
             enrichment_ready=enrichment_ready,
+            external_reading=external_reading,
         )
         return (
             str(row["id"]),
@@ -235,6 +247,7 @@ async def score_missing_candidates(
             shell_label,
             deliverable_tier,
             enrichment_ready,
+            external_reading,
         )
 
     results = await asyncio.gather(*(_score(row) for row in rows))
@@ -250,6 +263,7 @@ async def score_missing_candidates(
                 shell_label,
                 deliverable_tier,
                 enrichment_ready,
+                external_reading,
             ) = scored
             if result is None:
                 pending_reason = (
@@ -293,7 +307,12 @@ async def score_missing_candidates(
                 else result.total
             )
             score_reason = build_distilled_score_reason(result)
-            if scoreability == "limited":
+            if external_reading:
+                score_reason = (
+                    "补评分：全文未缓存，依据已生成摘要/来源摘录；请打开原文复核。"
+                    + score_reason
+                )[:500]
+            elif scoreability == "limited":
                 score_reason = (
                     "低置信度初筛：正文不足1000字符，仅用于排序和是否值得继续抓取。"
                     + score_reason
@@ -332,10 +351,11 @@ async def score_missing_candidates(
                 '"distilledProfile" = %s, '
                 '"scoreReason" = %s, '
                 '"enrichmentStatus" = CASE '
+                'WHEN %s THEN NULL '
                 'WHEN %s::text IS NULL THEN NULL '
                 'WHEN %s THEN \'ready\' ELSE \'pending\' END, '
                 '"enrichmentNextRetryAt" = CASE '
-                'WHEN %s::text IS NULL OR %s THEN NULL ELSE now() END, '
+                'WHEN %s OR %s::text IS NULL OR %s THEN NULL ELSE now() END, '
                 '"tags" = ' + tags_sql + ', '
                 '"updatedAt" = now() WHERE "id" = %s',
                 (
@@ -345,8 +365,10 @@ async def score_missing_candidates(
                     result.tier if is_enrichment_tier(result.tier) else None,
                     result.profile_id,
                     score_reason,
+                    external_reading,
                     result.tier if is_enrichment_tier(result.tier) else None,
                     enrichment_ready,
+                    external_reading,
                     result.tier if is_enrichment_tier(result.tier) else None,
                     enrichment_ready,
                     deliverable_tier or "skim",

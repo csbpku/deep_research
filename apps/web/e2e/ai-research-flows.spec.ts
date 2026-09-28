@@ -172,7 +172,7 @@ test.describe('AI Research parent (UI polish)', () => {
       return route.continue();
     });
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
     await page.goto('/ai-research');
@@ -263,6 +263,216 @@ test.describe('AI Research parent (UI polish)', () => {
     await expect(page.getByLabel('Slides 提纲预览')).toHaveCount(1);
     await expect(page.getByText('3 页', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '编辑 Slides 提纲' })).toBeVisible();
+  });
+
+  test('knowledge card save keeps the exact judgment used to generate its preview', async ({ page }) => {
+    await loginWithCredentials(page.context().request, {
+      email: 'e2e-admin@e2e.local',
+      role: 'admin',
+    });
+    const jobId = '77777777-7777-4777-8777-777777777777';
+    const researchId = '88888888-8888-4888-8888-888888888888';
+    const firstJudgment = '结论 A：在过载时保持幂等重试。';
+    const secondJudgment = '结论 B：不要重复写入索引文档。';
+    let derivePayload: Record<string, unknown> | null = null;
+    let savePayload: Record<string, unknown> | null = null;
+    const artifact = `${firstJudgment}\n\n${secondJudgment}`;
+
+    await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId,
+        status: 'succeeded',
+        finalStatus: 'succeeded',
+        currentStep: 'write',
+        topic: '幂等研究',
+        sourcesCount: 1,
+        savedSourcesCount: 1,
+        partialSourcesCount: 0,
+        failedSourcesCount: 0,
+        userSourceRefsCount: 0,
+        autoSourceRefsCount: 1,
+        reportType: 'research_report',
+        reportLength: 'standard',
+        deliverableStatus: 'report',
+        sourcePolicy: 'prefer_user_sources',
+        researchProgress: null,
+        outputText: null,
+        errorCode: null,
+        errorMessage: null,
+        errorDetails: null,
+        startedAt: '2026-09-24T04:00:00.000Z',
+        createdAt: '2026-09-24T04:00:00.000Z',
+        completedAt: '2026-09-24T04:01:00.000Z',
+        draftResearchId: researchId,
+        review: { phase: 'completed', status: 'passed', attempts: 1, corrected_count: 0, unverified_count: 0, contradicted_count: 0, claims: [] },
+        conversation: [],
+        sources: [],
+        artifact: {
+          type: 'markdown',
+          title: '幂等研究',
+          version: 1,
+          mimeType: 'text/markdown',
+          content: artifact,
+          rawContent: null,
+          payload: null,
+          sourceRefs: [],
+          sourceHash: null,
+          draftResearchId: researchId,
+        },
+      }),
+    }));
+    await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) =>
+      route.fulfill({ status: 404, body: 'not found' }),
+    );
+    await page.route('**/api/knowledge/derive', async (route) => {
+      derivePayload = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          preview: { title: '幂等判断', body: '过载时按幂等键执行有界重试。', conclusion: '重试必须幂等。', tags: [] },
+        }),
+      });
+    });
+    await page.route('**/api/knowledge', async (route) => {
+      savePayload = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ knowledge: { id: '99999999-9999-4999-8999-999999999999', status: 'draft' } }),
+      });
+    });
+
+    await page.goto(`/ai-research/${jobId}`);
+    const source = page.locator(`[data-knowledge-source-message="${researchId}"]`);
+    await expect(source).toContainText(secondJudgment);
+    const selectSourceText = async (text: string) => {
+      await source.evaluate((root, selected) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node: Node | null;
+        while ((node = walker.nextNode())) {
+          const value = node.textContent ?? '';
+          const start = value.indexOf(selected);
+          if (start < 0) continue;
+          const range = document.createRange();
+          range.setStart(node, start);
+          range.setEnd(node, start + selected.length);
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+          return;
+        }
+        throw new Error(`Could not select report text: ${selected}`);
+      }, text);
+    };
+
+    await selectSourceText(firstJudgment);
+    await page.getByRole('button', { name: '存为知识' }).click();
+    await expect(page.getByText('知识卡片预览')).toBeVisible();
+    await expect(page.getByLabel('本次提炼所选原文')).toContainText(firstJudgment);
+    expect(derivePayload?.selectedText).toBe(firstJudgment);
+
+    await selectSourceText(secondJudgment);
+    await expect(page.getByLabel('本次提炼所选原文')).toContainText(firstJudgment);
+    await page.getByRole('button', { name: '保存知识卡片' }).click();
+    await expect(page.getByText('已保存知识卡片')).toBeVisible();
+    expect(savePayload?.selectedText).toBe(firstJudgment);
+  });
+
+  test('follow-up report revision sends only the persisted answer ID and cancel is inert', async ({ page }) => {
+    await loginWithCredentials(page.context().request, {
+      email: 'e2e-admin@e2e.local',
+      role: 'admin',
+    });
+    const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const reportId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const answerId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    let revisionPayload: Record<string, unknown> | null = null;
+
+    await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId,
+        status: 'succeeded',
+        finalStatus: 'succeeded',
+        currentStep: 'write',
+        topic: '幂等索引调研',
+        sourcesCount: 1,
+        savedSourcesCount: 1,
+        partialSourcesCount: 0,
+        failedSourcesCount: 0,
+        userSourceRefsCount: 0,
+        autoSourceRefsCount: 1,
+        reportType: 'research_report',
+        reportLength: 'standard',
+        deliverableStatus: 'report',
+        sourcePolicy: 'prefer_user_sources',
+        researchProgress: null,
+        outputText: null,
+        errorCode: null,
+        errorMessage: null,
+        errorDetails: null,
+        startedAt: '2026-09-28T04:00:00.000Z',
+        createdAt: '2026-09-28T04:00:00.000Z',
+        completedAt: '2026-09-28T04:01:00.000Z',
+        draftResearchId: reportId,
+        review: { phase: 'completed', status: 'passed', attempts: 1, corrected_count: 0, unverified_count: 0, contradicted_count: 0, claims: [] },
+        conversation: [],
+        sources: [],
+        artifact: {
+          type: 'markdown',
+          title: '幂等索引调研',
+          version: 1,
+          mimeType: 'text/markdown',
+          content: '旧报告正文。',
+          rawContent: '旧报告正文。',
+          payload: null,
+          sourceRefs: [],
+          sourceHash: null,
+          draftResearchId: reportId,
+        },
+      }),
+    }));
+    await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        jobId,
+        title: '幂等索引调研',
+        status: 'active',
+        messageCount: 2,
+        createdAt: '2026-09-28T04:00:00.000Z',
+        updatedAt: '2026-09-28T04:01:00.000Z',
+        messages: [
+          { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', role: 'user', content: '补充重试边界', createdAt: '2026-09-28T04:00:30.000Z', intent: 'revise' },
+          { id: answerId, role: 'assistant', content: '在事务提交后重试，并使用稳定幂等键。', createdAt: '2026-09-28T04:01:00.000Z', intent: 'revise' },
+        ],
+      }),
+    }));
+    await page.route(`**/api/researches/${reportId}`, async (route) => {
+      if (route.request().method() !== 'PUT') return route.continue();
+      revisionPayload = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+
+    await page.goto(`/ai-research/${jobId}`);
+    const applyButton = page.getByRole('button', { name: '应用到报告 · 先预览变更' });
+    await expect(applyButton).toBeVisible();
+    await applyButton.click();
+    await expect(page.getByText('应用为报告新版本？')).toBeVisible();
+    await page.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(page.getByText('应用为报告新版本？')).toHaveCount(0);
+    expect(revisionPayload).toBeNull();
+
+    await applyButton.click();
+    await page.getByRole('button', { name: '确认生成新版本' }).click();
+    await expect(page.getByText('已生成新版本 · 可在编辑器的版本历史中恢复')).toBeVisible();
+    expect(revisionPayload).toEqual({ revisionContext: { sourceMessageId: answerId } });
   });
 
   test('brief without captured evidence is not presented as verified research', async ({ page }) => {

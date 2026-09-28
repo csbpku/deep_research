@@ -27,7 +27,6 @@ export default async function SignInPage({
   const googleOnly = env.AUTH_GOOGLE_ONLY;
   const betaMode = env.AUTH_BETA_MODE;
   const emailVerification = env.AUTH_EMAIL_VERIFICATION;
-  const isE2EMode = process.env.E2E === '1';
   const isDevMode = process.env.NODE_ENV !== 'production';
   const authAllowed = isProductionAuthAllowed(
     requestHeaders,
@@ -53,17 +52,6 @@ export default async function SignInPage({
     if (!githubConfigured) return;
     await signIn('github', { redirectTo: callbackUrl });
   }
-
-  async function doE2EAdminSignIn() {
-    'use server';
-    if (process.env.E2E !== '1') return;
-    await signIn('e2e-credentials', {
-      email: process.env.E2E_ADMIN_EMAIL ?? 'e2e-admin@example.com',
-      role: 'admin',
-      redirectTo: callbackUrl,
-    });
-  }
-
 
   return (
     <div className="mx-auto max-w-md py-10 text-center">
@@ -128,15 +116,6 @@ export default async function SignInPage({
         <p role="alert" className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-left text-sm text-destructive">
           Google OAuth 尚未配置，当前无法登录。
         </p>
-      ) : null}
-
-      {isE2EMode ? (
-        <form action={doE2EAdminSignIn} className="mt-3">
-          <Button type="submit" variant="secondary" size="lg" className="w-full">
-            以 E2E Admin 登录
-          </Button>
-          <p className="mt-2 text-xs text-muted-foreground">仅在 E2E 模式可用，不读取真实账号凭据。</p>
-        </form>
       ) : null}
 
     </div>

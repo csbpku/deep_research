@@ -38,6 +38,14 @@ from ai_engine.contracts.states import (
     AiChatSessionStatus,
 )
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
+from ai_engine.llm.token_budget import (
+    TokenBudgetError,
+    bind_budget_user,
+    estimate_call_tokens,
+    release_llm_tokens,
+    reserve_llm_tokens,
+    settle_llm_tokens,
+)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -692,6 +700,15 @@ async def append_message(
     anything_model: str | None = None
     try:
         if _anythingllm_chat_enabled(snapshot):
+            reservation = await reserve_llm_tokens(
+                operation="chat.anythingllm",
+                requested_tokens=estimate_call_tokens(
+                    user_prompt=prompt,
+                    system_prompt=None,
+                    max_output_tokens=4096,
+                ),
+                user_id=body.user_id,
+            )
             try:
                 (
                     content,
@@ -700,6 +717,12 @@ async def append_message(
                     anything_tokens_out,
                     anything_model,
                 ) = await _anythingllm_chat(snapshot, prompt, session_id=session_id)
+                if reservation is not None:
+                    reported = (anything_tokens_in or 0) + (anything_tokens_out or 0)
+                    await settle_llm_tokens(
+                        reservation,
+                        reported if reported > 0 else reservation.reserved_tokens,
+                    )
                 logger.info("ai-engine.chat.anythingllm", session_id=session_id)
                 await record_llm_usage(
                     LlmUsageAttempt(
@@ -713,7 +736,11 @@ async def append_message(
                         latency_ms=int((time.monotonic() - started) * 1000),
                     )
                 )
+            except TokenBudgetError:
+                raise
             except Exception as exc:
+                if reservation is not None:
+                    await release_llm_tokens(reservation)
                 logger.warning("ai-engine.chat.anythingllm_fallback", session_id=session_id, error=str(exc))
                 content = ""
         else:
@@ -726,7 +753,8 @@ async def append_message(
                 report_type="summary_brief", source_policy="prefer_user_sources",
                 source_refs=(), timeout_seconds=60,
             )
-            await adapter.submit(req)
+            with bind_budget_user(body.user_id):
+                await adapter.submit(req)
             deadline = time.monotonic() + 60.0
             while time.monotonic() < deadline:
                 await asyncio.sleep(0.1)
@@ -737,7 +765,8 @@ async def append_message(
             if brief is None:
                 raise _http_error("AI_ENGINE_UNAVAILABLE", "adapter 60s 超时")
             if brief.status != "succeeded":
-                raise _http_error("AI_ENGINE_UNAVAILABLE", brief.error_message or "AI 暂时没有生成回答，请重试")
+                error_code = "AI_QUOTA_EXCEEDED" if brief.error_code == "AI_QUOTA_EXCEEDED" else "AI_ENGINE_UNAVAILABLE"
+                raise _http_error(error_code, brief.error_message or "AI 暂时没有生成回答，请重试")
             content = _clean_model_text(brief.output_text)
         latency_ms = int((time.monotonic() - started) * 1000)
         if not content:

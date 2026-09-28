@@ -119,7 +119,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
     return;
   }
   const controller = new AbortController();
-  const boundedContext = boundTaskContext(context);
+  const boundedContext = boundTaskContext(context, { preserveAllBlocks: true });
   // Reserve the job ID before any IndexedDB await so duplicate messages from
   // a recreated panel cannot start two model pipelines.
   translationJobs.set(jobId, { controller, tabId, job: null, pending: null });

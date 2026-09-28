@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 
@@ -30,6 +30,12 @@ const executablePath = process.env.CHROME_FOR_TESTING
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const testExtensionPath = `${await mkdtemp('/private/tmp/deep-research-reader-history-extension-')}/extension`;
+await cp(extensionPath, testExtensionPath, { recursive: true });
+const testManifestPath = `${testExtensionPath}/manifest.json`;
+const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
+testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), `http://127.0.0.1:${port}/*`])];
+await writeFile(testManifestPath, JSON.stringify(testManifest));
 const profilePath = `/private/tmp/deep-research-reader-history-${Date.now()}`;
 const context = await chromium.launchPersistentContext(profilePath, {
   executablePath,
@@ -37,8 +43,8 @@ const context = await chromium.launchPersistentContext(profilePath, {
   viewport: { width: 1280, height: 900 },
   args: [
     '--enable-extensions',
-    `--disable-extensions-except=${extensionPath}`,
-    `--load-extension=${extensionPath}`,
+    `--disable-extensions-except=${testExtensionPath}`,
+    `--load-extension=${testExtensionPath}`,
     '--no-first-run',
     '--no-default-browser-check',
   ],
@@ -170,7 +176,21 @@ try {
   if (context.pages().length !== pageCountBeforeHistory) {
     throw new Error('打开聊天记录不应创建新的浏览器标签页');
   }
+  await history.waitForFunction(() => {
+    const tabs = document.querySelector('#history-tabs');
+    const sessionTab = document.querySelector('[data-history-tab="sessions"]');
+    return tabs?.getAttribute('aria-busy') === 'false' && sessionTab instanceof HTMLButtonElement && !sessionTab.disabled;
+  });
   const summaryCard = history.locator('.history-card').filter({ hasText: '整页正文 · 全文总结' }).first();
+  if (await history.locator('[data-history-tab="sessions"]').getAttribute('aria-pressed') !== 'true'
+    || await history.locator('[data-history-tab="insights"]').getAttribute('aria-pressed') !== 'false') {
+    throw new Error('history category selection is missing its accessible pressed state');
+  }
+  await history.locator('[data-history-tab="insights"]').click();
+  if (await history.locator('[data-history-tab="insights"]').getAttribute('aria-pressed') !== 'true') {
+    throw new Error('history category state did not update for knowledge conclusions');
+  }
+  await history.locator('[data-history-tab="sessions"]').click();
   try {
     await summaryCard.waitFor({ state: 'visible', timeout: 10_000 });
   } catch (error) {
@@ -179,6 +199,11 @@ try {
   }
   await summaryCard.locator('.history-card-action', { hasText: '查看对话' }).click();
   await history.locator('#history-detail').waitFor({ state: 'visible', timeout: 5_000 });
+  if (await history.locator('#history-detail').getAttribute('role') !== 'region'
+    || await history.locator('.history-content').getAttribute('aria-live') !== null
+    || await history.evaluate(() => document.activeElement?.id) !== 'history-detail-title') {
+    throw new Error('history detail should be a labeled region, focus its heading, and not live-announce the full transcript');
+  }
   const detail = await history.evaluate(() => ({
     title: document.querySelector('#history-detail-title')?.textContent || '',
     source: document.querySelector('#history-detail-source')?.textContent || '',
@@ -198,12 +223,56 @@ try {
   if (!detail.structured) throw new Error(`历史详情没有恢复结构化证据：${JSON.stringify(detail)}`);
   if (!detail.listHidden || !detail.continueVisible) throw new Error(`历史详情没有替换列表或缺少继续入口：${JSON.stringify(detail)}`);
 
+  await history.locator('#close-history-detail').click();
+  if (await history.evaluate(() => document.activeElement?.textContent?.trim()) !== '查看对话') {
+    throw new Error('closing history detail did not restore focus to the card action that opened it');
+  }
+  await summaryCard.locator('.history-card-action', { hasText: '查看对话' }).click();
+  await history.locator('#history-detail').waitFor({ state: 'visible', timeout: 5_000 });
+
   await article.bringToFront();
   await history.locator('#continue-history-detail').evaluate((node) => node.click());
   await history.waitForURL(`chrome-extension://${extensionId}/sidepanel.html`);
   await history.locator('#discussion-section').waitFor({ state: 'visible', timeout: 10_000 });
 
-  console.log(JSON.stringify({ ok: true, contextLabel, detail, continuedInSidePanel: true }, null, 2));
+  await history.locator('#scope-selection').click();
+  await article.evaluate(() => {
+    const paragraph = document.querySelector('#target');
+    if (!paragraph) throw new Error('fixture target paragraph is missing before version-change regression');
+    paragraph.append(' Content changed after the previous discussion.');
+  });
+  try {
+    await history.waitForFunction(() => document.querySelector('#answer-warnings')?.textContent?.includes('旧引文定位已撤销'), null, { timeout: 10_000 });
+  } catch (error) {
+    console.error(JSON.stringify(await history.evaluate(() => ({
+      notice: document.querySelector('#notice')?.textContent || '',
+      status: document.querySelector('#page-context-status')?.textContent || '',
+      scope: document.querySelector('#discussion-context')?.textContent || '',
+      messages: document.querySelector('#conversation-list')?.textContent || '',
+      warnings: document.querySelector('#answer-warnings')?.textContent || '',
+    })), null, 2));
+    throw error;
+  }
+  const afterContentChange = await history.evaluate(() => ({
+    messages: document.querySelectorAll('.conversation-message').length,
+    scope: document.querySelector('#discussion-context')?.textContent || '',
+    evidenceCount: document.querySelectorAll('#answer-evidence .evidence-item').length,
+    warning: document.querySelector('#answer-warnings')?.textContent || '',
+    notice: document.querySelector('#notice')?.textContent || '',
+  }));
+  if (afterContentChange.messages !== 6) throw new Error(`page version change discarded the chat transcript: ${JSON.stringify(afterContentChange)}`);
+  if (!afterContentChange.scope.startsWith('整页正文')) throw new Error(`stale selection scope was not reset to the page: ${JSON.stringify(afterContentChange)}`);
+  if (afterContentChange.evidenceCount !== 0 || !afterContentChange.warning.includes('旧引文定位已撤销')) {
+    throw new Error(`stale citation anchors were not invalidated: ${JSON.stringify(afterContentChange)}`);
+  }
+  await history.locator('#question-input').fill('结合更新后的正文继续回答。');
+  await history.locator('#send-question').click();
+  await history.locator('.conversation-message.assistant').nth(3).waitFor({ state: 'visible', timeout: 10_000 });
+  if (await history.locator('.conversation-message').count() !== 8) {
+    throw new Error('the reader could not continue the preserved conversation after a page version change');
+  }
+
+  console.log(JSON.stringify({ ok: true, contextLabel, detail, continuedInSidePanel: true, afterContentChange }, null, 2));
 } finally {
   await context.close();
   provider.kill('SIGTERM');

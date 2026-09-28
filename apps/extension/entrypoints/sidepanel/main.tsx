@@ -21,31 +21,36 @@ function ReaderPanel() {
           <button id="settings-button" className="header-action" title="模型与数据设置">设置</button>
         </nav>
       </header>
-      <div id="reader-status-strip" className="reader-status-strip" aria-label="当前运行状态">
+      <div id="reader-status-strip" className="reader-status-strip" role="status" aria-live="polite" aria-label="当前运行状态">
         <span id="storage-status" className="mode-badge">独立模式</span>
-        <span className="status"><i id="status-dot" className="status-dot" /><span id="status-text">未配置模型</span></span>
+        <span className="status"><i id="status-dot" className="status-dot" aria-hidden="true" /><span id="status-text">未配置模型</span></span>
       </div>
 
       <section id="empty-view" className="empty">
         <div className="eyebrow">原网页阅读助手</div>
-        <h1 id="empty-title">先连接一个模型，再开始阅读。</h1>
-        <p id="empty-description">模型配置只保存在本地。配置完成后，点击扩展按钮启用当前网页。</p>
+        <h1 id="empty-title">先准备阅读模型。</h1>
+        <p id="empty-description">独立模式配置自己的模型；平台模式登录调研平台后直接使用平台 AI Engine。</p>
         <div className="actions"><button id="empty-settings" className="primary">配置模型</button><button id="empty-history" className="secondary">查看聊天记录</button></div>
       </section>
 
-      <section id="page-view" className="hidden">
+      <section id="page-view" className="reader-page-view hidden">
+        <div id="page-overview-scroll" className="page-overview-scroll">
         <div className="hero">
           <div className="eyebrow">当前页面</div>
           <h1 id="page-title">打开一个网页后开始阅读</h1>
           <div id="page-source" className="source" />
           <div id="page-context-card" className="page-context-card">
             <div className="page-context-topline">
-              <span id="page-context-status" className="page-context-status is-loading">正在读取正文</span>
+              <span id="page-context-status" className="page-context-status is-loading" role="status" aria-live="polite">正在读取正文</span>
               <span id="page-context-scope" className="page-context-scope">整页正文</span>
             </div>
             <div id="page-context-meta" className="page-context-meta">等待当前页面正文和章节信息。</div>
           </div>
-          <div id="scope-notice" className="notice hidden" />
+          <div id="ai-availability-banner" className="ai-availability-banner hidden">
+            <span id="ai-availability-message" role="status" aria-live="polite" />
+            <button id="ai-availability-action" className="text-button" type="button">配置模型</button>
+          </div>
+          <div id="scope-notice" className="notice hidden" role="status" aria-live="polite" />
           <div className="actions">
             <button id="translate-all" className="primary">全文翻译</button>
             <label className="inline-control" htmlFor="translation-language"><span>译为</span><select id="translation-language" className="compact-select" defaultValue="zh-CN"><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="ja-JP">日本語</option><option value="en-US">English</option></select></label>
@@ -53,14 +58,14 @@ function ReaderPanel() {
             <button id="cancel-translation" className="danger hidden">取消任务</button>
             <button id="restore-page" className="secondary">恢复原文</button>
           </div>
-          <div id="progress-area" className="progress hidden">
+          <div id="progress-area" className="progress hidden" role="group" aria-label="全文翻译进度">
             <div className="progress-line"><span id="text-progress-label">正文翻译</span><span id="text-progress-value">0 / 0</span></div>
-            <div className="track"><div id="text-progress-bar" className="bar" /></div>
+            <div id="text-progress-track" className="track" role="progressbar" aria-labelledby="text-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始" ><div id="text-progress-bar" className="bar" /></div>
             <div className="progress-line" style={{ marginTop: 8 }}><span id="image-progress-label">图片文字</span><span id="image-progress-value">未开始</span></div>
-            <div className="track"><div id="image-progress-bar" className="bar image" /></div>
+            <div id="image-progress-track" className="track" role="progressbar" aria-labelledby="image-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始"><div id="image-progress-bar" className="bar image" /></div>
             <div id="translation-failures" className="translation-failures hidden" />
           </div>
-          <div id="notice" className="notice hidden" />
+          <div id="notice" className="notice hidden" role="status" aria-live="polite" />
         </div>
 
         <section id="quick-actions-section" className="quick-actions-panel">
@@ -71,7 +76,7 @@ function ReaderPanel() {
             </div>
             <div className="quick-actions-heading-actions">
               <span id="quick-actions-scope" className="quick-actions-scope">整页正文</span>
-              <button id="open-page-chat" className="secondary quick-chat-button" type="button">问整页</button>
+              <button id="open-page-chat" className="secondary quick-chat-button" type="button">打开聊天</button>
             </div>
           </div>
           <div className="quick-actions-grid">
@@ -93,10 +98,9 @@ function ReaderPanel() {
         <section id="selection-section" className="card paper hidden">
           <div className="card-title"><span>当前选段</span><span id="selection-scope">所在小节</span></div>
           <div id="selection-quote" className="quote" />
-          <div className="selection-action-groups">
-            <div className="selection-action-group">
-              <div className="selection-action-label">针对这段</div>
-              <div className="selection-actions">
+          <div className="selection-action-group">
+            <div className="selection-action-label">选段操作</div>
+            <div className="selection-actions">
                 <button id="summarize-selection" className="secondary selection-action" type="button" title="用几个要点总结当前选段">
                   <strong>总结这段</strong><span>压缩成要点</span>
                 </button>
@@ -106,24 +110,15 @@ function ReaderPanel() {
                 <button id="translate-selection" className="secondary selection-action" type="button" title="翻译当前选段并保留技术术语">
                   <strong>翻译这段</strong><span>保留 API / 代码标识</span>
                 </button>
-              </div>
-            </div>
-            <div className="selection-action-group">
-              <div className="selection-action-label">聊天范围</div>
-              <div className="selection-actions">
                 <button id="ask-selection" className="secondary selection-action" type="button" title="只使用当前选段及所在小节回答问题">
-                  <strong>问这段</strong><span>只用选段和所在小节</span>
-                </button>
-                <button id="ask-page" className="secondary selection-action" type="button" title="使用整页正文回答问题">
-                  <strong>问整页</strong><span>切换到全文范围</span>
+                  <strong>围绕这段提问</strong><span>在聊天中继续追问</span>
                 </button>
                 <button id="annotate-selection" className="secondary selection-action" type="button">
-                  <strong>标注原文</strong><span>在原文留下位置和笔记</span>
+                  <strong>标注原文</strong><span>保存后锚定高亮并留短注</span>
                 </button>
                 <button id="save-selection" className="secondary selection-action" type="button">
-                  <strong>保存摘录</strong><span>保存摘录、笔记和结论</span>
+                  <strong>保存摘录</strong><span>存入阅读库，不改原文</span>
                 </button>
-              </div>
             </div>
           </div>
         </section>
@@ -132,71 +127,6 @@ function ReaderPanel() {
           <div className="card-title"><span>当前图示</span><span id="image-scope">视觉输入</span></div>
           <div id="image-preview" className="image-preview"><div id="image-preview-title" className="image-preview-title" /><div id="image-preview-meta" className="image-preview-meta" /></div>
           <div className="actions"><button id="explain-image" className="primary">解读图示</button><button id="ask-image" className="secondary">追问图示</button><button id="clear-image" className="secondary">清除</button></div>
-        </section>
-
-        <section id="discussion-section" className="discussion-panel hidden">
-          <div className="section-label discussion-heading">
-            <div>
-              <h2>围绕原文聊天</h2>
-              <div id="discussion-context-detail" className="discussion-context-detail" />
-            </div>
-            <div className="section-actions">
-              <span id="discussion-context" className="discussion-context-badge">整页正文 · 提问</span>
-              <button id="open-chat" className="text-button">聚焦输入</button>
-              <button id="open-history-inline" className="text-button">聊天记录</button>
-            </div>
-          </div>
-          <div id="discussion-source" className="discussion-source-card">
-            <span className="discussion-source-mark">R</span>
-            <div className="discussion-source-main">
-              <strong id="discussion-source-title">当前页面</strong>
-              <span id="discussion-source-url" />
-            </div>
-            <span id="discussion-source-scope" className="discussion-source-scope">整页正文</span>
-          </div>
-          <div className="chat-window">
-            <div id="conversation-empty" className="conversation-empty">这是当前页面的聊天窗口。可以直接问整篇文章；选中原文后，会自动切换为选段上下文。</div>
-            <div id="conversation-list" className="conversation-list" />
-            <div id="answer-output" className="answer stream-answer hidden" />
-            <div id="answer-structured" className="answer-structured hidden">
-              <div id="answer-evidence" className="answer-part hidden"><div className="answer-label">原文证据</div><div id="answer-evidence-list" className="evidence-list" /></div>
-              <div id="answer-background" className="answer-part hidden"><div className="answer-label">必要背景</div><div id="answer-background-text" /></div>
-              <div id="answer-inference" className="answer-part hidden"><div className="answer-label">AI 推断</div><div id="answer-inference-text" /></div>
-              <div id="answer-limitations" className="answer-part hidden"><div className="answer-label">适用条件与未知项</div><ul id="answer-limitations-list" /></div>
-              <div id="answer-warnings" className="answer-warning hidden" />
-            </div>
-            <div id="answer-actions" className="answer-actions hidden">
-              <button id="copy-answer" className="text-button" type="button" title="复制当前回答和原文证据">复制</button>
-              <button id="save-answer" className="text-button" type="button" title="保存原文摘录、AI 结论和笔记">保存结论</button>
-              <button id="return-answer" className="text-button" type="button" title="跳回当前回答使用的原文证据">回到原文</button>
-              <button id="continue-answer" className="text-button" type="button" title="回到当前会话继续提问">继续追问</button>
-            </div>
-            <div id="discussion-followups" className="discussion-followups hidden">
-              <div className="answer-label">继续追问</div>
-              <div id="discussion-followup-list" className="discussion-followup-list" />
-            </div>
-          </div>
-          <div className="chat-scope-bar" role="group" aria-label="回答范围">
-            <span className="chat-scope-label">回答范围</span>
-            <div className="chat-scope-options">
-              <button id="scope-page" className="scope-option" type="button" aria-pressed="true">整页正文</button>
-              <button id="scope-selection" className="scope-option hidden" type="button" aria-pressed="false">当前选段</button>
-              <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">当前图示</button>
-            </div>
-            <span id="scope-control-hint" className="scope-control-hint">会使用当前页面的正文</span>
-          </div>
-        </section>
-
-        <section id="persistent-composer" className="chat-composer persistent-composer hidden" aria-label="围绕当前原文提问">
-          <div className="composer-context-row">
-            <span id="composer-scope-label" className="composer-scope-label">整页正文</span>
-            <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span>
-          </div>
-          <textarea id="question-input" rows={3} placeholder="针对整篇文章提问，例如：作者的主要取舍是什么？" />
-          <div className="chat-composer-footer">
-            <span id="chat-composer-hint" className="chat-composer-hint">当前上下文会显示在上方</span>
-            <button id="send-question" className="primary">发送问题</button>
-          </div>
         </section>
 
         <section id="reading-section">
@@ -215,10 +145,72 @@ function ReaderPanel() {
             </div>
             <div className="sync-actions">
               <button id="sync-session" className="secondary hidden">同步会话</button>
-              <button id="sync-selection" className="secondary hidden">同步结论</button>
+              <button id="sync-selection" className="secondary hidden">重试同步</button>
             </div>
           </div>
           <div id="library-list" className="small" style={{ paddingTop: 10 }}>还没有本地保存的成果。</div>
+        </section>
+        </div>
+
+        <section id="discussion-section" className="discussion-panel hidden">
+          <div className="section-label discussion-heading">
+            <div>
+              <h2>围绕原文聊天</h2>
+              <div id="discussion-context-detail" className="discussion-context-detail" />
+            </div>
+            <div className="section-actions">
+              <span id="discussion-context" className="discussion-context-badge">整页正文 · 提问</span>
+              <button id="open-history-inline" className="text-button">聊天记录</button>
+            </div>
+          </div>
+          <div id="discussion-source" className="discussion-source-card">
+            <span className="discussion-source-mark">R</span>
+            <div className="discussion-source-main">
+              <strong id="discussion-source-title">当前页面</strong>
+              <span id="discussion-source-url" />
+            </div>
+            <div id="discussion-scope-options" className="discussion-scope-options" role="group" aria-label="回答依据">
+              <span className="discussion-scope-label">基于</span>
+              <button id="scope-page" className="scope-option" type="button" aria-pressed="true">整篇</button>
+              <button id="scope-selection" className="scope-option hidden" type="button" aria-pressed="false">选段</button>
+              <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
+            </div>
+          </div>
+          <div className="chat-window">
+            <div id="chat-transcript" className="chat-transcript">
+              <div id="conversation-empty" className="conversation-empty">可以直接问整篇文章；选中原文后，也可以切换为选段继续讨论。</div>
+              <div id="conversation-list" className="conversation-list" />
+              <div id="answer-output" className="answer stream-answer hidden" />
+              <div id="answer-structured" className="answer-structured hidden">
+                <div id="answer-evidence" className="answer-part hidden"><div className="answer-label">原文证据</div><div id="answer-evidence-list" className="evidence-list" /></div>
+                <div id="answer-background" className="answer-part hidden"><div className="answer-label">必要背景</div><div id="answer-background-text" /></div>
+                <div id="answer-inference" className="answer-part hidden"><div className="answer-label">AI 推断</div><div id="answer-inference-text" /></div>
+                <div id="answer-limitations" className="answer-part hidden"><div className="answer-label">适用条件与未知项</div><ul id="answer-limitations-list" /></div>
+                <div id="answer-warnings" className="answer-warning hidden" />
+              </div>
+              <div id="answer-actions" className="answer-actions hidden">
+                <button id="copy-answer" className="text-button" type="button" title="复制当前回答和原文证据">复制</button>
+                <button id="save-answer" className="text-button" type="button" title="保存原文摘录、AI 结论和笔记">保存结论</button>
+                <button id="return-answer" className="text-button" type="button" title="跳回当前回答使用的原文证据">回到原文</button>
+                <button id="continue-answer" className="text-button" type="button" title="回到当前会话继续提问">继续追问</button>
+              </div>
+              <div id="discussion-followups" className="discussion-followups hidden">
+                <div className="answer-label">继续追问</div>
+                <div id="discussion-followup-list" className="discussion-followup-list" />
+              </div>
+            </div>
+            <div id="persistent-composer" className="chat-composer persistent-composer hidden" aria-label="围绕当前原文提问">
+              <div className="composer-context-row">
+                <span id="composer-scope-label" className="composer-scope-label">整页正文</span>
+                <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span>
+              </div>
+              <label className="composer-question-label" htmlFor="question-input">继续提问</label>
+              <textarea id="question-input" rows={2} placeholder="针对整篇文章提问，例如：作者的主要取舍是什么？" />
+              <div className="chat-composer-footer">
+                <button id="send-question" className="primary">发送问题</button>
+              </div>
+            </div>
+          </div>
         </section>
       </section>
 
@@ -232,16 +224,17 @@ function ReaderPanel() {
             <strong>独立模式</strong><span>自带模型，本地保存</span>
           </button>
           <button id="mode-platform" className="mode-option" type="button" aria-pressed="false">
-            <strong>平台模式</strong><span>平台模型，数据库同步</span>
+            <strong>平台模式</strong><span>平台 AI Engine，数据库同步</span>
           </button>
         </div>
+        <div id="mode-guidance" className="mode-guidance hidden" role="status" aria-live="polite" />
 
         <section id="platform-settings" className="settings-card">
           <div className="settings-card-heading">
             <div><div className="settings-kicker">Deep Research</div><h3>连接调研平台</h3></div>
             <span id="platform-status" className="connection-badge">未连接</span>
           </div>
-          <p className="small">平台模式下，技术问答使用平台模型；阅读会话和确认保存的结论同步到 PostgreSQL。网页全文、图片字节和翻译缓存仍不会上传。</p>
+          <p className="small">问答、总结、选段翻译、全文翻译和图片文字翻译使用调研平台 AI Engine；阅读会话和确认保存的结论同步到 PostgreSQL。全文仅在你发起操作时发送。图片字节由浏览器读取后按需上传，不上传图片 URL；翻译缓存保留在本地。</p>
           <p className="small">目标平台：<strong id="platform-target">techradar.top</strong></p>
           <div className="actions">
             <button id="connect-platform" className="primary">连接平台</button>
@@ -254,7 +247,7 @@ function ReaderPanel() {
           <div className="settings-card-heading">
             <div><div className="settings-kicker">Standalone</div><h3>本地模型服务</h3></div>
           </div>
-          <p className="small">独立模式的问答、全文翻译和图片理解直接调用这里配置的模型服务。支持 OpenAI-compatible Chat Completions 和 Anthropic Messages API；平台模式仍可用它处理图片翻译。</p>
+          <p className="small">独立模式的问答、全文翻译和图片理解直接调用这里配置的模型服务。支持 OpenAI-compatible Chat Completions 和 Anthropic Messages API。</p>
           <div className="field"><label htmlFor="provider-kind">模型服务商</label><select id="provider-kind" defaultValue="openai"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="minimax">MiniMax</option><option value="deepseek">DeepSeek</option><option value="custom">其他 OpenAI-compatible 服务</option><option value="custom-anthropic">其他 Anthropic-compatible 服务</option></select></div>
           <div id="provider-custom-url-field" className="field hidden"><label htmlFor="provider-url">自定义接口地址</label><input id="provider-url" className="input" placeholder="https://你的服务/v1" /></div>
           <div id="provider-endpoint-hint" className="small provider-endpoint-hint" />
@@ -263,7 +256,7 @@ function ReaderPanel() {
           <label className="check"><input id="request-provider-origin" type="checkbox" defaultChecked />保存时请求访问该模型服务域名，只在模型调用需要时使用。</label>
           <div className="actions"><button id="save-settings" className="primary">保存并测试连接</button></div>
         </section>
-        <div id="settings-notice" className="notice hidden" />
+              <div id="settings-notice" className="notice hidden" role="status" aria-live="polite" />
         <div className="section-label"><h2>本地数据</h2></div>
         <div className="actions"><button id="export-data" className="secondary">导出阅读数据</button><button id="import-data" className="secondary">导入数据</button><button id="clear-cache" className="danger">清除翻译缓存</button><button id="clear-data" className="danger">清除本地数据</button></div>
         <p className="small" style={{ marginTop: 8 }}>卸载扩展前请先导出需要保留的阅读成果；卸载后浏览器本地数据不保证恢复。</p>
@@ -273,16 +266,16 @@ function ReaderPanel() {
       <section id="save-dialog" className="setting-panel hidden">
         <div className="eyebrow">保存阅读成果</div>
         <h2>留下以后能复用的结论</h2>
-        <p className="small" style={{ marginTop: 8 }}>先确认摘录、笔记和 AI 结论，再保存到本地阅读库。原文不会自动全文保存。</p>
-        <div className="card paper"><div className="card-title"><span>原文摘录</span><span id="save-source-title">当前页面</span></div><textarea id="save-quote" className="input" style={{ marginTop: 9, minHeight: 100 }} /></div>
+        <p id="save-mode-note" className="small" style={{ marginTop: 8 }}>保存为可检索的阅读结论卡，不会在原文添加高亮。</p>
+        <div className="card paper"><div className="card-title"><label htmlFor="save-quote">原文摘录</label><span id="save-source-title">当前页面</span></div><textarea id="save-quote" className="input" style={{ marginTop: 9, minHeight: 100 }} /></div>
         <div className="field"><label htmlFor="save-note">我的笔记</label><textarea id="save-note" placeholder="补充自己的判断、待验证问题或使用场景" /></div>
         <div className="field"><label htmlFor="save-ai-answer">要保存的 AI 结论</label><textarea id="save-ai-answer" placeholder="可以删掉不想长期保留的部分" /></div>
         <div className="field"><label htmlFor="save-tags">标签（用逗号分隔，最多 10 个）</label><input id="save-tags" className="input" placeholder="架构, 性能, 待验证" /></div>
-        <div id="save-notice" className="notice hidden" />
-        <div className="actions"><button id="confirm-save" className="primary">保存到本地阅读库</button><button id="cancel-save" className="secondary">取消</button></div>
+        <div id="save-notice" className="notice hidden" role="status" aria-live="polite" />
+        <div className="actions"><button id="confirm-save" className="primary">保存到阅读库</button><button id="cancel-save" className="secondary">取消</button></div>
       </section>
 
-      <div className="footer">翻译、讨论和收藏默认留在你的浏览器。你可以随时导出或清除本地数据。</div>
+      <div id="mode-data-note" className="footer">独立模式：模型请求与阅读成果保存在本地，可导出或清除。</div>
     </main>
   );
 }

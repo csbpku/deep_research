@@ -4,9 +4,9 @@
 
 ## 安装
 
-1. 解压 `deep-research-reader-beta-0.2.6.zip`。
+1. 解压下载的 `deep-research-reader-beta-<版本号>.zip`。
 2. 打开 Chrome 的 `chrome://extensions`，开启“开发者模式”。
-3. 点击“加载已解压的扩展程序”，选择解压后的目录（目录根部应直接包含 `manifest.json`）。
+3. 点击“加载已解压的扩展程序”，选择解压后的目录（目录根部应直接包含 `manifest.json`，不要再选择子目录）。
 4. 打开公开技术文章、官方文档、GitHub README 或 Zread 小节，点击工具栏中的 Reader 图标。
 5. 在侧栏顶部点击“聊天记录”，可以搜索、重命名、删除或分别导出聊天会话和知识结论。
 

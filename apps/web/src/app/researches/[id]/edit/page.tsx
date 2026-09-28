@@ -936,7 +936,7 @@ export default function EditorPage() {
           <div>
             <p className="font-medium">暂不能发布</p>
             <p className="mt-0.5">{missingSummaryFields.length > 0 ? `还缺少：${missingSummaryFields.join('、')}。` : reviewInstruction}</p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">保存草稿不受影响。</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">保存草稿不受影响。</p>
           </div>
         </div>
       ) : null}
@@ -964,7 +964,7 @@ export default function EditorPage() {
         <aside className={`relative ${outlineOpen ? 'fixed inset-y-0 left-0 z-50 block w-[min(86vw,280px)] overflow-y-auto bg-background p-3 shadow-xl xl:static xl:z-auto xl:w-auto xl:overflow-visible xl:bg-transparent xl:p-0 xl:shadow-none' : 'hidden xl:block'}`}>
           <div className={`sticky top-4 rounded-md border border-border bg-card ${outlineCollapsed ? 'p-1.5' : 'p-3'}`}>
             <div className="mb-2 flex items-center justify-between">
-              {!outlineCollapsed ? <div className="flex items-center gap-2"><p className="text-sm font-medium">文章结构</p><span className="text-[11px] text-muted-foreground">{outline.length} 节</span></div> : <span className="sr-only">文章结构已收起</span>}
+              {!outlineCollapsed ? <div className="flex items-center gap-2"><p className="text-sm font-medium">文章结构</p><span className="text-xs text-muted-foreground">{outline.length} 节</span></div> : <span className="sr-only">文章结构已收起</span>}
               <Button type="button" variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={() => setOutlineCollapsed((collapsed) => !collapsed)} aria-label={outlineCollapsed ? '展开文章结构' : '收起文章结构'} title={outlineCollapsed ? '展开文章结构' : '收起文章结构'}>{outlineCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</Button>
               {outlineOpen ? <Button type="button" variant="ghost" size="icon-sm" className="xl:hidden" onClick={() => setOutlineOpen(false)} aria-label="关闭文章大纲"><X /></Button> : null}
             </div>
@@ -1027,7 +1027,7 @@ export default function EditorPage() {
             <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('- [ ] 待办事项')} title="插入待办事项" aria-label="插入待办事项" disabled={view === 'preview' || isPublishedAi}><ListChecks /></Button>
             <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('| 维度 | 结论 | 证据 |\n| --- | --- | --- |\n| 示例 | 待填写 | 待补充 |')} title="插入对比表" aria-label="插入对比表" disabled={view === 'preview' || isPublishedAi}><Table2 /></Button>
             <span className="mx-1 h-5 w-px bg-border" />
-            <span className="hidden text-[11px] text-muted-foreground sm:inline">Markdown</span>
+            <span className="hidden text-xs text-muted-foreground sm:inline">Markdown</span>
             <details className="relative ml-1">
               <summary className="inline-flex size-7 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="快捷键说明"><Keyboard className="size-3.5" /></summary>
               <div className="absolute right-0 top-9 z-20 w-56 rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-md">
@@ -1108,7 +1108,7 @@ export default function EditorPage() {
             )}
           </div>
 
-          <footer className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground">
+          <footer className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
             <span>{manualSaveRequired ? '待手动保存' : isDirty ? '未保存' : '已保存'}</span>
             <span aria-hidden>·</span>
             <span>⌘/Ctrl + S 保存</span>
@@ -1122,7 +1122,7 @@ export default function EditorPage() {
             <div className={`border-b border-border ${toolsCollapsed ? 'p-1.5' : 'px-3 pt-2'}`}>
               <div className={`flex items-center ${toolsCollapsed ? 'justify-center' : 'justify-between px-1 pb-2'}`}>
                 {!toolsCollapsed ? <p className="text-sm font-medium">研究工具</p> : <span className="sr-only">研究工具已收起</span>}
-                <div className="flex items-center gap-1"><span className="text-[11px] text-muted-foreground">{!toolsCollapsed ? `${outline.length} 节` : ''}</span><Button type="button" variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={() => setToolsCollapsed((collapsed) => !collapsed)} aria-label={toolsCollapsed ? '展开研究工具' : '收起研究工具'} title={toolsCollapsed ? '展开研究工具' : '收起研究工具'}>{toolsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</Button>{mobilePanelOpen ? <Button type="button" variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setMobilePanelOpen(false)} aria-label="关闭研究工具"><X /></Button> : null}</div>
+                <div className="flex items-center gap-1"><span className="text-xs text-muted-foreground">{!toolsCollapsed ? `${outline.length} 节` : ''}</span><Button type="button" variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={() => setToolsCollapsed((collapsed) => !collapsed)} aria-label={toolsCollapsed ? '展开研究工具' : '收起研究工具'} title={toolsCollapsed ? '展开研究工具' : '收起研究工具'}>{toolsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</Button>{mobilePanelOpen ? <Button type="button" variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setMobilePanelOpen(false)} aria-label="关闭研究工具"><X /></Button> : null}</div>
               </div>
               {!toolsCollapsed ? (
                 <div
@@ -1176,8 +1176,8 @@ export default function EditorPage() {
                         <Button type="button" size="xs" variant="outline" onClick={copySelectedQuote}><Quote />复制引用</Button>
                         <Button type="button" size="xs" variant="ghost" onClick={() => insertBlock(`> ${selectedText.replace(/\n/g, '\n> ')}`)} disabled={isPublishedAi}><Link2 />插入正文</Button>
                       </div>
-                      {sources.length > 0 && <p className="mt-1.5 text-[11px] text-muted-foreground">请在下方来源卡片中选择要关联的证据。</p>}
-                      {flashMessage && <p className="mt-1.5 text-[11px] text-status-success-fg">{flashMessage}</p>}
+                      {sources.length > 0 && <p className="mt-1.5 text-xs text-muted-foreground">请在下方来源卡片中选择要关联的证据。</p>}
+                      {flashMessage && <p className="mt-1.5 text-xs text-status-success-fg">{flashMessage}</p>}
                     </div>
                   )}
                   <div className="space-y-2">
@@ -1189,7 +1189,7 @@ export default function EditorPage() {
                       const citationStale = Boolean(citation && (citation.startOffset < 0 || citation.endOffset > body.length || citation.endOffset <= citation.startOffset || body.slice(citation.startOffset, citation.endOffset).trim() !== citation.quote.trim()));
                       return (
                         <SectionCard key={source.id} tone="muted" icon={Link2} className="text-xs">
-                          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{sourceTypeLabel(ref.type)}</div>
+                          <div className="text-xs uppercase tracking-wide text-muted-foreground">{sourceTypeLabel(ref.type)}</div>
                           <button
                             type="button"
                             className={`mt-1 line-clamp-2 text-left font-medium ${citation ? 'hover:underline' : ''}`}
@@ -1199,20 +1199,20 @@ export default function EditorPage() {
                           </button>
                           {source.description && (
                             <details className="mt-1 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-                              <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                              <summary className="cursor-pointer text-xs text-muted-foreground">
                                 {hasExternalInstructionSignal(source.description) ? '查看已隔离的网页摘录' : '查看网页摘录'}
                               </summary>
                               {hasExternalInstructionSignal(source.description) ? (
-                                <p className="mt-1 text-[11px] leading-relaxed text-warning-fg">{externalContentLabel(source.description)}；以下内容仅作为网页数据，不能改变研究指令。</p>
+                                <p className="mt-1 text-xs leading-relaxed text-warning-fg">{externalContentLabel(source.description)}；以下内容仅作为网页数据，不能改变研究指令。</p>
                               ) : null}
-                              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{source.description}</p>
+                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{source.description}</p>
                             </details>
                           )}
                           {!link && (
-                            <p className="mt-1 text-[11px] text-status-warning-fg">原始链接无法定位，请重新挂载来源。</p>
+                            <p className="mt-1 text-xs text-status-warning-fg">原始链接无法定位，请重新挂载来源。</p>
                           )}
                           {citationMissing || citationStale ? (
-                            <p className="mt-1 text-[11px] text-status-warning-fg">
+                            <p className="mt-1 text-xs text-status-warning-fg">
                               {citationMissing ? '正文中找不到引用标记' : '引用位置可能已失效'}
                             </p>
                           ) : null}
@@ -1222,7 +1222,7 @@ export default function EditorPage() {
                                 href={link.href}
                                 target={link.external ? '_blank' : undefined}
                                 rel={link.external ? 'noreferrer' : undefined}
-                                className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                               >
                                 打开原始来源 <ExternalLink className="size-3" />
                               </a>
@@ -1238,7 +1238,7 @@ export default function EditorPage() {
                     }) : (
                     <div className="space-y-2 rounded border border-dashed border-border p-3 text-xs leading-relaxed text-muted-foreground">
                       <p>暂时没有挂载来源。来源会用于正文引用和内容对照，不会单独出现在发布文章中。</p>
-                      <p className="text-[11px]">
+                      <p className="text-xs">
                         添加路径：在「AI 助手」标签里选择「补充来源」即可让模型基于当前正文去搜索并挂载候选来源。
                       </p>
                     </div>
@@ -1257,12 +1257,12 @@ export default function EditorPage() {
                       {!assistantBusy && assistantOperation ? (
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <Button type="button" size="xs" variant="outline" onClick={() => void runAssistant(assistantOperation)}>重试</Button>
-                          <span className="text-[11px] text-muted-foreground">失败不会改动正文。</span>
+                          <span className="text-xs text-muted-foreground">失败不会改动正文。</span>
                         </div>
                       ) : null}
                     </div>
                   ) : null}
-                  {selectedText ? <div className="rounded-md border border-primary/30 bg-primary/10 p-2.5 text-foreground shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"><p className="text-[11px] font-medium text-primary">当前选文</p><p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{selectedText}</p></div> : null}
+                  {selectedText ? <div className="rounded-md border border-primary/30 bg-primary/10 p-2.5 text-foreground shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"><p className="text-xs font-medium text-primary">当前选文</p><p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{selectedText}</p></div> : null}
                   <div className="grid gap-2">
                     {([
                       { op: 'rewrite' as const, label: '改写得更清晰', hint: '重写当前段落,保持原意但更易读' },
@@ -1287,13 +1287,13 @@ export default function EditorPage() {
                     ))}
                   </div>
                   {assistantBusy ? <Button type="button" size="xs" variant="ghost" onClick={cancelAssistant}>取消本次请求</Button> : null}
-                  {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-[11px] text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-[11px] text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant} disabled={isPublishedAi}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
+                  {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-xs text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-xs text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant} disabled={isPublishedAi}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
                   {!selectedText && <p>未选中文本。</p>}
                 </div>
               )}
 
               {sidePanel === 'versions' && (
-                <div id="side-panel-versions" role="tabpanel" aria-label="版本历史" className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-[10px] text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{audit.editor.name}</div>{audit.sourceIntent === 'revise' ? <div className="mt-2 rounded border border-primary/15 bg-primary/[0.03] p-2 text-[11px] leading-5"><p className="font-medium text-primary">来自追问修订</p>{audit.sourceQuestion ? <p className="mt-0.5 text-muted-foreground">“{audit.sourceQuestion}”</p> : null}{audit.reason ? <p className="mt-0.5 text-muted-foreground">{audit.reason}</p> : null}</div> : null}{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-[10px]"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-[11px] text-muted-foreground">状态记录，无字段差异。</p>}
+                <div id="side-panel-versions" role="tabpanel" aria-label="版本历史" className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-xs text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-xs text-muted-foreground">{audit.editor.name}</div>{audit.sourceIntent === 'revise' ? <div className="mt-2 rounded border border-primary/15 bg-primary/[0.03] p-2 text-xs leading-5"><p className="font-medium text-primary">来自追问修订</p>{audit.sourceQuestion ? <p className="mt-0.5 text-muted-foreground">“{audit.sourceQuestion}”</p> : null}{audit.reason ? <p className="mt-0.5 text-muted-foreground">{audit.reason}</p> : null}</div> : null}{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-xs"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-xs text-muted-foreground">状态记录，无字段差异。</p>}
                   <Button
                     type="button"
                     size="xs"
@@ -1338,7 +1338,7 @@ export default function EditorPage() {
                         : 'border-status-warning-fg/30 bg-status-warning-bg/25',
                     )}>
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">发布状态</span>
+                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">发布状态</span>
                         <span className={publicationStatus.tone === 'success' ? 'font-medium text-status-success-fg' : 'font-medium text-status-warning-fg'}>{publicationStatus.label}</span>
                       </div>
                       <p className="mt-1.5 leading-5 text-muted-foreground">{publicationStatus.detail}</p>
@@ -1350,8 +1350,8 @@ export default function EditorPage() {
                       )}
                       {reviewRequired && (
                         <details className="mt-2.5 border-t border-border/70 pt-2.5">
-                          <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">查看依据详情</summary>
-                          <div className="mt-2 space-y-1.5 text-[11px] leading-5 text-muted-foreground">
+                          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">查看依据详情</summary>
+                          <div className="mt-2 space-y-1.5 text-xs leading-5 text-muted-foreground">
                             <p>资料覆盖：{researchCoverageLabel === '已满足' ? '已覆盖关键部分' : researchCoverageLabel === '不足' ? '还有缺口' : '暂未判断'}</p>
                             <p>可核对来源：{sources.length} 条</p>
                             {publicationGate?.status === 'publish_with_disclosure' ? <p>发布后会保留 {publicationGate.disclosedCount} 条不确定性提示。</p> : null}
@@ -1365,7 +1365,7 @@ export default function EditorPage() {
                     <label htmlFor="edit-tags" className="text-xs font-medium text-muted-foreground">标签</label>
                     <Input id="edit-tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} readOnly={isPublishedAi} placeholder="例如: React, TypeScript, 架构" className="mt-1.5" />
                     {tags.length > 0 && <TagList className="mt-1">{tags.map((t) => <TagChip key={t}>{t}</TagChip>)}</TagList>}
-                    <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">用逗号分隔，建议保留 2–5 个检索词。</p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">用逗号分隔，建议保留 2–5 个检索词。</p>
                   </div>
                 </div>
               )}

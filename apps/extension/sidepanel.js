@@ -12,6 +12,8 @@ import {
   providerReady,
   requestChat,
   saveProvider,
+  combineTranslationParts,
+  splitTranslationBlocks,
   testVisionProvider,
   translateBlocks,
   translateImage,
@@ -66,9 +68,11 @@ let activeTabId = null;
 let activationNeeded = null;
 let pageReadState = 'idle';
 let lastSavedInsight = null;
+let insightSyncFailed = false;
 let editingInsight = null;
 let pendingInsightSource = null;
 let editingAnnotation = null;
+let pendingAnnotationHighlightId = null;
 let activeSessionTitle = '';
 let sessionSaveQueue = Promise.resolve();
 const translatedTextIds = new Set();
@@ -137,7 +141,7 @@ function updatePageContextUi(context = pageContext || documentContext || selecti
   if (meta) meta.textContent = descriptor.detail;
   const scope = activeDiscussionScope();
   if ($('page-context-scope')) $('page-context-scope').textContent = discussionScopeLabel(scope);
-  if ($('quick-actions-scope')) $('quick-actions-scope').textContent = discussionScopeLabel(scope);
+  if ($('quick-actions-scope')) $('quick-actions-scope').textContent = '整页正文';
   sendToPage({
     type: 'deep-research:reader-status',
     state: descriptor.state,
@@ -150,7 +154,7 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   const context = activeDiscussionContext(scope);
   const composer = $('persistent-composer');
   if (!composer) return;
-  const visible = Boolean(pageContext || documentContext || selectionContext);
+  const visible = Boolean(discussionOpen || discussionHistory.length || latestAnswer || latestStructuredAnswer);
   show(composer, visible);
   const descriptor = pageReadDescriptor(context);
   const selectionReady = scope === 'selection' && Boolean(context?.selection?.quote);
@@ -162,13 +166,6 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
       : Boolean(imageContext?.image && pageReady);
   if ($('composer-scope-label')) $('composer-scope-label').textContent = discussionScopeLabel(scope);
   if ($('composer-context-status')) $('composer-context-status').textContent = `正文状态：${descriptor.label}`;
-  if ($('chat-composer-hint')) {
-    $('chat-composer-hint').textContent = scope === 'selection'
-      ? '只使用当前选段及所在小节'
-      : scope === 'image'
-        ? '结合当前图示和页面正文'
-        : descriptor.detail;
-  }
   const question = $('question-input');
   if (question) {
     question.placeholder = scope === 'selection'
@@ -188,12 +185,36 @@ function platformModeReady() {
   return readingMode === 'platform' && platformConnected;
 }
 
+function textModelReady() {
+  return readingMode === 'platform' ? platformConnected : providerReady(provider);
+}
+
+function updateAiAvailabilityBanner() {
+  const banner = $('ai-availability-banner');
+  const message = $('ai-availability-message');
+  const action = $('ai-availability-action');
+  if (!banner || !message || !action) return;
+  const hasReadableContext = contextHasReadableBody(pageContext || documentContext)
+    || Boolean(selectionContext?.selection?.quote)
+    || Boolean(imageContext?.image);
+  const ready = textModelReady();
+  show(banner, hasReadableContext && !ready);
+  if (!hasReadableContext || ready) return;
+  const platform = readingMode === 'platform';
+  message.textContent = platform
+    ? '平台模式尚未连接，问答、总结和翻译暂不可用。'
+    : '独立模式尚未配置模型，问答、总结和翻译暂不可用。';
+  action.textContent = platform ? '连接平台' : '配置模型';
+}
+
 function updateReadingModeUi() {
   const platform = readingMode === 'platform';
   $('mode-local')?.setAttribute('aria-pressed', String(!platform));
   $('mode-platform')?.setAttribute('aria-pressed', String(platform));
   $('storage-status')?.classList.toggle('platform', platform);
   if ($('storage-status')) $('storage-status').textContent = platform ? '平台模式' : '独立模式';
+  show($('platform-settings'), platform);
+  show($('local-provider-settings'), !platform);
   if ($('platform-inline-status')) {
     $('platform-inline-status').textContent = platform
       ? platformConnected ? '会话与结论同步到调研平台' : '平台模式尚未连接'
@@ -202,20 +223,55 @@ function updateReadingModeUi() {
   if ($('platform-inline-description')) {
     $('platform-inline-description').textContent = platform
       ? platformConnected
-        ? '问答使用平台模型；正文、图片字节和翻译缓存仍只在浏览器处理。'
-        : '到设置中连接平台，或切回独立模式继续使用本地模型。'
-      : '连接调研平台后，可把会话和确认过的结论写入研究库。';
+        ? '问答、总结和全文翻译使用平台 AI Engine；图片只在你发起全文翻译时由浏览器读取字节并发送给视觉模型。'
+        : '连接调研平台后即可使用平台 AI Engine，无需配置本地模型。'
+      : '会话和阅读成果保存在浏览器；需要同步到研究库时可切换平台模式。';
   }
-  if (platformModeReady()) setStatus(true, '平台模型已连接');
+  if ($('sync-selection')) $('sync-selection').textContent = '重试同步';
+  show($('sync-selection'), platform && platformConnected && Boolean(lastSavedInsight) && insightSyncFailed);
+  show($('sync-session'), platform && platformConnected && Boolean(contextUrl()));
+  show($('restore-session'), platform && platformConnected);
+  if ($('mode-data-note')) {
+    $('mode-data-note').textContent = platform
+      ? platformConnected
+        ? '平台模式：文本操作使用调研平台 AI Engine；发起全文翻译时，图片字节会按需发送给视觉模型，但不会保存到平台阅读库。图示问答暂不支持。'
+        : '平台模式尚未连接：连接并登录后使用调研平台 AI Engine；当前不会调用本地模型。'
+      : '独立模式：模型请求、聊天记录和阅读成果保存在本地，可导出或清除。';
+  }
+  const guidance = $('mode-guidance');
+  if (guidance) {
+    guidance.classList.remove('is-warning', 'is-connected');
+    if (platform && platformConnected) {
+      guidance.textContent = '平台模式已连接。问答、总结、全文翻译和图片文字翻译使用调研平台 AI Engine；图片仅在你发起翻译时由浏览器读取并上传字节，不会让服务器抓取图片地址。';
+      guidance.classList.add('is-connected');
+      show(guidance, true);
+    } else if (platform) {
+      guidance.textContent = '平台模式尚未连接。点击下方“连接平台”并完成登录；无需填写本地模型服务。';
+      guidance.classList.add('is-warning');
+      show(guidance, true);
+    } else if (!providerReady(provider)) {
+      guidance.textContent = '独立模式需要配置服务商、模型名称和 API Key。也可以切换到平台模式并连接调研平台，直接使用平台 AI Engine。';
+      guidance.classList.add('is-warning');
+      show(guidance, true);
+    } else {
+      show(guidance, false);
+    }
+  }
+  if (platform) setStatus(platformConnected, platformConnected ? '平台 AI 已连接' : '平台未连接');
   else setStatus(providerReady(provider), providerReady(provider) ? '本地模型已连接' : '未配置模型');
+  updateAiAvailabilityBanner();
 }
 
 async function setReadingMode(mode) {
   readingMode = mode === 'platform' ? 'platform' : 'local';
-  await readerStore.setSetting('readingMode', readingMode);
   updateReadingModeUi();
   renderEmptyState();
   if (readingMode === 'platform' && !platformConnected) showSettings();
+  try {
+    await readerStore.setSetting('readingMode', readingMode);
+  } catch {
+    setNotice('运行模式已切换，但未能保存设置；重新打开侧栏后可能恢复之前的模式。', $('settings-notice'));
+  }
 }
 
 function currentReadingLanguage() {
@@ -242,6 +298,25 @@ function streamAnswerPreview(value) {
   return '';
 }
 
+function bindCitationReferences(container, evidenceItems) {
+  container?.querySelectorAll('[data-reader-citation]').forEach((reference) => {
+    const index = Number(reference.dataset.readerCitation) - 1;
+    const item = evidenceItems[index];
+    if (!item) {
+      reference.replaceWith(document.createTextNode(reference.textContent || ''));
+      return;
+    }
+    reference.href = item.url || contextUrl() || '#';
+    reference.removeAttribute('target');
+    reference.title = item.anchor?.quote ? '跳转到对应原文证据' : '打开原文';
+    reference.addEventListener('click', (event) => {
+      if (!item.anchor?.quote) return;
+      event.preventDefault();
+      sendToPage({ type: 'deep-research:focus-anchor', anchor: item.anchor });
+    });
+  });
+}
+
 function renderStructuredAnswer(result) {
   const structured = $('answer-structured');
   if (!structured) return;
@@ -258,51 +333,66 @@ function renderStructuredAnswer(result) {
     renderDiscussionFollowups();
     return;
   }
-  renderMarkdown($('answer-output'), answer.answer || latestAnswer || '');
+  const evidenceItems = Array.isArray(answer.evidence) ? answer.evidence : [];
+  const answerOutput = $('answer-output');
+  renderMarkdown(answerOutput, answer.answer || latestAnswer || '');
+  bindCitationReferences(answerOutput, evidenceItems);
+  const evidenceLabel = evidencePart?.querySelector('.answer-label');
+  if (evidenceLabel) evidenceLabel.textContent = evidenceItems.length ? `原文证据 · ${evidenceItems.length}` : '原文证据';
   evidenceList.textContent = '';
-  (Array.isArray(answer.evidence) ? answer.evidence : []).forEach((item, index) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'evidence-item';
-    button.dataset.evidenceIndex = String(index);
-    button.title = item.anchor?.quote ? '跳转到原文证据' : '这条证据没有可用的原文定位';
+  evidenceItems.forEach((item, index) => {
+    const link = document.createElement('a');
+    link.className = 'evidence-item';
+    link.href = item.url || contextUrl() || '#';
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+    link.id = `reader-evidence-${index + 1}`;
+    link.dataset.evidenceIndex = String(index);
+    link.title = item.anchor?.quote ? '定位原文' : '打开原文';
     const number = document.createElement('span');
     number.className = 'evidence-number';
     number.textContent = `[${index + 1}]`;
     const content = document.createElement('span');
     content.className = 'evidence-content';
-    const quote = document.createElement('span');
-    quote.className = 'evidence-quote';
-    quote.textContent = `“${item.quote || ''}”`;
-    content.appendChild(quote);
     if (item.claim) {
       const claim = document.createElement('span');
       claim.className = 'evidence-claim';
-      claim.textContent = item.claim;
+      const fullClaim = String(item.claim || '').trim();
+      claim.textContent = `${fullClaim.slice(0, 112)}${fullClaim.length > 112 ? '…' : ''}`;
+      claim.title = fullClaim;
       content.appendChild(claim);
     }
-    button.append(number, content);
-    button.addEventListener('click', () => {
+    const quote = document.createElement('span');
+    quote.className = 'evidence-quote';
+    const fullQuote = String(item.quote || '').trim();
+    quote.textContent = `“${fullQuote.slice(0, 120)}${fullQuote.length > 120 ? '…' : ''}”`;
+    quote.title = fullQuote;
+    content.appendChild(quote);
+    const openLabel = document.createElement('span');
+    openLabel.className = 'evidence-open';
+    openLabel.textContent = item.anchor?.quote ? '定位原文' : '打开原文';
+    content.appendChild(openLabel);
+    link.append(number, content);
+    link.addEventListener('click', (event) => {
       if (item.anchor?.quote) {
+        event.preventDefault();
         sendToPage({ type: 'deep-research:focus-anchor', anchor: item.anchor });
-      } else {
-        setNotice('这条证据没有可用的原文定位。');
       }
     });
-    evidenceList.appendChild(button);
+    evidenceList.appendChild(link);
   });
   show(evidencePart, evidenceList.childElementCount > 0);
-  $('answer-background-text').textContent = answer.background || '';
+  renderMarkdown($('answer-background-text'), answer.background || '');
   show(backgroundPart, Boolean(answer.background));
-  $('answer-inference-text').textContent = answer.inference || '';
+  renderMarkdown($('answer-inference-text'), answer.inference || '');
   show(inferencePart, Boolean(answer.inference));
   const limitationList = $('answer-limitations-list');
   limitationList.textContent = '';
-  (Array.isArray(answer.limitations) ? answer.limitations : []).forEach((item) => {
-    const li = document.createElement('li');
-    li.textContent = item;
-    limitationList.appendChild(li);
-  });
+    (Array.isArray(answer.limitations) ? answer.limitations : []).forEach((item) => {
+      const li = document.createElement('li');
+      renderMarkdown(li, item);
+      limitationList.appendChild(li);
+    });
   show(limitationsPart, limitationList.childElementCount > 0);
   const warningText = Array.isArray(answer.warnings) ? answer.warnings.filter(Boolean).join('\n') : '';
   warnings.textContent = warningText;
@@ -357,7 +447,7 @@ function ensureSaveDialog() {
   section = document.createElement('section');
   section.id = 'save-dialog';
   section.className = 'setting-panel hidden';
-  section.innerHTML = `<div class="eyebrow">保存阅读成果</div><h2>留下以后能复用的结论</h2><p class="small" style="margin-top:8px">先确认摘录、笔记和 AI 结论，再保存到本地阅读库。原文不会自动全文保存。</p><div class="card paper"><div class="card-title"><span>原文摘录</span><span id="save-source-title">当前页面</span></div><textarea id="save-quote" class="input" style="margin-top:9px;min-height:100px"></textarea></div><div class="field"><label for="save-note">我的笔记</label><textarea id="save-note" placeholder="补充自己的判断、待验证问题或使用场景"></textarea></div><div class="field"><label for="save-ai-answer">要保存的 AI 结论</label><textarea id="save-ai-answer" placeholder="可以删掉不想长期保留的部分"></textarea></div><div class="field"><label for="save-tags">标签（用逗号分隔，最多 10 个）</label><input id="save-tags" class="input" placeholder="架构, 性能, 待验证" /></div><div id="save-notice" class="notice hidden"></div><div class="actions"><button id="confirm-save" class="primary">保存到本地阅读库</button><button id="cancel-save" class="secondary">取消</button></div>`;
+  section.innerHTML = `<div class="eyebrow">保存阅读成果</div><h2>留下以后能复用的结论</h2><p id="save-mode-note" class="small" style="margin-top:8px">保存为可检索的阅读结论卡，不会在原文添加高亮。</p><div class="card paper"><div class="card-title"><label for="save-quote">原文摘录</label><span id="save-source-title">当前页面</span></div><textarea id="save-quote" class="input" style="margin-top:9px;min-height:100px"></textarea></div><div class="field"><label for="save-note">我的笔记</label><textarea id="save-note" placeholder="补充自己的判断、待验证问题或使用场景"></textarea></div><div class="field"><label for="save-ai-answer">要保存的 AI 结论</label><textarea id="save-ai-answer" placeholder="可以删掉不想长期保留的部分"></textarea></div><div class="field"><label for="save-tags">标签（用逗号分隔，最多 10 个）</label><input id="save-tags" class="input" placeholder="架构, 性能, 待验证" /></div><div id="save-notice" class="notice hidden" role="status" aria-live="polite"></div><div class="actions"><button id="confirm-save" class="primary">保存到阅读库</button><button id="cancel-save" class="secondary">取消</button></div>`;
   document.querySelector('main.shell')?.appendChild(section);
   return bindActions(section);
 }
@@ -375,7 +465,7 @@ function ensureAnnotationDialog() {
   section = document.createElement('section');
   section.id = 'annotation-dialog';
   section.className = 'setting-panel hidden';
-  section.innerHTML = '<div class="eyebrow">原文标注</div><h2>给这段内容留下线索</h2><p class="small" style="margin-top:8px">标注只保存精确摘录、页面版本和你的短笔记，不保存全文。页面变化后会保留记录，但不会错误高亮。</p><div class="card paper"><div class="card-title"><span>原文摘录</span><span id="annotation-source-title">当前页面</span></div><textarea id="annotation-quote" class="input" style="margin-top:9px;min-height:100px" readonly></textarea></div><div class="field"><label for="annotation-note">标注笔记</label><textarea id="annotation-note" placeholder="例如：这里是性能瓶颈的关键假设"></textarea></div><div id="annotation-notice" class="notice hidden"></div><div class="actions"><button id="confirm-annotation" class="primary">保存标注</button><button id="cancel-annotation" class="secondary">取消</button></div>';
+  section.innerHTML = '<div class="eyebrow">原文标注</div><h2>给这段内容留下位置标记</h2><p class="small" style="margin-top:8px">保存后会按原文位置叠加高亮，并保留一条短笔记；不会创建阅读结论卡。仅在原文版本匹配时高亮，标注保存在浏览器本地。</p><div class="card paper"><div class="card-title"><label for="annotation-quote">待标注原文</label><span id="annotation-source-title">当前页面</span></div><textarea id="annotation-quote" class="input" style="margin-top:9px;min-height:100px" readonly></textarea></div><div class="field"><label for="annotation-note">标注笔记</label><textarea id="annotation-note" placeholder="例如：这里是性能瓶颈的关键假设"></textarea></div><div id="annotation-notice" class="notice hidden" role="status" aria-live="polite"></div><div class="actions"><button id="confirm-annotation" class="primary">保存标注并高亮</button><button id="cancel-annotation" class="secondary">取消</button></div>';
   document.querySelector('main.shell')?.appendChild(section);
   return bindActions(section);
 }
@@ -421,6 +511,18 @@ function persistJobPatch(job, patch) {
   if (!job?.id) return;
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
   void readerStore.saveJob(job);
+}
+
+function translationCoverageWarning(context) {
+  if (!context?.bodyTruncated && !context?.blocksTruncated) return '';
+  const totalBlocks = Number(context.blockCount || context.blocks?.length || 0);
+  const processedBlocks = Array.isArray(context.blocks) ? context.blocks.length : 0;
+  const totalChars = Number(context.bodyCharCount || String(context.body || '').length || 0);
+  const processedChars = String(context.body || '').length;
+  const details = [];
+  if (context.blocksTruncated) details.push(`正文块 ${processedBlocks.toLocaleString()} / ${totalBlocks.toLocaleString()}`);
+  if (context.bodyTruncated) details.push(`字符 ${processedChars.toLocaleString()} / ${totalChars.toLocaleString()}`);
+  return `本页超出当前处理上限（${details.join('，')}）；未覆盖内容没有翻译。`;
 }
 
 function saveLocalSession() {
@@ -585,6 +687,9 @@ function discussionLabel(scope = discussionScope, intent = discussionIntent) {
 }
 
 function renderDiscussionScopeControls(scope = discussionScope) {
+  const selectionAvailable = Boolean(selectionContext?.selection?.quote);
+  const imageAvailable = readingMode !== 'platform' && Boolean(imageContext?.image);
+  const hasAlternative = selectionAvailable || imageAvailable;
   const options = [
     ['scope-page', 'page'],
     ['scope-selection', 'selection'],
@@ -594,20 +699,15 @@ function renderDiscussionScopeControls(scope = discussionScope) {
     const button = $(id);
     if (!button) return;
     const available = optionScope === 'page'
-      || optionScope === 'selection' && Boolean(selectionContext?.selection?.quote)
-      || optionScope === 'image' && Boolean(imageContext?.image);
+      ? hasAlternative
+      : optionScope === 'selection'
+        ? selectionAvailable
+        : imageAvailable;
     show(button, available);
     button.setAttribute('aria-pressed', String(scope === optionScope));
     button.classList.toggle('active', scope === optionScope);
   });
-  const hint = $('scope-control-hint');
-  if (hint) {
-    hint.textContent = scope === 'selection'
-      ? '只使用选段及其所在小节'
-      : scope === 'image'
-        ? '结合图示和页面正文'
-        : '会使用当前页面的正文';
-  }
+  show($('discussion-scope-options'), hasAlternative);
 }
 
 function activeDiscussionScope() {
@@ -629,20 +729,12 @@ function renderDiscussionContext(scope = discussionScope, intent = discussionInt
   if (label) label.textContent = discussionLabel(scope, intent);
   if ($('discussion-source-title')) $('discussion-source-title').textContent = source?.title || pageContext?.title || '当前页面';
   if ($('discussion-source-url')) $('discussion-source-url').textContent = source?.url || pageContext?.url || '';
-  if ($('discussion-source-scope')) $('discussion-source-scope').textContent = discussionScopeLabel(scope);
   if (detail) {
     detail.textContent = formatCoverage(source, scope);
   }
   renderDiscussionScopeControls(scope);
   updatePageContextUi(source || pageContext || documentContext);
   renderPersistentComposer(scope);
-  if ($('chat-composer-hint')) {
-    $('chat-composer-hint').textContent = scope === 'selection'
-      ? '只使用当前选段及所在小节'
-      : scope === 'image'
-        ? '结合当前图示和页面正文'
-        : '使用整页正文回答';
-  }
 }
 
 function suggestedFollowups(scope = activeDiscussionScope(), intent = discussionIntent) {
@@ -696,7 +788,15 @@ function renderConversation() {
     header.textContent = item.role === 'user' ? '你' : 'Reader';
     const body = document.createElement('div');
     body.className = 'conversation-message-body';
-    if (item.role === 'assistant') renderMarkdown(body, String(item.content || ''));
+    if (item.role === 'assistant') {
+      renderMarkdown(body, String(item.content || ''));
+      const latestAssistant = [...messages].reverse().find((candidate) => candidate.role === 'assistant');
+      if (item === latestAssistant && item.content === latestStructuredAnswer?.answer) {
+        bindCitationReferences(body, Array.isArray(latestStructuredAnswer.evidence) ? latestStructuredAnswer.evidence : []);
+      } else {
+        bindCitationReferences(body, []);
+      }
+    }
     else body.textContent = String(item.content || '');
     message.append(header, body);
     list.appendChild(message);
@@ -705,17 +805,35 @@ function renderConversation() {
   show($('conversation-empty'), messages.length === 0 && !discussionRunning);
 }
 
+function revealLatestAnswerDetails() {
+  const transcript = $('chat-transcript');
+  if (!transcript) return;
+  const target = $('answer-evidence-list')?.lastElementChild
+    || $('discussion-followups')
+    || $('answer-actions');
+  if (!target) return;
+  requestAnimationFrame(() => {
+    const transcriptRect = transcript.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    if (targetRect.bottom > transcriptRect.bottom) {
+      transcript.scrollTop += targetRect.bottom - transcriptRect.bottom + 8;
+    } else if (targetRect.top < transcriptRect.top) {
+      transcript.scrollTop -= transcriptRect.top - targetRect.top + 8;
+    }
+  });
+}
+
 function renderEmptyState() {
   const title = $('empty-title');
   const description = $('empty-description');
   const primary = $('empty-settings');
   if (!title || !description || !primary) return;
-  if (!providerReady(provider) && !platformModeReady()) {
-    title.textContent = '先连接一个模型，再开始阅读。';
+  if (!textModelReady()) {
+    title.textContent = readingMode === 'platform' ? '平台模式尚未连接。' : '独立模式尚未配置模型。';
     description.textContent = readingMode === 'platform'
-      ? '连接调研平台后使用平台模型，或切回独立模式配置自己的模型。'
-      : '模型配置只保存在本地。配置完成后，点击扩展按钮启用当前网页。';
-    primary.textContent = readingMode === 'platform' ? '连接平台' : '配置模型';
+      ? '连接并登录调研平台后，问答与全文翻译即可使用平台 AI Engine。'
+      : '配置本地模型，或在设置中切换到平台模式并连接调研平台。';
+    primary.textContent = readingMode === 'platform' ? '连接调研平台' : '配置独立模型';
     primary.disabled = false;
     show(primary, true);
     return;
@@ -834,6 +952,7 @@ function renderPage() {
   const context = pageContext || documentContext || selectionContext;
   show($('empty-view'), !context);
   show($('page-view'), Boolean(context));
+  updateAiAvailabilityBanner();
   if (!context) {
     show($('persistent-composer'), false);
     renderEmptyState();
@@ -863,9 +982,13 @@ function renderPage() {
   if (imageContext?.image) {
     const image = imageContext.image;
     $('image-preview-title').textContent = image.alt || image.src || `图示 ${image.id || ''}`;
-    $('image-preview-meta').textContent = imageContext.restored
-      ? '已恢复图示讨论上下文；如需继续追问，请在原网页重新点击该图示。'
-      : `${image.width || '?'} × ${image.height || '?'} · 图片内容只按需发送给视觉模型`;
+    $('image-preview-meta').textContent = readingMode === 'platform'
+      ? '平台模式暂不支持围绕图示问答；全文翻译仍可按需识别并翻译图片文字。'
+      : imageContext.restored
+        ? '已恢复图示讨论上下文；如需继续追问，请在原网页重新点击该图示。'
+        : `${image.width || '?'} × ${image.height || '?'} · 图片内容只按需发送给视觉模型`;
+    show($('explain-image'), readingMode !== 'platform');
+    show($('ask-image'), readingMode !== 'platform');
   }
   const visibleDiscussionScope = activeDiscussionScope();
   // Keep the page action surface compact until the user chooses a discussion
@@ -890,10 +1013,20 @@ function renderPage() {
 
 function renderProgress(textDone = 0, textTotal = 0, imageDone = 0, imageTotal = 0) {
   show($('progress-area'), Boolean(textTotal || imageTotal || translationRunning || failedTranslationItems.length));
+  const textPercent = textTotal ? Math.round((textDone / textTotal) * 100) : 0;
+  const imagePercent = imageTotal ? Math.round((imageDone / imageTotal) * 100) : 0;
   $('text-progress-value').textContent = `${textDone} / ${textTotal}`;
-  $('text-progress-bar').style.width = `${textTotal ? Math.round((textDone / textTotal) * 100) : 0}%`;
+  $('text-progress-track').setAttribute('aria-valuenow', String(textPercent));
+  $('text-progress-track').setAttribute('aria-valuetext', textTotal ? `${textDone} / ${textTotal} 个正文片段` : '尚未开始');
+  $('text-progress-bar').style.width = `${textPercent}%`;
   $('image-progress-value').textContent = imageTotal ? `${imageDone} / ${imageTotal}` : '无可读取图片';
-  $('image-progress-bar').style.width = `${imageTotal ? Math.round((imageDone / imageTotal) * 100) : 0}%`;
+  $('image-progress-value').title = imageTotal && readingMode === 'platform'
+    ? '图片文字翻译由调研平台视觉能力处理；图片只在本次操作中按需上传，不会保存到平台阅读库。'
+    : '';
+  $('image-progress-track').setAttribute('aria-valuenow', String(imagePercent));
+  $('image-progress-track').setAttribute('aria-valuetext', imageTotal ? `${imageDone} / ${imageTotal} 张图片` : '无可读取图片');
+  $('image-progress-bar').style.width = `${imagePercent}%`;
+  $('progress-area').setAttribute('aria-busy', String(translationRunning));
   $('translate-all').textContent = translationRunning ? '处理中…' : '全文翻译';
   $('translate-all').disabled = translationRunning;
   show($('pause-translation'), translationRunning);
@@ -1058,16 +1191,24 @@ async function findPendingTranslation(context) {
   activeJobRecord = job;
   failedTranslationItems = Array.isArray(job.failedItems) ? job.failedItems : [];
   renderProgress(job.textDone || 0, job.textTotal || 0, job.imageDone || 0, job.imageTotal || 0);
-  setNotice(job.status === 'completed_with_errors'
-    ? `上次全文翻译有 ${failedTranslationItems.length} 项未完成；可以逐项重试。`
-    : `上次全文翻译停在 ${job.textDone || 0}/${job.textTotal || 0} 个正文块、${job.imageDone || 0}/${job.imageTotal || 0} 张图片；点击“全文翻译”可从本地缓存继续。`);
+  const progress = `已处理 ${job.textDone || 0}/${job.textTotal || 0} 个正文块、${job.imageDone || 0}/${job.imageTotal || 0} 张图片`;
+  const statusNotice = job.status === 'completed_with_errors'
+    ? `上次全文翻译完成，但有 ${failedTranslationItems.length} 项未完成；可以逐项重试。`
+    : job.status === 'completed'
+      ? `上次全文翻译已完成：${progress}。`
+      : job.status === 'cancelled'
+        ? `上次全文翻译已暂停：${progress}；点击“全文翻译”可从本地缓存继续。`
+        : job.status === 'failed'
+          ? `上次全文翻译中断：${progress}；点击“全文翻译”可从本地缓存重试。`
+          : `上次全文翻译尚未结束：${progress}；已完成内容会从本地缓存跳过。`;
+  setNotice(statusNotice);
   // A side-panel document can be destroyed while a request is in flight. A
   // queued/running job is therefore a durable recovery signal. A completed
   // job is only history: translation results are a bounded cache, so opening
   // a page must never silently send fresh model requests after the cache has
   // been cleared. Completed-with-errors, cancelled, and failed jobs remain
   // explicit user retry actions.
-  if (providerReady(provider) && ['queued', 'running'].includes(job.status)) {
+  if (textModelReady() && ['queued', 'running'].includes(job.status)) {
     translationRequested = true;
     fullTranslationEnabled = true;
     translationPaused = false;
@@ -1089,7 +1230,8 @@ function applyProviderFields() {
   if ($('provider-key')) $('provider-key').value = provider?.apiKey || '';
   if ($('translation-language')) $('translation-language').value = targetLanguage || 'zh-CN';
   updateProviderForm();
-  setStatus(providerReady(provider), providerReady(provider) ? `${provider.model} 已就绪` : '未配置模型');
+  if (readingMode === 'platform') setStatus(platformConnected, platformConnected ? '平台 AI 已连接' : '平台未连接');
+  else setStatus(providerReady(provider), providerReady(provider) ? `${provider.model} 已就绪` : '未配置模型');
 }
 
 function updateProviderForm() {
@@ -1151,7 +1293,8 @@ function setPlatformConnected(connected, message = '') {
   show($('disconnect-platform'), connected);
   $('platform-status').textContent = message || (connected ? '已连接 Deep Research' : '未连接');
   $('platform-status').classList.toggle('connected', connected);
-  show($('sync-selection'), connected && Boolean(lastSavedInsight));
+  if ($('sync-selection')) $('sync-selection').textContent = '重试同步';
+  show($('sync-selection'), connected && Boolean(lastSavedInsight) && insightSyncFailed);
   show($('sync-session'), connected && Boolean(contextUrl()));
   show($('restore-session'), connected);
   updateReadingModeUi();
@@ -1237,7 +1380,14 @@ async function disconnectPlatform() {
 async function syncInsight(insight = lastSavedInsight) {
   if (!insight) { setNotice('先收藏一个选段，再同步到研究库。'); return; }
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
-  if (!readerToken) { setNotice('先在设置中连接 Deep Research。'); return; }
+  if (!readerToken) {
+    insightSyncFailed = true;
+    updateReadingModeUi();
+    setNotice('先在设置中连接 Deep Research，再重试同步。');
+    return;
+  }
+  insightSyncFailed = false;
+  updateReadingModeUi();
   try {
     const response = await fetch(`${platformUrl}/api/reading/save`, {
       method: 'POST',
@@ -1255,8 +1405,12 @@ async function syncInsight(insight = lastSavedInsight) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.message || '研究库同步失败');
+    insightSyncFailed = false;
+    updateReadingModeUi();
     setNotice(payload.deduplicated ? '研究库已存在这条成果，未重复创建。' : '已同步到 Deep Research 研究库。');
   } catch (error) {
+    insightSyncFailed = true;
+    updateReadingModeUi();
     if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, '平台令牌已失效，请重新连接');
     setNotice(error instanceof Error ? error.message : '研究库同步失败');
   }
@@ -1316,7 +1470,7 @@ async function syncCurrentSession({ quiet = false } = {}) {
 }
 
 function platformContext(context, scope) {
-  const body = String(context?.body || '').slice(0, 256_000);
+  const body = String(context?.body || '');
   const selection = scope === 'selection' ? context?.selection : undefined;
   return {
     url: context.url,
@@ -1324,7 +1478,7 @@ function platformContext(context, scope) {
     language: currentReadingLanguage(),
     scope,
     body,
-    ...(typeof context.section === 'string' && context.section ? { section: context.section.slice(0, 80_000) } : {}),
+    ...(typeof context.section === 'string' && context.section ? { section: context.section } : {}),
     ...(selection ? { selection } : {}),
   };
 }
@@ -1332,7 +1486,7 @@ function platformContext(context, scope) {
 async function requestPlatformAnswer(sourceContext, question, scope, options = {}) {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
-  const action = options.action === 'explain' ? 'explain' : 'ask';
+  const action = ['explain', 'translate'].includes(options.action) ? options.action : 'ask';
   const response = await fetch(`${platformUrl}/api/reading/answer/stream`, {
     method: 'POST',
     headers: {
@@ -1353,7 +1507,8 @@ async function requestPlatformAnswer(sourceContext, question, scope, options = {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.message || '平台 AI 暂时不可用');
+    if (response.status === 401 || response.status === 403) setPlatformConnected(false, '平台连接已失效，请重新连接');
+    throw new Error(platformAnswerErrorMessage(payload, response.status));
   }
   if (!response.body) throw new Error('平台 AI 没有返回可读取的内容');
   const reader = response.body.getReader();
@@ -1370,15 +1525,26 @@ async function requestPlatformAnswer(sourceContext, question, scope, options = {
       streamed += payload.text;
       options.onDelta?.(payload.text);
     } else if (event === 'error') {
-      throw new Error(payload.message || '平台 AI 暂时不可用');
+      throw new Error(platformAnswerErrorMessage(payload));
+    } else if (event === 'progress') {
+      options.onProgress?.(Number(payload.done) || 0, Number(payload.total) || 0, payload.phase || 'analyzing');
     } else if (event === 'done') {
-      completed = payload.reading || {
+      const reading = payload.reading || {
         answer: payload.answer || payload.suggestion || streamed,
         evidence: [],
         background: '',
         inference: '',
         limitations: [],
         warnings: payload.warnings || [],
+      };
+      const citations = Array.isArray(payload.citations) ? payload.citations : [];
+      const evidence = Array.isArray(reading.evidence) ? reading.evidence : [];
+      completed = {
+        ...reading,
+        evidence: evidence.map((item) => {
+          const citation = citations.find((candidate) => candidate?.quote === item?.quote);
+          return citation ? { ...item, anchor: citation.anchor || item.anchor, url: citation.url } : item;
+        }),
       };
     }
   };
@@ -1399,6 +1565,148 @@ async function requestPlatformAnswer(sourceContext, question, scope, options = {
     limitations: [],
     warnings: [],
   };
+}
+
+function platformAnswerErrorMessage(payload = {}, status = 0) {
+  const detail = [payload.code, payload.message, payload.error?.message]
+    .filter((value) => typeof value === 'string')
+    .join(' ');
+  const requestId = typeof payload.request_id === 'string' ? payload.request_id : '';
+  let message = '平台 AI 暂时无法完成此请求，请稍后重试；如持续发生，请联系平台管理员。';
+  if (status === 402 || /insufficient[_ ]balance|insufficient[_ ]quota|credit balance|AI_QUOTA_EXCEEDED/iu.test(detail)) {
+    message = '平台模型额度不足，本次请求未完成。请联系平台管理员检查模型服务额度后重试。';
+  } else if (status === 429 || /rate[_ ]limit|too many requests/iu.test(detail)) {
+    message = '平台模型请求过于频繁，请稍后重试。';
+  } else if (/invalid[_ ]api[_ ]key|authenticationerror|invalid api key/iu.test(detail)) {
+    message = '平台模型服务鉴权失败。请联系平台管理员检查 AI Engine 配置。';
+  } else if (/timed? ?out|timeout|deadline exceeded/iu.test(detail)) {
+    message = '平台 AI 处理超时，请缩短问题范围后重试。';
+  }
+  return requestId ? `${message}（请求编号：${requestId}）` : message;
+}
+
+async function requestPlatformTranslations(context, blocks, options = {}) {
+  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  if (!readerToken) throw new Error('平台连接已失效，请重新连接');
+  const tasks = splitTranslationBlocks(blocks);
+  const output = [];
+  const completedBySource = new Map();
+  const completedSourceIds = new Set();
+  const batchSize = 24;
+  const batches = Array.from({ length: Math.ceil(tasks.length / batchSize) }, (_, index) => index);
+  let nextBatch = 0;
+  let batchError = null;
+  async function processBatch(batchIndex) {
+    const offset = batchIndex * batchSize;
+    const batch = tasks.slice(offset, offset + batchSize);
+    const requestIds = new Map(batch.map((block, index) => [block.id, `translation-${offset + index}`]));
+    const response = await fetch(`${platformUrl}/api/reading/translate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
+      body: JSON.stringify({
+        url: context.url,
+        title: String(context.title || '当前网页').slice(0, 300),
+        language: currentReadingLanguage(),
+        blocks: batch.map(({ id, text }) => ({ id: requestIds.get(id), text })),
+      }),
+      signal: options.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) setPlatformConnected(false, '平台连接已失效，请重新连接');
+      throw new Error(payload.message || '平台 AI 翻译暂时不可用');
+    }
+    const byId = new Map((Array.isArray(payload.translations) ? payload.translations : []).map((item) => [item.id, item]));
+    for (const block of batch) {
+      const result = byId.get(requestIds.get(block.id));
+      const translated = result?.text ? { ...block, text: result.text, sourceText: block.text } : {
+        ...block,
+        text: '',
+        sourceText: block.text,
+        error: result?.error || '平台没有返回该段翻译',
+      };
+      output.push(translated);
+      const sourceId = String(block.sourceBlockId || block.id);
+      if (!completedBySource.has(sourceId)) completedBySource.set(sourceId, []);
+      const parts = completedBySource.get(sourceId);
+      parts.push(translated);
+      if (parts.length === Number(block.partCount || 1)) {
+        const sourceBlock = blocks.find((item) => String(item.id) === sourceId);
+        const [combined] = combineTranslationParts(sourceBlock ? [sourceBlock] : [], parts);
+        if (combined) {
+          completedSourceIds.add(sourceId);
+          await options.onResult?.(combined);
+        }
+      }
+      options.onProgress?.(completedSourceIds.size, blocks.length, sourceId);
+    }
+  }
+  async function batchWorker() {
+    while (!batchError && nextBatch < batches.length) {
+      const batchIndex = nextBatch++;
+      if (options.signal?.aborted) {
+        batchError = new DOMException('翻译已取消', 'AbortError');
+        return;
+      }
+      try {
+        await processBatch(batchIndex);
+      } catch (error) {
+        batchError ||= error;
+      }
+    }
+  }
+  // Two 24-block requests keep the bounded engine pool busy without flooding it.
+  await Promise.all(Array.from({ length: Math.min(2, batches.length) }, () => batchWorker()));
+  if (batchError) throw batchError;
+  return blocks.map((block) => {
+    const parts = output.filter((item) => String(item.sourceBlockId || item.id) === String(block.id));
+    const [combined] = combineTranslationParts([block], parts);
+    return combined || { ...block, text: '', sourceText: block.text, error: '正文片段翻译不完整，请重试' };
+  });
+}
+
+async function requestPlatformImageTranslation(context, image, options = {}) {
+  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  if (!readerToken) throw new Error('平台连接已失效，请重新连接');
+  const imageProvider = {
+    baseUrl: `${platformUrl}/api/reading`,
+    model: 'platform-reading-vision',
+    language: currentReadingLanguage(),
+    visionReady: true,
+  };
+  return translateImage(imageProvider, makeDocument(context), image, {
+    signal: options.signal,
+    fetchImageBytes: true,
+    requireImageBytes: true,
+    requestVision: async ({ imageDataUrl, userText, signal }) => {
+      const response = await fetch(`${platformUrl}/api/reading/translate-image`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${readerToken}`,
+        },
+        body: JSON.stringify({
+          imageDataUrl,
+          alt: String(image.alt || '').slice(0, 500),
+          title: String(context.title || '技术文章配图').slice(0, 300),
+          language: currentReadingLanguage(),
+          retry: userText.includes('上一轮没有返回可定位的文字区域'),
+        }),
+        signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) setPlatformConnected(false, '平台连接已失效，请重新连接');
+        throw new Error(payload.message || '平台视觉模型暂时不可用');
+      }
+      return payload;
+    },
+    requestText: async ({ userPrompt, signal }) => {
+      const [translated] = await requestPlatformTranslations(context, [{ id: `svg-${image.id}`, text: userPrompt }], { signal });
+      if (!translated?.text) throw new Error(translated?.error || 'SVG 图中文字翻译失败');
+      return { choices: [{ message: { content: translated.text } }] };
+    },
+  });
 }
 
 async function restoreCloudSession() {
@@ -1472,20 +1780,21 @@ async function saveSettings() {
     await testProvider(nextProvider);
     provider = await saveProvider(nextProvider);
     setStatus(true, `${provider.model} 已就绪`);
+    updateAiAvailabilityBanner();
     setNotice(provider.visionReady === false
       ? `模型连接成功；图片翻译不可用时会继续保留原图。${provider.visionError || '当前模型未通过视觉能力检查'}。API Key 只保存在此浏览器。`
       : '模型连接成功，文本与图片能力检查通过。API Key 只保存在此浏览器。', $('settings-notice'));
   } catch (error) {
     provider = null;
     setStatus(false, '连接失败');
+    updateAiAvailabilityBanner();
     setNotice(error instanceof Error ? error.message : '模型连接失败', $('settings-notice'));
   }
 }
 
 async function startFullTranslation() {
-  if (!providerReady(provider)) {
-    showSettings();
-    setNotice('先选择模型服务并填写 API Key。');
+  if (!textModelReady()) {
+    showModelSetupGuidance('全文翻译');
     return;
   }
   if (pageContext?.translationDetected && !window.confirm('检测到页面可能已有其他翻译插件。继续会在现有译文旁再次插入内容，是否仍要继续？')) {
@@ -1495,9 +1804,8 @@ async function startFullTranslation() {
   // Request image hosts while the button gesture is still active. A denial
   // must not block text translation; unreadable images remain visible as
   // explicit retry/authorization failures.
-  const imagePermission = requestImageOrigins((pageContext?.images || []).filter((image) => image.src));
-  const imagePermissionGranted = await imagePermission;
-  if (!imagePermissionGranted) setNotice('未获得部分图片站点权限；正文会继续翻译，图片可能需要授权后重试。');
+  const imagePermissionGranted = await requestImageOrigins((pageContext?.images || []).filter((image) => image.src && !image.dataUrl));
+  if (!imagePermissionGranted) setNotice('未获得部分图片站点权限；正文会继续翻译，相关图片可授权后重试。');
   translationRequested = true;
   fullTranslationEnabled = true;
   translationPaused = false;
@@ -1517,7 +1825,7 @@ async function startFullTranslation() {
   translationController?.abort();
   translationController = new AbortController();
   renderProgress();
-  setNotice('正在读取当前页面的正文和图片…');
+  setNotice(platformModeReady() ? '正在读取正文，随后交由调研平台 AI Engine 翻译…' : '正在读取当前页面的正文和图片…');
   sendToPage({ type: 'deep-research:request-full-document' });
 }
 
@@ -1543,9 +1851,8 @@ function cancelCurrentTranslation() {
 
 async function retryTranslationItem(item) {
   if (!item || retryingTranslationId || translationRunning) return;
-  if (!providerReady(provider)) {
-    showSettings();
-    setNotice('先配置模型后再重试。');
+  if (!textModelReady()) {
+    showModelSetupGuidance('翻译重试');
     return;
   }
   const context = documentContext || pageContext;
@@ -1561,14 +1868,21 @@ async function retryTranslationItem(item) {
     if (item.kind === 'text') {
       const block = (documentContext?.blocks || context.blocks || []).find((candidate) => candidate.id === item.id);
       if (!block) throw new Error('正文已变化，请重新开启全文翻译');
-      const [translated] = await translateBlocks(readingProvider(), document, [block], { signal: controller.signal });
+      const results = platformModeReady()
+        ? await requestPlatformTranslations(context, [block], { signal: controller.signal })
+        : await translateBlocks(readingProvider(), document, [block], { signal: controller.signal });
+      const [translated] = results;
       if (!translated?.text) throw new Error(translated?.error || '正文翻译结果为空');
       sendToPage({ type: 'deep-research:apply-translations', translations: [translated] });
       translatedTextIds.add(item.id);
     } else {
       const image = (documentContext?.images || context.images || []).find((candidate) => candidate.id === item.id);
       if (!image) throw new Error('图片已变化，请重新开启全文翻译');
-      const translated = await translateImage(readingProvider(), document, image, { signal: controller.signal, fetchImageBytes: true });
+      const permissionGranted = await requestImageOrigins(image.src && !image.dataUrl ? [image] : []);
+      if (!permissionGranted && !image.dataUrl) throw new Error('未获得图片站点权限；允许后可重试图片翻译。');
+      const translated = platformModeReady()
+        ? await requestPlatformImageTranslation(context, image, { signal: controller.signal })
+        : await translateImage(readingProvider(), document, image, { signal: controller.signal, fetchImageBytes: true });
       if (!translated.regions?.length && !translated.fallbackText && !translated.fallbackRegions?.length && !translated.noText && !translated.keptOriginal) throw new Error(translated.note || '图片没有可安全显示的译文');
       if (translated.regions?.length || translated.fallbackText || translated.fallbackRegions?.length) sendToPage({ type: 'deep-research:apply-image-translations', translations: [translated] });
       translatedImageIds.add(item.id);
@@ -1594,14 +1908,17 @@ async function retryTranslationItem(item) {
 async function processDocument(context, runId = activeTranslationRun) {
   if (!translationRequested || !translationRunning || runId !== activeTranslationRun) return;
   const job = activeJobRecord;
-  context = boundTaskContext({ ...context, targetLanguage: currentReadingLanguage() });
+  const usePlatform = platformModeReady();
+  context = boundTaskContext({ ...context, targetLanguage: currentReadingLanguage() }, { preserveAllBlocks: true });
   documentContext = context;
+  updatePageContextUi(context);
+  const coverageWarning = translationCoverageWarning(context);
 
   // Long-running translation belongs to the MV3 service worker. The side
   // panel is a disposable view: closing it must not abort an in-flight job.
   // If the worker cannot accept the task, retain the local fallback below so
   // a browser with an unusual extension runtime still remains usable.
-  if (job?.id && Number.isInteger(activeTabId)) {
+  if (!usePlatform && job?.id && Number.isInteger(activeTabId)) {
     try {
       const accepted = await chrome.runtime.sendMessage({
         type: 'deep-research:translation-start',
@@ -1645,9 +1962,11 @@ async function processDocument(context, runId = activeTranslationRun) {
   const imageLimitNotice = context.imageTruncated
     ? `图片超过处理上限，已列出 ${images.length}/${context.imageCandidateCount || images.length} 张，未处理部分已明确保留。`
     : '';
-  setNotice(`正文翻译会按块处理；图片无法翻译时保留原图并继续。${imageLimitNotice ? `\n${imageLimitNotice}` : ''}`);
+  setNotice(usePlatform
+    ? `正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。${coverageWarning ? `\n${coverageWarning}` : ''}${imageLimitNotice ? `\n${imageLimitNotice}` : ''}`
+    : `正文翻译会按块处理；图片无法翻译时保留原图并继续。${coverageWarning ? `\n${coverageWarning}` : ''}${imageLimitNotice ? `\n${imageLimitNotice}` : ''}`);
   try {
-    const translations = await translateBlocks(readingProvider(), document, translatableBlocks, {
+    const translationOptions = {
       signal: translationController.signal,
       // Apply each completed block immediately. Waiting for every paragraph
       // made a long page feel frozen even though the model was already
@@ -1662,7 +1981,10 @@ async function processDocument(context, runId = activeTranslationRun) {
         renderProgress(textDone, Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
         persistJobPatch(job, { textDone, textTotal: Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size) });
       },
-    });
+    };
+    const translations = usePlatform
+      ? await requestPlatformTranslations(context, translatableBlocks, translationOptions)
+      : await translateBlocks(readingProvider(), document, translatableBlocks, translationOptions);
     job.processedTextIds = mergeProcessedIds(processedTextIds, [
       ...translations.filter((item) => item.text || item.error).map((item) => item.id),
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
@@ -1677,15 +1999,17 @@ async function processDocument(context, runId = activeTranslationRun) {
     for (const image of images) {
       if (translationController.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
       try {
-        const translated = await translateImage(readingProvider(), document, image, { signal: translationController.signal, fetchImageBytes: true });
+        const translated = usePlatform
+          ? await requestPlatformImageTranslation(context, image, { signal: translationController.signal })
+          : await translateImage(readingProvider(), document, image, { signal: translationController.signal, fetchImageBytes: true });
         imageTranslations.push(translated);
       } catch (error) {
         imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : '图片翻译失败' });
       }
       imageDone += 1;
-      job.processedImageIds = mergeProcessedIds(processedImageIds, imageTranslations.map((item) => item.id).filter(Boolean));
-      renderProgress(textDone, Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), Math.max(Number(job?.imageDone) || 0, job.processedImageIds.length), Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size));
-      persistJobPatch(job, { imageDone: Math.max(Number(job?.imageDone) || 0, job.processedImageIds.length), imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size), processedImageIds: job.processedImageIds });
+      job.processedImageIds = mergeProcessedIds(processedImageIds, imageTranslations.filter((item) => !item.skipped).map((item) => item.id).filter(Boolean));
+      renderProgress(textDone, Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size));
+      persistJobPatch(job, { imageDone, imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size), processedImageIds: job.processedImageIds });
     }
     if (runId !== activeTranslationRun) return;
     const usableImageTranslations = imageTranslations.filter((item) => item.regions?.length || item.fallbackText || item.fallbackRegions?.length);
@@ -1714,19 +2038,21 @@ async function processDocument(context, runId = activeTranslationRun) {
     failedTranslationItems = mergeTranslationFailures(failedTranslationItems, currentFailures, resolvedIds);
     const imageWarnings = imageTranslations
       .filter((item) => item.noText || item.keptOriginal || (item.fallbackText && item.note) || item.sourceWarning)
-      .map((item) => `图片 ${item.id}: ${[item.sourceWarning, item.skipped ? '当前模型不可用，保留原图并继续' : '', item.noText ? '未发现可可靠读取的文字' : '', item.keptOriginal && !item.skipped ? '图片文字为技术标识符，保留原文' : '', item.note].filter(Boolean).join('；')}`);
+      .map((item) => `图片 ${item.id}: ${[item.sourceWarning, item.skipped ? '已跳过并保留原图' : '', item.noText ? '未发现可可靠读取的文字' : '', item.keptOriginal && !item.skipped ? '图片文字为技术标识符，保留原文' : '', item.note].filter(Boolean).join('；')}`);
     renderTranslationFailures();
     const failures = failedTranslationItems.map((item) => `${item.kind === 'image' ? '图片' : '正文'} ${item.id}: ${item.error}`);
     setNotice(failures.length
-      ? `翻译完成，但有 ${failures.length} 项需要重试。\n${[...failures, ...imageWarnings].slice(0, 5).join('\n')}`
+      ? `翻译完成，但有 ${failures.length} 项需要重试。\n${[...failures, coverageWarning, ...imageWarnings].filter(Boolean).slice(0, 5).join('\n')}`
       : imageWarnings.length
-        ? `全文翻译完成。${imageWarnings.slice(0, 3).join('\n')}`
-        : '全文翻译完成。可以滚动阅读，或选择一段文字继续追问。');
+        ? `${coverageWarning ? '已翻译可处理正文，未覆盖部分没有翻译。' : '全文翻译完成。'}${coverageWarning ? `\n${coverageWarning}` : ''}\n${imageWarnings.slice(0, 3).join('\n')}`
+        : coverageWarning
+          ? `已翻译可处理正文，未覆盖部分没有翻译。\n${coverageWarning}`
+          : '全文翻译完成。可以滚动阅读，或选择一段文字继续追问。');
     if (runId === activeTranslationRun) persistJobPatch(job, {
       status: failedTranslationItems.length ? 'completed_with_errors' : 'completed',
       textDone,
       textTotal: Math.max(Number(job?.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
-      imageDone: Math.max(Number(job?.imageDone) || 0, job.processedImageIds.length),
+      imageDone: Math.max(Number(job?.imageDone) || 0, imageDone),
       imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size),
       processedTextIds: job.processedTextIds,
       processedImageIds: job.processedImageIds,
@@ -1748,7 +2074,7 @@ async function processDocument(context, runId = activeTranslationRun) {
   }
 }
 
-const FULL_PAGE_SUMMARY_PROMPT = '请用四个编号小节总结整篇技术文章：1）文章解决的问题和核心结论；2）关键机制或架构；3）重要取舍、适用边界和失败条件；4）值得继续核对的原文证据。每节最多 3 个要点，总回答控制在 1200 个汉字以内；证据最多 4 条，每条引用不超过 160 个字符。只基于当前页面正文，不要把未出现在原文中的信息说成文章结论。';
+const FULL_PAGE_SUMMARY_PROMPT = '请总结整篇技术文章，并严格按 Markdown 输出四个独立小节，每个小节标题单独占一行，格式为“## 1. 核心结论”……“## 4. 值得继续核对”。小节 1 概括文章解决的问题和结论；小节 2 概括关键机制或架构；小节 3 概括重要取舍、适用边界和失败条件；小节 4 只列出最多 3 个简短、可检验的核对点，并在每项末尾用 [1]、[2] 引用下方原文证据编号。不要在回答正文粘贴长引文，不要重复证据卡内容。每节最多 3 个要点，总回答控制在 1000 个汉字以内；最多 4 条证据，每条原文短引不超过 140 字，claim 不超过 100 字。只基于当前页面正文，不要把未出现的信息说成文章结论。';
 const ARTICLE_MAP_PROMPT = '请把整篇技术文章整理成一张可导航的文章地图：列出文章主线、章节或主题之间的依赖关系、每一部分解决的问题，以及读者应该先读什么。只基于当前页面正文，无法确认的关系请明确标记。';
 const ARCHITECTURE_PROMPT = '请从技术实现角度分析整篇文章，重点说明组件、数据流、控制流、关键接口和原文中明确出现的实现线索；如果原文没有代码，不要生成完整实现，只列出可核对的实现问题、接口边界和推断。把原文明确内容、必要背景和 AI 推断分开。只基于当前页面正文。';
 const TRADEOFFS_PROMPT = '请审查整篇技术文章的风险与取舍：明确列出前提、收益、成本、失败条件、反例和需要继续核对的地方。不要把一般经验冒充原文结论，并为原文依据提供可定位的证据。';
@@ -1786,7 +2112,6 @@ function discussionUserLabel(scope, intent, question = '') {
 
 function revealDiscussion({ focusInput = false } = {}) {
   window.setTimeout(() => {
-    $('discussion-section')?.scrollIntoView({ behavior: 'auto', block: 'start' });
     if (focusInput) $('question-input')?.focus({ preventScroll: true });
   }, 0);
 }
@@ -1857,6 +2182,7 @@ async function handlePageAction(action) {
 
 async function explainOrAsk(question = '', scope = discussionScope, intent = discussionIntent) {
   interactionGeneration += 1;
+  const normalizedIntent = DISCUSSION_INTENTS.has(intent) ? intent : 'ask';
   const sourceContext = scope === 'page' || scope === 'image' ? (documentContext || pageContext) : selectionContext;
   const image = scope === 'image' ? imageContext?.image : null;
   if (!sourceContext || (scope === 'selection' && !sourceContext.selection?.quote) || (scope === 'image' && !image)) {
@@ -1870,13 +2196,28 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     setNotice('没有提取到可用于问答的正文。请重新加载页面，或先选择一段原文后提问。');
     return;
   }
-  if (scope === 'image' && !providerReady(provider)) {
-    showSettings();
-    setNotice('图片理解仍需要独立模式的视觉模型配置。');
+  if (scope === 'image' && readingMode === 'platform') {
+    setNotice('平台 AI Engine 暂未提供图示视觉理解接口。切换到独立模式并配置视觉模型后可继续。');
     return;
   }
-  if (!platformModeReady() && !providerReady(provider)) { showSettings(); setNotice('先配置模型后再解读。'); return; }
-  const normalizedIntent = DISCUSSION_INTENTS.has(intent) ? intent : 'ask';
+  if (scope === 'image' && !providerReady(provider)) {
+    showModelSetupGuidance('图示解读');
+    return;
+  }
+  if (!textModelReady()) {
+    const setupAction = scope === 'selection'
+      ? normalizedIntent === 'ask' ? '选段问答'
+        : normalizedIntent === 'translate' ? '选段翻译'
+          : normalizedIntent === 'selection-summary' ? '选段总结' : '选段解读'
+      : normalizedIntent === 'summary' ? '全文总结'
+        : normalizedIntent === 'map' ? '文章地图'
+          : normalizedIntent === 'architecture' ? '关键机制分析'
+            : normalizedIntent === 'tradeoffs' ? '风险与取舍分析'
+              : normalizedIntent === 'translate' ? '全文翻译'
+                : normalizedIntent === 'ask' ? '整页问答' : '整页解读';
+    showModelSetupGuidance(setupAction);
+    return;
+  }
   discussionScope = scope;
   discussionIntent = normalizedIntent;
   discussionOpen = true;
@@ -1899,8 +2240,17 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     const requestPrompt = question || intentPrompt;
     const result = scope !== 'image' && platformModeReady()
       ? await requestPlatformAnswer(sourceContext, requestPrompt, scope, {
-        action: !question && normalizedIntent === 'explain' ? 'explain' : 'ask',
+        action: !question && normalizedIntent === 'explain'
+          ? 'explain'
+          : !question && normalizedIntent === 'translate'
+            ? 'translate'
+            : 'ask',
         signal: discussionController.signal,
+        onProgress: (done, total, phase) => {
+          $('answer-output').textContent = phase === 'merging'
+            ? '全文已逐块检查，正在汇总证据…'
+            : `正在阅读全文并核对证据（${done}/${total}）…`;
+        },
         onDelta: (delta) => {
           streamBuffer += delta;
           $('answer-output').textContent = streamBuffer || '正在通过调研平台核对原文证据…';
@@ -1921,6 +2271,11 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
         // answer short in the prompt, but leave enough budget for that
         // envelope to arrive intact.
         maxTokens: normalizedIntent === 'summary' ? 6000 : 5000,
+        onProgress: (done, total, phase) => {
+          $('answer-output').textContent = phase === 'merging'
+            ? '全文已逐块检查，正在汇总证据…'
+            : `正在阅读全文并核对证据（${done}/${total}）…`;
+        },
         onDelta: (delta) => {
           streamBuffer += delta;
           $('answer-output').textContent = streamAnswerPreview(streamBuffer) || '正在整理回答、原文证据和适用边界…';
@@ -1939,6 +2294,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     renderConversation();
     renderStructuredAnswer(latestStructuredAnswer);
     show($('answer-output'), false);
+    revealLatestAnswerDetails();
     saveLocalSession();
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -2000,9 +2356,10 @@ async function confirmAnnotation() {
     note,
   });
   editingAnnotation = null;
+  pendingAnnotationHighlightId = saved.id;
   sendToPage({ type: 'deep-research:apply-annotation', annotation: saved });
   showReading();
-  setNotice('已保存标注，并在原文中高亮。');
+  setNotice('标注已保存，正在原文中定位高亮。');
   await updateLibrary();
 }
 
@@ -2025,6 +2382,13 @@ function openSaveDialog(insight = null) {
   show($('settings-view'), false);
   show(ensureAnnotationDialog(), false);
   show(dialog, true);
+  const destination = platformModeReady()
+    ? '确认后保存到调研平台研究库。'
+    : readingMode === 'platform'
+      ? '平台尚未连接，本次会保存在浏览器本地。'
+      : '独立模式下保存在浏览器本地。';
+  $('save-mode-note').textContent = `保存为可检索的阅读结论卡：原文摘录、笔记、AI 结论和标签；不会在原文添加高亮。${destination}`;
+  $('confirm-save').textContent = platformModeReady() ? '保存到调研平台' : '保存到本地阅读库';
   $('save-source-title').textContent = source.title || source.document?.title || '当前页面';
   $('save-quote').value = source.quote || '';
   $('save-note').value = source.note || '';
@@ -2072,6 +2436,7 @@ async function confirmSaveInsight() {
         : undefined,
   });
   lastSavedInsight = saved;
+  insightSyncFailed = false;
   editingInsight = null;
   pendingInsightSource = null;
   // The token in local storage is the durable source of truth.  The callback
@@ -2081,7 +2446,7 @@ async function confirmSaveInsight() {
   const stored = await chrome.storage.local.get(['readerToken']);
   if (stored.readerToken && !platformConnected) setPlatformConnected(true, `已连接 · ${platformUrl}`);
   showReading();
-  show($('sync-selection'), Boolean(stored.readerToken) || platformConnected);
+  show($('sync-selection'), false);
   if (platformModeReady()) {
     await syncInsight(saved);
   } else {
@@ -2162,8 +2527,8 @@ async function activateCurrentPage() {
 }
 
 function handleEmptyPrimary() {
-  if (!providerReady(provider) && !platformModeReady()) {
-    showSettings();
+  if (!textModelReady()) {
+    showModelSetupGuidance(readingMode === 'platform' ? '平台 AI' : '阅读');
     return;
   }
   void activateCurrentPage();
@@ -2171,6 +2536,20 @@ function handleEmptyPrimary() {
 
 function showSettings() {
   show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), false); applyProviderFields(); updateReadingModeUi();
+}
+
+function showModelSetupGuidance(action) {
+  showSettings();
+  const guidance = $('mode-guidance');
+  if (!guidance) return;
+  const nextStep = readingMode === 'platform'
+    ? platformConnected
+      ? '平台已连接，请返回阅读后重试。'
+      : '连接调研平台并完成登录；无需配置本地模型。'
+    : '填写下方的模型服务、模型名称和 API Key，或切换到平台模式并连接调研平台。';
+  guidance.textContent = `${action}尚未开始。${nextStep}`;
+  guidance.classList.add('is-warning');
+  show(guidance, true);
 }
 
 function showReading() {
@@ -2264,19 +2643,40 @@ chrome.runtime.onMessage.addListener((message) => {
       documentContext = null;
       imageContext = null;
       selectionContext = null;
-      latestAnswer = '';
-      latestStructuredAnswer = null;
-      discussionHistory = [];
-      discussionScope = 'page';
-      discussionIntent = 'ask';
-      discussionOpen = false;
-      activeSessionTitle = '';
+      if (documentChanged) {
+        latestAnswer = '';
+        latestStructuredAnswer = null;
+        discussionHistory = [];
+        discussionScope = 'page';
+        discussionIntent = 'ask';
+        discussionOpen = false;
+        activeSessionTitle = '';
+      } else if (contentChanged) {
+        const scopeChanged = discussionScope !== 'page';
+        if (scopeChanged) {
+          discussionScope = 'page';
+          discussionIntent = 'ask';
+        }
+        if (latestStructuredAnswer) {
+          latestStructuredAnswer = {
+            ...latestStructuredAnswer,
+            evidence: [],
+            warnings: [
+              ...(Array.isArray(latestStructuredAnswer.warnings) ? latestStructuredAnswer.warnings : []),
+              '页面内容已更新，旧引文定位已撤销。',
+            ],
+          };
+        }
+        discussionController?.abort();
+        setNotice(scopeChanged
+          ? '页面内容已变化；聊天记录已保留，旧引文定位已撤销，讨论范围已切换到整页。'
+          : '页面内容已变化；聊天记录已保留，旧引文定位已撤销。');
+      }
       if (documentChanged || contentChanged) resumedUrls.delete(message.context.url);
       failedTranslationItems = [];
       translatedTextIds.clear();
       translatedImageIds.clear();
       if (documentChanged) setNotice('页面已切换，旧的证据和讨论已清除。请在新页面重新开始。');
-      else if (contentChanged) setNotice('页面内容已变化，旧的证据和讨论已失效；请重新选择原文。');
     }
     applyRadarEntryContext(pageContext);
     renderPage(); setPlatformConnected(platformConnected); void applyAnnotationsForContext(pageContext);
@@ -2286,7 +2686,7 @@ chrome.runtime.onMessage.addListener((message) => {
     const contextForResume = pageContext;
     const interactionAtResumeStart = interactionGeneration;
     void (async () => {
-      await resumeSession(contextForResume);
+      if (!contentChanged) await resumeSession(contextForResume);
       if (interactionAtResumeStart !== interactionGeneration || contextForResume !== pageContext) return;
       saveLocalSession();
       await findPendingTranslation(contextForResume);
@@ -2296,11 +2696,11 @@ chrome.runtime.onMessage.addListener((message) => {
     // `translations-restored` event below is the single hand-off point that
     // starts the replacement job; doing it here as well creates a race where
     // the restore event cancels the just-started request.
-    if (contentChanged && fullTranslationEnabled && !translationPaused && providerReady(provider)) {
+    if (contentChanged && fullTranslationEnabled && !translationPaused && textModelReady()) {
       translationRequested = true;
       return;
     }
-    if (fullTranslationEnabled && !translationPaused && !translationRunning && providerReady(provider) && Array.isArray(pageContext.blocks)) {
+    if (fullTranslationEnabled && !translationPaused && !translationRunning && textModelReady() && Array.isArray(pageContext.blocks)) {
       const pendingBlocks = pageContext.blocks.filter((block) => !translatedTextIds.has(block.id) && !pageContext.translatedBlockIds?.includes(block.id));
       const pendingImages = (pageContext.images || []).filter((image) => !translatedImageIds.has(image.id) && !pageContext.translatedImageIds?.includes(image.id));
       if (pendingBlocks.length || pendingImages.length) {
@@ -2390,7 +2790,7 @@ chrome.runtime.onMessage.addListener((message) => {
   }
   if (message.type === 'deep-research:selection-action') {
     if (message.action === 'translate' && selectionContext) {
-      if (!providerReady(provider)) { showSettings(); setNotice('先配置模型后再翻译。'); return; }
+      if (!textModelReady()) { showModelSetupGuidance('选段翻译'); return; }
       translationRequested = true;
       fullTranslationEnabled = false;
       translationRunning = true;
@@ -2423,7 +2823,7 @@ chrome.runtime.onMessage.addListener((message) => {
       fullTranslationEnabled
       && translationRequested
       && !translationPaused
-      && providerReady(provider)
+      && textModelReady()
       && pageContext?.url,
     );
     activeTranslationRun += 1;
@@ -2450,7 +2850,14 @@ chrome.runtime.onMessage.addListener((message) => {
     setNotice('已回到原文证据。');
   }
   if (message.type === 'deep-research:annotation-unresolved') {
-    setNotice(message.reason || '原文已变化，标注没有错误高亮。');
+    if (!pendingAnnotationHighlightId || message.id === pendingAnnotationHighlightId) {
+      setNotice(message.reason || '原文已变化，标注已保存，但没有高亮到不匹配的位置。');
+      pendingAnnotationHighlightId = null;
+    }
+  }
+  if (message.type === 'deep-research:annotation-resolved' && message.id === pendingAnnotationHighlightId) {
+    setNotice('标注已保存，并已在原文高亮。');
+    pendingAnnotationHighlightId = null;
   }
 });
 
@@ -2465,6 +2872,7 @@ async function init() {
   $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
+  $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? '平台 AI' : '阅读'));
   $('provider-kind')?.addEventListener('change', () => updateProviderForm());
   $('translation-language')?.addEventListener('change', async (event) => {
     targetLanguage = event.target.value;
@@ -2476,18 +2884,10 @@ async function init() {
   $('explain-selection').addEventListener('click', () => void explainOrAsk('', 'selection', 'explain'));
   $('translate-selection')?.addEventListener('click', () => void explainOrAsk('', 'selection', 'translate'));
   $('ask-selection').addEventListener('click', () => openDiscussion('selection', 'ask'));
-  $('ask-page').addEventListener('click', () => {
-    if (!documentContext && !pageContext) {
-      setNotice('当前页面正文还没有提取完成。');
-      return;
-    }
-    openDiscussion('page', 'ask');
-  });
   $('annotate-selection').addEventListener('click', () => void openAnnotationDialog());
   $('save-selection').addEventListener('click', () => void saveInsight());
   $('save-answer')?.addEventListener('click', () => void openSaveDialog());
   $('return-answer')?.addEventListener('click', returnLatestAnswerToSource);
-  $('open-chat')?.addEventListener('click', () => openDiscussion('page', 'ask'));
   $('open-page-chat')?.addEventListener('click', () => openDiscussion('page', 'ask'));
   $('open-history-inline')?.addEventListener('click', () => void openHistoryPage());
   $('scope-page')?.addEventListener('click', () => setDiscussionScope('page'));

@@ -196,10 +196,10 @@ function HistoryTable({ items, rerunning, onRerun }: {
                 <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
               </div>
               {inFlight && item.currentStep ? (
-                <p className="mt-2 pl-6 text-[11px] text-muted-foreground">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</p>
+                <p className="mt-2 pl-6 text-xs text-muted-foreground">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</p>
               ) : null}
               <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
-                <span className="text-[11px] text-muted-foreground">{relativeTime(item.createdAt)}</span>
+                <span className="text-xs text-muted-foreground">{relativeTime(item.createdAt)}</span>
                 <HistoryActions item={item} rerunning={rerunning} onRerun={onRerun} />
               </div>
             </article>
@@ -240,7 +240,7 @@ function HistoryTable({ items, rerunning, onRerun }: {
                     <div className="space-y-1">
                       <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
                       {inFlight && item.currentStep ? (
-                        <p className="text-[11px] text-muted-foreground">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</p>
+                        <p className="text-xs text-muted-foreground">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</p>
                       ) : null}
                     </div>
                   </TableCell>

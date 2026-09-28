@@ -1,6 +1,6 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,8 @@
     "e2e:controls": "node e2e/controls.mjs",
     "e2e:conversation-history": "node e2e/conversation-history.mjs",
     "e2e:visual": "node e2e/sidepanel-visual.mjs",
+    "e2e:answer-rendering": "node e2e/answer-rendering.mjs",
+    "e2e:full-page-translation": "node e2e/full-page-translation.mjs",
     "e2e:radar-flow": "node e2e/radar-reader-flow.mjs",
     "e2e:image-position": "node e2e/image-position.mjs",
     "e2e:dynamic-failure": "node e2e/dynamic-failure.mjs",

@@ -43,7 +43,10 @@ describe('POST /api/reading/answer/stream', () => {
     const upstream = [
       'event: meta\ndata: {"operation":"ask","streaming":true}\n\n',
       'event: delta\ndata: {"text":"答案"}\n\n',
-      'event: done\ndata: {"suggestion":"答案"}\n\n',
+      `event: done\ndata: ${JSON.stringify({
+        suggestion: '答案 [1]',
+        reading: { answer: '答案 [1]', evidence: [{ quote, claim: '说明限制' }] },
+      })}\n\n`,
     ].join('');
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(upstream, {
       status: 200,
@@ -61,6 +64,13 @@ describe('POST /api/reading/answer/stream', () => {
     const streamText = await response.text();
     expect(streamText).toContain('event: delta');
     expect(streamText).toContain('"citations"');
+    const doneData = streamText.match(/event: done\ndata: (.+)\n/u)?.[1];
+    const done = JSON.parse(doneData || '{}');
+    expect(done.reading.evidence[0]).toMatchObject({
+      quote,
+      url: 'https://example.com/docs',
+      anchor: { quote, startOffset, endOffset: startOffset + quote.length },
+    });
     expect(fetchMock).toHaveBeenCalledWith('http://ai.test/api/ai/research-assistant/stream', expect.objectContaining({
       method: 'POST',
       body: expect.stringContaining('"operation":"ask"'),

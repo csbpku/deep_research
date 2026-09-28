@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
 
+from ai_engine.radar import distilled_scorer
 from ai_engine.radar.distilled_scorer import (
     DIMENSIONS,
     DIM_NAMES,
@@ -230,8 +232,8 @@ def test_user_prompt_meta_includes_domain_published_current() -> None:
     assert "2026-07-30" in prompt
 
 
-def test_version_string_is_v4_8() -> None:
-    assert DISTILLED_VERSION == "4.8"
+def test_version_string_is_v5_0() -> None:
+    assert DISTILLED_VERSION == "5.0"
 
 
 def test_scoring_content_skips_client_side_docs_shell() -> None:
@@ -631,9 +633,10 @@ def test_compute_score_midrange() -> None:
             "信息增量": 2, "分析深度": 2, "可行动性": 1,
             "事实可信度": 2, "时效性": 2, "表达质量": 1, "综合信号": 1,
             "weak_point": "可行动性不足",
+            "weak_point_evidence": "文章没有可执行步骤",
         }
     )
-    result = compute_score(parsed)
+    result = compute_score(parsed, evidence_text="文章没有可执行步骤，只有原则性建议。")
     # engineering: 2*25/3 + 2*20/3 + 1*25/3 + 2*10/3 + 2*10/3 + 1*5/3 + 1*5/3
     # = 16.67 + 13.33 + 8.33 + 6.67 + 6.67 + 1.67 + 1.67 = 55.0
     assert 54 <= result.total <= 56
@@ -803,7 +806,7 @@ def test_unknown_keys_are_ignored() -> None:
     assert all(v == 0 for v in result.dimension_scores.values())
 
 
-def test_weak_point_auto_generated_when_empty() -> None:
+def test_weak_point_without_source_evidence_is_omitted() -> None:
     parsed = _all_zero_parsed(
         **{
             "信息增量": 3, "分析深度": 3, "可行动性": 1,
@@ -812,7 +815,8 @@ def test_weak_point_auto_generated_when_empty() -> None:
         }
     )
     result = compute_score(parsed)
-    assert "可行动性" in result.weak_point
+    assert result.weak_point == ""
+    assert result.weak_point_evidence == ""
 
 
 def test_generic_readme_length_weak_point_is_suppressed() -> None:
@@ -826,9 +830,13 @@ def test_generic_readme_length_weak_point_is_suppressed() -> None:
             "表达质量": 2,
             "综合信号": 2,
             "weak_point": "README极长，安全/操作/编辑器配置段落存在重复冗余",
+            "weak_point_evidence": "README covers security, operations, and editor setup",
         }
     )
-    result = compute_score(parsed)
+    result = compute_score(
+        parsed,
+        evidence_text="README covers security, operations, and editor setup.",
+    )
     assert result.weak_point == ""
 
 
@@ -843,10 +851,35 @@ def test_weak_point_keeps_concrete_low_dimension_reason() -> None:
             "表达质量": 2,
             "综合信号": 2,
             "weak_point": "缺少可复现的超时与重试配置",
+            "weak_point_evidence": "重试策略未包含超时与重试配置",
         }
     )
-    result = compute_score(parsed)
+    result = compute_score(
+        parsed,
+        evidence_text="重试策略未包含超时与重试配置，其他内容略。",
+    )
     assert result.weak_point == "缺少可复现的超时与重试配置"
+    assert result.weak_point_evidence == "重试策略未包含超时与重试配置"
+    assert result.to_dict()["weakPointEvidence"] == "重试策略未包含超时与重试配置"
+
+
+def test_weak_point_is_omitted_when_quoted_evidence_is_not_in_source() -> None:
+    parsed = _all_zero_parsed(
+        **{
+            "信息增量": 2,
+            "分析深度": 2,
+            "可行动性": 1,
+            "事实可信度": 2,
+            "时效性": 2,
+            "表达质量": 2,
+            "综合信号": 2,
+            "weak_point": "缺少可复现的超时与重试配置",
+            "weak_point_evidence": "重试策略未包含超时与重试配置",
+        }
+    )
+    result = compute_score(parsed, evidence_text="文章仅讨论请求去重，没有重试章节。")
+    assert result.weak_point == ""
+    assert result.weak_point_evidence == ""
 
 
 # ── default_score / score_with_llm ────────────────────────────────
@@ -858,6 +891,7 @@ def test_default_score() -> None:
     assert result.tier_score == 0.0
     assert result.tier == TIER_NOISE
     assert result.is_default is True
+    assert result.weak_point == ""
     assert all(v == 0 for v in result.dimension_scores.values())
     assert result.profile_id == PROFILE_ENGINEERING
 
@@ -932,6 +966,53 @@ async def test_anthropic_scorer_substitutes_placeholder_for_empty_key(
     assert captured["api_key"] == "sk-placeholder-for-anthropic-compatible-proxy"
     assert captured["base_url"] == "http://127.0.0.1:15721"
     assert '"信息增量": 2' in raw
+
+
+async def test_anthropic_scorer_maps_every_long_document_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UTILITY_LLM", "anthropic:test-model")
+    monkeypatch.setattr(distilled_scorer, "SCORING_CHUNK_TOKEN_BUDGET", 1_000)
+    prompts: list[str] = []
+
+    class Result:
+        input_tokens = 10
+        output_tokens = 5
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    async def fake_generate_text(**kwargs: object) -> Result:
+        prompt = str(kwargs["user_prompt"])
+        prompts.append(prompt)
+        chunk = re.search(r"当前分块：(\d+)/(\d+)", prompt)
+        if chunk:
+            return Result(json.dumps({
+                "coverage": f"覆盖区块 {chunk.group(1)}",
+                "evidence": [],
+                "risk_signals": [],
+                "repost_signal": "",
+            }, ensure_ascii=False))
+        return Result(json.dumps(_all_max_parsed(), ensure_ascii=False))
+
+    monkeypatch.setattr("ai_engine.llm.client.generate_text", fake_generate_text)
+    content = "\n\n".join(
+        f"## Section {section}\n\n"
+        + ("Concrete methods, measured results, limitations, and deployment facts.\n\n" * 300)
+        for section in range(1, 4)
+    )
+
+    response = await anthropic_scorer("Long source", content)
+
+    chunk_prompts = [prompt for prompt in prompts if "当前分块：" in prompt]
+    assert len(chunk_prompts) > 3
+    match = re.search(r"当前分块：1/(\d+)", chunk_prompts[0])
+    assert match is not None
+    total_chunks = int(match.group(1))
+    assert len(chunk_prompts) == total_chunks
+    final_prompt = prompts[-1]
+    assert all(f"覆盖区块 {index}" in final_prompt for index in range(1, total_chunks + 1))
+    assert '"信息增量"' in response
 
 
 async def test_score_with_llm_custom_scorer() -> None:

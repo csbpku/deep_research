@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   researchCreate: vi.fn(),
   researchSourceCreate: vi.fn(),
   researchAuditCreate: vi.fn(),
+  indexTaskUpsert: vi.fn(),
   transaction: vi.fn(),
 }));
 
@@ -92,6 +93,7 @@ beforeEach(() => {
     research: { create: mocks.researchCreate },
     researchSource: { create: mocks.researchSourceCreate },
     researchAudit: { create: mocks.researchAuditCreate },
+    personalKnowledgeIndexTask: { upsert: mocks.indexTaskUpsert },
   }));
 });
 
@@ -100,7 +102,11 @@ describe('explicit knowledge-card flow', () => {
     const response = await derivePost(new Request('http://localhost/api/knowledge/derive', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sourceKind: 'research_chat', messageId: MESSAGE_ID }),
+      body: JSON.stringify({
+        sourceKind: 'research_chat',
+        messageId: MESSAGE_ID,
+        selectedText: '可以复用的判断。',
+      }),
     }) as never);
 
     expect(response.status).toBe(200);
@@ -115,7 +121,7 @@ describe('explicit knowledge-card flow', () => {
       retry: false,
       body: expect.objectContaining({
         operation: 'knowledge_card',
-        body: '回答中包含可以复用的判断。',
+        body: '可以复用的判断。',
         sources: [expect.objectContaining({ canonicalKey: 'https://example.com/evidence' })],
       }),
     }));
@@ -127,7 +133,7 @@ describe('explicit knowledge-card flow', () => {
     const response = await derivePost(new Request('http://localhost/api/knowledge/derive', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sourceKind: 'research_chat', messageId: MESSAGE_ID }),
+        body: JSON.stringify({ sourceKind: 'research_chat', messageId: MESSAGE_ID, selectedText: '可以复用的判断。' }),
     }) as never);
 
     expect(response.status).toBe(403);
@@ -141,6 +147,7 @@ describe('explicit knowledge-card flow', () => {
       body: JSON.stringify({
         sourceKind: 'research_chat',
         messageId: MESSAGE_ID,
+        selectedText: '可以复用的判断。',
         title: 'RAG 的检索边界',
         body: '先明确检索范围，再用来源证据约束生成结果。',
         conclusion: '知识卡片应保留适用边界。',
@@ -153,7 +160,7 @@ describe('explicit knowledge-card flow', () => {
     expect(mocks.researchCreate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         type: 'knowledge',
-        status: 'published',
+        status: 'draft',
         creationMethod: 'ai_research',
         aiAssisted: true,
         originContentSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
@@ -169,6 +176,13 @@ describe('explicit knowledge-card flow', () => {
       data: expect.objectContaining({
         action: 'create',
         diff: expect.objectContaining({ sourceMessageId: MESSAGE_ID }),
+      }),
+    }));
+    expect(mocks.indexTaskUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        ownerId: USER.id,
+        researchId: '44444444-4444-4444-8444-444444444444',
+        operation: 'upsert',
       }),
     }));
   });

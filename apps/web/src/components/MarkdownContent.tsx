@@ -80,7 +80,7 @@ function ReferenceLink({
           role="tooltip"
           className="absolute bottom-full left-1/2 z-50 mb-2 w-72 -translate-x-1/2 rounded-md border border-border bg-popover px-3 py-2 text-left text-xs font-normal leading-5 text-popover-foreground shadow-lg"
         >
-          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">{label}</span>
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-primary">{label}</span>
           {preview}
         </span>
       ) : null}
@@ -291,7 +291,7 @@ const components: Components = {
   // 宽表格需要独立的横向滚动容器，否则会顶破 760px 量度。
   table: ({ children }) => (
     <div className="my-3 overflow-x-auto" role="region" aria-label="可横向滚动的表格" tabIndex={0}>
-      <p className="mb-1 whitespace-nowrap text-[11px] text-muted-foreground">表格可左右滑动查看</p>
+      <p className="mb-1 whitespace-nowrap text-xs text-muted-foreground">表格可左右滑动查看</p>
       <table>{children}</table>
     </div>
   ),

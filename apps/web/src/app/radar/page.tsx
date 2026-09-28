@@ -6,7 +6,7 @@
 //  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
 //  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（核心材料 / 推荐精读 / 速览）
 //  - 分页（Pagination domain component）
-//  - 列表卡点击跳转详情（详情页有 AskAiDrawer）
+//  - 标题在列表内打开文章概览；独立详情页仍支持直达和新标签页阅读
 
 import { useQueries, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -59,6 +59,7 @@ import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { useCurrentUser } from '@/lib/auth/client';
+import { useMediaQuery } from '@/lib/hooks/use-media-query';
 import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 import { cn } from '@/lib/utils';
 
@@ -146,9 +147,9 @@ function radarUrlParams(state: RadarUrlState): URLSearchParams {
   if (state.selectedId) params.set('open', state.selectedId);
   return params;
 }
-// Include skim because browser-reading candidates intentionally carry only
-// source metadata until a user opens the original page in the extension.
-const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read', 'skim'];
+// Keep the default stream focused on readable material; skim remains opt-in
+// for users who want to browse browser-reading candidates.
+const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read'];
 
 const DATE_OPTIONS = [
   { value: 'all', label: '全部时间' },
@@ -234,7 +235,7 @@ function RadarMultiSelect({
   const valueLabel = selectedLabels.length > 0 ? selectedLabels.join('、') : allLabel;
 
   return (
-    <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+    <div className="flex w-full min-w-0 items-center justify-between gap-2 text-sm text-muted-foreground xl:w-auto xl:justify-start">
       <span className="shrink-0">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -244,7 +245,7 @@ function RadarMultiSelect({
             size="sm"
             aria-label={ariaLabel}
             title={valueLabel}
-            className="h-9 min-w-36 max-w-64 justify-between gap-2 font-normal"
+            className="h-11 min-h-11 min-w-36 max-w-64 justify-between gap-2 font-normal xl:h-9 xl:min-h-0"
           >
             <span className="truncate text-foreground">{valueLabel}</span>
             <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -383,8 +384,12 @@ export default function RadarPage() {
     (total, { query }) => total + (query.data?.total ?? 0),
     0,
   );
+  const resultCountLabel = view === 'ranked'
+    ? query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : null
+    : groupedIsFetching ? '加载中…' : `共 ${groupedTotal} 条`;
   const items = query.data?.items ?? [];
   const selectedId = searchParams.get('open');
+  const isDesktop = useMediaQuery('(min-width: 1024px)');
   const availableItems = view === 'ranked'
     ? items
     : visibleGroupEntries.flatMap(({ items: groupItems }) => groupItems);
@@ -412,6 +417,13 @@ export default function RadarPage() {
   const qualityLabel = quality.length > 0
     ? QUALITY_OPTIONS.filter((option) => quality.includes(option.value)).map((option) => option.label).join('、')
     : '全部阅读等级';
+  const sourceSummary = sourceTypes.length === 0
+    ? '全部来源'
+    : sourceTypes.length === 1
+      ? SOURCE_TYPE_OPTIONS.find((option) => option.value === sourceTypes[0])?.label ?? '1 个来源'
+      : `${sourceTypes.length} 个来源`;
+  const qualitySummary = quality.length === QUALITY_OPTIONS.length ? '全部等级' : qualityLabel;
+  const mobileFilterSummary = `${dateLabel} · ${sourceSummary} · ${qualitySummary}`;
   const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view, selectedId };
   const replaceUrlState = (patch: Partial<RadarUrlState>) => {
     const next = { ...currentUrlState, ...patch };
@@ -454,6 +466,26 @@ export default function RadarPage() {
   };
   const openPreview = (summaryId: string) => replaceUrlState({ selectedId: summaryId });
   const closePreview = () => replaceUrlState({ selectedId: null });
+  const previewContent = previewQuery.isLoading && !previewQuery.data ? (
+    <aside className="flex h-full min-h-[26rem] items-center justify-center border border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 text-sm text-[var(--ink-muted)]">
+      正在准备文章概览…
+    </aside>
+  ) : previewQuery.isError && !previewQuery.data ? (
+    <aside className="h-full min-h-[26rem] border border-[var(--ink-rule)] bg-[var(--ink-page)] p-5" role="alert">
+      <p className="text-sm font-semibold text-[var(--ink-text)]">文章概览加载失败</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">{String((previewQuery.error as Error).message)}</p>
+      <div className="mt-4 flex items-center gap-3">
+        <button type="button" onClick={() => void previewQuery.refetch()} className="text-xs font-semibold text-[var(--ink-accent)] hover:underline">重试</button>
+        <button type="button" onClick={closePreview} className="text-xs text-[var(--ink-muted)] hover:text-[var(--ink-text)]">关闭</button>
+      </div>
+    </aside>
+  ) : previewQuery.data ? (
+    <RadarPreviewPanel
+      detail={previewQuery.data}
+      onClose={closePreview}
+      className="h-full border-0 shadow-none"
+    />
+  ) : null;
 
   return (
     <div className="mx-auto min-w-0 max-w-shell">
@@ -469,13 +501,13 @@ export default function RadarPage() {
                 variant={view === 'ranked' ? 'default' : 'ghost'}
                 size="sm"
                 className={view === 'ranked' ? 'shadow-sm' : 'text-muted-foreground'}
-                title="按推荐程度统一排序"
-                aria-label="推荐先看"
+                title="按分层评分从高到低排序；阅读等级表示当前可直接阅读的内容深度"
+                aria-label="推荐排序"
                 aria-pressed={view === 'ranked'}
                 onClick={() => { setView('ranked'); replaceUrlState({ view: 'ranked', page: 1 }); }}
               >
                 <ListOrdered className="size-3.5" />
-                推荐先看
+                推荐排序
               </Button>
               <Button
                 type="button"
@@ -498,14 +530,10 @@ export default function RadarPage() {
 
       <FilterBar
         onSubmit={submitSearch}
-        className="hidden sm:flex"
+        className="hidden xl:flex"
         trailing={
           <div className="flex items-center gap-2">
-            <span>
-              {view === 'ranked'
-                ? query.isFetching ? '加载中…' : query.data ? `共 ${query.data.total} 条` : null
-                : groupedIsFetching ? '加载中…' : `共 ${groupedTotal} 条`}
-            </span>
+            <span>{resultCountLabel}</span>
             <Button
               type="button"
               variant="ghost"
@@ -597,7 +625,7 @@ export default function RadarPage() {
         </Button>
       </FilterBar>
 
-      <div className="mb-3 space-y-2 sm:hidden">
+      <div className="mb-3 space-y-2 xl:hidden">
         <form onSubmit={submitSearch} className="flex items-center gap-2">
           <Input
             type="search"
@@ -605,19 +633,20 @@ export default function RadarPage() {
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="搜索标题、解读或标签"
             aria-label="搜索雷达内容"
-            className="h-10 min-w-0 flex-1"
+            className="h-11 min-w-0 flex-1"
           />
-          <Button type="submit" size="icon" className="size-10 shrink-0" aria-label="搜索雷达内容">
+          <Button type="submit" size="icon" className="size-11 shrink-0" aria-label="搜索雷达内容">
             <Search />
           </Button>
         </form>
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <p className="min-w-0 truncate">
-            {view === 'ranked' ? '推荐先看' : '按来源浏览'} · {dateLabel} · {qualityLabel}
+          <p className="min-w-0 flex-1 truncate" title={mobileFilterSummary}>
+            {mobileFilterSummary}
           </p>
+          <span className="hidden shrink-0 tabular-nums sm:inline">{resultCountLabel}</span>
           <Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
             <SheetTrigger asChild>
-              <Button type="button" variant="outline" size="sm" className="h-9 shrink-0">
+              <Button type="button" variant="outline" size="sm" className="h-11 shrink-0">
                 <SlidersHorizontal />
                 筛选
               </Button>
@@ -625,7 +654,7 @@ export default function RadarPage() {
             <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto px-4 pb-6">
               <SheetHeader className="px-0">
                 <SheetTitle>筛选雷达内容</SheetTitle>
-                <SheetDescription>调整后立即更新结果，也可以随时重置。</SheetDescription>
+                <SheetDescription className="sr-only">阅读等级、入库时间和来源筛选会立即更新结果。</SheetDescription>
               </SheetHeader>
               <div className="mt-5 grid gap-4">
                 <RadarMultiSelect
@@ -646,7 +675,7 @@ export default function RadarPage() {
                     value={dateRange}
                     onValueChange={(v) => { const nextDateRange = v as DateRange; setDateRange(nextDateRange); setPage(1); replaceUrlState({ dateRange: nextDateRange, page: 1 }); }}
                   >
-                    <SelectTrigger className="w-36" aria-label="入库时间筛选">
+                    <SelectTrigger className="h-11 w-36" aria-label="入库时间筛选">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -675,7 +704,7 @@ export default function RadarPage() {
                       value={String(perPage)}
                       onValueChange={(v) => { const nextPerPage = v === 'all' ? 'all' : Number(v) as PageSize; setPerPage(nextPerPage); setPage(1); replaceUrlState({ perPage: nextPerPage, page: 1 }); }}
                     >
-                      <SelectTrigger className="w-36" aria-label="每页展示条数">
+                      <SelectTrigger className="h-11 w-36" aria-label="每页展示条数">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -689,11 +718,11 @@ export default function RadarPage() {
                   </label>
                 ) : null}
                 <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
-                  <Button type="button" variant="ghost" size="sm" onClick={resetFilters}>
+                  <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={resetFilters}>
                     <RotateCcw />
                     重置筛选
                   </Button>
-                  <Button type="button" size="sm" onClick={() => setMobileFiltersOpen(false)}>
+                  <Button type="button" size="sm" className="min-h-11" onClick={() => setMobileFiltersOpen(false)}>
                     完成
                   </Button>
                 </div>
@@ -851,28 +880,24 @@ export default function RadarPage() {
 
         {selectedId ? (
           <div className="hidden min-w-0 lg:sticky lg:top-4 lg:block lg:self-start">
-            {previewQuery.isLoading && !previewQuery.data ? (
-              <aside className="flex min-h-[26rem] items-center justify-center border border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 text-sm text-[var(--ink-muted)]">
-                正在准备预览…
-              </aside>
-            ) : previewQuery.isError && !previewQuery.data ? (
-              <aside className="border border-[var(--ink-rule)] bg-[var(--ink-page)] p-5" role="alert">
-                <p className="text-sm font-semibold text-[var(--ink-text)]">预览加载失败</p>
-                <p className="mt-2 text-sm leading-6 text-[var(--ink-muted)]">{String((previewQuery.error as Error).message)}</p>
-                <div className="mt-4 flex items-center gap-3">
-                  <button type="button" onClick={() => void previewQuery.refetch()} className="text-xs font-semibold text-[var(--ink-accent)] hover:underline">重试</button>
-                  <button type="button" onClick={closePreview} className="text-xs text-[var(--ink-muted)] hover:text-[var(--ink-text)]">关闭</button>
-                </div>
-              </aside>
-            ) : previewQuery.data ? (
-              <RadarPreviewPanel
-                detail={previewQuery.data}
-                onClose={closePreview}
-              />
-            ) : null}
+            {previewContent}
           </div>
         ) : null}
       </div>
+
+      <Sheet
+        open={Boolean(selectedId) && !isDesktop}
+        onOpenChange={(open) => { if (!open) closePreview(); }}
+      >
+        <SheetContent
+          side="bottom"
+          hideClose
+          className="inset-x-0 bottom-0 top-auto h-auto max-h-[90dvh] w-full max-w-none gap-0 overflow-hidden rounded-t-md border-0 p-0 sm:max-w-none"
+        >
+          <SheetTitle className="sr-only">文章概览</SheetTitle>
+          <div className="h-full min-h-0">{previewContent}</div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

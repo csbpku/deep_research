@@ -78,7 +78,7 @@ export function MarkdownPreview({ source, onTextSelect, className, compactCitati
       )}
     >
       {compactCitations && displaySource !== source ? (
-        <p role="note" className="mb-4 border-b border-border/70 pb-3 text-[11px] leading-5 text-muted-foreground">
+        <p role="note" className="mb-4 border-b border-border/70 pb-3 text-xs leading-5 text-muted-foreground">
           正文引用已折叠为编号；点击编号可跳到文末参考文献，悬停或聚焦可预览来源。
         </p>
       ) : null}

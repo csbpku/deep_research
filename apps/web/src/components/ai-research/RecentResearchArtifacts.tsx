@@ -162,7 +162,7 @@ export function RecentResearchArtifacts({
           <Sparkles className="size-3.5 text-primary" />
           最近任务
         </h2>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">最近 3 项，继续查看或恢复工作</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">最近 3 项，继续查看或恢复工作</p>
       </div>
 
       {query.isLoading ? (
@@ -213,7 +213,7 @@ export function RecentResearchArtifacts({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5 pr-1">
                       <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-xs text-muted-foreground">
                         {RESEARCH_MODE_LABEL[item.reportLength ?? 'standard'] ?? '研究深度'} ·{' '}
                         {REPORT_TYPE_LABEL[item.reportType] ?? '调研任务'} · {relativeTime(item.createdAt)}
                       </span>
@@ -225,7 +225,7 @@ export function RecentResearchArtifacts({
                       {item.topic}
                     </p>
                     {!finished && item.currentStep ? (
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p className="mt-1 text-xs text-muted-foreground">
                         当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}
                       </p>
                     ) : null}
@@ -279,7 +279,7 @@ export function RecentResearchArtifacts({
                     {mainLabel}
                   </Link>
                   {item.publishedResearchId ? (
-                    <span className="text-[11px] text-muted-foreground">已进入研究库</span>
+                    <span className="text-xs text-muted-foreground">已进入研究库</span>
                   ) : null}
                 </div>
               </article>

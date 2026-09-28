@@ -4,7 +4,7 @@
 // 约束：
 //   - simple 字典全文检索 + pg_trgm 近似匹配（两者均已在基础 migration 启用）
 //   - 参数化查询；禁止拼接
-//   - search_docs 保持 published-only；雷达候选从 summaries 动态加入
+//   - search_docs 保持 published-only；雷达候选从 summaries 动态加入；本人草稿独立按 owner 召回
 //   - 全部结果中，已发布雷达只保留 radar 形态，避免与 summary 重复
 
 import type { Prisma } from '@prisma/client';
@@ -17,6 +17,7 @@ import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
 export interface BuildSearchArgs {
   q: string;
   type?: SearchableType | undefined;
+  userId?: string | null;
   page: number;
   perPage: number;
 }
@@ -30,6 +31,7 @@ export interface SearchRow {
   highlighted: string;
   publishedAt: Date;
   rank: number;
+  isPrivate: boolean;
 }
 
 export type SearchableType = 'summary' | 'long_research' | 'knowledge' | 'radar';
@@ -54,9 +56,12 @@ export function buildSearchSql(args: BuildSearchArgs): {
 } {
   const { q, type, page, perPage } = args;
   const offset = (page - 1) * perPage;
+  const externalReading = "'external_reading' = ANY(COALESCE(s.tags, ARRAY[]::text[]))";
+  const radarBodyForSearch = `CASE WHEN ${externalReading} THEN '' ELSE COALESCE(s.body, '') END`;
+  const radarSnippet = `CASE WHEN ${externalReading} THEN LEFT(COALESCE(NULLIF(s.interpretation, ''), ''), 1000) ELSE LEFT(COALESCE(NULLIF(s.interpretation, ''), s.body), 1000) END`;
 
   // 四类结果共用同一组参数；SQL 全部静态，用户输入只通过占位符进入。
-  // 参数顺序：$1=q, $2=type (nullable), $3=limit, $4=offset
+  // 参数顺序：$1=q, $2=type, $3=owner UUID, $4=limit, $5=offset
   const matchesSql = `
     WITH search_query AS (
       SELECT
@@ -77,6 +82,7 @@ export function buildSearchSql(args: BuildSearchArgs): {
           'StartSel=<mark>, StopSel=</mark>, MaxWords=20, MinWords=5'
         ) AS highlighted,
         sd."publishedAt",
+        false AS "isPrivate",
         (
           ts_rank(sd.doc_tsv, sq.tsq) * 4
           + CASE WHEN lower(sd.title) = sq.needle THEN 8 ELSE 0 END
@@ -109,20 +115,21 @@ export function buildSearchSql(args: BuildSearchArgs): {
         'radar'::text AS type,
         s.id AS "refId",
         s.title,
-        left(coalesce(nullif(s.interpretation, ''), s.body), 1000) AS snippet,
+        ${radarSnippet} AS snippet,
         ts_headline(
           'simple',
-          left(coalesce(nullif(s.interpretation, ''), s.body), 1000),
+          ${radarSnippet},
           sq.tsq,
           'StartSel=<mark>, StopSel=</mark>, MaxWords=20, MinWords=5'
         ) AS highlighted,
         coalesce(s."publishedAt", s."createdAt") AS "publishedAt",
+        false AS "isPrivate",
         (
           ts_rank(
             setweight(to_tsvector('simple', coalesce(s.title, '')), 'A')
               || setweight(to_tsvector('simple', coalesce(s.interpretation, '')), 'B')
               || setweight(to_tsvector('simple', array_to_string(s.tags, ' ')), 'B')
-              || setweight(to_tsvector('simple', coalesce(s.body, '')), 'C'),
+              || setweight(to_tsvector('simple', ${radarBodyForSearch}), 'C'),
             sq.tsq
           ) * 4
           + CASE WHEN lower(s.title) = sq.needle THEN 8 ELSE 0 END
@@ -135,7 +142,7 @@ export function buildSearchSql(args: BuildSearchArgs): {
               strict_word_similarity(sq.needle, lower(s.title))
             ) * 3
           + strict_word_similarity(sq.needle, lower(coalesce(s.interpretation, ''))) * 1.5
-          + strict_word_similarity(sq.needle, lower(left(s.body, 2000))) * 0.75
+          + strict_word_similarity(sq.needle, lower(left(${radarBodyForSearch}, 2000))) * 0.75
         )::float8 AS rank
       FROM summaries s
       CROSS JOIN search_query sq
@@ -144,6 +151,10 @@ export function buildSearchSql(args: BuildSearchArgs): {
         AND s.status::text <> 'archived'
         AND (
           s."distilledTier" = 'skim'
+          OR (
+            s."distilledTier" IN ('collection', 'deep_read')
+            AND 'external_reading' = ANY(COALESCE(s.tags, ARRAY[]::text[]))
+          )
           OR (
             s."distilledTier" IN ('collection', 'deep_read')
             AND s."enrichmentStatus" = 'ready'
@@ -156,11 +167,11 @@ export function buildSearchSql(args: BuildSearchArgs): {
             setweight(to_tsvector('simple', coalesce(s.title, '')), 'A')
               || setweight(to_tsvector('simple', coalesce(s.interpretation, '')), 'B')
               || setweight(to_tsvector('simple', array_to_string(s.tags, ' ')), 'B')
-              || setweight(to_tsvector('simple', coalesce(s.body, '')), 'C')
+              || setweight(to_tsvector('simple', ${radarBodyForSearch}), 'C')
           ) @@ sq.tsq
           OR strpos(lower(s.title), sq.needle) > 0
           OR strpos(lower(coalesce(s.interpretation, '')), sq.needle) > 0
-          OR strpos(lower(s.body), sq.needle) > 0
+          OR strpos(lower(${radarBodyForSearch}), sq.needle) > 0
           OR EXISTS (
             SELECT 1 FROM unnest(s.tags) tag WHERE strpos(lower(tag), sq.needle) > 0
           )
@@ -170,7 +181,61 @@ export function buildSearchSql(args: BuildSearchArgs): {
               similarity(lower(s.title), sq.needle),
               strict_word_similarity(sq.needle, lower(s.title)),
               strict_word_similarity(sq.needle, lower(coalesce(s.interpretation, ''))),
-              strict_word_similarity(sq.needle, lower(left(s.body, 2000)))
+              strict_word_similarity(sq.needle, lower(left(${radarBodyForSearch}, 2000)))
+            ) >= 0.35
+        )
+      )
+      UNION ALL
+
+      SELECT
+        'private:' || r.id::text AS id,
+        CASE WHEN r.type::text = 'knowledge' THEN 'knowledge' ELSE 'long_research' END AS type,
+        r.id AS "refId",
+        r.title,
+        left(coalesce(nullif(r.conclusion, ''), r.body), 1000) AS snippet,
+        ts_headline(
+          'simple',
+          left(coalesce(nullif(r.conclusion, ''), r.body), 1000),
+          websearch_to_tsquery('simple', $1),
+          'StartSel=<mark>, StopSel=</mark>, MaxWords=20, MinWords=5'
+        ) AS highlighted,
+        r."updatedAt" AS "publishedAt",
+        true AS "isPrivate",
+        (
+          ts_rank(
+            setweight(to_tsvector('simple', coalesce(r.title, '')), 'A')
+              || setweight(to_tsvector('simple', coalesce(r.conclusion, '')), 'B')
+              || setweight(to_tsvector('simple', coalesce(r.body, '')), 'C'),
+            websearch_to_tsquery('simple', $1)
+          ) * 4
+          + CASE WHEN lower(r.title) = lower($1) THEN 8 ELSE 0 END
+          + CASE WHEN strpos(lower(r.title), lower($1)) > 0 THEN 4 ELSE 0 END
+          + greatest(
+              similarity(lower(r.title), lower($1)),
+              strict_word_similarity(lower($1), lower(r.title))
+            ) * 3
+        )::float8 AS rank
+      FROM researches r
+      WHERE $3::uuid IS NOT NULL
+        AND r."authorId" = $3::uuid
+        AND r.status::text = 'draft'
+        AND ($2::text IS NULL OR (CASE WHEN r.type::text = 'knowledge' THEN 'knowledge' ELSE 'long_research' END) = $2)
+        AND (
+          (
+            setweight(to_tsvector('simple', coalesce(r.title, '')), 'A')
+              || setweight(to_tsvector('simple', coalesce(r.conclusion, '')), 'B')
+              || setweight(to_tsvector('simple', coalesce(r.body, '')), 'C')
+          ) @@ websearch_to_tsquery('simple', $1)
+          OR strpos(lower(r.title), lower($1)) > 0
+          OR strpos(lower(r.conclusion), lower($1)) > 0
+          OR strpos(lower(r.body), lower($1)) > 0
+          OR (
+            char_length($1) >= 3
+            AND greatest(
+              similarity(lower(r.title), lower($1)),
+              strict_word_similarity(lower($1), lower(r.title)),
+              strict_word_similarity(lower($1), lower(coalesce(r.conclusion, ''))),
+              strict_word_similarity(lower($1), lower(left(r.body, 2000)))
             ) >= 0.35
           )
         )
@@ -186,11 +251,12 @@ export function buildSearchSql(args: BuildSearchArgs): {
       snippet,
       highlighted,
       "publishedAt",
+      "isPrivate",
       rank
     FROM matches
     WHERE ($2::text IS NULL OR type = $2)
     ORDER BY rank DESC, "publishedAt" DESC
-    LIMIT $3 OFFSET $4
+    LIMIT $4 OFFSET $5
   `;
 
   const countSql = `${matchesSql}
@@ -202,7 +268,7 @@ export function buildSearchSql(args: BuildSearchArgs): {
   return {
     rowsSql,
     countSql,
-    params: [q, type ?? null, perPage, offset],
+    params: [q, type ?? null, args.userId ?? null, perPage, offset],
   };
 }
 
@@ -219,6 +285,7 @@ export function shapeSearchRow(row: {
   highlighted: string;
   publishedAt: Date;
   rank: number;
+  isPrivate?: boolean;
 }) {
   return {
     id: row.id,
@@ -229,6 +296,7 @@ export function shapeSearchRow(row: {
     highlighted: sanitizeSearchHighlight(row.highlighted),
     publishedAt: row.publishedAt.toISOString(),
     rank: Number(row.rank.toFixed(4)),
+    isPrivate: row.isPrivate === true,
   };
 }
 

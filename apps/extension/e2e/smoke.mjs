@@ -1,9 +1,16 @@
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 
-const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const builtExtensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const testRoot = await mkdtemp('/private/tmp/deep-research-reader-smoke-');
+const extensionPath = `${testRoot}/extension`;
+await cp(builtExtensionPath, extensionPath, { recursive: true });
+const testManifestPath = `${extensionPath}/manifest.json`;
+const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
+testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), 'http://127.0.0.1/*'])];
+await writeFile(testManifestPath, JSON.stringify(testManifest));
 const liveMode = process.env.READER_LIVE === '1';
 const textOnlyMode = process.env.READER_LIVE_TEXT_ONLY === '1';
 const providerUrl = process.env.READER_LIVE_BASE_URL || 'http://127.0.0.1:8799/v1';

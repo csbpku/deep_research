@@ -11,12 +11,15 @@ import { toApiErrorResponse } from '../../../lib/errors';
 import { withRequestId } from '../../../lib/log';
 import {
   KNOWLEDGE_SOURCE_KINDS,
+  isSelectedKnowledgeText,
   resolveKnowledgeSource,
 } from '../../../lib/knowledge-card';
+import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 const Input = z.object({
   sourceKind: z.enum(KNOWLEDGE_SOURCE_KINDS),
   messageId: z.string().uuid(),
+  selectedText: z.string().trim().min(8).max(5_000),
   title: z.string().trim().min(1).max(300),
   body: z.string().trim().min(1).max(50_000),
   conclusion: z.string().trim().max(2_000).optional().default(''),
@@ -34,7 +37,14 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   if (!source) {
     return toApiErrorResponse({
       code: 'PERMISSION_DENIED' as const,
-      message: '只能保存自己会话中的 AI 回答',
+      message: '只能使用自己有权限的 AI 回答或研究稿',
+      requestId,
+    });
+  }
+  if (!isSelectedKnowledgeText(source.content, input.selectedText)) {
+    return toApiErrorResponse({
+      code: 'VALIDATION_FAILED' as const,
+      message: '所选内容已不在来源中，请重新选择后再保存',
       requestId,
     });
   }
@@ -43,16 +53,16 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     const created = await tx.research.create({
       data: {
         type: 'knowledge',
-        status: 'published',
+        status: 'draft',
         title: input.title,
         body: input.body,
         conclusion: input.conclusion || null,
+        knowledgeIndexText: confirmedKnowledgeIndexText(input),
         tags: input.tags,
         authorId: user.id,
         creationMethod: 'ai_research',
         aiAssisted: true,
-        originContentSha256: createHash('sha256').update(source.content).digest('hex'),
-        publishedAt: new Date(),
+        originContentSha256: createHash('sha256').update(input.selectedText).digest('hex'),
       },
       select: {
         id: true,
@@ -74,6 +84,12 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       });
     }
 
+    await queuePersonalKnowledgeIndex(tx, {
+      ownerId: user.id,
+      researchId: created.id,
+      operation: 'upsert',
+    });
+
     await tx.researchAudit.create({
       data: {
         researchId: created.id,
@@ -82,6 +98,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         diff: {
           sourceKind: input.sourceKind,
           sourceMessageId: source.messageId,
+          selectedTextLength: input.selectedText.length,
           sourceCount: source.sources.length,
         } as Prisma.InputJsonValue,
       },

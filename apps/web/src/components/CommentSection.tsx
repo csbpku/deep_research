@@ -333,19 +333,19 @@ function CommentRow({
               {formatRelative(comment.createdAt)}
             </span>
             {comment.promoteStatus === 'approved' && (
-              <span className="inline-flex items-center gap-1 rounded bg-radar-published-bg px-1.5 py-0.5 text-[10px] text-radar-published-fg">
+              <span className="inline-flex items-center gap-1 rounded bg-radar-published-bg px-1.5 py-0.5 text-xs text-radar-published-fg">
                 <Sparkles className="size-3" />
                 已提炼为知识卡片
               </span>
             )}
             {comment.promoteStatus === 'nominated' && (
-              <span className="inline-flex items-center gap-1 rounded bg-accent px-1.5 py-0.5 text-[10px] text-accent-foreground">
+              <span className="inline-flex items-center gap-1 rounded bg-accent px-1.5 py-0.5 text-xs text-accent-foreground">
                 <Lightbulb className="size-3" />
                 待提炼
               </span>
             )}
             {comment.promoteStatus === 'rejected' && (
-              <span className="rounded bg-radar-rejected-bg px-1.5 py-0.5 text-[10px] text-radar-rejected-fg">
+              <span className="rounded bg-radar-rejected-bg px-1.5 py-0.5 text-xs text-radar-rejected-fg">
                 暂不提炼
               </span>
             )}

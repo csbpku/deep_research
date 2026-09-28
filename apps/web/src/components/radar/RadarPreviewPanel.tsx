@@ -31,9 +31,11 @@ function isHttpUrl(value: string): boolean {
 export function RadarPreviewPanel({
   detail,
   onClose,
+  className,
 }: {
   detail: ExternalReadingDetail;
   onClose: () => void;
+  className?: string;
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
   const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
@@ -68,18 +70,18 @@ export function RadarPreviewPanel({
 
   return (
     <aside
-      className="flex min-h-0 min-w-0 flex-col overflow-hidden border border-[var(--ink-rule)] bg-[var(--ink-page)] font-sans shadow-sm lg:max-h-[calc(100dvh-8rem)]"
-      aria-label="雷达详情预览"
+      className={cn('flex min-h-0 min-w-0 flex-col overflow-hidden border border-[var(--ink-rule)] bg-[var(--ink-page)] font-sans shadow-sm max-h-[90dvh] lg:max-h-[calc(100dvh-8rem)]', className)}
+      aria-label="文章概览"
     >
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--ink-rule)] px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2 text-[9px] font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
           <Sparkles className="size-3 shrink-0" aria-hidden />
-          <span>快速预览</span>
+          <span>文章概览</span>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex size-7 shrink-0 items-center justify-center text-[var(--ink-muted)] transition-colors hover:bg-[var(--ink-surface)] hover:text-[var(--ink-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+          className="inline-flex size-11 shrink-0 items-center justify-center text-[var(--ink-muted)] transition-colors hover:bg-[var(--ink-surface)] hover:text-[var(--ink-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:size-7"
           aria-label="关闭预览"
           title="关闭预览"
         >
@@ -88,14 +90,14 @@ export function RadarPreviewPanel({
       </header>
 
       <div ref={scrollContainerRef} className="min-h-0 overflow-y-auto px-4 py-4 sm:px-5">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-semibold text-[var(--ink-muted)]">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold text-[var(--ink-muted)]">
           <span>{sourceName}</span>
           <span aria-hidden className="text-[var(--ink-faint)]">·</span>
           <span>{contentLabel.short}</span>
           {publishedLabel ? (
             <>
               <span aria-hidden className="text-[var(--ink-faint)]">·</span>
-              <span>{publishedLabel}</span>
+              <span>发布 {publishedLabel}</span>
             </>
           ) : null}
         </div>
@@ -105,16 +107,19 @@ export function RadarPreviewPanel({
         </h2>
 
         <section className="mt-5 border-l-2 border-[var(--ink-accent)] pl-3" aria-labelledby="radar-preview-summary">
-          <p id="radar-preview-summary" className="text-[9px] font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
+          <p id="radar-preview-summary" className="text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
             AI 摘要
           </p>
-          <p className="mt-2 whitespace-pre-line font-serif text-[13px] leading-[1.55] text-[var(--ink-text)]">{lead}</p>
+          <p className="mt-1 text-xs leading-5 text-[var(--ink-faint)]">
+            同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
+          </p>
+          <p className="mt-2 whitespace-pre-line font-serif text-base leading-6 text-[var(--ink-text)] sm:text-sm sm:leading-[1.55]">{lead}</p>
           {supportingExcerpt ? (
             <div className="mt-3 border-t border-[var(--ink-rule)] pt-2.5">
-              <p className="text-[9px] font-extrabold uppercase tracking-[0.12em] text-[var(--ink-muted)]">
+              <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-muted)]">
                 原文补充
               </p>
-              <p className="mt-1.5 line-clamp-4 whitespace-pre-line font-serif text-[12px] leading-[1.55] text-[var(--ink-muted)]">
+              <p className="mt-1.5 line-clamp-4 whitespace-pre-line font-serif text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.55]">
                 {supportingExcerpt}
               </p>
             </div>
@@ -123,21 +128,21 @@ export function RadarPreviewPanel({
 
         {detail.selectionReason?.trim() ? (
           <section className="mt-5 border-t border-[var(--ink-rule)] pt-3.5">
-            <p className="text-[9px] font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
+            <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
               为什么值得看
             </p>
-            <p className="mt-2 text-[12px] leading-[1.55] text-[var(--ink-muted)]">{detail.selectionReason.trim()}</p>
+            <p className="mt-2 text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.55]">{detail.selectionReason.trim()}</p>
           </section>
         ) : null}
 
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--ink-rule)] pt-3">
-          <span className={cn('inline-flex min-h-6 items-center border px-2 text-[10px] font-bold', tierVisual.border, tierVisual.text)}>
+          <span className={cn('inline-flex min-h-6 items-center border px-2 text-xs font-bold', tierVisual.border, tierVisual.text)}>
             {tierLabel}
           </span>
           {tags.length ? (
             <div className="flex flex-wrap gap-1.5">
               {tags.map((tag) => (
-                <span key={tag} className="border border-[var(--ink-rule)] px-1.5 py-0.5 text-[10px] text-[var(--ink-muted)]">
+                <span key={tag} className="border border-[var(--ink-rule)] px-1.5 py-0.5 text-xs text-[var(--ink-muted)]">
                   #{tag}
                 </span>
               ))}
@@ -147,7 +152,7 @@ export function RadarPreviewPanel({
 
         {detail.distilledScore ? (
           <details className="group mt-4 border-t border-[var(--ink-rule)] pt-3">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[10px] font-bold text-[var(--ink-muted)] hover:text-[var(--ink-accent)] [&::-webkit-details-marker]:hidden">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-bold text-[var(--ink-muted)] hover:text-[var(--ink-accent)] [&::-webkit-details-marker]:hidden">
               <span>查看评分依据</span>
               <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
             </summary>
@@ -164,7 +169,7 @@ export function RadarPreviewPanel({
             type="button"
             data-reader-url={readerUrl}
             onClick={() => setSourcePromptOpen(true)}
-            className="inline-flex min-h-9 flex-1 items-center justify-center gap-2 bg-[var(--ink-accent)] px-3 text-[11px] font-bold text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 bg-[var(--ink-accent)] px-3 text-xs font-bold text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:min-h-9"
           >
             {zreadUrl ? <Github className="size-3.5" aria-hidden /> : <ExternalLink className="size-3.5" aria-hidden />}
             {zreadUrl ? '打开 GitHub' : '打开原文'}
@@ -175,7 +180,7 @@ export function RadarPreviewPanel({
             href={zreadUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex min-h-9 flex-1 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-[11px] font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:min-h-9"
           >
             <BookOpen className="size-3.5" aria-hidden />
             打开 Zread
@@ -184,7 +189,7 @@ export function RadarPreviewPanel({
         <Link
           href={`/ai-research?seed=${encodeURIComponent(detail.id)}`}
           prefetch={false}
-          className="inline-flex min-h-9 flex-1 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-[11px] font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+          className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:min-h-9"
         >
           <Sparkles className="size-3.5" aria-hidden />
           深入调研

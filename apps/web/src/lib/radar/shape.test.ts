@@ -202,6 +202,7 @@ describe('parseDistilledScore', () => {
         audience_fit: 3,
       },
       weak_point: '缺少机制分析',
+      weak_point_evidence: '实验只覆盖单个数据集',
       veto: null,
       risk_flags: [],
       profile: 'engineering',
@@ -221,6 +222,7 @@ describe('parseDistilledScore', () => {
     expect(score?.dimensions.analysisDepth).toBe(2);
     expect(score?.dimensions.currentApplicability).toBe(3);
     expect(score?.weakPoint).toBe('缺少机制分析');
+    expect(score?.weakPointEvidence).toBe('实验只覆盖单个数据集');
   });
 });
 
@@ -315,6 +317,46 @@ describe('shapeCandidate', () => {
     });
 
     expect(shaped.title).toBe("Claude Preview's capabilities");
+  });
+
+  it('never derives external-reading excerpts from the cached body', () => {
+    const shaped = shapeCandidate({
+      summary: {
+        id: 'summary-external',
+        title: 'External article',
+        body: 'Cached full source text that must stay private.',
+        url: 'https://example.com/article',
+        tags: ['external_reading'],
+        status: 'candidate',
+        summaryDate: new Date('2026-08-26T00:00:00Z'),
+        publishedAt: null,
+        createdAt: new Date('2026-08-26T00:00:00Z'),
+        interpretation: 'A metadata-based summary.',
+        scoreReason: null,
+        scoreVersion: null,
+        relevanceScore: null,
+        timelinessScore: null,
+        sourceQualityScore: null,
+        distilledScore: null,
+        selectionReason: null,
+        sortOrder: null,
+        syncRunId: 'run-1',
+        originalMarkdown: 'Cached full source text that must stay private.',
+        originalMeta: { zread: { content: 'Cached generated document.' } },
+        repoSummary: 'A historical repository summary.',
+        highlights: { summary: 'Cached highlights.' },
+        tldr: 'Cached paper analysis.',
+      },
+    });
+
+    expect(shaped.body).toBeNull();
+    expect(shaped.excerpt).toBe('A metadata-based summary.');
+    expect(shaped.excerpt).not.toContain('Cached full source text');
+    expect(shaped.originalMarkdown).toBeNull();
+    expect(shaped.originalMeta).toBeNull();
+    expect(shaped.repoSummary).toBeNull();
+    expect(shaped.highlights).toBeNull();
+    expect(shaped.tldr).toBeNull();
   });
 
   it('does not expose legacy GitHub activity data in the detail payload', () => {

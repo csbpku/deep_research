@@ -2,7 +2,7 @@
 
 // RadarCandidateCard —— 雷达候选卡（列表 / admin 队列共用）。
 //
-// 公开列表只展示来源、日期、标题、两行判断、阅读等级、收藏和简报入口。
+// 公开列表只展示来源、日期、标题、两行判断、阅读等级和收藏；标题是概览的唯一入口。
 // 管理队列才附加状态、排序和管理操作。
 
 import Link from 'next/link';
@@ -66,7 +66,7 @@ interface RadarCandidateCardProps {
   currentUserRole?: 'member' | 'admin' | null;
   /** 统一排序流使用无卡片行，来源分组和 Admin 保留卡片容器。 */
   compact?: boolean;
-  /** 桌面端在雷达页内打开快速预览；保留 href 以支持新标签页和直接访问。 */
+  /** 在雷达页内打开文章概览；保留 href 以支持新标签页和直接访问。 */
   onOpenPreview?: (summaryId: string) => void;
   selected?: boolean;
 }
@@ -89,7 +89,7 @@ function SourcePill({
     : formatSourceType(sourceType);
   return (
     <span
-      className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground"
+      className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground"
       aria-label={label.full}
       title={label.full}
     >
@@ -131,9 +131,9 @@ export function RadarCandidateCard({
   // External-reading candidates still pass through the detail landing page so
   // the user sees the Reader install prompt before leaving the platform.
   const readingHref = resolvedDetailHref;
-  // ``distilledScore.tier`` is the score target. The persisted ``tier`` is
-  // intentionally skim while enrichment is pending, so the card must render
-  // the deliverable tier rather than promise an unreadable deep read.
+  // ``distilledScore.tier`` is the score target. Render the persisted tier:
+  // server-reading rows are gated by enrichment, while external-reading rows
+  // retain their score tier and open through the source URL/Reader path.
   const tier = candidate.tier ?? null;
   const contentPending = candidate.tags.includes('content_pending');
   const showPipelinePending = isAdminQueue && contentPending;
@@ -151,7 +151,7 @@ export function RadarCandidateCard({
             ? '不推荐'
             : null;
   const tierClass = cn(
-    'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+    'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium',
     tier === 'deep_read' && 'border-tier-deep-read/40 text-tier-deep-read',
     tier === 'skim' && 'border-tier-skim/40 text-tier-skim',
     tier === 'collection' && 'border-tier-collection/40 text-tier-collection',
@@ -180,7 +180,6 @@ export function RadarCandidateCard({
   const handlePreviewClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
     if (
       !onOpenPreview
-      || !window.matchMedia('(min-width: 1024px)').matches
       || event.button !== 0
       || event.metaKey
       || event.ctrlKey
@@ -205,15 +204,15 @@ export function RadarCandidateCard({
         <SourcePill sourceType={candidate.sourceType} sourceName={candidate.sourceName} />
         {isAdminQueue ? <StatusBadge kind="radar" value={candidate.status} /> : null}
         {showPipelinePending ? (
-          <span className="inline-flex items-center rounded-full border border-warning-border/70 bg-warning-bg px-2 py-0.5 text-[11px] font-medium text-warning-fg">
+          <span className="inline-flex items-center rounded-full border border-warning-border/70 bg-warning-bg px-2 py-0.5 text-xs font-medium text-warning-fg">
             内容管线待处理
           </span>
         ) : null}
         {isAdminQueue && candidate.sortOrder !== null ? (
-          <span className="font-mono text-[11px] text-muted-foreground">#{candidate.sortOrder}</span>
+          <span className="font-mono text-xs text-muted-foreground">#{candidate.sortOrder}</span>
         ) : null}
-        <span className="ml-auto text-xs text-muted-foreground" title={candidate.crawledAt}>
-          {formatDate(candidate.crawledAt)}
+        <span className="ml-auto text-xs text-muted-foreground" title={`入库于 ${candidate.crawledAt}`}>
+          入库 {formatDate(candidate.crawledAt)}
         </span>
       </header>
 
@@ -235,7 +234,7 @@ export function RadarCandidateCard({
             <Link
               key={`topic-${t.id}`}
               href={`/topics/${t.slug}`}
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary/40 hover:text-primary"
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
             >
               <BookOpenCheck className="size-3" />
               {t.name}
@@ -246,7 +245,7 @@ export function RadarCandidateCard({
               key={`issue-${iss.id}`}
               href={`/topics/${iss.topic.slug}`}
               className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]',
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs',
                 iss.kind === 'event'
                   ? 'border border-status-running-border bg-status-running-bg text-status-running-fg'
                   : 'border border-status-failed-border bg-status-failed-bg text-status-failed-fg',
@@ -259,15 +258,15 @@ export function RadarCandidateCard({
         </div>
       ) : null}
 
-      {compact ? (
+      {compact && selected ? null : compact ? (
         compactTeaser ? (
-          <p className="line-clamp-2 whitespace-pre-line text-[13px] leading-5 text-muted-foreground">
+          <p className="line-clamp-2 whitespace-pre-line text-base leading-6 text-muted-foreground sm:text-sm sm:leading-5">
             {compactTeaser}
           </p>
         ) : null
       ) : candidate.interpretation ? (
         <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-          <span className="mr-1.5 text-[11px] text-foreground/70">AI 摘要：</span>
+          <span className="mr-1.5 text-xs text-foreground/70">AI 摘要：</span>
           {candidate.interpretation}
         </p>
       ) : showExcerpt ? (
@@ -322,17 +321,19 @@ export function RadarCandidateCard({
             <Sparkles className="size-3.5" />
           </Link>
         ) : null}
-        <Link
-          href={readingHref}
-          prefetch={false}
-          onMouseEnter={prefetchDetail}
-          onFocus={prefetchDetail}
-          onClick={handlePreviewClick}
-          className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
-        >
-          {onOpenPreview ? '阅读简报' : externalReading ? '阅读原文' : '打开详情'}
-          <ArrowUpRight className="size-3.5" />
-        </Link>
+        {!onOpenPreview ? (
+          <Link
+            href={readingHref}
+            prefetch={false}
+            onMouseEnter={prefetchDetail}
+            onFocus={prefetchDetail}
+            onClick={handlePreviewClick}
+            className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            {externalReading ? '阅读原文' : '打开详情'}
+            <ArrowUpRight className="size-3.5" />
+          </Link>
+        ) : null}
       </div>
 
       {adminActions ? (

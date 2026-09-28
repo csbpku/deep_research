@@ -63,9 +63,9 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis, showTldr = 
           论文解读
         </h2>
         {formatAuthors(authors) ? <span className="text-xs text-muted-foreground">{formatAuthors(authors)}</span> : null}
-        {meta.arxivId ? <span className="font-mono text-[11px] text-muted-foreground">arXiv:{meta.arxivId}</span> : null}
+        {meta.arxivId ? <span className="font-mono text-xs text-muted-foreground">arXiv:{meta.arxivId}</span> : null}
         {meta.arxivId ? (
-          <span className="ml-auto flex items-center gap-2 text-[11px]">
+          <span className="ml-auto flex items-center gap-2 text-xs">
             <a
               href={`https://arxiv.org/html/${meta.arxivId}`}
               target="_blank"
@@ -89,7 +89,7 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis, showTldr = 
       {/* TL;DR */}
       {showTldr && (tldr || (analysis && analysis.tldr)) && (
         <div className="mb-3 border-l-2 border-primary bg-muted/40 px-3 py-2.5">
-          <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-primary">
+          <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-primary">
             <Sparkles className="size-3" />
             TL;DR
           </div>

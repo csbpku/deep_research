@@ -111,7 +111,7 @@ function AiResearchIndicator() {
               className="block rounded-sm px-2.5 py-2.5 outline-none transition-colors hover:bg-muted focus-visible:bg-muted"
             >
               <span className="line-clamp-2 text-sm leading-5">{job.topic}</span>
-              <span className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <span className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
                 {statusLabel(job)}
                 <ArrowUpRight className="size-3" />
               </span>

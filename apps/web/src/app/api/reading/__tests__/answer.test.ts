@@ -59,7 +59,7 @@ describe('POST /api/reading/answer', () => {
     }));
     expect(response.status).toBe(200);
     expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
-      body: expect.objectContaining({ body: '当前小节\n\n' + body, selection: expect.objectContaining({ quote }) }),
+      body: expect.objectContaining({ requester_id: USER.id, body: '当前小节\n\n' + body, selection: expect.objectContaining({ quote }) }),
     }));
   });
 
@@ -83,5 +83,38 @@ describe('POST /api/reading/answer', () => {
     expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
       body: expect.objectContaining({ body, selection: undefined }),
     }));
+  });
+
+  it('merges exact model evidence with BFF-computed source anchors', async () => {
+    mocks.fetchAiEngine.mockResolvedValue({
+      ok: true,
+      body: {
+        original: quote,
+        suggestion: '回答 [1]',
+        reading: {
+          answer: '回答 [1]',
+          evidence: [{ quote, claim: '说明上下文限制' }],
+          background: '',
+          inference: '',
+          limitations: [],
+          warnings: [],
+          structured: true,
+        },
+      },
+    });
+
+    const response = await POST(request({
+      action: 'ask',
+      prompt: '解释重点',
+      context: { url: 'https://example.com/docs', title: 'Docs', body, scope: 'page' },
+    }));
+
+    const payload = await response.json();
+    expect(payload.citations).toHaveLength(1);
+    expect(payload.reading.evidence[0]).toMatchObject({
+      quote,
+      url: 'https://example.com/docs',
+      anchor: { quote, startOffset, endOffset: startOffset + quote.length },
+    });
   });
 });

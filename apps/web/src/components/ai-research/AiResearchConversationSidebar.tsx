@@ -64,7 +64,7 @@ export function AiResearchConversationSidebar({
         </Button>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-visible p-2 lg:overflow-y-auto">
-        <span className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           最近对话
         </span>
         {query.isLoading ? (
@@ -105,7 +105,7 @@ export function AiResearchConversationSidebar({
                     <MessageSquare className="mt-0.5 size-3.5 shrink-0" />
                     <span className="min-w-0 flex-1">
                       <span className="line-clamp-2 leading-5">{conversation.title}</span>
-                      <span className="mt-0.5 block text-[11px] text-muted-foreground/70">
+                      <span className="mt-0.5 block text-xs text-muted-foreground/70">
                         {relativeTime(conversation.updatedAt)}
                         {conversation.jobId ? ' · 已启动' : ''}
                       </span>
@@ -117,7 +117,7 @@ export function AiResearchConversationSidebar({
           </ul>
         )}
       </div>
-      <div className="flex items-center gap-1.5 border-t border-border px-3 py-2.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 border-t border-border px-3 py-2.5 text-xs text-muted-foreground">
         <Sparkles className="size-3.5" />
         对话自动保存，可随时回来继续
       </div>

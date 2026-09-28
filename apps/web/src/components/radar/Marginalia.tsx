@@ -48,7 +48,7 @@ export function Marginalia({ anchors, activeAnchorId, onAnchorClick, className }
           style={{ top: anchor.top }}
           aria-label={`跳转到原文第 ${anchor.order} 处 AI 提到的段落`}
         >
-          <span className="text-[11px] leading-none">↗</span>
+          <span className="text-xs leading-none">↗</span>
         </button>
       ))}
     </div>

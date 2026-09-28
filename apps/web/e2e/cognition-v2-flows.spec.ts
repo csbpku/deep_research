@@ -14,7 +14,7 @@ import { loginWithCredentials } from './fixtures';
 test.describe('Topics list filter chips (V2)', () => {
   test('filter chips are present and clicking changes the URL', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
     await page.goto('/topics');
@@ -38,7 +38,7 @@ test.describe('Topics list filter chips (V2)', () => {
 test.describe('Topic detail 4-tab view (V2)', () => {
   test('tabs 概览 / 热点议题 / 相关研究 / 相关内容 are present and switchable', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
     await page.route('**/api/topics/ai-agents**', (route) =>
@@ -106,7 +106,7 @@ test.describe('Topic detail 4-tab view (V2)', () => {
 test.describe('AI Research V2 brief', () => {
   test('conversation page shows Research Brief section after topic is set', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
 

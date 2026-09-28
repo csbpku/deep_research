@@ -31,15 +31,23 @@ from ai_engine.radar.vendor_changelog_fetcher import fetch_vendor_changelog
 from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 
 
-RSS_XML = b"""<?xml version="1.0"?><rss><channel><item>
-<title>Agent release</title><link>https://example.com/agent</link>
-<description>LLM agent update</description><pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate>
-</item></channel></rss>"""
+def _recent_rss_date() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
 
-WEWE_RSS_XML = """<?xml version="1.0"?><rss><channel><item>
+
+_RECENT_RSS_DATE = _recent_rss_date()
+
+RSS_XML = f"""<?xml version="1.0"?><rss><channel><item>
+<title>Agent release</title><link>https://example.com/agent</link>
+<description>LLM agent update</description><pubDate>{_RECENT_RSS_DATE}</pubDate>
+</item></channel></rss>""".encode()
+
+WEWE_RSS_XML = f"""<?xml version="1.0"?><rss><channel><item>
 <title><![CDATA[中文 AI 工程实践]]></title><link>https://mp.weixin.qq.com/s/example</link>
 <content:encoded><![CDATA[<p>这是一篇公众号全文内容，包含 RAG 和 Agent 工程实践。</p>]]></content:encoded>
-<pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate>
+<pubDate>{_RECENT_RSS_DATE}</pubDate>
 </item></channel></rss>""".encode()
 
 BLOGGER_ATOM_XML = b"""<?xml version='1.0'?><feed xmlns='http://www.w3.org/2005/Atom'>
@@ -133,14 +141,15 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
 
 
 async def test_rss_ai_filter_applies_result_cap_after_filtering() -> None:
-    xml = b"""<?xml version="1.0"?><rss><channel>
+    rss_date = _recent_rss_date()
+    xml = f"""<?xml version="1.0"?><rss><channel>
     <item><title>Unrelated story</title><link>https://example.com/noise</link>
     <description>Generic software release.</description>
-    <pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate></item>
+    <pubDate>{rss_date}</pubDate></item>
     <item><title>OpenAI ships a useful update</title><link>https://example.com/ai</link>
     <description>LLM platform update.</description>
-    <pubDate>Tue, 25 Aug 2026 12:01:00 GMT</pubDate></item>
-    </channel></rss>"""
+    <pubDate>{rss_date}</pubDate></item>
+    </channel></rss>""".encode()
 
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
         return _doc(xml, url=url)
@@ -229,7 +238,7 @@ def test_reddit_rss_applies_limit_after_ai_filtering() -> None:
 
 
 async def test_hn_rss_shell_is_collapsed_into_metadata_snippet() -> None:
-    hn_xml = b"""<?xml version='1.0'?><rss version='2.0' xmlns:dc='http://purl.org/dc/elements/1.1/'><channel>
+    hn_xml = f"""<?xml version='1.0'?><rss version='2.0' xmlns:dc='http://purl.org/dc/elements/1.1/'><channel>
     <item><title><![CDATA[Judge Rules Trump's Blacklisting of Anthropic]]></title>
     <link>https://www.nytimes.com/2026/08/27/technology/anthropic-government-blacklisting-ruling.html</link>
     <description><![CDATA[
@@ -239,8 +248,8 @@ async def test_hn_rss_shell_is_collapsed_into_metadata_snippet() -> None:
     <p># Comments: 27</p>
     ]]></description>
     <dc:creator><![CDATA[jbegley]]></dc:creator>
-    <pubDate>Fri, 28 Aug 2026 02:03:38 +0000</pubDate>
-    </item></channel></rss>"""
+    <pubDate>{_recent_rss_date()}</pubDate>
+    </item></channel></rss>""".encode()
 
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
         return _doc(hn_xml, url=url)
@@ -352,7 +361,7 @@ async def test_rss_fetcher_cleans_wewe_html_instead_of_passing_page_shell() -> N
     <title><![CDATA[正文测试]]></title><link>https://mp.weixin.qq.com/s/example2</link>
     <content:encoded><![CDATA[<html><head><script>window.pageData = 'noise';</script></head>
     <body><div id="js_content"><p>{article}</p></div></body></html>]]></content:encoded>
-    <pubDate>Tue, 25 Aug 2026 12:00:00 GMT</pubDate>
+    <pubDate>{_recent_rss_date()}</pubDate>
     </item></channel></rss>""".encode()
 
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
@@ -389,7 +398,7 @@ async def test_rss_fetcher_prefers_atom_article_link_over_comments_feed() -> Non
 
 
 async def test_rss_fetcher_default_age_gate_drops_archive_items() -> None:
-    old = RSS_XML.replace(b"Tue, 25 Aug 2026 12:00:00 GMT", b"Wed, 22 Jul 2020 12:00:00 GMT")
+    old = RSS_XML.replace(_RECENT_RSS_DATE.encode(), b"Wed, 22 Jul 2020 12:00:00 GMT")
 
     async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
         return _doc(old)

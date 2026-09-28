@@ -2131,7 +2131,7 @@ async def _parse_arxiv_html_document(
             str(soup),
             source_url,
             "arxiv",
-            max_bytes=ARXIV_MARKDOWN_MAX_BYTES,
+            max_chars=ARXIV_MARKDOWN_MAX_BYTES,
         ).strip()
         # GFM's table normalizer can expose MathML display equations as
         # one- or multi-row tables. Restore them to display-math blocks before
@@ -3013,6 +3013,11 @@ async def _run_enrichment_for_pending(
         else '("distilledTier" IN (\'collection\', \'deep_read\') '
              'OR "distilledTargetTier" IN (\'collection\', \'deep_read\'))'
     )
+    reading_mode_filter = (
+        'TRUE'
+        if force
+        else 'NOT (\'external_reading\' = ANY(COALESCE("tags", ARRAY[]::text[])))'
+    )
     if run_id is None:
         run_id = str(uuid.uuid4())
     state_filter = (
@@ -3054,6 +3059,7 @@ async def _run_enrichment_for_pending(
         'SELECT "id" FROM "summaries" '
         f'WHERE "originalKind" IN ({placeholders}) '
         f'AND {tier_filter} '
+        f'AND {reading_mode_filter} '
         f'AND {enrichment_need}'
         f'AND {state_filter} '
         'AND NOT ("originalKind" = \'github_repo\' AND '

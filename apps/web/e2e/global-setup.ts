@@ -11,7 +11,7 @@
 //   - 只 ping，不需要校验响应（401 / 200 都行，只要触发编译）
 //   - 用独立的 fetch，不依赖 Playwright 的 fixture
 
-const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+const BASE_URL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000';
 
 const WARMUP_ENDPOINTS = [
   // 公共

@@ -312,7 +312,7 @@ export function RadarRightPanel({
             className="block w-full text-left text-[var(--ink-muted)] hover:text-[var(--ink-accent)]"
           >
             <span className="block font-serif">“{item.quote}”</span>
-            {item.body ? <span className="mt-1 block text-[11px] text-[var(--ink-faint)]">{item.body}</span> : null}
+            {item.body ? <span className="mt-1 block text-xs text-[var(--ink-faint)]">{item.body}</span> : null}
           </button>
           {editingId === item.id ? (
             <div className="mt-2">
@@ -325,14 +325,14 @@ export function RadarRightPanel({
                 className="w-full resize-y rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-2 py-1.5 text-xs leading-5 outline-none focus:border-[var(--ink-accent)]"
               />
               {annotationError ? (
-                <p role="alert" className="mt-1 text-[11px] text-[var(--ink-danger-text)]">{annotationError}</p>
+                <p role="alert" className="mt-1 text-xs text-[var(--ink-danger-text)]">{annotationError}</p>
               ) : null}
               <div className="mt-2 flex items-center justify-end gap-1.5">
                 <button
                   type="button"
                   onClick={() => void saveAnnotationEdit()}
                   disabled={busyId === item.id}
-                  className="inline-flex items-center gap-1 rounded-md bg-[var(--ink-accent)] px-2 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-60"
+                  className="inline-flex items-center gap-1 rounded-md bg-[var(--ink-accent)] px-2 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-60"
                 >
                   {busyId === item.id ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
                   保存
@@ -344,7 +344,7 @@ export function RadarRightPanel({
                     setEditingBody('');
                     setAnnotationError(null);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md border border-[var(--ink-rule)] px-2 py-1 text-[11px] text-[var(--ink-muted)] hover:bg-[var(--ink-page)]"
+                  className="inline-flex items-center gap-1 rounded-md border border-[var(--ink-rule)] px-2 py-1 text-xs text-[var(--ink-muted)] hover:bg-[var(--ink-page)]"
                 >
                   <X className="size-3" />
                   取消
@@ -357,7 +357,7 @@ export function RadarRightPanel({
                 type="button"
                 onClick={() => startEditAnnotation(item)}
                 disabled={busyId === item.id}
-                className="inline-flex items-center gap-1 rounded-md border border-[var(--ink-rule)] px-2 py-1 text-[11px] text-[var(--ink-muted)] hover:bg-[var(--ink-page)] disabled:opacity-60"
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--ink-rule)] px-2 py-1 text-xs text-[var(--ink-muted)] hover:bg-[var(--ink-page)] disabled:opacity-60"
               >
                 <Pencil className="size-3" />编辑
               </button>
@@ -365,13 +365,13 @@ export function RadarRightPanel({
                 type="button"
                 onClick={() => void deleteAnnotation(item)}
                 disabled={busyId === item.id}
-                className="inline-flex items-center gap-1 rounded-md border border-[var(--ink-danger-border)] px-2 py-1 text-[11px] text-[var(--ink-danger-text)] hover:bg-[var(--ink-danger)] disabled:opacity-60"
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--ink-danger-border)] px-2 py-1 text-xs text-[var(--ink-danger-text)] hover:bg-[var(--ink-danger)] disabled:opacity-60"
               >
                 {busyId === item.id ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
                 删除
               </button>
               {annotationError && busyId !== item.id ? (
-                <span role="alert" className="text-[11px] text-[var(--ink-danger-text)]">{annotationError}</span>
+                <span role="alert" className="text-xs text-[var(--ink-danger-text)]">{annotationError}</span>
               ) : null}
             </div>
           )}
@@ -385,7 +385,7 @@ export function RadarRightPanel({
       <aside className={cn('flex h-full min-h-0 flex-col', className)} aria-label="我的批注">
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
-            <p className="font-sans text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读批注</p>
+            <p className="font-sans text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读批注</p>
             <h2 className="mt-1 font-sans text-lg font-semibold text-[var(--ink-text)]">我的批注</h2>
             <p className="mt-1 max-w-[32ch] text-xs leading-5 text-[var(--ink-muted)]">
               {annotations.length
@@ -398,7 +398,7 @@ export function RadarRightPanel({
               <button
                 type="button"
                 onClick={exportAnnotations}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--ink-accent)] hover:underline"
+                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--ink-accent)] hover:underline"
               >
                 <Download className="size-3" />导出
               </button>
@@ -432,11 +432,11 @@ export function RadarRightPanel({
   const panelHeader = (
     <div className="mb-5 flex items-start justify-between gap-3">
       <div>
-        <p className="font-sans text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读导航</p>
+        <p className="font-sans text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读导航</p>
         <h2 className="mt-1 font-sans text-lg font-semibold text-[var(--ink-text)]">{panelTitle}</h2>
         <p className="mt-1 max-w-[30ch] text-xs leading-5 text-[var(--ink-muted)]">{panelDescription}</p>
         {!sourceOnly && !mapState.loading && !mapState.error && mapState.guide ? (
-          <div className="mt-2 space-y-1 text-[10px] text-[var(--ink-faint)]">
+          <div className="mt-2 space-y-1 text-xs text-[var(--ink-faint)]">
             <p>{mapState.cached ? '已使用本地缓存' : '刚刚生成并已缓存'}</p>
             {mapState.coverage ? (
               <p>
@@ -467,27 +467,27 @@ export function RadarRightPanel({
 
       {selectedQuote ? (
         <div className="mb-4 border-y border-[var(--ink-rule)] py-3">
-          <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
             <Sparkles className="size-3" />
             当前选中文本
           </div>
           <p className="line-clamp-3 font-serif text-xs leading-5 text-[var(--ink-muted)]">{selectedQuote}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <button type="button" onClick={onExplainSelection} className="inline-flex items-center gap-1 border border-[var(--ink-accent)]/35 px-2 py-1 text-[11px] font-medium text-[var(--ink-accent)] hover:bg-[var(--ink-accent)]/[0.06]">
+            <button type="button" onClick={onExplainSelection} className="inline-flex items-center gap-1 border border-[var(--ink-accent)]/35 px-2 py-1 text-xs font-medium text-[var(--ink-accent)] hover:bg-[var(--ink-accent)]/[0.06]">
               <Sparkles className="size-3" />解释
             </button>
-            <button type="button" onClick={onTranslateSelection} className="inline-flex items-center gap-1 border border-warning-border px-2 py-1 text-[11px] font-medium text-warning-fg hover:bg-warning-bg">
+            <button type="button" onClick={onTranslateSelection} className="inline-flex items-center gap-1 border border-warning-border px-2 py-1 text-xs font-medium text-warning-fg hover:bg-warning-bg">
               <Languages className="size-3" />翻译
             </button>
             {canInteract && onAskSelection ? (
-              <button type="button" onClick={onAskSelection} className="inline-flex items-center gap-1 border border-method-ai/35 px-2 py-1 text-[11px] font-medium text-method-ai hover:bg-method-ai/10">
+              <button type="button" onClick={onAskSelection} className="inline-flex items-center gap-1 border border-method-ai/35 px-2 py-1 text-xs font-medium text-method-ai hover:bg-method-ai/10">
                 <MessageCircle className="size-3" />问 AI
               </button>
             ) : null}
-            <button type="button" onClick={onAnnotateSelection} className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-2 py-1 text-[11px] font-medium text-[var(--ink-text)] hover:bg-[var(--ink-page)]">
+            <button type="button" onClick={onAnnotateSelection} className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-2 py-1 text-xs font-medium text-[var(--ink-text)] hover:bg-[var(--ink-page)]">
               <BookmarkPlus className="size-3" />批注
             </button>
-            <button type="button" onClick={onCopySelection} className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-2 py-1 text-[11px] font-medium text-[var(--ink-text)] hover:bg-[var(--ink-page)]">
+            <button type="button" onClick={onCopySelection} className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-2 py-1 text-xs font-medium text-[var(--ink-text)] hover:bg-[var(--ink-page)]">
               <Copy className="size-3" />复制
             </button>
           </div>
@@ -511,7 +511,7 @@ export function RadarRightPanel({
 
       {displayOutline.length ? (
         <div className="min-h-0 flex-1 space-y-1.5 lg:overflow-y-auto">
-          <p className="mb-2 text-[11px] text-[var(--ink-muted)]">
+          <p className="mb-2 text-xs text-[var(--ink-muted)]">
             {usingSourceOutline
               ? sourceOnly ? '来源结构' : contentPending ? '原文结构' : '原文结构 · AI 地图生成中'
               : `基于全文生成 · ${outline.length} 个部分`}
@@ -538,18 +538,18 @@ export function RadarRightPanel({
               }}
             >
               <div className="flex gap-2.5">
-                <span className="font-mono text-[10px] text-[var(--ink-accent)]">{String(index + 1).padStart(2, '0')}</span>
+                <span className="font-mono text-xs text-[var(--ink-accent)]">{String(index + 1).padStart(2, '0')}</span>
                 <div className="min-w-0">
                   <p className="break-words font-sans text-xs font-semibold text-[var(--ink-text)]">{item.heading || `部分 ${index + 1}`}</p>
                   {item.takeaway ? <p className="mt-1 break-words font-serif text-xs leading-5 text-[var(--ink-muted)]">{item.takeaway}</p> : null}
                   {'source' in item && item.source ? (
-                    <span className="mt-1 inline-flex items-center gap-0.5 text-[11px] text-[var(--ink-muted)]">
+                    <span className="mt-1 inline-flex items-center gap-0.5 text-xs text-[var(--ink-muted)]">
                       原文目录
                     </span>
                   ) : item.anchorStatus === 'unresolved' || !item.quote ? (
-                    <span className="mt-1 block text-[11px] text-[var(--ink-faint)]">暂无精确原文位置</span>
+                    <span className="mt-1 block text-xs text-[var(--ink-faint)]">暂无精确原文位置</span>
                   ) : (
-                    <span className="mt-1 inline-flex items-center gap-0.5 text-[11px] text-[var(--ink-accent)]">
+                    <span className="mt-1 inline-flex items-center gap-0.5 text-xs text-[var(--ink-accent)]">
                       <Crosshair className="size-3" aria-hidden />
                       回到原文
                       <span className="sr-only">(滚动到原文位置)</span>
@@ -569,7 +569,7 @@ export function RadarRightPanel({
             <button
               type="button"
               onClick={(event) => { event.preventDefault(); exportAnnotations(); }}
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--ink-accent)] hover:underline"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[var(--ink-accent)] hover:underline"
             >
               <Download className="size-3" />导出 Markdown
             </button>
@@ -589,10 +589,10 @@ export function RadarRightPanel({
       >
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-y border-[var(--ink-rule)] py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 [&::-webkit-details-marker]:hidden">
           <div className="min-w-0">
-            <p className="font-sans text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读导航</p>
+            <p className="font-sans text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读导航</p>
             <div className="mt-1 flex min-w-0 items-baseline gap-2">
               <span className="truncate font-sans text-sm font-semibold text-[var(--ink-text)]">{panelTitle}</span>
-              <span className="shrink-0 text-[11px] text-[var(--ink-muted)]">{compactPanelStatus}</span>
+              <span className="shrink-0 text-xs text-[var(--ink-muted)]">{compactPanelStatus}</span>
             </div>
           </div>
           <ChevronDown className="size-4 shrink-0 text-[var(--ink-muted)] transition-transform group-open:rotate-180" aria-hidden />

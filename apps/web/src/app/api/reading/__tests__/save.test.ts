@@ -4,6 +4,10 @@ const mocks = vi.hoisted(() => ({
   requireReadingUser: vi.fn(),
   transaction: vi.fn(),
   findFirst: vi.fn(),
+  researchCreate: vi.fn(),
+  researchSourceCreate: vi.fn(),
+  researchAuditCreate: vi.fn(),
+  indexTaskUpsert: vi.fn(),
 }));
 
 vi.mock('../../../../lib/api-handler', () => ({
@@ -39,6 +43,13 @@ function request(input: unknown): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.requireReadingUser.mockResolvedValue(USER);
+  mocks.researchCreate.mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', title: 'Docs', status: 'draft', createdAt: new Date() });
+  mocks.transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback({
+    research: { create: mocks.researchCreate },
+    researchSource: { create: mocks.researchSourceCreate },
+    researchAudit: { create: mocks.researchAuditCreate },
+    personalKnowledgeIndexTask: { upsert: mocks.indexTaskUpsert },
+  }));
 });
 
 describe('POST /api/reading/save', () => {
@@ -64,5 +75,40 @@ describe('POST /api/reading/save', () => {
     expect(response.status).toBe(400);
     expect((await response.json()).message).toContain('位置或内容指纹');
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('stores an excerpt without enqueueing it for vector indexing', async () => {
+    const response = await POST(request({
+      url: 'https://example.com/docs',
+      title: 'Docs',
+      quote: body,
+      note: '',
+    }) as never);
+
+    expect(response.status).toBe(201);
+    expect(mocks.researchCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ knowledgeIndexText: null }),
+    }));
+    expect(mocks.indexTaskUpsert).not.toHaveBeenCalled();
+  });
+
+  it('indexes only the confirmed note and AI conclusion, never the quoted source', async () => {
+    const response = await POST(request({
+      url: 'https://example.com/docs',
+      title: 'Docs',
+      quote: body,
+      note: '我的判断是先限制索引范围。',
+      aiAnswer: '确认的结论是小规模验证成本。',
+    }) as never);
+
+    expect(response.status).toBe(201);
+    const create = mocks.researchCreate.mock.calls[0][0] as { data: { knowledgeIndexText: string; conclusion: string } };
+    expect(create.data.knowledgeIndexText).toContain('我的判断是先限制索引范围。');
+    expect(create.data.knowledgeIndexText).toContain('确认的 AI 结论');
+    expect(create.data.knowledgeIndexText).not.toContain(body);
+    expect(create.data.conclusion).toContain('我的笔记');
+    expect(mocks.indexTaskUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ operation: 'upsert' }),
+    }));
   });
 });

@@ -166,15 +166,19 @@ try {
     await waitFor(async () => {
       const result = await secondFixture.evaluate(() => ({
         overlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
+        imageWrappers: document.querySelectorAll('[data-deep-research-image-wrap]').length,
+        imageResults: document.querySelectorAll('[data-deep-research-image-overlay], [data-deep-research-image-fallback], [data-deep-research-image-side-translation]').length,
         translations: document.querySelectorAll('[data-deep-research-translation]').length,
       }));
-      return result.overlays === 2 && result.translations >= 6 ? result : null;
+      return result.imageWrappers === 2 && result.imageResults >= 2 && result.translations >= 6 ? result : null;
     }, { timeout: 45_000, label: '浏览器重启后的页面结果' });
   } catch (error) {
     console.error(JSON.stringify({
       panel: (await secondPanel.locator('body').innerText().catch(() => '')).slice(-1800),
       page: await secondFixture.evaluate(() => ({
         overlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
+        imageWrappers: document.querySelectorAll('[data-deep-research-image-wrap]').length,
+        imageResults: document.querySelectorAll('[data-deep-research-image-overlay], [data-deep-research-image-fallback], [data-deep-research-image-side-translation]').length,
         translations: document.querySelectorAll('[data-deep-research-translation]').length,
         body: document.body.innerText.slice(0, 600),
       })).catch(() => null),
@@ -195,6 +199,8 @@ try {
   const requests = requestLines.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const visibleResult = await secondFixture.evaluate(() => ({
     overlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
+    imageWrappers: document.querySelectorAll('[data-deep-research-image-wrap]').length,
+    imageResults: document.querySelectorAll('[data-deep-research-image-overlay], [data-deep-research-image-fallback], [data-deep-research-image-side-translation]').length,
     translations: document.querySelectorAll('[data-deep-research-translation]').length,
   }));
   const summary = {
@@ -206,7 +212,7 @@ try {
     visibleResult,
     providerRequests: requests.length,
   };
-  if (visibleResult.overlays !== 2 || visibleResult.translations < 6) throw new Error(`浏览器重启恢复后的页面结果不完整：${JSON.stringify(summary)}`);
+  if (visibleResult.imageWrappers !== 2 || visibleResult.imageResults < 2 || visibleResult.translations < 6) throw new Error(`浏览器重启恢复后的页面结果不完整：${JSON.stringify(summary)}`);
   if (finalState.taskInputs.length !== 0 || finalState.jobs.some((item) => ['queued', 'running'].includes(item.status))) throw new Error(`浏览器重启恢复后的任务未收口：${JSON.stringify(summary)}`);
   console.log(JSON.stringify(summary, null, 2));
 } finally {

@@ -405,15 +405,15 @@ function OverviewPane({
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-3">
             <div className="rounded-md border border-border/70 bg-card/70 p-3">
-              <p className="text-[11px] text-muted-foreground">相关内容</p>
+              <p className="text-xs text-muted-foreground">相关内容</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums">{topic.candidateCount}</p>
             </div>
             <div className="rounded-md border border-border/70 bg-card/70 p-3">
-              <p className="text-[11px] text-muted-foreground">活跃议题</p>
+              <p className="text-xs text-muted-foreground">活跃议题</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums">{issueTotalCount}</p>
             </div>
             <div className="rounded-md border border-border/70 bg-card/70 p-3">
-              <p className="text-[11px] text-muted-foreground">采集渠道</p>
+              <p className="text-xs text-muted-foreground">采集渠道</p>
               <p className="mt-1 font-mono text-lg font-semibold tabular-nums">{topic.sourceCount}</p>
             </div>
           </div>
@@ -607,12 +607,12 @@ function SynthesisPendingNotice({
             : '综述正在准备中。先从下方的热点议题和时间线开始，不必等待整篇综述。'}
       </p>
       {lastSuccessAt ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           最近成功更新：{new Date(lastSuccessAt).toLocaleString('zh-CN')}
         </p>
       ) : null}
       {slow ? (
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
           <span>等待超过 8 秒</span>
           <Button type="button" size="xs" variant="outline" onClick={() => router.refresh()}>
             <RefreshCw />
@@ -641,7 +641,7 @@ function RecentIssuesPreview({
           <h2 id="featured-topic-issues" className="text-sm font-semibold">
             重点议题
           </h2>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">按重要度展示</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">按重要度展示</p>
         </div>
         <Link
           href={`/topics/${encodeURIComponent(topic.slug)}?tab=issues`}
@@ -653,7 +653,7 @@ function RecentIssuesPreview({
       <ul className="mt-2 grid list-none gap-2 p-0">
         {issues.slice(0, 3).map((issue) => (
           <li key={issue.id} className="border-b border-border pb-2 last:border-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <span>{issue.kind === 'event' ? '事件' : '问题'}</span>
               <span>最近更新 {new Date(issue.lastSeenAt).toLocaleDateString('zh-CN')}</span>
               <span>{issue.candidateIds.length} 条关联内容</span>
@@ -835,7 +835,7 @@ function IssuesPane({
             </Button>
           ) : null}
           {viewedAt ? (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               已标记为已读 {new Date(viewedAt).toLocaleString('zh-CN')}
             </span>
           ) : null}
@@ -868,7 +868,7 @@ function IssuesPane({
                 <h3 className="min-w-0 flex-1 text-sm font-medium">{issue.title}</h3>
               </div>
               <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{issue.proposition}</p>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>首发 {new Date(issue.firstSeenAt).toLocaleDateString('zh-CN')}</span>
                 <span>·</span>
                 <span>最近更新 {new Date(issue.lastSeenAt).toLocaleDateString('zh-CN')}</span>
@@ -943,7 +943,7 @@ function ResearchPane({
                 ) : (
                   <Badge className="bg-muted text-muted-foreground">{row.researchStatus}</Badge>
                 )}
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   {new Date(row.createdAt).toLocaleDateString('zh-CN')}
                 </span>
               </div>
@@ -1063,7 +1063,7 @@ function TrendPane({ topic }: { topic: TopicPayload }): ReactNode {
           {new Date(topic.aggregationWindowEnd).toLocaleDateString('zh-CN')}
         </p>
         <TrendSparkline points={trend} />
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           过去 {trend.length} 天新增 {totalInWindow} 条相关内容
           {peak && peak.count > 0 ? `，单日峰值 ${peak.count} 条（${peak.date}）` : ''}
         </p>
@@ -1112,7 +1112,7 @@ function TrendSparkline({ points }: { points: TopicCandidateTrendPoint[] }): Rea
           <title>{`${lastDate ?? ''} · ${last.count} 条相关内容`}</title>
         </circle>
       </svg>
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>起 {formatDate(firstDate)}</span>
         <span>止 {formatDate(lastDate)}</span>
       </div>
@@ -1133,7 +1133,7 @@ function TimelinePane({ candidates }: { candidates: CandidateRow[] }): ReactNode
   });
   return (
     <div className="space-y-2">
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         最近显示 {Math.min(sorted.length, 12)} 条，共 {sorted.length} 条已加载内容。
       </p>
       <ol aria-label="按发布时间排序的近期相关内容" className="grid list-none gap-1.5 p-0 text-xs">
@@ -1141,7 +1141,7 @@ function TimelinePane({ candidates }: { candidates: CandidateRow[] }): ReactNode
             <li key={c.summaryId} className="flex items-start gap-2">
               <span className="mt-1 inline-block size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
               <div className="min-w-0 flex-1">
-                <p className="font-mono text-[11px] text-muted-foreground">
+                <p className="font-mono text-xs text-muted-foreground">
                   <time>{c.publishedAt ? new Date(c.publishedAt).toLocaleDateString('zh-CN') : '待发布'}</time>
                 </p>
                 <Link href={`/radar/${c.summaryId}`} className="line-clamp-2 hover:text-primary hover:underline">

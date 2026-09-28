@@ -10,8 +10,26 @@
 //   - CI 集成：Week 11 之后接入（暂未实现；详见 docs/E2E_TESTING.md）
 
 import { defineConfig, devices } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 
-const BASE_URL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+const baseUrl = new URL(process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000');
+if (baseUrl.port === '') baseUrl.port = '3000';
+if (
+  baseUrl.protocol !== 'http:' ||
+  !['localhost', '127.0.0.1', '[::1]'].includes(baseUrl.hostname.toLowerCase()) ||
+  baseUrl.pathname !== '/' ||
+  baseUrl.search ||
+  baseUrl.hash ||
+  baseUrl.username ||
+  baseUrl.password
+) {
+  throw new Error('E2E_BASE_URL must be a local HTTP origin on localhost or loopback');
+}
+const BASE_URL = baseUrl.origin;
+const bindHost = baseUrl.hostname.toLowerCase() === '[::1]' ? '::1' : '127.0.0.1';
+const E2E_CREDENTIALS_TOKEN = process.env.E2E_CREDENTIALS_TOKEN ?? randomBytes(32).toString('hex');
+process.env.E2E_BASE_URL = BASE_URL;
+process.env.E2E_CREDENTIALS_TOKEN = E2E_CREDENTIALS_TOKEN;
 
 export default defineConfig({
   testDir: './e2e',
@@ -29,7 +47,7 @@ export default defineConfig({
 
   // 串行启动 web（ai-engine 由 dev:ai 单独起；详见 docs/E2E_TESTING.md）
   webServer: {
-    command: 'pnpm dev',
+    command: `./node_modules/.bin/next dev --turbopack --hostname ${bindHost} --port ${baseUrl.port}`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
@@ -37,10 +55,15 @@ export default defineConfig({
     stderr: 'pipe',
     env: {
       E2E: '1',
+      E2E_CREDENTIALS_TOKEN,
+      ANYTHINGLLM_API_KEY: '',
+      ANYTHINGLLM_URL: '',
       // Auth.js builds callback redirects from NEXTAUTH_URL. Keep it aligned
       // with Playwright's target so custom/CI ports never redirect into a
       // different local service.
       NEXTAUTH_URL: BASE_URL,
+      TEST_ANYTHINGLLM_API_KEY: '',
+      TEST_ANYTHINGLLM_URL: '',
     },
   },
 

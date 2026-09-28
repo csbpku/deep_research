@@ -380,13 +380,57 @@ class DbJobStore(JobStore):
 
                 if kind == "summary":
                     row = await conn.execute(
-                        'SELECT title, url, interpretation, body FROM summaries WHERE id = %s',
-                        (value,),
+                        """
+                        SELECT s.title, s.url, s.interpretation, s.body
+                        FROM summaries s
+                        LEFT JOIN share_submissions share ON share."publishedSummaryId" = s.id
+                        WHERE s.id = %s
+                          AND (
+                            (s.source::text = 'daily' AND s."syncRunId" IS NOT NULL)
+                            OR (s.source::text = 'user' AND share.status::text = 'approved')
+                          )
+                          AND (
+                            EXISTS (
+                              SELECT 1 FROM users requester
+                              WHERE requester.id = %s AND requester.role = 'admin'
+                            )
+                            OR (
+                              s.status::text IN ('candidate', 'published')
+                              AND (
+                                (
+                                  s.source::text = 'daily'
+                                  AND (
+                                    s."distilledTier" = 'skim'
+                                    OR (
+                                      s."distilledTier" IN ('collection', 'deep_read')
+                                      AND (
+                                        'external_reading' = ANY(COALESCE(s.tags, ARRAY[]::text[]))
+                                        OR (
+                                          s."enrichmentStatus" = 'ready'
+                                          AND s."readerQualityStatus" = 'ready'
+                                          AND s."contentReviewStatus" = 'approved'
+                                        )
+                                      )
+                                    )
+                                  )
+                                )
+                                OR (
+                                  s.source::text = 'user'
+                                  AND share.status::text = 'approved'
+                                  AND COALESCE(s."distilledTier", s."distilledScore"->>'tier') IS NOT NULL
+                                  AND COALESCE(s."distilledTier", s."distilledScore"->>'tier') <> 'noise'
+                                )
+                              )
+                            )
+                          )
+                        """,
+                        (value, requester_id),
                     )
                 else:
                     row = await conn.execute(
                         'SELECT title, NULL::text AS url, NULL::text AS interpretation, body '
-                        'FROM researches WHERE id = %s AND (status = \'published\' OR "authorId" = %s)',
+                        'FROM researches WHERE id = %s AND (status = \'published\' '
+                        'OR ("authorId" = %s AND status = \'draft\'))',
                         (value, requester_id),
                     )
                 found = await row.fetchone()

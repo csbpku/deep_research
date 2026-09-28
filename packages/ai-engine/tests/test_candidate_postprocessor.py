@@ -71,7 +71,7 @@ async def test_score_missing_candidates_scores_approved_share_content() -> None:
     update_sql, update_params = pool.connection_value.executions[1]
     assert '"distilledScore"' in update_sql
     assert 'WHEN %s::text IS NULL THEN NULL' in update_sql
-    assert 'WHEN %s::text IS NULL OR %s THEN NULL' in update_sql
+    assert 'WHEN %s OR %s::text IS NULL OR %s THEN NULL' in update_sql
     assert update_params[1] == 58.0
 
 
@@ -127,6 +127,45 @@ async def test_rescoring_enriched_repo_uses_github_profile_and_signals() -> None
     assert calls[0]["structured_signals"]["stars"] == 68_000
     assert calls[0]["structured_signals"]["hasCiAction"] is True
     assert calls[0]["structured_signals"]["hasTests"] is True
+
+
+async def test_external_reading_rescore_preserves_high_tier_without_enrichment() -> None:
+    pool = _Pool([{
+        "id": "summary-external",
+        "title": "acme/external-repo",
+        "body": "A useful external reading brief. " * 80,
+        "url": "https://github.com/acme/external-repo",
+        "publishedAt": None,
+        "originalMarkdown": None,
+        "tags": ["external_reading"],
+        "originalKind": "github_repo",
+        "originalMeta": None,
+        "enrichmentStatus": None,
+        "readerQualityStatus": None,
+        "sourceType": "github",
+    }])
+
+    async def fake_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        return replace(
+            default_score(get_profile("engineering")),
+            total=80.0,
+            effective_total=80.0,
+            ranking_score=80.0,
+            tier_score=80.0,
+            tier="deep_read",
+            is_default=False,
+        )
+
+    scored = await score_missing_candidates(pool, scorer=fake_scorer)
+
+    assert scored == 1
+    update_sql, update_params = pool.connection_value.executions[1]
+    assert 'WHEN %s THEN NULL' in update_sql
+    assert update_params[2] == "deep_read"
+    assert str(update_params[5]).startswith("补评分：全文未缓存")
+    assert update_params[6] is True
+    assert update_params[9] is True
+    assert update_params[-1] == "summary-external"
 
 
 async def test_score_missing_candidates_leaves_default_score_retryable() -> None:
@@ -247,7 +286,7 @@ async def test_limited_content_cannot_persist_high_value_deliverable_tier() -> N
     assert '"distilledTargetTier" = %s' in update_sql
     assert update_params[2] == "skim"
     assert update_params[3] == "deep_read"
-    assert update_params[7] is False
+    assert update_params[8] is False
 
 
 async def test_score_missing_candidates_retries_complete_content_pending_row() -> None:

@@ -249,7 +249,7 @@ function SubmissionsHistory({ onRetry, retrying }: { onRetry: (id: string) => vo
                 <Badge className={STATUS_TONE[s.status] ?? 'bg-muted text-muted-foreground'}>
                   {STATUS_LABELS[s.status] ?? s.status}
                 </Badge>
-                <span className="font-mono text-[10px] text-muted-foreground">
+                <span className="font-mono text-xs text-muted-foreground">
                   {s.id.slice(0, 8)}…
                 </span>
                 {s.status === 'completed' && s.summaryId ? (

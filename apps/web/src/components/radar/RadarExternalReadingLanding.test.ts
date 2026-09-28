@@ -6,10 +6,25 @@ vi.mock('../domain/BackToSearchButton', () => ({
   BackToSearchButton: () => createElement('button', null, '返回'),
 }));
 
-import { externalReaderUrl, RadarExternalReadingLanding } from './RadarExternalReadingLanding';
+import { cleanRadarTags, externalReaderUrl, RadarExternalReadingLanding, ReaderSourcePrompt } from './RadarExternalReadingLanding';
 import { zreadRepositoryUrl } from './radar-repository';
 
 describe('RadarExternalReadingLanding', () => {
+  it('renders the source prompt as a labelled modal with explicit next steps', () => {
+    const html = renderToStaticMarkup(createElement(ReaderSourcePrompt, {
+      readerUrl: 'https://example.com/article',
+      onClose: vi.fn(),
+      onOpen: vi.fn(),
+    }));
+
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain('aria-describedby="reader-source-prompt-description"');
+    expect(html).toContain('data-initial-focus="true"');
+    expect(html).toContain('先安装 Reader');
+    expect(html).toContain('我已安装，继续打开');
+  });
+
   it('marks the external URL so the installed Reader can recognize radar context', () => {
     const url = new URL(externalReaderUrl(
       'https://example.com/article?lang=en#architecture',
@@ -55,6 +70,7 @@ describe('RadarExternalReadingLanding', () => {
     expect(html).toContain('/reading/install');
     expect(html).toContain('deep-research-source=radar');
     expect(html).toContain('AI 摘要');
+    expect(html).toContain('同步时临时读取原文生成摘要和评分；全文不保存在本站');
     expect(html).toContain('A concise AI interpretation.');
     expect(html).toContain('为什么值得看');
     expect(html).toContain('只有你明确保存时才会上传内容');
@@ -112,6 +128,10 @@ describe('RadarExternalReadingLanding', () => {
 
   it('does not decorate unsupported protocols', () => {
     expect(externalReaderUrl('javascript:alert(1)', 'summary-id')).toBe('javascript:alert(1)');
+  });
+
+  it('does not show the external-reading implementation tag to users', () => {
+    expect(cleanRadarTags(['external_reading', 'tier_deep_read', 'ai'])).toEqual(['ai']);
   });
 
   it('derives a Zread URL only for a GitHub repository root', () => {

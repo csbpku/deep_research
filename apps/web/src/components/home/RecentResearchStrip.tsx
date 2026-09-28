@@ -124,13 +124,13 @@ export function RecentResearchStrip() {
                         <TagChip key={t}>{t}</TagChip>
                       ))}
                       {item.tags.length > 2 ? (
-                        <span className="font-mono text-[11px] text-muted-foreground">
+                        <span className="font-mono text-xs text-muted-foreground">
                           +{item.tags.length - 2}
                         </span>
                       ) : null}
                     </TagList>
                   ) : null}
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="truncate">{item.author.name}</span>
                     <span aria-hidden>·</span>
                     <span className="font-mono tabular-nums">

@@ -84,16 +84,20 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const upstream = await fetchAiEngine<EngineResponse>({
     url: `${getWebEnv().AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/research-assistant`,
     method: 'POST',
-    timeoutMs: input.action === 'ask' ? 120_000 : 60_000,
+    timeoutMs: input.action === 'ask'
+      ? Math.min(1_200_000, 120_000 + Math.ceil(Math.max(0, body.length - 20_000) / 20_000) * 20_000)
+      : 60_000,
     retry: false,
     signal: req.signal,
     requestId,
     context: 'reading.answer',
     body: {
       operation: input.action,
-      body: body.slice(0, 256_000),
+      requester_id: user.id,
+      body,
       topic: context.title,
       instruction: boundedInstruction,
+      scope: context.scope,
       selection: strictSelection,
     },
   });
@@ -132,6 +136,14 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const citations = modelCitations.length > 0
     ? modelCitations
     : anchor ? [{ quote: anchor.quote, anchor, url: context.url }] : [];
+  const reading = upstream.body.reading ?? null;
+  const anchoredReading = reading ? {
+    ...reading,
+    evidence: (reading.evidence ?? []).map((item) => {
+      const citation = citations.find((candidate) => candidate.quote === item.quote);
+      return citation ? { ...item, anchor: citation.anchor, url: citation.url } : item;
+    }),
+  } : null;
   return NextResponse.json({
     ok: true,
     action: input.action,
@@ -144,7 +156,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       anchor: anchor ?? null,
     },
     citations,
-    reading: upstream.body.reading ?? null,
+    reading: anchoredReading,
     warnings: upstream.body.warnings ?? upstream.body.reading?.warnings ?? [],
     truncated: Boolean(upstream.body.truncated),
     metrics: upstream.body.metrics ?? {},

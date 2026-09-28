@@ -35,14 +35,12 @@ export function ResearchChatPanel({
   note,
   reportId,
   reportContent,
-  rawReportContent,
 }: {
   conversation: AiResearchConversationDetail | null;
   canAsk: boolean;
   note?: string;
   reportId?: string | null;
   reportContent?: string | null;
-  rawReportContent?: string | null;
 }) {
   const [messages, setMessages] = useState<AiResearchChatMessage[]>(conversation?.messages ?? []);
   const [input, setInput] = useState('');
@@ -251,39 +249,21 @@ export function ResearchChatPanel({
   }
 
   async function applyRevision(message: AiResearchChatMessage) {
-    if (message.intent !== 'revise' || !reportId || !reportContent || !rawReportContent || revisionSaving) return;
+    if (message.intent !== 'revise' || !reportId || !reportContent || revisionSaving) return;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(message.id)) {
       setRevisionError('这条回答还没有完成保存，请稍候再试。');
       return;
     }
-    const addition = message.content.trim();
-    if (!addition) return;
+    if (!message.content.trim()) return;
     setRevisionSaving(true);
     setRevisionError(null);
     try {
-      const messageIndex = messages.findIndex((item) => item.id === message.id);
-      const question = messageIndex >= 0
-        ? [...messages.slice(0, messageIndex)].reverse().find((item) => item.role === 'user')?.content
-        : undefined;
-      const separator = rawReportContent.trimEnd().endsWith('\n') ? '\n' : '\n\n';
-      const quotedQuestion = (question ?? '本次追问').split(/\r?\n/u).map((line) => `> ${line}`).join('\n');
-      const provenance = [
-        '## 追问补充',
-        '',
-        `**追问：**\n${quotedQuestion}`,
-        '',
-        addition,
-        '',
-      ].join('\n');
-      const nextBody = `${rawReportContent.trimEnd()}${separator}${provenance}`;
       const response = await fetch(`/api/researches/${encodeURIComponent(reportId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          body: nextBody,
           revisionContext: {
             sourceMessageId: message.id,
-            reason: question ? `根据追问「${question.slice(0, 180)}${question.length > 180 ? '…' : ''}」补充报告` : '根据本次追问补充报告',
           },
         }),
       });
@@ -310,9 +290,9 @@ export function ResearchChatPanel({
           <h3 className="text-sm font-semibold">继续追问</h3>
         </div>
         {canAsk ? (
-          <span className="text-[11px] text-muted-foreground">{note ?? '回答基于本次调研报告，会自动保存到对话。'}</span>
+          <span className="text-xs text-muted-foreground">{note ?? '回答基于本次调研报告，会自动保存到对话。'}</span>
         ) : (
-          <span className="text-[11px] text-muted-foreground">{note ?? '研究完成后可以在这里继续追问。'}</span>
+          <span className="text-xs text-muted-foreground">{note ?? '研究完成后可以在这里继续追问。'}</span>
         )}
       </header>
 
@@ -337,8 +317,11 @@ export function ResearchChatPanel({
               )}>
                 {message.role === 'assistant' ? <Bot className="size-3.5" /> : <UserRound className="size-3.5" />}
               </span>
-              <div className="min-w-0 max-w-[86%]">
-                <p className="text-[11px] font-medium text-muted-foreground">
+              <div
+                className="min-w-0 max-w-[86%]"
+                data-knowledge-source-message={message.role === 'assistant' ? message.id : undefined}
+              >
+                <p className="text-xs font-medium text-muted-foreground">
                   {message.role === 'assistant' ? 'AI 调研助手' : '你'}
                   {message.id.startsWith('streaming-') ? ' · 生成中' : ''}
                 </p>
@@ -361,7 +344,7 @@ export function ResearchChatPanel({
                 {reportId && reportContent && message.intent === 'revise' && message.role === 'assistant' && message.content && index === messages.length - 1 ? (
                   <div className="mt-2">
                     {appliedRevisionIds.has(message.id) ? (
-                      <p className="text-[11px] text-status-success-fg">已生成新版本 · 可在编辑器的版本历史中恢复</p>
+                      <p className="text-xs text-status-success-fg">已生成新版本 · 可在编辑器的版本历史中恢复</p>
                     ) : revisionMessageId === message.id ? (
                       <div className="rounded-lg border border-primary/30 bg-primary/[0.04] p-3 text-xs">
                         <div className="flex items-center justify-between gap-2">
@@ -374,11 +357,11 @@ export function ResearchChatPanel({
                         <div className="mt-2 grid gap-2 sm:grid-cols-2">
                           <div className="rounded border border-border bg-background p-2">
                             <p className="mb-1 font-medium text-muted-foreground">原报告末尾</p>
-                            <p className="line-clamp-5 whitespace-pre-wrap text-[11px] leading-5 text-muted-foreground">{reportContent.trim().slice(-420)}</p>
+                            <p className="line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{reportContent.trim().slice(-420)}</p>
                           </div>
                           <div className="rounded border border-primary/20 bg-primary/[0.04] p-2">
                             <p className="mb-1 font-medium text-primary">将新增</p>
-                            <p className="line-clamp-5 whitespace-pre-wrap text-[11px] leading-5 text-foreground">## 追问补充{`\n\n`}{message.content}</p>
+                            <p className="line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-foreground">## 追问补充{`\n\n`}{message.content}</p>
                           </div>
                         </div>
                         {revisionError ? <p role="alert" className="mt-2 text-destructive">{revisionError}</p> : null}
@@ -390,7 +373,7 @@ export function ResearchChatPanel({
                         </div>
                       </div>
                     ) : (
-                      <button type="button" className="text-[11px] font-medium text-primary hover:underline" onClick={() => { setRevisionError(null); setRevisionMessageId(message.id); }}>
+                      <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={() => { setRevisionError(null); setRevisionMessageId(message.id); }}>
                         应用到报告 · 先预览变更
                       </button>
                     )}
@@ -410,7 +393,7 @@ export function ResearchChatPanel({
 
       {canAsk && !sending && messages.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 border-t border-border/60 px-4 py-2.5">
-          <span className="mr-1 self-center text-[11px] text-muted-foreground">研究动作：</span>
+          <span className="mr-1 self-center text-xs text-muted-foreground">研究动作：</span>
           {FOLLOW_UP_INTENTS.map((item) => (
             <button
               key={item.value}
@@ -418,7 +401,7 @@ export function ResearchChatPanel({
               aria-pressed={intent === item.value}
               onClick={() => { setIntent(item.value); setInput(item.prompt); }}
               className={cn(
-                'touch-target rounded-full border px-2.5 py-1 text-[11px] transition-colors',
+                'touch-target rounded-full border px-2.5 py-1 text-xs transition-colors',
                 intent === item.value ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground',
               )}
             >
@@ -453,7 +436,7 @@ export function ResearchChatPanel({
             className="min-h-[64px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
           />
           <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
-            <span className="text-[11px] text-muted-foreground">{FOLLOW_UP_INTENTS.find((item) => item.value === intent)?.label} · ⌘/Ctrl + Enter 发送</span>
+            <span className="text-xs text-muted-foreground">{FOLLOW_UP_INTENTS.find((item) => item.value === intent)?.label} · ⌘/Ctrl + Enter 发送</span>
             <Button type="button" size="sm" onClick={() => void sendMessage()} disabled={!input.trim() || !canAsk || sending} aria-label="发送追问">
               {sending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
               发送
@@ -486,9 +469,9 @@ function ActionItemsView({ content }: { content: string }) {
     return (
       <div className="mt-1 rounded-lg border border-warning-border/60 bg-warning-bg/20 p-3">
         <p className="text-xs font-medium text-foreground">行动项未按约定格式返回</p>
-        <p className="mt-1 text-[11px] leading-5 text-muted-foreground">原始回答仍已保存；请重试生成行动项，避免把缺失的负责人或完成条件猜出来。</p>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">原始回答仍已保存；请重试生成行动项，避免把缺失的负责人或完成条件猜出来。</p>
         <details className="mt-2">
-          <summary className="cursor-pointer text-[11px] font-medium text-primary">查看原始回答</summary>
+          <summary className="cursor-pointer text-xs font-medium text-primary">查看原始回答</summary>
           <MarkdownContent content={content} compact className="mt-2 text-sm leading-6" />
         </details>
       </div>
@@ -500,7 +483,7 @@ function ActionItemsView({ content }: { content: string }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xs font-semibold text-foreground">行动项</p>
-          <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">独立于研究稿保存，不会自动写入报告。</p>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">独立于研究稿保存，不会自动写入报告。</p>
         </div>
         <Button type="button" variant="outline" size="xs" onClick={() => void copyItems()} aria-label="复制行动项">
           {copied ? <Check className="size-3.5" /> : <Clipboard className="size-3.5" />}
@@ -513,9 +496,9 @@ function ActionItemsView({ content }: { content: string }) {
             <div className="flex items-start gap-2">
               <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
               <h4 className="min-w-0 flex-1 text-xs font-semibold leading-5 text-foreground">{item.title}</h4>
-              <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.priority ?? '待判断'}</span>
+              <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-xs text-muted-foreground">{item.priority ?? '待判断'}</span>
             </div>
-            <dl className="mt-2 grid gap-1.5 text-[11px] leading-5 sm:grid-cols-2">
+            <dl className="mt-2 grid gap-1.5 text-xs leading-5 sm:grid-cols-2">
               <ActionField label="负责人" value={item.owner} />
               <ActionField label="待验证假设" value={item.hypothesis} />
               <ActionField label="完成条件" value={item.completionCriteria} />
@@ -524,7 +507,7 @@ function ActionItemsView({ content }: { content: string }) {
           </article>
         ))}
       </div>
-      {copyError ? <p role="alert" className="mt-2 text-[11px] text-destructive">复制失败，请手动选择行动项文本。</p> : null}
+      {copyError ? <p role="alert" className="mt-2 text-xs text-destructive">复制失败，请手动选择行动项文本。</p> : null}
     </section>
   );
 }
@@ -532,7 +515,7 @@ function ActionItemsView({ content }: { content: string }) {
 function ActionField({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="min-w-0 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-      <dt className="text-[10px] text-muted-foreground">{label}</dt>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 break-words text-foreground">{value ?? '未明确'}</dd>
     </div>
   );

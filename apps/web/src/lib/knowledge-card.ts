@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 
-export const KNOWLEDGE_SOURCE_KINDS = ['research_chat', 'radar_chat'] as const;
+export const KNOWLEDGE_SOURCE_KINDS = ['research_chat', 'radar_chat', 'research_report'] as const;
 export type KnowledgeSourceKind = (typeof KNOWLEDGE_SOURCE_KINDS)[number];
 
 export interface KnowledgeCardSource {
@@ -47,6 +47,42 @@ export async function resolveKnowledgeSource(
   messageId: string,
   userId: string,
 ): Promise<ResolvedKnowledgeSource | null> {
+  if (kind === 'research_report') {
+    const report = await prisma.research.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        title: true,
+        body: true,
+        authorId: true,
+        researchSources: {
+          orderBy: { createdAt: 'asc' },
+          select: { sourceRef: true, canonicalKey: true, title: true, description: true },
+        },
+      },
+    });
+    if (!report || report.type !== 'research' || report.authorId !== userId || !report.body.trim()) return null;
+    const sources: KnowledgeCardSource[] = [];
+    for (const source of report.researchSources) {
+      addSource(sources, {
+        sourceRef: isRecord(source.sourceRef)
+          ? source.sourceRef
+          : { type: 'url', value: source.canonicalKey },
+        canonicalKey: source.canonicalKey,
+        title: source.title,
+        description: source.description,
+      });
+    }
+    return {
+      messageId: report.id,
+      content: report.body.slice(0, 256000),
+      topic: report.title,
+      sources,
+    };
+  }
+
   if (kind === 'research_chat') {
     const message = await prisma.aiResearchConversationMessage.findUnique({
       where: { id: messageId },
@@ -169,4 +205,16 @@ export async function resolveKnowledgeSource(
       : '雷达文章',
     sources,
   };
+}
+
+export function isSelectedKnowledgeText(source: string, selection: string): boolean {
+  const normalize = (value: string) => value
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gmu, '')
+    .replace(/[`*_~]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLocaleLowerCase();
+  const selected = normalize(selection);
+  return selected.length >= 8 && normalize(source).includes(selected);
 }

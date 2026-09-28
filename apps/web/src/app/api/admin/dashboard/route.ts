@@ -119,6 +119,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         originalMeta: true,
         enrichmentStatus: true,
         readerQualityStatus: true,
+        tags: true,
       },
     }),
     prisma.radarSyncDiagnostic.findMany({
@@ -288,7 +289,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       && pageCount >= expectedPageCount;
   };
   const pendingEnrichment = todayRadarCandidates.filter(
-    (candidate) => isHighValue(candidate) && !hasCompleteEnrichment(candidate),
+    (candidate) => !candidate.tags.includes('external_reading')
+      && isHighValue(candidate)
+      && !hasCompleteEnrichment(candidate),
   ).length;
   for (const candidate of todayRadarCandidates) {
     if (candidate.distilledTier === 'collection') readingLevels.collection += 1;

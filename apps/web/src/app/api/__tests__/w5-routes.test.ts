@@ -298,6 +298,8 @@ describe('GET /api/radar', () => {
         ]),
       }),
     }));
+    expect(JSON.stringify(mocks.summaryFindMany.mock.calls[0]?.[0]?.where))
+      .toContain('external_reading');
     expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         AND: expect.arrayContaining([
@@ -564,6 +566,39 @@ describe('GET /api/radar/[id]', () => {
     expect(body.body).toBe('long body');
     expect(body.canManage).toBe(false); // MEMBER role
     expect(body.sourceType).toBe('arxiv');
+  });
+
+  it('allows external-reading candidates without enrichment and redacts cached source content', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'External repo', body: 'source snippet', url: 'https://github.com/acme/repo',
+      tags: ['external_reading', 'tier_deep_read'], status: 'candidate',
+      summaryDate: new Date('2026-09-24'), publishedAt: null, createdAt: new Date(),
+      interpretation: 'A useful repository', scoreReason: 'strong project signals', scoreVersion: 'v1',
+      relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
+      distilledTier: 'deep_read', enrichmentStatus: null, readerQualityStatus: null,
+      contentReviewStatus: null, originalKind: 'github_repo', originalMarkdown: '# Cached README',
+      originalMeta: { zread: { pages: [{ title: 'Overview' }] } }, repoSummary: 'Cached repo summary',
+      selectionReason: null, sortOrder: null, syncRunId: 'r', source: 'daily', sharedBy: null,
+      syncRun: { id: 'r', completedAt: null, source: { sourceType: 'github', name: 'GitHub' } },
+      shareSource: null,
+    });
+    mocks.radarFeedbackGroupBy.mockResolvedValue([]);
+    mocks.radarFeedbackFindMany.mockResolvedValue([]);
+
+    const response = await radarDetail(
+      new Request('http://localhost/api/radar/x') as never,
+      { params: Promise.resolve({ id: SUM_ID }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.tier).toBe('deep_read');
+    expect(body.body).toBeNull();
+    expect(body.excerpt).toBe('A useful repository');
+    expect(body.excerpt).not.toContain('source snippet');
+    expect(body.originalMarkdown).toBeNull();
+    expect(body.originalMeta).toBeNull();
+    expect(body.repoSummary).toBeNull();
   });
 
   it('allows anonymous radar detail reads without user feedback state', async () => {

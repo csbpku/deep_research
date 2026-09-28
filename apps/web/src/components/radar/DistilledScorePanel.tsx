@@ -66,8 +66,8 @@ export function DistilledScorePanel({ score, compact = false, embedded = false, 
               className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tierVisual.border} ${tierVisual.text}`}
               aria-label={`Distilled 评分 ${displayScore}，当前层级 ${tierLabel}，悬停查看详情`}
             >
-              <span className="font-sans text-[11px] font-medium">Distilled</span>
-              {formatScore(displayScore)}<span className="font-sans text-[10px] font-normal">/100</span>
+              <span className="font-sans text-xs font-medium">Distilled</span>
+              {formatScore(displayScore)}<span className="font-sans text-xs font-normal">/100</span>
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="start" className="w-72 max-w-[calc(100vw-2rem)] p-3">
@@ -118,8 +118,8 @@ function ExpandedScorePanel({
         <span
           className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums ${tierVisual.border} ${tierVisual.text}`}
         >
-          <span className="font-sans text-[11px] font-medium">Distilled</span>
-          {formatScore(displayScore)}<span className="font-sans text-[10px] font-normal">/100</span>
+          <span className="font-sans text-xs font-medium">Distilled</span>
+          {formatScore(displayScore)}<span className="font-sans text-xs font-normal">/100</span>
         </span>
         <span className="text-xs text-muted-foreground">查看评分详情</span>
         <span className={`text-xs font-medium ${tierVisual.text}`}>{tierLabel}</span>
@@ -167,28 +167,28 @@ function ScoreDetails({
           {tierLabel}
           {targetTierLabel ? <span className="ml-2 font-normal text-muted-foreground">目标：{targetTierLabel}</span> : null}
         </span>
-        <span className="text-[11px] text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
+        <span className="text-xs text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
       </div>
       {score.tierScore !== undefined || score.rankingScore !== undefined ? (
         <div className="grid grid-cols-3 gap-1.5 border-b border-border pb-2 text-center">
           <div className="min-w-0">
-            <div className="font-mono text-[13px] font-semibold tabular-nums">{formatScore(score.tierScore ?? score.total)}<span className="text-[9px] font-normal text-muted-foreground">/100</span></div>
-            <div className="whitespace-nowrap text-[10px] text-muted-foreground">分层分</div>
+            <div className="font-mono text-[13px] font-semibold tabular-nums">{formatScore(score.tierScore ?? score.total)}<span className="text-xs font-normal text-muted-foreground">/100</span></div>
+            <div className="whitespace-nowrap text-xs text-muted-foreground">分层分</div>
           </div>
           <div className="min-w-0">
-            <div className="font-mono text-[13px] font-semibold tabular-nums">{score.rankingScore === undefined ? '-' : formatScore(score.rankingScore)}{score.rankingScore === undefined ? null : <span className="text-[9px] font-normal text-muted-foreground">/100</span>}</div>
-            <div className="whitespace-nowrap text-[10px] text-muted-foreground">排序分</div>
+            <div className="font-mono text-[13px] font-semibold tabular-nums">{score.rankingScore === undefined ? '-' : formatScore(score.rankingScore)}{score.rankingScore === undefined ? null : <span className="text-xs font-normal text-muted-foreground">/100</span>}</div>
+            <div className="whitespace-nowrap text-xs text-muted-foreground">排序分</div>
           </div>
           <div className="min-w-0">
-            <div className="font-mono text-[13px] font-semibold tabular-nums">{formatScore(score.qualityScore ?? score.total)}<span className="text-[9px] font-normal text-muted-foreground">/100</span></div>
-            <div className="whitespace-nowrap text-[10px] text-muted-foreground">内容质量</div>
+            <div className="font-mono text-[13px] font-semibold tabular-nums">{formatScore(score.qualityScore ?? score.total)}<span className="text-xs font-normal text-muted-foreground">/100</span></div>
+            <div className="whitespace-nowrap text-xs text-muted-foreground">内容质量</div>
           </div>
         </div>
       ) : null}
       <div className="grid grid-cols-1 gap-y-2">
         {Object.entries(score.dimensions).map(([key, val]) => (
           <div key={key} className="grid min-w-0 grid-cols-[minmax(0,4.75rem)_minmax(3.75rem,1fr)_auto] items-center gap-2">
-            <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
               {DIMENSION_LABELS[key] ?? key}
             </span>
             <span className="flex min-w-0 gap-0.5" aria-hidden>
@@ -199,13 +199,22 @@ function ScoreDetails({
                 />
               ))}
             </span>
-            <span className="w-7 shrink-0 text-right text-[10px] font-medium text-muted-foreground">
+            <span className="w-7 shrink-0 text-right text-xs font-medium text-muted-foreground">
               {DIMENSION_LEVELS[val] ?? '未知'}
             </span>
           </div>
         ))}
       </div>
-      {showWeakPoint ? <p className="border-t border-border pt-2 text-muted-foreground"><span className="font-medium text-foreground">弱点：</span>{score.weakPoint}</p> : null}
+      {showWeakPoint ? (
+        <div className="border-t border-border pt-2 text-muted-foreground">
+          <p><span className="font-medium text-foreground">弱点：</span>{score.weakPoint}</p>
+          {score.weakPointEvidence ? (
+            <p className="mt-1 break-words border-l-2 border-border pl-2 text-xs leading-relaxed">
+              原文依据：{score.weakPointEvidence}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {score.veto ? <p className="text-destructive"><span className="font-medium">否决项：</span>{score.veto}</p> : null}
     </div>
   );

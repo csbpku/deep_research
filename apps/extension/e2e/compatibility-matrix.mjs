@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 
@@ -53,7 +54,19 @@ await new Promise((resolve, reject) => { server.once('error', reject); server.li
 const provider = spawn(process.execPath, [new URL('./fake-openai.mjs', import.meta.url).pathname], { env: { ...process.env, PORT: '8801' }, stdio: ['ignore', 'pipe', 'pipe'] });
 await new Promise((resolve) => setTimeout(resolve, 300));
 
-const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const extensionSourcePath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const testExtensionPath = `${await mkdtemp('/private/tmp/deep-research-reader-matrix-extension-')}/extension`;
+await cp(extensionSourcePath, testExtensionPath, { recursive: true });
+const testManifestPath = `${testExtensionPath}/manifest.json`;
+const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
+testManifest.host_permissions = [...new Set([
+  ...(testManifest.host_permissions || []),
+  'http://reader.local/*',
+  'http://docs.local/*',
+  'http://github.localhost/*',
+  'http://zread.localhost/*',
+])];
+await writeFile(testManifestPath, JSON.stringify(testManifest));
 const executablePath = process.env.CHROME_FOR_TESTING
   || [
     '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -66,8 +79,8 @@ const context = await chromium.launchPersistentContext(`/private/tmp/deep-resear
   viewport: { width: 1280, height: 900 },
   args: [
     '--enable-extensions',
-    `--disable-extensions-except=${extensionPath}`,
-    `--load-extension=${extensionPath}`,
+    `--disable-extensions-except=${testExtensionPath}`,
+    `--load-extension=${testExtensionPath}`,
     '--host-resolver-rules=MAP reader.local 127.0.0.1,MAP docs.local 127.0.0.1',
     '--no-first-run',
     '--no-default-browser-check',
@@ -138,18 +151,26 @@ try {
     // The incremental job translates text before images. Waiting only for the
     // newly appended paragraph would sample the page between those two
     // phases and report a false image failure.
-    await page.waitForFunction((expected) => document.querySelectorAll('[data-deep-research-image-overlay]').length === expected, meta.imageCount, { timeout: 30_000 });
+    await page.waitForFunction((expected) => document.querySelectorAll('[data-deep-research-image-wrap]').length === expected, meta.imageCount, { timeout: 30_000 });
     const result = await page.evaluate(() => ({
       textTranslations: document.querySelectorAll('[data-deep-research-translation]').length,
       imageOverlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
+      imageSideTranslations: document.querySelectorAll('[data-deep-research-image-side-translation]').length,
+      imageFallbacks: document.querySelectorAll('[data-deep-research-image-fallback]').length,
+      translatedImages: document.querySelectorAll('[data-deep-research-image-wrap]').length,
       sourceLink: document.querySelector('#source-link')?.getAttribute('href'),
       code: document.querySelector('pre code')?.textContent,
       dynamic: Boolean(document.querySelector('#dynamic')),
       dynamicTranslated: Boolean(document.querySelector('#dynamic')?.nextElementSibling?.hasAttribute('data-deep-research-translation')),
     }));
-    if (!result.textTranslations || result.imageOverlays !== meta.imageCount || !result.sourceLink || !result.code || !result.dynamic || !result.dynamicTranslated) {
+    if (!result.textTranslations || result.translatedImages !== meta.imageCount
+      || result.imageOverlays + result.imageSideTranslations + result.imageFallbacks < meta.imageCount
+      || !result.sourceLink || !result.code || !result.dynamic || !result.dynamicTranslated) {
       throw new Error(`matrix failure for ${meta.kind}${meta.path}: ${JSON.stringify(result)}`);
     }
+    await panel.locator('#restore-page').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-deep-research-translation],[data-deep-research-image-wrap]').length === 0, null, { timeout: 10_000 });
+    await page.bringToFront();
     await page.evaluate(() => {
       const target = document.querySelector('#evidence-target');
       const range = document.createRange();
@@ -157,7 +178,7 @@ try {
       const selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
-      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     });
     await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
     await panel.locator('#explain-selection').click();
@@ -165,8 +186,6 @@ try {
     await panel.locator('#answer-evidence .evidence-item').first().click();
     await page.waitForFunction(() => Boolean(document.querySelector('#evidence-target')?.style.outline), null, { timeout: 5_000 });
     results.push({ ...meta, ...result, anchorResolved: true });
-    await panel.locator('#restore-page').click();
-    await page.waitForFunction(() => document.querySelectorAll('[data-deep-research-translation],[data-deep-research-image-overlay]').length === 0, null, { timeout: 10_000 });
   }
   const imageCount = results.reduce((sum, item) => sum + item.imageCount, 0);
   console.log(JSON.stringify({ pages: results.length, imageCount, kinds: Object.fromEntries(['article', 'docs', 'github', 'zread'].map((kind) => [kind, results.filter((item) => item.kind === kind).length])) }, null, 2));

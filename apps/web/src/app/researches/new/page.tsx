@@ -97,7 +97,7 @@ export default function NewResearchPage() {
               <h1 className="text-3xl font-semibold tracking-normal">新建调研</h1>
             <p className="mt-1 text-sm text-muted-foreground">从一个空白问题开始，或导入已有资料后再整理成团队可复用的研究。</p>
           </div>
-          <div className="hidden text-right font-mono text-[11px] text-muted-foreground sm:block">预计 2–5 分钟<br />可随时保存草稿</div>
+          <div className="hidden text-right font-mono text-xs text-muted-foreground sm:block">预计 2–5 分钟<br />可随时保存草稿</div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">

@@ -24,28 +24,28 @@ function HistoryPage() {
           <div className="history-kicker">LOCAL MEMORY</div>
           <h1>把读过的内容，<br /><em>重新找回来。</em></h1>
           <p className="history-intro">这里集中查看聊天会话和知识结论。独立模式读取浏览器本地数据；平台模式会同时读取已同步到调研平台的会话。</p>
-          <nav className="history-tabs" aria-label="本地内容分类">
-            <button className="history-tab active" data-history-tab="sessions"><span>聊天会话</span><strong id="session-count">0</strong></button>
-            <button className="history-tab" data-history-tab="insights"><span>知识结论</span><strong id="insight-count">0</strong></button>
+          <nav id="history-tabs" className="history-tabs" aria-label="本地内容分类" aria-busy="true">
+            <button className="history-tab active" data-history-tab="sessions" aria-pressed="true" disabled><span>聊天会话</span><strong id="session-count">0</strong></button>
+            <button className="history-tab" data-history-tab="insights" aria-pressed="false" disabled><span>知识结论</span><strong id="insight-count">0</strong></button>
           </nav>
           <div className="history-rail-note"><span className="note-dot" />只保存你主动留下的阅读成果</div>
         </aside>
 
-        <section className="history-content" aria-live="polite">
+        <section className="history-content">
           <div className="history-toolbar">
             <div>
               <div className="history-section-kicker" id="history-section-kicker">READING SESSIONS</div>
               <h2 id="history-section-title">聊天会话</h2>
             </div>
-            <label className="history-search"><span aria-hidden="true">⌕</span><input id="history-search-input" type="search" placeholder="搜索页面或历史问题" /><button id="clear-history-search" title="清除搜索" aria-label="清除搜索">×</button></label>
+            <label className="history-search"><span aria-hidden="true">⌕</span><span className="history-search-label">搜索</span><input id="history-search-input" type="search" aria-label="搜索页面或历史问题" placeholder="页面标题、原文或问题" /><button id="clear-history-search" title="清除搜索" aria-label="清除搜索">×</button></label>
           </div>
-          <div className="history-summary"><span id="history-summary-text">正在读取本地数据…</span><span id="history-filter-text" /></div>
+          <div className="history-summary" role="status" aria-live="polite"><span id="history-summary-text">正在读取本地数据…</span><span id="history-filter-text" /></div>
           <div id="history-list" className="history-list" />
-          <section id="history-detail" className="history-detail hidden" aria-live="polite">
+          <section id="history-detail" className="history-detail hidden" role="region" aria-label="聊天详情">
             <div className="history-detail-header">
               <div>
                 <div className="history-section-kicker">CONVERSATION</div>
-                <h3 id="history-detail-title">聊天详情</h3>
+                <h3 id="history-detail-title" tabIndex={-1}>聊天详情</h3>
                 <div id="history-detail-source" className="history-card-source" />
               </div>
               <div className="history-detail-actions">

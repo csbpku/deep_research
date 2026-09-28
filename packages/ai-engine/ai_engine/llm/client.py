@@ -19,6 +19,14 @@ from ai_engine.llm.config import (
     resolve_route,
 )
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
+from ai_engine.llm.token_budget import (
+    TokenBudgetError,
+    current_budget_task,
+    estimate_call_tokens,
+    release_llm_tokens,
+    reserve_llm_tokens,
+    settle_llm_tokens,
+)
 
 LlmTier = Literal["light", "heavy"]
 _SECRET_RE = re.compile(r"(?:sk|key|token)[-_][A-Za-z0-9._-]{8,}", re.IGNORECASE)
@@ -279,6 +287,49 @@ def _fallback_spec(primary_spec: str) -> str | None:
     return candidate if candidate and candidate != primary_spec else None
 
 
+async def _with_token_reservation(
+    *,
+    operation: str,
+    user_prompt: str,
+    system_prompt: str | None,
+    max_tokens: int,
+    budget_user_id: str | None,
+    call: Callable[[], Awaitable[TextGenerationResult]],
+) -> TextGenerationResult:
+    budget_task = current_budget_task()
+    if budget_task is not None:
+        result = await call()
+        budget_task.record(result.input_tokens, result.output_tokens)
+        return result
+
+    reservation = await reserve_llm_tokens(
+        operation=operation,
+        requested_tokens=estimate_call_tokens(
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            max_output_tokens=max_tokens,
+        ),
+        user_id=budget_user_id,
+    )
+    try:
+        result = await call()
+    except BaseException:
+        if reservation is not None:
+            try:
+                await asyncio.shield(release_llm_tokens(reservation))
+            except Exception:
+                # Expiry recovery releases a reservation if cleanup is interrupted.
+                pass
+        raise
+    if reservation is not None:
+        actual_tokens = result.input_tokens + result.output_tokens
+        await settle_llm_tokens(
+            reservation,
+            actual_tokens if actual_tokens > 0 else reservation.reserved_tokens,
+        )
+    return result
+
+
 async def generate_text(
     *,
     user_prompt: str,
@@ -290,6 +341,7 @@ async def generate_text(
     disable_thinking: bool = False,
     operation: str = "llm.generate_text",
     request_id: str | None = None,
+    budget_user_id: str | None = None,
 ) -> TextGenerationResult:
     """Generate text with explicit retry -> fallback ordering.
 
@@ -321,18 +373,25 @@ async def generate_text(
             total_attempts += 1
             started_at = time.monotonic()
             try:
-                result = await _generate_text_once(
-                    llm_spec=route_spec,
+                result = await _with_token_reservation(
+                    operation=operation,
                     user_prompt=user_prompt,
                     system_prompt=system_prompt,
-                    tier=tier,
                     max_tokens=max_tokens,
-                    timeout=timeout,
-                    disable_thinking=disable_thinking,
+                    budget_user_id=budget_user_id,
+                    call=lambda: _generate_text_once(
+                        llm_spec=route_spec,
+                        user_prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        tier=tier,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                        disable_thinking=disable_thinking,
+                    ),
                 )
             except Exception as error:
                 last_error = error
-                retryable = is_retryable_llm_error(error)
+                retryable = not isinstance(error, TokenBudgetError) and is_retryable_llm_error(error)
                 circuit_state = await _circuit_failure(
                     route.endpoint_key,
                     retryable=retryable,
@@ -379,6 +438,211 @@ async def generate_text(
     raise RuntimeError("no usable LLM route configured")
 
 
+async def generate_vision(
+    *,
+    user_prompt: str,
+    system_prompt: str | None,
+    image_media_type: str,
+    image_base64: str,
+    llm_spec: str | None = None,
+    max_tokens: int = 4096,
+    timeout: float = 90.0,
+    operation: str = "llm.generate_vision",
+    request_id: str | None = None,
+    budget_user_id: str | None = None,
+) -> TextGenerationResult:
+    """Generate text grounded in a browser-supplied image, with normal routing and audit."""
+    if image_media_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise ValueError("unsupported image media type")
+    primary_spec = _llm_spec("light", llm_spec)
+    fallback_spec = _fallback_spec(primary_spec)
+    routes = [primary_spec] + ([fallback_spec] if fallback_spec else [])
+    retry_count = max(0, int(os.environ.get("LLM_RETRY_ATTEMPTS", "1")))
+    total_attempts = 0
+    last_error: BaseException | None = None
+
+    for route_index, route_spec in enumerate(routes):
+        used_fallback = route_index > 0
+        route = resolve_route("utility", spec=route_spec, tier="light")
+        if await _circuit_is_open(route.endpoint_key):
+            last_error = RuntimeError(f"LLM endpoint circuit open: {route.endpoint_key}")
+            continue
+        for _ in range(retry_count + 1):
+            total_attempts += 1
+            started_at = time.monotonic()
+            try:
+                result = await _with_token_reservation(
+                    operation=operation,
+                    # Image payload tokens are provider-specific. Reserve a
+                    # conservative fixed allowance without counting base64 as text.
+                    user_prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=max_tokens + 1536,
+                    budget_user_id=budget_user_id,
+                    call=lambda: _generate_vision_once(
+                        llm_spec=route_spec,
+                        user_prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        image_media_type=image_media_type,
+                        image_base64=image_base64,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                    ),
+                )
+            except Exception as error:
+                last_error = error
+                retryable = not isinstance(error, TokenBudgetError) and is_retryable_llm_error(error)
+                circuit_state = await _circuit_failure(route.endpoint_key, retryable=retryable)
+                await _record_failure(
+                    operation=operation,
+                    request_id=request_id,
+                    llm_spec=route_spec,
+                    fallback_spec=fallback_spec,
+                    used_fallback=used_fallback,
+                    error=error,
+                    started_at=started_at,
+                    primary_model=primary_spec,
+                    fallback_reason=_fallback_reason(error) if used_fallback else None,
+                    attempt_count=total_attempts,
+                    endpoint=route.base_url,
+                    circuit_state=circuit_state,
+                )
+                if not retryable:
+                    raise
+                continue
+            await _circuit_success(route.endpoint_key)
+            await _record_success(
+                operation=operation,
+                request_id=request_id,
+                result=result,
+                fallback_spec=fallback_spec,
+                used_fallback=used_fallback,
+                started_at=started_at,
+                primary_model=primary_spec,
+                fallback_reason=_fallback_reason(last_error) if used_fallback and last_error else None,
+                attempt_count=total_attempts,
+                endpoint=route.base_url,
+                circuit_state="closed",
+            )
+            return result
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("no usable vision LLM route configured")
+
+
+async def _generate_vision_once(
+    *,
+    llm_spec: str,
+    user_prompt: str,
+    system_prompt: str | None,
+    image_media_type: str,
+    image_base64: str,
+    max_tokens: int,
+    timeout: float,
+) -> TextGenerationResult:
+    route = resolve_route("utility", spec=llm_spec, tier="light")
+    provider = route.vendor
+    model = route.model
+    api_key = route.api_key
+    if not api_key or api_key.startswith("local-"):
+        api_key = f"sk-placeholder-for-{provider}-compatible-proxy"
+
+    if route.protocol == "anthropic":
+        from anthropic import AsyncAnthropic
+
+        client = _cached_client(
+            AsyncAnthropic,
+            provider=provider,
+            api_key=api_key,
+            base_url=route.base_url,
+        )
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {"type": "image", "source": {
+                        "type": "base64",
+                        "media_type": image_media_type,
+                        "data": image_base64,
+                    }},
+                ],
+            }],
+            "timeout": timeout,
+        }
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        async with _llm_semaphore():
+            response = await client.messages.create(**kwargs)
+        text = "".join(
+            block.text
+            for block in response.content
+            if getattr(block, "type", None) == "text" and hasattr(block, "text")
+        ).strip()
+        usage = getattr(response, "usage", None)
+        finish_reason = str(getattr(response, "stop_reason", "") or "") or None
+        return TextGenerationResult(
+            text=text,
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            requested_model=model,
+            actual_model=str(getattr(response, "model", "") or "") or None,
+            provider=provider,
+            finish_reason=finish_reason,
+            truncated=finish_reason == "max_tokens",
+        )
+
+    from openai import AsyncOpenAI
+
+    client = _cached_client(
+        AsyncOpenAI,
+        provider=provider,
+        api_key=api_key,
+        base_url=route.base_url,
+    )
+    messages: list[Any] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": user_prompt},
+            {"type": "image_url", "image_url": {
+                "url": f"data:{image_media_type};base64,{image_base64}",
+                "detail": "high",
+            }},
+        ],
+    })
+    async with _llm_semaphore():
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+    choice = response.choices[0] if response.choices else None
+    content = choice.message.content if choice is not None else ""
+    text = "".join(
+        str(getattr(part, "text", "") or "")
+        for part in content
+    ).strip() if isinstance(content, list) else str(content or "").strip()
+    usage = getattr(response, "usage", None)
+    finish_reason = str(getattr(choice, "finish_reason", "") or "") or None
+    return TextGenerationResult(
+        text=text,
+        input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+        requested_model=model,
+        actual_model=str(getattr(response, "model", "") or "") or None,
+        provider=provider,
+        finish_reason=finish_reason,
+        truncated=finish_reason in {"length", "max_tokens"},
+    )
+
+
 async def stream_text(
     *,
     user_prompt: str,
@@ -391,6 +655,7 @@ async def stream_text(
     operation: str = "llm.stream_text",
     request_id: str | None = None,
     on_delta: Callable[[str], Awaitable[None]],
+    budget_user_id: str | None = None,
 ) -> TextGenerationResult:
     """Stream provider output while preserving the normal routing policy.
 
@@ -426,21 +691,28 @@ async def stream_text(
             total_attempts += 1
             started_at = time.monotonic()
             try:
-                result = await _stream_text_once(
-                    llm_spec=route_spec,
+                result = await _with_token_reservation(
+                    operation=operation,
                     user_prompt=user_prompt,
                     system_prompt=system_prompt,
-                    tier=tier,
                     max_tokens=max_tokens,
-                    timeout=timeout,
-                    disable_thinking=disable_thinking,
-                    emit=emit,
+                    budget_user_id=budget_user_id,
+                    call=lambda: _stream_text_once(
+                        llm_spec=route_spec,
+                        user_prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        tier=tier,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                        disable_thinking=disable_thinking,
+                        emit=emit,
+                    ),
                 )
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 last_error = error
-                retryable = is_retryable_llm_error(error)
+                retryable = not isinstance(error, TokenBudgetError) and is_retryable_llm_error(error)
                 circuit_state = await _circuit_failure(route.endpoint_key, retryable=retryable)
                 await _record_failure(
                     operation=operation,
@@ -704,12 +976,16 @@ async def _stream_text_once(
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
         async with _llm_semaphore():
+            stream_kwargs: dict[str, Any] = {}
+            if provider == "minimax":
+                stream_kwargs["stream_options"] = {"include_usage": True}
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
                 timeout=timeout,
                 stream=True,
+                **stream_kwargs,
             )
             async for chunk in response:
                 choices = getattr(chunk, "choices", None) or []

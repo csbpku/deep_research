@@ -136,7 +136,11 @@ async def _make_client(
     app_module._adapter_singleton = lambda: adapter  # type: ignore[assignment]
 
     transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"x-internal-token": "test-only-ai-engine-token"},
+    ) as client:
         try:
             yield client, store, adapter
         finally:
@@ -528,7 +532,11 @@ async def _make_quota_client(
     app_module._adapter_singleton = lambda: adapter  # type: ignore[assignment]
 
     transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"x-internal-token": "test-only-ai-engine-token"},
+    ) as client:
         try:
             yield client, adapter
         finally:

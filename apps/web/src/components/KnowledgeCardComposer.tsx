@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Lightbulb, Loader2, RotateCw, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -38,21 +38,49 @@ export function KnowledgeCardComposer({
   const [conclusion, setConclusion] = useState('');
   const [tags, setTags] = useState('');
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [selectedText, setSelectedText] = useState('');
+  const [derivedFromText, setDerivedFromText] = useState('');
   const deriveInFlight = useRef(false);
+
+  useEffect(() => {
+    function updateSelection(event: Event) {
+      if (event.target instanceof Element && event.target.closest('[data-knowledge-card-composer]')) return;
+      const selection = window.getSelection();
+      const root = Array.from(document.querySelectorAll<HTMLElement>('[data-knowledge-source-message]'))
+        .find((element) => element.dataset.knowledgeSourceMessage === messageId);
+      const elementFor = (node: Node | null) => node instanceof Element ? node : node?.parentElement ?? null;
+      const anchor = elementFor(selection?.anchorNode ?? null);
+      const focus = elementFor(selection?.focusNode ?? null);
+      if (!root || !selection || !anchor || !focus || !root.contains(anchor) || !root.contains(focus)) {
+        setSelectedText('');
+        return;
+      }
+      setSelectedText(selection.toString().trim().slice(0, 5_000));
+    }
+    document.addEventListener('mouseup', updateSelection);
+    document.addEventListener('keyup', updateSelection);
+    return () => {
+      document.removeEventListener('mouseup', updateSelection);
+      document.removeEventListener('keyup', updateSelection);
+    };
+  }, [messageId]);
 
   if (!UUID_RE.test(messageId)) return null;
 
   async function derive() {
     if (deriveInFlight.current) return;
+    const sourceText = selectedText;
+    if (sourceText.length < 8) return;
     deriveInFlight.current = true;
     setOpen(true);
     setLoading(true);
     setError(null);
+    setDerivedFromText(sourceText);
     try {
       const response = await fetch('/api/knowledge/derive', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sourceKind, messageId }),
+        body: JSON.stringify({ sourceKind, messageId, selectedText: sourceText }),
       });
       if (!response.ok) {
         throw new Error(friendlyMessage(await toApiHttpError(response, '提炼失败'), '提炼失败，请稍后重试。'));
@@ -85,6 +113,7 @@ export function KnowledgeCardComposer({
         body: JSON.stringify({
           sourceKind,
           messageId,
+          selectedText: derivedFromText,
           title: normalizedTitle,
           body: normalizedBody,
           conclusion: conclusion.trim(),
@@ -107,17 +136,17 @@ export function KnowledgeCardComposer({
   return (
     <div className="mt-2" data-knowledge-card-composer="true">
       {savedId ? (
-        <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-status-success-fg">
+        <p className="flex flex-wrap items-center gap-1.5 text-xs text-status-success-fg">
           <Check className="size-3.5" />
           已保存知识卡片
           <Link href={`/researches/${savedId}`} className="font-medium text-primary hover:underline">查看</Link>
         </p>
       ) : (
         <>
-          {!open ? (
+          {!open && selectedText.length >= 8 ? (
             <Button type="button" variant="ghost" size="xs" onClick={() => void derive()}>
               <Lightbulb className="size-3.5" />
-              提炼为知识卡片
+              存为知识
             </Button>
           ) : null}
           {open ? (
@@ -125,7 +154,7 @@ export function KnowledgeCardComposer({
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold">知识卡片预览</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">保存前可以修改，确认后才会写入研究库。</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">仅根据所选判断生成；保存后是私人草稿。</p>
                 </div>
                 <button
                   type="button"
@@ -136,6 +165,13 @@ export function KnowledgeCardComposer({
                   <X className="size-3.5" />
                 </button>
               </div>
+              <blockquote
+                aria-label="本次提炼所选原文"
+                title={derivedFromText}
+                className="mt-2 border-l-2 border-method-ai/40 pl-2 text-xs leading-5 text-muted-foreground"
+              >
+                {derivedFromText.length > 360 ? `${derivedFromText.slice(0, 360)}…` : derivedFromText}
+              </blockquote>
               {loading ? (
                 <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground" role="status">
                   <Loader2 className="size-3.5 animate-spin" />
@@ -143,26 +179,26 @@ export function KnowledgeCardComposer({
                 </div>
               ) : preview ? (
                 <div className="mt-3 grid gap-2">
-                  <label className="grid gap-1 text-[11px] font-medium">
+                  <label className="grid gap-1 text-xs font-medium">
                     标题
                     <Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={300} className="h-8 bg-background text-xs" />
                   </label>
-                  <label className="grid gap-1 text-[11px] font-medium">
+                  <label className="grid gap-1 text-xs font-medium">
                     核心结论
                     <Textarea value={body} onChange={(event) => setBody(event.target.value)} maxLength={50_000} rows={4} className="min-h-[96px] bg-background text-xs leading-5" />
                   </label>
-                  <label className="grid gap-1 text-[11px] font-medium">
+                  <label className="grid gap-1 text-xs font-medium">
                     一句话结论
                     <Input value={conclusion} onChange={(event) => setConclusion(event.target.value)} maxLength={2_000} className="h-8 bg-background text-xs" />
                   </label>
-                  <label className="grid gap-1 text-[11px] font-medium">
+                  <label className="grid gap-1 text-xs font-medium">
                     标签
                     <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用顿号或逗号分隔" maxLength={400} className="h-8 bg-background text-xs" />
                   </label>
                   {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
                   <div className="flex flex-wrap justify-end gap-2 pt-1">
                     <Button type="button" variant="ghost" size="xs" onClick={() => { setOpen(false); setPreview(null); setError(null); }} disabled={saving}>取消</Button>
-                    <Button type="button" size="xs" onClick={() => void save()} disabled={!title.trim() || !body.trim() || saving}>
+                    <Button type="button" size="xs" onClick={() => void save()} disabled={derivedFromText.length < 8 || !title.trim() || !body.trim() || saving}>
                       {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
                       {saving ? '保存中…' : '保存知识卡片'}
                     </Button>

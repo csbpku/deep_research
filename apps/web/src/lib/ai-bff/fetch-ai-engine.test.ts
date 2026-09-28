@@ -2,9 +2,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { fetchAiEngine } from './fetch-ai-engine';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('fetchAiEngine', () => {
+  it('forwards the internal service token without exposing it in the result', async () => {
+    vi.stubEnv('INTERNAL_SERVICE_TOKEN', 'reader-test-service-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await fetchAiEngine({ url: 'http://ai.test/assistant', requestId: 'req-auth', context: 'test' });
+
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      'x-internal-token': 'reader-test-service-token',
+      'x-request-id': 'req-auth',
+    });
+    expect(result).toEqual({ ok: true, body: { status: 'ok' }, status: 200 });
+  });
+
   it('keeps FastAPI validation errors distinct from an unavailable engine', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       detail: [{ loc: ['body', 'selection'], msg: 'Field required', type: 'missing' }],

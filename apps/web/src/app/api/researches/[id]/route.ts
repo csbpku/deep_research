@@ -24,7 +24,7 @@ import { apiHandler, parseBody } from '../../../../lib/api-handler';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { log, withRequestId } from '../../../../lib/log';
-import { UpdateResearchInput } from '../../../../lib/schemas';
+import { MAX_RESEARCH_UPDATE_BODY_CHARS, UpdateResearchInput } from '../../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { resolveResearchSourceLink } from '../../../../lib/research-source-link';
@@ -32,6 +32,11 @@ import { resolveCurrentReviewState } from '../../../../lib/research-review-state
 import { getReviewDisclosureItems, getReviewPublicationGate, reviewCoverageStatus } from '../../../../lib/research-review-decisions';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
+import {
+  confirmedKnowledgeIndexText,
+  queuePersonalKnowledgeIndex,
+  readingKnowledgeIndexTextFromBody,
+} from '../../../../lib/personal-knowledge-index';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
@@ -347,6 +352,7 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     where: { id: parsed.data.id },
     select: {
       id: true,
+      type: true,
       title: true,
       body: true,
       background: true,
@@ -357,6 +363,8 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       status: true,
       creationMethod: true,
       aiAssisted: true,
+      readingSaveKey: true,
+      knowledgeIndexText: true,
       sourceAiJob: {
         select: {
           id: true,
@@ -403,17 +411,27 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  const revisionAudit = body.revisionContext
+  const resolvedRevision = body.revisionContext
     ? await resolveRevisionAuditContext({
         sourceMessageId: body.revisionContext.sourceMessageId,
-        reason: body.revisionContext.reason,
         userId: u.id,
         aiJobId: existing.sourceAiJob?.id ?? null,
         sources: existing.sourceAiJob?.aiResearchSources ?? [],
         requestId,
       })
     : null;
-  if (revisionAudit instanceof NextResponse) return revisionAudit;
+  if (resolvedRevision instanceof NextResponse) return resolvedRevision;
+  const revisionAudit = resolvedRevision?.audit ?? null;
+  const revisionBody = resolvedRevision
+    ? appendFollowUpRevision(existing.body, resolvedRevision.sourceQuestion, resolvedRevision.sourceAnswer)
+    : body.body;
+  if (revisionBody && revisionBody.length > MAX_RESEARCH_UPDATE_BODY_CHARS) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: `追问修订超过研究稿 ${MAX_RESEARCH_UPDATE_BODY_CHARS.toLocaleString('en-US')} 字符上限，请缩短追问回答后重试`,
+      requestId,
+    });
+  }
 
   // 不允许 edited→published（发布必须走 publish endpoint）
   if (existing.status === RESEARCH_STATUS.PUBLISHED) {
@@ -490,7 +508,7 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   };
   const nextSnapshot = {
     title: body.title ?? existing.title,
-    body: body.body ?? existing.body,
+    body: revisionBody ?? existing.body,
     background: body.background !== undefined ? body.background : existing.background,
     conclusion: body.conclusion !== undefined ? body.conclusion : existing.conclusion,
     risks: body.risks !== undefined ? body.risks : existing.risks,
@@ -498,6 +516,11 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   };
   const diff = computeDiff(prevSnapshot, nextSnapshot);
   const contentChanged = Object.keys(diff).length > 0;
+  const nextKnowledgeIndexText = existing.type === 'knowledge'
+    ? existing.readingSaveKey
+      ? readingKnowledgeIndexTextFromBody(nextSnapshot.body)
+      : confirmedKnowledgeIndexText(nextSnapshot)
+    : undefined;
   const invalidatedReview = contentChanged ? {
     reviewStatus: null,
     reviewAttempts: 0,
@@ -562,11 +585,14 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       where: { id: parsed.data.id, status: RESEARCH_STATUS.DRAFT },
       data: {
         ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.body !== undefined ? { body: body.body } : {}),
+        ...(revisionBody !== undefined ? { body: revisionBody } : {}),
         background: body.background !== undefined ? body.background : undefined,
         conclusion: body.conclusion !== undefined ? body.conclusion : undefined,
         risks: body.risks !== undefined ? body.risks : undefined,
         ...(body.tags !== undefined ? { tags: body.tags } : {}),
+        ...(existing.type === 'knowledge'
+          ? { knowledgeIndexText: contentChanged ? nextKnowledgeIndexText : existing.knowledgeIndexText }
+          : {}),
         // A review is valid only for the exact document snapshot it saw.
         // Any draft edit invalidates the old verdict before the new version
         // can be published or reviewed again.
@@ -584,7 +610,14 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
             prevSnapshot: prevSnapshot as unknown as Prisma.InputJsonValue,
             ...(revisionAudit ?? {}),
           },
-        });
+      });
+    }
+    if (contentChanged && existing.type === 'knowledge') {
+      await queuePersonalKnowledgeIndex(tx, {
+        ownerId: existing.authorId,
+        researchId: existing.id,
+        operation: nextKnowledgeIndexText ? 'upsert' : 'delete',
+      });
     }
     return next;
   }).catch((error: unknown) => {
@@ -639,6 +672,7 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
     select: {
       id: true,
       authorId: true,
+      type: true,
       status: true,
       sourceAiJob: { select: { id: true } },
     },
@@ -678,6 +712,13 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
     if (existing.sourceAiJob?.id) {
       await tx.aiResearchJob.delete({
         where: { id: existing.sourceAiJob.id },
+      });
+    }
+    if (existing.type === 'knowledge') {
+      await queuePersonalKnowledgeIndex(tx, {
+        ownerId: existing.authorId,
+        researchId: existing.id,
+        operation: 'delete',
       });
     }
     await tx.research.delete({ where: { id: existing.id } });
@@ -899,6 +940,26 @@ interface RevisionAuditData {
   sourceRefs: Prisma.InputJsonValue;
 }
 
+interface ResolvedRevisionAudit {
+  audit: RevisionAuditData;
+  sourceQuestion: string;
+  sourceAnswer: string;
+}
+
+function appendFollowUpRevision(reportBody: string, question: string, answer: string): string {
+  const quotedQuestion = question.split(/\r?\n/u).map((line) => `> ${line}`).join('\n');
+  const addition = [
+    '## 追问补充',
+    '',
+    `**追问：**\n${quotedQuestion}`,
+    '',
+    answer.trim(),
+    '',
+  ].join('\n');
+  const original = reportBody.trimEnd();
+  return `${original}${original.endsWith('\n') ? '\n' : '\n\n'}${addition}`;
+}
+
 /**
  * Resolve revision provenance on the server. The client sends only the id of
  * the assistant answer it accepted; ownership, job linkage, question and
@@ -906,14 +967,12 @@ interface RevisionAuditData {
  */
 async function resolveRevisionAuditContext({
   sourceMessageId,
-  reason,
   userId,
   aiJobId,
   sources,
   requestId,
 }: {
   sourceMessageId: string;
-  reason?: string;
   userId: string;
   aiJobId: string | null;
   sources: Array<{
@@ -923,7 +982,7 @@ async function resolveRevisionAuditContext({
     createdAt: Date;
   }>;
   requestId: string;
-}): Promise<RevisionAuditData | NextResponse> {
+}): Promise<ResolvedRevisionAudit | NextResponse> {
   if (!aiJobId) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
@@ -938,6 +997,7 @@ async function resolveRevisionAuditContext({
       id: true,
       role: true,
       intent: true,
+      content: true,
       createdAt: true,
       conversation: { select: { id: true, userId: true, jobId: true } },
     },
@@ -946,6 +1006,8 @@ async function resolveRevisionAuditContext({
     !sourceMessage
     || sourceMessage.role !== 'assistant'
     || sourceMessage.intent !== 'revise'
+    || typeof sourceMessage.content !== 'string'
+    || !sourceMessage.content.trim()
     || sourceMessage.conversation.userId !== userId
     || sourceMessage.conversation.jobId !== aiJobId
   ) {
@@ -979,16 +1041,22 @@ async function resolveRevisionAuditContext({
     });
   }
 
+  const boundedQuestion = sourceQuestion.slice(0, 32_000);
+  const quotedQuestion = boundedQuestion.slice(0, 180);
   return {
-    sourceMessageId,
-    sourceIntent: 'revise',
-    sourceQuestion: sourceQuestion.slice(0, 32_000),
-    reason: (reason?.trim() || '根据本次追问补充报告').slice(0, 2_000),
-    sourceRefs: sources.map((source) => ({
-      sourceRef: source.sourceRef as Prisma.InputJsonValue,
-      canonicalKey: source.canonicalKey,
-      title: source.title,
-      capturedAt: source.createdAt.toISOString(),
-    })) as unknown as Prisma.InputJsonValue,
+    audit: {
+      sourceMessageId,
+      sourceIntent: 'revise',
+      sourceQuestion: boundedQuestion,
+      reason: `根据追问「${quotedQuestion}${boundedQuestion.length > 180 ? '…' : ''}」补充报告`.slice(0, 2_000),
+      sourceRefs: sources.map((source) => ({
+        sourceRef: source.sourceRef as Prisma.InputJsonValue,
+        canonicalKey: source.canonicalKey,
+        title: source.title,
+        capturedAt: source.createdAt.toISOString(),
+      })) as unknown as Prisma.InputJsonValue,
+    },
+    sourceQuestion: boundedQuestion,
+    sourceAnswer: sourceMessage.content,
   };
 }

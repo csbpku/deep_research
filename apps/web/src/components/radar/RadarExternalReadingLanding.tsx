@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   BookOpenCheck,
@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Github,
   Sparkles,
+  X,
 } from 'lucide-react';
 
 import type { DistilledScore } from '@deep-research/shared/schemas';
@@ -22,6 +23,7 @@ import {
 } from '../../lib/radar/source-labels';
 import { TIER_LABELS, tierClasses } from '../domain/ScoreBar';
 import { cn } from '../../lib/utils';
+import { bindDialogFocus } from '../../lib/dialog-focus';
 import { zreadRepositoryUrl } from './radar-repository';
 
 export interface ExternalReadingDetail {
@@ -96,6 +98,7 @@ export function cleanRadarTags(tags: string[] | undefined): string[] {
       'github',
       'tracked',
       'repo_digest',
+      'external_reading',
       'content_pending',
       'fetch_failed_shell',
       'paywall_stub',
@@ -112,6 +115,13 @@ export function ReaderSourcePrompt({
   onClose: () => void;
   onOpen: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    return dialog ? bindDialogFocus(dialog, onClose) : undefined;
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-5"
@@ -125,10 +135,13 @@ export function ReaderSourcePrompt({
         role="dialog"
         aria-modal="true"
         aria-labelledby="reader-source-prompt-title"
+        aria-describedby="reader-source-prompt-description"
+        ref={dialogRef}
+        tabIndex={-1}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-[9px] font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
+            <p className="text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
               Reader
             </p>
             <h2 id="reader-source-prompt-title" className="mt-2 text-lg font-semibold text-[var(--ink-text)]">
@@ -137,20 +150,21 @@ export function ReaderSourcePrompt({
           </div>
           <button
             type="button"
-            className="text-lg leading-none text-[var(--ink-muted)] hover:text-[var(--ink-text)]"
+            className="inline-flex size-9 shrink-0 items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
             aria-label="关闭安装提示"
             onClick={onClose}
           >
-            ×
+            <X className="size-4" aria-hidden />
           </button>
         </div>
-        <p className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
+        <p id="reader-source-prompt-description" className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
           原文会在新标签页打开。若还没有安装扩展，先完成安装；回到原文后点击浏览器工具栏里的 Reader，再启用当前站点。
         </p>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Link
             href="/reading/install"
-            className="inline-flex min-h-9 items-center justify-center border border-[var(--ink-rule)] px-3 text-[11px] font-bold text-[var(--ink-text)] hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)]"
+            data-initial-focus
+            className="inline-flex min-h-9 items-center justify-center border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/50 focus-visible:ring-offset-2"
           >
             先安装 Reader
           </Link>
@@ -158,7 +172,7 @@ export function ReaderSourcePrompt({
             type="button"
             onClick={onOpen}
             data-reader-url={readerUrl}
-            className="inline-flex min-h-9 items-center justify-center bg-[var(--ink-accent)] px-3 text-[11px] font-bold text-white hover:brightness-95"
+            className="inline-flex min-h-9 items-center justify-center bg-[var(--ink-accent)] px-3 text-xs font-bold text-white hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/50 focus-visible:ring-offset-2"
           >
             我已安装，继续打开
           </button>
@@ -232,7 +246,7 @@ export function RadarExternalReadingLanding({
             <span className="sm:hidden">雷达</span>
           </Link>
           <span className="hidden text-xs text-[var(--ink-faint)] sm:inline">/</span>
-          <span className="hidden truncate text-xs text-[var(--ink-faint)] sm:inline">详情简报</span>
+          <span className="hidden truncate text-xs text-[var(--ink-faint)] sm:inline">文章概览</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {sourceUrlAvailable ? (
@@ -240,7 +254,7 @@ export function RadarExternalReadingLanding({
               type="button"
               data-reader-url={readerUrl}
               onClick={() => setSourcePromptOpen(true)}
-              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 bg-[var(--ink-accent)] px-3 text-[11px] font-bold text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 bg-[var(--ink-accent)] px-3 text-xs font-bold text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
             >
               {zreadUrl ? <Github className="size-3.5" aria-hidden /> : <ExternalLink className="size-3.5" aria-hidden />}
               <span>{zreadUrl ? '打开 GitHub' : '打开原文'}</span>
@@ -251,7 +265,7 @@ export function RadarExternalReadingLanding({
               href={zreadUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-[11px] font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
             >
               <BookOpen className="size-3.5" aria-hidden />
               <span>打开 Zread</span>
@@ -270,14 +284,14 @@ export function RadarExternalReadingLanding({
 
       <main className="mx-auto w-full max-w-7xl px-5 py-6 sm:px-8 sm:py-8 lg:py-10">
         <section className="max-w-5xl">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[10px] font-semibold text-[var(--ink-muted)]">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-xs font-semibold text-[var(--ink-muted)]">
             <span>{sourceName}</span>
             <span aria-hidden className="text-[var(--ink-faint)]">·</span>
             <span>{contentLabel.short}</span>
             {publishedLabel ? (
               <>
                 <span aria-hidden className="text-[var(--ink-faint)]">·</span>
-                <span>{publishedLabel}</span>
+                <span>发布 {publishedLabel}</span>
               </>
             ) : null}
           </div>
@@ -289,19 +303,22 @@ export function RadarExternalReadingLanding({
           <div className="mt-6 grid gap-7 lg:grid-cols-[minmax(0,1fr)_15rem] lg:gap-8">
             <div className="min-w-0">
               <div className="border-l-2 border-[var(--ink-accent)] pl-3.5 sm:pl-4">
-                <div className="flex items-center gap-2 text-[9px] font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
+                <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
                   <Sparkles className="size-3" aria-hidden />
                   AI 摘要
                 </div>
-                <p className="mt-2 whitespace-pre-line font-serif text-[15px] leading-[1.6] text-[var(--ink-text)] sm:text-[16px]">
+                <p className="mt-1 text-xs leading-5 text-[var(--ink-faint)]">
+                  同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
+                </p>
+                <p className="mt-2 whitespace-pre-line font-serif text-base leading-[1.6] text-[var(--ink-text)]">
                   {summaryLead}
                 </p>
                 {supportingExcerpt ? (
                   <div className="mt-4 border-t border-[var(--ink-rule)] pt-3">
-                    <p className="text-[9px] font-extrabold uppercase tracking-[0.13em] text-[var(--ink-muted)]">
+                    <p className="text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-muted)]">
                       原文补充
                     </p>
-                    <p className="mt-2 whitespace-pre-line font-serif text-[13px] leading-[1.6] text-[var(--ink-muted)] sm:text-[14px]">
+                    <p className="mt-2 whitespace-pre-line font-serif text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.6]">
                       {supportingExcerpt}
                     </p>
                   </div>
@@ -312,10 +329,10 @@ export function RadarExternalReadingLanding({
             <aside className="min-w-0 border-y border-[var(--ink-rule)] py-4 lg:border-y-0 lg:border-l lg:pl-5 lg:pt-0">
               {selectionReason ? (
                 <>
-                  <p className="text-[9px] font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
+                  <p className="text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
                     为什么值得看
                   </p>
-                  <p className="mt-2 text-[13px] leading-[1.55] text-[var(--ink-muted)]">{selectionReason}</p>
+                  <p className="mt-2 text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.55]">{selectionReason}</p>
                 </>
               ) : null}
 
@@ -326,13 +343,13 @@ export function RadarExternalReadingLanding({
                   : '',
               )}
               >
-                <span className={cn('inline-flex min-h-6 items-center border px-2 text-[10px] font-bold', tierVisual.border, tierVisual.text)}>
+                <span className={cn('inline-flex min-h-6 items-center border px-2 text-xs font-bold', tierVisual.border, tierVisual.text)}>
                   {tierLabel}
                 </span>
                 {tags.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
                   {tags.map((tag) => (
-                    <span key={tag} className="border border-[var(--ink-rule)] px-1.5 py-0.5 text-[10px] text-[var(--ink-muted)]">
+                    <span key={tag} className="border border-[var(--ink-rule)] px-1.5 py-0.5 text-xs text-[var(--ink-muted)]">
                       #{tag}
                     </span>
                   ))}
@@ -342,7 +359,7 @@ export function RadarExternalReadingLanding({
 
               {detail.distilledScore ? (
                 <details className="group mt-4 border-t border-[var(--ink-rule)] pt-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[10px] font-bold text-[var(--ink-muted)] hover:text-[var(--ink-accent)] [&::-webkit-details-marker]:hidden">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-bold text-[var(--ink-muted)] hover:text-[var(--ink-accent)] [&::-webkit-details-marker]:hidden">
                     <span>查看评分依据</span>
                     <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
                   </summary>
@@ -358,7 +375,7 @@ export function RadarExternalReadingLanding({
         <section id="source-reading" className="mt-8 border-t border-[var(--ink-rule)] pt-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="max-w-2xl">
-              <div className="flex items-center gap-2 text-[9px] font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
+              <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
                 <BookOpenCheck className="size-3.5" aria-hidden />
                 Reader
               </div>
@@ -368,7 +385,7 @@ export function RadarExternalReadingLanding({
             </div>
             <Link
               href="/reading/install"
-              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-[11px] font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)]"
+              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)]"
             >
               <BookOpenCheck className="size-3.5" aria-hidden />
               安装 Reader

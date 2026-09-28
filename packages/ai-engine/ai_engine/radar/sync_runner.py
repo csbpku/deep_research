@@ -51,10 +51,12 @@ SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
 DistilledScorerFn = Callable[..., Awaitable[Any]]
 EmbeddingScorerFn = Any  # BatchEmbeddingScorer or None
 
-# Preserve long-form papers and articles. Prompt construction applies its own
-# token budget later; truncating the stored source here destroys the reader's
-# ability to inspect the complete document.
+# Legacy server-side reading persistence cap; transient extraction has its
+# own larger limit and the browser-reading mode does not store source text.
 ORIGINAL_MARKDOWN_MAX_BYTES = 256 * 1024
+# Keep the transient extraction bounded by the fetch layer's default 2 MiB
+# response limit, not by the smaller legacy persistence column budget.
+TRANSIENT_MARKDOWN_MAX_CHARS = 2 * 1024 * 1024
 # A radar detail should provide enough context for a reading decision. Keep
 # this below the prompt target so a slightly terse but still useful answer is
 # not discarded in favor of raw source text.
@@ -809,7 +811,7 @@ async def _retry_existing_summary_content(
         brief = await _generate_brief_with_retry(
             generate_brief,
             adapter,
-            {"title": candidate.title, "snippet": markdown[:2000]},
+            {"title": candidate.title, "snippet": markdown},
             canonical_url,
             timeout_seconds=timeout_seconds,
         )
@@ -870,6 +872,14 @@ async def _record_sync_diagnostic(
     if distilled is not None and not getattr(distilled, "is_default", False):
         distilled_payload = json.dumps(distilled.to_dict(), ensure_ascii=False)
         distilled_tier = getattr(distilled, "tier", None)
+    diagnostic_body = (
+        (candidate.snippet or "")[:2000]
+        if browser_reading_mode_enabled()
+        else (body or candidate.snippet or "")[:64_000]
+    )
+    diagnostic_tags = list(candidate.tags)
+    if browser_reading_mode_enabled() and "external_reading" not in diagnostic_tags:
+        diagnostic_tags.append("external_reading")
     try:
         async with pool.connection() as conn:
             await conn.execute(
@@ -889,12 +899,12 @@ async def _record_sync_diagnostic(
                     (candidate.title or "Untitled")[:300],
                     candidate.url[:2048],
                     canonical_url[:2048],
-                    (body or candidate.snippet or "")[:64_000],
+                    diagnostic_body,
                     original_markdown,
                     original_kind,
                     candidate.content_origin,
                     candidate.published_at,
-                    list(candidate.tags),
+                    diagnostic_tags,
                     reason_code,
                     (reason_message or "")[:500] or None,
                     error_type,
@@ -929,6 +939,7 @@ async def _insert_candidate(
     extra_tags: tuple[str, ...] = (),
     distilled: Any | None = None,
     limited_score: bool = False,
+    metadata_only_fallback: bool = False,
 ) -> bool:
     stored_url = stored_url or candidate.url
     candidate_title = _html.unescape(candidate.title or "").strip()
@@ -941,7 +952,8 @@ async def _insert_candidate(
     title = candidate_title or _infer_title(fetched, markdown)
 
     merged_tags = list(candidate.tags) + list(extra_tags)
-    if _is_fetch_failure_shell(
+    external_reading = browser_reading_mode_enabled()
+    if not external_reading and _is_fetch_failure_shell(
         markdown,
         source_type=source.source_type,
         url=stored_url,
@@ -965,13 +977,8 @@ async def _insert_candidate(
     deliverable_tier = effective_tier(
         scored_target_tier,
         enrichment_ready=False,
+        external_reading=browser_reading_mode_enabled(),
     )
-    if browser_reading_mode_enabled():
-        # A metadata-only candidate is safely browseable, but it has no
-        # evidence for a deep-read promise. Keep the visible deliverable tier
-        # at a conservative skim even when a GitHub metadata scorer returns a
-        # recommendation; retain distilledTargetTier for ranking/governance.
-        deliverable_tier = "skim"
     if persisted_distilled is not None:
         if deliverable_tier:
             merged_tags.append(f"tier_{deliverable_tier}")
@@ -983,9 +990,12 @@ async def _insert_candidate(
             merged_tags.append("risk_suspected_repost")
         merged_tags.append(f"profile_{persisted_distilled.profile_id}")
     # Prefer a substantive AI brief, but never hide a fetched article behind a
-    # terse one-line model response. The full capture remains available in
-    # originalMarkdown for deep-dive rendering.
-    body = _best_content_body(interpretation, markdown, candidate.snippet)
+    # terse one-line model response when the configured mode caches originals.
+    body = (
+        (interpretation or candidate.title).strip()[:2000]
+        if external_reading
+        else _best_content_body(interpretation, markdown, candidate.snippet)
+    )
     content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     published_at = candidate.published_at
 
@@ -996,6 +1006,7 @@ async def _insert_candidate(
     original_markdown: str | None = None
     original_kind: str | None = None
     original_bytes: int | None = None
+    original_sha256: str | None = None
     if DEEPDIVE_ENABLED and not browser_reading_mode_enabled():
         original_kind = (
             original_kind_override
@@ -1004,6 +1015,7 @@ async def _insert_candidate(
         truncated = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES]
         original_markdown = truncated.decode("utf-8", errors="replace")
         original_bytes = len(truncated)
+        original_sha256 = content_sha256
 
     async with pool.connection() as conn:
         async with conn.transaction():
@@ -1023,7 +1035,7 @@ async def _insert_candidate(
                     '"enrichmentNextRetryAt") '
                     "VALUES (%s, %s, %s, %s, %s, 'daily', %s, %s, %s, %s, %s, %s::text[], "
                     "'candidate', %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, "
-                    "%s, now(), %s, %s, now(), now(), %s, "
+                    "%s, CASE WHEN %s THEN now() ELSE NULL END, %s, %s, now(), now(), %s, "
                     "CASE WHEN %s = 'pending' THEN now() ELSE NULL END) "
                     'ON CONFLICT ("canonicalUrl") DO NOTHING RETURNING "id"',
                     (
@@ -1049,6 +1061,8 @@ async def _insert_candidate(
                             markdown=markdown,
                             source_type=source.source_type,
                             url=stored_url,
+                            external_reading=external_reading,
+                            metadata_only_fallback=metadata_only_fallback,
                         ),
                         (
                             json.dumps(persisted_distilled.to_dict(), ensure_ascii=False)
@@ -1072,8 +1086,9 @@ async def _insert_candidate(
                         run_id,
                         original_markdown,
                         original_kind,
+                        original_markdown is not None,
                         original_bytes,
-                        content_sha256,
+                        original_sha256,
                         durable_enrichment_status,
                         durable_enrichment_status,
                     ),
@@ -1090,6 +1105,8 @@ def _build_score_reason(
     markdown: str = "",
     source_type: str | None = None,
     url: str | None = None,
+    external_reading: bool = False,
+    metadata_only_fallback: bool = False,
 ) -> str:
     """Return the reason for the score that the UI actually displays."""
     reason = ""
@@ -1099,12 +1116,22 @@ def _build_score_reason(
         reason = build_distilled_score_reason(distilled)
     else:
         reason = str(score.reason or "")[:500]
-    if limited_score and distilled is not None:
+    if metadata_only_fallback and distilled is not None:
+        reason = (
+            "来源摘要初筛：未能取得原文正文，评分仅供发现排序；请打开原文复核。"
+            + reason
+        )[:500]
+    elif limited_score and external_reading and distilled is not None:
+        reason = (
+            "原文可用内容较短，评分仅供初筛；请打开原文复核。"
+            + reason
+        )[:500]
+    elif limited_score and distilled is not None:
         reason = (
             "低置信度初筛：正文不足1000字符，仅用于排序和是否值得继续抓取。"
             + reason
         )[:500]
-    shell_label = _shell_content_label(
+    shell_label = None if external_reading else _shell_content_label(
         markdown,
         source_type=source_type,
         url=url,
@@ -1453,7 +1480,7 @@ def _extract_article_content(
     url: str,
     source_type: str,
     *,
-    max_bytes: int = ORIGINAL_MARKDOWN_MAX_BYTES,
+    max_chars: int = TRANSIENT_MARKDOWN_MAX_CHARS,
 ) -> str:
     """Extract clean article text from HTML, optimized per source type.
 
@@ -1473,7 +1500,7 @@ def _extract_article_content(
 
         structured = structured_html_to_markdown(html, url)
         if len(structured.strip()) >= 200:
-            return normalize_markdown(structured)[:max_bytes]
+            return normalize_markdown(structured)[:max_chars]
     except Exception as exc:  # structure recovery is an enhancement, never a sync blocker
         logger.debug("structured HTML extraction failed", extra={"url": url[:2048], "error": str(exc)})
 
@@ -1490,7 +1517,7 @@ def _extract_article_content(
             favor_precision=True,
         )
         if extracted and len(extracted.strip()) >= 200:
-            return normalize_markdown(extracted)[:max_bytes]
+            return normalize_markdown(extracted)[:max_chars]
     except Exception as exc:  # extraction is an enhancement, never a sync blocker
         logger.debug("trafilatura extraction failed", extra={"url": url[:2048], "error": str(exc)})
 
@@ -1503,7 +1530,7 @@ def _extract_article_content(
         if m:
             abstract = _strip_html_tags(m.group(1))
             if len(abstract) > 50:
-                return normalize_markdown(abstract)[:8000]
+                return normalize_markdown(abstract)[:max_chars]
 
     # ── GitHub: extract README article content ──
     if source_type in ("github", "github_trending") or "github.com" in url:
@@ -1515,14 +1542,14 @@ def _extract_article_content(
         if m:
             readme = _strip_html_tags(m.group(1))
             if len(readme) > 100:
-                return normalize_markdown(readme)[:8000]
+                return normalize_markdown(readme)[:max_chars]
         # Fallback: try <div id="readme">
         m = _re.search(r'<div[^>]*id="readme"[^>]*>(.*?)</div>\s*</div>',
                         html, _re.DOTALL | _re.IGNORECASE)
         if m:
             readme = _strip_html_tags(m.group(1))
             if len(readme) > 100:
-                return normalize_markdown(readme)[:8000]
+                return normalize_markdown(readme)[:max_chars]
 
     # ── Dev.to: extract <div id="article-body"> ──
     if source_type == "devto" or "dev.to" in url:
@@ -1533,7 +1560,7 @@ def _extract_article_content(
         if m:
             body = _strip_html_tags(m.group(1))
             if len(body) > 100:
-                return normalize_markdown(body)[:8000]
+                return normalize_markdown(body)[:max_chars]
 
     # ── Generic: strip nav/header/footer/aside, then extract <main> or <article> ──
     # Try <main> tag first
@@ -1541,19 +1568,19 @@ def _extract_article_content(
     if m:
         body = _strip_html_tags(m.group(1))
         if len(body) > 100:
-            return normalize_markdown(body)[:8000]
+            return normalize_markdown(body)[:max_chars]
     # Try <article> tag
     m = _re.search(r"<article[^>]*>(.*?)</article>", html, _re.DOTALL | _re.IGNORECASE)
     if m:
         body = _strip_html_tags(m.group(1))
         if len(body) > 100:
-            return normalize_markdown(body)[:8000]
+            return normalize_markdown(body)[:max_chars]
     # Last resort: strip known noise sections from full page
     cleaned = _strip_html_tags(html)
     if len(cleaned) > 200:
-        return normalize_markdown(cleaned)[:8000]
+        return normalize_markdown(cleaned)[:max_chars]
     # Absolute fallback: original html_to_markdown
-    return normalize_markdown(html_to_markdown(html))[:8000]
+    return normalize_markdown(html_to_markdown(html))[:max_chars]
 
 
 def _snippet_document(url: str, snippet: str) -> FetchedDocument:
@@ -1678,96 +1705,71 @@ async def _run_source(
                         skipped_rule_noise += 1
                         return
 
-                    if browser_reading_mode_enabled():
-                        # Discovery uses source-provided metadata only. The
-                        # browser plugin reads the open URL after a user action.
-                        metadata_parts = [normalized.snippet.strip()]
-                        if raw_candidate.repo_signals:
-                            metadata_parts.append(
-                                "结构化来源信号："
-                                + json.dumps(
-                                    raw_candidate.repo_signals,
-                                    ensure_ascii=False,
-                                    sort_keys=True,
-                                )
-                            )
-                        markdown = "\n\n".join(
-                            part for part in metadata_parts if part
-                        )[:8000]
-                        if not markdown:
-                            markdown = normalized.title.strip()[:8000]
-                        fetched = _snippet_document(raw_candidate.url, markdown)
-                    elif source.source_type == "arxiv" and normalized.snippet.strip():
-                        # The arXiv API already returns the abstract. Fetching
-                        # every /abs page afterwards multiplies one upstream
-                        # request into 50 rate-limited page requests.
-                        markdown = normalized.snippet.strip()[:8000]
-                        fetched = _snippet_document(raw_candidate.url, markdown)
-                    else:
-                        document_host = _host(raw_candidate.url)
-                        # A source batch often contains many links on one host
-                        # (ArXiv, Dev.to, GitHub). Once transport fails for a
-                        # host, retrying every remaining candidate only turns a
-                        # single outage into dozens of identical failures.
-                        async with unavailable_hosts_lock:
-                            host_unavailable = document_host in unavailable_hosts
-                        if host_unavailable:
-                            total_skipped += 1
-                            await _record_sync_diagnostic(
-                                pool,
-                                source=source,
-                                run_id=run_id,
-                                candidate=raw_candidate,
-                                canonical_url=normalized.canonical_url,
-                                kind="filtered",
-                                reason_code="HOST_CIRCUIT_OPEN",
-                                reason_message="同一主机前序抓取失败，后续候选跳过重试",
-                                body=normalized.snippet,
+                    metadata_only_fallback = False
+                    document_host = _host(raw_candidate.url)
+                    # Full source text is an ephemeral scoring input in both
+                    # reading modes. Browser mode only suppresses persistence
+                    # and downstream enrichment, not this bounded sync fetch.
+                    async with unavailable_hosts_lock:
+                        host_unavailable = document_host in unavailable_hosts
+                    if host_unavailable:
+                        total_skipped += 1
+                        await _record_sync_diagnostic(
+                            pool,
+                            source=source,
+                            run_id=run_id,
+                            candidate=raw_candidate,
+                            canonical_url=normalized.canonical_url,
+                            kind="filtered",
+                            reason_code="HOST_CIRCUIT_OPEN",
+                            reason_message="同一主机前序抓取失败，后续候选跳过重试",
+                            body=normalized.snippet,
+                        )
+                        logger.info(
+                            "ai-engine.radar.host_circuit_open",
+                            extra={
+                                "request_id": run_id,
+                                "source_id": source.id,
+                                "domain": document_host,
+                            },
+                        )
+                        return
+                    try:
+                        fetched, markdown = await _fetch_document_with_content_retries(
+                            document_fetcher,
+                            url=raw_candidate.url,
+                            source_type=source.source_type,
+                            run_id=run_id,
+                            source_id=source.id,
+                            domain=document_host,
+                        )
+                    except Exception as fetch_exc:
+                        if (
+                            _can_use_snippet_fallback(source, raw_candidate)
+                            or _can_use_candidate_metadata_fallback(source, raw_candidate)
+                        ):
+                            fallback_count += 1
+                            metadata_only_fallback = True
+                            markdown = raw_candidate.snippet.strip()[:8000]
+                            fetched = _snippet_document(
+                                raw_candidate.url, markdown
                             )
                             logger.info(
-                                "ai-engine.radar.host_circuit_open",
+                                "ai-engine.radar.snippet_transport_fallback",
                                 extra={
                                     "request_id": run_id,
                                     "source_id": source.id,
+                                    "error_code": _safe_error_code(fetch_exc),
                                     "domain": document_host,
                                 },
                             )
-                            return
-                        try:
-                            fetched, markdown = await _fetch_document_with_content_retries(
-                                document_fetcher,
-                                url=raw_candidate.url,
-                                source_type=source.source_type,
-                                run_id=run_id,
-                                source_id=source.id,
-                                domain=document_host,
-                            )
-                        except Exception as fetch_exc:
-                            if (
-                                _can_use_snippet_fallback(source, raw_candidate)
-                                or _can_use_candidate_metadata_fallback(source, raw_candidate)
-                            ):
-                                fallback_count += 1
-                                markdown = raw_candidate.snippet.strip()[:8000]
-                                fetched = _snippet_document(
-                                    raw_candidate.url, markdown
-                                )
-                                logger.info(
-                                    "ai-engine.radar.snippet_transport_fallback",
-                                    extra={
-                                        "request_id": run_id,
-                                        "source_id": source.id,
-                                        "error_code": _safe_error_code(fetch_exc),
-                                        "domain": document_host,
-                                    },
-                                )
-                            else:
-                                if _is_retryable_transport_error(fetch_exc):
-                                    async with unavailable_hosts_lock:
-                                        unavailable_hosts.add(document_host)
-                                raise
+                        else:
+                            if _is_retryable_transport_error(fetch_exc):
+                                async with unavailable_hosts_lock:
+                                    unavailable_hosts.add(document_host)
+                            raise
                     raw_content = markdown or normalized.snippet
-                    content_failure_reason = None if browser_reading_mode_enabled() else _content_fetch_failure_reason(
+                    content_failure_reason = _content_fetch_failure_reason(
                         raw_content,
                         source.source_type,
                         normalized.title,
@@ -1798,8 +1800,7 @@ async def _run_source(
                         )
                         total_skipped += 1
                         return
-                    metadata_only_fallback = browser_reading_mode_enabled()
-                    low_quality = False if browser_reading_mode_enabled() else _is_low_quality_content(raw_content)
+                    low_quality = _is_low_quality_content(raw_content)
                     brief: Any = None
                     interpretation = ""
                     if low_quality:
@@ -1807,18 +1808,13 @@ async def _run_source(
                         # too-short shell. Any fallback path counts as 1 fallback
                         # regardless of whether we use the snippet as LLM context.
                         fallback_count += 1
-                        # If the fetcher supplied a snippet (even if short, like
-                        # a Product Hunt tagline), skip the LLM brief step but
-                        # **let the row keep the raw markdown as its body** so
-                        # the Admin can still review the page contents. We
-                        # intentionally leave ``interpretation`` empty here so
-                        # ``_insert_candidate`` falls through to ``markdown``
-                        # (not the snippet) when building the summary body.
+                        # A fetched shell is not the source document. Fall back
+                        # to source metadata only when it is independently useful;
+                        # otherwise keep a diagnostic without the fetched body.
                         snippet_clean = normalized.snippet.strip()
                         use_metadata_fallback = _can_use_candidate_metadata_fallback(
                             source, raw_candidate
                         )
-                        metadata_only_fallback = use_metadata_fallback
                         if (
                             use_metadata_fallback
                             or (
@@ -1829,6 +1825,7 @@ async def _run_source(
                                 )
                             )
                         ):
+                            metadata_only_fallback = True
                             logger.info(
                                 "ai-engine.radar.low_quality_page_use_snippet",
                                 extra={
@@ -1888,7 +1885,7 @@ async def _run_source(
                     )
                     item = {
                         "title": normalized.title,
-                        "snippet": brief_context[:2000],
+                        "snippet": brief_context,
                     }
                     # 低质量 fallback（snippet 路径）已直接用 snippet 作 interpretation，跳过 LLM
                     if not low_quality:
@@ -1960,9 +1957,7 @@ async def _run_source(
                     # description + repo_signals are the only available
                     # evidence, so skip the generic brief but do not skip the
                     # tier decision.
-                    if distilled_scorer is not None and (
-                        not metadata_only_fallback or github_repo_candidate
-                    ):
+                    if distilled_scorer is not None:
                         from ai_engine.scoring.scoring_profiles import profile_for_source
 
                         profile, _ = profile_for_source(scoring_source_type)
@@ -1979,6 +1974,11 @@ async def _run_source(
                                 if part.strip()
                             )
                             cleaned = repo_context
+                            scoreability = "limited"
+                        elif metadata_only_fallback and scoreability is not None:
+                            # Source-provided abstracts/descriptions can support
+                            # discovery triage, but are never evidence of a full
+                            # article regardless of their character count.
                             scoreability = "limited"
                         if github_repo_candidate or scoreability is not None:
                             distilled_result = await distilled_scorer(
@@ -2086,7 +2086,11 @@ async def _run_source(
                         ),
                         extra_tags=tuple(extra_tags_list),
                         distilled=distilled_result,
-                        limited_score=scoreability == "limited",
+                        limited_score=(
+                            metadata_only_fallback
+                            or scoreability == "limited"
+                        ),
+                        metadata_only_fallback=metadata_only_fallback,
                     )
                     if inserted:
                         total_new += 1

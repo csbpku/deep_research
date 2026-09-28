@@ -1,18 +1,23 @@
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/session';
 import { getWebEnv } from '@/lib/env';
+import { getReaderInstallDownloadState } from '@/lib/reader-install';
 
 export default async function ReadingInstallPage() {
   const env = getWebEnv();
   const user = await getCurrentUser();
-  const downloadReady = Boolean(env.READING_EXTENSION_BETA_PATH || env.READING_EXTENSION_BETA_URL);
+  const downloadState = getReaderInstallDownloadState({
+    signedIn: Boolean(user),
+    betaPath: env.READING_EXTENSION_BETA_PATH,
+    betaUrl: env.READING_EXTENSION_BETA_URL,
+  });
   const signInHref = `/signin?callbackUrl=${encodeURIComponent('/reading/install')}`;
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12 sm:py-16">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Deep Research Reader</p>
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Deep Research Reader</p>
       <h1 className="mt-3 font-serif text-3xl font-semibold tracking-tight text-foreground">在原网页中使用 AI 阅读</h1>
-      <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">Reader 是独立的 Chrome 扩展。它在你打开的网页里按需读取正文，直接调用你配置的 OpenAI 兼容模型；雷达账号和数据库不是核心阅读的前置条件。</p>
+      <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">Reader 是可独立使用的 Chrome 扩展。独立模式调用你配置的 OpenAI-compatible 或 Anthropic-compatible 模型；平台模式登录调研平台后使用平台 AI，无需单独配置模型。</p>
       <section className="mt-8 grid gap-3 sm:grid-cols-2">
         <div className="border-l-2 border-primary bg-primary/[0.04] px-4 py-3">
           <h2 className="text-sm font-semibold text-foreground">独立模式</h2>
@@ -27,37 +32,41 @@ export default async function ReadingInstallPage() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold">Beta 安装包</h2>
-            <p className="mt-1 text-xs text-muted-foreground">当前版本 `v{env.READING_EXTENSION_BETA_VERSION}`，适用于桌面 Chrome。</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {downloadState.available
+                ? env.READING_EXTENSION_BETA_VERSION
+                  ? `当前版本 v${env.READING_EXTENSION_BETA_VERSION}，适用于桌面 Chrome。`
+                  : '适用于桌面 Chrome。'
+                : '安装包暂不可用，请稍后再试或联系管理员。'}
+            </p>
           </div>
-          {user ? (
-            downloadReady ? (
+          {downloadState.action === 'download' ? (
               <a
                 href="/api/reading/extension/download"
                 className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
               >
                 下载 Beta ZIP
               </a>
-            ) : (
-              <span className="inline-flex rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">产物尚未发布</span>
-            )
-          ) : (
+          ) : downloadState.action === 'signin' ? (
             <Link
               href={signInHref}
               className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
               登录后下载
             </Link>
+          ) : (
+            <span className="inline-flex rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">暂不可下载</span>
           )}
         </div>
-        {env.READING_EXTENSION_BETA_SHA256 ? (
-          <p className="mt-4 break-all font-mono text-[11px] leading-5 text-muted-foreground">
+        {downloadState.available && env.READING_EXTENSION_BETA_SHA256 ? (
+          <p className="mt-4 break-all font-mono text-xs leading-5 text-muted-foreground">
             SHA-256: {env.READING_EXTENSION_BETA_SHA256}
           </p>
         ) : null}
         <ol className="mt-4 space-y-3 text-sm leading-6 text-muted-foreground">
-          <li><span className="font-medium text-foreground">1.</span> 下载并解压 Beta ZIP；解压后的目录根部应直接包含 `manifest.json`。</li>
+          <li><span className="font-medium text-foreground">1.</span> 下载并解压 Beta ZIP，在解压目录中确认可以直接看到 `manifest.json`。</li>
           <li><span className="font-medium text-foreground">2.</span> 打开 Chrome 的 `chrome://extensions`，开启“开发者模式”。</li>
-          <li><span className="font-medium text-foreground">3.</span> 选择“加载已解压的扩展程序”，选中 `chrome-mv3` 目录。</li>
+          <li><span className="font-medium text-foreground">3.</span> 选择“加载已解压的扩展程序”，选中 `manifest.json` 所在的解压目录。</li>
           <li><span className="font-medium text-foreground">4.</span> 打开任意公开技术网页，点击工具栏里的 Deep Research Reader。首次启用站点后，网页右侧也会保留一个低打扰入口。</li>
           <li><span className="font-medium text-foreground">5.</span> 在设置中选择独立模式或平台模式；平台模式会跳转登录并使用 PKCE 安全连接。</li>
         </ol>

@@ -268,7 +268,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             </div>
             <ProgressBar />
             {phase === 'polling' && now - pollingStartedAt > 30_000 ? (
-              <p className="mt-2 rounded border border-warning-border bg-warning-bg px-2 py-1 text-[11px] text-warning-fg">
+              <p className="mt-2 rounded border border-warning-border bg-warning-bg px-2 py-1 text-xs text-warning-fg">
                 已等待超过 30 秒,通常是文档较大或外部 LLM 排队;任务仍在后台,可关闭对话框稍后回来。
               </p>
             ) : null}

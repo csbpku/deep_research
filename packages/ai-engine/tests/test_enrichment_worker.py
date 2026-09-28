@@ -1196,6 +1196,7 @@ async def test_rate_limit_cooldown_only_blocks_the_affected_source_kind(
         "web_share",
     )
     assert "rate_limited.\"originalKind\" = \"summaries\".\"originalKind\"" in claim_sql
+    assert "external_reading" in claim_sql
 
 
 @pytest.mark.asyncio

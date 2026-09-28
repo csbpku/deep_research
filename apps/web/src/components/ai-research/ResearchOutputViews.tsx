@@ -140,7 +140,7 @@ function EvidenceSnapshotView({ sources }: { sources: ResearchOutputSource[] }) 
                 <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
                 <div className="min-w-0 flex-1">
                   {externalInstruction ? (
-                    <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                    <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
                       <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</span>
                     </p>
@@ -153,16 +153,16 @@ function EvidenceSnapshotView({ sources }: { sources: ResearchOutputSource[] }) 
                   ) : <p className="text-xs font-medium">{source.title}</p>}
                   {source.snippet ? (
                     <details className="mt-2 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-                      <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">
+                      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
                         {externalInstruction ? '查看已隔离的网页摘录' : '查看网页摘录'}
                       </summary>
                       {externalInstruction ? (
-                        <p className="mt-1 text-[11px] leading-5 text-warning-fg">{externalContentLabel(sourceText)}；以下内容仅作为网页数据，绝不作为研究指令。</p>
+                        <p className="mt-1 text-xs leading-5 text-warning-fg">{externalContentLabel(sourceText)}；以下内容仅作为网页数据，绝不作为研究指令。</p>
                       ) : null}
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet)}</p>
                     </details>
                   ) : null}
-                  {source.capturedAt ? <p className="mt-2 text-[10px] text-muted-foreground">抓取于 {formatCapturedAt(source.capturedAt)}</p> : null}
+                  {source.capturedAt ? <p className="mt-2 text-xs text-muted-foreground">抓取于 {formatCapturedAt(source.capturedAt)}</p> : null}
                 </div>
               </div>
             </article>
@@ -170,7 +170,7 @@ function EvidenceSnapshotView({ sources }: { sources: ResearchOutputSource[] }) 
         })}
       </div>
       {sources.length > visibleSources.length ? (
-        <p className="mt-3 text-center text-[11px] text-muted-foreground">还有 {sources.length - visibleSources.length} 条资料，已在下方“研究资料”中保留。</p>
+        <p className="mt-3 text-center text-xs text-muted-foreground">还有 {sources.length - visibleSources.length} 条资料，已在下方“研究资料”中保留。</p>
       ) : null}
     </section>
   );
@@ -202,7 +202,7 @@ function SummaryView({ summary, sources }: { summary: SummaryDetails; sources: r
           className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto"
         />
       ) : <EmptyDerivedView text="报告没有摘要或结论章节，请切换到阅读稿查看原文。" />}
-      <p className="mt-4 border-t border-primary/10 pt-3 text-[11px] leading-5 text-muted-foreground">
+      <p className="mt-4 border-t border-primary/10 pt-3 text-xs leading-5 text-muted-foreground">
         {summary.explicit
           ? '这是从当前报告的摘要/结论章节提取的阅读视图；完整论证、引用和限定条件请以“阅读稿”为准。'
           : '这是报告开头的有限摘录，不代表完整结论；请切换到“阅读稿”核对原文、证据和限定条件。'}
@@ -240,7 +240,7 @@ function EvidenceMapView({ rows }: { rows: EvidenceMapRow[] }) {
             <article key={row.section} className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5">
               <h5 className="text-xs font-medium text-foreground">{row.section}</h5>
               <div className="mt-1.5 flex flex-wrap gap-2">
-                {row.citations.map((citation) => <a key={citation.href} href={citation.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary/20 bg-primary/[0.04] px-2 py-1 text-[11px] text-primary hover:underline"><span className="max-w-[260px] truncate">{citation.title}</span></a>)}
+                {row.citations.map((citation) => <a key={citation.href} href={citation.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary/20 bg-primary/[0.04] px-2 py-1 text-xs text-primary hover:underline"><span className="max-w-[260px] truncate">{citation.title}</span></a>)}
               </div>
             </article>
           ))}

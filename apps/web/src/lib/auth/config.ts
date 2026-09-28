@@ -25,6 +25,7 @@ import { isBootstrapAdminEmail } from './invitation';
 import { canCreateAccountInBeta } from './beta-access';
 import { log } from '../log';
 import { isProductionAuthAllowed } from './transport';
+import { canUseE2EProvider, isAllowedE2EIdentity } from './e2e-access';
 
 const isE2E = process.env.E2E === '1';
 
@@ -69,17 +70,23 @@ export const authConfig: NextAuthConfig = {
             credentials: {
               email: { label: 'Email', type: 'email' },
               role: { label: 'Role', type: 'text' },
+              e2eToken: { label: 'E2E token', type: 'password' },
             },
-            async authorize(credentials) {
+            async authorize(credentials, request) {
               const email = (credentials?.email as string | undefined)?.toLowerCase();
               const role = (credentials?.role as 'member' | 'admin' | undefined) ?? 'member';
-              if (!email) return null;
-              const env = getWebEnv();
-              // This provider exists only for local Playwright runs.
+              const allowed = canUseE2EProvider({
+                nodeEnv: process.env.NODE_ENV,
+                requestUrl: request.url,
+                suppliedToken: credentials?.e2eToken as string | undefined,
+                expectedToken: process.env.E2E_CREDENTIALS_TOKEN,
+              });
+              if (!allowed || !email || !isAllowedE2EIdentity(email, role)) return null;
+              const accountRole = role;
               const u = await prisma.user.upsert({
                 where: { email },
-                create: { email, name: email.split('@')[0], role },
-                update: { name: email.split('@')[0], role },
+                create: { email, name: email.split('@')[0], role: accountRole },
+                update: { name: email.split('@')[0], role: accountRole },
               });
               if (!canEstablishSession(u)) return null;
               return {

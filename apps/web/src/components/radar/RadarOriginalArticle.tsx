@@ -334,7 +334,7 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
       >
         {toc.length ? (
           <nav className="sticky top-4 hidden h-[calc(100dvh-12rem)] max-h-[calc(100dvh-12rem)] self-start overscroll-contain overflow-y-auto pr-2 lg:block" aria-label="原文目录">
-            <p className="mb-2 text-[10px] font-semibold tracking-[0.16em] text-[var(--ink-accent)]">原文目录</p>
+            <p className="mb-2 text-xs font-semibold tracking-[0.16em] text-[var(--ink-accent)]">原文目录</p>
             <TocList items={toc} />
           </nav>
         ) : null}
@@ -389,7 +389,7 @@ function TocList({ items }: { items: RadarTocItem[] }) {
             className={cn(
               'block py-1 text-xs leading-5 text-[var(--ink-muted)] transition-colors hover:text-[var(--ink-accent)]',
               item.level <= 2 && 'font-semibold text-[var(--ink-text)]',
-              item.level === 3 && 'pl-2 text-[11px]',
+              item.level === 3 && 'pl-2 text-xs',
             )}
           >
             {item.label}

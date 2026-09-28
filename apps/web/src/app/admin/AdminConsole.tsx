@@ -610,7 +610,7 @@ function DashboardTab() {
               </h2>
               <p className="mt-1 text-xs text-muted-foreground">先处理会阻塞内容质量和研究交付的事项。</p>
             </div>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               仪表板每 5 秒刷新
             </span>
           </div>
@@ -895,15 +895,15 @@ function DashboardTab() {
                       <td className="px-3 py-2.5">
                         <SyncStatusBadge status={run.status} />
                         {run.recovered ? (
-                          <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                          <div className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
                             已恢复 · 历史失败 {run.historicalFailureCount} 次
                           </div>
                         ) : run.attemptCount > 1 ? (
-                          <div className="mt-1 text-[11px] text-muted-foreground">
+                          <div className="mt-1 text-xs text-muted-foreground">
                             第 {run.attemptCount} 次运行
                           </div>
                         ) : null}
-                        <div className="mt-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        <div className="mt-1 font-mono text-xs tabular-nums text-muted-foreground">
                           {formatRunTime(run.completedAt ?? run.createdAt)}
                         </div>
                       </td>
@@ -936,7 +936,7 @@ function DashboardTab() {
                       <td className="max-w-[240px] px-4 py-2.5 text-muted-foreground">
                         <div className="font-mono tabular-nums">{formatElapsed(run.elapsedMs)}</div>
                         {run.errorCode ? (
-                          <div className="mt-1 whitespace-normal break-words text-[11px] text-destructive">
+                          <div className="mt-1 whitespace-normal break-words text-xs text-destructive">
                             <code>{run.errorCode}</code>
                             {run.errorMessage ? <div className="mt-0.5 font-sans">{run.errorMessage}</div> : null}
                           </div>
@@ -1004,7 +1004,7 @@ function DashboardTab() {
                     <div className="text-right">
                       <SyncStatusBadge status={run.status} />
                       {run.recovered ? (
-                        <div className="mt-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                        <div className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
                           已恢复 · 失败 {run.historicalFailureCount} 次
                         </div>
                       ) : null}
@@ -1027,7 +1027,7 @@ function DashboardTab() {
                     </div>
                   </div>
                   {run.errorCode ? (
-                    <div className="mt-2 break-words text-[11px] text-destructive">
+                    <div className="mt-2 break-words text-xs text-destructive">
                       <code>{run.errorCode}</code>
                       {run.errorMessage ? <div className="mt-0.5 text-xs">{run.errorMessage}</div> : null}
                     </div>
@@ -1099,7 +1099,7 @@ function RadarMonitorPanel({
             </h2>
             <span
               className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
                 monitor.active
                   ? 'bg-status-running-bg text-status-running-fg'
                   : 'bg-status-succeeded-bg text-status-succeeded-fg',
@@ -1161,7 +1161,7 @@ function RadarMonitorPanel({
       <details className="group border-t border-border">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
           <span>查看详细分布与异常原因</span>
-          <span className="flex items-center gap-2 text-[11px] font-normal text-muted-foreground">
+          <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
             {levelTotal} 条内容 · {monitor.runs.failures.length} 类失败
             <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
           </span>
@@ -1249,7 +1249,7 @@ function RadarMonitorSection({
     <div className="min-w-0 px-4 py-3">
       <div className="mb-3 flex items-baseline justify-between gap-2">
         <h3 className="text-xs font-semibold">{title}</h3>
-        {hint ? <span className="text-[11px] text-muted-foreground">{hint}</span> : null}
+        {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
       </div>
       {children}
     </div>
@@ -1568,7 +1568,7 @@ function RadarGovernanceTab() {
           <Activity />
           低置信度
         </Button>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           先处理失败、待评分和不可评估内容，再看普通噪声。
         </span>
       </div>
@@ -1705,7 +1705,7 @@ function RadarGovernanceTab() {
             aria-label="搜索治理条目"
             className="h-8 min-w-56 max-w-md text-xs"
           />
-          <span className="text-[11px] text-muted-foreground">筛选结果按 canonicalUrl 去重</span>
+          <span className="text-xs text-muted-foreground">筛选结果按 canonicalUrl 去重</span>
         </div>
         {actionMessage ? (
           <div className="border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
@@ -1960,7 +1960,7 @@ function RadarHealthBadge({
 }) {
   if (running > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-running-bg px-2 py-0.5 text-[11px] font-medium text-status-running-fg">
+      <span className="inline-flex items-center gap-1 rounded-full bg-status-running-bg px-2 py-0.5 text-xs font-medium text-status-running-fg">
         <Activity className="size-3" />
         同步中
       </span>
@@ -1968,7 +1968,7 @@ function RadarHealthBadge({
   }
   if (failed > 0 || partial > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-failed-bg px-2 py-0.5 text-[11px] font-medium text-status-failed-fg">
+      <span className="inline-flex items-center gap-1 rounded-full bg-status-failed-bg px-2 py-0.5 text-xs font-medium text-status-failed-fg">
         <AlertTriangle className="size-3" />
         有异常
       </span>
@@ -1976,14 +1976,14 @@ function RadarHealthBadge({
   }
   if (pending > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-[11px] font-medium text-status-partial-fg">
+      <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-xs font-medium text-status-partial-fg">
         <Activity className="size-3" />
         后处理中
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-status-succeeded-bg px-2 py-0.5 text-[11px] font-medium text-status-succeeded-fg">
+    <span className="inline-flex items-center gap-1 rounded-full bg-status-succeeded-bg px-2 py-0.5 text-xs font-medium text-status-succeeded-fg">
       <CheckCircle2 className="size-3" />
       已完成
     </span>
@@ -2001,7 +2001,7 @@ function RadarMetric({
 }) {
   return (
     <div className="px-4 py-3">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
       <div
         className={cn(
           'mt-0.5 font-mono text-lg font-semibold tabular-nums',

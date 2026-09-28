@@ -23,6 +23,7 @@ export const DistilledScoreSchema = z.object({
   tier: DistilledTierSchema,
   dimensions: DistilledDimensionScoresSchema,
   weakPoint: z.string().max(100),
+  weakPointEvidence: z.string().max(120).optional(),
   veto: z.enum(['unsafe_content', 'title_content_mismatch']).nullable(),
   riskFlags: z.array(z.enum(['security_review_required', 'suspected_repost'])),
   profile: DistilledProfileSchema,
@@ -188,8 +189,8 @@ export const ReadingContextSchema = z.object({
   title: z.string().max(300).default('当前网页'),
   language: z.string().max(20).default('zh-CN'),
   scope: ReadingContextScopeSchema.default('selection'),
-  body: z.string().min(1).max(256_000),
-  section: z.string().max(80_000).optional(),
+  body: z.string().min(1),
+  section: z.string().optional(),
   selection: SourceAnchorSchema.optional(),
 }).strict().superRefine((value, ctx) => {
   // A selection scoped request without an anchor would silently fall back to
@@ -224,6 +225,16 @@ export const ReadingTranslateInputSchema = z.object({
   blocks: z.array(z.object({ id: z.string().min(1).max(100), text: z.string().min(1).max(12_000) }).strict()).min(1).max(24),
 }).strict();
 export type ReadingTranslateInput = z.infer<typeof ReadingTranslateInputSchema>;
+
+export const ReadingImageTranslateInputSchema = z.object({
+  imageDataUrl: z.string().min(1).max(8_400_000)
+    .regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/u),
+  alt: z.string().max(500).default(''),
+  title: z.string().max(300).default('技术文章配图'),
+  language: z.string().max(20).default('zh-CN'),
+  retry: z.boolean().default(false),
+}).strict();
+export type ReadingImageTranslateInput = z.infer<typeof ReadingImageTranslateInputSchema>;
 
 export const ReadingCitationSchema = z.object({
   quote: z.string().min(1).max(12_000),

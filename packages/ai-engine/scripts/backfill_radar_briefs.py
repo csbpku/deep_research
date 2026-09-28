@@ -29,7 +29,12 @@ from ai_engine.adapters.base import build_adapter
 from ai_engine.contracts.states import AI_JOB_STATUS
 from ai_engine.ingestion.pipeline import _generate_brief
 from ai_engine.job_runner.db_store import DbJobStore
-from ai_engine.radar.sync_runner import MIN_BRIEF_OUTPUT_CHARS, _strip_reasoning_markup
+from ai_engine.radar.sync_runner import (
+    BRIEF_CONTEXT_MAX_CHARS,
+    MIN_BRIEF_OUTPUT_CHARS,
+    _brief_context_excerpt,
+    _strip_reasoning_markup,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,11 +95,11 @@ async def _backfill_one(
             adapter,
             {
                 "title": str(row.get("title") or "Untitled")[:200],
-                "snippet": context[:2000],
+                "snippet": _brief_context_excerpt(context),
             },
             url,
             timeout_seconds=timeout_seconds,
-            context_max_chars=2000,
+            context_max_chars=BRIEF_CONTEXT_MAX_CHARS,
         )
     except Exception as exc:  # noqa: BLE001 - one row must not stop the batch
         return BackfillResult(summary_id, "failed", type(exc).__name__)

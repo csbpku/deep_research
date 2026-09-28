@@ -27,6 +27,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
     const actionRequestId = newAdminActionRequestId();
     const enrichmentEnabled = radarEnrichmentEnabled();
+    const externalReading = !enrichmentEnabled;
     try {
       const result = await prisma.$transaction(async (tx) => {
         const diagnostic = await tx.radarSyncDiagnostic.findUnique({ where: { id } });
@@ -40,11 +41,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         });
         let summaryId = existing?.id;
         if (existing) {
+          const promotedTags = new Set([...existing.tags, 'admin_promoted']);
+          if (externalReading) promotedTags.add('external_reading');
+          else promotedTags.delete('external_reading');
           await tx.summary.update({
             where: { id: existing.id },
             data: {
               status: 'candidate',
-              tags: [...new Set([...existing.tags, 'admin_promoted'])],
+              tags: [...promotedTags],
             },
           });
         }
@@ -66,35 +70,41 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
             || diagnostic.distilledTier === 'deep_read'
             ? diagnostic.distilledTier
             : null;
+          const promotedTags = new Set([...diagnostic.tags, 'admin_promoted']);
+          if (externalReading) promotedTags.add('external_reading');
+          else promotedTags.delete('external_reading');
+          const promotedBody = externalReading
+            ? diagnostic.tags.includes('external_reading')
+              ? diagnostic.body || diagnostic.title
+              : diagnostic.title
+            : diagnostic.body || diagnostic.title;
           const created = await tx.summary.create({
             data: {
               title: diagnostic.title,
-              body: diagnostic.body || diagnostic.title,
+              body: promotedBody,
               url: diagnostic.url,
               canonicalUrl: diagnostic.canonicalUrl,
               source: 'daily',
               contentOrigin: origin,
               summaryDate: diagnostic.publishedAt ?? diagnostic.createdAt,
               publishedAt: diagnostic.publishedAt,
-              tags: [...new Set([...diagnostic.tags, 'admin_promoted'])],
+              tags: [...promotedTags],
               status: 'candidate',
               distilledScore: diagnostic.distilledScore ?? undefined,
               distilledTotal: total,
-              // A promoted high-value diagnostic is only a score decision at
-              // this point. Keep the public tier at skim until the durable
-              // enrichment worker has produced and quality-checked the full
-              // reader snapshot.
+              // Use the score tier directly when the external Reader path is
+              // active; otherwise keep high-value rows at skim until review.
               distilledTier: enrichmentEnabled && targetTier ? 'skim' : diagnostic.distilledTier,
-              distilledTargetTier: enrichmentEnabled ? targetTier : null,
+              distilledTargetTier: targetTier,
               enrichmentStatus: enrichmentEnabled && targetTier ? 'pending' : null,
               enrichmentNextRetryAt: enrichmentEnabled && targetTier ? new Date() : null,
               syncRunId: diagnostic.runId,
-              interpretation: (diagnostic.body || '').slice(0, 2000) || null,
+              interpretation: (promotedBody || '').slice(0, 2000) || null,
               selectionReason: 'Admin 从同步过滤队列人工提升',
-              originalMarkdown: diagnostic.originalMarkdown,
+              originalMarkdown: externalReading ? null : diagnostic.originalMarkdown,
               originalKind: diagnostic.originalKind,
-              originalFetchedAt: diagnostic.createdAt,
-              originalBytes: diagnostic.originalMarkdown?.length ?? null,
+              originalFetchedAt: externalReading ? null : diagnostic.createdAt,
+              originalBytes: externalReading ? null : diagnostic.originalMarkdown?.length ?? null,
             },
             select: { id: true },
           });

@@ -69,13 +69,21 @@ const state = await page.evaluate(() => {
   const image = document.querySelector('[data-deep-research-image-wrap] img');
   const source = image?.getBoundingClientRect();
   const overlays = [...document.querySelectorAll('[data-deep-research-image-overlay] > span')];
+  const vertical = overlays.find((node) => node.style.writingMode === 'vertical-rl');
+  const verticalRect = vertical?.getBoundingClientRect();
   const side = [...document.querySelectorAll('[data-deep-research-image-side-translation]')];
   return {
     overlays: overlays.length,
-    verticalWriting: overlays.some((node) => node.style.writingMode === 'vertical-rl'),
+    verticalWriting: Boolean(vertical),
+    verticalLabelFits: Boolean(source && verticalRect
+      && verticalRect.left >= source.left && verticalRect.right <= source.right
+      && parseFloat(getComputedStyle(vertical).fontSize) <= verticalRect.width * 0.65),
     side: side.map((node) => ({ text: node.textContent, outside: (() => { const rect = node.getBoundingClientRect(); return Boolean(source && (rect.left >= source.right || rect.right <= source.left || rect.top >= source.bottom || rect.bottom <= source.top)); })() })),
   };
 });
 await page.screenshot({ path: '/private/tmp/deep-research-reader-image-position.png', fullPage: true });
 console.log(JSON.stringify(state, null, 2));
+if (!state.verticalWriting || !state.verticalLabelFits || state.overlays !== 3 || !state.side.every((item) => item.outside)) {
+  throw new Error(`image translation layout failed: ${JSON.stringify(state)}`);
+}
 await browser.close();

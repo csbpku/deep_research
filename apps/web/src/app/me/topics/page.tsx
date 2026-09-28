@@ -193,7 +193,7 @@ export default async function MyTopicsPage() {
                       <p className="mt-1 line-clamp-2 text-muted-foreground">{top.proposition}</p>
                     </div>
                   ) : null}
-                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     <span>{t.candidateCount} 条相关内容</span>
                     <span>·</span>
                     <span>{list.length} 个活跃议题</span>

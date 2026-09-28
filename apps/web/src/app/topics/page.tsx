@@ -269,12 +269,12 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
                       <p className="line-clamp-3 text-xs text-muted-foreground">{t.summary}</p>
                     ) : null}
                     {research ? (
-                      <p className="flex items-center gap-1.5 text-[11px] text-primary">
+                      <p className="flex items-center gap-1.5 text-xs text-primary">
                         <BookOpenCheck className="size-3" />
                         已有团队研究：{research.title.slice(0, 32)}
                       </p>
                     ) : null}
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>{t.candidateCount} 条相关内容</span>
                       <span>{activeIssueDatesByTopic.get(t.id)?.length ?? 0} 个活跃议题</span>
                       <span>{t.sourceCount} 个采集渠道</span>

@@ -203,6 +203,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     includeBody: true,
   });
   const tier = summary.distilledTier ?? shaped.distilledScore?.tier ?? null;
+  const externalReading = summary.tags.includes('external_reading');
   if ((tier === 'noise' || tier === null) && u?.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
@@ -215,6 +216,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   if (
     isPublicAutomaticHighValue &&
     u?.role !== 'admin' &&
+    !externalReading &&
     !(
       summary.enrichmentStatus === 'ready' &&
       summary.readerQualityStatus === 'ready' &&
@@ -228,9 +230,10 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     });
   }
 
-  // A skim is a summary surface by contract. Do not expose historical deep
-  // enrichment or full source text even if old rows still contain it.
-  const responseCandidate = tier === 'skim'
+  // External reading uses the source URL/Reader path, never a cached source
+  // snapshot. Keep historical payloads private even if the row was enriched
+  // before it acquired the external-reading contract.
+  const responseCandidate = tier === 'skim' || externalReading
     ? {
         ...shaped,
         body: null,

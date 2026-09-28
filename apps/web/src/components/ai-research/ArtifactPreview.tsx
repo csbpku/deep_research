@@ -171,10 +171,10 @@ export function ArtifactPreview({ content }: { content: string }) {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <div className="flex rounded-lg border border-border bg-background p-0.5" role="group" aria-label="Slides 预览模式">
-            <button type="button" aria-pressed={mode === 'stage'} onClick={() => setMode('stage')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${mode === 'stage' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}><Maximize2 className="size-3" />演示</button>
-            <button type="button" aria-pressed={mode === 'outline'} onClick={() => setMode('outline')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] ${mode === 'outline' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}><List className="size-3" />列表</button>
+            <button type="button" aria-pressed={mode === 'stage'} onClick={() => setMode('stage')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${mode === 'stage' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}><Maximize2 className="size-3" />演示</button>
+            <button type="button" aria-pressed={mode === 'outline'} onClick={() => setMode('outline')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${mode === 'outline' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}><List className="size-3" />列表</button>
           </div>
-          <span className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-[11px] tabular-nums text-muted-foreground">{slides.length} 页</span>
+          <span className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs tabular-nums text-muted-foreground">{slides.length} 页</span>
         </div>
       </div>
       {mode === 'stage' ? (
@@ -200,7 +200,7 @@ export function ArtifactPreview({ content }: { content: string }) {
             <span className="absolute -right-12 -top-16 size-52 rounded-full border border-tier-skim/20 transition-transform duration-700 motion-reduce:transition-none group-hover:scale-110" aria-hidden />
             <span className="absolute bottom-[-24%] left-[38%] h-[120%] w-px rotate-[28deg] bg-tier-skim/15" aria-hidden />
             <div className="relative grid h-full grid-rows-[auto_1fr_auto] p-5 sm:p-9 lg:p-12">
-              <div className="flex items-center justify-between gap-3 text-[10px] font-medium uppercase tracking-[0.18em] text-background/65 dark:text-muted-foreground">
+              <div className="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-[0.18em] text-background/65 dark:text-muted-foreground">
                 <span>Research / visual briefing</span>
                 <span className="font-mono text-tier-skim">{String(current + 1).padStart(2, '0')} / {String(slides.length).padStart(2, '0')}</span>
               </div>
@@ -229,7 +229,7 @@ export function ArtifactPreview({ content }: { content: string }) {
                   ) : null}
                 </div>
               </div>
-              <div className="flex items-end justify-between gap-3 border-t border-background/15 pt-3 text-[10px] text-background/60 sm:pt-5 dark:border-foreground/15 dark:text-muted-foreground">
+              <div className="flex items-end justify-between gap-3 border-t border-background/15 pt-3 text-xs text-background/60 sm:pt-5 dark:border-foreground/15 dark:text-muted-foreground">
                 <span>点击舞台或使用 ← → / 空格推进 · 列表模式核对完整提纲</span>
                 <span className="hidden sm:inline">证据优先 · 结论可核验</span>
               </div>
@@ -251,7 +251,7 @@ export function ArtifactPreview({ content }: { content: string }) {
           {slides.map((slide, index) => (
             <article key={`${index}-${slide.slice(0, 24)}`} aria-label={`第 ${index + 1} 页：${slideTitle(slide, index)}`} className="min-w-0 rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
               <div className="flex items-start justify-between gap-3 border-b border-border/70 pb-3">
-                <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Slide {String(index + 1).padStart(2, '0')}</p>
+                <p className="font-mono text-xs uppercase tracking-[0.14em] text-muted-foreground">Slide {String(index + 1).padStart(2, '0')}</p>
                 <p className="min-w-0 truncate text-right text-xs font-medium text-foreground" title={slideTitle(slide, index)}>{slideTitle(slide, index)}</p>
               </div>
               <div className="pt-4">

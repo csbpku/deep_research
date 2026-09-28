@@ -81,6 +81,7 @@ describe('POST /api/researches/[id]/assistant', () => {
     expect(response.status).toBe(200);
     expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
       body: expect.objectContaining({
+        requester_id: USER.id,
         body: '正文上下文选中的文本',
         topic: '研究主题',
         selection: {
@@ -131,8 +132,8 @@ describe('POST /api/researches/[id]/assistant', () => {
     expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
   });
 
-  it('caps the context sent to the synchronous engine', async () => {
-    const body = 'x'.repeat(35_000);
+  it('sends the complete draft body to the synchronous engine', async () => {
+    const body = 'x'.repeat(300_000);
     mocks.researchFindUnique.mockResolvedValueOnce({
       id: RESEARCH_ID,
       title: '研究主题',
@@ -153,7 +154,7 @@ describe('POST /api/researches/[id]/assistant', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.fetchAiEngine).toHaveBeenCalledWith(expect.objectContaining({
-      body: expect.objectContaining({ body: 'x'.repeat(30_000) }),
+      body: expect.objectContaining({ body }),
     }));
   });
 

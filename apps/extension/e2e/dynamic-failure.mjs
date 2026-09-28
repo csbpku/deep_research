@@ -6,6 +6,7 @@ const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname
 const pagePort = 8782;
 const providerPort = 8806;
 let failuresRemaining = 2;
+let providerRequests = 0;
 
 const pageHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Dynamic failure recovery</title><style>body{max-width:860px;margin:32px auto;font:17px/1.6 system-ui,sans-serif}</style></head><body><main><article><h1>Dynamic failure recovery</h1><p id="fail-block">FAIL_DYNAMIC_ONCE This paragraph must remain visible as a retryable failure when the page changes.</p><p id="stable-block">The stable paragraph should translate and remain available while the failing item is retried.</p><pre><code>const next = await queue.take();</code></pre></article></main><iframe title="cross-origin fixture" src="http://127.0.0.1:8783/embedded"></iframe><script>setTimeout(()=>{const p=document.createElement('p');p.id='dynamic-block';p.textContent='Dynamic content arrived after the first translation snapshot and must enter the queue.';document.querySelector('article').append(p)},900)</script></body></html>`;
 
@@ -40,6 +41,7 @@ const providerServer = createServer(async (request, response) => {
   let raw = '';
   for await (const chunk of request) raw += chunk;
   const payload = raw ? JSON.parse(raw) : {};
+  providerRequests += 1;
   const system = String(payload.messages?.find((item) => item.role === 'system')?.content || '');
   const user = payload.messages?.at(-1);
   const content = Array.isArray(user?.content)
@@ -50,13 +52,13 @@ const providerServer = createServer(async (request, response) => {
     json(response, 200, { choices: [{ message: { content: 'READER_VISION_CHECK' } }] });
     return;
   }
-  if (system.includes('技术文档翻译器') && content.includes('FAIL_DYNAMIC_ONCE') && failuresRemaining > 0) {
+  if (system.includes('技术文档翻译编辑') && content.includes('FAIL_DYNAMIC_ONCE') && failuresRemaining > 0) {
     failuresRemaining -= 1;
     json(response, 503, { error: { message: 'temporary dynamic test rate limit' } });
     return;
   }
 
-  const answer = system.includes('技术文档翻译器')
+  const answer = system.includes('技术文档翻译编辑')
     ? `译文：${content.replace(/^页面标题：[\s\S]*?原文：\n/u, '').slice(0, 120)}`
     : 'OK';
   await new Promise((resolve) => setTimeout(resolve, 120));
@@ -120,21 +122,32 @@ try {
   await panel.locator('#translate-all').click();
 
   // Wait for the dynamically appended block to be translated. Its arrival
-  // forces a new page snapshot while the old job already contains a failure.
+  // forces a new page snapshot while the old job may still contain a failure.
   await page.waitForSelector('#dynamic-block', { state: 'attached', timeout: 10_000 });
   await page.waitForFunction(() => Boolean(document.querySelector('#dynamic-block')?.nextElementSibling?.hasAttribute('data-deep-research-translation')), null, { timeout: 30_000 });
-  await panel.waitForFunction(() => document.querySelector('#translation-failures')?.textContent?.includes('需要处理'), null, { timeout: 30_000 });
-  const failureText = await panel.locator('#translation-failures').innerText();
-  if (!failureText.includes('FAIL_DYNAMIC_ONCE')) throw new Error(`动态更新后旧失败项没有保留：${failureText}`);
-
-  await panel.locator('.translation-retry').first().click();
-  await panel.waitForFunction(() => !document.querySelector('#translation-failures')?.textContent?.includes('需要处理'), null, { timeout: 30_000 });
+  if (failuresRemaining !== 0) {
+    throw new Error(`预设的两次临时失败未触发：${JSON.stringify({ providerRequests, failuresRemaining })}`);
+  }
+  let recovery = 'automatic';
+  const failurePanel = panel.locator('#translation-failures');
+  if (await failurePanel.isVisible()) {
+    const failureText = await failurePanel.innerText();
+    if (!failureText.includes('FAIL_DYNAMIC_ONCE')) throw new Error(`动态更新后失败列表丢失原失败项：${failureText}`);
+    recovery = 'manual-retry';
+    await panel.locator('.translation-retry').first().click();
+    await panel.waitForFunction(() => !document.querySelector('#translation-failures')?.textContent?.includes('需要处理'), null, { timeout: 30_000 });
+  } else {
+    await page.waitForFunction(() => Boolean(document.querySelector('#fail-block')?.nextElementSibling?.hasAttribute('data-deep-research-translation')), null, { timeout: 30_000 });
+  }
   const final = await page.evaluate(() => ({
     dynamicTranslated: Boolean(document.querySelector('#dynamic-block')?.nextElementSibling?.hasAttribute('data-deep-research-translation')),
+    failedBlockTranslated: Boolean(document.querySelector('#fail-block')?.nextElementSibling?.hasAttribute('data-deep-research-translation')),
     failureRows: document.querySelectorAll('[data-deep-research-translation]').length,
   }));
-  if (!final.dynamicTranslated) throw new Error(`动态正文翻译结果丢失：${JSON.stringify(final)}`);
-  console.log(JSON.stringify({ extensionId, tabId, failuresRemaining, preservedFailure: true, retried: true, final }, null, 2));
+  if (!final.dynamicTranslated || !final.failedBlockTranslated || await failurePanel.isVisible()) {
+    throw new Error(`动态正文或失败段恢复不完整：${JSON.stringify({ recovery, final, failures: await failurePanel.innerText().catch(() => '') })}`);
+  }
+  console.log(JSON.stringify({ extensionId, tabId, failuresRemaining, recovery, final }, null, 2));
 } finally {
   await context.close().catch(() => {});
   await new Promise((resolve) => providerServer.close(resolve));

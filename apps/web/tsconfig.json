@@ -33,6 +33,7 @@
   },
   "include": [
     ".next-dev/types/**/*.ts",
+    ".next-goal-e2e/types/**/*.ts",
     ".next-qa/types/**/*.ts",
     ".next-recovery/types/**/*.ts",
     ".next-recovery/types/**/*.ts",

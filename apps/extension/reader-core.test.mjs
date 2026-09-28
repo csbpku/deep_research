@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { boundTaskContext, buildAnnotationUrl, cleanTranslationText, explainImage, explainSelection, loadProvider, mergeProcessedIds, mergeTranslationFailures, parseReadingAnswer, providerReady, requestChat, requestChatStream, saveProvider, stripReasoningText, testVisionProvider, translateBlocks, translateImage } from './reader-core.js';
+import { boundTaskContext, buildAnnotationUrl, cleanTranslationText, combineTranslationParts, explainImage, explainSelection, loadProvider, mergeProcessedIds, mergeTranslationFailures, parseReadingAnswer, providerReady, requestChat, requestChatStream, saveProvider, splitReadingText, splitTranslationBlocks, stripReasoningText, testVisionProvider, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 
 test('provider readiness requires address, model and key', () => {
@@ -258,27 +258,38 @@ test('streaming and blocking responses hide provider reasoning tags, including s
   }
 });
 
-test('whole-page questions select a bounded relevant context and disclose coverage', async () => {
+test('whole-page questions analyze every text chunk before synthesizing an answer', async () => {
   const originalFetch = globalThis.fetch;
-  let request;
+  const requests = [];
   globalThis.fetch = async (_url, options) => {
-    request = JSON.parse(options.body);
+    requests.push(JSON.parse(options.body));
     return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answer: 'bounded answer', evidence: [] }) } }] }), { status: 200 });
   };
   try {
-    const body = `${'intro '.repeat(20_000)}\n\n${'queue capacity relevant '.repeat(2_000)}\n\n${'tail '.repeat(20_000)}`;
+    const body = `START_SENTINEL\n\n${'intro '.repeat(5_000)}\n\n${'queue capacity relevant '.repeat(2_000)}\n\n${'tail '.repeat(5_000)}\n\nEND_SENTINEL`;
     const result = await explainSelection(
       { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret' },
-      { url: 'https://example.com/docs', title: 'Long docs', body },
+      { url: 'https://example.com/docs', title: 'Long docs', body, scope: 'page' },
       'queue capacity',
     );
-    const userContent = request.messages.at(-1).content;
-    assert.ok(userContent.length < 100_000);
-    assert.match(userContent, /queue capacity relevant/u);
-    assert.ok(result.warnings.some((warning) => /只覆盖与问题相关/u.test(warning)));
+    const submitted = requests.map((request) => request.messages.at(-1).content).join('\n');
+    assert.ok(requests.length > 2);
+    assert.match(submitted, /START_SENTINEL/u);
+    assert.match(submitted, /END_SENTINEL/u);
+    assert.match(submitted, /第 \d+\/\d+ 块/u);
+    assert.equal(result.answer, 'bounded answer');
+    assert.equal(result.warnings.some((warning) => /只覆盖与问题相关/u.test(warning)), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('reading text chunks are lossless and retain a final short section', () => {
+  const source = `Intro\n\n${'long paragraph. '.repeat(2_000)}\n\nTAIL_SENTINEL`;
+  const chunks = splitReadingText(source, 4_000);
+  assert.ok(chunks.length > 1);
+  assert.equal(chunks.map((chunk) => chunk.text).join(''), source);
+  assert.equal(chunks.at(-1).text.endsWith('TAIL_SENTINEL'), true);
 });
 
 test('code blocks are preserved and never sent to the translation model', async () => {
@@ -287,13 +298,15 @@ test('code blocks are preserved and never sent to the translation model', async 
   globalThis.fetch = async (_url, options) => {
     calls += 1;
     const body = JSON.parse(options.body);
+    assert.match(body.messages[0].content, /避免逐词直译/u);
+    assert.match(body.messages[1].content, /文章标题（仅作术语语境/u);
     assert.match(body.messages[1].content, /prose/u);
     return new Response(JSON.stringify({ choices: [{ message: { content: '译文' } }] }), { status: 200 });
   };
   try {
     const result = await translateBlocks(
       { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
-      { title: 'Test' },
+      { title: 'Technical article' },
       [{ id: 'p', text: 'prose', kind: 'text' }, { id: 'code', text: 'const x = 1;', kind: 'code' }],
     );
     assert.equal(calls, 1);
@@ -304,25 +317,100 @@ test('code blocks are preserved and never sent to the translation model', async 
   }
 });
 
-test('text translations are emitted as soon as each block completes', async () => {
+test('independent translation batches short blocks and maps results back by id', async () => {
   const originalFetch = globalThis.fetch;
   const completed = [];
+  let calls = 0;
   globalThis.fetch = async (_url, options) => {
+    calls += 1;
     const body = JSON.parse(options.body);
-    const source = body.messages.at(-1).content;
-    const delay = source.includes('slow') ? 25 : 0;
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return new Response(JSON.stringify({ choices: [{ message: { content: source.includes('slow') ? '慢段' : '快段' } }] }), { status: 200 });
+    const request = body.messages.at(-1).content.split('<<<TRANSLATION_BATCH>>>\n')[1];
+    const batch = JSON.parse(request);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      translations: batch.blocks.map((item) => ({ id: item.id, text: `译:${item.text}` })).reverse(),
+    }) } }] }), { status: 200 });
   };
   try {
+    const blocks = Array.from({ length: 48 }, (_, index) => ({
+      id: `batch-${index}`,
+      text: `short technical block ${index}`,
+      kind: 'text',
+    }));
     const result = await translateBlocks(
       { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
-      { title: 'Test' },
-      [{ id: 'slow', text: 'slow', kind: 'text' }, { id: 'fast', text: 'fast', kind: 'text' }],
-      { concurrency: 2, onResult: (item) => completed.push(item.id) },
+      { title: 'Batch mapping test' },
+      blocks,
+      { onResult: (item) => completed.push(item.id) },
     );
-    assert.deepEqual(completed, ['fast', 'slow']);
-    assert.deepEqual(result.map((item) => item.text), ['快段', '慢段']);
+    assert.equal(calls, 2);
+    assert.equal(result.length, 48);
+    assert.equal(result[0].text, '译:short technical block 0');
+    assert.equal(result[47].text, '译:short technical block 47');
+    assert.equal(completed.length, 48);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('embedded prompts are translated as text instead of being answered', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    const content = body.messages.at(-1).content;
+    if (content.includes('<<<TRANSLATION_BATCH>>>')) {
+      const batch = JSON.parse(content.split('<<<TRANSLATION_BATCH>>>\n')[1]);
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        translations: batch.blocks.map(({ id, text }) => ({
+          id,
+          text: text.startsWith('Read the attached') ? '我没有看到附件，请把文件内容贴出来。' : '策略会在编写规格说明时得到执行。',
+        })),
+      }) } }] }), { status: 200 });
+    }
+    assert.match(body.messages[0].content, /绝不回答/u);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '阅读所附 intent.md，并根据它编写规格说明。' } }] }), { status: 200 });
+  };
+  try {
+    const results = await translateBlocks(
+      { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Prompt translation test' },
+      [
+        { id: 'embedded-prompt', text: 'Read the attached intent.md and produce a requirements spec.', kind: 'text' },
+        { id: 'normal', text: 'Policy is applied while the spec is written.', kind: 'text' },
+      ],
+    );
+
+    assert.equal(requests.length, 2);
+    assert.equal(results[0].text, '阅读所附 intent.md，并根据它编写规格说明。');
+    assert.equal(results[1].text, '策略会在编写规格说明时得到执行。');
+    assert.ok(results.every((item) => !item.error));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('malformed independent translation batches retry every source block separately', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (_url, options) => {
+    const content = JSON.parse(options.body).messages.at(-1).content;
+    calls.push(content);
+    if (content.includes('<<<TRANSLATION_BATCH>>>')) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"translations":[]}' } }] }), { status: 200 });
+    }
+    const source = content.match(/<<<SOURCE_TEXT>>>\n([\s\S]*?)\n<<<END_SOURCE_TEXT>>>/u)?.[1] || '';
+    return new Response(JSON.stringify({ choices: [{ message: { content: `译:${source}` } }] }), { status: 200 });
+  };
+  try {
+    const results = await translateBlocks(
+      { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Malformed batch test' },
+      [{ id: 'retry-a', text: 'Source A', kind: 'text' }, { id: 'retry-b', text: 'Source B', kind: 'text' }],
+    );
+    assert.equal(calls.length, 3);
+    assert.deepEqual(results.map((item) => item.text), ['译:Source A', '译:Source B']);
+    assert.ok(results.every((item) => !item.error));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -411,6 +499,8 @@ test('image translation follows the configured target language', async () => {
       { id: 'language-image', src: 'https://example.com/image.png', width: 100, height: 80, status: 'ready' },
     );
     assert.match(request.messages[0].content, /fr-FR/u);
+    assert.match(request.messages[0].content, /穷尽识别图片内每一处清晰可读文字/u);
+    assert.match(request.messages[0].content, /x、y 是文字框左上角/u);
     assert.doesNotMatch(request.messages[0].content, /翻译成中文/u);
   } finally {
     globalThis.fetch = originalFetch;
@@ -438,6 +528,56 @@ test('image translation can read a permitted cross-origin image before sending i
     assert.equal(result.regions.length, 1);
     assert.equal(requests[0].image, true);
     assert.equal(requests[1].messages[1].content.some((part) => part.type === 'image_url' && part.image_url.url.startsWith('data:image/png;base64,')), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('platform image translation sends browser-read image bytes, never a remote URL', async () => {
+  let request;
+  const result = await translateImage(
+    { baseUrl: 'https://platform.example/api/reading', model: 'platform-reading-vision', language: 'zh-CN', visionReady: true },
+    { title: 'Architecture' },
+    {
+      id: 'platform-image',
+      src: 'https://cdn.example/diagram.png',
+      dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+      width: 100,
+      height: 80,
+      status: 'ready',
+      alt: 'Architecture diagram',
+    },
+    {
+      requireImageBytes: true,
+      requestVision: async (payload) => {
+        request = payload;
+        return { choices: [{ message: { content: JSON.stringify({
+          regions: [{ text: 'Service', translation: '服务', x: 2, y: 3, width: 24, height: 12 }],
+          confidence: 0.95,
+          note: '',
+        }) } }] };
+      },
+    },
+  );
+
+  assert.equal(request.imageDataUrl, 'data:image/png;base64,iVBORw0KGgo=');
+  assert.doesNotMatch(JSON.stringify(request), /https:\/\/cdn\.example/u);
+  assert.equal(result.regions[0].translation, '服务');
+});
+
+test('platform image translation refuses remote URL fallback when browser byte access fails', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('permission denied'); };
+  try {
+    await assert.rejects(
+      () => translateImage(
+        { baseUrl: 'https://platform.example/api/reading', model: 'platform-reading-vision', language: 'zh-CN', visionReady: true },
+        { title: 'Architecture' },
+        { id: 'no-bytes', src: 'https://cdn.example/diagram.png', width: 100, height: 80, status: 'ready' },
+        { requireImageBytes: true, fetchImageBytes: true, requestVision: async () => { throw new Error('must not run'); } },
+      ),
+      /平台不会抓取图片 URL/u,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -867,7 +1007,7 @@ test('image OCR rejects regions that extend outside the source image', async () 
   }
 });
 
-test('temporary task input stays bounded and exposes inline image overflow', () => {
+test('temporary task input keeps complete body and exposes inline image overflow', () => {
   const oversized = `data:image/svg+xml;base64,${'A'.repeat(8_100_000)}`;
   const bounded = boundTaskContext({
     url: 'https://example.com/long',
@@ -875,11 +1015,112 @@ test('temporary task input stays bounded and exposes inline image overflow', () 
     blocks: [{ id: 'long', kind: 'text', text: 'x'.repeat(14_000) }],
     images: [{ id: 'inline-only', dataUrl: oversized, width: 320, height: 120, status: 'ready' }],
   });
-  assert.equal(bounded.body.length, 256_000);
+  assert.equal(bounded.body.length, 260_000);
   assert.equal(bounded.blocks[0].text.length, 12_000);
   assert.equal(bounded.images[0].dataUrl, null);
   assert.match(bounded.images[0].inputWarning, /没有可回退的 URL/u);
   assert.ok(bounded.taskWarnings.length >= 2);
+});
+
+test('whole-page translation preserves more than 1,024 blocks and the final table cell', () => {
+  const sourceBlocks = Array.from({ length: 1_030 }, (_, index) => ({
+    id: `block-${index}`,
+    kind: 'text',
+    text: `Technical section ${index} has enough content to be translated.`,
+  }));
+  sourceBlocks.push({ id: 'table-cell-last', kind: 'text', text: 'AI-native SDLC comparison' });
+  const bounded = boundTaskContext({
+    body: sourceBlocks.map((block) => block.text).join('\n\n'),
+    blockCount: sourceBlocks.length,
+    blocks: sourceBlocks,
+  }, { preserveAllBlocks: true });
+
+  assert.equal(bounded.blocks.length, 1_031);
+  assert.equal(bounded.blocks.at(-1).id, 'table-cell-last');
+  assert.equal(bounded.blocksTruncated, false);
+});
+
+test('whole-page translation preserves long blocks instead of silently clipping them', () => {
+  const sourceBlocks = Array.from({ length: 1_030 }, (_, index) => ({
+    id: `block-${index}`,
+    kind: 'text',
+    text: `Technical section ${index} has enough content to be translated.`,
+  }));
+  sourceBlocks[0].text = `Start ${'long technical content. '.repeat(700)}TAIL_SENTINEL`;
+  const sourceBody = sourceBlocks.map((block) => block.text).join('\n\n');
+  const bounded = boundTaskContext({
+    body: sourceBody,
+    blockCount: sourceBlocks.length,
+    blocks: sourceBlocks,
+  }, { preserveAllBlocks: true });
+
+  assert.equal(bounded.blocks.length, 1_030);
+  assert.equal(bounded.blockCount, 1_030);
+  assert.equal(bounded.body, sourceBody);
+  assert.equal(bounded.blocks[0].text, sourceBlocks[0].text);
+  assert.equal(bounded.blocksTruncated, false);
+  assert.equal(bounded.bodyTruncated, false);
+});
+
+test('translation chunks retain every source character and combine only a complete set', () => {
+  const source = `Start. ${'long technical passage. '.repeat(900)}TAIL_SENTINEL`;
+  const blocks = [{ id: 'long-paragraph', kind: 'text', text: source }];
+  const parts = splitTranslationBlocks(blocks, 1_000);
+  assert.ok(parts.length > 1);
+  assert.ok(parts.every((part) => part.text.length <= 1_000));
+  assert.equal(parts.map((part, index) => `${index ? part.separatorBefore : ''}${part.text}`).join(''), source);
+
+  const translated = parts.map((part) => ({ ...part, text: `译${part.text}` }));
+  const [combined] = combineTranslationParts(blocks, translated);
+  assert.equal(combined.id, 'long-paragraph');
+  assert.ok(combined.text.endsWith('TAIL_SENTINEL'));
+  assert.equal(combined.text.length, source.length + parts.length);
+  const [incomplete] = combineTranslationParts(blocks, translated.slice(1));
+  assert.match(incomplete.error, /不完整/u);
+});
+
+test('local whole-page translation sends long paragraphs in complete model-sized chunks', async () => {
+  const originalFetch = globalThis.fetch;
+  const source = `Start. ${'complete long source sentence. '.repeat(500)}TAIL_SENTINEL`;
+  const received = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    const text = body.messages.at(-1).content.match(/<<<SOURCE_TEXT>>>\n([\s\S]*?)\n<<<END_SOURCE_TEXT>>>/u)?.[1] || '';
+    received.push(text);
+    return new Response(JSON.stringify({ choices: [{ message: { content: text } }] }), { status: 200 });
+  };
+  try {
+    const results = await translateBlocks(
+      { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Long page' },
+      [{ id: 'long', kind: 'text', text: source }],
+    );
+    assert.ok(received.length > 1);
+    assert.ok(received.every((text) => text.length <= 3_000));
+    assert.equal(results[0].id, 'long');
+    assert.ok(results[0].text.endsWith('TAIL_SENTINEL'));
+    assert.equal(results[0].text, source);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('local translation refuses to display a provider response marked as truncated', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: 'partial translation' }, finish_reason: 'length' }],
+  }), { status: 200 });
+  try {
+    const [result] = await translateBlocks(
+      { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Truncated response' },
+      [{ id: 'truncated-local', kind: 'text', text: 'The source must not be hidden by a partial translation.' }],
+    );
+    assert.equal(result.text, '');
+    assert.match(result.error, /输出达到长度上限/u);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('image explanations send visual input and warn when page evidence is unavailable', async () => {
@@ -961,6 +1202,30 @@ test('reading answers keep only exact source evidence and expose anchors', () =>
   assert.equal(result.evidence.length, 1);
   assert.equal(result.citations[0].anchor.startOffset, 0);
   assert.match(result.warnings[0], /无法在当前原文中/u);
+});
+
+test('reading evidence and verification notes stay compact for citation cards', () => {
+  const quote = 'Evidence remains exact and linked to its source.';
+  const result = parseReadingAnswer(JSON.stringify({
+    answer: '结论见 [1]。',
+    evidence: [{ quote, claim: 'c'.repeat(240) }],
+    limitations: Array.from({ length: 6 }, () => 'l'.repeat(240)),
+  }), { url: 'https://example.com/article', body: quote });
+
+  assert.equal(result.evidence[0].claim.length, 160);
+  assert.equal(result.evidence[0].anchor.quote, quote);
+  assert.equal(result.limitations.length, 4);
+  assert.ok(result.limitations.every((item) => item.length === 180));
+});
+
+test('reading answer normalization preserves Markdown block boundaries', () => {
+  const markdown = '## 1. 结论\n\n有界队列限制并发工作量。[1]\n\n- 保持浏览器响应。\n- 取消过期请求。';
+  const result = parseReadingAnswer(JSON.stringify({ answer: markdown, evidence: [] }), {
+    url: 'https://example.com/article',
+    body: '原文正文。',
+  });
+
+  assert.equal(result.answer, markdown);
 });
 
 test('ordinary prose still gets a selected-source citation', () => {
@@ -1127,6 +1392,59 @@ test('SVG text remains readable beside the original when rasterization is unavai
     assert.match(result.note, /旁侧译文/u);
   } finally {
     globalThis.fetch = originalFetch;
+    await readerStore.clearCache();
+  }
+});
+
+test('unloaded remote SVG is fetched, rasterized to PNG, and translated in platform-compatible form', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCreateImageBitmap = globalThis.createImageBitmap;
+  const originalOffscreenCanvas = globalThis.OffscreenCanvas;
+  const pngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  let submittedImage = '';
+  globalThis.createImageBitmap = async () => ({ width: 640, height: 320, close() {} });
+  globalThis.OffscreenCanvas = class {
+    constructor(width, height) { this.width = width; this.height = height; }
+    getContext() { return { clearRect() {}, drawImage() {} }; }
+    async convertToBlob() { return new Blob([pngBytes], { type: 'image/png' }); }
+  };
+  globalThis.fetch = async (input, options = {}) => {
+    const url = String(input);
+    if (url === 'https://example.com/lazy-diagram.svg') {
+      return new Response('<svg xmlns="http://www.w3.org/2000/svg"/>', { status: 200, headers: { 'content-type': 'image/svg+xml' } });
+    }
+    if (url.startsWith('data:image/svg+xml')) return originalFetch(input, options);
+    if (url.endsWith('/chat/completions')) {
+      const body = JSON.parse(options.body);
+      submittedImage = body.messages.at(-1).content.find((part) => part.type === 'image_url').image_url.url;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        regions: [{ text: 'Bounded Queue', translation: '有界队列', x: 20, y: 20, width: 150, height: 32 }],
+        confidence: 0.99,
+        fallbackTranslation: '',
+        note: '',
+      }) } }] }), { status: 200 });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  await readerStore.clearCache();
+  try {
+    const result = await translateImage(
+      { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', visionReady: true, language: 'zh-CN' },
+      { title: 'Lazy image test' },
+      { id: 'lazy-svg', src: 'https://example.com/lazy-diagram.svg', width: 0, height: 0, status: 'pending' },
+      { fetchImageBytes: true, requireImageBytes: true },
+    );
+
+    assert.match(submittedImage, /^data:image\/png;base64,/u);
+    assert.equal(result.regions[0].translation, '有界队列');
+    assert.equal(result.regions[0].x, 20);
+    assert.equal(result.regions[0].width, 150);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalCreateImageBitmap === undefined) delete globalThis.createImageBitmap;
+    else globalThis.createImageBitmap = originalCreateImageBitmap;
+    if (originalOffscreenCanvas === undefined) delete globalThis.OffscreenCanvas;
+    else globalThis.OffscreenCanvas = originalOffscreenCanvas;
     await readerStore.clearCache();
   }
 });

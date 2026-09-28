@@ -10,12 +10,14 @@ import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import {
   KNOWLEDGE_SOURCE_KINDS,
+  isSelectedKnowledgeText,
   resolveKnowledgeSource,
 } from '../../../../lib/knowledge-card';
 
 const Input = z.object({
   sourceKind: z.enum(KNOWLEDGE_SOURCE_KINDS),
   messageId: z.string().uuid(),
+  selectedText: z.string().trim().min(8).max(5_000),
 }).strict();
 
 interface KnowledgeCardPreview {
@@ -36,7 +38,14 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   if (!source) {
     return toApiErrorResponse({
       code: 'PERMISSION_DENIED' as const,
-      message: '只能提炼自己会话中的 AI 回答',
+      message: '只能使用自己有权限的 AI 回答或研究稿',
+      requestId,
+    });
+  }
+  if (!isSelectedKnowledgeText(source.content, input.selectedText)) {
+    return toApiErrorResponse({
+      code: 'VALIDATION_FAILED' as const,
+      message: '所选内容已不在来源中，请重新选择后再保存',
       requestId,
     });
   }
@@ -57,7 +66,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     context: 'knowledge-card.derive',
     body: {
       operation: 'knowledge_card',
-      body: source.content,
+      requester_id: user.id,
+      body: input.selectedText,
       topic: source.topic,
       sources: source.sources,
     },

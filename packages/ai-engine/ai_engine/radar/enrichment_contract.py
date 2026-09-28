@@ -86,12 +86,13 @@ def effective_tier(
     target_tier: object,
     *,
     enrichment_ready: bool,
+    external_reading: bool = False,
 ) -> str | None:
-    """Map a scored tier to the tier that is safe to expose right now."""
+    """Map a scored tier to the tier supported by its configured reading path."""
     target = str(target_tier or "") or None
     if target is None:
         return None
-    if is_enrichment_tier(target) and not enrichment_ready:
+    if is_enrichment_tier(target) and not enrichment_ready and not external_reading:
         return "skim"
     return target
 

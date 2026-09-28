@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 from ai_engine.adapters.fake import FakeAdapter
-from ai_engine.ingestion.pipeline import canonicalize_url, run_ingestion
+from ai_engine.contracts.states import AI_JOB_STATUS
+from ai_engine.ingestion.pipeline import _generate_brief, canonicalize_url, run_ingestion
 
 
 class _Cursor:
@@ -38,6 +40,17 @@ class _Pool:
         yield self.connection_value
 
 
+class _CapturingBriefAdapter:
+    def __init__(self) -> None:
+        self.request: Any = None
+
+    async def submit(self, request: Any) -> None:
+        self.request = request
+
+    async def get_status(self, _job_id: str) -> SimpleNamespace:
+        return SimpleNamespace(status=AI_JOB_STATUS["SUCCEEDED"])
+
+
 async def _rss(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
     return [{
         "title": "Useful source",
@@ -58,6 +71,20 @@ def test_canonicalize_url_removes_tracking_and_fragment() -> None:
         "https://example.com/a?keep=1"
     )
     assert canonicalize_url("javascript:alert(1)") == ""
+
+
+async def test_generate_brief_keeps_expanded_source_context_by_default() -> None:
+    adapter = _CapturingBriefAdapter()
+    context = "正文片段。" * 1_500
+
+    await _generate_brief(
+        adapter,
+        {"title": "Long article", "snippet": context},
+        "https://example.com/article",
+        timeout_seconds=1,
+    )
+
+    assert adapter.request.context == context
 
 
 async def test_ingestion_publishes_generated_brief_with_metrics() -> None:

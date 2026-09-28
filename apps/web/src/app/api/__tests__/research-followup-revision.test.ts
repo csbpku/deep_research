@@ -106,6 +106,7 @@ beforeEach(() => {
     id: MESSAGE_ID,
     role: 'assistant',
     intent: 'revise',
+    content: '服务端保存的追问结论',
     createdAt: CREATED_AT,
     conversation: { id: CONVERSATION_ID, userId: USER_ID, jobId: JOB_ID },
   });
@@ -123,16 +124,18 @@ beforeEach(() => {
 });
 
 describe('PUT /api/researches/[id] follow-up revision provenance', () => {
-  it('resolves the question and captured sources server-side before recording the revision', async () => {
+  it('appends the saved answer and resolves question and sources server-side', async () => {
     const response = await PUT(request({
-      body: '原报告\n\n## 追问补充\n\n补充结论',
       revisionContext: {
         sourceMessageId: MESSAGE_ID,
-        reason: '补充成本与适用边界',
       },
     }), { params: Promise.resolve({ id: RESEARCH_ID }) });
 
     expect(response.status).toBe(200);
+    const updateCall = mocks.researchUpdate.mock.calls[0]?.[0] as { data?: { body?: string } } | undefined;
+    expect(updateCall?.data?.body).toContain('原报告');
+    expect(updateCall?.data?.body).toContain('请补充 GraphRAG 的索引成本和适用边界。');
+    expect(updateCall?.data?.body).toContain('服务端保存的追问结论');
     expect(mocks.auditCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         researchId: RESEARCH_ID,
@@ -141,7 +144,7 @@ describe('PUT /api/researches/[id] follow-up revision provenance', () => {
         sourceMessageId: MESSAGE_ID,
         sourceIntent: 'revise',
         sourceQuestion: '请补充 GraphRAG 的索引成本和适用边界。',
-        reason: '补充成本与适用边界',
+        reason: '根据追问「请补充 GraphRAG 的索引成本和适用边界。」补充报告',
         sourceRefs: [{
           sourceRef: { type: 'url', value: 'https://example.com/graphrag' },
           canonicalKey: 'https://example.com/graphrag',
@@ -157,12 +160,12 @@ describe('PUT /api/researches/[id] follow-up revision provenance', () => {
       id: MESSAGE_ID,
       role: 'assistant',
       intent: 'revise',
+      content: '修订回答',
       createdAt: CREATED_AT,
       conversation: { id: CONVERSATION_ID, userId: USER_ID, jobId: '66666666-6666-4666-8666-666666666666' },
     });
 
     const response = await PUT(request({
-      body: '篡改正文',
       revisionContext: { sourceMessageId: MESSAGE_ID },
     }), { params: Promise.resolve({ id: RESEARCH_ID }) });
 
@@ -177,13 +180,13 @@ describe('PUT /api/researches/[id] follow-up revision provenance', () => {
       id: MESSAGE_ID,
       role: 'assistant',
       intent: 'answer',
+      content: '普通回答',
       createdAt: CREATED_AT,
       conversation: { id: CONVERSATION_ID, userId: USER_ID, jobId: JOB_ID },
     });
 
     const response = await PUT(request({
-      body: '不应写入正文',
-      revisionContext: { sourceMessageId: MESSAGE_ID, reason: '伪造修订意图' },
+      revisionContext: { sourceMessageId: MESSAGE_ID },
     }), { params: Promise.resolve({ id: RESEARCH_ID }) });
 
     expect(response.status).toBe(400);

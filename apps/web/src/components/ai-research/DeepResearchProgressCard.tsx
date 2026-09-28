@@ -204,14 +204,14 @@ export function DeepResearchProgressCard({
             <span className="font-semibold text-foreground">正在研究</span>
             <span className="truncate text-muted-foreground">{round}</span>
           </div>
-          <span className="text-[11px] text-muted-foreground">{state}</span>
+          <span className="text-xs text-muted-foreground">{state}</span>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2" aria-label="研究覆盖摘要">
           <SummaryMetric label="方向" value={roundProgress} />
           <SummaryMetric label="检索线索" value={discovered} />
           <SummaryMetric label="可引用证据" value={captured} emphasized />
         </div>
-        <div className="mt-3 grid gap-1 text-[11px] leading-5">
+        <div className="mt-3 grid gap-1 text-xs leading-5">
           <p className="truncate">
             <span className="font-medium text-foreground">当前：</span>
             <span className="text-muted-foreground">{focus || state}</span>
@@ -226,7 +226,7 @@ export function DeepResearchProgressCard({
           </p>
         </div>
         {retrievalDegraded ? (
-          <div className="mt-3 flex items-start gap-1.5 rounded-md border border-warning-border/60 bg-warning-bg/35 px-2.5 py-2 text-[11px] leading-5 text-warning-fg" role="status">
+          <div className="mt-3 flex items-start gap-1.5 rounded-md border border-warning-border/60 bg-warning-bg/35 px-2.5 py-2 text-xs leading-5 text-warning-fg" role="status">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             <span>{retrievalLabel}</span>
           </div>
@@ -241,7 +241,7 @@ export function DeepResearchProgressCard({
         className="mt-3 rounded-lg border border-primary/15 bg-primary/[0.035]"
         aria-label="研究细节"
       >
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-[11px] [&::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs [&::-webkit-details-marker]:hidden">
           <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
             <Radar className="size-3.5 text-primary" />
             研究细节
@@ -256,12 +256,12 @@ export function DeepResearchProgressCard({
             <ResearchMetric label="检索线索" value={discovered} />
           </div>
           {discovered > 0 ? (
-            <p className={cn('mt-1.5 text-[10px] leading-4', captured < discovered ? 'text-warning-fg' : 'text-muted-foreground')}>
+            <p className={cn('mt-1.5 text-xs leading-5', captured < discovered ? 'text-warning-fg' : 'text-muted-foreground')}>
               可引用证据：{captured}/{discovered} 条检索线索已有可核对正文
               {captured < discovered ? '；其余仍只是线索。' : '。'}
             </p>
           ) : null}
-          <div className="mt-2 rounded-md border border-border/70 bg-background/60 px-2.5 py-2 text-[11px] leading-5">
+          <div className="mt-2 rounded-md border border-border/70 bg-background/60 px-2.5 py-2 text-xs leading-5">
             <span className="font-medium text-foreground">当前研究方向：</span>
             <span className="text-muted-foreground">{terminal
               ? terminalStatus === 'partial'
@@ -275,19 +275,19 @@ export function DeepResearchProgressCard({
                   : '本轮研究已结束'
               : focus || (adaptive?.stoppedEarly && stopReasonLabel) || '正在拆分并行研究方向'}</span>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-4 text-muted-foreground">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-4 text-muted-foreground">
             {currentRoundTotal > 0 ? <span>本轮 {currentRoundCompleted}/{currentRoundTotal} 个方向</span> : null}
             {coverage.length > 0 ? <span>官方资料已覆盖 {coveredProducts}/{coverage.length} 个产品</span> : null}
             {followupLabel ? <span>{followupLabel}</span> : null}
             {evidenceGapLabel ? <span className="text-warning-fg">{evidenceGapLabel}</span> : null}
           </div>
           {collectionTimeboxed ? (
-            <p className="mt-1.5 text-[10px] leading-4 text-warning-fg">
+            <p className="mt-1.5 text-xs leading-5 text-warning-fg">
               检索已达到本轮时间盒{progress.collectionTimeboxSeconds ? `（${progress.collectionTimeboxSeconds} 秒）` : ''}；已停止继续扩展研究树，正在基于现有证据生成报告。
             </p>
           ) : null}
           {retrievalDegraded ? (
-            <div className="mt-2 flex items-start gap-1.5 text-[10px] leading-4 text-warning-fg" title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
+            <div className="mt-2 flex items-start gap-1.5 text-xs leading-5 text-warning-fg" title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
               <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
               <span>
                 {retrievalLabel} {captured > 0 ? `当前仍可核对 ${captured} 条正文。` : ''}
@@ -315,47 +315,47 @@ export function DeepResearchProgressCard({
         <span className="text-muted-foreground">{branchLabel}</span>
         <span className="text-muted-foreground">· {state}</span>
       </div>
-      <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
         先按产品和证据主题分别覆盖多个角度；只有证据不足或出现新缺口时才会继续追查，证据够了就收敛。
       </p>
       {followupLabel ? (
-        <p className="mt-1.5 text-[11px] leading-5 text-muted-foreground">
+        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
           研究树：{followupLabel}。补查只针对尚未解决的证据缺口，不会把重复搜索计入有效证据。
         </p>
       ) : null}
-      <div className="mt-2 grid grid-cols-2 gap-1.5 text-[11px] sm:grid-cols-4" aria-label="研究覆盖统计">
+      <div className="mt-2 grid grid-cols-2 gap-1.5 text-xs sm:grid-cols-4" aria-label="研究覆盖统计">
         <ResearchMetric label="已完成方向" value={cumulativeCompleted} emphasized />
         <ResearchMetric label="已打开页面" value={visited ?? '—'} />
         <ResearchMetric label="检索线索" value={discovered} />
         <ResearchMetric label="可引用证据" value={captured} emphasized />
       </div>
-      <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+      <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
         检索线索只是研究树中的候选页面；可引用证据表示已打开并取得可核对正文。没有记录页面数时不做推算；数字本身不能单独证明结论正确。
       </p>
       {discovered > 0 ? (
-        <p className={cn('mt-1.5 text-[10px] leading-4', captured < discovered ? 'text-warning-fg' : 'text-muted-foreground')}>
+        <p className={cn('mt-1.5 text-xs leading-5', captured < discovered ? 'text-warning-fg' : 'text-muted-foreground')}>
           可引用证据：{captured}/{discovered} 条检索线索已有可核对正文
           {captured < discovered ? '；其余仍只是线索。' : '。'}
         </p>
       ) : null}
       {selectedProvider ? (
-        <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
           已启用联网检索；相同问题会复用结果，服务波动时自动切换备用检索。
         </p>
       ) : null}
       {retrievalDegraded ? (
-        <p className="mt-1.5 flex items-start gap-1.5 text-[10px] leading-4 text-warning-fg" title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
+        <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-warning-fg" title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
           <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
           <span>{retrievalLabel} {captured > 0 ? `当前仍可核对 ${captured} 条正文。` : ''}</span>
         </p>
       ) : null}
       {focus && !terminal ? (
-        <p className="mt-1.5 line-clamp-2 text-[11px] leading-5 text-muted-foreground">
+        <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">
           当前方向：{focus}
         </p>
       ) : null}
       {waitingForEvidence ? (
-        <div className="mt-2 flex items-start gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground" role="status">
+        <div className="mt-2 flex items-start gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 py-2 text-xs leading-5 text-muted-foreground" role="status">
           <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" aria-hidden />
           <p>
             {idleSeconds >= 90
@@ -365,7 +365,7 @@ export function DeepResearchProgressCard({
         </div>
       ) : null}
       {coverage.length > 0 ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]" aria-label="官方资料覆盖">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" aria-label="官方资料覆盖">
           <span className="text-muted-foreground">官方资料覆盖</span>
           {coverage.map((item) => {
             const required = item.requiredCaptured ?? 2;
@@ -396,23 +396,23 @@ export function DeepResearchProgressCard({
         </div>
       ) : null}
       {progress.coverageRepair && progress.coverageRepair.attempted > 0 ? (
-        <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
           已针对证据不足的产品补查 {progress.coverageRepair.attempted} 个官方入口，新增 {progress.coverageRepair.captured} 条已抓取正文。
         </p>
       ) : null}
       {collectionTimeboxed ? (
-        <p className="mt-1.5 text-[10px] leading-4 text-warning-fg">
+        <p className="mt-1.5 text-xs leading-5 text-warning-fg">
           检索已达到本轮时间盒{progress.collectionTimeboxSeconds ? `（${progress.collectionTimeboxSeconds} 秒）` : ''}；后续报告只基于已抓取正文，不会把未打开的线索当成证据。
         </p>
       ) : null}
       {evidenceGapRepair && evidenceGapRepair.attempted > 0 ? (
-        <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
           研究阶段已补查 {evidenceGapRepair.resolved} 个证据缺口；
           {evidenceGapRepair.remaining > 0 ? `仍有 ${evidenceGapRepair.remaining} 个未解决，结果中会提示需要确认。` : '本轮没有遗留研究资料缺口。'}
         </p>
       ) : null}
       {reportWriteFallback ? (
-        <p className="mt-1.5 text-[10px] leading-4 text-warning-fg">
+        <p className="mt-1.5 text-xs leading-5 text-warning-fg">
           {reportWriteFallback.reason === 'timeout'
             ? `主报告写作超过 ${reportWriteFallback.timeoutSeconds ?? 180} 秒，`
             : '主报告写作未返回有效正文，'}
@@ -420,7 +420,7 @@ export function DeepResearchProgressCard({
         </p>
       ) : null}
       {retrievalDegraded ? (
-        <div className="mt-2 flex gap-2 rounded-lg border border-warning-border/60 bg-warning-bg/40 px-2.5 py-2 text-[11px] leading-5 text-warning-fg" role="status">
+        <div className="mt-2 flex gap-2 rounded-lg border border-warning-border/60 bg-warning-bg/40 px-2.5 py-2 text-xs leading-5 text-warning-fg" role="status">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <p>
             {retrievalLabel} 当前仍可核对 {captured} 条正文。
@@ -462,7 +462,7 @@ function SummaryMetric({
       <div className={cn('truncate font-mono text-sm font-semibold tabular-nums', emphasized ? 'text-primary' : 'text-foreground')}>
         {value}
       </div>
-      <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{label}</div>
+      <div className="mt-0.5 truncate text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }

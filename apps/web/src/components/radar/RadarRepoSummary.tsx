@@ -62,7 +62,7 @@ export function RadarRepoSummary({
           <Github className="size-4 text-muted-foreground" aria-hidden />
           {summaryText ? '项目解读' : 'AI 一句话解读'}
         </h2>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
           {meta?.language ? (
             <span className="inline-flex items-center gap-1"><Code2 className="size-3" />{meta.language}</span>
           ) : null}
@@ -84,7 +84,7 @@ export function RadarRepoSummary({
       </div>
       {showBrief && summaryText ? (
         <div className="mb-4 rounded-md border-l-2 border-primary bg-background/70 px-3 py-2.5">
-          <p className="mb-1 text-[11px] font-medium text-muted-foreground">AI 一句话解读</p>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">AI 一句话解读</p>
           <p className="text-sm leading-7 text-foreground/90">{briefText}</p>
         </div>
       ) : null}

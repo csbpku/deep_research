@@ -124,4 +124,33 @@ describe('DistilledScorePanel', () => {
     expect(html).not.toContain('弱点：');
     expect(html).not.toContain('README极长');
   });
+
+  it('shows the source excerpt that grounds a weak-point note', () => {
+    const html = renderToStaticMarkup(createElement(DistilledScorePanel, {
+      embedded: true,
+      score: {
+        total: 55,
+        tier: 'skim',
+        dimensions: {
+          informationGain: 2,
+          analysisDepth: 2,
+          actionability: 1,
+          factualReliability: 2,
+          currentApplicability: 2,
+          expressionQuality: 2,
+          audienceFit: 2,
+        },
+        weakPoint: '可行动性不足',
+        weakPointEvidence: '文章没有可执行步骤',
+        veto: null,
+        riskFlags: [],
+        profile: 'engineering',
+        isDefault: false,
+        version: '4.9',
+      },
+    }));
+
+    expect(html).toContain('可行动性不足');
+    expect(html).toContain('原文依据：文章没有可执行步骤');
+  });
 });

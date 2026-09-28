@@ -104,7 +104,7 @@ const STEP_LABELS = ['明确问题', '确认设置', '启动研究', '进行中'
 
 function StepStepper({ step }: { step: number }) {
   return (
-    <ol className="flex flex-wrap items-center gap-1.5 text-[11px]" aria-label="调研进度">
+    <ol className="flex flex-wrap items-center gap-1.5 text-xs" aria-label="调研进度">
       {STEP_LABELS.map((label, index) => {
         const state = index < step ? 'done' : index === step ? 'active' : 'todo';
         return (
@@ -165,17 +165,17 @@ function ResearchRunReceipt({
     <section className="rounded-lg border border-primary/20 bg-primary/[0.035] px-3.5 py-3" aria-label="本次研究收据">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
             <Sparkles className="size-3.5" />
             本次研究已提交
           </div>
           <h3 className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-foreground">{topic}</h3>
         </div>
-          <span className="shrink-0 rounded-full border border-primary/20 bg-background/70 px-2 py-0.5 text-[10px] text-primary">
+          <span className="shrink-0 rounded-full border border-primary/20 bg-background/70 px-2 py-0.5 text-xs text-primary">
           {isDeep ? '多轮研究' : '单轮研究'}
         </span>
       </div>
-      <dl className="mt-3 grid grid-cols-1 gap-1.5 text-[11px] sm:grid-cols-3">
+      <dl className="mt-3 grid grid-cols-1 gap-1.5 text-xs sm:grid-cols-3">
         <div className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2">
           <dt className="text-muted-foreground">研究深度</dt>
           <dd className="mt-0.5 font-medium text-foreground">{isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</dd>
@@ -183,17 +183,17 @@ function ResearchRunReceipt({
         <div className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2">
           <dt className="text-muted-foreground">资料来源</dt>
           <dd className="mt-0.5 font-medium text-foreground">{sourceLabel}</dd>
-          {selectedCount > 0 ? <div className="mt-0.5 text-[10px] text-muted-foreground">已指定 {selectedCount} 条</div> : null}
+          {selectedCount > 0 ? <div className="mt-0.5 text-xs text-muted-foreground">已指定 {selectedCount} 条</div> : null}
         </div>
         <div className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2">
           <dt className="text-muted-foreground">交付形式</dt>
           <dd className="mt-0.5 font-medium text-foreground">{outputLabel}</dd>
         </div>
       </dl>
-      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
         任务会在后台继续；下方显示真实的研究轮次、已访问页面和可核对正文。资料数量不等于结论质量，未确认内容会单独标记。
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         <span className="text-muted-foreground">启动配置已锁定，避免运行中产生歧义。</span>
         <Link href={`/ai-research/${jobId}`} className="font-medium text-primary hover:underline">
           打开任务并继续追问 →
@@ -611,7 +611,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                     {message.role === 'assistant' ? <Bot className="size-3.5" /> : <UserRound className="size-3.5" />}
                   </span>
                   <div className={cn('min-w-0 max-w-[86%] flex-1', message.role === 'user' && 'flex-none text-right')}>
-                    <span className={cn('mb-1 block text-[11px] font-semibold uppercase tracking-wide', message.role === 'assistant' ? 'text-method-ai' : 'text-muted-foreground')}>
+                    <span className={cn('mb-1 block text-xs font-semibold uppercase tracking-wide', message.role === 'assistant' ? 'text-method-ai' : 'text-muted-foreground')}>
                       {message.role === 'assistant' ? 'AI 调研助手' : '你'}
                     </span>
                     <p className="whitespace-pre-wrap text-sm leading-7 text-foreground">
@@ -749,7 +749,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               className="min-h-[92px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
             />
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/2000`}
               </span>
               <Button type="submit" size="sm" disabled={!input.trim() || submitting || hydrating || !!activeJobId} aria-label="发送消息（AI 调研）">
@@ -809,7 +809,7 @@ function ResearchConfirmationControls({
     <div className="space-y-4" aria-label="资料与产出">
       <fieldset disabled={disabled} className="space-y-2 disabled:opacity-50">
         <legend className="font-medium text-foreground">交付形式</legend>
-        <p className="text-[11px] leading-5 text-muted-foreground">选择这次要生成的结果。</p>
+        <p className="text-xs leading-5 text-muted-foreground">选择这次要生成的结果。</p>
         <div className="grid gap-2 sm:grid-cols-3">
           {durableReportOptions.map((option) => {
             const Icon = option.icon;
@@ -827,7 +827,7 @@ function ResearchConfirmationControls({
                 <Icon className="size-3.5 shrink-0" />
                 <span className="flex flex-col items-start text-left">
                   <span className="text-xs font-medium">{option.label}</span>
-                  <span className="text-[11px] text-muted-foreground">{option.description}</span>
+                  <span className="text-xs text-muted-foreground">{option.description}</span>
                 </span>
               </Button>
               );
@@ -838,7 +838,7 @@ function ResearchConfirmationControls({
           const selected = reportType === quickJudgmentOption.value;
           return (
             <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">只想先看方向？</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">只想先看方向？</p>
               <Button
                 type="button"
                 variant={selected ? 'secondary' : 'ghost'}
@@ -850,7 +850,7 @@ function ResearchConfirmationControls({
                 <Icon className="size-3.5 shrink-0" />
                 <span className="flex flex-col items-start text-left">
                   <span className="text-xs font-medium">{quickJudgmentOption.label}</span>
-                  <span className="text-[11px] text-muted-foreground">{quickJudgmentOption.description}；不会创建正式研究稿</span>
+                  <span className="text-xs text-muted-foreground">{quickJudgmentOption.description}；不会创建正式研究稿</span>
                 </span>
               </Button>
             </div>
@@ -861,7 +861,7 @@ function ResearchConfirmationControls({
       {reportType !== 'summary_brief' ? (
         <fieldset disabled={disabled} className="space-y-2 disabled:opacity-50">
           <legend className="font-medium text-foreground">研究深度</legend>
-          <p className="text-[11px] leading-5 text-muted-foreground">
+          <p className="text-xs leading-5 text-muted-foreground">
             需要快速扫清方向，还是先覆盖多个角度，再根据证据缺口继续查？
           </p>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -875,7 +875,7 @@ function ResearchConfirmationControls({
             >
               <span className="flex flex-col items-start">
                 <span className="text-xs font-medium">多轮研究 · 推荐</span>
-                <span className="text-[11px] font-normal text-muted-foreground">先覆盖多个方向，再补查真实证据缺口；适合重要判断，耗时更长</span>
+                <span className="text-xs font-normal text-muted-foreground">先覆盖多个方向，再补查真实证据缺口；适合重要判断，耗时更长</span>
               </span>
             </Button>
             <Button
@@ -888,19 +888,19 @@ function ResearchConfirmationControls({
             >
               <span className="flex flex-col items-start">
                 <span className="text-xs font-medium">单轮研究</span>
-                <span className="text-[11px] font-normal text-muted-foreground">只做一轮检索，适合先扫清方向，不适合证据要求很高的决策</span>
+                <span className="text-xs font-normal text-muted-foreground">只做一轮检索，适合先扫清方向，不适合证据要求很高的决策</span>
               </span>
             </Button>
           </div>
           {reportLength === 'deep' && sourcePolicy !== 'only_user_sources' ? (
-            <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+            <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs leading-5 text-muted-foreground">
               <span className="font-medium text-foreground">这次会做：</span>
               拆分问题 → 并行检索 → 根据缺口补查 → 生成结果。
               证据足够时会提前收敛，不会为了凑页数继续搜索。
             </div>
           ) : null}
           {reportLength === 'deep' && sourcePolicy === 'only_user_sources' ? (
-            <p className="text-[11px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               当前只使用你提供的资料；不会扩展到网页做多轮检索。
             </p>
           ) : null}
@@ -909,28 +909,28 @@ function ResearchConfirmationControls({
 
       <fieldset disabled={disabled} className="space-y-2 disabled:opacity-50">
         <legend className="font-medium text-foreground">资料来源</legend>
-        <p className="text-[11px] leading-5 text-muted-foreground">决定 AI 可以参考哪些资料。</p>
+        <p className="text-xs leading-5 text-muted-foreground">决定 AI 可以参考哪些资料。</p>
         <div className="grid gap-2 sm:grid-cols-2">
           <Button type="button" aria-pressed={sourcePolicy === 'prefer_user_sources'} variant={sourcePolicy === 'prefer_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('prefer_user_sources')} className="h-auto justify-start whitespace-normal text-left">
             <span className="flex flex-col items-start">
               <span className="text-xs font-medium">网页搜索 + 已选资料</span>
-              <span className="text-[11px] font-normal text-muted-foreground">搜索公开网页；你选中的资料也会一并纳入</span>
+              <span className="text-xs font-normal text-muted-foreground">搜索公开网页；你选中的资料也会一并纳入</span>
             </span>
           </Button>
           <Button type="button" aria-pressed={sourcePolicy === 'only_user_sources'} variant={sourcePolicy === 'only_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('only_user_sources')} className="h-auto justify-start whitespace-normal text-left">
             <span className="flex flex-col items-start">
               <span className="text-xs font-medium">仅使用已选资料</span>
-              <span className="text-[11px] font-normal text-muted-foreground">不访问公开网页，只使用你添加的资料</span>
+              <span className="text-xs font-normal text-muted-foreground">不访问公开网页，只使用你添加的资料</span>
             </span>
           </Button>
         </div>
-        <div className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+        <div className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
           <span className="font-medium text-foreground">已添加资料：</span>
           {sourceRefs.length > 0 ? `${sourceRefs.length} 条${seed ? '（含当前雷达内容）' : ''}` : '尚未添加'}
           {selectedContextCount > 0 ? ` · ${selectedContextCount} 条已有资料` : ''}
         </div>
         <label htmlFor="conversation-source-url" className="block space-y-1.5">
-          <span className="text-[11px] text-muted-foreground">添加网页资料（可选）</span>
+          <span className="text-xs text-muted-foreground">添加网页资料（可选）</span>
           <div className="flex gap-2">
             <Input
               id="conversation-source-url"
@@ -958,7 +958,7 @@ function ResearchConfirmationControls({
                 key={url}
                 type="button"
                 onClick={() => onRemoveSource(url)}
-                className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground"
+                className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
                 title={`移除资料 ${url}`}
               >
                 <span className="max-w-[220px] truncate">{url}</span>
@@ -970,18 +970,18 @@ function ResearchConfirmationControls({
       </fieldset>
 
       {scopeIncomplete ? (
-        <p role="alert" className="rounded-md border border-warning-border/50 bg-warning-bg/40 px-3 py-2 text-[11px] leading-5 text-warning-fg">
+        <p role="alert" className="rounded-md border border-warning-border/50 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg">
           “优先资料时间”选择了自定义，请同时填写开始和结束日期后再启动。
         </p>
       ) : null}
 
       <div className="border-t border-border/70 pt-3">
         {sourceSelectionIncomplete ? (
-          <p role="alert" className="rounded-md border border-warning-border/60 bg-warning-bg/35 px-2.5 py-2 text-[11px] leading-5 text-warning-fg">
+          <p role="alert" className="rounded-md border border-warning-border/60 bg-warning-bg/35 px-2.5 py-2 text-xs leading-5 text-warning-fg">
             仅使用已选资料时，请先添加至少一条雷达内容、网页资料或已有资料。
           </p>
         ) : null}
-        <p className="text-[11px] leading-5 text-muted-foreground">
+        <p className="text-xs leading-5 text-muted-foreground">
           {
             sourceSelectionIncomplete
               ? '添加资料后，“开始研究”按钮会恢复可用。'

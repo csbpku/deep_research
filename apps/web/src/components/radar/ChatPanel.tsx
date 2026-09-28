@@ -108,7 +108,7 @@ function CitationAnchor({
         }}
         onFocus={() => setTooltipOpen(true)}
         onBlur={() => setTooltipOpen(false)}
-        className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-accent/40 px-1 align-middle text-[11px] font-medium tabular-nums leading-none text-accent-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-accent/40 px-1 align-middle text-xs font-medium tabular-nums leading-none text-accent-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`引用 ${index + 1}：${quote.slice(0, 60)}${quote.length > 60 ? '…' : ''}`}
       >
         {index + 1}
@@ -121,13 +121,13 @@ function CitationAnchor({
           + (tooltipOpen ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0')
         }
       >
-        <span className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-method-ai">
+        <span className="mb-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-method-ai">
           <Quote className="size-3" />
           引用依据 · 回到原文
         </span>
         <span className="line-clamp-3 text-xs leading-5 text-foreground">“{quote}”</span>
         {source.location ? (
-          <span className="mt-1 block text-[10px] leading-4 text-muted-foreground">{source.location}</span>
+          <span className="mt-1 block text-xs leading-4 text-muted-foreground">{source.location}</span>
         ) : null}
       </span>
     </span>
@@ -209,7 +209,7 @@ export function ChatPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-card">
       {contextLabel ? (
-        <div className="flex items-center gap-2 border-b border-border bg-method-ai/5 px-4 py-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 border-b border-border bg-method-ai/5 px-4 py-2 text-xs text-muted-foreground">
           <span className="size-1.5 rounded-full bg-method-ai" aria-hidden />
           <span className="font-medium text-foreground">讨论上下文</span>
           <span className="truncate">{contextLabel}</span>
@@ -241,7 +241,7 @@ export function ChatPanel({
                 aria-pressed={active}
                 onClick={() => onContextScopeChange(option.value)}
                 className={
-                  'h-6 rounded-full px-2 text-[11px] font-medium transition-colors ' +
+                  'h-6 rounded-full px-2 text-xs font-medium transition-colors ' +
                   (active
                     ? 'bg-method-ai text-primary-foreground'
                     : 'border border-border bg-background text-muted-foreground hover:border-method-ai/40 hover:text-foreground')
@@ -257,7 +257,7 @@ export function ChatPanel({
       {/* Suggestions are an empty-state aid, not permanent chat chrome. */}
       {!loading && !err && messages.length === 0 ? (
         <div className="border-b border-border px-4 py-3">
-          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <Lightbulb className="size-3.5 text-method-ai" />
             推荐问题
           </div>
@@ -342,7 +342,7 @@ export function ChatPanel({
                 <div key={m.id} className="mb-6 flex flex-col items-end">
                   <p className="max-w-[86%] whitespace-pre-wrap break-words text-sm leading-7 text-foreground">{m.content}</p>
                   {userReplyMissing ? (
-                    <div className="mt-1 flex max-w-[86%] items-center gap-2 text-[11px] text-muted-foreground">
+                    <div className="mt-1 flex max-w-[86%] items-center gap-2 text-xs text-muted-foreground">
                       <span role="status">回答未返回</span>
                       <button
                         type="button"
@@ -357,7 +357,7 @@ export function ChatPanel({
                   ) : null}
                 </div>
               ) : (
-                <div key={m.id} className="mb-6">
+                <div key={m.id} className="mb-6" data-knowledge-source-message={m.id}>
                     {m.content ? (
                       <div>
                         <MarkdownContent content={m.content} compact className="text-sm leading-7" />
@@ -368,14 +368,14 @@ export function ChatPanel({
                               className="inline-block h-3.5 w-[3px] animate-pulse rounded-full bg-method-ai align-middle"
                             />
                             {slowGeneration ? (
-                              <span className="text-[11px] text-muted-foreground">生成较慢，正在继续</span>
+                              <span className="text-xs text-muted-foreground">生成较慢，正在继续</span>
                             ) : null}
                             {onStop ? (
                               <button
                                 type="button"
                                 onClick={onStop}
                                 aria-label="停止生成"
-                                className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-background px-2 text-[11px] text-muted-foreground transition-colors hover:border-method-ai/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-background px-2 text-xs text-muted-foreground transition-colors hover:border-method-ai/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               >
                                 <Square className="size-2.5" />
                                 停止
@@ -417,27 +417,27 @@ export function ChatPanel({
                           ))}
                         </div>
                         <details className="group/cite mt-2">
-                          <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                          <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                             引用 · {m.sources.length} 段
                             <ChevronDown className="size-3 transition-transform group-open/cite:rotate-180" />
                           </summary>
                           <div className="mt-2 space-y-1.5 border-l border-border pl-3">
                             {m.sources.map((source, index) => (
                               <div key={index} className="flex items-start gap-2">
-                                <span className="mt-0.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded border border-border bg-accent/40 px-0.5 text-[10px] font-medium tabular-nums text-accent-foreground">
+                                <span className="mt-0.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded border border-border bg-accent/40 px-0.5 text-xs font-medium tabular-nums text-accent-foreground">
                                   {index + 1}
                                 </span>
                                 <div className="min-w-0 flex-1">
                                   <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">“{source.quote ?? ''}”</p>
                                   {source.location ? (
-                                    <span className="mt-0.5 block text-[10px] leading-4 text-muted-foreground">{source.location}</span>
+                                    <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{source.location}</span>
                                   ) : null}
                                   {source.sourceUrl ? (
                                     <a
                                       href={source.sourceUrl}
                                       target="_blank"
                                       rel="noreferrer"
-                                      className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-method-ai hover:underline"
+                                      className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-method-ai hover:underline"
                                     >
                                       <ExternalLink className="size-3" />{sourceLinkLabel}
                                     </a>
@@ -453,7 +453,7 @@ export function ChatPanel({
                     {/* Honest "no verifiable citation" hint, downgraded from a banner. */}
                     {m.content && !m.sources?.length && !sending ? (
                       <p
-                        className="mt-2 flex items-center gap-1 text-[11px] leading-5 text-warning-fg"
+                        className="mt-2 flex items-center gap-1 text-xs leading-5 text-warning-fg"
                         title="这条回答没有解析出可以回到正文的引用，请按原文复核。"
                       >
                         <Info className="size-3 shrink-0" />
@@ -494,7 +494,7 @@ export function ChatPanel({
           />
           <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
             {showCounter ? (
-              <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+              <span className="font-mono text-xs tabular-nums text-muted-foreground">
                 {input.length}/{inputLimit}
               </span>
             ) : null}

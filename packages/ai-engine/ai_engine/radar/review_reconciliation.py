@@ -200,7 +200,7 @@ async def _refresh_stale_reader_quality(pool: Any, *, limit: int) -> int:
                 # enrichment snapshot. Keep them out of the legacy quality
                 # reconciliation pass as well as the content/render passes;
                 # otherwise an idle worker could still write review state for
-                # a row that was meant to remain metadata-only.
+                # a row whose full source text is transient-only.
                 'AND COALESCE("originalMeta"->>\'enrichmentVersion\', \'\') = \'2.0\' '
                 'AND ('
                 'COALESCE("readerQualityDetails"->>\'version\', \'\') '

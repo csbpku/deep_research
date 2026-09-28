@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { ReadingAnswerInputSchema } from '@deep-research/shared/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { apiHandler, parseBody } from '../../../../../lib/api-handler';
+import { aiEngineServiceAuthHeaders } from '../../../../../lib/ai-bff/fetch-ai-engine';
 import { getWebEnv } from '../../../../../lib/env';
 import { toApiErrorResponse } from '../../../../../lib/errors';
 import { withRequestId } from '../../../../../lib/log';
@@ -60,17 +61,28 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const controller = new AbortController();
   const abortFromCaller = () => controller.abort();
   req.signal.addEventListener('abort', abortFromCaller, { once: true });
-  const timer = setTimeout(() => controller.abort(), input.action === 'ask' ? 125_000 : 65_000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    input.action === 'ask'
+      ? Math.min(1_200_000, 125_000 + Math.ceil(Math.max(0, body.length - 20_000) / 20_000) * 20_000)
+      : 65_000,
+  );
   let upstream: Response;
   try {
     upstream = await fetch(`${getWebEnv().AI_ENGINE_URL.replace(/\/$/u, '')}/api/ai/research-assistant/stream`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-request-id': requestId },
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': requestId,
+        ...aiEngineServiceAuthHeaders(),
+      },
       body: JSON.stringify({
         operation: input.action,
-        body: body.slice(0, 256_000),
+        requester_id: user.id,
+        body,
         topic: input.context.title,
         instruction: boundedInstruction,
+        scope: input.context.scope,
         selection: strictSelection,
       }),
       signal: controller.signal,
@@ -125,8 +137,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       };
       parsed.source = source;
       const bodyHash = createHash('sha256').update(input.context.body, 'utf8').digest('hex');
-      const modelCitations = Array.isArray((parsed.reading as { evidence?: Array<{ quote?: string }> } | undefined)?.evidence)
-        ? ((parsed.reading as { evidence?: Array<{ quote?: string }> }).evidence || []).flatMap((item) => {
+      const reading = parsed.reading && typeof parsed.reading === 'object'
+        ? parsed.reading as { evidence?: Array<{ quote?: string; claim?: string }> }
+        : null;
+      const modelCitations = Array.isArray(reading?.evidence)
+        ? (reading.evidence || []).flatMap((item) => {
             const quote = typeof item.quote === 'string' ? item.quote.trim() : '';
             const start = quote ? input.context.body.indexOf(quote) : -1;
             if (!quote || start < 0) return [];
@@ -148,6 +163,12 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       parsed.citations = modelCitations.length > 0
         ? modelCitations
         : anchor ? [{ quote: anchor.quote, anchor, url: input.context.url }] : [];
+      if (reading) {
+        reading.evidence = (reading.evidence || []).map((item) => {
+          const citation = modelCitations.find((candidate) => candidate.quote === item.quote);
+          return citation ? { ...item, anchor: citation.anchor, url: citation.url } : item;
+        });
+      }
       return `event: done\ndata: ${JSON.stringify(parsed)}\n\n`;
     } catch {
       return `${frame}\n\n`;

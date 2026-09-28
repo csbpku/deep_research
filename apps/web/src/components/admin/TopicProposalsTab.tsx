@@ -239,7 +239,7 @@ export function TopicProposalsTab() {
               </button>
             ))}
           </div>
-          <span className="text-[11px] text-muted-foreground" role="status">
+          <span className="text-xs text-muted-foreground" role="status">
             显示 {visibleProposals.length} / {proposals.length} 个提议
           </span>
         </div>

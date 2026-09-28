@@ -82,7 +82,7 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
         <div className="absolute -right-16 -top-20 size-56 rounded-full border border-tier-skim/20" aria-hidden />
         <div className="absolute -right-4 -top-8 size-32 rounded-full border border-tier-skim/15" aria-hidden />
         <div className="relative max-w-3xl">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium uppercase tracking-[0.18em] text-tier-skim">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium uppercase tracking-[0.18em] text-tier-skim">
             <span>Research brief</span>
             <span className="text-background/60">/</span>
             <span>独立网页阅读版</span>
@@ -141,10 +141,10 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
                   const citationCount = evidenceMap.find((row) => row.section === section.heading)?.citations.length ?? 0;
                   return (
                     <article key={`${section.heading}-${index}`} className="border border-border bg-card px-4 py-4 transition-colors hover:border-primary/35">
-                      <span className="font-mono text-[11px] text-tier-skim">0{index + 1}</span>
+                      <span className="font-mono text-xs text-tier-skim">0{index + 1}</span>
                       <h3 className="mt-3 line-clamp-3 text-sm font-semibold leading-5">{section.heading}</h3>
                       <p className="mt-3 line-clamp-5 text-xs leading-5 text-muted-foreground">{sectionLead(section.body)}</p>
-                      <p className="mt-4 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                      <p className="mt-4 text-xs uppercase tracking-[0.12em] text-muted-foreground">
                         {citationCount > 0 ? `可回链证据 · ${citationCount}` : '正文未建立回链'}
                       </p>
                     </article>
@@ -199,21 +199,21 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
                           <span className="font-mono text-[10px] text-tier-skim">{String(index + 1).padStart(2, '0')}</span>
                           <div className="min-w-0 flex-1">
                             {externalInstruction ? (
-                              <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                              <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
                                 <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
                                 <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</span>
                               </p>
                             ) : null}
                             {source.href ? <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-primary hover:underline"><span className="line-clamp-2">{source.title}</span><ArrowUpRight className="mt-0.5 size-3 shrink-0" /></a> : <p className="text-xs font-medium">{source.title}</p>}
                             {source.snippet ? <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 360)}</p> : null}
-                            <p className="mt-2 text-[10px] text-muted-foreground">{source.capturedAt ? `抓取于 ${formatDate(source.capturedAt)}` : '抓取时间未知'}</p>
+                            <p className="mt-2 text-xs text-muted-foreground">{source.capturedAt ? `抓取于 ${formatDate(source.capturedAt)}` : '抓取时间未知'}</p>
                           </div>
                         </div>
                       </article>
                     );
                   })}
                 </div>
-                {sources.length > 8 ? <p className="mt-3 text-center text-[11px] text-muted-foreground">已展示前 8 条来源；其余 {sources.length - 8} 条资料仍保留在研究过程的资料账本中。</p> : null}
+                {sources.length > 8 ? <p className="mt-3 text-center text-xs text-muted-foreground">已展示前 8 条来源；其余 {sources.length - 8} 条资料仍保留在研究过程的资料账本中。</p> : null}
               </>
             ) : <p className="mt-4 text-sm text-muted-foreground">本轮没有保存可核对来源。</p>}
             {bibliography ? (
@@ -230,7 +230,7 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
 
         <aside className="hidden lg:block" aria-label="网页简报侧栏">
           <div className="sticky top-5 space-y-5 border-l border-border pl-5 print:hidden">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">On this page</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">On this page</p>
             <ol className="space-y-3 text-xs leading-5 text-muted-foreground">
               <li><a href="#web-brief-summary" className="hover:text-primary">01 · 一页判断</a></li>
               <li><a href="#web-brief-findings" className="hover:text-primary">02 · 关键发现</a></li>

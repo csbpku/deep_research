@@ -24,6 +24,7 @@ import { CreateResearchInput, ResearchListQuery } from '../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { researchListWhere } from '../../../lib/research-list-where';
+import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
@@ -47,6 +48,9 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         status: 'draft',
         creationMethod: 'manual',
         aiAssisted: false,
+        ...(body.type === 'knowledge'
+          ? { knowledgeIndexText: confirmedKnowledgeIndexText(body) }
+          : {}),
       },
       select: {
         id: true,
@@ -75,6 +79,13 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         action: 'create',
       },
     });
+    if (body.type === 'knowledge') {
+      await queuePersonalKnowledgeIndex(tx, {
+        ownerId: u.id,
+        researchId: created.id,
+        operation: 'upsert',
+      });
+    }
     return created;
   });
 

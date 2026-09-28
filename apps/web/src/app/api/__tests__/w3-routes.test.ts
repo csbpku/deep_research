@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   aiJobDelete: vi.fn(),
   auditCreate: vi.fn(),
   eventCreate: vi.fn(),
+  personalKnowledgeIndexUpsert: vi.fn(),
 }));
 
 vi.mock('../../../lib/api-handler.js', async (importOriginal) => ({
@@ -61,6 +62,7 @@ beforeEach(() => {
     aiResearchJob: { delete: mocks.aiJobDelete },
     researchAudit: { create: mocks.auditCreate },
     productEvent: { create: mocks.eventCreate },
+    personalKnowledgeIndexTask: { upsert: mocks.personalKnowledgeIndexUpsert },
   }));
   mocks.researchUpdateMany.mockResolvedValue({ count: 1 });
   mocks.create.mockResolvedValue({
@@ -194,6 +196,65 @@ describe('research provenance input', () => {
     expect(response.status).toBe(200);
     expect((await response.json()).aiAssisted).toBe(true);
     expect(mocks.researchUpdate.mock.calls[0][0].data.aiAssisted).toBe(true);
+  });
+
+  it('queues private index cleanup when a knowledge draft is published', async () => {
+    const id = '33333333-3333-4333-8333-333333333333';
+    const authorId = '11111111-1111-1111-1111-111111111111';
+    const now = new Date();
+    mocks.researchFindUnique.mockResolvedValue({
+      id,
+      type: 'knowledge',
+      authorId,
+      status: 'draft',
+      title: 'Confirmed judgment',
+      body: 'A concise, confirmed engineering judgment.',
+      background: 'Context',
+      conclusion: 'Keep private vectors out of the public knowledge surface.',
+      risks: 'Verify citations.',
+      tags: [],
+      creationMethod: 'manual',
+      knowledgeIndexText: 'Confirmed judgment text.',
+      reviewStatus: null,
+      reviewRuns: [],
+      sourceAiJob: null,
+    });
+    mocks.researchUpdate.mockResolvedValue({
+      id,
+      type: 'knowledge',
+      status: 'published',
+      title: 'Confirmed judgment',
+      body: 'A concise, confirmed engineering judgment.',
+      background: 'Context',
+      conclusion: 'Keep private vectors out of the public knowledge surface.',
+      risks: 'Verify citations.',
+      tags: [],
+      authorId,
+      creationMethod: 'manual',
+      aiAssisted: false,
+      publishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      author: { id: authorId, name: 'User', email: 'u@test' },
+    });
+
+    const response = await publishPost(
+      new Request(`http://localhost/api/researches/${id}/publish`, { method: 'POST' }) as never,
+      { params: Promise.resolve({ id }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.personalKnowledgeIndexUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { researchId: id },
+      create: expect.objectContaining({
+        ownerId: authorId,
+        researchId: id,
+        operation: 'delete',
+        status: 'queued',
+        generation: 1,
+      }),
+      update: expect.objectContaining({ operation: 'delete', status: 'queued' }),
+    }));
   });
 
   it('requires the research summary before publication', async () => {

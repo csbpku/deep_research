@@ -38,6 +38,7 @@ interface SearchRow {
   highlighted: string;
   publishedAt: string;
   rank: number;
+  isPrivate: boolean;
 }
 
 interface SearchResponse {
@@ -189,7 +190,7 @@ function SearchContent() {
     <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="搜索"
-        description="跨雷达、摘要与研究库检索；标题优先，兼顾词组和近似匹配。"
+        description="搜索公开资料、雷达，以及仅本人可见的研究草稿。"
       />
 
       <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
@@ -236,7 +237,7 @@ function SearchContent() {
         ) : null}
 
         {!submittedQ && (
-          <EmptyState title="开始搜索" description="输入关键词以搜索雷达、摘要、研究报告和知识卡片。" />
+          <EmptyState title="开始搜索" description="输入关键词以搜索雷达、公开研究，以及本人草稿。" />
         )}
 
         {loading && (
@@ -272,6 +273,9 @@ function SearchContent() {
                       <CardContent className="min-w-0 p-3.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusBadge kind="searchType" value={searchKind} />
+                          {row.isPrivate ? (
+                            <span className="text-xs font-medium text-muted-foreground">本人草稿</span>
+                          ) : null}
                           <Link
                             href={detailHref(row)}
                             className="min-w-0 break-words text-sm font-medium hover:text-primary hover:underline"

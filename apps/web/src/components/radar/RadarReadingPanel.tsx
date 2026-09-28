@@ -135,7 +135,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
     <section className="my-9 overflow-hidden rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-paper)] shadow-sm" aria-labelledby="radar-reading-workbench">
       <header className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--ink-rule)] px-5 py-5 sm:px-7">
         <div>
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-accent)]">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-accent)]">
             <Sparkles className="size-3.5" />
             阅读工作台
           </div>
@@ -168,7 +168,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
         <article className="min-w-0 border-b border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 py-6 sm:px-7 lg:border-b-0 lg:border-r">
           <div className="mb-5 flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{leftTitle}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{leftTitle}</p>
               <p className="mt-1 text-xs text-[var(--ink-muted)]">{leftDescription}</p>
             </div>
             {mode === 'translate' ? (
@@ -209,7 +209,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
               {activeTransform.error}
             </div>
           ) : leftContent ? (
-            <MarkdownContent content={leftContent} className="reading-workbench-markdown text-[15px] leading-8 text-[var(--ink-text)]" />
+            <MarkdownContent content={leftContent} className="reading-workbench-markdown text-base leading-8 text-[var(--ink-text)]" />
           ) : (
             <div className="rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-5 text-sm text-[var(--ink-muted)]">暂无可展示内容。</div>
           )}
@@ -218,10 +218,10 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
         <aside className="min-w-0 bg-[var(--ink-surface)] px-5 py-6 sm:px-7" aria-label="原文证据与阅读模式">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读模式</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">阅读模式</p>
               <p className="mt-1 text-xs text-[var(--ink-muted)]">切换左侧的阅读辅助，右侧始终保留证据。</p>
             </div>
-            <span className="rounded-full bg-[var(--ink-page)] px-2 py-1 text-[10px] font-medium text-[var(--ink-muted)]">双栏</span>
+            <span className="rounded-full bg-[var(--ink-page)] px-2 py-1 text-xs font-medium text-[var(--ink-muted)]">双栏</span>
           </div>
 
           <div className="mt-4 grid gap-1 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-1.5">
@@ -241,7 +241,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
                 <span className="mr-2 text-[var(--ink-accent)]">{item.value === 'translate' ? <Languages className="size-3.5" /> : item.value === 'ai_reading' ? <Sparkles className="size-3.5" /> : <span className="block size-1.5 rounded-full bg-current" />}</span>
                 <span>
                   <span className="block text-xs font-semibold">{item.label}</span>
-                  <span className="mt-0.5 block text-[11px] text-[var(--ink-faint)]">{item.description}</span>
+                  <span className="mt-0.5 block text-xs text-[var(--ink-faint)]">{item.description}</span>
                 </span>
               </Button>
             ))}
@@ -250,10 +250,10 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
           <div className="mt-6 border-t border-[var(--ink-rule)] pt-5">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">原文证据</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">原文证据</p>
                 <p className="mt-1 text-xs text-[var(--ink-muted)]">高亮段落来自 AI 阅读结果</p>
               </div>
-              {highlightedBlocks.length > 0 ? <span className="text-[11px] font-medium text-[var(--ink-accent)]">{highlightedBlocks.length} 段高亮</span> : null}
+              {highlightedBlocks.length > 0 ? <span className="text-xs font-medium text-[var(--ink-accent)]">{highlightedBlocks.length} 段高亮</span> : null}
             </div>
 
             {highlightedBlocks.length > 0 ? (

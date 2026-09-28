@@ -26,14 +26,14 @@ export const CreateResearchInput = z.object({
 export type CreateResearchInput = z.infer<typeof CreateResearchInput>;
 
 /** 编辑沉淀 */
+export const MAX_RESEARCH_UPDATE_BODY_CHARS = 200_000;
 const ResearchRevisionContext = z.object({
   sourceMessageId: z.string().uuid(),
-  reason: z.string().trim().min(1).max(2000).optional(),
 }).strict();
 
 export const UpdateResearchInput = z.object({
   title: z.string().min(1).max(300).optional(),
-  body: z.string().min(1).max(50000).optional(),
+  body: z.string().min(1).max(MAX_RESEARCH_UPDATE_BODY_CHARS).optional(),
   background: z.string().max(2000).nullable().optional(),
   conclusion: z.string().max(2000).nullable().optional(),
   risks: z.string().max(2000).nullable().optional(),
@@ -41,6 +41,14 @@ export const UpdateResearchInput = z.object({
   // 只有 AI 调研追问的“修改报告”动作使用；服务端会重新解析消息和来源，
   // 不信任客户端提交的 provenance 文本。
   revisionContext: ResearchRevisionContext.optional(),
+}).superRefine((input, ctx) => {
+  if (input.revisionContext && input.body !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['body'],
+      message: '追问修订只接受已保存的回答 ID',
+    });
+  }
 });
 export type UpdateResearchInput = z.infer<typeof UpdateResearchInput>;
 

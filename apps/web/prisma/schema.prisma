@@ -200,6 +200,7 @@ model User {
   comments              Comment[]
   commentStars          CommentStar[]
   aiJobs                AiResearchJob[]
+  tokenBudgetEvents     LlmTokenBudgetEvent[]
   importJobs            ContentImportJob[]
   confluenceConnection  ConfluenceConnection?
   productEvents         ProductEvent[]
@@ -453,6 +454,8 @@ model Research {
   readingSaveKey      String?        @db.Uuid
   originContentSha256 String?        @db.Char(64) // 阻止未修改 AI 草稿直接发布
   sourceCommentId     String?        @db.Uuid // type=knowledge 时指向源评论
+  // 用户确认的短判断/笔记；不包含 Reader 原文摘录，AnythingLLM 只索引此字段。
+  knowledgeIndexText String?         @db.Text
   // 已发布 AI 研究是稳定的、经过审核的版本；后续编辑创建新的私有草稿。
   supersedesResearchId String?       @db.Uuid
   reviewStatus        String?        @db.VarChar(32)
@@ -496,6 +499,31 @@ model Research {
   @@index([sourceCommentId])
   @@index([supersedesResearchId])
   @@map("researches")
+}
+
+// Durable outbox for the optional per-user AnythingLLM index. Deliberately
+// has no Research FK: a delete task must survive the hard deletion it cleans up.
+model PersonalKnowledgeIndexTask {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId        String   @db.Uuid
+  researchId     String   @unique @db.Uuid
+  operation      String   @default("upsert") @db.VarChar(16)
+  status         String   @default("queued") @db.VarChar(16)
+  generation     Int      @default(1)
+  attempts       Int      @default(0)
+  nextRetryAt    DateTime? @db.Timestamptz(3)
+  lockedBy       String?  @db.VarChar(128)
+  leaseExpiresAt DateTime? @db.Timestamptz(3)
+  workspaceSlug  String?  @db.VarChar(128)
+  documentPath   String?  @db.Text
+  contentHash    String?  @db.Char(64)
+  lastError      String?  @db.VarChar(500)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status, nextRetryAt, leaseExpiresAt])
+  @@index([ownerId])
+  @@map("personal_knowledge_index_tasks")
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1329,6 +1357,24 @@ model LlmUsageEvent {
   @@index([operation, createdAt(sort: Desc)])
   @@index([requestedModel, createdAt(sort: Desc)])
   @@map("llm_usage_events")
+}
+
+model LlmTokenBudgetEvent {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String?   @db.Uuid
+  operation      String    @db.VarChar(120)
+  reservedTokens BigInt    @db.BigInt
+  actualTokens   BigInt?   @db.BigInt
+  status         String    @default("reserved") @db.VarChar(16)
+  expiresAt      DateTime  @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  settledAt      DateTime? @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc), status, expiresAt])
+  @@map("llm_token_budget_events")
 }
 
 // Phase 3: Radar deep-dive inline annotations (W3C Web Annotation aligned).

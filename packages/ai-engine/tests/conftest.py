@@ -36,6 +36,8 @@ os.environ.setdefault(
 os.environ["JOB_RUNNER_BACKEND"] = "memory"
 os.environ["AI_ENGINE_ADAPTER"] = "fake"  # tests always use fake adapter
 os.environ["LLM_CIRCUIT_ENABLED"] = "false"
+# Never let test clients inherit a developer or production service credential.
+os.environ["INTERNAL_SERVICE_TOKEN"] = "test-only-ai-engine-token"
 
 # Clear the vendor fetchers' statefiles before the test session so dedupe
 # tests do not see URLs left behind by prior runs. Each test that wants

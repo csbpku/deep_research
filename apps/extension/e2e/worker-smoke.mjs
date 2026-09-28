@@ -82,12 +82,15 @@ try {
   await panel.close();
 
   // The worker owns the requests now; closing the panel must not cancel them.
-  await fixture.waitForSelector('[data-deep-research-image-overlay]', { timeout: 30_000 });
+  await fixture.waitForFunction(() => Boolean(document.querySelector(
+    '[data-deep-research-image-overlay], [data-deep-research-image-fallback], [data-deep-research-image-side-translations] [data-deep-research-image-side-translation]',
+  )), null, { timeout: 30_000 });
   const translatedWhileClosed = await fixture.evaluate(() => ({
     overlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
+    imageResults: document.querySelectorAll('[data-deep-research-image-overlay], [data-deep-research-image-fallback], [data-deep-research-image-side-translations] [data-deep-research-image-side-translation]').length,
     textTranslations: document.querySelectorAll('[data-deep-research-translation]').length,
   }));
-  // The last image overlay is applied just before the worker commits its
+  // The last image translation is applied just before the worker commits its
   // terminal job state. Give IndexedDB that final write a bounded turn before
   // reopening the disposable panel.
   await fixture.waitForTimeout(500);
@@ -97,18 +100,23 @@ try {
   // replay cached results even though the original panel was destroyed.
   const reopened = await context.newPage();
   await reopened.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
-  await reopened.bringToFront();
   await fixture.bringToFront();
+  await serviceWorker.evaluate(async (tabId) => {
+    await chrome.tabs.sendMessage(tabId, { type: 'deep-research:request-page' });
+  }, activation.tabId);
+  await reopened.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('上次全文翻译已完成'), null, { timeout: 10_000 });
   await fixture.waitForTimeout(500);
   await reopened.bringToFront();
   const requestCountAfterReopen = (await readFile(requestLogPath, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).length;
   const resumedNotice = await reopened.locator('#notice').innerText().catch(() => '');
   const resumed = await fixture.evaluate(() => ({
     overlays: document.querySelectorAll('[data-deep-research-image-overlay]').length,
+    imageResults: document.querySelectorAll('[data-deep-research-image-overlay], [data-deep-research-image-fallback], [data-deep-research-image-side-translations] [data-deep-research-image-side-translation]').length,
     textTranslations: document.querySelectorAll('[data-deep-research-translation]').length,
   }));
-  if (!translatedWhileClosed.overlays || !translatedWhileClosed.textTranslations) throw new Error(`worker did not finish after panel close: ${JSON.stringify(translatedWhileClosed)}`);
-  if (!resumed.overlays || !resumed.textTranslations) throw new Error(`cached results were not reattached: ${JSON.stringify(resumed)}`);
+  if (!translatedWhileClosed.imageResults || !translatedWhileClosed.textTranslations) throw new Error(`worker did not finish after panel close: ${JSON.stringify(translatedWhileClosed)}`);
+  if (!resumed.imageResults || !resumed.textTranslations) throw new Error(`cached results were not reattached: ${JSON.stringify(resumed)}`);
+  if (resumedNotice.includes('停在') || resumedNotice.includes('点击“全文翻译”')) throw new Error(`completed translation was presented as recoverable work: ${resumedNotice}`);
   if (requestCountAfterReopen !== requestCountBeforeReopen) throw new Error(`completed job reopened with new model requests: ${JSON.stringify({ requestCountBeforeReopen, requestCountAfterReopen })}`);
 
   // Citation location gate: an unchanged unique quote resolves, a duplicate

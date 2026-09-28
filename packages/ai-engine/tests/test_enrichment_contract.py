@@ -77,3 +77,21 @@ def test_high_scored_candidate_is_exposed_as_skim_until_ready() -> None:
     assert effective_tier("collection", enrichment_ready=False) == "skim"
     assert effective_tier("deep_read", enrichment_ready=True) == "deep_read"
     assert effective_tier("skim", enrichment_ready=False) == "skim"
+
+
+def test_external_reading_preserves_scored_tier_without_server_enrichment() -> None:
+    assert effective_tier(
+        "deep_read",
+        enrichment_ready=False,
+        external_reading=True,
+    ) == "deep_read"
+    assert effective_tier(
+        "collection",
+        enrichment_ready=False,
+        external_reading=True,
+    ) == "collection"
+    assert effective_tier(
+        "skim",
+        enrichment_ready=False,
+        external_reading=True,
+    ) == "skim"

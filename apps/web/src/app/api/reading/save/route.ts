@@ -9,6 +9,7 @@ import { prisma } from '../../../../lib/db';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import { requireReadingUser } from '../../../../lib/reading-auth';
+import { readingKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../../lib/personal-knowledge-index';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +49,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     input.aiAnswer?.trim() ? `## AI 解读\n\n${input.aiAnswer.trim()}` : '',
   ].filter(Boolean);
   const body = sections.join('\n\n');
+  const knowledgeIndexText = readingKnowledgeIndexText(input.note, input.aiAnswer);
+  const conclusion = [
+    input.aiAnswer?.trim() ? `AI 解读：${input.aiAnswer.trim()}` : '',
+    input.note.trim() ? `我的笔记：${input.note.trim()}` : '',
+  ].filter(Boolean).join('\n\n').slice(0, 2_000) || null;
   const sourceRef = {
     type: 'url',
     value: input.url,
@@ -65,7 +71,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
           status: 'draft',
           title: input.title,
           body,
-          conclusion: input.aiAnswer?.trim().slice(0, 2_000) || input.note.trim().slice(0, 2_000) || null,
+          conclusion,
+          knowledgeIndexText,
           tags: input.tags,
           authorId: user.id,
           creationMethod: 'manual',
@@ -83,6 +90,13 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
           description: input.quote.slice(0, 1_000),
         },
       });
+      if (knowledgeIndexText) {
+        await queuePersonalKnowledgeIndex(tx, {
+          ownerId: user.id,
+          researchId: research.id,
+          operation: 'upsert',
+        });
+      }
       await tx.researchAudit.create({
         data: {
           researchId: research.id,

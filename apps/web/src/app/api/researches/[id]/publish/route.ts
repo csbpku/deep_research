@@ -17,6 +17,7 @@ import { toApiErrorResponse } from '../../../../../lib/errors';
 import { log, withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
+import { queuePersonalKnowledgeIndex } from '../../../../../lib/personal-knowledge-index';
 import { resolveCurrentReviewState } from '../../../../../lib/research-review-state';
 import { getReviewPublicationGate, reviewCoverageStatus } from '../../../../../lib/research-review-decisions';
 import { evaluateResearchSufficiency } from '../../../../../lib/research-sufficiency';
@@ -43,7 +44,9 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     where: { id: parsed.data.id },
     select: {
       id: true,
+      type: true,
       authorId: true,
+      knowledgeIndexText: true,
       status: true,
       title: true,
       body: true,
@@ -401,6 +404,13 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           action: 'publish',
         },
       });
+      if (existing.type === 'knowledge' && existing.knowledgeIndexText) {
+        await queuePersonalKnowledgeIndex(tx, {
+          ownerId: existing.authorId,
+          researchId: existing.id,
+          operation: 'delete',
+        });
+      }
 
     // ADR 0010: 发布时回流专题。来源是 AiResearchJob.primaryTopicId。
     // 防御：测试 mock 没有 findFirst；上层 $transaction 已被 mock 时

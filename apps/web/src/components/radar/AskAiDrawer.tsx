@@ -94,7 +94,7 @@ export function AskAiDrawer({
               </a>
             </p>
           </article>
-          <p className="shrink-0 border-t border-border px-6 py-2 text-[11px] leading-5 text-muted-foreground">
+          <p className="shrink-0 border-t border-border px-6 py-2 text-xs leading-5 text-muted-foreground">
             当前显示平台提取并清洗后的正文；原文网页请使用右上角新窗口打开。
           </p>
         </div>
@@ -106,7 +106,7 @@ export function AskAiDrawer({
               <Sparkles className="size-4 shrink-0 text-method-ai" aria-hidden />
               <div className="min-w-0">
                 <div className="text-sm font-semibold">与 AI 讨论</div>
-                <div className="truncate text-[11px] text-muted-foreground" title={summaryTitle}>
+                <div className="truncate text-xs text-muted-foreground" title={summaryTitle}>
                   基于当前雷达条目
                 </div>
               </div>

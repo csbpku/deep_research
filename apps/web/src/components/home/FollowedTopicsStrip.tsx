@@ -115,7 +115,7 @@ export function FollowedTopicsStrip() {
                           {topic.summary}
                         </p>
                       ) : null}
-                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      <p className="mt-1 font-mono text-xs text-muted-foreground">
                         {topic.candidateCount} 条相关内容 · {topic.sourceCount} 个采集渠道
                         {topic.lastSyncedAt ? ` · 更新 ${formatTimeAgo(topic.lastSyncedAt)}` : null}
                       </p>

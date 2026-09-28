@@ -29,7 +29,7 @@ test.describe('Homepage (anonymous)', () => {
 test.describe('Homepage (member)', () => {
   test('logged-in homepage remains the radar surface', async ({ page }) => {
     await loginWithCredentials(page.context().request, {
-      email: 'member@shopee.com',
+      email: 'member@e2e.local',
       role: 'member',
     });
 

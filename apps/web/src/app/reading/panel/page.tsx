@@ -424,12 +424,12 @@ export default function ReadingPanelPage() {
       <div className="mx-auto w-full max-w-2xl px-4 py-5 sm:px-6">
         <div className="mb-5 flex items-start justify-between gap-3">
           <div>
-            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#315fe8]"><BookOpen className="h-3.5 w-3.5" /> Deep Research Reader</div>
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#315fe8]"><BookOpen className="h-3.5 w-3.5" /> Deep Research Reader</div>
             <h1 className="text-lg font-semibold leading-snug">{title}</h1>
             {context && <p className="mt-1 truncate text-xs text-[#5e625d]">{safeHostname(context.url)} · {scopeLabel}</p>}
           </div>
           <div className="flex items-center gap-1">
-            {tokenPresent && <button aria-label="断开并撤销阅读令牌" disabled={disconnecting} className="rounded-md px-2 py-1 text-[11px] text-[#5e625d] hover:bg-white disabled:opacity-50" onClick={() => void disconnectReader()}>{disconnecting ? '断开中…' : '断开账号'}</button>}
+            {tokenPresent && <button aria-label="断开并撤销阅读令牌" disabled={disconnecting} className="rounded-md px-2 py-1 text-xs text-[#5e625d] hover:bg-white disabled:opacity-50" onClick={() => void disconnectReader()}>{disconnecting ? '断开中…' : '断开账号'}</button>}
             <button aria-label="关闭侧栏" className="rounded-md p-2 text-[#5e625d] hover:bg-white" onClick={() => panelMessage({ type: 'deep-research:close' })}><X className="h-4 w-4" /></button>
           </div>
         </div>
@@ -443,9 +443,9 @@ export default function ReadingPanelPage() {
         ) : (
           <>
             <section className="rounded-xl border border-[#d9ddd5] bg-white p-4 shadow-sm">
-              <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-[#5e625d]"><span>原文摘录</span><span>{context.selection ? '已锚定' : '页面上下文'}</span></div>
+              <div className="mb-2 flex items-center justify-between text-xs font-medium text-[#5e625d]"><span>原文摘录</span><span>{context.selection ? '已锚定' : '页面上下文'}</span></div>
               <blockquote className="border-l-2 border-[#315fe8] pl-3 text-sm leading-6 text-[#30332f]">{displayQuote}</blockquote>
-              {context.translationDetected && <p role="status" className="mt-3 rounded-md bg-[#fff5e8] px-3 py-2 text-[11px] leading-5 text-[#8b5b20]">检测到页面已有其他翻译插件内容。为避免重复翻译，已暂停本插件的双语插入；请选择一个翻译器继续。</p>}
+              {context.translationDetected && <p role="status" className="mt-3 rounded-md bg-[#fff5e8] px-3 py-2 text-xs leading-5 text-[#8b5b20]">检测到页面已有其他翻译插件内容。为避免重复翻译，已暂停本插件的双语插入；请选择一个翻译器继续。</p>}
               <div className="mt-4 flex flex-wrap gap-2">
                 <button className="reader-action" disabled={Boolean(busy) || Boolean(context.translationDetected)} onClick={translateVisibleBlocks}><Languages className="h-3.5 w-3.5" /> {bilingualEnabled ? '继续翻译视口' : '开启双语'}</button>
                 {bilingualEnabled && <button className="reader-action" disabled={Boolean(busy)} onClick={() => setBilingualPaused((paused) => !paused)}><Languages className="h-3.5 w-3.5" /> {bilingualPaused ? '继续处理' : '暂停双语'}</button>}
@@ -457,9 +457,9 @@ export default function ReadingPanelPage() {
             </section>
 
             <section className="mt-4 rounded-xl border border-[#d9ddd5] bg-white p-4 shadow-sm">
-              <div className="mb-3 flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-sm font-semibold"><MessageCircle className="h-4 w-4 text-[#315fe8]" /> 围绕原文讨论</div>{context.selection && <div className="flex rounded-md border border-[#d9ddd5] p-0.5 text-[11px]" role="group" aria-label="讨论范围"><button className={`rounded px-2 py-1 ${discussionScope === 'selection' ? 'bg-[#eff4ff] text-[#315fe8]' : 'text-[#5e625d]'}`} onClick={() => setDiscussionScope('selection')}>当前选段</button><button className={`rounded px-2 py-1 ${discussionScope === 'page' ? 'bg-[#eff4ff] text-[#315fe8]' : 'text-[#5e625d]'}`} onClick={() => setDiscussionScope('page')}>问整页</button></div>}</div>
-              <p className="mb-3 text-[11px] leading-5 text-[#767d75]">本轮范围：{discussionScope === 'page' || !context.selection ? '当前页面（已提取正文）' : '当前选段 + 所在小节'} · 回答会把原文证据与一般背景分开说明</p>
-              {sourceNotice && <p className="mb-3 rounded-md bg-[#f5f6f2] px-3 py-2 text-[11px] leading-5 text-[#5e625d]">{sourceNotice}</p>}
+              <div className="mb-3 flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-sm font-semibold"><MessageCircle className="h-4 w-4 text-[#315fe8]" /> 围绕原文讨论</div>{context.selection && <div className="flex rounded-md border border-[#d9ddd5] p-0.5 text-xs" role="group" aria-label="讨论范围"><button className={`rounded px-2 py-1 ${discussionScope === 'selection' ? 'bg-[#eff4ff] text-[#315fe8]' : 'text-[#5e625d]'}`} onClick={() => setDiscussionScope('selection')}>当前选段</button><button className={`rounded px-2 py-1 ${discussionScope === 'page' ? 'bg-[#eff4ff] text-[#315fe8]' : 'text-[#5e625d]'}`} onClick={() => setDiscussionScope('page')}>问整页</button></div>}</div>
+              <p className="mb-3 text-xs leading-5 text-[#767d75]">本轮范围：{discussionScope === 'page' || !context.selection ? '当前页面（已提取正文）' : '当前选段 + 所在小节'} · 回答会把原文证据与一般背景分开说明</p>
+              {sourceNotice && <p className="mb-3 rounded-md bg-[#f5f6f2] px-3 py-2 text-xs leading-5 text-[#5e625d]">{sourceNotice}</p>}
               {anchorNotice && <p role="status" className="mb-3 rounded-md bg-[#fff5e8] px-3 py-2 text-xs text-[#8b5b20]">{anchorNotice}</p>}
               {answer && <div className="mb-4 whitespace-pre-wrap rounded-lg bg-[#eff4ff] p-3 text-sm leading-6"><div>{answer}</div>{context.selection && <button className="mt-3 text-xs font-medium text-[#315fe8] underline" onClick={() => panelMessage({ type: 'deep-research:focus-anchor', anchor: context.selection })}>回到原文证据</button>}</div>}
               {readingAnswer && (readingAnswer.evidence?.length || readingAnswer.background || readingAnswer.inference || readingAnswer.limitations?.length || readingAnswer.warnings?.length) ? (
@@ -481,12 +481,12 @@ export default function ReadingPanelPage() {
 
             <section className="mt-4 rounded-xl border border-[#d9ddd5] bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center gap-2 text-sm font-semibold"><Bookmark className="h-4 w-4 text-[#315fe8]" /> 保存阅读成果</div>
-              <label className="mb-2 block text-[11px] font-medium text-[#5e625d]" htmlFor="reader-quote">摘录（可编辑）</label>
+              <label className="mb-2 block text-xs font-medium text-[#5e625d]" htmlFor="reader-quote">摘录（可编辑）</label>
               <textarea id="reader-quote" value={quoteOverride} onChange={(event) => setQuoteOverride(event.target.value)} className="mb-3 min-h-20 w-full resize-y rounded-lg border border-[#d9ddd5] px-3 py-2 text-sm leading-6 outline-none focus:border-[#315fe8] focus:ring-2 focus:ring-[#eaf0ff]" />
-              {context.selection && quoteOverride.trim() !== context.selection.quote.trim() && <p className="-mt-1 mb-3 text-[11px] leading-5 text-[#8b5b20]">摘录已编辑；保存后不附带精确原文锚点。</p>}
-              <label className="mb-2 block text-[11px] font-medium text-[#5e625d]" htmlFor="reader-note">我的笔记</label>
+              {context.selection && quoteOverride.trim() !== context.selection.quote.trim() && <p className="-mt-1 mb-3 text-xs leading-5 text-[#8b5b20]">摘录已编辑；保存后不附带精确原文锚点。</p>}
+              <label className="mb-2 block text-xs font-medium text-[#5e625d]" htmlFor="reader-note">我的笔记</label>
               <textarea id="reader-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="补充你的判断、疑问或适用条件…" className="min-h-20 w-full resize-y rounded-lg border border-[#d9ddd5] px-3 py-2 text-sm outline-none focus:border-[#315fe8] focus:ring-2 focus:ring-[#eaf0ff]" />
-              <div className="mt-3 flex items-center justify-between gap-3"><p className="text-[11px] leading-5 text-[#767d75]">只保存你确认的摘录、笔记和 AI 结论；不会自动保存整篇网页。</p><button onClick={() => void saveResult()} disabled={Boolean(busy) || Boolean(saved)} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[#20211f] px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{saved ? <Check className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />} {saved ? '已保存草稿' : '保存到研究库'}</button></div>
+              <div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs leading-5 text-[#767d75]">只保存你确认的摘录、笔记和 AI 结论；不会自动保存整篇网页。</p><button onClick={() => void saveResult()} disabled={Boolean(busy) || Boolean(saved)} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[#20211f] px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{saved ? <Check className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />} {saved ? '已保存草稿' : '保存到研究库'}</button></div>
             </section>
           </>
         )}

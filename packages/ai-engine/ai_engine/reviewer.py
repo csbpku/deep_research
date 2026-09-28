@@ -31,6 +31,13 @@ from ai_engine.fact_resolvers import (
     resolve_pypi_package,
 )
 from ai_engine.llm.client import generate_text
+from ai_engine.llm.token_budget import (
+    TokenBudgetExceeded,
+    TokenBudgetUnavailable,
+    estimate_call_tokens,
+    reserve_llm_token_task,
+)
+from ai_engine.text_chunking import split_text_by_token_budget
 from ai_engine.untrusted_text import sanitize_external_instruction_text
 
 ReviewStatus = Literal["passed", "needs_revision", "blocked", "review_unavailable"]
@@ -40,6 +47,8 @@ ReviewErrorCode = Literal[
     "invalid_output",
     "provider_unavailable",
     "no_captured_evidence",
+    "AI_QUOTA_EXCEEDED",
+    "AI_ENGINE_UNAVAILABLE",
 ]
 ClaimRisk = Literal["high", "medium", "low", "opinion"]
 ClaimType = Literal[
@@ -801,6 +810,10 @@ def _reconcile_unbound_evidence(
 
 def _review_error_code(exc: BaseException) -> ReviewErrorCode:
     """Map provider/parser failures to a small stable UI vocabulary."""
+    if isinstance(exc, TokenBudgetExceeded):
+        return "AI_QUOTA_EXCEEDED"
+    if isinstance(exc, TokenBudgetUnavailable):
+        return "AI_ENGINE_UNAVAILABLE"
     message = str(exc).lower()
     if isinstance(exc, (TimeoutError, httpx.TimeoutException)) or any(
         token in message for token in ("timeout", "timed out", "time out", "超时")
@@ -1964,26 +1977,92 @@ class DefaultResearchReviewer:
             has_dynamic_claim = has_dynamic_claim or extra_dynamic
         source_text = _review_source_text(report, captured_sources)
         citation_ledger = _citation_ledger(report, captured_sources)
-        inventory_prompt = (
-            f"主题：{topic}\n报告类型：{report_type}\n"
-            f"报告正文：\n{_report_body_without_references(report)[:24000]}\n"
-            "请先完成声明清单，不要判断声明是否正确。"
+        inventory_body = _report_body_without_references(report)
+        inventory_chunks = split_text_by_token_budget(
+            inventory_body,
+            max(1_000, int(os.environ.get("RESEARCH_REVIEW_CHUNK_TOKENS", "6000"))),
+        )
+        inventory_prompts = [
+            (
+                f"主题：{topic}\n报告类型：{report_type}\n"
+                f"这是报告全文第 {chunk.index}/{len(inventory_chunks)} 块（字符 {chunk.start}-{chunk.end}）。"
+                "只抽取本块中的声明；如果内容不是完整声明，保留原样并标记 coverage_status=insufficient。"
+                "请先完成声明清单，不要判断事实是否正确。\n报告正文：\n"
+                f"{chunk.text}"
+            )
+            for chunk in inventory_chunks
+        ]
+        inventory_reserved_tokens = sum(
+            estimate_call_tokens(
+                user_prompt=prompt,
+                system_prompt=_CLAIM_INVENTORY_SYSTEM,
+                max_output_tokens=5000,
+            )
+            for prompt in inventory_prompts
         )
         try:
-            # Phase 1: inventory only.  This prevents the evidence judge from
-            # silently dropping a claim merely because it cannot find a quote.
-            generated = await generate_text(
-                user_prompt=inventory_prompt,
-                system_prompt=_CLAIM_INVENTORY_SYSTEM,
-                llm_spec=self._llm_spec,
-                tier="light",
-                max_tokens=5000,
-                timeout=60.0,
-                disable_thinking=True,
+            # Reserve all inventory chunks before the first call; the ledger
+            # settles their aggregate provider usage when the pass completes.
+            inventory_items: list[ClaimInventoryItem] = []
+            inventory_coverages: list[str] = []
+            seen_inventory_claims: set[str] = set()
+            inventory_payload: dict[str, object] = {}
+            completed_inventory_chunks = 0
+            async with reserve_llm_token_task(
                 operation="research.fact_review.inventory",
-            )
-            inventory_payload = _extract_json_object(generated.text)
-            inventory = _parse_claim_inventory_payload(inventory_payload)
+                estimated_tokens=inventory_reserved_tokens,
+            ):
+                for chunk, inventory_prompt in zip(inventory_chunks, inventory_prompts):
+                    generated = await generate_text(
+                        user_prompt=inventory_prompt,
+                        system_prompt=_CLAIM_INVENTORY_SYSTEM,
+                        llm_spec=self._llm_spec,
+                        tier="light",
+                        max_tokens=5000,
+                        timeout=60.0,
+                        disable_thinking=True,
+                        operation="research.fact_review.inventory",
+                    )
+                    if getattr(generated, "truncated", False):
+                        raise ValueError(
+                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单输出不完整"
+                        )
+                    parsed_payload = _extract_json_object(generated.text)
+                    if not parsed_payload:
+                        raise ValueError(
+                            f"第 {chunk.index}/{len(inventory_chunks)} 个报告块的声明清单无法解析"
+                        )
+                    completed_inventory_chunks += 1
+                    coverage = parsed_payload.get("coverage_status")
+                    inventory_coverages.append(
+                        coverage
+                        if isinstance(coverage, str)
+                        and coverage in {"complete", "insufficient"}
+                        else "insufficient"
+                    )
+                    for item in _parse_claim_inventory_payload(parsed_payload):
+                        identity = _claim_merge_key(item.claim)
+                        if identity and identity in seen_inventory_claims:
+                            continue
+                        if identity:
+                            seen_inventory_claims.add(identity)
+                        inventory_items.append(replace(
+                            item,
+                            claim_id=(
+                                f"B{chunk.index}-{item.claim_id}"
+                                if len(inventory_chunks) > 1
+                                else item.claim_id
+                            ),
+                        ))
+            inventory = tuple(inventory_items)
+            inventory_payload = {
+                "coverage_status": (
+                    "complete"
+                    if inventory_coverages and all(item == "complete" for item in inventory_coverages)
+                    else "insufficient"
+                ),
+                "claims": [asdict(item) for item in inventory],
+            }
 
             factual_inventory = tuple(
                 item for item in inventory
@@ -2023,37 +2102,42 @@ class DefaultResearchReviewer:
                 # Keep a bounded compatibility path for older providers that
                 # only understand the original one-shot review contract. An
                 # empty inventory is never treated as a clean fact review.
-                legacy_prompt = (
-                    f"主题：{topic}\n报告类型：{report_type}\n报告：\n{report[:24000]}\n"
-                    f"来源证据：\n{source_text}\n"
-                    "请提取并审核高风险和中风险事实。普通观点标记 not_applicable。"
-                )
-                legacy_generated = await generate_text(
-                    user_prompt=legacy_prompt,
-                    system_prompt=_REVIEW_SYSTEM,
-                    llm_spec=self._llm_spec,
-                    tier="light",
-                    max_tokens=6000,
-                    timeout=60.0,
-                    disable_thinking=True,
-                    operation="research.fact_review.legacy",
-                )
-                llm_result = _parse_review_payload(_extract_json_object(legacy_generated.text))
-                if _report_requires_claim_review(report):
-                    llm_result = replace(llm_result, coverage_status="insufficient")
-                    if not llm_result.claims:
-                        # The legacy compatibility call is allowed to fail,
-                        # but an empty response must not erase the report's
-                        # visible factual worklist. Preserve a bounded,
-                        # explicitly unresolved fallback ledger instead.
-                        fallback_claims = _fallback_claims_from_report(report)
-                        if fallback_claims:
-                            llm_result = replace(
-                                llm_result,
-                                claims=fallback_claims,
-                                error="声明抽取返回空结果，已保留未确认事实句",
-                                error_code="invalid_output",
-                            )
+                if len(inventory_chunks) > 1:
+                    llm_result = ReviewResult(
+                        "review_unavailable",
+                        claims=tuple(_fallback_claims_from_report(report)),
+                        error="全文声明清单没有返回可审核条目；多块报告未降级为前段审核。",
+                        error_code="invalid_output",
+                        coverage_status="insufficient",
+                    )
+                else:
+                    legacy_prompt = (
+                        f"主题：{topic}\n报告类型：{report_type}\n报告：\n{report}\n"
+                        f"来源证据：\n{source_text}\n"
+                        "请提取并审核高风险和中风险事实。普通观点标记 not_applicable。"
+                    )
+                    legacy_generated = await generate_text(
+                        user_prompt=legacy_prompt,
+                        system_prompt=_REVIEW_SYSTEM,
+                        llm_spec=self._llm_spec,
+                        tier="light",
+                        max_tokens=6000,
+                        timeout=60.0,
+                        disable_thinking=True,
+                        operation="research.fact_review.legacy",
+                    )
+                    llm_result = _parse_review_payload(_extract_json_object(legacy_generated.text))
+                    if _report_requires_claim_review(report):
+                        llm_result = replace(llm_result, coverage_status="insufficient")
+                        if not llm_result.claims:
+                            fallback_claims = _fallback_claims_from_report(report)
+                            if fallback_claims:
+                                llm_result = replace(
+                                    llm_result,
+                                    claims=fallback_claims,
+                                    error="声明抽取返回空结果，已保留未确认事实句",
+                                    error_code="invalid_output",
+                                )
             else:
                 # Phase 2: adjudicate only the external-fact subset against
                 # the captured ledger. Each bounded batch has its own retry
@@ -2078,6 +2162,25 @@ class DefaultResearchReviewer:
             llm_result = _validate_llm_evidence(llm_result, captured_sources)
             llm_result = _reconcile_unbound_evidence(llm_result, captured_sources)
         except Exception as exc:
+            if len(inventory_chunks) > 1:
+                await emit_phase("failed", {
+                    "coverage_status": "insufficient",
+                    "completed_inventory_chunks": completed_inventory_chunks,
+                    "inventory_chunk_count": len(inventory_chunks),
+                })
+                fallback_claims = (*deterministic, *citation_ledger)
+                return finalize(ReviewResult(
+                    "review_unavailable",
+                    claims=tuple(fallback_claims),
+                    revision_instructions=tuple(dict.fromkeys((*instructions, *_claim_gap_instructions(fallback_claims)))),
+                    error=(
+                        str(exc)
+                        if isinstance(exc, (TokenBudgetExceeded, TokenBudgetUnavailable))
+                        else f"{type(exc).__name__}: full-text inventory incomplete"
+                    ),
+                    error_code=_review_error_code(exc),
+                    coverage_status="insufficient",
+                ))
             # Reasoning-capable OpenAI-compatible endpoints occasionally
             # consume the whole first output budget in a hidden <think>
             # block.  Retry once with a smaller, stricter prompt before
@@ -2088,7 +2191,7 @@ class DefaultResearchReviewer:
             retry_prompt = (
                 f"主题：{topic}\n报告类型：{report_type}\n"
                 "只审核报告中最重要的可验证事实；观点和建议使用 not_applicable。\n"
-                f"报告：\n{report[:14000]}\n\n来源证据：\n{source_text[:14000]}"
+                f"报告：\n{report}\n\n来源证据：\n{source_text}"
             )
             try:
                 retry_generated = await generate_text(

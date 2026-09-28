@@ -49,6 +49,7 @@ from ai_engine.job_runner.models import (
     noop_hooks,
 )
 from ai_engine.job_runner.store import JobStore, cast_status
+from ai_engine.llm.token_budget import bind_budget_user
 
 
 def _review_details(metadata: dict[str, object] | None) -> dict[str, object] | None:
@@ -255,10 +256,13 @@ async def run_once(
         )
 
     try:
-        await asyncio.wait_for(
-            adapter.submit(request),
-            timeout=max(0.1, deadline_monotonic - asyncio.get_event_loop().time()),
-        )
+        # The adapter starts its long-running task during submit; ContextVar
+        # state is copied into that task and attributes all its model calls.
+        with bind_budget_user(snapshot.requester_id):
+            await asyncio.wait_for(
+                adapter.submit(request),
+                timeout=max(0.1, deadline_monotonic - asyncio.get_event_loop().time()),
+            )
     except asyncio.TimeoutError:
         return await timeout_outcome(None)
     except AdapterError:

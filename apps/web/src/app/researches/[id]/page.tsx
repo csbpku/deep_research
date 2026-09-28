@@ -484,7 +484,7 @@ export default function ResearchDetailPage() {
           <dl className="grid gap-3 text-xs">
             <div><dt className="text-muted-foreground">状态</dt><dd className="mt-0.5 font-medium">{isDraft ? '草稿' : data.status === 'published' ? '已发布' : '已归档'}</dd></div>
             <div><dt className="text-muted-foreground">内容类型</dt><dd className="mt-0.5 font-medium">{isLongResearch ? '研究报告' : '知识卡片'}</dd></div>
-            <div><dt className="text-muted-foreground">更新时间</dt><dd className="mt-0.5 font-mono text-[11px]">{new Date(data.updatedAt).toISOString().slice(0, 10)}</dd></div>
+            <div><dt className="text-muted-foreground">更新时间</dt><dd className="mt-0.5 font-mono text-xs">{new Date(data.updatedAt).toISOString().slice(0, 10)}</dd></div>
           </dl>
         </SectionCard>
         {data.status === 'published' ? (
@@ -538,7 +538,7 @@ export default function ResearchDetailPage() {
                   <span> （{Object.keys(a.diff as Record<string, unknown>).join(', ')} 变更）</span>
                 ) : null}
                 {a.sourceIntent === 'revise' ? (
-                  <div className="mt-1 rounded border border-primary/15 bg-primary/[0.03] px-2 py-1.5 text-[11px] text-muted-foreground">
+                  <div className="mt-1 rounded border border-primary/15 bg-primary/[0.03] px-2 py-1.5 text-xs text-muted-foreground">
                     <span className="font-medium text-primary">来自追问修订</span>
                     {a.sourceQuestion ? <span className="ml-1">：{a.sourceQuestion}</span> : null}
                   </div>

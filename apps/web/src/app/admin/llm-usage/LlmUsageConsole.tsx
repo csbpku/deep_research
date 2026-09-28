@@ -129,7 +129,7 @@ export default function LlmUsageConsole() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h4 className="text-xs font-semibold">Token 趋势</h4>
-                <p className="mt-1 text-[11px] text-muted-foreground">柱高按当前时间范围内的日总 Token 归一化。</p>
+                <p className="mt-1 text-xs text-muted-foreground">柱高按当前时间范围内的日总 Token 归一化。</p>
               </div>
               <span className="font-mono text-xs tabular-nums text-muted-foreground">{daily.length} 天</span>
             </div>
@@ -149,7 +149,7 @@ export default function LlmUsageConsole() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-2 flex justify-between text-[11px] text-muted-foreground">
+                <div className="mt-2 flex justify-between text-xs text-muted-foreground">
                   <span>{formatTrendDate(daily[0].date)}</span>
                   <span>{formatTrendDate(daily[daily.length - 1].date)}</span>
                 </div>
@@ -196,7 +196,7 @@ export default function LlmUsageConsole() {
 function TableScrollFrame({ children, label }: { children: ReactNode; label: string }) {
   return (
     <div className="overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground lg:hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground lg:hidden">
         <span>左右滑动查看完整明细</span>
         <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />
       </div>
@@ -213,7 +213,7 @@ function TableScrollFrame({ children, label }: { children: ReactNode; label: str
 }
 
 function SummaryCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return <div className="rounded-lg border border-border bg-card p-4"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>{hint && <div className="mt-1 text-[11px] text-muted-foreground">{hint}</div>}</div>;
+  return <div className="rounded-lg border border-border bg-card p-4"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>{hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}</div>;
 }
 
 function RankingList({
@@ -236,7 +236,7 @@ function RankingList({
           {items.map((item) => (
             <div key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-xs">
               <div className="min-w-0">
-                <div className="truncate font-mono text-[11px]" title={item.label}>{item.label}</div>
+                <div className="truncate font-mono text-xs" title={item.label}>{item.label}</div>
                 <div className="mt-1 h-1.5 overflow-hidden rounded-sm bg-muted">
                   <div className="h-full rounded-sm bg-status-failed-fg/70" style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }} />
                 </div>
@@ -269,7 +269,7 @@ function Signal({
 }) {
   return (
     <div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
       <div
         className={cn(
           'mt-1 font-mono text-lg font-semibold tabular-nums',

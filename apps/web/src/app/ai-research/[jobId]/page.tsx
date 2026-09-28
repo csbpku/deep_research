@@ -70,6 +70,7 @@ import {
   type ReviewPublicationGate,
 } from '@/lib/research-review-decisions';
 import { ResearchOutputViews } from '@/components/ai-research/ResearchOutputViews';
+import { KnowledgeCardComposer } from '@/components/KnowledgeCardComposer';
 import { ResearchChatPanel } from '@/components/ai-research/ResearchChatPanel';
 import { AiResearchWorkspaceSidebar } from '@/components/ai-research/AiResearchWorkspaceSidebar';
 import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
@@ -215,7 +216,7 @@ function ReviewGateChip({
         : 'border-warning-border/70 bg-warning-bg/40 text-warning-fg';
   return (
     <span
-      className={cn('rounded-full border px-2 py-0.5 text-[10px] font-medium', tone)}
+      className={cn('rounded-full border px-2 py-0.5 text-xs font-medium', tone)}
       aria-label={`结果状态：${label}`}
     >
       {label}
@@ -805,7 +806,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
           <section className="border-t border-border bg-background/40 px-5 py-6" aria-label={evidenceOnly ? '本轮资料快照' : !isTerminal ? `${outputLabel}（依据整理中）` : `${outputLabel}结果`}>
           <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
             <div>
-              <p className={cn('text-[11px] font-semibold uppercase tracking-wide', evidenceOnly || finalStatus === 'partial' ? 'text-status-partial-fg' : 'text-primary')}>
+              <p className={cn('text-xs font-semibold uppercase tracking-wide', evidenceOnly || finalStatus === 'partial' ? 'text-status-partial-fg' : 'text-primary')}>
                 {evidenceOnly ? '资料摘要' : !isTerminal ? `${outputLabel} · 依据整理中` : finalStatus === 'partial' ? `阶段性${outputLabel}` : '研究产物'}
               </p>
               <h3 className="mt-1 text-lg font-semibold">{s.artifact.title}</h3>
@@ -852,7 +853,10 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               </Link>
             </Button>
           </div>
-          <div className="mx-auto max-w-4xl">
+          <div
+            className="mx-auto max-w-4xl"
+            data-knowledge-source-message={s.draftResearchId ?? undefined}
+          >
             <ResearchOutputViews
               content={s.artifact.content}
               artifactType={evidenceOnly ? 'markdown' : s.artifact.type === 'slides' ? 'slides' : 'markdown'}
@@ -862,6 +866,9 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               reviewStatus={s.review?.status}
               showQualityStatus={false}
             />
+            {s.draftResearchId ? (
+              <KnowledgeCardComposer sourceKind="research_report" messageId={s.draftResearchId} />
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -876,7 +883,6 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               : finalStatus === 'partial' ? '可基于阶段性研究稿继续追问；如需把它作为正式依据，请先完成关键结论确认。' : '回答会基于上方报告和本次研究上下文。'}
             reportId={s.draftResearchId}
             reportContent={s.artifact?.content ?? null}
-            rawReportContent={s.artifact?.rawContent ?? s.artifact?.content ?? null}
           />
         </div>
       ) : null}
@@ -957,7 +963,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               ? '任务在结果确认完成前达到时间上限；阶段性研究稿和已抓取资料已保留，可继续阅读、追问或重新运行。'
               : '任务在生成研究结论前结束；已生成资料快照，可先核对原文或基于这批资料追问。本轮没有可编辑研究稿。'}
           </p>
-          {s.errorCode ? <p className="mt-1 text-[11px] opacity-75">错误码：{s.errorCode}</p> : null}
+          {s.errorCode ? <p className="mt-1 text-xs opacity-75">错误码：{s.errorCode}</p> : null}
         </div>
       ) : s.errorCode ? (
         <div
@@ -1051,7 +1057,7 @@ function EvidencePanel({
             <Radar className="size-4 text-primary" />
             <span className="text-sm font-semibold">资料与证据</span>
           </span>
-          <span className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="truncate">
             检索线索 {discoveredTotal} · 可引用证据 {capturedTotal}
             {capturedTotal > 0 ? ` · 独立域名 ${independentSourceCount}` : ''}
@@ -1062,7 +1068,7 @@ function EvidencePanel({
       </button>
       {expanded ? (
         <div className="border-t border-border px-3 py-3">
-          <p className="mb-3 px-1 text-[11px] leading-5 text-muted-foreground">
+          <p className="mb-3 px-1 text-xs leading-5 text-muted-foreground">
             来源等级按域名、页面路径和来源类型推断；同一域名的页面只计为一个独立来源，不等同于结论已被证明。
           </p>
           {sources.length === 0 ? (
@@ -1101,13 +1107,13 @@ function EvidencePanel({
                     {source.href ? <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" /> : null}
                   </div>
                   {externalInstruction ? (
-                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
                       <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
                     </p>
                   ) : null}
-                  {source.snippet ? <p className="mt-1.5 line-clamp-2 text-[11px] leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 320)}</p> : null}
-                  <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {source.snippet ? <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 320)}</p> : null}
+                  <div className="mt-2 flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
                     <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
@@ -1155,7 +1161,7 @@ function ResearchCheckpoint({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">证据检查点</h3>
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{isTerminal ? '本轮已结束' : '可随时纠偏'}</span>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{isTerminal ? '本轮已结束' : '可随时纠偏'}</span>
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {isTerminal
@@ -1164,7 +1170,7 @@ function ResearchCheckpoint({
                 ? `任务会继续按启动时的范围执行；当前已保存 ${sourceCount} 条来源${failed > 0 ? `，其中 ${failed} 条获取失败` : ''}。深度研究会先展开多个角度，再补查证据缺口。`
                 : `任务会继续按启动时的范围执行；当前已记录 ${sourceCount} 条来源${failed > 0 ? `，其中 ${failed} 条获取失败` : ''}。你可以继续等待，也可以现在收敛范围。`}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
             原始检索设置：{scopeSummary(s.brief?.scope)} · {s.sourcePolicy === 'only_user_sources' ? '仅使用已选资料' : '网页搜索 + 已选资料'} · {sourceProvenanceSummary(s)}
             {targetedEvidenceCount > 0 ? ` · 后续声明补证新增 ${targetedEvidenceCount} 条` : ''}
           </p>
@@ -1187,7 +1193,7 @@ function ResearchCheckpoint({
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {!isTerminal ? (
           <>
-            <span className="text-[11px] text-muted-foreground">任务会按启动时的设置继续运行；离开页面不会停止。</span>
+            <span className="text-xs text-muted-foreground">任务会按启动时的设置继续运行；离开页面不会停止。</span>
             <Button type="button" size="xs" variant="outline" onClick={async () => { const cancelled = await onCancel(); if (cancelled) router.push('/ai-research'); }} disabled={cancelling}>
               {cancelling ? '结束中…' : '结束并调整设置'}
             </Button>
@@ -1641,7 +1647,7 @@ function ReviewPanel({
           {sufficiencyGapSummary && sufficiencyGapSummary.groups.length > 0 ? (
             <details className="mt-2 rounded border border-warning-border/50 bg-background/35 px-2.5 py-2">
               <summary className="cursor-pointer font-medium">按方案查看待补维度</summary>
-              <div className="mt-2 space-y-1.5 text-[11px] leading-5">
+              <div className="mt-2 space-y-1.5 text-xs leading-5">
                 {sufficiencyGapSummary.groups.map((group) => (
                   <p key={group.option}>
                     <span className="font-medium">{group.option}</span>
@@ -1654,7 +1660,7 @@ function ReviewPanel({
           {sufficiencyGapSummary && sufficiencyGapSummary.otherGaps.length > 0 ? (
             <details className="mt-2 rounded border border-warning-border/50 bg-background/35 px-2.5 py-2">
               <summary className="cursor-pointer font-medium">查看其他缺口</summary>
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-5">
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5">
                 {sufficiencyGapSummary.otherGaps.map((gap) => <li key={gap}>{gap}</li>)}
               </ul>
             </details>
@@ -1732,7 +1738,7 @@ function ReviewPanel({
         <summary className="cursor-pointer font-medium text-foreground">
           {pendingClaims.length > 0 ? `查看并处理 ${pendingClaims.length} 条待确认结论` : '查看结论依据'}
         </summary>
-        <div className="mt-2 space-y-2 rounded border border-border/70 bg-background/50 p-3 text-[11px] leading-5 text-muted-foreground">
+        <div className="mt-2 space-y-2 rounded border border-border/70 bg-background/50 p-3 text-xs leading-5 text-muted-foreground">
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             <span>关键结论 {factualClaimCount}</span>
             <span>有直接依据 {claimCounts.supported}</span>
@@ -1838,16 +1844,16 @@ function DecisionCoverageMatrixView({
     <details open={!matrix.complete} className="mb-3 rounded-md border border-border/80 bg-background">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs [&::-webkit-details-marker]:hidden">
         <span className="font-medium">问题覆盖矩阵</span>
-        <span className={cn('text-[11px]', matrix.complete ? 'text-status-succeeded-fg' : 'text-warning-fg')}>
+        <span className={cn('text-xs', matrix.complete ? 'text-status-succeeded-fg' : 'text-warning-fg')}>
           {evidenceCells}/{matrix.cells.length} 格有证据
         </span>
       </summary>
       <div className="border-t border-border/70 px-3 pb-3 pt-2.5">
-        <p className="mb-2 text-[11px] leading-5 text-muted-foreground">
+        <p className="mb-2 text-xs leading-5 text-muted-foreground">
           这是研究完成门禁：每个方案 × 决策维度必须逐格处理；“待实测”不等于“没有问题”。
         </p>
         <div className="overflow-x-auto rounded border border-border/70">
-          <table className="min-w-[760px] w-full border-collapse text-[11px]">
+          <table className="min-w-[760px] w-full border-collapse text-xs">
             <thead className="bg-muted/35 text-left text-muted-foreground">
               <tr><th className="border-b border-border/70 px-2 py-2 font-medium">方案</th>{matrix.dimensions.map((dimension) => <th key={dimension} className="border-b border-border/70 px-2 py-2 font-medium">{dimension}</th>)}</tr>
             </thead>
@@ -1866,7 +1872,7 @@ function DecisionCoverageMatrixView({
                         >
                           {stateLabel[state]}{cell?.evidenceCount ? ` · ${cell.evidenceCount}` : ''}
                         </span>
-                        {cell?.evidenceGap ? <p className="mt-1 max-w-40 text-[10px] leading-4 text-warning-fg">{cell.evidenceGap}</p> : null}
+                        {cell?.evidenceGap ? <p className="mt-1 max-w-40 text-xs leading-5 text-warning-fg">{cell.evidenceGap}</p> : null}
                       </td>
                     );
                   })}
@@ -1875,7 +1881,7 @@ function DecisionCoverageMatrixView({
             </tbody>
           </table>
         </div>
-        {recommendation.status === 'incomplete' ? <p className="mt-2 text-[11px] text-warning-fg">结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</p> : null}
+        {recommendation.status === 'incomplete' ? <p className="mt-2 text-xs text-warning-fg">结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</p> : null}
       </div>
     </details>
   );
@@ -1960,21 +1966,21 @@ function ReviewClaimCard({
     <article className="px-3 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <h5 className="min-w-0 flex-1 text-xs font-semibold leading-5 text-foreground">{claimText || '未命名声明'}</h5>
-        <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium', statusClass)}>{status}</span>
+        <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', statusClass)}>{status}</span>
       </div>
-      {claim.reason ? <p className="mt-1.5 text-[11px] leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，但本轮没有完成确认。' : claim.evidence?.resolver === 'captured-source-reconciler' ? '找到可对照资料，但还不能确认它支持这句话。' : claim.reason.includes('审核结果没有提供') ? '当前没有能直接对照的资料。' : claim.reason}</p> : null}
+      {claim.reason ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，但本轮没有完成确认。' : claim.evidence?.resolver === 'captured-source-reconciler' ? '找到可对照资料，但还不能确认它支持这句话。' : claim.reason.includes('审核结果没有提供') ? '当前没有能直接对照的资料。' : claim.reason}</p> : null}
       {judgmentStatus !== 'settled' ? (
-        <p className="mt-1.5 text-[11px] leading-5 text-warning-fg">
+        <p className="mt-1.5 text-xs leading-5 text-warning-fg">
           {judgmentStatus === 'disputed'
             ? '两次独立核对给出了不同判断，系统不会替你判定真伪。'
             : '这条声明已经被识别，但还没有形成可用的最终判断。'}
         </p>
       ) : null}
-      <div className="mt-2 rounded border border-border/70 bg-background/70 px-2.5 py-2 text-[11px] leading-5">
+      <div className="mt-2 rounded border border-border/70 bg-background/70 px-2.5 py-2 text-xs leading-5">
         <span className="font-medium text-foreground">可对照的原文：</span>
         <span className="text-muted-foreground">{claim.evidence?.excerpt || '没有保存可核对摘录'}</span>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         {claim.evidence?.source_url ? (
           <a className="inline-flex items-center gap-1 text-primary hover:underline" href={claim.evidence.source_url} target="_blank" rel="noreferrer noopener">
             打开来源 <ExternalLink className="size-3" />
@@ -1989,7 +1995,7 @@ function ReviewClaimCard({
         {claim.evidence?.published_at ? <span className="text-muted-foreground">发布时间：{claim.evidence.published_at}</span> : null}
         {claim.evidence?.evidence_strength && claim.evidence.evidence_strength !== 'unknown' ? <span className="text-muted-foreground">证据强度：{claim.evidence.evidence_strength}</span> : null}
       </div>
-      {claim.evidence?.counterexamples?.length ? <p className="mt-1.5 text-[11px] leading-5 text-warning-fg">反例/限制：{claim.evidence.counterexamples.join('；')}</p> : null}
+      {claim.evidence?.counterexamples?.length ? <p className="mt-1.5 text-xs leading-5 text-warning-fg">反例/限制：{claim.evidence.counterexamples.join('；')}</p> : null}
       {needsAction ? (
         <div className="mt-2.5 flex flex-wrap items-center gap-2">
           {nextAction === 'reverify_current_sources' && canRequestVerification ? (
@@ -2018,13 +2024,13 @@ function ReviewClaimCard({
             </Button>
           ) : null}
           {nextAction === 'edit_claim' ? (
-            <span className="text-[10px] text-status-failed-fg">来源不一致；请修改表述或删除后重新检查</span>
+            <span className="text-xs text-status-failed-fg">来源不一致；请修改表述或删除后重新检查</span>
           ) : risk === 'high' ? (
-            <span className="text-[10px] text-status-failed-fg">高风险项必须修改或补足证据</span>
+            <span className="text-xs text-status-failed-fg">高风险项必须修改或补足证据</span>
           ) : status === '来源不一致' ? (
-            <span className="text-[10px] text-status-failed-fg">来源不一致，不能直接接受；请修改表述或删除</span>
+            <span className="text-xs text-status-failed-fg">来源不一致，不能直接接受；请修改表述或删除</span>
           ) : (
-            <span className="text-[10px] text-muted-foreground">修改正文后需要重新确认</span>
+            <span className="text-xs text-muted-foreground">修改正文后需要重新确认</span>
           )}
         </div>
       ) : null}
@@ -2039,11 +2045,11 @@ function ReviewClaimCard({
           >
             {decisionBusy ? '排队中…' : '证据不匹配？重新核对'}
           </Button>
-          <span className="text-[10px] text-muted-foreground">如果这条依据不对，可以要求重新确认。</span>
+          <span className="text-xs text-muted-foreground">如果这条依据不对，可以要求重新确认。</span>
         </div>
       ) : null}
       {evidenceTask ? (
-        <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
           {evidenceTask.status === 'queued' || evidenceTask.status === 'researching'
             ? '正在针对这条声明寻找新的直接来源；原研究稿暂不改变。'
             : evidenceTask.status === 'evidence_ready' || evidenceTask.status === 'review_queued'
@@ -2088,7 +2094,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
           </div>
           {claims.length > 0 ? (
             reviewUnavailable ? (
-              <span className="rounded-full border border-warning-border/70 bg-warning-bg/60 px-2 py-1 text-[11px] text-warning-fg">
+              <span className="rounded-full border border-warning-border/70 bg-warning-bg/60 px-2 py-1 text-xs text-warning-fg">
                 {citationPending > 0
                   ? `已保留 ${citationPending} 条引用关系`
                   : factualClaimCount > 0
@@ -2096,7 +2102,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                     : '语义核验未完成'}
               </span>
             ) : (
-              <div className="flex gap-2 text-[11px] tabular-nums">
+              <div className="flex gap-2 text-xs tabular-nums">
                 <span className="rounded-full bg-status-succeeded-bg px-2 py-1 text-status-succeeded-fg">已支持 {counts.supported}</span>
                 <span className="rounded-full bg-warning-bg px-2 py-1 text-warning-fg">需要确认 {counts.unverified}</span>
                 <span className="rounded-full bg-status-failed-bg px-2 py-1 text-status-failed-fg">冲突 {counts.contradicted}</span>
@@ -2130,14 +2136,14 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                     )}
                     {source.href ? <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
                   </div>
-                  <p className="mt-1.5 text-[11px] leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet ?? '', 240)}</p>
+                  <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet ?? '', 240)}</p>
                   {externalInstruction ? (
-                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-[10px] leading-4 text-warning-fg">
+                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
                       <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
                     </p>
                   ) : null}
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
                     <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
@@ -2161,7 +2167,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
             </p>
           )}
           {sources.length > inspectableSources.length ? (
-            <p className="mt-2 text-[11px] text-muted-foreground">
+            <p className="mt-2 text-xs text-muted-foreground">
               另有 {sources.length - inspectableSources.length} 条已保存资料可在上方“研究资料”中查看；它们不会自动支撑报告结论。
             </p>
           ) : null}
@@ -2196,9 +2202,9 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
             <article key={`${claim.claim ?? 'claim'}-${index}`} className="px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <h4 className="min-w-0 flex-1 text-sm font-medium">{claim.claim || '未命名声明'}</h4>
-                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium', statusClass)}>{status}</span>
+                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', statusClass)}>{status}</span>
               </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span className="rounded-full border border-border px-2 py-0.5">{claimKindLabel(claim)}</span>
                 <span>{claimKindDescription(claim)}</span>
               </div>
@@ -2210,7 +2216,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
               {(() => {
                 const matchedSource = findEvidenceSource(claim, sources);
                 return matchedSource ? (
-                  <div className="mt-2 rounded-md border border-primary/15 bg-primary/[0.03] px-3 py-2 text-[11px] leading-5">
+                  <div className="mt-2 rounded-md border border-primary/15 bg-primary/[0.03] px-3 py-2 text-xs leading-5">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-medium text-foreground">来源：{matchedSource.title}</span>
                       <span className="text-muted-foreground">{SOURCE_TYPE_LABELS[matchedSource.type] ?? matchedSource.type}</span>
@@ -2220,7 +2226,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                   </div>
                 ) : null;
               })()}
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 {claim.evidence?.source_url ? (
                   <a className="inline-flex items-center gap-1 text-primary hover:underline" href={claim.evidence.source_url} target="_blank" rel="noreferrer noopener">
                     打开来源 <ExternalLink className="size-3" />
@@ -2405,10 +2411,10 @@ function TimelineStep({
       </span>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className={cn('text-sm font-medium', state === 'waiting' && 'text-muted-foreground')}>{step.label}</span>
-        <span className={cn('text-[11px]', state === 'current' ? 'text-primary' : state === 'attention' ? 'text-warning-fg' : state === 'error' ? 'text-status-failed-fg' : 'text-muted-foreground')}>
+        <span className={cn('text-xs', state === 'current' ? 'text-primary' : state === 'attention' ? 'text-warning-fg' : state === 'error' ? 'text-status-failed-fg' : 'text-muted-foreground')}>
           {STEP_LABELS[state]}
         </span>
-        {count ? <span className="truncate text-[11px] text-muted-foreground" title={count}>{count}</span> : null}
+        {count ? <span className="truncate text-xs text-muted-foreground" title={count}>{count}</span> : null}
       </div>
       <p className="mt-1 text-xs text-muted-foreground" title={step.desc}>
         {step.desc}

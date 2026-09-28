@@ -135,7 +135,7 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
             {owner}/{repo}
           </span>
           {meta.language && (
-            <span className="ml-auto shrink-0 rounded border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
+            <span className="ml-auto shrink-0 rounded border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground">
               {meta.language}
             </span>
           )}
@@ -173,7 +173,7 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
           <span>文件结构</span>
           <span className="font-normal text-muted-foreground">({buckets.length} 顶层)</span>
           {meta.trimmed && (
-            <span className="ml-auto rounded border border-warning-border bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning-fg">
+            <span className="ml-auto rounded border border-warning-border bg-warning-bg px-1.5 py-0.5 text-xs font-medium text-warning-fg">
               已截断
             </span>
           )}
@@ -184,7 +184,7 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
               <div className={bucket.key ? 'flex items-start gap-2 break-all font-semibold text-primary' : 'flex items-start gap-2 break-all text-foreground'}>
                 {bucket.type === 'tree' ? <FolderOpen className="mt-1 size-3.5 shrink-0" aria-hidden /> : <FileText className="mt-1 size-3.5 shrink-0" aria-hidden />}
                 <span className="min-w-0">{bucket.name}</span>
-                {bucket.key && <span className="mt-0.5 shrink-0 text-[10px]" aria-label="关键入口">●</span>}
+                {bucket.key && <span className="mt-0.5 shrink-0 text-xs" aria-label="关键入口">●</span>}
               </div>
               {bucket.children.length > 0 && (
                 <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-4">
@@ -192,9 +192,9 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
                     <div key={child.path} className={child.key ? 'flex items-start gap-2 break-all font-medium text-primary' : 'flex items-start gap-2 break-all'}>
                       <FileText className="mt-1 size-3 shrink-0" aria-hidden />
                       <span className="min-w-0">{child.path.replace(`${bucket.name}/`, '')}</span>
-                      {child.key && <span className="mt-0.5 shrink-0 text-[10px]" aria-label="关键入口">●</span>}
+                      {child.key && <span className="mt-0.5 shrink-0 text-xs" aria-label="关键入口">●</span>}
                       {child.size != null && (
-                        <span className="shrink-0 font-sans text-[11px] font-normal text-muted-foreground">({formatSize(child.size)})</span>
+                        <span className="shrink-0 font-sans text-xs font-normal text-muted-foreground">({formatSize(child.size)})</span>
                       )}
                     </div>
                   ))}

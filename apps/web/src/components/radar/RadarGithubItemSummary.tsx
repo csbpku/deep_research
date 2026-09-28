@@ -49,7 +49,7 @@ export function RadarGithubItemSummary({ meta }: { meta: RadarGithubItemMeta }) 
       {meta.labels.length > 0 ? (
         <div className="mb-4 flex flex-wrap gap-1.5">
           {meta.labels.map((label) => (
-            <span key={label} className="border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground">
+            <span key={label} className="border border-border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
               {label}
             </span>
           ))}

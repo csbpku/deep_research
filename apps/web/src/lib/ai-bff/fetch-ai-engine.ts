@@ -15,6 +15,11 @@ import { log, serializeError } from '../log';
 const AI_ENGINE_TIMEOUT_MS = 5_000;
 const AI_ENGINE_RETRY_DELAY_MS = 250;
 
+export function aiEngineServiceAuthHeaders(): Record<string, string> {
+  const token = process.env.INTERNAL_SERVICE_TOKEN?.trim();
+  return token ? { 'x-internal-token': token } : {};
+}
+
 export interface FetchAiEngineOptions {
   url: string;
   requestId: string;
@@ -90,6 +95,7 @@ export async function fetchAiEngine<T = unknown>(
         headers: {
           'x-request-id': opts.requestId,
           ...opts.headers,
+          ...aiEngineServiceAuthHeaders(),
           ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
