@@ -27,6 +27,7 @@ async def main() -> int:
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument("--source-type", default=None)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -34,6 +35,14 @@ async def main() -> int:
     batch_size = max(1, min(args.batch_size, 25))
     concurrency = max(1, min(args.concurrency, 5))
     timeout_seconds = max(30, args.timeout_seconds)
+    source_filter = ""
+    query_params: tuple[object, ...] = (limit,)
+    if args.source_type:
+        source_filter = (
+            'AND COALESCE(rs."sourceType", CASE '
+            'WHEN s."source" = \'user\' THEN \'web_share\' ELSE \'rss\' END) = %s '
+        )
+        query_params = (args.source_type, limit)
 
     load_dotenv()
     store = DbJobStore(dsn=os.environ["DATABASE_URL"])
@@ -43,18 +52,26 @@ async def main() -> int:
             rows = await (
                 await conn.execute(
                     'SELECT s."id" FROM "summaries" s '
+                    'LEFT JOIN "radar_sync_runs" rr ON rr."id" = s."syncRunId" '
+                    'LEFT JOIN "radar_sources" rs ON rs."id" = rr."sourceId" '
                     'WHERE s."status" IN (\'candidate\', \'published\') '
                     'AND ((s."source" = \'daily\' AND s."syncRunId" IS NOT NULL) '
                     'OR (s."source" = \'user\' AND EXISTS ('
                     'SELECT 1 FROM "share_submissions" sh '
                     'WHERE sh."publishedSummaryId" = s."id" '
                     'AND sh."status" = \'approved\'))) '
-                    'ORDER BY s."createdAt" ASC, s."id" ASC LIMIT %s',
-                    (limit,),
+                    + source_filter
+                    + 'ORDER BY s."createdAt" ASC, s."id" ASC LIMIT %s',
+                    query_params,
                 )
             ).fetchall()
         ids = tuple(str(dict(row)["id"]) for row in rows)
-        print(f"active_targets={len(ids)} batch_size={batch_size} concurrency={concurrency}", flush=True)
+        source_label = args.source_type or "all"
+        print(
+            f"active_targets={len(ids)} source_type={source_label} "
+            f"batch_size={batch_size} concurrency={concurrency}",
+            flush=True,
+        )
         if not ids or args.dry_run:
             return 0
 
