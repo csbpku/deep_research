@@ -1,13 +1,18 @@
 """Re-score active radar rows without scheduling enrichment work."""
+# ruff: noqa: E402
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import os
+import sys
 from typing import Any
 
 from dotenv import load_dotenv
+
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, PACKAGE_ROOT)
 
 from ai_engine.job_runner.db_store import DbJobStore
 from ai_engine.radar.candidate_postprocessor import score_missing_candidates
