@@ -44,10 +44,10 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - `main` 已包含 Hugging Face 可配置请求源、Zread 限流恢复、enrichment 限流隔离、可选 browser-review profile 和 HTTP UUID 兼容；当前实现以 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md) 与代码为准，发布与线上事实以带日期的 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 条目为准。
 - AI engine: `GptResearcherAdapter` is primary (ADR 0004 复评通过), `FakeAdapter` is the test/CI fallback. Canonical LLM slots 是 `<provider>:<model>` 形式的 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM`（fallback 兼容读取旧名 `LLM_FALLBACK_LLM`；`SMART_LLM` 等旧槽位仅作 gpt-researcher 兼容镜像，派生逻辑见 `ai_engine/llm/config.py`）；`scripts/setup.sh` discovers `/models` and writes the selected model to the canonical slots, while `--quick`/fake uses `anthropic:deepseek-v4-flash`. Heavy calls prefer `*_HEAVY` credentials and fall back to the light pair. 只有 `RETRIEVER=tavily` 时才需要 `TAVILY_API_KEY`。
 - 历史交付按日期保留在 `docs/weekly/`，不得当作当前行为说明。
-- P1 已交付：研究文章三栏工作台、雷达讨论与治理、Confluence 导入框架（OAuth 仍需外部凭据验收）、AI 事实核验与结论审查；日报生成链路已删除。本周新增/收口知识卡片显式提炼、研究库状态/类型筛选、AI 调研四种产物（研究稿、快速判断、Slides 提纲、网页简报）和独立审核边界。
+- 现有能力包括研究文章三栏工作台、雷达讨论与治理、Confluence 导入框架（OAuth 仍需外部凭据验收）、AI 事实核验与结论审查、知识卡片显式提炼、研究库状态/类型筛选、AI 调研四种产物（研究稿、快速判断、Slides 提纲、网页简报）和独立审核边界；日报生成链路已删除。
 - 雷达详情当前为“摘要先行 + 原文阅读动作栏”：文章地图只允许严格正文 block 回链，选中文本支持解释/翻译/问 AI/批注/复制引用；HTML 正文图片会保留为安全 HTTPS 图片并懒加载。高价值 enrichment 还会经过内容呈现审核和真实浏览器渲染审核，二者与 AI 研究事实审核分开。
 - 部署脚手架 `infra/` 已就绪，Docker Compose 镜像构建及备份恢复演练已完成。
-- 默认生产 Compose 拓扑为 PostgreSQL、Web、AI engine、nginx；真实 Chromium 页面审核属于可选 `browser-review` profile，不进入默认 GHCR 发布。AnythingLLM 是可选的 HTTP 讨论后端，生产 URL、workspace 和凭据只保留在 VPS `.env`。
+- 默认生产 Compose 包含 PostgreSQL、Web、AI engine、内网 AnythingLLM 和 nginx；真实 Chromium 页面审核属于可选 `browser-review` profile，不进入默认 GHCR 发布。个人 AnythingLLM 索引独立于共享讨论 workspace，默认关闭；生产配置与凭据只留在 VPS `.env`。
 - 本地运行：`launchd` 模板（`infra/launchd/`）支持常驻 AI engine（uvicorn 直接运行，无 `--reload`）和 Next.js 服务。
 - **收口门禁**：以本次实际验证写入 `docs/PROJECT_STATUS.md` 的日期条目为准；不要把历史周报或未在本次重跑的数量写成新基线。
 - **已移除/废弃**：`apps/web/src/app/api/admin/radar/[id]/select/route.ts`（逐条选入日报接口已移除；当前雷达由自动排序与 Admin 负向治理处理）。

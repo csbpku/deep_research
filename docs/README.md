@@ -1,13 +1,13 @@
 # 项目文档入口
 
-> 更新日期：2026-09-14
+> 更新日期：2026-09-28
 > 当前技术方案只保留一份摘要；日期化运行证据与历史材料分开存放。
 
 ## 先看哪一份
 
 | 目的 | 文档 | 说明 |
 |---|---|---|
-| 快速理解当前技术方案 | [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md) | 当前实现、运行拓扑、服务生命周期和文档分层 |
+| 快速理解当前技术方案 | [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md) | 当前实现、个人知识索引边界、运行拓扑、服务生命周期和文档分层 |
 | 理解 Reader 产品边界与 Monica 对照 | [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md) | 原网页 UI 观察、技术阅读差异化、双模式权威数据边界和非目标 |
 | 查看日期化进度、部署和验证证据 | [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) | 只记录事实，不承载架构说明 |
 | 测试用户功能 | [`FUNCTIONAL_CHECKLIST.md`](./FUNCTIONAL_CHECKLIST.md) | 短冒烟路径、功能矩阵、失败恢复和验收记录模板 |

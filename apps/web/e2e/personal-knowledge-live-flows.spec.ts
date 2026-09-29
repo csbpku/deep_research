@@ -293,6 +293,7 @@ test('a selected AI research judgment is indexed, replaced, and removed with its
   test.setTimeout(180_000);
   const email = `personal-card-${randomUUID().replaceAll('-', '')}@e2e.local`;
   const title = `E2E selected judgment ${randomUUID().slice(0, 8)}`;
+  const jobId = randomUUID();
   const sourceUrl = 'https://example.com/synthetic-selected-judgment';
   const selectedText = 'For uncertain remote writes, preserve the same idempotency token across retries so a timeout cannot create a duplicate operation.';
   const initialConclusion = 'Retries after an uncertain result must reuse the original idempotency token.';
@@ -331,21 +332,103 @@ test('a selected AI research judgment is indexed, replaced, and removed with its
     });
     reportId = report.id;
 
-    const saved = await page.request.post('/api/knowledge', {
-      data: {
-        sourceKind: 'research_report',
-        messageId: report.id,
-        selectedText,
-        title,
-        body: `Confirmed judgment\n\n${initialConclusion}`,
-        conclusion: initialConclusion,
-        tags: ['e2e'],
-      },
-    });
+    await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId,
+        status: 'succeeded',
+        finalStatus: 'succeeded',
+        currentStep: 'write',
+        topic: title,
+        sourcesCount: 1,
+        savedSourcesCount: 1,
+        partialSourcesCount: 0,
+        failedSourcesCount: 0,
+        userSourceRefsCount: 0,
+        autoSourceRefsCount: 1,
+        reportType: 'research_report',
+        reportLength: 'standard',
+        deliverableStatus: 'report',
+        sourcePolicy: 'prefer_user_sources',
+        researchProgress: null,
+        outputText: null,
+        errorCode: null,
+        errorMessage: null,
+        errorDetails: null,
+        startedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        draftResearchId: report.id,
+        review: { phase: 'completed', status: 'passed', attempts: 1, corrected_count: 0, unverified_count: 0, contradicted_count: 0, claims: [] },
+        conversation: [],
+        sources: [],
+        artifact: {
+          type: 'markdown',
+          title,
+          version: 1,
+          mimeType: 'text/markdown',
+          content: `## Judgment\n\n${selectedText}`,
+          rawContent: null,
+          payload: null,
+          sourceRefs: [{ type: 'url', value: sourceUrl, title: 'Synthetic idempotency reference' }],
+          sourceHash: null,
+          draftResearchId: report.id,
+        },
+      }),
+    }));
+    await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) =>
+      route.fulfill({ status: 404, body: 'not found' }),
+    );
+    await page.route('**/api/knowledge/derive', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        preview: {
+          title: 'Confirmed judgment',
+          body: `Confirmed judgment\n\n${initialConclusion}`,
+          conclusion: initialConclusion,
+          tags: ['e2e'],
+        },
+      }),
+    }));
+
+    await page.goto(`/ai-research/${jobId}`);
+    const reportSource = page.locator(`[data-knowledge-source-message="${report.id}"]`);
+    await expect(reportSource).toContainText(selectedText);
+    await reportSource.evaluate((root, selected) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const text = node.textContent ?? '';
+        const start = text.indexOf(selected);
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, start + selected.length);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        return;
+      }
+      throw new Error('Could not select the synthetic report judgment');
+    }, selectedText);
+    await page.getByRole('button', { name: '存为知识' }).click();
+    await expect(page.getByText('知识卡片预览')).toBeVisible();
+    await expect(page.getByLabel('本次提炼所选原文')).toContainText(selectedText);
+    await page.getByLabel('标题').fill(title);
+    const saveResponse = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === '/api/knowledge' &&
+      response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: '保存知识卡片' }).click();
+    const saved = await saveResponse;
     expect(saved.status()).toBe(201);
     const savedBody = await saved.json() as { knowledge: { id: string; status: string } };
     knowledgeId = savedBody.knowledge.id;
     expect(savedBody.knowledge.status).toBe('draft');
+    await expect(page.getByText('已保存知识卡片')).toBeVisible();
 
     const initialRecord = await prisma.research.findUnique({
       where: { id: knowledgeId },

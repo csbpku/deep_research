@@ -6,7 +6,7 @@ Next.js 15 App Router 应用，负责页面、认证授权、Web BFF、搜索/�
 
 - 页面：技术雷达与详情、主题、研究库/知识卡片、文件导入、AI 调研、搜索、登录和 Admin。
 - AI 调研：研究稿、快速判断、Slides 提纲、独立网页简报；深度任务会展示实际证据进度，运行中/部分完成的研究稿可读但仍受事实审核和发布门禁约束。
-- 雷达阅读：摘要先行并直接进入原文阅读插件；默认 browser 模式不拉取新正文或创建 enrichment，历史/显式 legacy enrichment 的审核状态仍单独展示，日报生成链路已移除。
+- 雷达阅读：摘要先行并直接进入原文阅读插件；默认 browser 模式同步时可能临时抓取来源正文用于摘要和评分，但不持久化全文或创建后续 enrichment，历史/显式 legacy enrichment 的审核状态仍单独展示，日报生成链路已移除。
 - API：researches、knowledge、imports、radar、shares、search、AI research、chat session/message、auth、admin 与 `/api/reading/*` routes；阅读接口支持按需翻译、原文上下文解读/追问、一次性授权码 + PKCE、流式回答和显式保存摘录草稿。
 - 基础设施：NextAuth JWT + scrypt 邮箱密码登录、可选 Google OAuth（生产可切换 Google-only）、角色/owner 权限 helper、统一错误响应、结构化脱敏日志、TanStack Query、Prisma；开发环境默认使用 `.next-dev`，隔离构建可用 `NEXT_DIST_DIR`。
 

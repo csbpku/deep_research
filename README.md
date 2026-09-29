@@ -11,13 +11,13 @@
 
 **核心能力**
 
-- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选；默认 `browser` 模式只保留来源元数据并打开原文，`enriched` 仅作为显式回滚路径。历史 enrichment 数据继续保留，候选可进入独立阅读插件。
+- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选；默认 `browser` 模式可在同步时临时抓取正文用于摘要和评分，但不持久化全文或运行后续 enrichment；用户从原文或 Reader 阅读。`enriched` 仅作为显式回滚路径，历史数据继续保留。
 - **技术专题**：关注长期专题后自动聚合热点议题，生成带可点击引用的综述（tldr / keyChanges / subtopics / openQuestions）；发布调研自动回流专题，`/me/topics` 汇总未读议题与最近研究。
-- **沉淀库**：长文与讨论精华共用同一结构，支持草稿 / 发布 / 全文搜索 / 修改审计。
+- **沉淀库**：研究稿与知识卡片共用同一结构，支持私人草稿、显式发布、全文搜索和修改审计；Reader 笔记可保存为私人知识，AI 回答或报告中的选中判断可确认后另存。
 - **原网页阅读助手（第一版）**：`apps/extension/` 提供独立的 WXT + React + TypeScript Chrome 116+ MV3 插件。用户在公开技术网页中按需翻译、选段解读、连续追问，并显式保存摘录到研究库；插件不自动抓取或保存整篇正文。运行 `npm run build` 生成可加载的 `.output/chrome-mv3`，`npm run package` 生成 Chrome ZIP。
-- **雷达迁移开关**：`RADAR_READING_MODE=browser` 是默认值；新雷达只保留来源元数据并直接打开原文，停止自动文章/Zread 抓取与 enrichment。设置为 `enriched` 才显式启用旧的服务端正文链路。
+- **雷达迁移开关**：`RADAR_READING_MODE=browser` 是默认值；同步期间可临时抓取来源正文用于摘要和评分，但不保存全文或运行后续文章/Zread enrichment。设置为 `enriched` 才显式启用旧的服务端正文链路。
 - **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
-- **AI 调研**：对话澄清主题/背景/资料与产物类型，自动推断 objective 并给出 Research Brief 与可复用上下文；启动异步 5 步流水线（研究 → 草拟 → 注入来源 → 校核 → 入库），草稿必须实际修改过才能发布。
+- **AI 调研**：对话澄清主题/背景/资料与产物类型，自动推断 objective 并给出 Research Brief 与可复用上下文；已有私人知识可作为默认未勾选的候选，只有用户确认后才进入本轮来源。异步流水线生成产物并入库，草稿必须实际修改过才能发布。
 - **团队讨论 + Admin**：团队讨论常驻雷达正文下方，支持 @成员、回复通知和“我的通知”；成员可把高价值评论提议沉淀为知识卡片。Admin 对雷达做软屏蔽/恢复，而非逐条审批，并处理分享审核、评论提炼、同步状态和失败任务。
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
 - **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、Docker Compose 部署脚手架。
@@ -124,7 +124,7 @@ launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.deep-research.w
 - 原生模式：Node.js ≥ 20.11、pnpm ≥ 10、Python ≥ 3.11、uv、PostgreSQL 16。
 - Docker 模式：Docker Engine 24+ 与 Compose v2；建议至少 2 vCPU / 4 GB RAM。
 - 真实 AI：一个受支持 provider 的 API key，以及 Tavily key（或将 `RETRIEVER=duckduckgo`）。只验 UI 可用 `AI_ENGINE_ADAPTER=fake`。
-- 邮箱密码登录：将 `ALLOWED_EMAIL_DOMAINS` 配置为允许激活/登录的邮箱域，并通过 `AUTH_INVITE_CODE` 控制首次激活；公开注册已关闭，生产环境必须使用 HTTPS。
+- 邮箱注册由 `AUTH_BETA_MODE` 控制：`0`（默认）开放普通注册，`1` 仅允许 Admin 预创建的账号完成注册（bootstrap Admin 除外）。若需仅白名单注册，应启用 Beta 模式并在 Admin 成员页预创建邮箱；生产环境必须使用 HTTPS。
 - Google OAuth（可选）：创建 Web application，并登记 `http://localhost:3000/api/auth/callback/google`。
 
 ### 原生启动
@@ -164,7 +164,7 @@ curl -fsS http://localhost:3000/api/healthz
 curl -fsS http://localhost:4000/healthz
 ```
 
-默认支持公开邮箱密码注册。设置 `AUTH_BETA_MODE=1` 后，Admin 需要先在控制台“成员”页添加允许注册的邮箱；密码注册、Google/GitHub 首次开户和旧邀请码激活都会执行同一白名单检查。设置 `AUTH_EMAIL_VERIFICATION=1` 并配置 SMTP 后，密码注册还必须验证 6 位邮箱验证码。`--quick` 生成的配置不会注册 OAuth provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`，首次启动会幂等创建/提升该 Admin，并始终保留首次设置密码或 OAuth 登录的能力。
+默认 `AUTH_BETA_MODE=0` 开放邮箱密码注册。设置 `AUTH_BETA_MODE=1` 后，只有 Admin 预创建的账号及 bootstrap Admin 可完成首次注册/登录建档；未知邮箱会被拒绝。`AUTH_EMAIL_VERIFICATION=1` 并配置 SMTP 后，邮箱验证码只用于密码注册，之后登录仍使用密码。旧 `/api/auth/activate` 才使用 `ALLOWED_EMAIL_DOMAINS` 与 `AUTH_INVITE_CODE`。`--quick` 生成的配置不会注册 OAuth provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`，首次启动会幂等创建/提升该 Admin。
 
 未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
@@ -228,7 +228,7 @@ curl -fsS https://research.example.com/ai-healthz
 - 如果 GHCR 包保持私有，再加 `GHCR_USERNAME`、`GHCR_READ_TOKEN`
 - Variable：`VPS_DEPLOY_PATH`，不填时默认 `/opt/deep_research`
 
-部署用户需要能运行 Docker。建议使用专用非 root 用户和仅用于部署的 SSH key；`VPS_KNOWN_HOSTS` 应保存固定的 SSH 主机指纹，工作流不会关闭 host key 校验。`120.76.248.204` 可以作为 `VPS_HOST`，不需要域名才能完成镜像部署。
+部署用户需要能运行 Docker。建议使用专用非 root 用户和仅用于部署的 SSH key；`VPS_KNOWN_HOSTS` 应保存固定的 SSH 主机指纹，工作流不会关闭 host key 校验。当前生产 VPS 地址为 `159.223.50.187`；不需要域名也能完成镜像部署。
 
 之后只要把代码推送到 `main`，CI 通过就会自动部署。也可以在 Actions 页面手动运行 `Deploy`。镜像回滚不回滚数据库 schema，新增迁移必须保持向前兼容。
 

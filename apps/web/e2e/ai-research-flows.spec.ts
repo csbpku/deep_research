@@ -7,7 +7,11 @@
 //   - 父页：EmptyState 错误 / 空态、产物确认卡片
 
 import { test, expect } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { loginWithCredentials } from './fixtures';
+
+const prisma = new PrismaClient();
 
 test.describe('AI Research flows', () => {
   test('ai-research form page renders', async ({ page }) => {
@@ -473,6 +477,167 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.getByRole('button', { name: '确认生成新版本' }).click();
     await expect(page.getByText('已生成新版本 · 可在编辑器的版本历史中恢复')).toBeVisible();
     expect(revisionPayload).toEqual({ revisionContext: { sourceMessageId: answerId } });
+  });
+
+  test('follow-up report revision persists through the real API and appears in version history', async ({ page }) => {
+    const adminEmail = 'e2e-admin@e2e.local';
+    await loginWithCredentials(page.context().request, { email: adminEmail, role: 'admin' });
+    const admin = await prisma.user.findUnique({ where: { email: adminEmail }, select: { id: true } });
+    expect(admin).not.toBeNull();
+
+    const jobId = randomUUID();
+    const reportId = randomUUID();
+    const conversationId = randomUUID();
+    const questionId = randomUUID();
+    const answerId = randomUUID();
+    const title = `E2E report revision ${randomUUID().slice(0, 8)}`;
+    const originalBody = 'Synthetic original report body.';
+    const question = '补充部署失败时的回滚边界';
+    const answer = '先停止新流量并恢复兼容版本；不要改写已经发布的迁移历史。';
+
+    try {
+      await prisma.research.create({
+        data: {
+          id: reportId,
+          type: 'research',
+          status: 'draft',
+          title,
+          body: originalBody,
+          authorId: admin!.id,
+          aiAssisted: true,
+          creationMethod: 'ai_research',
+        },
+      });
+      await prisma.aiResearchJob.create({
+        data: {
+          id: jobId,
+          requesterId: admin!.id,
+          topic: title,
+          status: 'succeeded',
+          completedAt: new Date(),
+          draftResearchId: reportId,
+        },
+      });
+      await prisma.aiResearchConversation.create({
+        data: {
+          id: conversationId,
+          userId: admin!.id,
+          jobId,
+          title,
+          messages: {
+            create: [
+              { id: questionId, role: 'user', content: question, intent: 'revise' },
+              { id: answerId, role: 'assistant', content: answer, intent: 'revise' },
+            ],
+          },
+        },
+      });
+
+      await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jobId,
+          status: 'succeeded',
+          finalStatus: 'succeeded',
+          currentStep: 'write',
+          topic: title,
+          sourcesCount: 0,
+          savedSourcesCount: 0,
+          partialSourcesCount: 0,
+          failedSourcesCount: 0,
+          userSourceRefsCount: 0,
+          autoSourceRefsCount: 0,
+          reportType: 'research_report',
+          reportLength: 'standard',
+          deliverableStatus: 'report',
+          sourcePolicy: 'prefer_user_sources',
+          researchProgress: null,
+          outputText: null,
+          errorCode: null,
+          errorMessage: null,
+          errorDetails: null,
+          startedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          draftResearchId: reportId,
+          review: { phase: 'completed', status: 'passed', attempts: 1, corrected_count: 0, unverified_count: 0, contradicted_count: 0, claims: [] },
+          conversation: [],
+          sources: [],
+          artifact: {
+            type: 'markdown',
+            title,
+            version: 1,
+            mimeType: 'text/markdown',
+            content: originalBody,
+            rawContent: originalBody,
+            payload: null,
+            sourceRefs: [],
+            sourceHash: null,
+            draftResearchId: reportId,
+          },
+        }),
+      }));
+      await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: conversationId,
+          jobId,
+          title,
+          status: 'active',
+          messageCount: 2,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          messages: [
+            { id: questionId, role: 'user', content: question, createdAt: new Date().toISOString(), intent: 'revise' },
+            { id: answerId, role: 'assistant', content: answer, createdAt: new Date().toISOString(), intent: 'revise' },
+          ],
+        }),
+      }));
+
+      await page.goto(`/ai-research/${jobId}`);
+      const applyButton = page.getByRole('button', { name: '应用到报告 · 先预览变更' });
+      await expect(applyButton).toBeVisible();
+      await applyButton.click();
+      await expect(page.getByText('应用为报告新版本？')).toBeVisible();
+      await page.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(page.getByText('应用为报告新版本？')).toHaveCount(0);
+      expect(await prisma.research.findUnique({ where: { id: reportId }, select: { body: true } }))
+        .toEqual({ body: originalBody });
+      expect(await prisma.researchAudit.count({ where: { researchId: reportId } })).toBe(0);
+
+      await applyButton.click();
+      const savedRevision = page.waitForResponse((response) =>
+        new URL(response.url()).pathname === `/api/researches/${reportId}` &&
+        response.request().method() === 'PUT',
+      );
+      await page.getByRole('button', { name: '确认生成新版本' }).click();
+      expect((await savedRevision).status()).toBe(200);
+      await expect(page.getByText('已生成新版本 · 可在编辑器的版本历史中恢复')).toBeVisible();
+
+      const updated = await prisma.research.findUnique({ where: { id: reportId }, select: { body: true } });
+      expect(updated?.body).toContain(originalBody);
+      expect(updated?.body).toContain('## 追问补充');
+      expect(updated?.body).toContain(question);
+      expect(updated?.body).toContain(answer);
+      const audit = await prisma.researchAudit.findFirst({
+        where: { researchId: reportId, sourceMessageId: answerId },
+        select: { action: true, sourceIntent: true, sourceQuestion: true, prevSnapshot: true },
+      });
+      expect(audit).toMatchObject({ action: 'edit', sourceIntent: 'revise', sourceQuestion: question });
+      expect(audit?.prevSnapshot).toMatchObject({ body: originalBody });
+
+      await page.goto(`/researches/${reportId}/edit`);
+      await page.getByRole('tab', { name: '版本历史' }).click();
+      const history = page.getByRole('tabpanel', { name: '版本历史' });
+      await expect(history.getByText('来自追问修订')).toBeVisible();
+      await expect(history).toContainText(question);
+    } finally {
+      await prisma.aiResearchConversation.deleteMany({ where: { id: conversationId } });
+      await prisma.aiResearchJob.deleteMany({ where: { id: jobId } });
+      await prisma.research.deleteMany({ where: { id: reportId } });
+    }
   });
 
   test('brief without captured evidence is not presented as verified research', async ({ page }) => {

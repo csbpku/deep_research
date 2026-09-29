@@ -1,6 +1,6 @@
 # AI技术调研平台 · 架构方案
 
-> 版本：v4.1 · 2026-09-21
+> 版本：v4.2 · 2026-09-28
 > 本文件描述当前系统架构、数据模型、安全边界与部署拓扑；只记录现状，不写演进过程。
 > 一页技术摘要见 [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md)。
 
@@ -10,9 +10,9 @@
 
 ### 当前能力
 
-1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；默认 `RADAR_READING_MODE=browser` 下，`sync → 元数据/评分 → 原文入口 → topic refresh` 只保留来源元数据和评分，不抓取或持久化新文章/Zread 正文。`enriched` 仅作为显式回滚路径，历史 enrichment 和 Admin 显式刷新仍保留。
+1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；默认 `RADAR_READING_MODE=browser` 下，同步尽量临时抓取来源全文供摘要和评分，不持久化全文，也不执行后续文章/Zread enrichment。抓取失败时才以来源摘要/元数据初筛，并在评分依据中注明。`enriched` 仅作为显式回滚路径，历史 enrichment 和 Admin 显式刷新仍保留。
 2. **技术专题**：关注专题后自动聚合热点议题，生成带可点击引用的综述（内容 hash 变化触发重算）；发布调研自动回流专题；专题页四标签：概览 / 热点议题 / 相关研究 / 来源。
-3. **沉淀**：长文与讨论精华共用 `researches`，支持草稿、发布、全文搜索、版本审计与恢复、AI Diff 建议与事实核验、三栏研究工作台。
+3. **沉淀**：研究稿与知识卡片共用 `researches`，支持私人草稿、显式发布、全文搜索、版本审计与恢复、AI Diff 建议与事实核验、三栏研究工作台；AI 回答或报告中的选中判断可确认后保存为私人知识。
 4. **AI 调研**：对话澄清主题/背景/资料/检索范围/产物类型，规则推断 objective 并返回 Research Brief 与匹配上下文；异步流水线支持研究稿、快速判断、Slides 提纲和网页简报，用户实际修改且当前版本通过事实审核后才能发布。
 5. **内容导入**：上传 `.md/.txt/.html`，异步转换为当前用户私有 Markdown 草稿。
 6. **团队讨论**：雷达正文、摘要和沉淀可评论；支持结构化 @成员、回复/提及站内通知，以及将高价值评论提议沉淀。
@@ -29,7 +29,7 @@
 ### 不做
 
 - 多人实时协同编辑。
-- 语义搜索。
+- 全局语义搜索；语义能力仅用于 AI 调研“已有资料”中的个人知识候选推荐。
 - AI 自动批准或自动发布团队内容。
 - Confluence 导入、双向同步或替代 Confluence 的协作能力。
 
@@ -45,6 +45,7 @@ flowchart LR
     Web["Next.js Web + BFF<br/>Auth / API / UI / permissions"]
     PG[("PostgreSQL 16<br/>tsvector/GIN + 队列")]
     Workers["DB-backed workers<br/>AI jobs / import jobs"]
+    AnythingLLM["AnythingLLM<br/>per-user vector workspaces"]
     Adapter["ResearchEngineAdapter"]
     Src["Tavily · arxiv · GitHub · RSS · 微信 · LLM"]
 
@@ -55,6 +56,7 @@ flowchart LR
     Adapter --> Src
     Adapter --> PG
     PG <--> Workers
+    Workers --> AnythingLLM
 ```
 
 ### 组件职责
@@ -66,15 +68,16 @@ flowchart LR
 | Import worker | 文件校验、HTML 清洗、Markdown 转换、warnings 和临时文件清理 | 调用 LLM 改写内容 |
 | AI worker | 雷达同步、轻量解读、调研任务、事实审核、内容/渲染审核、心跳、重试、来源和成本 | 决定内容是否公开 |
 | ResearchEngineAdapter | 隔离具体 AI 引擎，统一任务、状态、来源和成本契约 | 用户权限与发布权限 |
+| AnythingLLM | 可选讨论后端及按用户隔离的向量索引；返回候选 ID | 权限裁决、权威内容存储、公开发布 |
 
 ### 技术栈
 
 - Web：Next.js 15、TypeScript、Tailwind CSS、shadcn/ui、TanStack Query。
 - 编辑器：react-md-editor。
-- Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；邮箱密码账号通过 allowlist + 邀请码激活，公开注册关闭。
+- Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；`AUTH_BETA_MODE=0`（默认）允许公开邮箱注册，`=1` 仅允许 Admin 预创建账号及 bootstrap Admin；`AUTH_EMAIL_VERIFICATION=1` 时验证码只用于密码注册，后续登录使用密码。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
-- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计。
-- 数据源：Tavily、arxiv、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；可选只读 sidecar：AnythingLLM 雷达/聊天集成、GBrain MCP 知识检索。
+- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计，`llm_token_budget_events` 记录预留与结算。用户滚动周期和平台 UTC 日 token 上限由环境变量配置，默认关闭；当前以单次模型调用为预留单位。
+- 数据源：Tavily、arxiv、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；AnythingLLM sidecar 承担可选讨论与个人向量索引，GBrain MCP 为可选知识检索集成。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
 
 ### 部署拓扑
@@ -84,6 +87,7 @@ flowchart LR
 | nginx | 80/443 | TLS 终止，转发 Web 和 AI API |
 | web | 3000 | Next.js、BFF、状态 API、导入上传入口 |
 | ai-engine | 4000 | AI worker、adapter、成本与来源记录 |
+| anythingllm | 3001 | 内网服务；宿主端口仅绑定 loopback，个人知识索引默认关闭 |
 | arxiv-mcp | 8001 | 可选论文读取服务 |
 | postgres | 5432 | 业务表、全文索引和两个任务队列 |
 
@@ -101,7 +105,8 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 |---|---|
 | `users` | 成员、角色和禁用状态 |
 | `summaries` | 雷达候选和用户分享 |
-| `researches` | 长文、精华和所有私有/公开草稿 |
+| `researches` | 研究稿、知识卡片和私有/公开草稿；`knowledgeIndexText` 是个人向量索引的受限投影 |
+| `personal_knowledge_index_tasks` | AnythingLLM 文档 upsert/delete outbox、generation、重试与硬删除墓碑；刻意不设 `researchId` 外键 |
 | `research_sources` | 调研挂载资料和来源引用 |
 | `ai_research_jobs` | AI 调研与轻量摘要任务 |
 | `ai_research_sources` | AI 任务实际使用的来源 |
@@ -125,6 +130,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 | `topic_follows` / `topic_proposals` / `topic_proposal_candidates` | 专题关注（lastViewedAt 未读推进）与 review-only 提案 |
 | `ai_chat_sessions` / `ai_chat_messages` | 雷达/调研侧个人即时问答会话 |
 | `llm_usage_events` | 共享 LLM 调用用量审计 |
+| `llm_token_budget_events` | LLM 调用 token 额度预留、结算和过期回收 |
 | `user_bookmarks` / `research_templates` | 用户收藏与调研模板 |
 | `radar_tracked_repos` / `radar_github_activities` / `radar_github_signals` | 历史 GitHub tracked/activity 链路遗留表：行数据保留供审计，运行时不再读写 |
 
@@ -145,6 +151,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 - `comment_mentions(comment_id, user_id)` 唯一；只接受未禁用的真实成员 ID，不从显示名反向解析用户。
 - `notifications(recipient_id, source_comment_id, type)` 唯一；自己提及/回复自己不发通知，回复对象同时被 @ 时只保留回复通知。
 - 私有草稿不依赖前端隐藏；所有读取均由 BFF 按 owner 和状态过滤。
+- AnythingLLM 只存每位用户独立 workspace 中的向量文档；PostgreSQL 始终是权限和内容权威。删除研究行后 outbox tombstone 仍保留，用于清除远端文档。
 
 ### `researches` 关键字段
 
@@ -153,6 +160,7 @@ Prisma schema 管理全部表与约束；任何 schema 变更都必须走 migrat
 | `type` | `research` 或 `knowledge` |
 | `status` | `draft` 或 `published` |
 | `creation_method` | `manual`、`ai_research`、`file_import`（历史数据可能保留 `confluence_import`） |
+| `knowledgeIndexText` | 仅 `knowledge` 草稿使用的用户笔记/确认判断索引投影；不包含 Reader 原文摘录或完整研究报告 |
 | `ai_assisted` | 只有 AI 草稿被成员实际修改并发布后才为 true |
 | `ai_assisted_job_id` | 来源 AI job，用于溯源 |
 | `origin_content_sha256` | 初始草稿归一化哈希，用于阻止未修改 AI 草稿直接发布 |
@@ -195,6 +203,14 @@ AI 产物与审核边界：
 - 声明级补证不是浏览器动作：`research_evidence_tasks` 由 AI engine 后台 reconciliation worker 在 evidence job 终态后自动完成“合并来源账本 → 创建当前版本新审核 run”，审核终态后再关闭任务。页面轮询只提供即时反馈，不能决定是否合并或是否进入审核；正文仍不会被自动改写。
 - `partial` / `running` 的可读检查点只允许阅读、核对来源和继续追问；不能直接发布，也不能把资料快照描述为研究结论。
 
+### 私人知识沉淀与语义候选
+
+- Reader 平台模式保存后自动创建本人 `knowledge/draft`；同步失败时才显示同幂等键重试。原文摘录留作来源，只有笔记和确认过的 AI 结论进入 `knowledgeIndexText`，并附简短来源引用。
+- AI 调研报告本身自动进入研究库，不复制为知识卡片。用户从回答或报告中选中判断，预览并确认后才保存为私人 `knowledge/draft`；历史已发布卡片的可见性不因新流程改变。
+- 保存、编辑、发布/归档和硬删除通过同事务 outbox 更新索引。每个用户对应独立 AnythingLLM workspace；调研上下文返回少量语义候选但默认不勾选。索引关闭或不可用时降级为 PostgreSQL 关键词候选。
+- 语义端只提供候选 UUID。BFF 回查 owner、类型、状态与最新内容；提交调研时 AI engine 再核对来源可见性，避免把向量命中当成授权。
+- 个人索引由 `ANYTHINGLLM_PERSONAL_KNOWLEDGE_ENABLED` 独立控制，默认关闭；既有共享讨论 workspace 不复用，历史已发布知识卡片不批量迁移。
+
 ---
 
 ## 五、核心流程
@@ -215,7 +231,7 @@ flowchart LR
     Sync -.-> Enrich -.-> Topics
 ```
 
-- 默认同步是 `sync → metadata/score → external reading → topic refresh`；不生成日报或跨来源日报文章。只有显式设置 `RADAR_READING_MODE=enriched` 才进入旧正文抓取链路。
+- 默认同步是 `sync → transient source fetch → brief/score → external reading`；完整来源文本只在同步处理期间使用，不写入摘要或诊断正文。不生成日报或跨来源日报文章。只有显式设置 `RADAR_READING_MODE=enriched` 才持久化站内阅读正文并进入后续 enrichment。
 - GitHub curated 即普通 `github` source（repos 模式）：每个 repo 一个候选，完成一次 Distilled 评分后按 collection/deep_read/skim/noise 进入对应治理路径；默认由原文入口交给 Reader 当前页面理解，不声称已读完整仓库或全部 Wiki。显式 legacy enrichment 仍可生成历史 Zread 文档缓存，详情页失败时保留旧缓存。
 - 雷达候选复用 `summaries`，主题使用 `topics/topic_candidates`；首页直接进入技术雷达，搜索统一进入雷达或调研详情。
 - 每条雷达内容保存来源发布时间、抓取时间、结构化解读、评分维度和人类可读理由。评分用于雷达排序；Admin 不逐条批准雷达内容。
@@ -226,10 +242,10 @@ flowchart LR
 
 正文展示约束：
 
-- 在默认 browser 模式，雷达不抓取新正文；用户在 Reader 中主动打开原文后，正文只按当前页面和当前任务临时提取。历史或显式 enriched 模式的正文才经过正文抽取、Markdown 转换和 deterministic normalizer，并保存为 `originalMarkdown`。
+- 在默认 browser 模式，雷达同步尽量抓取并抽取新正文供当次 brief/score 使用，但不会将全文保存在 `body`、`originalMarkdown` 或诊断正文中；只保存摘要、评分和有界来源信息。用户在 Reader 中主动打开原文后，正文按当前页面和当前任务临时提取。显式 enriched 模式才会持久化站内阅读正文。
 - `originalSha256` 是历史/显式 enrichment 正文版本锚点；插件侧使用当前页面内容指纹，翻译、AI 阅读和高亮结果必须绑定对应版本，不能覆盖原文。
 - Web 端统一使用 `MarkdownContent` renderer；原始 HTML 默认跳过，URL 协议只允许 `http`、`https`、`mailto`。
-- `collection/deep_read` 的 legacy enrichment 完成后才执行 reader quality 和内容呈现审核；默认 browser 模式不创建新的 enrichment、reader quality 或呈现审核任务。真实浏览器渲染审核属于可选 `browser-review` profile，不进入默认生产流程。
+- `collection/deep_read` 的 legacy enrichment 完成后才执行 reader quality 和内容呈现审核；默认 browser 模式不创建后续 enrichment、reader quality 或呈现审核任务。真实浏览器渲染审核属于可选 `browser-review` profile，不进入默认生产流程。
 - 雷达详情公开读取；反馈、评论、AI 聊天和深入调研仍走登录权限。
 
 ### 文件导入
@@ -326,7 +342,9 @@ Admin 页面显隐只是体验层；Admin API 必须服务端校验角色。禁�
 | `POST /api/researches/{id}/publish` | 校验 owner、状态和 AI 初始哈希；事务内发布和更新索引 |
 | `POST /api/researches/{id}/review` | owner/admin；为当前研究版本排队、重跑或读取独立事实审核 |
 | `POST /api/researches/{id}/review/decisions` | owner/admin；在当前审核 run 上追加声明处理决定，不能覆盖机器结论 |
-| `POST /api/knowledge/derive` / `POST /api/knowledge` | 从雷达/研究上下文显式提炼并保存知识卡片 |
+| `POST /api/knowledge/derive` / `POST /api/knowledge` | 从本人 AI 回答/研究稿的选中判断生成预览；确认后保存为私人知识草稿 |
+| `GET /api/search` | 搜索公开研究/雷达与本人私有研究/知识草稿；私有结果不对其他账号暴露 |
+| `GET /api/ai-research/context` | 返回关键词资料及可选语义知识候选；语义候选默认不注入调研 |
 | `POST /api/shares` | 使用统一安全抓取器，创建待审核分享 |
 | `POST /api/radar/{id}/feedback` | 相同用户、候选和反馈类型幂等 |
 | `POST /api/radar/sync` | Admin-only；触发同步并返回 run id |

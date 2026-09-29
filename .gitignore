@@ -9,7 +9,6 @@ out/
 apps/web/.next-*/
 apps/web/tmp/
 apps/web/.next-topic-repair/
-digest-*.md
 next-env.d.ts
 
 # 构建产物
@@ -44,7 +43,7 @@ apps/web/prisma/migrations/dev.db*
 .idea/
 *.swp
 
-# 临时导入文件（按 ARCHITECTURE §四点七 P0 文件安全边界 24h 清理）
+# 临时导入文件（按 docs/ARCHITECTURE.md「文件导入」约定 24h 清理）
 apps/web/data/import-tmp/
 infra/data/import-tmp/
 

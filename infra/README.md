@@ -2,9 +2,9 @@
 
 该目录保存当前部署拓扑和运维脚本，是本地 Docker、GHCR 和单 VPS 的操作基线。
 
-## 当前状态（2026-09-14）
+## 当前状态（2026-09-28）
 
-- `docker-compose.yml`：核心四服务拓扑，另提供可选的 `browser-review` Chromium profile。
+- `docker-compose.yml`：PostgreSQL、Web、AI engine、内网 AnythingLLM 与 nginx；另提供可选的 `browser-review` Chromium profile。
 - `docker-compose.registry.yml`：默认生产覆盖文件，使用 GHCR 中按 commit SHA 固定的 Web / AI engine 镜像，不在 VPS 上重新构建。
 - `docker-compose.registry-render-review.yml`：可选浏览器审核覆盖文件，仅在需要真实页面审核时启用。
 - `nginx.conf`：Web/AI 反代、5 MB 上传、300 秒 AI 超时、JSON access log、健康路径 `/healthz` 和 `/ai-healthz`。
@@ -52,7 +52,7 @@ AI engine 镜像偏大的原因有两层：
 
 | 文件 | 用途 | 状态 |
 |---|---|---|
-| `docker-compose.yml` | 核心四服务 + 可选浏览器 profile | 本地构建 / 运行时基线 |
+| `docker-compose.yml` | 核心五服务 + 可选浏览器 profile | 本地构建 / 运行时基线；AnythingLLM 宿主端口只绑定 loopback |
 | `docker-compose.registry.yml` | Web / AI engine GHCR 镜像覆盖 | 默认生产部署使用 |
 | `docker-compose.registry-render-review.yml` | 可选 render-review GHCR 覆盖 | 需要真实浏览器审核时使用 |
 | `docker-compose.certbot.yml` | ACME webroot / Certbot 兼容覆盖 | 首次签证与续期使用 |
@@ -88,7 +88,7 @@ AI engine 镜像偏大的原因有两层：
 
 | Secret / Variable | 用途 |
 |---|---|
-| `VPS_HOST` | VPS 地址，例如 `120.76.248.204` |
+| `VPS_HOST` | 当前生产 VPS 地址 `159.223.50.187`，或你的部署主机地址 |
 | `VPS_USER` | 专用非 root 部署用户 |
 | `VPS_SSH_KEY` | 该用户对应的私钥 |
 | `VPS_KNOWN_HOSTS` | `ssh-keyscan` 得到的固定主机指纹 |
