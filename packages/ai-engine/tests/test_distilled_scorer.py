@@ -94,6 +94,34 @@ async def test_scoring_json_retries_only_invalid_format(
     assert raw == '{"score": 1}'
 
 
+async def test_scoring_json_retries_truncated_output_with_larger_budget() -> None:
+    class Result:
+        def __init__(self, text: str, *, truncated: bool = False) -> None:
+            self.text = text
+            self.truncated = truncated
+
+    requests: list[dict[str, object]] = []
+
+    async def fake_generate_text(**request: object) -> Result:
+        requests.append(dict(request))
+        if len(requests) == 1:
+            return Result('{"score": 1}', truncated=True)
+        return Result('{"score": 2}')
+
+    raw, parsed = await distilled_scorer._generate_scoring_json(
+        fake_generate_text,
+        stage="test",
+        user_prompt="original prompt",
+        max_tokens=768,
+    )
+
+    assert len(requests) == 2
+    assert requests[1]["max_tokens"] == 2048
+    assert "达到 token 上限" in str(requests[1]["user_prompt"])
+    assert parsed == {"score": 2}
+    assert raw == '{"score": 2}'
+
+
 async def test_scoring_json_does_not_retry_transport_errors() -> None:
     calls = 0
 

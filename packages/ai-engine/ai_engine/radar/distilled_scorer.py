@@ -626,6 +626,12 @@ class InvalidLLMResponseShapeError(ValueError):
     error_kind = "invalid_json_root_type"
 
 
+class TruncatedLLMResponseError(ValueError):
+    """The provider stopped at its output-token limit."""
+
+    error_kind = "truncated_response"
+
+
 def _scoring_response_error_kind(exc: BaseException) -> str:
     if isinstance(exc, json.JSONDecodeError):
         return "invalid_json_response"
@@ -640,12 +646,23 @@ async def _generate_scoring_json(
 ) -> tuple[str, dict[str, Any]]:
     """Retry malformed structured output once, without retrying transport errors."""
     original_prompt = request["user_prompt"]
+    original_max_tokens = int(request.get("max_tokens") or 0)
     for attempt in range(_SCORING_FORMAT_RETRIES + 1):
         response = await generate_text_fn(**request)
         raw = response.text
         try:
+            if bool(getattr(response, "truncated", False)) or getattr(
+                response, "finish_reason", None
+            ) in {"length", "max_tokens"}:
+                raise TruncatedLLMResponseError(
+                    "Provider response reached its output-token limit"
+                )
             parsed = _parse_llm_response(raw)
-        except (json.JSONDecodeError, InvalidLLMResponseShapeError) as exc:
+        except (
+            json.JSONDecodeError,
+            InvalidLLMResponseShapeError,
+            TruncatedLLMResponseError,
+        ) as exc:
             error_kind = _scoring_response_error_kind(exc)
             if attempt >= _SCORING_FORMAT_RETRIES:
                 logger.warning(
@@ -655,6 +672,18 @@ async def _generate_scoring_json(
                     attempt + 1,
                 )
                 raise
+            was_truncated = isinstance(exc, TruncatedLLMResponseError)
+            if was_truncated:
+                request["max_tokens"] = min(
+                    max(2048, int(request.get("max_tokens") or 0) * 2),
+                    8192,
+                )
+            correction = (
+                "上一次输出达到 token 上限并被截断，请缩短字段内容，"
+                "仍需返回完整 JSON 对象。"
+                if was_truncated
+                else "上一次输出不是合法的 JSON 对象。"
+            )
             logger.info(
                 "distilled_scorer.format_retry stage=%s error_kind=%s attempt=%s",
                 stage,
@@ -662,10 +691,12 @@ async def _generate_scoring_json(
                 attempt + 1,
             )
             request["user_prompt"] = (
-                f"{original_prompt}\n\n[格式修正] 上一次输出不是合法的 JSON 对象。"
+                f"{original_prompt}\n\n[格式修正] {correction}"
                 "请按原字段要求重新作答，只返回一个完整 JSON 对象，不要输出解释、"
                 "Markdown 代码围栏或其他文本。"
             )
+            if not was_truncated:
+                request["max_tokens"] = original_max_tokens
         else:
             return raw, parsed
     raise AssertionError("unreachable scoring response retry state")
@@ -830,8 +861,8 @@ async def _extract_scoring_evidence(
 当前分块：{chunk.index}/{len(chunks)}
 章节路径：{chunk.section or "（未命名章节）"}
 
-提取覆盖范围，并最多列出 3 条对整篇评分有用的原文证据。证据应覆盖这些方面中实际出现的内容：主要贡献、方法与推理、可执行性、数据与验证、时效、表达与重复、目标读者匹配；同时指出正文明确写出的局限、安全风险、标题不符或搬运信号。
-`coverage` 为不超过 300 字的客观概述；`quote` 必须是当前分块中的 8-80 字逐字引文；`observation` 只解释该引文能支持什么判断。`risk_signals` 也必须提供逐字引文和观察说明。没有证据的方面不要推测。
+提取覆盖范围，并最多列出 3 条对整篇评分有用的原文证据。证据应覆盖这些方面中实际出现的内容：主要贡献、方法与推理、可执行性、数据与验证、时效、表达与重复、目标读者匹配；同时最多列出 2 条正文明确写出的局限、安全风险、标题不符或搬运信号。
+`coverage` 为不超过 180 字的客观概述；`quote` 必须是当前分块中的 8-80 字逐字引文；`observation` 不超过 90 字，只解释该引文能支持什么判断。风险项也必须提供逐字引文和观察说明。没有证据的方面不要推测。
 
 <untrusted-document-chunk>
 {chunk.text}
@@ -845,7 +876,7 @@ async def _extract_scoring_evidence(
                 llm_spec=llm_spec,
                 system_prompt=_SCORING_EVIDENCE_SYSTEM,
                 user_prompt=prompt,
-                max_tokens=768,
+                max_tokens=2048,
                 timeout=60.0,
                 disable_thinking=True,
                 operation="radar.distilled_score",
@@ -902,7 +933,7 @@ async def _reduce_scoring_evidence(
                 llm_spec=llm_spec,
                 system_prompt=_SCORING_EVIDENCE_SYSTEM,
                 user_prompt=prompt,
-                max_tokens=768,
+                max_tokens=2048,
                 timeout=60.0,
                 disable_thinking=True,
                 operation="radar.distilled_score",
