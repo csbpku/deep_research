@@ -94,6 +94,7 @@ async def score_missing_candidates(
     sync_run_ids: tuple[str, ...] | None = None,
     original_fetched_since: datetime | None = None,
     rescore: bool = False,
+    suppress_enrichment: bool = False,
     concurrency: int | None = None,
     scorer: ScoreFn = score_with_llm,
 ) -> int:
@@ -102,7 +103,9 @@ async def score_missing_candidates(
     Source-sync candidates are normally scored inline. This fallback primarily
     covers approved user shares, while also repairing interrupted sync rows.
     Default/fallback scores are deliberately not persisted so a later run can
-    retry the real LLM score.
+    retry the real LLM score. During an explicit re-score, rows that cannot be
+    scored keep their existing score. ``suppress_enrichment`` lets maintenance
+    jobs update scores without queueing server-side reading assets.
     """
     async with pool.connection() as conn:
         summary_filter = ""
@@ -160,7 +163,17 @@ async def score_missing_candidates(
 
     async def _score(
         raw: Any,
-    ) -> tuple[str, DistilledScore | None, str | None, str | None, str | None, bool, bool] | None:
+    ) -> tuple[
+        str,
+        DistilledScore | None,
+        str | None,
+        str | None,
+        str | None,
+        bool,
+        bool,
+        bool,
+        bool,
+    ] | None:
         row = dict(raw)
         external_reading = "external_reading" in (row.get("tags") or [])
         source_type = str(row.get("sourceType") or "web_share")
@@ -197,7 +210,17 @@ async def score_missing_candidates(
                 "ai-engine.radar.postprocess.score_deferred_incomplete_content",
                 extra={"summary_id": str(row["id"]), "source_type": source_type},
             )
-            return str(row["id"]), None, None, shell_label, None, False, external_reading
+            return (
+                str(row["id"]),
+                None,
+                None,
+                shell_label,
+                None,
+                False,
+                external_reading,
+                external_reading or suppress_enrichment,
+                suppress_enrichment,
+            )
         if external_reading:
             # Even a long provider abstract is not the full source document.
             scoreability = "limited"
@@ -238,7 +261,7 @@ async def score_missing_candidates(
         deliverable_tier = effective_tier(
             result.tier,
             enrichment_ready=enrichment_ready,
-            external_reading=external_reading,
+            external_reading=external_reading or suppress_enrichment,
         )
         return (
             str(row["id"]),
@@ -248,6 +271,8 @@ async def score_missing_candidates(
             deliverable_tier,
             enrichment_ready,
             external_reading,
+            external_reading or suppress_enrichment,
+            suppress_enrichment,
         )
 
     results = await asyncio.gather(*(_score(row) for row in rows))
@@ -264,8 +289,16 @@ async def score_missing_candidates(
                 deliverable_tier,
                 enrichment_ready,
                 external_reading,
+                no_enrichment,
+                preserve_enrichment_state,
             ) = scored
             if result is None:
+                if rescore:
+                    logger.info(
+                        "ai-engine.radar.postprocess.rescore_skipped_incomplete_content",
+                        extra={"summary_id": summary_id},
+                    )
+                    continue
                 pending_reason = (
                     "抓取失败: "
                     + shell_label
@@ -351,10 +384,12 @@ async def score_missing_candidates(
                 '"distilledProfile" = %s, '
                 '"scoreReason" = %s, '
                 '"enrichmentStatus" = CASE '
+                'WHEN %s THEN "enrichmentStatus" '
                 'WHEN %s THEN NULL '
                 'WHEN %s::text IS NULL THEN NULL '
                 'WHEN %s THEN \'ready\' ELSE \'pending\' END, '
                 '"enrichmentNextRetryAt" = CASE '
+                'WHEN %s THEN "enrichmentNextRetryAt" '
                 'WHEN %s OR %s::text IS NULL OR %s THEN NULL ELSE now() END, '
                 '"tags" = ' + tags_sql + ', '
                 '"updatedAt" = now() WHERE "id" = %s',
@@ -365,10 +400,12 @@ async def score_missing_candidates(
                     result.tier if is_enrichment_tier(result.tier) else None,
                     result.profile_id,
                     score_reason,
-                    external_reading,
+                    preserve_enrichment_state,
+                    no_enrichment,
                     result.tier if is_enrichment_tier(result.tier) else None,
                     enrichment_ready,
-                    external_reading,
+                    preserve_enrichment_state,
+                    no_enrichment,
                     result.tier if is_enrichment_tier(result.tier) else None,
                     enrichment_ready,
                     deliverable_tier or "skim",

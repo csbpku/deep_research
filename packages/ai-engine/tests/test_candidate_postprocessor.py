@@ -163,9 +163,58 @@ async def test_external_reading_rescore_preserves_high_tier_without_enrichment()
     assert 'WHEN %s THEN NULL' in update_sql
     assert update_params[2] == "deep_read"
     assert str(update_params[5]).startswith("补评分：全文未缓存")
-    assert update_params[6] is True
-    assert update_params[9] is True
+    assert update_params[6] is False
+    assert update_params[7] is True
+    assert update_params[9] is False
     assert update_params[-1] == "summary-external"
+
+
+async def test_suppressed_enrichment_rescore_keeps_high_tier_for_legacy_row() -> None:
+    pool = _Pool([{
+        "id": "summary-legacy",
+        "title": "Legacy radar item",
+        "body": "A detailed technical article. " * 100,
+        "url": "https://example.com/article",
+        "publishedAt": None,
+        "originalMarkdown": "A detailed technical article. " * 100,
+        "tags": [],
+        "originalKind": "article",
+        "originalMeta": None,
+        "enrichmentStatus": "manual",
+        "readerQualityStatus": None,
+        "sourceType": "rss",
+    }])
+
+    async def fake_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        return replace(
+            default_score(get_profile("news")),
+            total=80.0,
+            effective_total=80.0,
+            ranking_score=80.0,
+            tier_score=80.0,
+            tier="deep_read",
+            is_default=False,
+        )
+
+    scored = await score_missing_candidates(
+        pool,
+        rescore=True,
+        suppress_enrichment=True,
+        scorer=fake_scorer,
+    )
+
+    assert scored == 1
+    update_sql, update_params = pool.connection_value.executions[1]
+    assert '"enrichmentStatus" = CASE ' in update_sql
+    assert 'WHEN %s THEN "enrichmentStatus"' in update_sql
+    assert 'WHEN %s THEN "enrichmentNextRetryAt"' in update_sql
+    assert update_sql.count('WHEN %s THEN NULL') == 1
+    assert update_params[2] == "deep_read"
+    assert update_params[6] is True
+    assert update_params[7] is True
+    assert update_params[10] is True
+    assert update_params[11] is True
+    assert update_params[-1] == "summary-legacy"
 
 
 async def test_score_missing_candidates_leaves_default_score_retryable() -> None:
@@ -214,12 +263,7 @@ async def test_score_missing_candidates_defers_short_content_even_on_rescore() -
 
     assert scored == 0
     assert calls == 0
-    assert len(pool.connection_value.executions) == 2
-    update_sql, update_params = pool.connection_value.executions[1]
-    assert "content_pending" in update_sql
-    assert '"distilledScore" = NULL' in update_sql
-    assert update_params == (None, "summary-short")
-    assert "fetch_failed_shell" in update_sql
+    assert len(pool.connection_value.executions) == 1
 
 
 async def test_score_missing_candidates_allows_limited_abstract_for_triage() -> None:
@@ -286,7 +330,7 @@ async def test_limited_content_cannot_persist_high_value_deliverable_tier() -> N
     assert '"distilledTargetTier" = %s' in update_sql
     assert update_params[2] == "skim"
     assert update_params[3] == "deep_read"
-    assert update_params[8] is False
+    assert update_params[7] is False
 
 
 async def test_score_missing_candidates_retries_complete_content_pending_row() -> None:
