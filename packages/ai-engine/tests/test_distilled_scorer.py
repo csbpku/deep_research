@@ -61,6 +61,99 @@ def test_parse_llm_response_strips_reasoning_wrapper() -> None:
     assert _parse_llm_response(raw) == {"信息增量": 2, "弱项": "验证不足"}
 
 
+def test_parse_llm_response_rejects_non_object_json() -> None:
+    with pytest.raises(distilled_scorer.InvalidLLMResponseShapeError):
+        _parse_llm_response('["valid JSON, invalid scoring shape"]')
+
+
+@pytest.mark.parametrize("invalid_response", ["not JSON", "[]"])
+async def test_scoring_json_retries_only_invalid_format(
+    invalid_response: str,
+) -> None:
+    class Result:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    prompts: list[str] = []
+
+    async def fake_generate_text(**request: object) -> Result:
+        prompts.append(str(request["user_prompt"]))
+        response = invalid_response if len(prompts) == 1 else '{"score": 1}'
+        return Result(response)
+
+    raw, parsed = await distilled_scorer._generate_scoring_json(
+        fake_generate_text,
+        stage="test",
+        user_prompt="original prompt",
+    )
+
+    assert len(prompts) == 2
+    assert prompts[0] == "original prompt"
+    assert "格式修正" in prompts[1]
+    assert parsed == {"score": 1}
+    assert raw == '{"score": 1}'
+
+
+async def test_scoring_json_does_not_retry_transport_errors() -> None:
+    calls = 0
+
+    async def failing_generate_text(**request: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider unavailable")
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await distilled_scorer._generate_scoring_json(
+            failing_generate_text,
+            stage="test",
+            user_prompt="original prompt",
+        )
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("invalid_response", "expected_error_kind"),
+    [("not JSON", "invalid_json_response"), ("[]", "invalid_json_root_type")],
+)
+async def test_production_scoring_audits_exhausted_format_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_response: str,
+    expected_error_kind: str,
+) -> None:
+    class Result:
+        text = invalid_response
+
+    calls = 0
+    degraded: list[dict[str, object]] = []
+
+    async def invalid_generate_text(**request: object) -> Result:
+        nonlocal calls
+        calls += 1
+        return Result()
+
+    async def capture_degraded(**fields: object) -> None:
+        degraded.append(fields)
+
+    monkeypatch.setenv("UTILITY_LLM", "openai:test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "ai_engine.llm.client.generate_text",
+        invalid_generate_text,
+    )
+    monkeypatch.setattr(distilled_scorer, "record_llm_degraded", capture_degraded)
+
+    result = await score_with_llm("title", "content")
+
+    assert result.is_default is True
+    assert calls == 2
+    assert degraded == [{
+        "operation": "radar.distilled_score",
+        "primary_model": "openai:test-model",
+        "reason": "llm_failed_after_unified_route",
+        "error_kind": expected_error_kind,
+    }]
+
+
 # ── Fixtures ──────────────────────────────────────────────────────
 
 

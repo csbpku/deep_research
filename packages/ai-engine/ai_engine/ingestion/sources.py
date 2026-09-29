@@ -24,15 +24,15 @@ import httpx
 logger = logging.getLogger("ai_engine.ingestion.sources")
 
 _SUMMARY_TAGS_DEFAULT: list[str] = ["tech", "ai", "engineering"]
-# The canonical arxiv.org API endpoint is less likely to be throttled than the
-# export hostname from local desktop IPs. Keep the query shape identical so
-# this remains compatible with the public API.
-_ARXIV_BASE = "https://arxiv.org/api/query"
+# Use arXiv's documented API host. The website host can reject API requests
+# with HTTP 406 from server-side clients even when the same query is valid.
+_ARXIV_BASE = "https://export.arxiv.org/api/query"
 _ARXIV_CATEGORIES = ["cs.AI", "cs.CL", "cs.LG"]
 # arXiv rate-limits anonymous clients without a descriptive User-Agent
 # (HTTP 403 / 503 with no body). We carry a stable UA on the default
 # client; callers can override per-request by passing a custom `client`.
-_ARXIV_USER_AGENT = "deep-research-ai-engine/0.1 (+https://example.com/deep-research)"
+_ARXIV_USER_AGENT = "deep-research-ai-engine/0.1 (+https://github.com/csbpku/deep_research)"
+_ARXIV_ACCEPT = "application/atom+xml, application/xml;q=0.9, */*;q=0.8"
 # arXiv responds 200 + empty <feed> on malformed queries; we surface a
 # distinct error so callers can fall back. 503 with Retry-After → rate limit.
 _ARXIV_RATE_LIMIT_STATUS = 429
@@ -148,7 +148,7 @@ async def fetch_arxiv(
 
     async with httpx.AsyncClient(
         timeout=timeout,
-        headers={"User-Agent": _ARXIV_USER_AGENT},
+        headers={"User-Agent": _ARXIV_USER_AGENT, "Accept": _ARXIV_ACCEPT},
         follow_redirects=True,
     ) as client:
         resp: httpx.Response | None = None

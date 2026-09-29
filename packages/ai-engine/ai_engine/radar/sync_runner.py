@@ -249,8 +249,8 @@ def _safe_error_code(exc: BaseException) -> str:
       ``URL_FETCH_NETWORK`` (connect, TLS, protocol; security policy
       rejections are surfaced by ``SafeFetchError`` as BLOCKED)
     - ``RuntimeError`` raised by ``ingestion.sources.fetch_arxiv`` (prefix
-      ``arxiv_*``) → specific codes so dashboards can split transport
-      failures from rate-limit hits and parse errors
+      ``arxiv_*``) → specific codes so dashboards can split transport,
+      upstream HTTP, rate-limit, and parse failures
     - anything else → ``AI_ENGINE_UNAVAILABLE`` (genuine unknown)
     """
     if isinstance(exc, SafeFetchError):
@@ -305,7 +305,9 @@ def _safe_error_code(exc: BaseException) -> str:
             return "URL_FETCH_TOO_LARGE"
         if tag == "arxiv_network":
             return "URL_FETCH_NETWORK"
-        if tag in {"arxiv_http_error", "arxiv_decode_failed"}:
+        if tag == "arxiv_http_error":
+            return "UPSTREAM_HTTP_ERROR"
+        if tag == "arxiv_decode_failed":
             return "URL_FETCH_NETWORK"
         if tag in {"arxiv_parse_failed", "arxiv_empty_response"}:
             # Body-level failures: most likely upstream schema change.
@@ -2175,15 +2177,16 @@ async def _run_source(
             source_failure,
             prefix="source failure",
         )
+        source_detail = str(exc)
+        if source_detail.startswith("arxiv_"):
+            error_message = f"{error_message}; detail={source_detail[:160]}"
         logger.warning(
-            "ai-engine.radar.source_failed",
-            extra={
-                "request_id": run_id,
-                "source_id": source.id,
-                "source_type": source.source_type,
-                "error_code": first_error_code,
-                "error_type": type(exc).__name__,
-            },
+            "ai-engine.radar.source_failed source_id=%s source_type=%s error_code=%s error_type=%s detail=%s",
+            source.id,
+            source.source_type,
+            first_error_code,
+            type(exc).__name__,
+            source_detail[:160] if source_detail.startswith("arxiv_") else "omitted",
         )
     elapsed_ms = int((time.monotonic() - started) * 1000)
     await _finish_run(

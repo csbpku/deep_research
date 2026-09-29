@@ -90,8 +90,9 @@ async def record_llm_degraded(
     primary_model: str,
     reason: str,
     request_id: str | None = None,
+    error_kind: str | None = None,
 ) -> None:
-    """Record a deterministic business fallback that made no LLM call."""
+    """Record a degraded result after scoring cannot produce a valid LLM result."""
     provider, separator, model = primary_model.partition(":")
     await record_llm_usage(
         LlmUsageAttempt(
@@ -101,6 +102,7 @@ async def record_llm_degraded(
             requested_model=model if separator else primary_model,
             primary_model=primary_model,
             fallback_reason=reason,
+            error_kind=error_kind,
             final_model=None,
             degraded=True,
             status="degraded",

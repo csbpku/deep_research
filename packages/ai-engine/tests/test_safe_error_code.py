@@ -97,8 +97,9 @@ def test_safe_error_code_maps_arxiv_network_to_network() -> None:
     assert _safe_error_code(RuntimeError("arxiv_network:ConnectError")) == "URL_FETCH_NETWORK"
 
 
-def test_safe_error_code_maps_arxiv_http_error_to_blocked() -> None:
-    assert _safe_error_code(RuntimeError("arxiv_http_error:503")) == "URL_FETCH_NETWORK"
+def test_safe_error_code_maps_arxiv_http_error_separately_from_network() -> None:
+    assert _safe_error_code(RuntimeError("arxiv_http_error:406")) == "UPSTREAM_HTTP_ERROR"
+    assert _safe_error_code(RuntimeError("arxiv_http_error:503")) == "UPSTREAM_HTTP_ERROR"
 
 
 def test_safe_error_code_maps_arxiv_parse_to_validation_failed() -> None:
@@ -176,6 +177,8 @@ async def test_fetch_arxiv_sets_descriptive_user_agent() -> None:
     assert transport.last_request is not None
     ua = transport.last_request.headers.get("user-agent", "")
     assert "deep-research-ai-engine" in ua, f"expected descriptive UA, got {ua!r}"
+    assert transport.last_request.url.host == "export.arxiv.org"
+    assert "application/atom+xml" in transport.last_request.headers.get("accept", "")
     assert items, "expected at least one item from a valid Atom response"
 
 

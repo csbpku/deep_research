@@ -64,6 +64,7 @@ SCORING_CHUNK_TOKEN_BUDGET = max(
 )
 SCORING_EVIDENCE_TOKEN_BUDGET = 4_500
 SCORING_REDUCE_BATCH_TOKEN_BUDGET = 3_500
+_SCORING_FORMAT_RETRIES = 1
 
 # ── 7 Dimensions (fixed; only weights vary per profile) ───────────
 #
@@ -619,6 +620,57 @@ class DimensionScorer(Protocol):
         ...
 
 
+class InvalidLLMResponseShapeError(ValueError):
+    """A JSON response was syntactically valid but not a scoring object."""
+
+    error_kind = "invalid_json_root_type"
+
+
+def _scoring_response_error_kind(exc: BaseException) -> str:
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid_json_response"
+    return str(getattr(exc, "error_kind", type(exc).__name__))[:64]
+
+
+async def _generate_scoring_json(
+    generate_text_fn: Callable[..., Awaitable[Any]],
+    *,
+    stage: str,
+    **request: Any,
+) -> tuple[str, dict[str, Any]]:
+    """Retry malformed structured output once, without retrying transport errors."""
+    original_prompt = request["user_prompt"]
+    for attempt in range(_SCORING_FORMAT_RETRIES + 1):
+        response = await generate_text_fn(**request)
+        raw = response.text
+        try:
+            parsed = _parse_llm_response(raw)
+        except (json.JSONDecodeError, InvalidLLMResponseShapeError) as exc:
+            error_kind = _scoring_response_error_kind(exc)
+            if attempt >= _SCORING_FORMAT_RETRIES:
+                logger.warning(
+                    "distilled_scorer.invalid_response stage=%s error_kind=%s attempts=%s",
+                    stage,
+                    error_kind,
+                    attempt + 1,
+                )
+                raise
+            logger.info(
+                "distilled_scorer.format_retry stage=%s error_kind=%s attempt=%s",
+                stage,
+                error_kind,
+                attempt + 1,
+            )
+            request["user_prompt"] = (
+                f"{original_prompt}\n\n[格式修正] 上一次输出不是合法的 JSON 对象。"
+                "请按原字段要求重新作答，只返回一个完整 JSON 对象，不要输出解释、"
+                "Markdown 代码围栏或其他文本。"
+            )
+        else:
+            return raw, parsed
+    raise AssertionError("unreachable scoring response retry state")
+
+
 # ── Anthropic implementation ───────────────────────────────────────
 
 
@@ -660,7 +712,9 @@ async def anthropic_scorer(
             published_at=published_at,
             structured_signals=structured_signals,
         )
-        result = await generate_text(
+        raw, _ = await _generate_scoring_json(
+            generate_text,
+            stage="final_score",
             llm_spec=llm_spec,
             system_prompt=SYSTEM_PROMPT,
             user_prompt=prompt,
@@ -669,7 +723,7 @@ async def anthropic_scorer(
             disable_thinking=True,
             operation="radar.distilled_score",
         )
-        return result.text
+        return raw
 
     packets = await _extract_scoring_evidence(
         generate_text,
@@ -695,7 +749,9 @@ async def anthropic_scorer(
         structured_signals=structured_signals,
         content_is_chunk_evidence=True,
     )
-    result = await generate_text(
+    raw, _ = await _generate_scoring_json(
+        generate_text,
+        stage="final_score",
         llm_spec=llm_spec,
         system_prompt=SYSTEM_PROMPT,
         user_prompt=prompt,
@@ -704,7 +760,7 @@ async def anthropic_scorer(
         disable_thinking=True,
         operation="radar.distilled_score",
     )
-    return result.text
+    return raw
 
 
 _SCORING_EVIDENCE_SYSTEM = """你是技术文章证据提取器，不负责给整篇文章打分。
@@ -783,7 +839,9 @@ async def _extract_scoring_evidence(
 
 只输出如下 JSON：{{"coverage":"...","evidence":[{{"aspect":"...","quote":"...","observation":"..."}}],"risk_signals":[{{"quote":"...","observation":"..."}}],"repost_signal":""}}"""
         async with semaphore:
-            result = await generate_text_fn(
+            _, parsed = await _generate_scoring_json(
+                generate_text_fn,
+                stage="evidence_extract",
                 llm_spec=llm_spec,
                 system_prompt=_SCORING_EVIDENCE_SYSTEM,
                 user_prompt=prompt,
@@ -792,7 +850,6 @@ async def _extract_scoring_evidence(
                 disable_thinking=True,
                 operation="radar.distilled_score",
             )
-        parsed = _parse_llm_response(result.text)
         return _compact_scoring_packet(
             parsed,
             section=f"{chunk.index}/{len(chunks)} {chunk.section}".strip(),
@@ -839,7 +896,9 @@ async def _reduce_scoring_evidence(
 记录：{serialized_group}
 
 只输出 JSON：{{"section":"...","coverage":"...","evidence":[{{"aspect":"...","quote":"原文逐字引文","observation":"..."}}],"risk_signals":[{{"quote":"原文逐字引文","observation":"..."}}],"repost_signal":""}}"""
-            result = await generate_text_fn(
+            _, parsed = await _generate_scoring_json(
+                generate_text_fn,
+                stage="evidence_reduce",
                 llm_spec=llm_spec,
                 system_prompt=_SCORING_EVIDENCE_SYSTEM,
                 user_prompt=prompt,
@@ -848,7 +907,6 @@ async def _reduce_scoring_evidence(
                 disable_thinking=True,
                 operation="radar.distilled_score",
             )
-            parsed = _parse_llm_response(result.text)
             section = "、".join(
                 str(item.get("section") or "") for item in group
             )[:160]
@@ -953,7 +1011,7 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
         lines = [ln for ln in lines if not ln.strip().startswith("```")]
         text = "\n".join(lines).strip()
     try:
-        result: dict[str, Any] = json.loads(text)
+        result: Any = json.loads(text)
     except json.JSONDecodeError:
         # Be tolerant of a short provider preamble while still requiring a
         # complete JSON object; malformed/truncated responses remain errors
@@ -963,6 +1021,10 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
         if start < 0 or end <= start:
             raise
         result = json.loads(text[start : end + 1])
+    if not isinstance(result, dict):
+        raise InvalidLLMResponseShapeError(
+            f"Expected JSON object, got {type(result).__name__}"
+        )
     return result
 
 
@@ -1828,21 +1890,18 @@ async def score_with_llm(
             return result
         except Exception as exc:
             rate_limited = _is_rate_limit_error(exc)
+            error_kind = _scoring_response_error_kind(exc)
             if not outer_retry_enabled:
                 logger.warning(
-                    "distilled_scorer.fallback",
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:200],
-                        "attempts": 1,
-                        "rate_limited": rate_limited,
-                        "retry_owner": "llm_client",
-                    },
+                    "distilled_scorer.fallback error_kind=%s attempts=1 rate_limited=%s retry_owner=llm_client",
+                    error_kind,
+                    rate_limited,
                 )
                 await record_llm_degraded(
                     operation="radar.distilled_score",
                     primary_model=llm_spec,
                     reason="llm_failed_after_unified_route",
+                    error_kind=error_kind,
                 )
                 return default_score(profile)
             max_retries = (
@@ -1855,18 +1914,16 @@ async def score_with_llm(
                     else "llm_failed_after_retries"
                 )
                 logger.warning(
-                    "distilled_scorer.fallback",
-                    extra={
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:200],
-                        "attempts": attempt + 1,
-                        "rate_limited": rate_limited,
-                    },
+                    "distilled_scorer.fallback error_kind=%s attempts=%s rate_limited=%s",
+                    error_kind,
+                    attempt + 1,
+                    rate_limited,
                 )
                 await record_llm_degraded(
                     operation="radar.distilled_score",
                     primary_model=llm_spec,
                     reason=failure_reason,
+                    error_kind=error_kind,
                 )
                 break
             delay = (
@@ -1875,13 +1932,11 @@ async def score_with_llm(
                 else _LLM_RETRY_DELAY
             )
             logger.info(
-                "distilled_scorer.retry",
-                extra={
-                    "attempt": attempt + 1,
-                    "error_type": type(exc).__name__,
-                    "rate_limited": rate_limited,
-                    "delay": delay,
-                },
+                "distilled_scorer.retry error_kind=%s attempt=%s rate_limited=%s delay=%s",
+                error_kind,
+                attempt + 1,
+                rate_limited,
+                delay,
             )
             await asyncio.sleep(delay)
             attempt += 1

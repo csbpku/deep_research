@@ -1010,7 +1010,17 @@ async def test_dispatch_source_configuration_is_passed() -> None:
 # ───────────── W7 (engineer B): S1 #7 regression ─────────────
 
 
-async def test_arxiv_source_failure_surfaces_typed_root_cause() -> None:
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        ("arxiv_timeout:ReadTimeout", "WORKER_TIMEOUT"),
+        ("arxiv_http_error:406", "UPSTREAM_HTTP_ERROR"),
+    ],
+)
+async def test_arxiv_source_failure_surfaces_typed_root_cause(
+    failure: str,
+    expected_code: str,
+) -> None:
     """Regression for S1 #7: when the arxiv fetcher fails, the sync
     runner's `error_code` must reflect the *root cause* (e.g. a
     network/timeout/parse error) instead of collapsing everything to
@@ -1021,7 +1031,7 @@ async def test_arxiv_source_failure_surfaces_typed_root_cause() -> None:
     async def broken_arxiv(config: dict[str, Any]) -> list[RadarCandidate]:
         # Simulate ``fetch_arxiv`` raising a typed RuntimeError when
         # the upstream service is unreachable.
-        raise RuntimeError("arxiv_timeout:ReadTimeout")
+        raise RuntimeError(failure)
 
     result = await run_radar_sync(
         pool,
@@ -1031,11 +1041,8 @@ async def test_arxiv_source_failure_surfaces_typed_root_cause() -> None:
         document_fetcher=_safe_fetch,
     )
     assert result.runs[0].status == "failed"
-    # The arxiv_timeout prefix must be translated to WORKER_TIMEOUT,
-    # NOT AI_ENGINE_UNAVAILABLE — the walkthrough regression that
-    # this test pins.
-    assert result.runs[0].error_code == "WORKER_TIMEOUT", (
-        f"expected WORKER_TIMEOUT, got {result.runs[0].error_code!r}"
+    assert result.runs[0].error_code == expected_code, (
+        f"expected {expected_code}, got {result.runs[0].error_code!r}"
     )
 
 
