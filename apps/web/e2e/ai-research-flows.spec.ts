@@ -517,6 +517,14 @@ test.describe('AI Research parent (UI polish)', () => {
           status: 'succeeded',
           completedAt: new Date(),
           draftResearchId: reportId,
+          partialSources: [{
+            source_ref: { type: 'url', value: 'https://example.com/e2e-report-revision' },
+            canonical_key: 'https://example.com/e2e-report-revision',
+            title: 'Synthetic E2E source',
+            snippet: 'Synthetic source snapshot for the report revision flow.',
+            score: 1,
+            step_captured: 'search',
+          }],
         },
       });
       await prisma.aiResearchConversation.create({
