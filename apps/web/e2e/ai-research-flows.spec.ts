@@ -8,7 +8,7 @@
 
 import { test, expect } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { loginWithCredentials } from './fixtures';
 
 const prisma = new PrismaClient();
@@ -506,6 +506,7 @@ test.describe('AI Research parent (UI polish)', () => {
           authorId: admin!.id,
           aiAssisted: true,
           creationMethod: 'ai_research',
+          originContentSha256: createHash('sha256').update(originalBody).digest('hex'),
         },
       });
       await prisma.aiResearchJob.create({
