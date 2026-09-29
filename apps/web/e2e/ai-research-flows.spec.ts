@@ -494,6 +494,8 @@ test.describe('AI Research parent (UI polish)', () => {
     const originalBody = 'Synthetic original report body.';
     const question = '补充部署失败时的回滚边界';
     const answer = '先停止新流量并恢复兼容版本；不要改写已经发布的迁移历史。';
+    const answerCreatedAt = new Date();
+    const questionCreatedAt = new Date(answerCreatedAt.getTime() - 1_000);
 
     try {
       await prisma.research.create({
@@ -535,8 +537,20 @@ test.describe('AI Research parent (UI polish)', () => {
           title,
           messages: {
             create: [
-              { id: questionId, role: 'user', content: question, intent: 'revise' },
-              { id: answerId, role: 'assistant', content: answer, intent: 'revise' },
+              {
+                id: questionId,
+                role: 'user',
+                content: question,
+                intent: 'revise',
+                createdAt: questionCreatedAt,
+              },
+              {
+                id: answerId,
+                role: 'assistant',
+                content: answer,
+                intent: 'revise',
+                createdAt: answerCreatedAt,
+              },
             ],
           },
         },
