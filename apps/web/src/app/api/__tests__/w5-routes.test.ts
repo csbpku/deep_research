@@ -303,16 +303,12 @@ describe('GET /api/radar', () => {
     expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         AND: expect.arrayContaining([
-          {
-            NOT: {
-              OR: [
-                { originalKind: { in: ['github_issue', 'github_pr', 'github_release'] } },
-                { canonicalUrl: { contains: '/issues/' } },
-                { canonicalUrl: { contains: '/pull/' } },
-                { canonicalUrl: { contains: '/releases/tag/' } },
-              ],
-            },
-          },
+          { AND: [
+            { OR: [{ originalKind: null }, { originalKind: { notIn: ['github_issue', 'github_pr', 'github_release'] } }] },
+            { NOT: { canonicalUrl: { contains: '/issues/' } } },
+            { NOT: { canonicalUrl: { contains: '/pull/' } } },
+            { NOT: { canonicalUrl: { contains: '/releases/tag/' } } },
+          ] },
         ]),
       }),
     }));

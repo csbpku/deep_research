@@ -133,12 +133,14 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           ...(qualityValues.includes('pending') ? [{ distilledTier: null }] : []),
         ],
       } satisfies Prisma.SummaryWhereInput;
-  const nonReaderGithubItem = {
-    OR: [
-      { originalKind: { in: ['github_issue', 'github_pr', 'github_release'] } },
-      { canonicalUrl: { contains: '/issues/' } },
-      { canonicalUrl: { contains: '/pull/' } },
-      { canonicalUrl: { contains: '/releases/tag/' } },
+  // originalKind is nullable: NOT (NULL IN (...)) would hide ordinary
+  // external-reading articles even when their URLs are reader-facing.
+  const readerGithubItem = {
+    AND: [
+      { OR: [{ originalKind: null }, { originalKind: { notIn: ['github_issue', 'github_pr', 'github_release'] } }] },
+      ...['/issues/', '/pull/', '/releases/tag/'].map((path) => ({
+        NOT: { canonicalUrl: { contains: path } },
+      })),
     ],
   } satisfies Prisma.SummaryWhereInput;
   // Public high-value rows use one of two contracts: external-reading rows
@@ -210,7 +212,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       // reading assets. Keep them in Admin, but do not mix them into the
       // member-facing stream. URL fallbacks cover historical rows that were
       // persisted as github_other before the classifier was fixed.
-      { NOT: nonReaderGithubItem },
+      readerGithubItem,
       // Public radar contains only scored, reader-facing tiers with the
       // quality gate above. Noise, pending and incomplete rows remain in
       // Admin governance tools.
