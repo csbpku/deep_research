@@ -868,13 +868,21 @@ async def _generate_text_once(
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": user_prompt})
+    completion_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "timeout": timeout,
+    }
+    if provider == "minimax" and model.casefold() == "minimax-m3":
+        # MiniMax documents max_completion_tokens for new OpenAI-compatible
+        # integrations; its thinking tokens otherwise consume max_tokens.
+        completion_kwargs["max_completion_tokens"] = max_tokens
+        if disable_thinking:
+            completion_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+    else:
+        completion_kwargs["max_tokens"] = max_tokens
     async with _llm_semaphore():
-        response = await openai_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            timeout=timeout,
-        )
+        response = await openai_client.chat.completions.create(**completion_kwargs)
     choice = response.choices[0] if response.choices else None
     content = choice.message.content if choice is not None else ""
     if isinstance(content, list):
@@ -1035,6 +1043,7 @@ async def _record_success(
     endpoint: str | None,
     circuit_state: str,
 ) -> None:
+    truncated = result.truncated or result.finish_reason in {"length", "max_tokens"}
     await record_llm_usage(
         LlmUsageAttempt(
             operation=operation,
@@ -1044,6 +1053,14 @@ async def _record_success(
             actual_model=result.actual_model,
             fallback_model=fallback_spec,
             used_fallback=used_fallback,
+            status="degraded" if truncated else "succeeded",
+            error_kind="truncated_response" if truncated else None,
+            error_message=(
+                f"finish_reason={result.finish_reason or 'unknown'}; "
+                f"output_tokens={result.output_tokens}"
+                if truncated
+                else None
+            ),
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             latency_ms=int((time.monotonic() - started_at) * 1000),
@@ -1053,6 +1070,7 @@ async def _record_success(
             final_model=result.requested_model,
             endpoint=endpoint,
             circuit_state=circuit_state,
+            degraded=truncated,
         )
     )
 

@@ -41,11 +41,15 @@ import logging
 import os
 import re
 import unicodedata
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from collections.abc import Awaitable, Callable
+from time import perf_counter
 from typing import Any, Protocol
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from ai_engine.scoring.scoring_profiles import (
     ScoringProfile,
@@ -56,6 +60,14 @@ from ai_engine.llm.usage_audit import record_llm_degraded
 from ai_engine.text_chunking import TextChunk, count_text_tokens, split_text_by_token_budget
 
 logger = logging.getLogger("ai_engine.radar.distilled_scorer")
+_SCORING_RUN_ID: ContextVar[str | None] = ContextVar(
+    "radar_scoring_run_id",
+    default=None,
+)
+_SCORING_RUN_METRICS: ContextVar[dict[str, int] | None] = ContextVar(
+    "radar_scoring_run_metrics",
+    default=None,
+)
 
 DISTILLED_VERSION = "5.0"
 
@@ -64,7 +76,7 @@ SCORING_CHUNK_TOKEN_BUDGET = max(
 )
 SCORING_EVIDENCE_TOKEN_BUDGET = 4_500
 SCORING_REDUCE_BATCH_TOKEN_BUDGET = 3_500
-_SCORING_FORMAT_RETRIES = 1
+_SCORING_FORMAT_RETRIES = 2
 
 # ── 7 Dimensions (fixed; only weights vary per profile) ───────────
 #
@@ -638,17 +650,116 @@ def _scoring_response_error_kind(exc: BaseException) -> str:
     return str(getattr(exc, "error_kind", type(exc).__name__))[:64]
 
 
+@asynccontextmanager
+async def _measure_scoring_stage(
+    stage: str,
+    **fields: int | str,
+) -> AsyncIterator[None]:
+    started_at = perf_counter()
+    metrics = _SCORING_RUN_METRICS.get()
+    generation_key = f"{stage}_generation_calls"
+    format_key = f"{stage}_format_attempts"
+    generation_start = metrics.get(generation_key, 0) if metrics else 0
+    format_start = metrics.get(format_key, 0) if metrics else 0
+    outcome = "succeeded"
+    error_kind = "none"
+    try:
+        yield
+    except BaseException as exc:
+        outcome = "failed"
+        error_kind = _scoring_response_error_kind(exc)
+        raise
+    finally:
+        generation_calls = (
+            metrics.get(generation_key, 0) - generation_start
+            if metrics
+            else 0
+        )
+        format_attempts = (
+            metrics.get(format_key, 0) - format_start
+            if metrics
+            else 0
+        )
+        field_text = " ".join(
+            f"{key}={value}" for key, value in sorted(fields.items())
+        )
+        logger.info(
+            "distilled_scorer.stage_completed scoring_run_id=%s stage=%s "
+            "outcome=%s duration_ms=%d generation_calls=%d "
+            "format_attempts=%d error_kind=%s %s",
+            _SCORING_RUN_ID.get() or "untracked",
+            stage,
+            outcome,
+            int((perf_counter() - started_at) * 1000),
+            generation_calls,
+            format_attempts,
+            error_kind,
+            field_text or "none",
+        )
+
+
 async def _generate_scoring_json(
     generate_text_fn: Callable[..., Awaitable[Any]],
     *,
     stage: str,
     **request: Any,
 ) -> tuple[str, dict[str, Any]]:
-    """Retry malformed structured output once, without retrying transport errors."""
+    """Retry malformed structured output twice, without retrying transport errors."""
+    scoring_run_id = _SCORING_RUN_ID.get() or uuid4().hex[:12]
+    metrics = _SCORING_RUN_METRICS.get()
+    generation_key = f"{stage}_generation_calls"
+    format_key = f"{stage}_format_attempts"
+    generation_index = (
+        metrics.get(generation_key, 0) + 1
+        if metrics is not None
+        else 1
+    )
+    if metrics is not None:
+        metrics[generation_key] = generation_index
     original_prompt = request["user_prompt"]
     original_max_tokens = int(request.get("max_tokens") or 0)
     for attempt in range(_SCORING_FORMAT_RETRIES + 1):
-        response = await generate_text_fn(**request)
+        request_id = (
+            f"radar-score-{scoring_run_id}-{stage}-"
+            f"{generation_index}-{attempt + 1}"
+        )
+        request["request_id"] = request_id
+        if metrics is not None:
+            metrics[format_key] = metrics.get(format_key, 0) + 1
+        request_started_at = perf_counter()
+        try:
+            response = await generate_text_fn(**request)
+        except BaseException as exc:
+            logger.warning(
+                "distilled_scorer.llm_call scoring_run_id=%s request_id=%s "
+                "stage=%s attempt=%d outcome=error latency_ms=%d error_kind=%s",
+                scoring_run_id,
+                request_id,
+                stage,
+                attempt + 1,
+                int((perf_counter() - request_started_at) * 1000),
+                _scoring_response_error_kind(exc),
+            )
+            raise
+        finish_reason = str(getattr(response, "finish_reason", None) or "unknown")
+        truncated = bool(getattr(response, "truncated", False)) or finish_reason in {
+            "length",
+            "max_tokens",
+        }
+        output_tokens = getattr(response, "output_tokens", None)
+        logger.info(
+            "distilled_scorer.llm_call scoring_run_id=%s request_id=%s "
+            "stage=%s attempt=%d outcome=response latency_ms=%d "
+            "finish_reason=%s truncated=%s output_tokens=%s",
+            scoring_run_id,
+            request_id,
+            stage,
+            attempt + 1,
+            int((perf_counter() - request_started_at) * 1000),
+            finish_reason,
+            truncated,
+            output_tokens if output_tokens is not None else "unknown",
+        )
         raw = response.text
         try:
             if bool(getattr(response, "truncated", False)) or getattr(
@@ -665,8 +776,12 @@ async def _generate_scoring_json(
         ) as exc:
             error_kind = _scoring_response_error_kind(exc)
             if attempt >= _SCORING_FORMAT_RETRIES:
+                setattr(exc, "scoring_stage", stage)
                 logger.warning(
-                    "distilled_scorer.invalid_response stage=%s error_kind=%s attempts=%s",
+                    "distilled_scorer.invalid_response scoring_run_id=%s "
+                    "request_id=%s stage=%s error_kind=%s attempts=%s",
+                    scoring_run_id,
+                    request_id,
                     stage,
                     error_kind,
                     attempt + 1,
@@ -685,7 +800,10 @@ async def _generate_scoring_json(
                 else "上一次输出不是合法的 JSON 对象。"
             )
             logger.info(
-                "distilled_scorer.format_retry stage=%s error_kind=%s attempt=%s",
+                "distilled_scorer.format_retry scoring_run_id=%s request_id=%s "
+                "stage=%s error_kind=%s attempt=%s",
+                scoring_run_id,
+                request_id,
                 stage,
                 error_kind,
                 attempt + 1,
@@ -715,6 +833,64 @@ async def anthropic_scorer(
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
 ) -> str:
+    scoring_run_id = uuid4().hex[:12]
+    metrics: dict[str, int] = {}
+    run_token = _SCORING_RUN_ID.set(scoring_run_id)
+    metrics_token = _SCORING_RUN_METRICS.set(metrics)
+    started_at = perf_counter()
+    outcome = "failed"
+    error_kind = "none"
+    try:
+        result = await _anthropic_scorer_impl(
+            title,
+            content,
+            profile=profile,
+            source_type=source_type,
+            url=url,
+            published_at=published_at,
+            structured_signals=structured_signals,
+        )
+    except BaseException as exc:
+        error_kind = _scoring_response_error_kind(exc)
+        raise
+    else:
+        outcome = "succeeded"
+        return result
+    finally:
+        logger.info(
+            "distilled_scorer.stage_completed scoring_run_id=%s stage=total "
+            "outcome=%s duration_ms=%d chunk_count=%d generation_calls=%d "
+            "format_attempts=%d error_kind=%s",
+            scoring_run_id,
+            outcome,
+            int((perf_counter() - started_at) * 1000),
+            metrics.get("chunk_count", 0),
+            sum(
+                value
+                for key, value in metrics.items()
+                if key.endswith("_generation_calls")
+            ),
+            sum(
+                value
+                for key, value in metrics.items()
+                if key.endswith("_format_attempts")
+            ),
+            error_kind,
+        )
+        _SCORING_RUN_METRICS.reset(metrics_token)
+        _SCORING_RUN_ID.reset(run_token)
+
+
+async def _anthropic_scorer_impl(
+    title: str,
+    content: str,
+    *,
+    profile: ScoringProfile | None = None,
+    source_type: str | None = None,
+    url: str | None = None,
+    published_at: datetime | None = None,
+    structured_signals: dict[str, Any] | None = None,
+) -> str:
     """Call the configured light LLM to score article dimensions.
 
     Passes profile / source_type / url / published_at to the prompt so
@@ -723,15 +899,24 @@ async def anthropic_scorer(
     from ai_engine.llm.client import generate_text
 
     llm_spec = resolve_spec("utility")
-    content_for_scoring = _prepare_scoring_content(
-        title,
-        content,
-        source_type=source_type,
-        url=url,
-    )
-    chunks = split_text_by_token_budget(
-        content_for_scoring,
-        SCORING_CHUNK_TOKEN_BUDGET,
+    async with _measure_scoring_stage("prepare"):
+        content_for_scoring = _prepare_scoring_content(
+            title,
+            content,
+            source_type=source_type,
+            url=url,
+        )
+        chunks = split_text_by_token_budget(
+            content_for_scoring,
+            SCORING_CHUNK_TOKEN_BUDGET,
+        )
+        metrics = _SCORING_RUN_METRICS.get()
+        if metrics is not None:
+            metrics["chunk_count"] = len(chunks)
+    logger.info(
+        "distilled_scorer.plan scoring_run_id=%s chunk_count=%d",
+        _SCORING_RUN_ID.get() or "untracked",
+        len(chunks),
     )
     if len(chunks) == 1:
         prompt = build_user_prompt(
@@ -743,32 +928,41 @@ async def anthropic_scorer(
             published_at=published_at,
             structured_signals=structured_signals,
         )
-        raw, _ = await _generate_scoring_json(
-            generate_text,
-            stage="final_score",
-            llm_spec=llm_spec,
-            system_prompt=SYSTEM_PROMPT,
-            user_prompt=prompt,
-            max_tokens=_LLM_SCORING_MAX_TOKENS,
-            timeout=60.0,
-            disable_thinking=True,
-            operation="radar.distilled_score",
-        )
+        async with _measure_scoring_stage("final_score"):
+            raw, _ = await _generate_scoring_json(
+                generate_text,
+                stage="final_score",
+                llm_spec=llm_spec,
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=prompt,
+                max_tokens=_LLM_SCORING_MAX_TOKENS,
+                timeout=60.0,
+                disable_thinking=True,
+                operation="radar.distilled_score",
+            )
         return raw
 
-    packets = await _extract_scoring_evidence(
-        generate_text,
-        llm_spec=llm_spec,
-        title=title,
-        chunks=chunks,
-        original_content=content_for_scoring,
-    )
-    packets = await _reduce_scoring_evidence(
-        generate_text,
-        llm_spec=llm_spec,
-        packets=packets,
-        original_content=content_for_scoring,
-    )
+    async with _measure_scoring_stage(
+        "evidence_extract",
+        chunk_count=len(chunks),
+    ):
+        packets = await _extract_scoring_evidence(
+            generate_text,
+            llm_spec=llm_spec,
+            title=title,
+            chunks=chunks,
+            original_content=content_for_scoring,
+        )
+    async with _measure_scoring_stage(
+        "evidence_reduce",
+        packet_count=len(packets),
+    ):
+        packets = await _reduce_scoring_evidence(
+            generate_text,
+            llm_spec=llm_spec,
+            packets=packets,
+            original_content=content_for_scoring,
+        )
     evidence = json.dumps(packets, ensure_ascii=False, separators=(",", ":"))
     prompt = build_user_prompt(
         title,
@@ -780,17 +974,18 @@ async def anthropic_scorer(
         structured_signals=structured_signals,
         content_is_chunk_evidence=True,
     )
-    raw, _ = await _generate_scoring_json(
-        generate_text,
-        stage="final_score",
-        llm_spec=llm_spec,
-        system_prompt=SYSTEM_PROMPT,
-        user_prompt=prompt,
-        max_tokens=_LLM_SCORING_MAX_TOKENS,
-        timeout=60.0,
-        disable_thinking=True,
-        operation="radar.distilled_score",
-    )
+    async with _measure_scoring_stage("final_score"):
+        raw, _ = await _generate_scoring_json(
+            generate_text,
+            stage="final_score",
+            llm_spec=llm_spec,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=prompt,
+            max_tokens=_LLM_SCORING_MAX_TOKENS,
+            timeout=60.0,
+            disable_thinking=True,
+            operation="radar.distilled_score",
+        )
     return raw
 
 
@@ -1825,6 +2020,7 @@ async def score_with_llm(
     url: str | None = None,
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
+    raise_on_error: bool = False,
 ) -> DistilledScore:
     """Score an article using the LLM dimension scorer.
 
@@ -1920,6 +2116,20 @@ async def score_with_llm(
                 return corrected_result
             return result
         except Exception as exc:
+            if raise_on_error:
+                stage = getattr(exc, "scoring_stage", None)
+                reason = (
+                    f"format_retry_exhausted:{stage}"
+                    if stage
+                    else "rescore_score_failed"
+                )
+                await record_llm_degraded(
+                    operation="radar.distilled_score",
+                    primary_model=llm_spec,
+                    reason=reason,
+                    error_kind=_scoring_response_error_kind(exc),
+                )
+                raise
             rate_limited = _is_rate_limit_error(exc)
             error_kind = _scoring_response_error_kind(exc)
             if not outer_retry_enabled:

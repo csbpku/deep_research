@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -51,6 +52,20 @@ class _RateLimitError(RuntimeError):
     status_code = 429
 
 
+@pytest.mark.asyncio
+async def test_maintenance_propagates_quota_without_default_or_retry():
+    calls = 0
+
+    async def exhausted(title: str, content: str) -> str:
+        nonlocal calls
+        calls += 1
+        raise _RateLimitError("quota exhausted")
+
+    with pytest.raises(_RateLimitError):
+        await score_with_llm("title", "content", scorer=exhausted, raise_on_error=True)
+    assert calls == 1
+
+
 def test_parse_llm_response_strips_reasoning_wrapper() -> None:
     raw = (
         "<think>Need to inspect the article before scoring.</think>\n"
@@ -75,10 +90,12 @@ async def test_scoring_json_retries_only_invalid_format(
             self.text = text
 
     prompts: list[str] = []
+    request_ids: list[str] = []
 
     async def fake_generate_text(**request: object) -> Result:
         prompts.append(str(request["user_prompt"]))
-        response = invalid_response if len(prompts) == 1 else '{"score": 1}'
+        request_ids.append(str(request["request_id"]))
+        response = invalid_response if len(prompts) < 3 else '{"score": 1}'
         return Result(response)
 
     raw, parsed = await distilled_scorer._generate_scoring_json(
@@ -87,9 +104,11 @@ async def test_scoring_json_retries_only_invalid_format(
         user_prompt="original prompt",
     )
 
-    assert len(prompts) == 2
+    assert len(prompts) == 3
+    assert len(set(request_ids)) == 3
+    assert all(request_id.startswith("radar-score-") for request_id in request_ids)
     assert prompts[0] == "original prompt"
-    assert "格式修正" in prompts[1]
+    assert all("格式修正" in prompt for prompt in prompts[1:])
     assert parsed == {"score": 1}
     assert raw == '{"score": 1}'
 
@@ -173,12 +192,50 @@ async def test_production_scoring_audits_exhausted_format_retry(
     result = await score_with_llm("title", "content")
 
     assert result.is_default is True
-    assert calls == 2
+    assert calls == 3
     assert degraded == [{
         "operation": "radar.distilled_score",
         "primary_model": "openai:test-model",
         "reason": "llm_failed_after_unified_route",
         "error_kind": expected_error_kind,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_rescore_audits_final_format_failure_with_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Result:
+        text = "not JSON"
+
+    calls = 0
+    degraded: list[dict[str, object]] = []
+
+    async def invalid_generate_text(**request: object) -> Result:
+        nonlocal calls
+        calls += 1
+        return Result()
+
+    async def capture_degraded(**fields: object) -> None:
+        degraded.append(fields)
+
+    monkeypatch.setenv("UTILITY_LLM", "openai:test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "ai_engine.llm.client.generate_text",
+        invalid_generate_text,
+    )
+    monkeypatch.setattr(distilled_scorer, "record_llm_degraded", capture_degraded)
+
+    with pytest.raises(json.JSONDecodeError):
+        await score_with_llm("title", "content", raise_on_error=True)
+
+    assert calls == 3
+    assert degraded == [{
+        "operation": "radar.distilled_score",
+        "primary_model": "openai:test-model",
+        "reason": "format_retry_exhausted:final_score",
+        "error_kind": "invalid_json_response",
     }]
 
 
@@ -1091,7 +1148,9 @@ async def test_anthropic_scorer_substitutes_placeholder_for_empty_key(
 
 async def test_anthropic_scorer_maps_every_long_document_chunk(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.INFO, logger="ai_engine.radar.distilled_scorer")
     monkeypatch.setenv("UTILITY_LLM", "anthropic:test-model")
     monkeypatch.setattr(distilled_scorer, "SCORING_CHUNK_TOKEN_BUDGET", 1_000)
     prompts: list[str] = []
@@ -1134,6 +1193,37 @@ async def test_anthropic_scorer_maps_every_long_document_chunk(
     final_prompt = prompts[-1]
     assert all(f"覆盖区块 {index}" in final_prompt for index in range(1, total_chunks + 1))
     assert '"信息增量"' in response
+    messages = [record.getMessage() for record in caplog.records]
+    extract_stage = next(
+        message
+        for message in messages
+        if "stage=evidence_extract outcome=succeeded" in message
+    )
+    assert f"chunk_count={total_chunks}" in extract_stage
+    assert f"generation_calls={total_chunks}" in extract_stage
+    assert any(
+        "stage=evidence_reduce outcome=succeeded" in message
+        for message in messages
+    )
+    assert any(
+        "stage=final_score outcome=succeeded" in message
+        and "generation_calls=1" in message
+        for message in messages
+    )
+    llm_call = next(
+        message
+        for message in messages
+        if "distilled_scorer.llm_call" in message
+        and "stage=evidence_extract" in message
+    )
+    assert "request_id=radar-score-" in llm_call
+    assert "latency_ms=" in llm_call
+    total_stage = next(
+        message
+        for message in messages
+        if "stage=total outcome=succeeded" in message
+    )
+    assert f"chunk_count={total_chunks}" in total_stage
 
 
 async def test_score_with_llm_custom_scorer() -> None:

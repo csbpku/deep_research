@@ -210,6 +210,54 @@ async def test_generate_text_uses_openai_compatible_endpoint(
     }
 
 
+async def test_minimax_m3_disables_thinking_and_audits_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    attempts: list[object] = []
+
+    class Completions:
+        async def create(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content='{"partial":'),
+                    finish_reason="length",
+                )],
+                usage=SimpleNamespace(prompt_tokens=1800, completion_tokens=2048),
+                model="MiniMax-M3",
+            )
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.chat = SimpleNamespace(completions=Completions())
+
+    async def capture_usage(attempt: object) -> None:
+        attempts.append(attempt)
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", capture_usage)
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+
+    result = await generate_text(
+        llm_spec="minimax:MiniMax-M3",
+        user_prompt="Return one JSON object.",
+        max_tokens=2048,
+        disable_thinking=True,
+        operation="radar.distilled_score",
+    )
+
+    assert result.truncated is True
+    assert captured["max_completion_tokens"] == 2048
+    assert "max_tokens" not in captured
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert len(attempts) == 1
+    assert attempts[0].status == "degraded"
+    assert attempts[0].error_kind == "truncated_response"
+    assert attempts[0].error_message == "finish_reason=length; output_tokens=2048"
+    assert attempts[0].degraded is True
+
+
 async def test_generate_vision_sends_browser_image_bytes_as_multimodal_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
