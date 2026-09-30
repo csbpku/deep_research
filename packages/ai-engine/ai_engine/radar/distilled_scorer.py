@@ -2089,6 +2089,25 @@ async def score_with_llm(
     """
     profile = profile or active_profile()
     llm_spec = resolve_spec("utility")
+    verified_arxiv_title = _verified_arxiv_source_title(
+        title, content, source_type=source_type, url=url,
+    )
+
+    async def reject_empty_verified_score(score: DistilledScore) -> DistilledScore:
+        if (
+            verified_arxiv_title
+            and score.veto is None
+            and all(value == 0 for value in score.dimension_scores.values())
+        ):
+            logger.warning("distilled_scorer.verified_arxiv_empty_score_not_persisted")
+            await record_llm_degraded(
+                operation="radar.distilled_score",
+                primary_model=llm_spec,
+                reason="verified_arxiv_empty_score",
+            )
+            return default_score(profile)
+        return score
+
     if scorer is None:
         from ai_engine.llm.client import llm_is_configured
 
@@ -2109,6 +2128,7 @@ async def score_with_llm(
                 url=url,
                 published_at=published_at,
                 structured_signals=structured_signals,
+                verified_arxiv_title=verified_arxiv_title,
             )
         active_scorer: Callable[[str, str], Awaitable[str]] = _contextual_scorer
     else:
@@ -2137,9 +2157,6 @@ async def score_with_llm(
                 and result.veto is None
                 and result.total == 0
             ):
-                verified_arxiv_title = _verified_arxiv_source_title(
-                    title, content, source_type=source_type, url=url,
-                )
                 correction = (
                     "原站 arXiv 编号与标题均与此条目完全一致，标题不符否决不适用。"
                     "请据论文实际内容重新给出完整七维评分，证据不足的维度给低分。"
@@ -2189,8 +2206,8 @@ async def score_with_llm(
                         reason="unverified_mismatch",
                     )
                     return default_score(profile)
-                return corrected_result
-            return result
+                return await reject_empty_verified_score(corrected_result)
+            return await reject_empty_verified_score(result)
         except Exception as exc:
             if raise_on_error:
                 stage = getattr(exc, "scoring_stage", None)

@@ -1376,6 +1376,31 @@ async def test_verified_arxiv_review_keeps_scoring_but_disables_mismatch_veto(
     assert "`unsafe_content`" in prompt
 
 
+async def test_verified_arxiv_all_zero_without_veto_is_not_a_formal_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reasons: list[str] = []
+
+    async def zero_scorer(title: str, content: str) -> str:
+        return json.dumps(_all_zero_parsed())
+
+    async def capture_degraded(**kwargs: object) -> None:
+        reasons.append(str(kwargs["reason"]))
+
+    monkeypatch.setattr(distilled_scorer, "record_llm_degraded", capture_degraded)
+    title = "Towards Communication-Efficient Social Intelligence in Language Agents"
+    content = (
+        f"# arXiv:2609.35749\n# Title:{title}\n\nAbstract: "
+        + "The authors study agents and measure communication efficiency. " * 30
+    )
+    result = await score_with_llm(
+        title, content, scorer=zero_scorer,
+        source_type="arxiv", url="https://arxiv.org/abs/2609.35749",
+    )
+    assert result.is_default
+    assert reasons == ["verified_arxiv_empty_score"]
+
+
 async def test_score_with_llm_scorer_exception_returns_default() -> None:
     async def bad_scorer(title: str, content: str) -> str:
         raise RuntimeError("LLM unavailable")

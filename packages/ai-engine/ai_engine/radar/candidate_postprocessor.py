@@ -381,6 +381,7 @@ async def score_missing_candidates(
             if external_reading or input_kind is not None:
                 evidence_label = (
                     "临时读取的来源正文" if input_kind == "transient_source"
+                    else "临时读取的原站摘要" if input_kind == "source_abstract"
                     else "来源摘录" if input_kind == "source_excerpt"
                     else "已生成摘要/来源摘录"
                 )

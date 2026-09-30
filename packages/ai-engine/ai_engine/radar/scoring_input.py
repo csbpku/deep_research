@@ -13,6 +13,8 @@ import re
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
+from bs4 import BeautifulSoup
+
 from ai_engine.fetcher.safe_fetch import FetchedDocument, safe_fetch
 from ai_engine.radar.sync_runner import (
     _extract_article_content,
@@ -82,6 +84,29 @@ def _usable_content(text: str, *, source_type: str, url: str) -> bool:
     )
 
 
+def _arxiv_abstract_input(html: str, url: str) -> tuple[str, str] | None:
+    paper = re.fullmatch(r"/abs/(\d{4}\.\d{4,5})(?:v\d+)?/?", urlsplit(url).path)
+    if paper is None:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    title_node = soup.select_one("h1.title")
+    abstract_node = soup.select_one("blockquote.abstract")
+    if title_node is None or abstract_node is None:
+        return None
+    title = re.sub(
+        r"^Title:\s*", "", title_node.get_text(" ", strip=True), flags=re.I,
+    ).strip()
+    abstract = re.sub(
+        r"^Abstract:\s*", "", abstract_node.get_text(" ", strip=True), flags=re.I,
+    ).strip()
+    if not title or _scoreability(abstract) is None:
+        return None
+    text = f"# arXiv:{paper.group(1)}\n# Title:{title}\n\nAbstract: {abstract}"
+    if not _usable_content(text, source_type="arxiv", url=url):
+        return None
+    return text[:18_000], "source_abstract"
+
+
 async def transient_scoring_input(
     pool: Any,
     row: dict[str, Any],
@@ -139,6 +164,10 @@ async def transient_scoring_input(
         )
         if fetched.status != 200 or urlsplit(fetched.url).hostname not in allowed_hosts:
             return excerpt_input
+        if source_type == "arxiv" and host == "arxiv.org":
+            return _arxiv_abstract_input(
+                fetched.content.decode("utf-8", errors="replace"), fetched.url,
+            ) or excerpt_input
         text = _extract_article_content(
             fetched.content.decode("utf-8", errors="replace"),
             fetched.url,

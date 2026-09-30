@@ -59,9 +59,11 @@ async def test_short_excerpt_uses_bounded_in_memory_source_read() -> None:
     pool = _Pool("A technically detailed research abstract describes benchmarks. " * 9)
     seen: list[dict[str, Any]] = []
     html = (
+        '<h1 class="title mathjax"><span>Title:</span> An arXiv study</h1>'
         '<blockquote class="abstract">'
         + "A peer-reviewed research result discusses benchmarks and implementation. " * 15
         + "</blockquote>"
+        + "<aside>Navigation and citation tools " * 100 + "</aside>"
     )
 
     async def fetch(url: str, **kwargs: Any) -> FetchedDocument:
@@ -74,8 +76,11 @@ async def test_short_excerpt_uses_bounded_in_memory_source_read() -> None:
 
     result = await transient_scoring_input(pool, _row(), fetcher=fetch)
     assert result is not None
-    assert result[1] == "transient_source"
+    assert result[1] == "source_abstract"
     assert "benchmarks and implementation" in result[0]
+    assert "# arXiv:2609.00001" in result[0]
+    assert "# Title:An arXiv study" in result[0]
+    assert "Navigation and citation tools" not in result[0]
     assert seen == [{
         "url": "https://arxiv.org/abs/2609.00001",
         "max_bytes": 256_000, "timeout": 10.0, "max_redirects": 2,
@@ -118,7 +123,7 @@ async def test_archived_daily_row_never_uses_legacy_diagnostic_excerpt() -> None
     pool = _Pool("A generated guess about a paper. " * 30)
 
     async def fetch(url: str, **kwargs: Any) -> FetchedDocument:
-        text = '<blockquote class="abstract">' + (
+        text = '<h1 class="title">Title: An arXiv study</h1><blockquote class="abstract">' + (
             "The study tests a concrete method and reports an evaluation. " * 25
         ) + "</blockquote>"
         return FetchedDocument(
@@ -129,9 +134,23 @@ async def test_archived_daily_row_never_uses_legacy_diagnostic_excerpt() -> None
     result = await transient_scoring_input(
         pool, _row(status="archived", tags=["legacy"]), fetcher=fetch,
     )
-    assert result is not None and result[1] == "transient_source"
+    assert result is not None and result[1] == "source_abstract"
     assert "concrete method" in result[0]
     assert not pool.queries
+
+
+async def test_arxiv_missing_abstract_never_scores_page_navigation() -> None:
+    async def fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        html = (
+            '<h1 class="title">Title: A study</h1>'
+            + "<nav>Bibliographic and Citation Tools</nav>" * 100
+        )
+        return FetchedDocument(
+            url=url, final_ip="8.8.8.8", status=200, headers={},
+            content=html.encode(), content_type="text/html", elapsed_ms=12,
+        )
+
+    assert await transient_scoring_input(_Pool(), _row(), fetcher=fetch) is None
 
 
 async def test_github_repo_uses_bounded_api_readme_instead_of_large_html() -> None:
