@@ -27,6 +27,7 @@ from ai_engine.scoring.scoring_profiles import profile_for_source_url
 logger = logging.getLogger("ai_engine.radar.candidate_postprocessor")
 
 ScoreFn = Callable[..., Awaitable[DistilledScore]]
+ScoreInputFn = Callable[[Any, dict[str, Any]], Awaitable[tuple[str, str] | None]]
 
 _SOURCE_PROFILE: dict[str, str] = {
     "arxiv": "paper",
@@ -97,6 +98,8 @@ async def score_missing_candidates(
     suppress_enrichment: bool = False,
     concurrency: int | None = None,
     scorer: ScoreFn = score_with_llm,
+    only_unscored: bool = False,
+    transient_input: ScoreInputFn | None = None,
 ) -> int:
     """Score visible radar rows that have no persisted Distilled result.
 
@@ -122,10 +125,14 @@ async def score_missing_candidates(
             summary_filter += 'AND s."originalFetchedAt" >= %s '
             params += (original_fetched_since,)
         score_filter = (
-            '(s."distilledScore" IS NULL OR COALESCE(s."tags", ARRAY[]::text[]) '
-            "@> ARRAY['score_pending_after_enrichment']::text[]) "
-            if not rescore
-            else 'TRUE '
+            's."distilledScore" IS NULL '
+            if only_unscored
+            else (
+                '(s."distilledScore" IS NULL OR COALESCE(s."tags", ARRAY[]::text[]) '
+                "@> ARRAY['score_pending_after_enrichment']::text[]) "
+                if not rescore
+                else 'TRUE '
+            )
         )
         summary_filter = summary_filter.removeprefix('AND ')
         where_prefix = 'WHERE ' + score_filter
@@ -134,6 +141,7 @@ async def score_missing_candidates(
         rows = await (
             await conn.execute(
                 'SELECT s."id", s."title", s."body", s."interpretation", s."url", '
+                's."source", s."syncRunId", s."canonicalUrl", '
                 's."publishedAt", s."originalMarkdown", s."tags", '
                 's."originalKind", s."originalMeta", s."enrichmentStatus", '
                 's."readerQualityStatus", '
@@ -173,6 +181,7 @@ async def score_missing_candidates(
         bool,
         bool,
         bool,
+        str | None,
     ] | None:
         row = dict(raw)
         external_reading = "external_reading" in (row.get("tags") or [])
@@ -193,6 +202,21 @@ async def score_missing_candidates(
             or row.get("title")
             or ""
         )
+        input_kind: str | None = None
+        if external_reading and transient_input is not None:
+            try:
+                async with gate:
+                    resolved = await transient_input(pool, row)
+            except Exception as exc:
+                logger.warning(
+                    "ai-engine.radar.postprocess.transient_input_failed",
+                    extra={"summary_id": str(row["id"]), "error": type(exc).__name__},
+                )
+                resolved = None
+            if resolved is not None:
+                content, input_kind = resolved
+            else:
+                return None
         shell_label = None if external_reading else _shell_content_label(
             content,
             source_type=source_type,
@@ -220,6 +244,7 @@ async def score_missing_candidates(
                 external_reading,
                 external_reading or suppress_enrichment,
                 suppress_enrichment,
+                input_kind,
             )
         if external_reading:
             # Even a long provider abstract is not the full source document.
@@ -273,6 +298,7 @@ async def score_missing_candidates(
             external_reading,
             external_reading or suppress_enrichment,
             suppress_enrichment,
+            input_kind,
         )
 
     results = await asyncio.gather(*(_score(row) for row in rows))
@@ -291,6 +317,7 @@ async def score_missing_candidates(
                 external_reading,
                 no_enrichment,
                 preserve_enrichment_state,
+                input_kind,
             ) = scored
             if result is None:
                 if rescore:
@@ -330,7 +357,8 @@ async def score_missing_candidates(
                     '"distilledTargetTier" = NULL, '
                     '"enrichmentStatus" = NULL, "enrichmentNextRetryAt" = NULL, '
                     '"distilledProfile" = NULL, "scoreReason" = %s, '
-                    '"updatedAt" = now() WHERE "id" = %s',
+                    '"updatedAt" = now() WHERE "id" = %s'
+                    + (' AND "distilledScore" IS NULL' if only_unscored else ''),
                     (pending_reason, summary_id),
                 )
                 continue
@@ -341,8 +369,13 @@ async def score_missing_candidates(
             )
             score_reason = build_distilled_score_reason(result)
             if external_reading:
+                evidence_label = (
+                    "临时读取的来源正文" if input_kind == "transient_source"
+                    else "来源摘录" if input_kind == "source_excerpt"
+                    else "已生成摘要/来源摘录"
+                )
                 score_reason = (
-                    "补评分：全文未缓存，依据已生成摘要/来源摘录；请打开原文复核。"
+                    f"补评分：全文未缓存，依据{evidence_label}；请打开原文复核。"
                     + score_reason
                 )[:500]
             elif scoreability == "limited":
@@ -377,7 +410,7 @@ async def score_missing_candidates(
                     "'score_pending_after_enrichment')) "
                     "|| ARRAY['tier_' || %s]::text[]"
                 )
-            await conn.execute(
+            cursor = await conn.execute(
                 'UPDATE "summaries" SET "distilledScore" = %s::jsonb, '
                 '"distilledTotal" = %s, "distilledTier" = %s, '
                 '"distilledTargetTier" = %s, '
@@ -392,7 +425,8 @@ async def score_missing_candidates(
                 'WHEN %s THEN "enrichmentNextRetryAt" '
                 'WHEN %s OR %s::text IS NULL OR %s THEN NULL ELSE now() END, '
                 '"tags" = ' + tags_sql + ', '
-                '"updatedAt" = now() WHERE "id" = %s',
+                '"updatedAt" = now() WHERE "id" = %s'
+                + (' AND "distilledScore" IS NULL' if only_unscored else ''),
                 (
                     json.dumps(result.to_dict(), ensure_ascii=False),
                     total,
@@ -412,5 +446,6 @@ async def score_missing_candidates(
                     summary_id,
                 ),
             )
-            persisted += 1
+            if not only_unscored or cursor.rowcount > 0:
+                persisted += 1
     return persisted

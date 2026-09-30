@@ -116,6 +116,8 @@ describe('buildSearchSql', () => {
     expect(rowsSql).toContain('similarity(lower(sd.title), sq.needle)');
     expect(rowsSql).toContain('strict_word_similarity(sq.needle, lower(sd.title))');
     expect(rowsSql).toContain('ts_headline(');
+    expect(rowsSql).toContain('s."distilledScore" IS NOT NULL');
+    expect(countSql).toContain('s."distilledScore" IS NOT NULL');
     expect(rowsSql).toContain("'StartSel=<mark>, StopSel=</mark>");
     // 显式不写其它字典
     expect(rowsSql).not.toContain("chinese_zh");

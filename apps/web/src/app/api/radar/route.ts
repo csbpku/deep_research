@@ -156,6 +156,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       {
         source: 'daily',
         syncRunId: { not: null },
+        distilledScore: { not: Prisma.DbNull },
         OR: [
           { distilledTier: 'skim' },
           {

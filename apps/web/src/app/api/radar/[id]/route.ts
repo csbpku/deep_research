@@ -185,6 +185,13 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       requestId,
     });
   }
+  if (isAutomaticRadar && summary.distilledScore === null && u?.role !== 'admin') {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '雷达候选不存在',
+      requestId,
+    });
+  }
 
   const fb = isContentSurface
     ? {

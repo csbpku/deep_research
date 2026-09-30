@@ -97,6 +97,26 @@ def _redirect_response(location: str, *, status: int = 302) -> httpx.Response:
     )
 
 
+@pytest.mark.asyncio
+async def test_allowed_hosts_rejects_redirect_before_requesting_target(
+    patch_resolver: Callable[[str, str], None],
+) -> None:
+    patch_resolver("public.example", "8.8.8.8")
+    transport = _MockTransport({
+        "public.example": lambda r: _redirect_response("https://other.example/"),
+        "other.example": lambda r: _ok_response(),
+    })
+    client = _client(transport)
+    with pytest.raises(SafeFetchError) as error:
+        await safe_fetch(
+            "https://public.example/article", client=client,
+            allowed_hosts=("public.example",),
+        )
+    assert error.value.code == "URL_FETCH_BLOCKED"
+    assert transport.record == ["https://public.example/article"]
+    await client.aclose()
+
+
 def test_dns_resolver_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """Transient resolver failures should recover before becoming URL_FETCH_DNS."""
     calls = 0

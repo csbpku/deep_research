@@ -256,6 +256,7 @@ async def safe_fetch(
     extra_denied_hosts: tuple[str, ...] = (),
     extra_allowed_ports: tuple[int, ...] = (),
     allow_localhost: bool = False,
+    allowed_hosts: tuple[str, ...] | None = None,
 ) -> FetchedDocument:
     """Fetch `url` with SSRF guards; returns a `FetchedDocument`.
 
@@ -295,6 +296,10 @@ async def safe_fetch(
     host, port = _validate_url_shape(
         url, allowed_ports=allowed_ports, denied_hosts=denied_hosts
     )
+    if allowed_hosts is not None and host.lower().rstrip(".") not in allowed_hosts:
+        raise SafeFetchError(
+            code="URL_FETCH_BLOCKED", message="host is not allowed", host=host,
+        )
     ip = _resolve_ip(host)
     blocked, reason = _is_blocked_ip(ip)
     if blocked:
@@ -338,6 +343,11 @@ async def safe_fetch(
                 cur_host, cur_port = _validate_url_shape(
                     current_url, allowed_ports=allowed_ports, denied_hosts=denied_hosts
                 )
+                if allowed_hosts is not None and cur_host.lower().rstrip(".") not in allowed_hosts:
+                    raise SafeFetchError(
+                        code="URL_FETCH_BLOCKED", message="redirect host is not allowed",
+                        host=cur_host,
+                    )
                 cur_ip = _resolve_ip(cur_host)
                 blocked, reason = _is_blocked_ip(cur_ip)
                 if blocked:

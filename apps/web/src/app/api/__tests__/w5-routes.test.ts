@@ -303,6 +303,20 @@ describe('GET /api/radar', () => {
     expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         AND: expect.arrayContaining([
+          expect.objectContaining({
+            OR: expect.arrayContaining([
+              expect.objectContaining({
+                source: 'daily',
+                distilledScore: { not: expect.anything() },
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    }));
+    expect(mocks.summaryFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
           { AND: [
             { OR: [{ originalKind: null }, { originalKind: { notIn: ['github_issue', 'github_pr', 'github_release'] } }] },
             { NOT: { canonicalUrl: { contains: '/issues/' } } },
@@ -487,6 +501,26 @@ describe('GET /api/radar', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar/[id]', () => {
+  it('hides a stale skim tier without a persisted score from members and anonymous readers', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Unscored card', body: 'brief', url: 'https://example.com',
+      tags: ['external_reading'], status: 'candidate', summaryDate: new Date(),
+      publishedAt: null, createdAt: new Date(), source: 'daily', syncRunId: 'r',
+      distilledScore: null, distilledTier: 'skim', shareSource: null,
+    });
+    for (const url of [
+      `http://localhost/api/radar/${SUM_ID}`,
+      `http://localhost/api/radar/${SUM_ID}?surface=content`,
+    ]) {
+      const response = await radarDetail(
+        new Request(url) as never,
+        { params: Promise.resolve({ id: SUM_ID }) },
+      );
+      expect(response.status).toBe(404);
+    }
+    expect(mocks.radarFeedbackGroupBy).not.toHaveBeenCalled();
+  });
+
   it('returns 400 on bad uuid', async () => {
     const r = await radarDetail(
       new Request('http://localhost/api/radar/xxx') as never,

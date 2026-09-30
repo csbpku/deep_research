@@ -148,6 +148,7 @@ export function buildSearchSql(args: BuildSearchArgs): {
       CROSS JOIN search_query sq
       WHERE s.source::text = 'daily'
         AND s."syncRunId" IS NOT NULL
+        AND s."distilledScore" IS NOT NULL
         AND s.status::text <> 'archived'
         AND (
           s."distilledTier" = 'skim'

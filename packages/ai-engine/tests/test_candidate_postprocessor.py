@@ -10,8 +10,9 @@ from ai_engine.scoring.scoring_profiles import get_profile
 
 
 class _Cursor:
-    def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
+    def __init__(self, rows: list[dict[str, Any]] | None = None, rowcount: int = 1) -> None:
         self.rows = rows or []
+        self.rowcount = rowcount
 
     async def fetchall(self) -> list[dict[str, Any]]:
         return self.rows
@@ -21,10 +22,14 @@ class _Connection:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows
         self.executions: list[tuple[str, tuple[Any, ...]]] = []
+        self.update_rowcount = 1
 
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
         self.executions.append((sql, params))
-        return _Cursor(self.rows if sql.lstrip().startswith("SELECT") else [])
+        return _Cursor(
+            self.rows if sql.lstrip().startswith("SELECT") else [],
+            self.update_rowcount,
+        )
 
 
 class _Pool:
@@ -73,6 +78,39 @@ async def test_score_missing_candidates_scores_approved_share_content() -> None:
     assert 'WHEN %s::text IS NULL THEN NULL' in update_sql
     assert 'WHEN %s OR %s::text IS NULL OR %s THEN NULL' in update_sql
     assert update_params[1] == 58.0
+
+
+async def test_only_unscored_filters_pending_scored_rows_and_guards_update() -> None:
+    pool = _Pool([{
+        "id": "summary-unscored",
+        "title": "Unscored radar",
+        "body": "Technical content about a working implementation. " * 40,
+        "url": "https://example.com/article",
+        "sourceType": "rss",
+    }])
+
+    async def fake_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        return replace(
+            default_score(get_profile("news")),
+            tier="skim",
+            is_default=False,
+        )
+
+    scored = await score_missing_candidates(
+        pool, only_unscored=True, suppress_enrichment=True, scorer=fake_scorer,
+    )
+    assert scored == 1
+    select_sql = pool.connection_value.executions[0][0]
+    update_sql = pool.connection_value.executions[1][0]
+    assert 'WHERE s."distilledScore" IS NULL' in select_sql
+    assert "score_pending_after_enrichment" not in select_sql
+    assert 'WHERE "id" = %s AND "distilledScore" IS NULL' in update_sql
+
+    # Another worker saved a score while the LLM was running.
+    pool.connection_value.update_rowcount = 0
+    assert await score_missing_candidates(
+        pool, only_unscored=True, suppress_enrichment=True, scorer=fake_scorer,
+    ) == 0
 
 
 async def test_rescoring_enriched_repo_uses_github_profile_and_signals() -> None:
@@ -167,6 +205,62 @@ async def test_external_reading_rescore_preserves_high_tier_without_enrichment()
     assert update_params[7] is True
     assert update_params[9] is False
     assert update_params[-1] == "summary-external"
+
+
+async def test_transient_external_uses_source_even_when_generated_brief_is_long() -> None:
+    brief = "Generated summary with no direct source evidence. " * 25
+    source = "Source document records measurements, benchmarks, and limitations. " * 20
+    pool = _Pool([{
+        "id": "external",
+        "title": "Source-backed article",
+        "body": brief,
+        "interpretation": brief,
+        "url": "https://arxiv.org/abs/2609.00001",
+        "tags": ["external_reading"],
+        "sourceType": "arxiv",
+    }])
+    calls: list[str] = []
+
+    async def source_input(_: Any, row: dict[str, Any]) -> tuple[str, str]:
+        calls.append(row["id"])
+        return source, "transient_source"
+
+    async def scorer(title: str, content: str, **kwargs: Any):  # type: ignore[no-untyped-def]
+        assert content == source
+        return replace(default_score(get_profile("paper")), is_default=False)
+
+    assert await score_missing_candidates(
+        pool, only_unscored=True, suppress_enrichment=True,
+        transient_input=source_input, scorer=scorer,
+    ) == 1
+    assert calls == ["external"]
+    updates = [params for sql, params in pool.connection_value.executions if sql.startswith("UPDATE")]
+    assert len(updates) == 1
+    assert "临时读取的来源正文" in updates[0][5]
+    assert source not in str(updates[0])
+
+
+async def test_transient_external_unavailable_leaves_row_unscored_and_untouched() -> None:
+    pool = _Pool([{
+        "id": "external",
+        "title": "Only a generated brief",
+        "body": "Generated summary with no direct source evidence. " * 25,
+        "interpretation": "Generated summary with no direct source evidence. " * 25,
+        "url": "https://arxiv.org/abs/2609.00001",
+        "tags": ["external_reading"],
+        "sourceType": "arxiv",
+    }])
+
+    async def no_source(_: Any, row: dict[str, Any]) -> None:
+        return None
+
+    async def no_score(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        raise AssertionError("cannot score a generated brief as source text")
+
+    assert await score_missing_candidates(
+        pool, only_unscored=True, transient_input=no_source, scorer=no_score,
+    ) == 0
+    assert len(pool.connection_value.executions) == 1
 
 
 async def test_suppressed_enrichment_rescore_keeps_high_tier_for_legacy_row() -> None:
