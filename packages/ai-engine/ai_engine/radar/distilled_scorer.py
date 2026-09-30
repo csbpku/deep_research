@@ -447,7 +447,7 @@ def _build_rubric_text(profile: ScoringProfile) -> str:
     return "\n".join(lines)
 
 
-def _build_veto_text() -> str:
+def _build_veto_text(*, verified_arxiv_title: bool = False) -> str:
     """Veto / risk / repost rules.
 
     v2 distinction:
@@ -458,10 +458,16 @@ def _build_veto_text() -> str:
       - Repost flag (``suspected_repost``) caps 信息增量 at 1 and
         but does not zero the score.
     """
-    return """
+    mismatch_rule = (
+        "   - 原站 arXiv 编号和标题已核对一致，不适用标题不符否决；"
+        "正文证据不足时正常给低分"
+        if verified_arxiv_title else
+        "   - `title_content_mismatch`：标题与内容严重不符，标题党"
+    )
+    return f"""
 ## 三类信号（按严重程度）
 1. **硬否决**（任一命中则所有维度记 0 分）：
-   - `title_content_mismatch`：标题与内容严重不符，标题党
+{mismatch_rule}
    - `unsafe_content`：明确鼓励违法、伤害、歧视或其他违反公共安全的内容
 2. **风险标记**（不否决，但标 risk_flag）：
    - `security_risk`：涉及安全漏洞利用、攻击教程、恶意代码分发。仍可能有分析价值，但不应被高优先级推送
@@ -528,6 +534,7 @@ def build_user_prompt(
     structured_signals: dict[str, Any] | None = None,
     content_is_chunk_evidence: bool = False,
     review_instruction: str | None = None,
+    verified_arxiv_title: bool = False,
 ) -> str:
     """Build the user message for the LLM scoring call.
 
@@ -564,6 +571,11 @@ def build_user_prompt(
         f"\n## 评分复核指令\n{review_instruction}\n"
         if review_instruction else ""
     )
+    veto_rule = (
+        '`veto` 只能填 `"unsafe_content"` 或 null；原站标题已经核对一致'
+        if verified_arxiv_title else
+        '`veto` 填 `"title_content_mismatch"` 或 `"unsafe_content"`'
+    )
     return f"""请对以下文章进行 7 个维度的评分（每个维度 0–3 分）。
 
 ## 评分画像上下文
@@ -591,7 +603,7 @@ def build_user_prompt(
 - 只有理论证明、综述或与当前 AI 工程无直接关系的论文，可在分析深度较高时保留深度分，但可行动性和综合信号仍应低分
 - 不确定时给低分，不要用 2 分作为默认值；3 分必须有正文中的具体证据支撑
 
-{_build_veto_text()}
+{_build_veto_text(verified_arxiv_title=verified_arxiv_title)}
 {review_block}
 
 ## 文章内容
@@ -623,7 +635,7 @@ def build_user_prompt(
 }}
 
 判定规则：
-- 硬否决命中：`veto` 填 `"title_content_mismatch"` 或 `"unsafe_content"`，`risk_flag=null`，`suspected_repost=false`，所有维度填 0
+- 硬否决命中：{veto_rule}，`risk_flag=null`，`suspected_repost=false`，所有维度填 0
 - 风险标记命中：`risk_flag` 填 `"security_risk"`，`veto=null`，`suspected_repost=false`，其它维度正常评分
 - 疑似搬运命中：`suspected_repost=true`，`veto=null`，`risk_flag=null`，其它维度正常评分（信息增量会在后处理中限制到 ≤ 1）"""
 
@@ -839,6 +851,7 @@ async def anthropic_scorer(
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
     review_instruction: str | None = None,
+    verified_arxiv_title: bool = False,
 ) -> str:
     scoring_run_id = uuid4().hex[:12]
     metrics: dict[str, int] = {}
@@ -857,6 +870,7 @@ async def anthropic_scorer(
             published_at=published_at,
             structured_signals=structured_signals,
             review_instruction=review_instruction,
+            verified_arxiv_title=verified_arxiv_title,
         )
     except BaseException as exc:
         error_kind = _scoring_response_error_kind(exc)
@@ -899,6 +913,7 @@ async def _anthropic_scorer_impl(
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
     review_instruction: str | None = None,
+    verified_arxiv_title: bool = False,
 ) -> str:
     """Call the configured light LLM to score article dimensions.
 
@@ -937,6 +952,7 @@ async def _anthropic_scorer_impl(
             published_at=published_at,
             structured_signals=structured_signals,
             review_instruction=review_instruction,
+            verified_arxiv_title=verified_arxiv_title,
         )
         async with _measure_scoring_stage("final_score"):
             raw, _ = await _generate_scoring_json(
@@ -984,6 +1000,7 @@ async def _anthropic_scorer_impl(
         structured_signals=structured_signals,
         content_is_chunk_evidence=True,
         review_instruction=review_instruction,
+        verified_arxiv_title=verified_arxiv_title,
     )
     async with _measure_scoring_stage("final_score"):
         raw, _ = await _generate_scoring_json(
@@ -1336,6 +1353,33 @@ _MISMATCH_STOPWORDS = frozenset({
     "model", "models", "project", "repo", "repository", "that", "their", "this",
     "using", "with",
 })
+
+
+def _verified_arxiv_source_title(
+    title: str,
+    content: str,
+    *,
+    source_type: str | None,
+    url: str | None,
+) -> bool:
+    if source_type != "arxiv" or not url:
+        return False
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.hostname != "arxiv.org":
+        return False
+    paper = re.fullmatch(r"/abs/(\d{4}\.\d{4,5})(?:v\d+)?/?", parts.path)
+    if paper is None:
+        return False
+    header = content[:700]
+    source_title = re.search(r"(?m)^\s{0,4}#{1,3}\s*Title:\s*(.+?)\s*$", header)
+    if source_title is None or not re.search(
+        rf"(?i)\barxiv:\s*{re.escape(paper.group(1))}\b", header
+    ):
+        return False
+    return (
+        " ".join(source_title.group(1).split()).casefold()
+        == " ".join(title.split()).casefold()
+    )
 
 
 def _mismatch_veto_refuted(
@@ -2093,7 +2137,13 @@ async def score_with_llm(
                 and result.veto is None
                 and result.total == 0
             ):
+                verified_arxiv_title = _verified_arxiv_source_title(
+                    title, content, source_type=source_type, url=url,
+                )
                 correction = (
+                    "原站 arXiv 编号与标题均与此条目完全一致，标题不符否决不适用。"
+                    "请据论文实际内容重新给出完整七维评分，证据不足的维度给低分。"
+                    if verified_arxiv_title else
                     "标题与长正文有可核验的词项重合，请重新核对其主题。"
                     "只有明确属于不同主题时才使用 title_content_mismatch；"
                     "若内容相符，应正常返回完整七维评分，证据不足的维度给低分。"
@@ -2109,6 +2159,7 @@ async def score_with_llm(
                             published_at=published_at,
                             structured_signals=structured_signals,
                             review_instruction=correction,
+                            verified_arxiv_title=verified_arxiv_title,
                         )
                     else:
                         corrected_raw = await active_scorer(

@@ -855,6 +855,35 @@ def test_hard_veto_title_content_mismatch_is_ignored_for_aligned_long_repo() -> 
     assert result.total > 0
 
 
+def test_arxiv_title_verification_requires_original_id_and_exact_title() -> None:
+    from ai_engine.radar.distilled_scorer import _verified_arxiv_source_title
+
+    title = "Towards Communication-Efficient Social Intelligence in Language Agents"
+    content = (
+        "# Computer Science > Computation and Language\n"
+        "**arXiv:2609.35749** (cs)\n"
+        f"# Title:{title}\n"
+        "The paper describes agents and communication efficiency. " * 25
+    )
+    assert _verified_arxiv_source_title(
+        title, content, source_type="arxiv",
+        url="https://arxiv.org/abs/2609.35749",
+    )
+    for url, source_title in (
+        ("https://arxiv.org/abs/2609.35750", title),
+        ("https://arxiv.org.attacker.example/abs/2609.35749", title),
+        ("https://github.com/org/repo", title),
+        ("https://arxiv.org/abs/2609.35749", "Another paper"),
+    ):
+        assert not _verified_arxiv_source_title(
+            source_title, content, source_type="arxiv", url=url,
+        )
+    assert not _verified_arxiv_source_title(
+        title, content.replace("arXiv:2609.35749", "arXiv:2609.35750"),
+        source_type="arxiv", url="https://arxiv.org/abs/2609.35749",
+    )
+
+
 def test_hard_veto_unsafe_content() -> None:
     parsed = _all_max_parsed()
     parsed["veto"] = VETO_UNSAFE
@@ -1303,6 +1332,48 @@ async def test_production_mismatch_review_is_not_inserted_into_source(
     )
     assert prompt.index("## 评分复核指令") < prompt.index("## 文章内容")
     assert prompt.split("## 文章内容", 1)[1].count("不同主题") == 0
+
+
+async def test_verified_arxiv_review_keeps_scoring_but_disables_mismatch_veto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object, object]] = []
+
+    async def fake_anthropic_scorer(
+        title: str, content: str, **kwargs: object,
+    ) -> str:
+        calls.append((
+            content, kwargs.get("review_instruction"),
+            kwargs.get("verified_arxiv_title"),
+        ))
+        parsed = _all_zero_parsed() if len(calls) == 1 else _all_max_parsed()
+        if len(calls) == 1:
+            parsed["veto"] = VETO_MISMATCH
+        return json.dumps(parsed)
+
+    monkeypatch.setenv("UTILITY_LLM", "openai:test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(distilled_scorer, "anthropic_scorer", fake_anthropic_scorer)
+    title = "Towards Communication-Efficient Social Intelligence in Language Agents"
+    content = (
+        f"# Computer Science\n**arXiv:2609.35749**\n# Title:{title}\n"
+        + "The authors study communication efficiency in social language agents. " * 30
+    )
+    result = await score_with_llm(
+        title, content, source_type="arxiv",
+        url="https://arxiv.org/abs/2609.35749",
+    )
+    assert not result.is_default
+    assert len(calls) == 2
+    assert calls[1][0] == content
+    assert "arXiv" in str(calls[1][1])
+    assert calls[1][2] is True
+    prompt = build_user_prompt(
+        title, content, review_instruction=str(calls[1][1]),
+        verified_arxiv_title=True,
+    )
+    assert "title_content_mismatch" not in prompt
+    assert "`unsafe_content`" in prompt
 
 
 async def test_score_with_llm_scorer_exception_returns_default() -> None:
