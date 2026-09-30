@@ -61,6 +61,7 @@ TRANSIENT_MARKDOWN_MAX_CHARS = 2 * 1024 * 1024
 # this below the prompt target so a slightly terse but still useful answer is
 # not discarded in favor of raw source text.
 MIN_BRIEF_OUTPUT_CHARS = 160
+MIN_JUDGEMENT_OUTPUT_CHARS = 30
 MIN_LIMITED_SCORE_CONTENT_CHARS = 300
 MIN_FULL_SCORE_CONTENT_CHARS = 1_000
 
@@ -1917,7 +1918,7 @@ async def _run_source(
                                     brief_message,
                                 )
                             interpretation = _strip_reasoning_markup(brief.output_text)
-                            if len(interpretation) < MIN_BRIEF_OUTPUT_CHARS:
+                            if len(interpretation) < MIN_JUDGEMENT_OUTPUT_CHARS:
                                 logger.warning(
                                     "ai-engine.radar.brief_output_short",
                                     extra={

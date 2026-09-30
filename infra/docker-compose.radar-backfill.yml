@@ -1,0 +1,31 @@
+# Maintenance-only override. Run with `compose run --no-deps`; never `up`.
+services:
+  ai-engine:
+    user: "1000:1000"
+    restart: "on-failure:3"
+    healthcheck:
+      disable: true
+    environment:
+      RESEARCH_LLM: minimax:MiniMax-M3
+      UTILITY_LLM: minimax:MiniMax-M3
+      FALLBACK_LLM: minimax:MiniMax-M3
+      LLM_FALLBACK_LLM: minimax:MiniMax-M3
+      LLM_RETRY_ATTEMPTS: "0"
+      RADAR_LLM_CONCURRENCY: "2"
+      RADAR_SCORING_CONCURRENCY: "2"
+      DB_POOL_MIN_SIZE: "1"
+      DB_POOL_MAX_SIZE: "2"
+      ANYTHINGLLM_ENABLED: "false"
+      ANYTHINGLLM_PERSONAL_KNOWLEDGE_ENABLED: "0"
+    volumes:
+      - ${RADAR_BACKFILL_DIR:?set maintenance directory}/state:/maintenance
+      - ${RADAR_BACKFILL_DIR:?set maintenance directory}/sync_runner.py:/app/ai_engine/radar/sync_runner.py:ro
+      - ${RADAR_BACKFILL_DIR:?set maintenance directory}/scoring_input.py:/app/ai_engine/radar/scoring_input.py:ro
+      - ${RADAR_BACKFILL_DIR:?set maintenance directory}/candidate_postprocessor.py:/app/ai_engine/radar/candidate_postprocessor.py:ro
+      - ${RADAR_BACKFILL_DIR:?set maintenance directory}/rescore_active_radar.py:/app/scripts/rescore_active_radar.py:ro
+      - ${RADAR_BACKFILL_DIR:?set maintenance directory}/backfill_radar_briefs.py:/app/scripts/backfill_radar_briefs.py:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"

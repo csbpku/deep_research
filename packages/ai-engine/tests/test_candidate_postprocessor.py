@@ -113,6 +113,72 @@ async def test_only_unscored_filters_pending_scored_rows_and_guards_update() -> 
     ) == 0
 
 
+async def test_archived_daily_rows_are_only_included_for_explicit_maintenance() -> None:
+    pool = _Pool([{
+        "id": "archived-1",
+        "title": "Archived article",
+        "body": "A real technical article with reproducible evidence. " * 30,
+        "url": "https://example.com/article",
+        "sourceType": "rss",
+    }])
+
+    async def fake_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        return replace(default_score(get_profile("news")), is_default=False)
+
+    await score_missing_candidates(
+        pool, only_unscored=True, include_archived=True,
+        suppress_enrichment=True, scorer=fake_scorer,
+    )
+    select_sql = pool.connection_value.executions[0][0]
+    assert "('candidate', 'published', 'archived')" in select_sql
+    assert 's."source" = \'user\' AND s."status" IN (\'candidate\', \'published\')' in select_sql
+    assert '"distilledScore" IS NULL' in pool.connection_value.executions[-1][0]
+
+
+async def test_archived_short_shell_is_not_mutated_by_maintenance() -> None:
+    pool = _Pool([{
+        "id": "archived-shell",
+        "status": "archived",
+        "title": "Cannot load page",
+        "body": "Access denied",
+        "url": "https://example.com/blocked",
+        "sourceType": "rss",
+    }])
+
+    async def fail_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        raise AssertionError("shell must not be scored")
+
+    assert await score_missing_candidates(
+        pool, include_archived=True, only_unscored=True,
+        suppress_enrichment=True, scorer=fail_scorer,
+    ) == 0
+    assert len(pool.connection_value.executions) == 1
+
+
+async def test_archived_legacy_body_is_never_scoring_evidence() -> None:
+    pool = _Pool([{
+        "id": "archived-legacy", "status": "archived",
+        "title": "Technical analysis",
+        "body": "According to the title we can infer this is important. " * 30,
+        "url": "https://example.com/post", "sourceType": "rss",
+    }])
+    calls = []
+
+    async def transient(*args: Any) -> None:
+        calls.append(True)
+        return None
+
+    async def fail_scorer(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        raise AssertionError("legacy generated body must not be scored")
+
+    assert await score_missing_candidates(
+        pool, include_archived=True, only_unscored=True,
+        suppress_enrichment=True, transient_input=transient, scorer=fail_scorer,
+    ) == 0
+    assert calls == [True]
+    assert len(pool.connection_value.executions) == 1
+
+
 async def test_rescoring_enriched_repo_uses_github_profile_and_signals() -> None:
     pool = _Pool([{
         "id": "summary-repo",

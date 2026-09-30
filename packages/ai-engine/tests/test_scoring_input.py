@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -110,6 +112,81 @@ async def test_rejects_untrusted_rows_and_non_https_links_without_fetch() -> Non
     ):
         assert await transient_scoring_input(pool, row, fetcher=no_fetch) is None
     assert all(sql.startswith("SELECT") for sql, _ in pool.queries)
+
+
+async def test_archived_daily_row_never_uses_legacy_diagnostic_excerpt() -> None:
+    pool = _Pool("A generated guess about a paper. " * 30)
+
+    async def fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        text = '<blockquote class="abstract">' + (
+            "The study tests a concrete method and reports an evaluation. " * 25
+        ) + "</blockquote>"
+        return FetchedDocument(
+            url=url, final_ip="8.8.8.8", status=200, headers={},
+            content=text.encode(), content_type="text/html", elapsed_ms=12,
+        )
+
+    result = await transient_scoring_input(
+        pool, _row(status="archived", tags=["legacy"]), fetcher=fetch,
+    )
+    assert result is not None and result[1] == "transient_source"
+    assert "concrete method" in result[0]
+    assert not pool.queries
+
+
+async def test_github_repo_uses_bounded_api_readme_instead_of_large_html() -> None:
+    pool = _Pool()
+    seen: list[tuple[str, dict[str, Any]]] = []
+    readme = "# OpenShell\nTechnical architecture and access-control mechanisms. " * 25
+
+    async def fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        seen.append((url, kwargs))
+        payload = json.dumps({
+            "encoding": "base64",
+            "content": base64.b64encode(readme.encode()).decode(),
+        })
+        return FetchedDocument(
+            url=url, final_ip="8.8.8.8", status=200, headers={},
+            content=payload.encode(), content_type="application/json", elapsed_ms=12,
+        )
+
+    result = await transient_scoring_input(
+        pool, _row(
+            sourceType="github", syncRunId=None, tags=["external_reading"],
+            url="https://github.com/NVIDIA/OpenShell",
+        ), fetcher=fetch,
+    )
+    assert result == (readme[:18_000], "transient_source")
+    assert seen == [(
+        "https://api.github.com/repos/NVIDIA/OpenShell/readme",
+        {
+            "max_bytes": 256_000, "timeout": 10.0, "max_redirects": 0,
+            "allowed_hosts": ("api.github.com",),
+        },
+    )]
+
+
+async def test_devto_uses_bounded_page_budget_for_large_html() -> None:
+    seen: list[dict[str, Any]] = []
+
+    async def fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        seen.append(kwargs)
+        html = "<article>" + (
+            "The author compares agent tool use and runtime isolation. " * 30
+        ) + "</article>"
+        return FetchedDocument(
+            url=url, final_ip="8.8.8.8", status=200, headers={},
+            content=html.encode(), content_type="text/html", elapsed_ms=12,
+        )
+
+    await transient_scoring_input(
+        _Pool(), _row(
+            sourceType="devto", syncRunId=None,
+            url="https://dev.to/example/technical-article",
+        ), fetcher=fetch,
+    )
+    assert seen[0]["max_bytes"] == 512_000
+    assert seen[0]["allowed_hosts"] == ("dev.to", "github.com")
 
 
 async def test_rejects_shell_failure_status_and_cross_domain_result() -> None:

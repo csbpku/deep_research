@@ -100,6 +100,7 @@ async def score_missing_candidates(
     scorer: ScoreFn = score_with_llm,
     only_unscored: bool = False,
     transient_input: ScoreInputFn | None = None,
+    include_archived: bool = False,
 ) -> int:
     """Score visible radar rows that have no persisted Distilled result.
 
@@ -138,9 +139,13 @@ async def score_missing_candidates(
         where_prefix = 'WHERE ' + score_filter
         if summary_filter:
             where_prefix += 'AND ' + summary_filter
+        statuses = (
+            "('candidate', 'published', 'archived')"
+            if include_archived else "('candidate', 'published')"
+        )
         rows = await (
             await conn.execute(
-                'SELECT s."id", s."title", s."body", s."interpretation", s."url", '
+                'SELECT s."id", s."title", s."body", s."interpretation", s."url", s."status", '
                 's."source", s."syncRunId", s."canonicalUrl", '
                 's."publishedAt", s."originalMarkdown", s."tags", '
                 's."originalKind", s."originalMeta", s."enrichmentStatus", '
@@ -151,7 +156,7 @@ async def score_missing_candidates(
                 'LEFT JOIN "radar_sync_runs" rr ON rr."id" = s."syncRunId" '
                 'LEFT JOIN "radar_sources" rs ON rs."id" = rr."sourceId" '
                 + where_prefix +
-                'AND s."status" IN (\'candidate\', \'published\') '
+                f'AND s."status" IN {statuses} '
                 'AND ((s."source" = \'daily\' AND s."syncRunId" IS NOT NULL) '
                 'OR (s."source" = \'user\' AND s."status" IN '
                 '(\'candidate\', \'published\') AND EXISTS ('
@@ -185,6 +190,9 @@ async def score_missing_candidates(
     ] | None:
         row = dict(raw)
         external_reading = "external_reading" in (row.get("tags") or [])
+        archived = include_archived and row.get("status") == "archived"
+        if archived and str(row.get("title") or "").lower().startswith("hacked by"):
+            return None
         source_type = str(row.get("sourceType") or "web_share")
         original_kind = str(row.get("originalKind") or "")
         is_repo = original_kind == "github_repo" or str(
@@ -203,7 +211,7 @@ async def score_missing_candidates(
             or ""
         )
         input_kind: str | None = None
-        if external_reading and transient_input is not None:
+        if transient_input is not None and (external_reading or archived):
             try:
                 async with gate:
                     resolved = await transient_input(pool, row)
@@ -224,6 +232,8 @@ async def score_missing_candidates(
         )
         scoreability = _scoreability(content)
         if scoreability is None:
+            if row.get("status") == "archived":
+                return None
             if external_reading:
                 logger.info(
                     "ai-engine.radar.postprocess.metadata_insufficient_for_score",
@@ -368,7 +378,7 @@ async def score_missing_candidates(
                 else result.total
             )
             score_reason = build_distilled_score_reason(result)
-            if external_reading:
+            if external_reading or input_kind is not None:
                 evidence_label = (
                     "临时读取的来源正文" if input_kind == "transient_source"
                     else "来源摘录" if input_kind == "source_excerpt"

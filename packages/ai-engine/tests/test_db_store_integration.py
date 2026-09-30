@@ -144,10 +144,11 @@ async def _insert_summary(
             INSERT INTO "summaries"
               ("id", "title", "body", "url", "canonicalUrl", "source",
                "summaryDate", "publishedAt", "status", "distilledTier",
-               "interpretation", "createdAt", "updatedAt")
+               "interpretation", "tags", "createdAt", "updatedAt")
             VALUES (%s, %s, %s, %s, %s, 'daily', now()::date,
                     now() - (%s * interval '1 day'), 'published', %s,
-                    %s, now() - (%s * interval '1 day'), now())
+                    %s, ARRAY['external_reading']::text[],
+                    now() - (%s * interval '1 day'), now())
             """,
             (
                 summary_id,

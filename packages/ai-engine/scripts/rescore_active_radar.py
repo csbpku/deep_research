@@ -29,6 +29,7 @@ from ai_engine.radar.scoring_input import transient_scoring_input
 
 SCOPE = "unscored_only"
 TRANSIENT_SCOPE = "unscored_transient_v1"
+ARCHIVED_SCOPE = "unscored_transient_including_archived_v1"
 
 
 def enable_stage_logging() -> None:
@@ -83,6 +84,8 @@ async def run_resumable(
     quota_wait: float,
     concurrency: int = 1,
     transient_external: bool = False,
+    include_archived: bool = False,
+    retry_unresolved: bool = False,
 ) -> int:
     require_minimax_only()
     concurrency = max(1, min(concurrency, 5))
@@ -91,13 +94,19 @@ async def run_resumable(
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if path.exists():
             state = json.loads(path.read_text())
-            scope = TRANSIENT_SCOPE if transient_external else SCOPE
+            scope = (
+                ARCHIVED_SCOPE if include_archived else
+                TRANSIENT_SCOPE if transient_external else SCOPE
+            )
             if state["version"] != DISTILLED_VERSION or state.get("scope") != scope:
                 raise RuntimeError("checkpoint score version or scope mismatch")
+            if retry_unresolved:
+                state["unresolved"] = []
         else:
             done = await current_ids(store.pool, ids)
             state = {"version": DISTILLED_VERSION,
-                     "scope": TRANSIENT_SCOPE if transient_external else SCOPE,
+                     "scope": ARCHIVED_SCOPE if include_archived else
+                              TRANSIENT_SCOPE if transient_external else SCOPE,
                      "targets": [i for i in ids if i not in done],
                      "completed": [], "unresolved": [], "pause_until": 0, "status": "running"}
         save_state(path, state)
@@ -113,8 +122,8 @@ async def run_resumable(
             if delay > 0:
                 state["status"] = "quota_paused"
                 save_state(path, state)
-                print(f'quota_paused resume_at={state["pause_until"]} remaining={len(pending)}', flush=True)
-                await asyncio.sleep(delay)
+                print(f'quota_paused next_probe_in={min(delay, 900):.0f}s remaining={len(pending)}', flush=True)
+                await asyncio.sleep(min(delay, 900))
                 state["pause_until"] = 0
                 state["status"] = "running"
                 save_state(path, state)
@@ -167,6 +176,7 @@ async def run_resumable(
                         scorer=bounded_score,
                         only_unscored=True,
                         transient_input=transient_scoring_input if transient_external else None,
+                        include_archived=include_archived,
                     )
                 except Exception as exc:
                     error_kind = type(exc).__name__
@@ -243,11 +253,14 @@ async def main() -> int:
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--source-type", default=None)
+    parser.add_argument("--summary-id", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--minimax-only", action="store_true")
     parser.add_argument("--quota-wait-seconds", type=float, default=5 * 3600)
     parser.add_argument("--transient-external", action="store_true")
+    parser.add_argument("--include-archived", action="store_true")
+    parser.add_argument("--retry-unresolved", action="store_true")
     args = parser.parse_args()
     if args.minimax_only != bool(args.state_file):
         parser.error("--minimax-only and --state-file must be used together")
@@ -255,12 +268,18 @@ async def main() -> int:
         parser.error("--quota-wait-seconds must be positive")
     if args.transient_external and not args.minimax_only:
         parser.error("--transient-external requires --minimax-only and --state-file")
+    if args.include_archived and not args.transient_external:
+        parser.error("--include-archived requires --transient-external")
 
     limit = max(1, min(args.limit, 10_000))
     concurrency = max(1, min(args.concurrency, 5))
     batch_size = concurrency if args.minimax_only else max(1, min(args.batch_size, 25))
     timeout_seconds = max(30, args.timeout_seconds)
     source_filter = ""
+    statuses = (
+        "('candidate', 'published', 'archived')"
+        if args.include_archived else "('candidate', 'published')"
+    )
     query_params: tuple[object, ...] = (limit,)
     if args.source_type:
         source_filter = (
@@ -268,6 +287,9 @@ async def main() -> int:
             'WHEN s."source" = \'user\' THEN \'web_share\' ELSE \'rss\' END) = %s '
         )
         query_params = (args.source_type, limit)
+    if args.summary_id:
+        source_filter += 'AND s."id" = ANY(%s::uuid[]) '
+        query_params = (*query_params[:-1], args.summary_id, query_params[-1])
 
     load_dotenv()
     enable_stage_logging()
@@ -280,15 +302,17 @@ async def main() -> int:
                     'SELECT s."id" FROM "summaries" s '
                     'LEFT JOIN "radar_sync_runs" rr ON rr."id" = s."syncRunId" '
                     'LEFT JOIN "radar_sources" rs ON rs."id" = rr."sourceId" '
-                    'WHERE s."status" IN (\'candidate\', \'published\') '
+                    f'WHERE s."status" IN {statuses} '
                     'AND s."distilledScore" IS NULL '
                     'AND ((s."source" = \'daily\' AND s."syncRunId" IS NOT NULL) '
-                    'OR (s."source" = \'user\' AND EXISTS ('
+                    'OR (s."source" = \'user\' AND s."status" IN '
+                    '(\'candidate\', \'published\') AND EXISTS ('
                     'SELECT 1 FROM "share_submissions" sh '
                     'WHERE sh."publishedSummaryId" = s."id" '
                     'AND sh."status" = \'approved\'))) '
                     + source_filter
-                    + 'ORDER BY s."createdAt" ASC, s."id" ASC LIMIT %s',
+                    + "ORDER BY CASE WHEN s.\"status\" = 'archived' THEN 1 ELSE 0 END, "
+                    's."createdAt" DESC, s."id" ASC LIMIT %s',
                     query_params,
                 )
             ).fetchall()
@@ -306,6 +330,8 @@ async def main() -> int:
                 store, ids, path=args.state_file, timeout=timeout_seconds,
                 quota_wait=args.quota_wait_seconds, concurrency=concurrency,
                 transient_external=args.transient_external,
+                include_archived=args.include_archived,
+                retry_unresolved=args.retry_unresolved,
             )
 
         async def bounded_score(

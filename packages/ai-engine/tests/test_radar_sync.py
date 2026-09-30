@@ -204,6 +204,38 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "仅用于排序，不自动发布" in params[15]
 
 
+async def test_sync_keeps_useful_short_judgement_instead_of_clearing_it() -> None:
+    pool = _Pool([_source()])
+    judgement = "这项工作提出可复现的代理工具调用流程，并比较了资源消耗与失败边界。"
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate()]
+
+    async def short_brief(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        return type("Brief", (), {
+            "status": AI_JOB_STATUS["SUCCEEDED"],
+            "output_text": judgement,
+            "cost": type("Cost", (), {
+                "token_input_total": 10, "token_output_total": 10, "cost_cents": 0,
+            })(),
+        })()
+
+    await run_radar_sync(
+        pool,
+        triggered_by="admin",
+        adapter=FakeAdapter(),
+        fetchers={"rss": fetcher},
+        document_fetcher=_safe_fetch,
+        generate_brief=short_brief,
+    )
+    _, params = next(
+        item for item in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in item[0]
+    )
+    assert params[21] == judgement
+
+
 async def test_sync_persists_high_score_as_target_but_only_skim_deliverable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

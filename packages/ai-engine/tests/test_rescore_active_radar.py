@@ -78,7 +78,7 @@ async def test_quota_pauses_and_retries_same_item_without_enrichment(monkeypatch
     assert state["scope"] == job.SCOPE
     assert result == 0
     assert calls == [("a",), ("a",)]
-    assert sleep.await_args.args[0] > 17990
+    assert sleep.await_args.args[0] == 900
     assert state["completed"] == ["a"]
     assert generation.call_args.kwargs["raise_on_error"] is True
 
@@ -130,6 +130,60 @@ async def test_transient_scope_rejects_existing_unscored_checkpoint(monkeypatch,
             timeout=30, quota_wait=18000, transient_external=True,
         )
     assert path.read_text() == snapshot
+
+
+@pytest.mark.asyncio
+async def test_archived_scope_isolated_and_passed_to_scoring(monkeypatch, tmp_path):
+    monkeypatch.setattr(job, "require_minimax_only", lambda: None)
+    completed = set()
+
+    async def current(pool, ids):
+        return completed.intersection(ids)
+
+    async def score(pool, **kwargs):
+        assert kwargs["include_archived"] is True
+        assert kwargs["transient_input"] is job.transient_scoring_input
+        assert kwargs["only_unscored"] is True
+        completed.update(kwargs["summary_ids"])
+        return 1
+
+    monkeypatch.setattr(job, "current_ids", current)
+    monkeypatch.setattr(job, "score_missing_candidates", score)
+    state = tmp_path / "archived.json"
+    assert await job.run_resumable(
+        SimpleNamespace(pool=None), ("a",), path=state, timeout=30,
+        quota_wait=18000, transient_external=True, include_archived=True,
+    ) == 0
+    assert json.loads(state.read_text())["scope"] == job.ARCHIVED_SCOPE
+
+
+@pytest.mark.asyncio
+async def test_explicit_retry_requeues_only_unresolved_targets(monkeypatch, tmp_path):
+    monkeypatch.setattr(job, "require_minimax_only", lambda: None)
+    path = tmp_path / "retry.json"
+    job.save_state(path, {
+        "version": job.DISTILLED_VERSION, "scope": job.ARCHIVED_SCOPE,
+        "targets": ["done", "retry"], "completed": ["done"],
+        "unresolved": ["retry"], "pause_until": 0,
+    })
+    completed = {"done"}
+
+    async def current(pool, ids):
+        return completed.intersection(ids)
+
+    async def score(pool, **kwargs):
+        assert kwargs["summary_ids"] == ("retry",)
+        completed.add("retry")
+        return 1
+
+    monkeypatch.setattr(job, "current_ids", current)
+    monkeypatch.setattr(job, "score_missing_candidates", score)
+    assert await job.run_resumable(
+        SimpleNamespace(pool=None), ("ignored",), path=path, timeout=30,
+        quota_wait=18000, transient_external=True, include_archived=True,
+        retry_unresolved=True,
+    ) == 0
+    assert json.loads(path.read_text())["completed"] == ["done", "retry"]
 
 
 @pytest.mark.asyncio
