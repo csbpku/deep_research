@@ -46,7 +46,7 @@ async def transient_scoring_input(
     *,
     fetcher: Fetcher = safe_fetch,
 ) -> tuple[str, str] | None:
-    """Use a saved source excerpt, then a bounded, non-persisted page read.
+    """Use a substantial source excerpt or a bounded, non-persisted page read.
 
     Never follow an arbitrary submitted link: this path is limited to
     source-synced external reading rows and a small set of known source hosts.
@@ -58,6 +58,7 @@ async def transient_scoring_input(
     parts = urlsplit(url)
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
         return None
+    excerpt_input: tuple[str, str] | None = None
     if row.get("syncRunId") and row.get("canonicalUrl"):
         async with pool.connection() as conn:
             excerpt = await (
@@ -71,19 +72,21 @@ async def transient_scoring_input(
             ).fetchone()
         text = str(dict(excerpt).get("body") or "").strip() if excerpt else ""
         if _usable_content(text, source_type=source_type, url=url):
-            return text[:2_000], "source_excerpt"
+            excerpt_input = (text[:2_000], "source_excerpt")
+            if _scoreability(text) == "full":
+                return excerpt_input
 
     host = parts.hostname
     allowed_hosts = _SOURCE_HOSTS.get(source_type, frozenset())
     if host not in allowed_hosts:
-        return None
+        return excerpt_input
     try:
         fetched = await fetcher(
             url, max_bytes=256_000, timeout=10.0, max_redirects=2,
             allowed_hosts=tuple(sorted(allowed_hosts)),
         )
         if fetched.status != 200 or urlsplit(fetched.url).hostname not in allowed_hosts:
-            return None
+            return excerpt_input
         text = _extract_article_content(
             fetched.content.decode("utf-8", errors="replace"),
             fetched.url,
@@ -95,9 +98,9 @@ async def transient_scoring_input(
             "radar.score_input_fetch_failed source_type=%s host=%s error_kind=%s",
             source_type, host, type(exc).__name__,
         )
-        return None
+        return excerpt_input
     if not _usable_content(text, source_type=source_type, url=fetched.url):
-        return None
+        return excerpt_input
     return text, "transient_source"
 
 

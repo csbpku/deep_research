@@ -37,7 +37,7 @@ def _row(**overrides: Any) -> dict[str, Any]:
 
 
 async def test_uses_existing_source_excerpt_without_network_or_new_writes() -> None:
-    excerpt = "A technical paper describes its method, experiments and limitations. " * 15
+    excerpt = "A technical paper describes its method, experiments and limitations. " * 20
     pool = _Pool(excerpt)
 
     async def no_fetch(*args: Any, **kwargs: Any) -> FetchedDocument:
@@ -54,7 +54,7 @@ async def test_uses_existing_source_excerpt_without_network_or_new_writes() -> N
 
 
 async def test_short_excerpt_uses_bounded_in_memory_source_read() -> None:
-    pool = _Pool("short snippet")
+    pool = _Pool("A technically detailed research abstract describes benchmarks. " * 9)
     seen: list[dict[str, Any]] = []
     html = (
         '<blockquote class="abstract">'
@@ -79,6 +79,19 @@ async def test_short_excerpt_uses_bounded_in_memory_source_read() -> None:
         "max_bytes": 256_000, "timeout": 10.0, "max_redirects": 2,
         "allowed_hosts": ("arxiv.org", "github.com"),
     }]
+    assert len(pool.queries) == 1
+
+
+async def test_limited_excerpt_falls_back_when_source_fetch_fails() -> None:
+    excerpt = "An arXiv abstract describes the approach and its evaluation. " * 9
+    pool = _Pool(excerpt)
+
+    async def unavailable(*args: Any, **kwargs: Any) -> FetchedDocument:
+        raise RuntimeError("temporary upstream failure")
+
+    assert await transient_scoring_input(pool, _row(), fetcher=unavailable) == (
+        excerpt.strip(), "source_excerpt",
+    )
     assert len(pool.queries) == 1
 
 
