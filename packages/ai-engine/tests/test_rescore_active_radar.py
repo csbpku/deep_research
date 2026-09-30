@@ -165,6 +165,7 @@ async def test_explicit_retry_requeues_only_unresolved_targets(monkeypatch, tmp_
         "version": job.DISTILLED_VERSION, "scope": job.ARCHIVED_SCOPE,
         "targets": ["done", "retry"], "completed": ["done"],
         "unresolved": ["retry"], "pause_until": 0,
+        "status": "completed_with_unresolved",
     })
     completed = {"done"}
 
@@ -184,6 +185,39 @@ async def test_explicit_retry_requeues_only_unresolved_targets(monkeypatch, tmp_
         retry_unresolved=True,
     ) == 0
     assert json.loads(path.read_text())["completed"] == ["done", "retry"]
+
+
+@pytest.mark.asyncio
+async def test_retry_flag_does_not_reset_unresolved_after_interrupted_run(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(job, "require_minimax_only", lambda: None)
+    path = tmp_path / "interrupted.json"
+    job.save_state(path, {
+        "version": job.DISTILLED_VERSION, "scope": job.ARCHIVED_SCOPE,
+        "targets": ["done", "unresolved", "pending"], "completed": ["done"],
+        "unresolved": ["unresolved"], "pause_until": 0, "status": "running",
+    })
+    completed = {"done"}
+
+    async def current(pool, ids):
+        return completed.intersection(ids)
+
+    async def score(pool, **kwargs):
+        assert kwargs["summary_ids"] == ("pending",)
+        completed.add("pending")
+        return 1
+
+    monkeypatch.setattr(job, "current_ids", current)
+    monkeypatch.setattr(job, "score_missing_candidates", score)
+    assert await job.run_resumable(
+        SimpleNamespace(pool=None), ("ignored",), path=path, timeout=30,
+        quota_wait=18000, transient_external=True, include_archived=True,
+        retry_unresolved=True,
+    ) == 2
+    saved = json.loads(path.read_text())
+    assert saved["completed"] == ["done", "pending"]
+    assert saved["unresolved"] == ["unresolved"]
 
 
 @pytest.mark.asyncio

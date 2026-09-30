@@ -100,8 +100,9 @@ async def run_resumable(
             )
             if state["version"] != DISTILLED_VERSION or state.get("scope") != scope:
                 raise RuntimeError("checkpoint score version or scope mismatch")
-            if retry_unresolved:
+            if retry_unresolved and state.get("status") == "completed_with_unresolved":
                 state["unresolved"] = []
+                state["status"] = "running"
         else:
             done = await current_ids(store.pool, ids)
             state = {"version": DISTILLED_VERSION,

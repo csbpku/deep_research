@@ -2,7 +2,7 @@
 services:
   ai-engine:
     user: "1000:1000"
-    restart: "on-failure:3"
+    restart: "no"
     healthcheck:
       disable: true
     environment:

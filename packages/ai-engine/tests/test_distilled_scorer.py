@@ -1265,6 +1265,46 @@ async def test_score_with_llm_retries_unverified_mismatch_once() -> None:
     assert result.total > 0
 
 
+async def test_production_mismatch_review_is_not_inserted_into_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_anthropic_scorer(
+        title: str, content: str, **kwargs: object,
+    ) -> str:
+        assert title == "volcengine/OpenViking"
+        instruction = kwargs.get("review_instruction")
+        assert instruction is None or isinstance(instruction, str)
+        calls.append((content, instruction))
+        parsed = _all_zero_parsed() if len(calls) == 1 else _all_max_parsed()
+        if len(calls) == 1:
+            parsed["veto"] = VETO_MISMATCH
+        return json.dumps(parsed)
+
+    monkeypatch.setenv("UTILITY_LLM", "openai:test-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(distilled_scorer, "anthropic_scorer", fake_anthropic_scorer)
+    content = (
+        "OpenViking is a context database with indexing, tests and deployment. "
+    ) * 20
+    result = await score_with_llm(
+        "volcengine/OpenViking", content,
+        source_type="github_repo", url="https://github.com/volcengine/OpenViking",
+    )
+
+    assert result.is_default is False
+    assert [item[0] for item in calls] == [content, content]
+    assert calls[0][1] is None
+    assert calls[1][1] is not None
+    assert "不同主题" in calls[1][1]
+    prompt = build_user_prompt(
+        "volcengine/OpenViking", content, review_instruction=calls[1][1],
+    )
+    assert prompt.index("## 评分复核指令") < prompt.index("## 文章内容")
+    assert prompt.split("## 文章内容", 1)[1].count("不同主题") == 0
+
+
 async def test_score_with_llm_scorer_exception_returns_default() -> None:
     async def bad_scorer(title: str, content: str) -> str:
         raise RuntimeError("LLM unavailable")

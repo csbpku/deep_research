@@ -527,6 +527,7 @@ def build_user_prompt(
     current_date: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
     content_is_chunk_evidence: bool = False,
+    review_instruction: str | None = None,
 ) -> str:
     """Build the user message for the LLM scoring call.
 
@@ -559,6 +560,10 @@ def build_user_prompt(
         if content_is_chunk_evidence
         else "以下是本次评分输入的完整正文"
     )
+    review_block = (
+        f"\n## 评分复核指令\n{review_instruction}\n"
+        if review_instruction else ""
+    )
     return f"""请对以下文章进行 7 个维度的评分（每个维度 0–3 分）。
 
 ## 评分画像上下文
@@ -587,6 +592,7 @@ def build_user_prompt(
 - 不确定时给低分，不要用 2 分作为默认值；3 分必须有正文中的具体证据支撑
 
 {_build_veto_text()}
+{review_block}
 
 ## 文章内容
 标题: {title}
@@ -832,6 +838,7 @@ async def anthropic_scorer(
     url: str | None = None,
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
+    review_instruction: str | None = None,
 ) -> str:
     scoring_run_id = uuid4().hex[:12]
     metrics: dict[str, int] = {}
@@ -849,6 +856,7 @@ async def anthropic_scorer(
             url=url,
             published_at=published_at,
             structured_signals=structured_signals,
+            review_instruction=review_instruction,
         )
     except BaseException as exc:
         error_kind = _scoring_response_error_kind(exc)
@@ -890,6 +898,7 @@ async def _anthropic_scorer_impl(
     url: str | None = None,
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
+    review_instruction: str | None = None,
 ) -> str:
     """Call the configured light LLM to score article dimensions.
 
@@ -927,6 +936,7 @@ async def _anthropic_scorer_impl(
             url=url,
             published_at=published_at,
             structured_signals=structured_signals,
+            review_instruction=review_instruction,
         )
         async with _measure_scoring_stage("final_score"):
             raw, _ = await _generate_scoring_json(
@@ -973,6 +983,7 @@ async def _anthropic_scorer_impl(
         published_at=published_at,
         structured_signals=structured_signals,
         content_is_chunk_evidence=True,
+        review_instruction=review_instruction,
     )
     async with _measure_scoring_stage("final_score"):
         raw, _ = await _generate_scoring_json(
@@ -2083,12 +2094,26 @@ async def score_with_llm(
                 and result.total == 0
             ):
                 correction = (
-                    "[评分纠错] 确定性检查发现标题、来源与长正文存在明确重合。"
-                    "除非正文实际属于另一个主题，否则不得使用 "
-                    "title_content_mismatch；请重新阅读全文并返回完整七维评分。\n\n"
+                    "标题与长正文有可核验的词项重合，请重新核对其主题。"
+                    "只有明确属于不同主题时才使用 title_content_mismatch；"
+                    "若内容相符，应正常返回完整七维评分，证据不足的维度给低分。"
                 )
                 async with _score_semaphore():
-                    corrected_raw = await active_scorer(title, correction + content)
+                    if scorer is None:
+                        corrected_raw = await anthropic_scorer(
+                            title,
+                            content,
+                            profile=profile,
+                            source_type=source_type,
+                            url=url,
+                            published_at=published_at,
+                            structured_signals=structured_signals,
+                            review_instruction=correction,
+                        )
+                    else:
+                        corrected_raw = await active_scorer(
+                            title, f"[评分纠错] {correction}\n\n{content}"
+                        )
                 corrected = _parse_llm_response(corrected_raw)
                 corrected_result = compute_score(
                     corrected,
