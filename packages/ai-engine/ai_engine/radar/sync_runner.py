@@ -466,34 +466,6 @@ def _is_github_repo_candidate(
     )
 
 
-_GITHUB_REPO_LINK_RE = _re.compile(
-    r"https?://(?:www\.)?github\.com/"
-    r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
-    r"(?!(?:/(?:issues|pull|releases|blob|tree|actions|commit|compare|"
-    r"discussions|wiki)(?:[/?#]|$)))"
-    r"(?=[/?#\s),.;:]|$)",
-    _re.IGNORECASE,
-)
-
-
-def _linked_github_repo_url(candidate_url: str, content: str) -> str | None:
-    """Return a repository URL explicitly linked by a project landing page.
-
-    Community feeds often point at a project's marketing/docs site even when
-    the actual unit of engineering interest is its GitHub repository. Treat a
-    linked repository root as the canonical identity, while leaving the
-    discovery source intact. Issues, PRs, releases, and arbitrary GitHub
-    pages are deliberately excluded.
-    """
-    if _classify_original_kind("github", candidate_url) == "github_repo":
-        return candidate_url.split("?", 1)[0].rstrip("/")
-    for match in _GITHUB_REPO_LINK_RE.finditer(content or ""):
-        repo_url = f"https://github.com/{match.group(1).rstrip('/')}"
-        if _classify_original_kind("github", repo_url) == "github_repo":
-            return repo_url
-    return None
-
-
 def _best_content_body(
     interpretation: str,
     markdown: str,
@@ -1872,17 +1844,16 @@ async def _run_source(
                     else:
                         brief_context = markdown or normalized.snippet
 
-                    linked_repo_url = _linked_github_repo_url(
-                        raw_candidate.url,
-                        "\n".join((raw_content, markdown, raw_candidate.snippet)),
+                    github_repo_candidate = _is_github_repo_candidate(
+                        source,
+                        raw_candidate,
                     )
-                    github_repo_candidate = (
-                        _is_github_repo_candidate(source, raw_candidate)
-                        or linked_repo_url is not None
-                    )
-                    persisted_candidate_url = (
-                        linked_repo_url or normalized.canonical_url
-                    )
+                    # The discovery URL is the identity of this candidate.
+                    # A body may mention a GitHub repository, but that does
+                    # not make the article and repository the same radar item.
+                    # Keeping this URL stable makes the pre-fetch duplicate
+                    # check and the database unique key use the same identity.
+                    persisted_candidate_url = normalized.canonical_url
                     scoring_source_type = (
                         "github" if github_repo_candidate else source.source_type
                     )
