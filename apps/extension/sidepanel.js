@@ -1,6 +1,7 @@
 import { readerStore } from './reader-store.js';
 import {
   explainSelection,
+  parseReadingAnswer,
   explainImage,
   boundTaskContext,
   buildAnnotationUrl,
@@ -64,7 +65,9 @@ let radarEntrySummaryId = '';
 // must not overwrite the newer connection event and hide the sync controls.
 let platformStateEvents = 0;
 let targetLanguage = 'zh-CN';
-let activeTabId = null;
+const windowSourceTab = Number(new URLSearchParams(location.search).get('sourceTab'));
+const boundWindowTabId = windowSourceTab > 0 && Number.isInteger(windowSourceTab) ? windowSourceTab : null;
+let activeTabId = boundWindowTabId;
 let activationNeeded = null;
 let pageReadState = 'idle';
 let lastSavedInsight = null;
@@ -79,15 +82,99 @@ const translatedTextIds = new Set();
 const translatedImageIds = new Set();
 const resumedUrls = new Set();
 const sessionResumeTasks = new Map();
+const questionDrafts = new Map();
+let draftPageUrl = '';
+function switchQuestionDraft(url = '') {
+  if (url === draftPageUrl) return;
+  const input = $('question-input');
+  if (input && draftPageUrl) questionDrafts.set(draftPageUrl, input.value);
+  draftPageUrl = url;
+  if (input) input.value = questionDrafts.get(url) || '';
+}
 let sessionGeneration = 0;
 let interactionGeneration = 0;
 const DISCUSSION_INTENTS = new Set(['explain', 'ask', 'summary', 'selection-summary', 'translate', 'map', 'architecture', 'tradeoffs']);
 
 function sendToPage(payload) {
-  chrome.runtime.sendMessage({ type: 'deep-research:to-page', payload }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'deep-research:to-page', payload, ...(boundWindowTabId ? { tabId: boundWindowTabId } : {}) }).catch(() => {});
 }
 
-function show(el, visible = true) { if (el) el.classList.toggle('hidden', !visible); }
+function focusReadingAnchor(anchor) {
+  // The article stays in its original tab; keep the conversation and draft visible.
+  sendToPage(anchor?.quote
+    ? { type: 'deep-research:focus-anchor', anchor }
+    : { type: 'deep-research:focus-page' });
+}
+
+function setWorkspaceView(view) {
+  const shell = document.querySelector('.shell');
+  if (!shell || !['chat', 'tools', 'library'].includes(view)) return;
+  shell.dataset.workspaceView = view;
+  for (const name of ['chat', 'tools', 'library']) {
+    const button = $(`nav-${name}`);
+    button?.classList.toggle('active', name === view);
+    button?.setAttribute('aria-pressed', String(name === view));
+  }
+}
+
+function setupWorkspaceLayout() {
+  $('chat-to-reading')?.addEventListener('click', () => focusReadingAnchor(activeDiscussionScope() === 'selection' ? selectionContext?.selection : null));
+  $('chat-translate-all')?.addEventListener('click', () => { focusReadingAnchor(null); void startFullTranslation(); });
+  $('clear-chat-selection')?.addEventListener('click', () => { selectionContext = null; discussionScope = 'page'; discussionIntent = 'ask'; renderPage(); saveLocalSession(); });
+  $('dismiss-notice')?.addEventListener('click', () => setNotice(''));
+  for (const view of ['chat', 'tools', 'library']) {
+    $(`nav-${view}`)?.addEventListener('click', () => {
+      showReading();
+      setChatExpanded(false);
+      setWorkspaceView(view);
+      if (view === 'chat') openDiscussion(activeDiscussionScope(), 'ask');
+    });
+  }
+  const handle = $('composer-resize');
+  const input = $('question-input');
+  if (!handle || !input) return;
+  const resize = (height) => {
+    const bounded = Math.round(Math.max(60, Math.min(240, window.innerHeight * 0.4, height)));
+    input.style.height = `${bounded}px`;
+    handle.setAttribute('aria-valuenow', String(bounded));
+    try { localStorage.setItem('readerComposerHeight', String(bounded)); } catch { /* Optional preference. */ }
+  };
+  try { const saved = Number(localStorage.getItem('readerComposerHeight')); if (saved) resize(saved); } catch { /* Default height remains usable. */ }
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    const startY = event.clientY;
+    const startHeight = input.getBoundingClientRect().height;
+    handle.setPointerCapture(event.pointerId);
+    const move = (next) => resize(startHeight + startY - next.clientY);
+    const stop = () => { handle.removeEventListener('pointermove', move); };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', stop, { once: true });
+    handle.addEventListener('pointercancel', stop, { once: true });
+  });
+  handle.addEventListener('keydown', (event) => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    resize(event.key === 'Home' ? 60 : event.key === 'End' ? 240 : input.getBoundingClientRect().height + (event.key === 'ArrowUp' ? 16 : -16));
+  });
+}
+
+function show(el, visible = true) {
+  if (!el) return;
+  el.classList.toggle('hidden', !visible);
+  if (el.id === 'discussion-section') {
+    $('page-view')?.classList.toggle('has-discussion', visible);
+    if (!visible) setChatExpanded(false);
+  }
+}
+
+function setChatExpanded(expanded) {
+  $('page-view')?.classList.toggle('chat-expanded', expanded);
+  const button = $('expand-chat');
+  if (button) {
+    button.textContent = expanded ? '恢复布局' : '放大聊天';
+    button.setAttribute('aria-pressed', String(expanded));
+  }
+}
 
 function setNotice(message = '', target = $('notice')) {
   target.textContent = message;
@@ -154,7 +241,7 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   const context = activeDiscussionContext(scope);
   const composer = $('persistent-composer');
   if (!composer) return;
-  const visible = Boolean(discussionOpen || discussionHistory.length || latestAnswer || latestStructuredAnswer);
+  const visible = Boolean(document.querySelector('.shell')?.dataset.workspaceView === 'chat' || discussionOpen || discussionHistory.length || latestAnswer || latestStructuredAnswer);
   show(composer, visible);
   const descriptor = pageReadDescriptor(context);
   const selectionReady = scope === 'selection' && Boolean(context?.selection?.quote);
@@ -312,7 +399,7 @@ function bindCitationReferences(container, evidenceItems) {
     reference.addEventListener('click', (event) => {
       if (!item.anchor?.quote) return;
       event.preventDefault();
-      sendToPage({ type: 'deep-research:focus-anchor', anchor: item.anchor });
+      focusReadingAnchor(item.anchor);
     });
   });
 }
@@ -376,7 +463,7 @@ function renderStructuredAnswer(result) {
     link.addEventListener('click', (event) => {
       if (item.anchor?.quote) {
         event.preventDefault();
-        sendToPage({ type: 'deep-research:focus-anchor', anchor: item.anchor });
+        focusReadingAnchor(item.anchor);
       }
     });
     evidenceList.appendChild(link);
@@ -394,7 +481,7 @@ function renderStructuredAnswer(result) {
       limitationList.appendChild(li);
     });
   show(limitationsPart, limitationList.childElementCount > 0);
-  const warningText = Array.isArray(answer.warnings) ? answer.warnings.filter(Boolean).join('\n') : '';
+  const warningText = Array.isArray(answer.warnings) ? [...new Set(answer.warnings.filter(Boolean))].join('\n') : '';
   warnings.textContent = warningText;
   show(warnings, Boolean(warningText));
   show(structured, Boolean(evidenceList.childElementCount || answer.background || answer.inference || limitationList.childElementCount || warningText));
@@ -733,6 +820,9 @@ function renderDiscussionContext(scope = discussionScope, intent = discussionInt
     detail.textContent = formatCoverage(source, scope);
   }
   renderDiscussionScopeControls(scope);
+  if ($('chat-scope-description')) $('chat-scope-description').textContent = scope === 'selection' ? '基于当前选段' : scope === 'image' ? '基于当前图示' : '基于整篇文章';
+  show($('chat-selection-card'), scope === 'selection' && Boolean(selectionContext?.selection?.quote));
+  if ($('chat-selection-quote')) $('chat-selection-quote').textContent = selectionContext?.selection?.quote || '';
   updatePageContextUi(source || pageContext || documentContext);
   renderPersistentComposer(scope);
 }
@@ -941,7 +1031,7 @@ function returnLatestAnswerToSource() {
     setNotice('当前回答没有可精确定位的证据，无法安全跳回原文。');
     return;
   }
-  sendToPage({ type: 'deep-research:focus-anchor', anchor: source.anchor });
+  focusReadingAnchor(source.anchor);
 }
 
 function renderPage() {
@@ -954,6 +1044,7 @@ function renderPage() {
   show($('page-view'), Boolean(context));
   updateAiAvailabilityBanner();
   if (!context) {
+    show($('discussion-section'), false);
     show($('persistent-composer'), false);
     renderEmptyState();
     return;
@@ -995,7 +1086,9 @@ function renderPage() {
   // action. Once opened, the same section becomes a persistent transcript and
   // composer, so the user can continue the conversation without losing scope.
   const discussionVisible = Boolean(
-    discussionOpen
+    document.querySelector('.shell')?.dataset.workspaceView === 'chat'
+    || (boundWindowTabId && document.querySelector('.shell')?.dataset.workspaceView === 'tools')
+    || discussionOpen
     || discussionHistory.length
     || latestAnswer
     || latestStructuredAnswer,
@@ -1389,7 +1482,7 @@ async function syncInsight(insight = lastSavedInsight) {
   insightSyncFailed = false;
   updateReadingModeUi();
   try {
-    const response = await fetch(`${platformUrl}/api/reading/save`, {
+    const request = {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
       body: JSON.stringify({
@@ -1402,12 +1495,18 @@ async function syncInsight(insight = lastSavedInsight) {
         anchor: insight.anchor,
         tags: Array.isArray(insight.tags) ? insight.tags : [],
       }),
-    });
-    const payload = await response.json().catch(() => ({}));
+    };
+    let response = await fetch(`${platformUrl}/api/reading/save`, request);
+    let payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.message || '研究库同步失败');
+    if (payload.deduplicated) {
+      response = await fetch(`${platformUrl}/api/reading/save`, { ...request, method: 'PUT' });
+      payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.updated) throw new Error(payload.message || '平台尚不支持更新此收藏；修改已保存在本地，云端尚未更新。');
+    }
     insightSyncFailed = false;
     updateReadingModeUi();
-    setNotice(payload.deduplicated ? '研究库已存在这条成果，未重复创建。' : '已同步到 Deep Research 研究库。');
+    setNotice(payload.updated ? '已更新 Deep Research 研究库中的收藏。' : '已同步到 Deep Research 研究库。');
   } catch (error) {
     insightSyncFailed = true;
     updateReadingModeUi();
@@ -1529,6 +1628,9 @@ async function requestPlatformAnswer(sourceContext, question, scope, options = {
     } else if (event === 'progress') {
       options.onProgress?.(Number(payload.done) || 0, Number(payload.total) || 0, payload.phase || 'analyzing');
     } else if (event === 'done') {
+      if (payload.truncated || ['length', 'max_tokens'].includes(payload.finishReason)) {
+        throw new Error('平台回答被截断，本次未保存为完整结论。请缩短问题或稍后重试。');
+      }
       const reading = payload.reading || {
         answer: payload.answer || payload.suggestion || streamed,
         evidence: [],
@@ -1537,6 +1639,13 @@ async function requestPlatformAnswer(sourceContext, question, scope, options = {
         limitations: [],
         warnings: payload.warnings || [],
       };
+      if (!reading.evidence?.length && reading.answer) {
+        const recovered = parseReadingAnswer(reading.answer, sourceContext);
+        if (recovered.evidence.length) {
+          reading.evidence = recovered.evidence;
+          reading.warnings = (reading.warnings || []).filter((warning) => !/没有找到可核对的原文引文|本轮没有可核对的原文证据/u.test(warning));
+        }
+      }
       const citations = Array.isArray(payload.citations) ? payload.citations : [];
       const evidence = Array.isArray(reading.evidence) ? reading.evidence : [];
       completed = {
@@ -1557,14 +1666,8 @@ async function requestPlatformAnswer(sourceContext, question, scope, options = {
     if (chunk.done) break;
   }
   if (buffer.trim()) consume(buffer);
-  return completed || {
-    answer: streamed,
-    evidence: [],
-    background: '',
-    inference: '',
-    limitations: [],
-    warnings: [],
-  };
+  if (!completed) throw new Error('平台回答连接提前结束，本次未保存为完整结论。请重试。');
+  return completed;
 }
 
 function platformAnswerErrorMessage(payload = {}, status = 0) {
@@ -1793,6 +1896,7 @@ async function saveSettings() {
 }
 
 async function startFullTranslation() {
+  setWorkspaceView('tools');
   if (!textModelReady()) {
     showModelSetupGuidance('全文翻译');
     return;
@@ -1814,10 +1918,11 @@ async function startFullTranslation() {
   activeTranslationRun += 1;
   const url = contextUrl();
   const version = pageContext?.contentHash || documentContext?.contentHash || null;
-  activeJobRecord = pendingJob?.documentUrl === url
-    && pendingJob?.contentHash === version
-    && ['queued', 'running', 'cancelled', 'failed', 'completed_with_errors'].includes(pendingJob.status)
-    ? pendingJob
+  const resumableJob = pendingJob || activeJobRecord;
+  activeJobRecord = resumableJob?.documentUrl === url
+    && resumableJob?.contentHash === version
+    && ['queued', 'running', 'cancelled', 'failed', 'completed_with_errors'].includes(resumableJob.status)
+    ? resumableJob
     : { id: `translation-${crypto.randomUUID()}`, documentUrl: url, contentHash: version, kind: 'text', status: 'queued', textDone: 0, textTotal: 0, imageDone: 0, imageTotal: 0 };
   failedTranslationItems = Array.isArray(activeJobRecord.failedItems) ? activeJobRecord.failedItems : [];
   pendingJob = null;
@@ -1908,6 +2013,10 @@ async function retryTranslationItem(item) {
 async function processDocument(context, runId = activeTranslationRun) {
   if (!translationRequested || !translationRunning || runId !== activeTranslationRun) return;
   const job = activeJobRecord;
+  const controller = translationController;
+  const completionNotice = context.scope === 'selection'
+    ? '选段翻译完成。可以选择、复制或放大原文旁的译文。'
+    : '全文翻译完成。可以滚动阅读，或选择一段文字继续追问。';
   const usePlatform = platformModeReady();
   context = boundTaskContext({ ...context, targetLanguage: currentReadingLanguage() }, { preserveAllBlocks: true });
   documentContext = context;
@@ -1938,13 +2047,16 @@ async function processDocument(context, runId = activeTranslationRun) {
   const document = makeDocument(context);
   const blocks = Array.isArray(context.blocks) ? context.blocks : [];
   const images = Array.isArray(context.images) ? context.images : [];
-  const processedTextIds = Array.isArray(job?.processedTextIds) ? job.processedTextIds : [];
+  const cachedTranslations = (Array.isArray(job?.textTranslations) ? job.textTranslations : []).filter((item) => item.text && blocks.some((block) => block.id === item.id && block.text === item.sourceText));
+  const completedTextIds = new Set([...cachedTranslations.map((item) => item.id), ...(context.translatedBlockIds || [])]);
+  if (cachedTranslations.length) sendToPage({ type: 'deep-research:apply-translations', translations: cachedTranslations });
+  const processedTextIds = mergeProcessedIds(Array.isArray(job?.processedTextIds) ? job.processedTextIds : [], [...completedTextIds]);
   const processedImageIds = Array.isArray(job?.processedImageIds) ? job.processedImageIds : [];
   const blockIds = blocks.map((block) => block.id).filter(Boolean);
   const imageIds = images.map((image) => image.id).filter(Boolean);
   let textDone = 0;
   let imageDone = 0;
-  const translatableBlocks = blocks.filter((block) => block.kind !== 'code');
+  const translatableBlocks = blocks.filter((block) => block.kind !== 'code' && !completedTextIds.has(block.id));
   const skippedCodeBlocks = blocks.length - translatableBlocks.length;
   textDone = skippedCodeBlocks;
   persistJobPatch(job, {
@@ -1967,13 +2079,19 @@ async function processDocument(context, runId = activeTranslationRun) {
     : `正文翻译会按块处理；图片无法翻译时保留原图并继续。${coverageWarning ? `\n${coverageWarning}` : ''}${imageLimitNotice ? `\n${imageLimitNotice}` : ''}`);
   try {
     const translationOptions = {
-      signal: translationController.signal,
+      signal: controller.signal,
       // Apply each completed block immediately. Waiting for every paragraph
       // made a long page feel frozen even though the model was already
       // returning usable results.
       onResult: (item) => {
         if (runId !== activeTranslationRun || !item?.text) return;
         translatedTextIds.add(item.id);
+        const savedResults = new Map((job.textTranslations || []).map((result) => [result.id, result]));
+        savedResults.set(item.id, item);
+        persistJobPatch(job, {
+          textTranslations: [...savedResults.values()],
+          processedTextIds: mergeProcessedIds(job.processedTextIds || [], [item.id]),
+        });
         sendToPage({ type: 'deep-research:apply-translations', translations: [item] });
       },
       onProgress: (done) => {
@@ -1997,13 +2115,14 @@ async function processDocument(context, runId = activeTranslationRun) {
     }
     const imageTranslations = [];
     for (const image of images) {
-      if (translationController.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
+      if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
       try {
         const translated = usePlatform
-          ? await requestPlatformImageTranslation(context, image, { signal: translationController.signal })
-          : await translateImage(readingProvider(), document, image, { signal: translationController.signal, fetchImageBytes: true });
+          ? await requestPlatformImageTranslation(context, image, { signal: controller.signal })
+          : await translateImage(readingProvider(), document, image, { signal: controller.signal, fetchImageBytes: true });
         imageTranslations.push(translated);
       } catch (error) {
+        if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
         imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : '图片翻译失败' });
       }
       imageDone += 1;
@@ -2047,7 +2166,7 @@ async function processDocument(context, runId = activeTranslationRun) {
         ? `${coverageWarning ? '已翻译可处理正文，未覆盖部分没有翻译。' : '全文翻译完成。'}${coverageWarning ? `\n${coverageWarning}` : ''}\n${imageWarnings.slice(0, 3).join('\n')}`
         : coverageWarning
           ? `已翻译可处理正文，未覆盖部分没有翻译。\n${coverageWarning}`
-          : '全文翻译完成。可以滚动阅读，或选择一段文字继续追问。');
+          : completionNotice);
     if (runId === activeTranslationRun) persistJobPatch(job, {
       status: failedTranslationItems.length ? 'completed_with_errors' : 'completed',
       textDone,
@@ -2117,6 +2236,7 @@ function revealDiscussion({ focusInput = false } = {}) {
 }
 
 function openDiscussion(scope = 'page', intent = 'ask') {
+  setWorkspaceView('chat');
   const nextScope = scope === 'selection' && selectionContext?.selection?.quote
     ? 'selection'
     : scope === 'image' && imageContext?.image
@@ -2221,6 +2341,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
   discussionScope = scope;
   discussionIntent = normalizedIntent;
   discussionOpen = true;
+  setWorkspaceView('chat');
   renderDiscussionContext(scope, normalizedIntent, sourceContext);
   $('answer-output').textContent = '正在阅读这段原文并核对证据…';
   show($('answer-output'), true);
@@ -2559,7 +2680,7 @@ function showReading() {
 async function openHistoryPage() {
   try {
     await sessionSaveQueue;
-    window.location.href = chrome.runtime.getURL('reading-history.html?surface=sidepanel');
+    window.location.href = chrome.runtime.getURL(`reading-history.html?surface=sidepanel${boundWindowTabId ? `&sourceTab=${boundWindowTabId}` : ''}`);
   } catch {
     setNotice('无法打开侧栏内的阅读历史。');
   }
@@ -2590,6 +2711,8 @@ function downloadJson(data) {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (!message) return;
+  if (boundWindowTabId && Number.isInteger(message.tabId) && message.tabId !== boundWindowTabId) return;
+  if (boundWindowTabId && message.type === 'deep-research:clear-page') return;
   if (message.type === 'deep-research:page-activation-needed') {
     activationNeeded = {
       tabId: Number.isInteger(message.tabId) ? message.tabId : null,
@@ -2609,10 +2732,12 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
   if (message.type === 'deep-research:clear-page') {
+    switchQuestionDraft();
     if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {});
     activeTranslationRun += 1; sessionGeneration += 1; sessionResumeTasks.clear(); discussionController?.abort(); discussionRunning = false; activeJobRecord = null; pendingJob = null; failedTranslationItems = []; retryingTranslationId = null; pageContext = null; documentContext = null; selectionContext = null; imageContext = null; latestAnswer = ''; latestStructuredAnswer = null; discussionHistory = []; discussionScope = 'page'; discussionIntent = 'ask'; discussionOpen = false; activeSessionTitle = ''; resumedUrls.clear(); activationNeeded = null; pageReadState = 'idle'; lastSavedInsight = null; pendingInsightSource = null; translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; radarEntryPlatformUrl = ''; radarEntryPromptKey = ''; radarEntrySummaryId = ''; translatedTextIds.clear(); translatedImageIds.clear(); sendToPage({ type: 'deep-research:clear-annotations' }); renderPage(); return;
   }
   if (message.type === 'deep-research:page-context' && message.context) {
+    switchQuestionDraft(message.context.url);
     if (Number.isInteger(message.tabId)) activeTabId = message.tabId;
     activationNeeded = null;
     pageReadState = contextHasReadableBody(message.context) ? 'ready' : 'error';
@@ -2661,10 +2786,10 @@ chrome.runtime.onMessage.addListener((message) => {
           latestStructuredAnswer = {
             ...latestStructuredAnswer,
             evidence: [],
-            warnings: [
+            warnings: [...new Set([
               ...(Array.isArray(latestStructuredAnswer.warnings) ? latestStructuredAnswer.warnings : []),
               '页面内容已更新，旧引文定位已撤销。',
-            ],
+            ])],
           };
         }
         discussionController?.abort();
@@ -2761,11 +2886,7 @@ chrome.runtime.onMessage.addListener((message) => {
       interactionGeneration += 1;
       discussionController?.abort();
       discussionRunning = false;
-      latestAnswer = '';
-      latestStructuredAnswer = null;
-      discussionHistory = [];
-      discussionIntent = 'explain';
-      discussionOpen = false;
+      discussionIntent = 'ask';
     }
     imageContext = null;
     selectionContext = message.context;
@@ -2862,6 +2983,7 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 async function init() {
+  setupWorkspaceLayout();
   provider = await loadProvider();
   await loadTargetLanguage();
   readingMode = await readerStore.getSetting('readingMode', 'local');
@@ -2889,6 +3011,10 @@ async function init() {
   $('save-answer')?.addEventListener('click', () => void openSaveDialog());
   $('return-answer')?.addEventListener('click', returnLatestAnswerToSource);
   $('open-page-chat')?.addEventListener('click', () => openDiscussion('page', 'ask'));
+  $('expand-chat')?.addEventListener('click', () => setChatExpanded(!$('page-view')?.classList.contains('chat-expanded')));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') setChatExpanded(false);
+  });
   $('open-history-inline')?.addEventListener('click', () => void openHistoryPage());
   $('scope-page')?.addEventListener('click', () => setDiscussionScope('page'));
   $('scope-selection')?.addEventListener('click', () => setDiscussionScope('selection'));

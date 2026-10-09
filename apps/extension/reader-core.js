@@ -871,7 +871,10 @@ export function parseReadingAnswer(raw, context) {
   const evidence = [];
   const candidates = Array.isArray(parsed?.evidence)
     ? parsed.evidence
-    : Array.isArray(parsed?.citations) ? parsed.citations : [];
+    : Array.isArray(parsed?.citations) ? parsed.citations
+      : !parsed && !rawLooksStructured
+        ? [...answer.matchAll(/["“]([^"”\n]{20,180})["”]/gu)].map((match) => ({ quote: match[1].replace(/\*\*|__/gu, '').trim() }))
+        : [];
   candidates.slice(0, 5).forEach((item) => {
     const quote = typeof item === 'string' ? item : item?.quote;
     const claim = typeof item === 'string' ? '' : compactAnswerText(item?.claim || item?.why || item?.explanation || '');

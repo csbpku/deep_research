@@ -13,14 +13,18 @@ function ReaderPanel() {
   }, []);
 
   return (
-    <main className="shell">
+    <main className="shell" data-workspace-view="chat">
       <header className="masthead">
-        <div className="wordmark"><span className="mark">R</span><span>READER / AI WORKBENCH</span></div>
-        <nav className="utility" aria-label="阅读操作">
-          <button id="open-history-header" className="header-action" title="查看过去的聊天会话和知识结论">聊天记录</button>
-          <button id="settings-button" className="header-action" title="模型与数据设置">设置</button>
-        </nav>
+        <div className="wordmark"><span className="mark">R</span><span>Reader<span className="brand-caption">阅读工作台</span></span></div>
+
       </header>
+      <nav className="workspace-nav" aria-label="工作台导航">
+        <button id="nav-chat" className="workspace-nav-item active" type="button" aria-pressed="true"><PanelIcon kind="chat" /><span>聊天</span></button>
+        <button id="nav-tools" className="workspace-nav-item" type="button" aria-pressed="false"><PanelIcon kind="tools" /><span>工具</span></button>
+        <button id="nav-library" className="workspace-nav-item" type="button" aria-pressed="false"><PanelIcon kind="library" /><span>收藏</span></button>
+        <button id="open-history-header" className="workspace-nav-item" type="button" title="查看过去的聊天会话和知识结论"><PanelIcon kind="history" /><span>历史</span></button>
+        <button id="settings-button" className="workspace-nav-item nav-settings" type="button" title="模型与数据设置"><PanelIcon kind="settings" /><span>设置</span></button>
+      </nav>
       <div id="reader-status-strip" className="reader-status-strip" role="status" aria-live="polite" aria-label="当前运行状态">
         <span id="storage-status" className="mode-badge">独立模式</span>
         <span className="status"><i id="status-dot" className="status-dot" aria-hidden="true" /><span id="status-text">未配置模型</span></span>
@@ -65,8 +69,8 @@ function ReaderPanel() {
             <div id="image-progress-track" className="track" role="progressbar" aria-labelledby="image-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始"><div id="image-progress-bar" className="bar image" /></div>
             <div id="translation-failures" className="translation-failures hidden" />
           </div>
-          <div id="notice" className="notice hidden" role="status" aria-live="polite" />
         </div>
+
 
         <section id="quick-actions-section" className="quick-actions-panel">
           <div className="quick-actions-heading">
@@ -152,14 +156,19 @@ function ReaderPanel() {
         </section>
         </div>
 
+        <div className="page-notice-container">
+          <div id="notice" className="notice page-notice hidden" role="status" aria-live="polite" />
+          <button id="dismiss-notice" className="dismiss-notice" type="button" aria-label="收起提示" title="收起提示">×</button>
+        </div>
         <section id="discussion-section" className="discussion-panel hidden">
           <div className="section-label discussion-heading">
             <div>
-              <h2>围绕原文聊天</h2>
+              <h2>原文对话</h2>
               <div id="discussion-context-detail" className="discussion-context-detail" />
             </div>
             <div className="section-actions">
               <span id="discussion-context" className="discussion-context-badge">整页正文 · 提问</span>
+              <button id="expand-chat" className="secondary discussion-action" type="button" aria-pressed="false" aria-controls="discussion-section">放大聊天</button>
               <button id="open-history-inline" className="text-button">聊天记录</button>
             </div>
           </div>
@@ -176,6 +185,8 @@ function ReaderPanel() {
               <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
             </div>
           </div>
+          <div className="discussion-reading-actions"><button id="chat-to-reading" className="text-button" type="button">查看原文</button><button id="chat-translate-all" className="text-button" type="button">翻译原网页</button><span id="chat-scope-description">基于整篇文章</span></div>
+          <details id="chat-selection-card" className="chat-selection-card hidden"><summary>当前选段 · 查看内容</summary><blockquote id="chat-selection-quote" /><button id="clear-chat-selection" className="text-button" type="button">清除选段，基于整篇</button></details>
           <div className="chat-window">
             <div id="chat-transcript" className="chat-transcript">
               <div id="conversation-empty" className="conversation-empty">可以直接问整篇文章；选中原文后，也可以切换为选段继续讨论。</div>
@@ -200,6 +211,7 @@ function ReaderPanel() {
               </div>
             </div>
             <div id="persistent-composer" className="chat-composer persistent-composer hidden" aria-label="围绕当前原文提问">
+              <div id="composer-resize" className="composer-resize" role="separator" tabIndex={0} aria-label="调整输入区高度" aria-orientation="horizontal" aria-valuemin={60} aria-valuemax={240} aria-valuenow={80} title="上下拖动调整输入区；方向键也可调整"><span /></div>
               <div className="composer-context-row">
                 <span id="composer-scope-label" className="composer-scope-label">整页正文</span>
                 <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span>
@@ -276,8 +288,20 @@ function ReaderPanel() {
       </section>
 
       <div id="mode-data-note" className="footer">独立模式：模型请求与阅读成果保存在本地，可导出或清除。</div>
+      <div id="resize-hint" className="resize-hint">选段与引用联动原网页 · 输入区上缘可拖动</div>
     </main>
   );
+}
+
+function PanelIcon({ kind }: { kind: 'chat' | 'tools' | 'library' | 'history' | 'settings' }) {
+  const paths = {
+    chat: 'M4 4h16v12H9l-5 4V4',
+    tools: 'M4 4h7v16H4z M13 4h7v16h-7 M7 8h1 M16 8h1 M7 12h1 M16 12h1',
+    library: 'M6 3h12v18l-6-4-6 4V3',
+    history: 'M3 11a9 9 0 1 1 2.6 7 M3 4v7h7 M12 7v5l3 2',
+    settings: 'M4 7h16 M4 17h16 M8 4v6 M16 14v6',
+  };
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[kind]} /></svg>;
 }
 
 createRoot(document.getElementById('root')!).render(<ReaderPanel />);

@@ -1513,3 +1513,14 @@ test('incremental translation keeps old failures until an item resolves', () => 
   assert.deepEqual(failures.map((item) => item.id), ['image-1', 'block-2']);
   assert.deepEqual(mergeProcessedIds(['block-1'], ['block-1', 'block-3']), ['block-1', 'block-3']);
 });
+
+
+test('plain Markdown citations recover only exact source quotes and tolerate emphasis', () => {
+  const quote = 'A combined coffee/tea pot that is temporarily out of coffee should instead return 503.';
+  const context = { body: quote, url: 'https://example.com/article', contentHash: 'current' };
+  const result = parseReadingAnswer('原文："A combined coffee/tea pot that is **temporarily** out of coffee should instead return 503."', context);
+  assert.equal(result.evidence.length, 1);
+  assert.equal(result.evidence[0].quote, quote);
+  assert.equal(result.evidence[0].anchor.contentHash, 'current');
+  assert.equal(parseReadingAnswer('原文："A combined coffee/tea pot should always return 418."', context).evidence.length, 0);
+});

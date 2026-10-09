@@ -263,11 +263,39 @@ try {
   const selectionTranslation = await fixture.evaluate(() => ({
     count: document.querySelectorAll('[data-deep-research-selection-translation]').length,
     source: document.querySelector('#target')?.textContent || '',
-    result: document.querySelector('[data-deep-research-selection-translation]')?.textContent || '',
+    result: document.querySelector('[data-deep-research-selection-translation]')?.shadowRoot?.querySelector('.text')?.textContent || '',
   }));
   if (selectionTranslation.count !== 1 || selectionTranslation.source !== 'Bounded queues keep browser work responsive because cancellation can stop stale requests before they consume more model capacity.' || !selectionTranslation.result) {
     throw new Error(`部分选段翻译没有就近显示：${JSON.stringify(selectionTranslation)}`);
   }
+  // A mouse selection in the translation must not be treated as new source
+  // text and remove the very surface the reader is selecting.
+  const translationText = fixture.locator('[data-deep-research-selection-translation] .text');
+  await translationText.evaluate((element) => {
+    const text = element.firstChild;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, Math.min(8, text.textContent.length));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, composed: true }));
+  });
+  await fixture.waitForTimeout(100);
+  if (!await translationText.isVisible()) throw new Error('拖选译文后浮层被删除');
+  const selectedTranslation = await fixture.evaluate(() => window.getSelection()?.toString());
+  if (!selectedTranslation) throw new Error('译文无法选中');
+  await fixture.locator('[data-deep-research-selection-translation] .expand').click();
+  if (await fixture.locator('[data-deep-research-selection-translation] .expand').getAttribute('aria-pressed') !== 'true') {
+    throw new Error('译文放大没有生效');
+  }
+  await fixture.locator('[data-deep-research-selection-translation] .expand').click();
+  await panel.locator('#open-page-chat').click();
+  await panel.locator('#expand-chat').click();
+  if (!await panel.locator('#page-view').evaluate((element) => element.classList.contains('chat-expanded'))) {
+    throw new Error('聊天放大没有生效');
+  }
+  await panel.locator('#expand-chat').click();
   await panel.locator('#restore-page').click();
   await fixture.waitForSelector('[data-deep-research-selection-translation]', { state: 'detached', timeout: 10_000 });
 

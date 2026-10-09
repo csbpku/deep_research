@@ -13,7 +13,7 @@ import { readingKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../..
 
 export const dynamic = 'force-dynamic';
 
-export const POST = apiHandler<[NextRequest]>(async (req) => {
+const saveReading = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
   const user = await requireReadingUser(req);
   if (user instanceof Response) return user;
@@ -60,6 +60,48 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     anchor: input.anchor ?? null,
     capturedAt: new Date().toISOString(),
   } satisfies Prisma.InputJsonValue;
+
+  if (req.method === 'PUT') {
+    if (!input.idempotencyKey) {
+      return toApiErrorResponse({ code: 'VALIDATION_FAILED', message: '更新收藏需要原保存标识', requestId });
+    }
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.research.findFirst({
+        where: { authorId: user.id, readingSaveKey, type: 'knowledge', status: 'draft' },
+        select: { id: true, researchSources: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true } } },
+      });
+      if (!existing) return null;
+      // Check ownership and draft state again in the mutation, including races
+      // with publishing. A reading token must never edit published research.
+      const changed = await tx.research.updateMany({
+        where: { id: existing.id, authorId: user.id, status: 'draft', type: 'knowledge', readingSaveKey },
+        data: { title: input.title, body, conclusion, knowledgeIndexText, tags: input.tags, aiAssisted: Boolean(input.aiAnswer?.trim()) },
+      });
+      if (!changed.count) return null;
+      const originalSource = existing.researchSources[0];
+      if (originalSource) {
+        await tx.researchSource.updateMany({
+          where: { id: originalSource.id, researchId: existing.id },
+          data: { sourceRef, canonicalKey: input.url, title: input.title, description: input.quote.slice(0, 1_000) },
+        });
+      }
+      await queuePersonalKnowledgeIndex(tx, {
+        ownerId: user.id, researchId: existing.id, operation: knowledgeIndexText ? 'upsert' : 'delete',
+      });
+      await tx.researchAudit.create({
+        data: { researchId: existing.id, editorId: user.id, action: 'update', diff: { origin: 'browser_reading', url: input.url, hasAnchor: Boolean(input.anchor) } as Prisma.InputJsonValue },
+      });
+      return tx.research.findUniqueOrThrow({
+        where: { id: existing.id }, select: { id: true, title: true, status: true, createdAt: true },
+      });
+    });
+    if (!updated) {
+      return toApiErrorResponse({ code: 'DRAFT_NOT_FOUND', message: '原收藏不存在或已不再是可编辑草稿；本地修改已保留', requestId });
+    }
+    return NextResponse.json({
+      ok: true, updated: true, draft: { ...updated, createdAt: updated.createdAt.toISOString() }, requestId,
+    });
+  }
 
   let created: { id: string; title: string; status: string; createdAt: Date };
   let deduplicated = false;
@@ -127,3 +169,6 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     requestId,
   }, { status: deduplicated ? 200 : 201 });
 });
+
+export const POST = saveReading;
+export const PUT = saveReading;

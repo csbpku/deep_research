@@ -10,6 +10,8 @@ let toastTimer = 0;
 let activeDetail = null;
 let activeDetailReturnFocus = null;
 const sidePanelSurface = new URLSearchParams(window.location.search).get('surface') === 'sidepanel';
+const sourceTab = Number(new URLSearchParams(window.location.search).get('sourceTab'));
+const boundWindowTabId = sourceTab > 0 && Number.isInteger(sourceTab) ? sourceTab : null;
 const pendingSessionKey = 'readerPendingSession';
 
 const $ = (id) => document.getElementById(id);
@@ -173,7 +175,9 @@ async function openSession(session, { anchor = null } = {}) {
         queuedAt: new Date().toISOString(),
       },
     });
-    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const activeTab = boundWindowTabId
+      ? await chrome.tabs.get(boundWindowTabId).catch(() => null)
+      : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
     let activeTabIsWeb = false;
     try {
       activeTabIsWeb = /^https?:$/u.test(new URL(activeTab?.url || '').protocol);
@@ -184,7 +188,7 @@ async function openSession(session, { anchor = null } = {}) {
       ? await chrome.tabs.update(activeTab.id, { url: session.url, active: true })
       : await chrome.tabs.create({ url: session.url, active: true });
     if (sidePanelSurface) {
-      window.location.href = chrome.runtime.getURL('sidepanel.html');
+      window.location.href = chrome.runtime.getURL(`sidepanel.html${boundWindowTabId && tab?.id ? `?sourceTab=${tab.id}` : ''}`);
     } else if (Number.isInteger(tab?.id)) {
       await chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
     }
@@ -494,7 +498,7 @@ function setTab(next) {
 
 function closeHistory() {
   if (sidePanelSurface) {
-    window.location.href = chrome.runtime.getURL('sidepanel.html');
+    window.location.href = chrome.runtime.getURL(`sidepanel.html${boundWindowTabId ? `?sourceTab=${boundWindowTabId}` : ''}`);
     return;
   }
   chrome.tabs.getCurrent((tab) => {

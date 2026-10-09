@@ -213,6 +213,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
       try {
         imageTranslations.push(await translateImage(readingProvider, document, image, { signal: controller.signal, fetchImageBytes: true }));
       } catch (error) {
+        if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
         imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : '图片翻译失败' });
       }
       job.processedImageIds = mergeProcessedIds(job.processedImageIds, [image.id]);
@@ -630,7 +631,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Some Chromium builds throw synchronously when the gesture is stale.
       }
     }
-    chrome.runtime.sendMessage(forwarded).catch(() => {});
+    // Inactive articles still emit mutation and reading-progress messages.
+    // Keep their cached context, but never let them replace the visible tab.
+    if (pageTabId !== undefined) {
+      chrome.tabs.query({ active: true, windowId: sender.tab.windowId }).then(([activeTab]) => {
+        if (activeTab?.id === pageTabId) chrome.runtime.sendMessage(forwarded).catch(() => {});
+      }).catch(() => {});
+    }
     return;
   }
   if (message?.type === 'deep-research:selection-action') {
@@ -654,6 +661,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
   if (message?.type === 'deep-research:to-page') {
+    if (Number.isInteger(message.tabId) && sender.url?.startsWith(chrome.runtime.getURL('sidepanel.html'))) {
+      chrome.tabs.sendMessage(message.tabId, message.payload).catch(() => {});
+      return;
+    }
     chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
       if (tab?.id) chrome.tabs.sendMessage(tab.id, message.payload).catch(() => {});
     }).catch(() => {});

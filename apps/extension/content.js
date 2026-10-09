@@ -154,6 +154,12 @@
     }
   }
 
+  function sourceBlockText(node) {
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll('[data-deep-research-translation]').forEach((item) => item.remove());
+    return clean(clone.textContent || '');
+  }
+
   function extractBlocks() {
     const nodes = Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR))
       .filter((node) => !node.closest('[data-deep-research-translation]'))
@@ -168,7 +174,9 @@
       .filter((node) => !node.matches('td,th,dt,dd') || !node.querySelector('h1,h2,h3,h4,p,li,blockquote,pre'));
     const blocks = [];
     nodes.forEach((node) => {
-      const text = clean(node.innerText || node.textContent || '');
+      // Read source DOM even when originals are hidden by translation. Nested
+      // list/table blocks may contain injected sibling translations.
+      const text = sourceBlockText(node);
       if (!text) return;
       const id = stableNodeId(node, 'block', blockIds, () => nextBlockId++);
       node.dataset.deepResearchBlock = id;
@@ -400,7 +408,7 @@
     let fallback = '';
     if (!body) {
       const clone = root.cloneNode(true);
-      clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside').forEach((node) => node.remove());
+      clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside,[data-deep-research-translation],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]').forEach((node) => node.remove());
       fallback = clean(clone.innerText || clone.textContent || '');
     }
     const entry = entryContext();
@@ -480,6 +488,8 @@
     if (!current) return clean(anchorNode.innerText || anchorNode.textContent || '').slice(0, 80000);
     const level = Number(current.tagName.slice(1)) || 4;
     const parts = [];
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
+    walker.currentNode = current;
     let node = current;
     while (node && parts.join('\n\n').length < 80000) {
       if (node.nodeType === Node.ELEMENT_NODE && !node.closest('[data-deep-research-translation]')) {
@@ -493,10 +503,7 @@
           if (text.length >= 2) parts.push(text);
         }
       }
-      node = node.nextElementSibling;
-      if (!node && current.parentElement && current.parentElement !== container) {
-        node = current.parentElement.nextElementSibling;
-      }
+      node = walker.nextNode();
     }
     return parts.join('\n\n').slice(0, 80000);
   }
@@ -549,10 +556,16 @@
     }
   }
 
+  function isTranslationNode(node) {
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    return Boolean(element?.closest?.('[data-deep-research-selection-translation]')
+      || node?.getRootNode?.()?.host?.matches?.('[data-deep-research-selection-translation]'));
+  }
+
   async function selectionContext() {
     const selection = window.getSelection();
     const quote = clean(selection?.toString() || '');
-    if (!quote) return null;
+    if (!quote || isTranslationNode(selection?.anchorNode) || isTranslationNode(selection?.focusNode)) return null;
     removeSelectionTranslation();
     const selectedElement = selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
       ? selection.anchorNode
@@ -603,13 +616,17 @@
   // firing while a user is typing in a form or editor.
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      removeSelectionTranslation();
       if (document.querySelector('[data-deep-research-image-zoom]')) closeImageZoom();
       if (toolbarHost) removeSelectionToolbar();
       return;
     }
     if (isTypingTarget(event.target) || !event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return;
     const shortcuts = { t: 'translate', e: 'explain', q: 'ask', s: 'summary', k: 'save', m: 'annotate' };
-    const action = shortcuts[event.key.toLowerCase()];
+    // Option changes event.key to a symbol on macOS (for example S → Í).
+    // Physical letter codes keep the advertised Alt+Shift shortcuts usable.
+    const letter = /^Key[A-Z]$/u.test(event.code || '') ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
+    const action = shortcuts[letter];
     if (!action || !lastSelectionContext) return;
     event.preventDefault();
     send({ type: 'deep-research:selection', context: lastSelectionContext });
@@ -753,12 +770,59 @@
     if (!fallbackRect || (!rect.width && !rect.height && !fallbackRect.width && !fallbackRect.height)) return false;
     const popup = document.createElement('div');
     popup.dataset.deepResearchSelectionTranslation = 'true';
-    popup.textContent = translation;
-    const left = Math.max(8, Math.min(window.innerWidth - 360, (rect.width || rect.left ? rect.left : fallbackRect.left)));
-    const top = Math.max(8, (rect.height || rect.top ? rect.bottom : fallbackRect.bottom) + 8);
-    popup.style.cssText = `position:fixed;z-index:2147483646;left:${left}px;top:${Math.min(window.innerHeight - 120, top)}px;max-width:min(360px,calc(100vw - 16px));padding:8px 10px;border:1px solid #b8c7f4;border-left:3px solid #315fe8;border-radius:6px;background:#f7f9ff;color:#172235;box-shadow:0 4px 16px rgba(23,34,53,.16);font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre-wrap;pointer-events:auto;`;
-    popup.setAttribute('role', 'status');
+    popup.dataset.deepResearchTranslation = 'true';
+    popup.setAttribute('role', 'region');
     popup.setAttribute('aria-label', '选段翻译');
+    const shadow = popup.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `<style>
+      :host{all:initial;color-scheme:light}
+      *{box-sizing:border-box}
+      .panel{display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden;border:1px solid #b8c7f4;border-left:3px solid #315fe8;border-radius:8px;background:#f7f9ff;color:#172235;box-shadow:0 4px 16px #17223529;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      header{display:flex;align-items:center;flex:none;gap:4px;padding:6px 8px;border-bottom:1px solid #d9e0f1;font-size:12px}
+      strong{margin-right:auto;white-space:nowrap}
+      button{min-height:32px;border:1px solid #c7d3f2;border-radius:5px;padding:4px 8px;background:#fff;color:#3159c9;font:inherit;cursor:pointer;white-space:nowrap}
+      button:hover{background:#eaf0ff}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}
+      .text{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}
+    </style><div class="panel"><header><strong>选段翻译</strong><button type="button" class="copy">复制</button><button type="button" class="expand" aria-pressed="false">放大</button><button type="button" class="close" aria-label="关闭选段翻译">关闭</button></header><div class="text" tabindex="0" aria-label="译文"></div></div>`;
+    shadow.querySelector('.text').textContent = text.trim();
+    const width = Math.min(440, window.innerWidth - 16);
+    const anchor = rect.width || rect.height ? rect : fallbackRect;
+    // Prefer space beside the source. Otherwise place below it, then above it.
+    const beside = anchor.right + width + 16 <= window.innerWidth;
+    const left = beside ? anchor.right + 8 : Math.max(8, Math.min(window.innerWidth - width - 8, anchor.left));
+    const below = window.innerHeight - anchor.bottom - 16;
+    const top = beside ? Math.max(8, Math.min(anchor.top, window.innerHeight - 240))
+      : below >= 180 ? anchor.bottom + 8 : Math.max(8, anchor.top - 300);
+    popup.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:${width}px;height:${Math.min(300, Math.max(120, window.innerHeight - top - 8))}px;min-width:min(280px,calc(100vw - 16px));min-height:120px;max-width:calc(100vw - 16px);max-height:calc(100vh - ${top + 8}px);resize:both;overflow:hidden;pointer-events:auto;`;
+    const initialStyle = popup.style.cssText;
+    const expand = shadow.querySelector('.expand');
+    expand.addEventListener('click', () => {
+      const expanded = expand.getAttribute('aria-pressed') !== 'true';
+      popup.style.cssText = expanded
+        ? 'position:fixed;z-index:2147483647;inset:5vh 5vw;width:90vw;height:90vh;overflow:hidden;pointer-events:auto;'
+        : initialStyle;
+      expand.textContent = expanded ? '恢复' : '放大';
+      expand.setAttribute('aria-pressed', String(expanded));
+    });
+    shadow.querySelector('.copy').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      try {
+        await navigator.clipboard.writeText(text.trim());
+        button.textContent = '已复制';
+      } catch {
+        button.textContent = '请选中复制';
+      }
+    });
+    shadow.querySelector('.close').addEventListener('click', () => popup.remove());
+    popup.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.stopPropagation(); popup.remove(); }
+    });
+    // Keep host-page selection helpers away from the translation, without
+    // preventing the browser's native text selection or clipboard shortcuts.
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+      popup.addEventListener(type, (event) => event.stopPropagation());
+    }
+    removeSelectionToolbar();
     document.documentElement.appendChild(popup);
     return true;
   }
@@ -879,7 +943,10 @@
       send({ type: 'deep-research:anchor-unresolved', reason: resolved.error });
       return;
     }
-    const target = resolved.target;
+    const translated = resolved.target.nextElementSibling;
+    const target = getComputedStyle(resolved.target).display === 'none'
+      && translated?.hasAttribute('data-deep-research-translation')
+      ? translated : resolved.target;
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const previousOutline = target.style.outline;
     const previousOffset = target.style.outlineOffset;
@@ -1275,7 +1342,8 @@
     document.querySelectorAll('[data-deep-research-image-overlay]').forEach((node) => node.remove());
   }
 
-  document.addEventListener('mouseup', () => {
+  document.addEventListener('mouseup', (event) => {
+    if (event.composedPath().some(isTranslationNode)) return;
     window.setTimeout(async () => {
       const context = await selectionContext();
       if (context) {
@@ -1287,7 +1355,9 @@
   }, true);
 
   document.addEventListener('selectionchange', () => {
-    if (!window.getSelection()?.toString().trim()) {
+    const selection = window.getSelection();
+    if (isTranslationNode(selection?.anchorNode) || isTranslationNode(selection?.focusNode)) return;
+    if (!selection?.toString().trim()) {
       lastSelectionContext = null;
       lastSelectionRange = null;
       if (!toolbarHost?.matches(':hover')) removeSelectionToolbar();
@@ -1355,6 +1425,9 @@
       const tone = message.state === 'ready' ? 'ready' : message.state === 'error' ? 'error' : 'loading';
       setReaderStatus(String(message.label || '正在读取正文'), tone, String(message.detail || ''));
     }
+    if (message?.type === 'deep-research:focus-page') {
+      root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     if (message?.type === 'deep-research:request-page') {
       sendPageContext();
     }
@@ -1403,7 +1476,7 @@
         // DOM updates can reorder block ids between the request and the
         // response. Refuse to attach a translation to a different paragraph;
         // the user can retry after the viewport context is refreshed.
-        if (typeof sourceText === 'string' && clean(node.innerText || node.textContent || '') !== clean(sourceText)) return;
+        if (typeof sourceText === 'string' && sourceBlockText(node) !== clean(sourceText)) return;
         if (getComputedStyle(node).display === 'none') return;
         const translated = document.createElement(node.tagName.toLowerCase());
         for (const attribute of ['class', 'style', 'dir', 'lang', 'role']) {
