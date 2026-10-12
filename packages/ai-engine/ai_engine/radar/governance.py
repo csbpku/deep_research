@@ -382,13 +382,16 @@ async def recover(pool: Any, actor: str, batch: str, *, limit: int = 1) -> dict[
             actor_id = await verify_admin(conn, actor)
         if actor_id != plan['actorId']:
             raise PermissionError('batch belongs to a different Admin')
-        if plan['quotaStopped']:
-            return summary(plan)
         pending = [r for r in plan['recovery'] if r['id'] not in plan['recoveryResults']][:limit]
         for target in pending:
             sid = target['id']
             state: dict[str, Any] = {'state': 'started', 'calls': 0, 'title': target['title']}
             plan['recoveryResults'][sid] = state
+            if plan['quotaStopped'] and (target['needScore'] or target['needBrief']):
+                state['state'] = 'quota_deferred'
+                state['reason'] = 'quota_exhausted'
+                save(path, plan)
+                continue
             save(path, plan)
             async with pool.connection() as conn:
                 row = await (await conn.execute('SELECT * FROM summaries WHERE id=%s', (sid,))).fetchone()
@@ -511,6 +514,4 @@ async def recover(pool: Any, actor: str, batch: str, *, limit: int = 1) -> dict[
                 state['reason'] = str(exc) if str(exc) in known_reasons else ('quota_exhausted' if plan['quotaStopped'] else type(exc).__name__)
                 # Store no raw response, credential, source text or model body.
                 save(path, plan)
-            if plan['quotaStopped']:
-                break
         return summary(plan)
