@@ -28,14 +28,14 @@ automatically. Quota stops model work. Existing valid scores are retained; sourc
 text is ephemeral. Verified external-reading migration retains old body/review
 history and never changes a rejected review to approved.
 
-SSH maintenance uses the same core:
+SSH maintenance uses the same core; run from the AI-engine package root (or `/app` in the production image):
 
 ```sh
-python scripts/govern_radar.py preview --actor <real-admin-email>
-python scripts/govern_radar.py apply --actor <real-admin-email> --batch <uuid> --limit 10
-python scripts/govern_radar.py recover --actor <real-admin-email> --batch <uuid> --limit 1
-python scripts/govern_radar.py report --actor <real-admin-email> --batch <uuid>
-python scripts/govern_radar.py rollback --actor <real-admin-email> --batch <uuid> --limit 100
+python -m scripts.govern_radar preview --actor <real-admin-email>
+python -m scripts.govern_radar apply --actor <real-admin-email> --batch <uuid> --limit 10
+python -m scripts.govern_radar recover --actor <real-admin-email> --batch <uuid> --limit 1
+python -m scripts.govern_radar report --actor <real-admin-email> --batch <uuid>
+python -m scripts.govern_radar rollback --actor <real-admin-email> --batch <uuid> --limit 100
 ```
 
 Rollback reverses recovery before deterministic operations, requires the recorded
