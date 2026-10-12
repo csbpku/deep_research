@@ -500,8 +500,8 @@ async def test_sync_scores_limited_abstract_instead_of_default() -> None:
     assert len(content_calls) == 1
     assert 300 <= len(content_calls[0]) < 1000
     assert not any(
-        "PENDING_SCORE" in sql
-        for sql, _params in pool.connection_value.executions
+        sql.startswith('INSERT INTO "radar_sync_diagnostics"') and 'PENDING_SCORE' in params
+        for sql, params in pool.connection_value.executions
     )
     insert_sql, insert_params = next(
         item
@@ -576,8 +576,8 @@ async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() ->
     assert "acme/agent" in calls[0][1]
     assert calls[0][2]["structured_signals"]["stars"] == 1200
     assert not any(
-        'PENDING_SCORE' in sql
-        for sql, _params in pool.connection_value.executions
+        sql.startswith('INSERT INTO "radar_sync_diagnostics"') and 'PENDING_SCORE' in params
+        for sql, params in pool.connection_value.executions
     )
 
 
@@ -1525,7 +1525,8 @@ async def test_browser_mode_diagnostics_never_persist_fetched_full_text(
         markdown=full_text,
     )
 
-    _sql, params = pool.connection_value.executions[0]
+    _sql, params = next((sql, params) for sql, params in pool.connection_value.executions
+                        if sql.startswith('INSERT INTO "radar_sync_diagnostics"'))
     assert params[7] == candidate.snippet
     assert params[8] is None
     assert "external_reading" in params[12]

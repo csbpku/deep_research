@@ -16,7 +16,7 @@ _METADATA_TAG_PREFIXES = ("profile_", "tier_")
 _METADATA_TAG_EXACT = frozenset({
     "github", "arxiv", "huggingface", "devto", "hackernews",
     "lobsters", "producthunt", "rss", "news", "trending",
-    "topic_search",
+    "topic_search", "external_reading",
 })
 
 # 宽泛领域/语言不是“热点主题”。具体议题（mcp / rag / agent-evaluation）

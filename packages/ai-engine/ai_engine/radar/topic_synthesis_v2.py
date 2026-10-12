@@ -19,6 +19,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
 from ai_engine.llm.client import generate_text
 from psycopg.rows import dict_row
 
@@ -212,15 +213,14 @@ async def _fetch_payload(pool: Any, topic_id: str) -> dict[str, Any] | None:
             return None
         rows = await (
             await conn.execute(
-                """
-                SELECT s."id", s."title", s."interpretation",
+                f"""
+                SELECT s."id", s."title",
+                       COALESCE(NULLIF(btrim(s."interpretation"), ''), left(s."body", 1000)) AS "interpretation",
                        COALESCE(s."summaryDate", s."publishedAt", s."createdAt") AS "appearAt"
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s
-                  AND s."enrichmentStatus" = 'ready'
-                  AND s."readerQualityStatus" = 'ready'
-                  AND s."contentReviewStatus" = 'approved'
+                  AND {TOPIC_ELIGIBILITY_SQL}
                 ORDER BY tc."addedAt" DESC
                 LIMIT 12
                 """,

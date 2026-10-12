@@ -24,6 +24,9 @@ from datetime import date, datetime, timezone
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+from ai_engine.radar.diagnostic_policy import (
+    close_scored_pending, deterministic_retry_blocked, retire_duplicate_pending,
+)
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -530,6 +533,10 @@ async def _with_transport_retries(
                 await asyncio.sleep(wait_seconds)
 
 
+class SourceNotFoundError(SafeFetchError):
+    """A confirmed 404/410; reuse the existing upstream error contract."""
+
+
 async def _fetch_document_with_content_retries(
     document_fetcher: SafeFetcher,
     *,
@@ -550,6 +557,8 @@ async def _fetch_document_with_content_retries(
                     source_id=source_id,
                     domain=domain,
                 )
+                if fetched.status in (404, 410):
+                    raise SourceNotFoundError('UPSTREAM_HTTP_ERROR', 'Source returned HTTP 404/410', host=domain)
             except Exception as exc:
                 last_error = exc
                 # A rendered arXiv mirror can be unavailable for a new or
@@ -857,6 +866,8 @@ async def _record_sync_diagnostic(
         diagnostic_tags.append("external_reading")
     try:
         async with pool.connection() as conn:
+            await retire_duplicate_pending(conn, source.id, canonical_url[:2048], reason_code,
+                                           kind, original_markdown, diagnostic_body)
             await conn.execute(
                 'INSERT INTO "radar_sync_diagnostics" '
                 '("id", "runId", "sourceId", "kind", "title", "url", '
@@ -1069,6 +1080,8 @@ async def _insert_candidate(
                     ),
                 )
             ).fetchone()
+            if row is not None:
+                await close_scored_pending(conn, str(dict(row)["id"]))
     return row is not None
 
 
@@ -1659,6 +1672,11 @@ async def _run_source(
                             )
                         total_skipped += 1
                         skipped_existing += 1
+                        return
+
+                    if await deterministic_retry_blocked(pool, source.id, normalized.canonical_url,
+                                                         raw_candidate.published_at):
+                        total_skipped += 1
                         return
 
                     # Heuristic score (for admin-queue sort only) + noise-pattern filter.

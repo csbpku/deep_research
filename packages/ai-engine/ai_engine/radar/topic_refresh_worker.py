@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
+from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
 from ai_engine.radar.topic_clustering import is_metadata_tag
 from ai_engine.radar.topic_presets import load_topic_presets
 
@@ -58,9 +59,20 @@ def _matches_topic(summary: dict[str, Any], anchors: set[str]) -> bool:
     haystack = " ".join([
         str(summary.get("title") or "").casefold(),
         str(summary.get("url") or "").casefold(),
+        str(summary.get("interpretation") or "").casefold(),
+        str(summary.get("body") or "")[:2000].casefold(),
         " ".join(tags),
     ])
-    return bool(tags & anchors) or any(anchor in haystack for anchor in anchors)
+    for raw_anchor in anchors:
+        anchor = raw_anchor.strip().casefold()
+        if not anchor:
+            continue
+        expression = re.escape(anchor).replace(r"\ ", r"[-\s]+")
+        if anchor.isascii():
+            expression = rf"(?<![a-z0-9]){expression}(?![a-z0-9])"
+        if re.search(expression, haystack):
+            return True
+    return False
 
 
 async def ensure_topic_presets(pool: Any) -> int:
@@ -138,16 +150,15 @@ async def refresh_existing_topics(
         ).fetchall()
         summary_rows = await (
             await conn.execute(
-                """
-                SELECT "id", "title", "url", "originalKind", "tags"
-                FROM "summaries"
+                f"""
+                SELECT s."id", s."title", s."url", s."originalKind", s."tags",
+                       s."interpretation", left(s."body", 2000) AS "body"
+                FROM "summaries" s
                 WHERE "status" IN ('candidate', 'published')
                   AND ("publishedAt" >= %s OR "createdAt" >= %s)
                   AND "distilledTier" = ANY(%s)
                   AND ("distilledTotal" IS NULL OR "distilledTotal" >= 0)
-                  AND "enrichmentStatus" = 'ready'
-                  AND "readerQualityStatus" = 'ready'
-                  AND "contentReviewStatus" = 'approved'
+                  AND {TOPIC_ELIGIBILITY_SQL}
                 """,
                 (since, since, list(ALLOWED_TIERS)),
             )
@@ -155,6 +166,8 @@ async def refresh_existing_topics(
 
         grouped: dict[str, dict[str, Any]] = {}
         for row in topic_rows:
+            if not row["enabled"]:
+                continue
             topic_id = str(row["id"])
             topic = grouped.setdefault(
                 topic_id, {"name": str(row["name"]), "anchors": set(), "rows": []}
@@ -180,7 +193,7 @@ async def refresh_existing_topics(
             old_count = int(before["count"] if before else 0)
 
             stale = await conn.execute(
-                """
+                f"""
                 DELETE FROM "topic_candidates" tc
                 USING "summaries" s
                 WHERE tc."topicId" = %s
@@ -190,15 +203,15 @@ async def refresh_existing_topics(
                     s."status" IN ('candidate', 'published')
                     AND (s."publishedAt" >= %s OR s."createdAt" >= %s)
                     AND s."distilledTier" = ANY(%s)
-                    AND s."enrichmentStatus" = 'ready'
-                    AND s."readerQualityStatus" = 'ready'
-                    AND s."contentReviewStatus" = 'approved'
+                    AND {TOPIC_ELIGIBILITY_SQL}
                   )
                 RETURNING tc."id"
                 """,
                 (topic_id, since, since, list(ALLOWED_TIERS)),
             )
-            removed += len(await stale.fetchall())
+            removed_rows = await stale.fetchall()
+            removed += len(removed_rows)
+            membership_changed = bool(removed_rows)
 
             for summary in summary_rows:
                 if not _matches_topic(dict(summary), topic["anchors"]):
@@ -215,6 +228,7 @@ async def refresh_existing_topics(
                 )
                 if await result.fetchone():
                     linked += 1
+                    membership_changed = True
 
             rows = await (
                 await conn.execute(
@@ -235,13 +249,16 @@ async def refresh_existing_topics(
                 SET "candidateCount" = %s, "sourceCount" = %s, "tier" = %s,
                     "lastSyncedAt" = now(), "aggregationWindowStart" = %s,
                     "aggregationWindowEnd" = %s,
-                    "synthesisPayload" = CASE WHEN %s <> %s THEN NULL ELSE "synthesisPayload" END,
-                    "synthesisGeneratedAt" = CASE WHEN %s <> %s THEN NULL ELSE "synthesisGeneratedAt" END,
+                    "synthesisPayload" = CASE WHEN %s THEN NULL ELSE "synthesisPayload" END,
+                    "synthesisGeneratedAt" = CASE WHEN %s THEN NULL ELSE "synthesisGeneratedAt" END,
+                    "synthesisInputHash" = CASE WHEN %s THEN NULL ELSE "synthesisInputHash" END,
                     "updatedAt" = now()
                 WHERE "id" = %s
                 """,
-                (count, source_count, _tier(count), since, now, count, old_count,
-                 count, old_count, topic_id),
+                (count, source_count, _tier(count), since, now,
+                 membership_changed or count != old_count,
+                 membership_changed or count != old_count,
+                 membership_changed or count != old_count, topic_id),
             )
             refreshed += 1
 

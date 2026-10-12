@@ -9,6 +9,7 @@ import os
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
+from ai_engine.radar.diagnostic_policy import close_scored_pending
 from ai_engine.radar.distilled_scorer import (
     DistilledScore,
     build_distilled_score_reason,
@@ -458,5 +459,7 @@ async def score_missing_candidates(
                 ),
             )
             if not only_unscored or cursor.rowcount > 0:
+                if not result.is_default and any(result.dimension_scores.values()):
+                    await close_scored_pending(conn, summary_id)
                 persisted += 1
     return persisted

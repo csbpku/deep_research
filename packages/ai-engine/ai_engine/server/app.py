@@ -1510,6 +1510,9 @@ from ai_engine.server.chat import _anythingllm_usage, router as chat_router  # n
 from ai_engine.server.research_chat import router as research_chat_router  # noqa: E402
 from ai_engine.server.personal_knowledge import router as personal_knowledge_router  # noqa: E402
 
+from ai_engine.radar.governance_endpoint import router as governance_router  # noqa: E402
+
+app.include_router(governance_router)
 app.include_router(radar_router)
 app.include_router(topic_router)
 app.include_router(chat_router)

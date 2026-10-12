@@ -23,6 +23,8 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
+
 from ai_engine.llm.client import (
     generate_text,
     is_retryable_llm_error,
@@ -196,8 +198,9 @@ async def _fetch_topic_inputs(
             return None, []
         rows = await (
             await conn.execute(
-                """
-                SELECT s."id", s."title", s."interpretation", s."tags",
+                f"""
+                SELECT s."id", s."title",
+                       COALESCE(NULLIF(btrim(s."interpretation"), ''), left(s."body", 1000)) AS "interpretation", s."tags",
                        s."originalKind", s."url",
                        s."publishedAt", s."createdAt",
                        s."distilledTier",
@@ -206,9 +209,7 @@ async def _fetch_topic_inputs(
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s AND tc."addedAt" >= %s
-                  AND s."enrichmentStatus" = 'ready'
-                  AND s."readerQualityStatus" = 'ready'
-                  AND s."contentReviewStatus" = 'approved'
+                  AND {TOPIC_ELIGIBILITY_SQL}
                 ORDER BY tc."addedAt" DESC
                 LIMIT 24
                 """,
@@ -721,15 +722,13 @@ async def _latest_candidate_at(pool: Any, topic_id: str) -> datetime | None:
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                """
+                f"""
                 SELECT max(tc."addedAt") AS "candidateAt"
                 FROM "topic_candidates" tc
                 JOIN "summaries" s ON s."id" = tc."summaryId"
                 WHERE tc."topicId" = %s
                   AND tc."addedAt" >= now() - (%s || ' days')::interval
-                  AND s."enrichmentStatus" = 'ready'
-                  AND s."readerQualityStatus" = 'ready'
-                  AND s."contentReviewStatus" = 'approved'
+                  AND {TOPIC_ELIGIBILITY_SQL}
                 """,
                 (topic_id, str(WINDOW_DAYS)),
             )
@@ -743,7 +742,7 @@ async def _claim_topics(pool: Any, limit: int) -> list[str]:
         conn.row_factory = dict_row
         rows = await (
             await conn.execute(
-                """
+                f"""
                 SELECT t."id"
                 FROM "topics" t
                 WHERE t."enabled" = true
@@ -756,9 +755,7 @@ async def _claim_topics(pool: Any, limit: int) -> list[str]:
                       WHERE tc."topicId" = t."id"
                         AND tc."addedAt" >= now() - (%s || ' days')::interval
                         AND tc."addedAt" > COALESCE(t."issueLastCandidateAt", to_timestamp(0))
-                        AND s."enrichmentStatus" = 'ready'
-                        AND s."readerQualityStatus" = 'ready'
-                        AND s."contentReviewStatus" = 'approved'
+                        AND {TOPIC_ELIGIBILITY_SQL}
                     )
                   )
                 ORDER BY t."updatedAt" DESC

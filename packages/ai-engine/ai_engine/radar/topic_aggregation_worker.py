@@ -23,6 +23,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
 from ai_engine.radar.topic_clustering import is_metadata_tag as _is_metadata_tag
 from ai_engine.radar.topic_refresh_worker import ensure_topic_presets
 
@@ -59,7 +60,7 @@ async def _fetch_candidate_clusters(pool: Any, since: datetime) -> list[dict[str
         # Hard score 阈值 SCORE_THRESHOLD 当前为 0（兜底用），方便 V2 把控。
         exploded = await (
             await conn.execute(
-                """
+                f"""
                 WITH windowed AS (
                   SELECT s."id" AS "summaryId", s."originalKind", s."title",
                          s."tags", s."summaryDate", s."publishedAt", s."createdAt"
@@ -68,9 +69,7 @@ async def _fetch_candidate_clusters(pool: Any, since: datetime) -> list[dict[str
                     AND (s."publishedAt" >= %s OR s."createdAt" >= %s)
                     AND s."distilledTier" = ANY(%s)
                     AND (s."distilledTotal" IS NULL OR s."distilledTotal" >= %s)
-                    AND s."enrichmentStatus" = 'ready'
-                    AND s."readerQualityStatus" = 'ready'
-                    AND s."contentReviewStatus" = 'approved'
+                    AND {TOPIC_ELIGIBILITY_SQL}
                 )
                 SELECT "summaryId", "originalKind", "title", "tag"
                 FROM windowed, unnest("tags") AS "tag"

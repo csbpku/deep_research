@@ -269,3 +269,72 @@ async def test_topic_synthesis_failure_preserves_last_success_timestamp(
     failure_updates = [sql for sql in pool.conn.sql if 'UPDATE "topics"' in sql]
     assert failure_updates
     assert '"lastSynthesisSuccessAt"' not in failure_updates[-1]
+
+
+@pytest.mark.parametrize(
+    "summary,anchors,expected",
+    [
+        ({"title": "morluto/rea", "body": "Reverse engineer anything with agents"}, {"agent", "agents"}, True),
+        ({"title": "repo", "interpretation": "用智能体逆向工程应用"}, {"智能体"}, True),
+        ({"title": "repo", "body": "An agentic runtime"}, {"agentic"}, True),
+        ({"title": "diagram-design"}, {"rag"}, False),
+        ({"title": "Maintain quality"}, {"ai"}, False),
+        ({"title": "Claude-Code tool"}, {"claude code"}, True),
+        ({"title": "repo", "tags": ["external_reading"]}, {"external_reading"}, False),
+    ],
+)
+def test_topic_matching_uses_saved_evidence_with_term_boundaries(
+    summary: dict[str, Any], anchors: set[str], expected: bool,
+) -> None:
+    assert _matches_topic(summary, anchors) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_candidate", [False, True])
+async def test_refresh_invalidates_synthesis_when_membership_changes_at_same_count(
+    replace_candidate: bool,
+) -> None:
+    from ai_engine.radar.topic_refresh_worker import refresh_existing_topics
+
+    class Cursor:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self.rows = rows
+
+        async def fetchall(self) -> list[dict[str, Any]]:
+            return self.rows
+
+        async def fetchone(self) -> dict[str, Any] | None:
+            return self.rows[0] if self.rows else None
+
+    class Connection:
+        update_params: tuple[Any, ...] = ()
+
+        async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Cursor:
+            if 'FROM "topics" t' in sql:
+                return Cursor([{"id": "topic", "name": "MCP", "keywords": ["mcp"], "enabled": True, "tags": []}])
+            if 'SELECT COUNT(*)' in sql:
+                return Cursor([{"count": 1}])
+            if 'DELETE FROM' in sql:
+                return Cursor([{"id": "old"}] if replace_candidate else [])
+            if 'INSERT INTO' in sql:
+                return Cursor([{"id": "new"}] if replace_candidate else [])
+            if 'UPDATE "topics"' in sql:
+                self.update_params = params
+                assert '"synthesisInputHash" = CASE WHEN %s THEN NULL' in sql
+                return Cursor([])
+            if 'FROM "summaries" s' in sql:
+                return Cursor([{"id": "candidate", "title": "MCP server", "url": "https://example.com/article", "tags": [], "originalKind": None}])
+            return Cursor([{"url": "https://example.com/article", "originalKind": None}])
+
+    class Pool:
+        conn = Connection()
+
+        @asynccontextmanager
+        async def connection(self) -> Any:
+            yield self.conn
+
+    pool = Pool()
+    result = await refresh_existing_topics(pool)
+    assert result["topics_refreshed"] == 1
+    assert pool.conn.update_params[0] == 1
+    assert pool.conn.update_params[5:8] == (replace_candidate,) * 3
