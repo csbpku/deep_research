@@ -102,7 +102,11 @@ try {
   await worker.evaluate(() => {
     globalThis.readerMenuUpdates = [];
     const update = chrome.contextMenus.update.bind(chrome.contextMenus);
-    chrome.contextMenus.update = (id, properties, callback) => { if (id === 'reader:toggle-paragraph') globalThis.readerMenuUpdates.push(properties); return update(id, properties, callback); };
+    chrome.contextMenus.update = (id, properties, callback) => update(id, properties, () => {
+      const error = chrome.runtime.lastError?.message || null;
+      if (id === 'reader:toggle-paragraph') globalThis.readerMenuUpdates.push({ ...properties, error });
+      callback?.();
+    });
   });
   await translated.hover();
   const paragraphControl = fixture.locator('[data-deep-research-paragraph-control] button');
@@ -112,6 +116,20 @@ try {
   assert.ok(await translated.isHidden());
   const menuToTranslation = await worker.evaluate(async () => { for (let i = 0; i < 30; i++) { if (globalThis.readerMenuUpdates.some(p => p.visible && p.title === '查看这一段译文')) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; });
   assert.equal(menuToTranslation, true, 'the native menu changes to return to the cached translation');
+  assert.deepEqual(await worker.evaluate(() => globalThis.readerMenuUpdates.filter(p => p.error)), [], 'native menu updates succeed in Chrome, rather than only being attempted');
+  await worker.evaluate(() => { globalThis.readerMenuUpdates = []; });
+  await fixture.evaluate(id => {
+    const p = document.querySelector(`[data-deep-research-block="${id}"]`);
+    p.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2 }));
+    document.body.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+  }, blockId);
+  await worker.evaluate(async () => { for (let i = 0; i < 30 && !globalThis.readerMenuUpdates.length; i++) await new Promise(resolve => setTimeout(resolve, 50)); });
+  assert.equal(await worker.evaluate(() => globalThis.readerMenuUpdates.some(p => p.visible === false)), false, 'an unrelated overlay hover cannot hide the paragraph action while the native menu opens');
+  assert.equal(await worker.evaluate(() => globalThis.readerMenuUpdates.some(p => p.visible && p.title === '查看这一段译文' && !p.error)), true);
+  await fixture.bringToFront();
+  await worker.evaluate(async () => { const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); await chrome.tabs.sendMessage(tab.id, {type: 'deep-research:toggle-paragraph'}); });
+  await translated.waitFor({state:'visible'});
+  await paragraphControl.filter({hasText:'查看这一段原文'}).click();
   await paragraphControl.filter({hasText:'查看这一段译文'}).click();
   await translated.waitFor({state:'visible'});
   assert.equal(requests.length, requestsBeforeToggle, 'paragraph switching reuses the existing translation');

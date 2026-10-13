@@ -616,14 +616,15 @@
   let contextParagraphId = null;
   let paragraphControl = null;
   let paragraphMenuState = '';
-  function syncParagraphControl(id) {
+  let paragraphMenuLocked = false;
+  function syncParagraphControl(id, forceMenu = false) {
     const original = id && document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
     const translated = id && document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
     const available = Boolean(original && translated && translatedOriginalDisplays.has(original));
     const showingTranslation = available && translated.style.display !== 'none';
     const title = showingTranslation ? '查看这一段原文' : '查看这一段译文';
     const menuState = `${available ? id : ''}:${showingTranslation}`;
-    if (menuState !== paragraphMenuState) {
+    if ((forceMenu || !paragraphMenuLocked) && (forceMenu || menuState !== paragraphMenuState)) {
       paragraphMenuState = menuState;
       send({ type: 'deep-research:paragraph-menu', available, showingTranslation });
     }
@@ -650,11 +651,21 @@
   function updateFocusedParagraph(event) {
     if (event.target instanceof Element && event.target.closest('[data-deep-research-paragraph-control]')) return;
     focusedTranslationId = translationIdForTarget(event.target);
+    if (focusedTranslationId && event.type === 'pointerover') paragraphMenuLocked = false;
     syncParagraphControl(focusedTranslationId);
   }
   function translationIdForTarget(target) {
-    const node = target instanceof Element ? target.closest('[data-deep-research-translation-for],[data-deep-research-block]') : null;
+    const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+    const node = element?.closest('[data-deep-research-translation-for],[data-deep-research-block]');
     return node?.getAttribute('data-deep-research-translation-for') || node?.getAttribute('data-deep-research-block');
+  }
+  function contextTranslationId(event) {
+    const direct = event.composedPath().map(translationIdForTarget).find(Boolean);
+    if (direct) return direct;
+    // Keyboard and accessibility context menus may target the document instead
+    // of the focused paragraph. Never reuse a previous, unrelated hover.
+    if (event.clientX === 0 && event.clientY === 0) return translationIdForTarget(document.activeElement);
+    return null;
   }
   function toggleOriginalParagraph(id) {
     if (!id) return false;
@@ -681,10 +692,22 @@
   });
   document.addEventListener('pointerover', updateFocusedParagraph, true);
   document.addEventListener('focusin', updateFocusedParagraph, true);
-  document.addEventListener('contextmenu', event => {
-    contextParagraphId = translationIdForTarget(event.target);
-    syncParagraphControl(contextParagraphId);
+  document.addEventListener('pointerdown', event => {
+    paragraphMenuLocked = false;
+    if (event.button !== 2) return;
+    contextParagraphId = contextTranslationId(event);
+    syncParagraphControl(contextParagraphId, true);
   }, true);
+  document.addEventListener('contextmenu', event => {
+    contextParagraphId = contextTranslationId(event);
+    // Native menu opening can emit a pointerover on a page-side overlay. Keep
+    // the clicked paragraph's menu until another deliberate page interaction.
+    paragraphMenuLocked = true;
+    syncParagraphControl(contextParagraphId, true);
+  }, true);
+  window.addEventListener('focus', () => {
+    if (!paragraphMenuLocked) syncParagraphControl(translationIdForTarget(document.activeElement), true);
+  });
   window.addEventListener('scroll', () => { if (paragraphControl?.style.display !== 'none') syncParagraphControl(focusedTranslationId); }, { passive: true });
   window.addEventListener('resize', () => syncParagraphControl(focusedTranslationId));
   document.addEventListener('click', event => {
@@ -694,6 +717,7 @@
   // for the mouse. These are page-local shortcuts and deliberately avoid
   // firing while a user is typing in a form or editor.
   document.addEventListener('keydown', (event) => {
+    paragraphMenuLocked = false;
     if (event.key === 'Escape') {
       removeSelectionTranslation();
       if (document.querySelector('[data-deep-research-image-zoom]')) closeImageZoom();
@@ -1509,6 +1533,7 @@
       root.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
     if (message?.type === 'deep-research:toggle-paragraph') {
+      paragraphMenuLocked = false;
       toggleOriginalParagraph(contextParagraphId);
       return;
     }
@@ -1625,7 +1650,8 @@
         }
         node.remove();
       });
-      focusedTranslationId = null; contextParagraphId = null; syncParagraphControl(null);
+      paragraphMenuLocked = false;
+      focusedTranslationId = null; contextParagraphId = null; syncParagraphControl(null, true);
       removeSelectionTranslation();
       restoreImageTranslations();
       send({ type: 'deep-research:translations-restored' });
