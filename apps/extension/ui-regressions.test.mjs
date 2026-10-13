@@ -103,7 +103,7 @@ test('platform stream rejects truncated and missing completion instead of saving
   ]) {
     let emitted = false;
     const sandbox = {
-      TextDecoder, scope: 'page', sourceContext: { url: 'https://a.test' }, discussionHistory: [], platformUrl: 'https://platform.test',
+      TextDecoder, scope: 'page', sourceContext: { url: 'https://a.test', title: 'Article', body: 'Source' }, discussionHistory: [], platformUrl: 'https://platform.test',
       platformContext: (c) => c,
       chrome: { storage: { local: { get: async () => ({ readerToken: 'test' }) } } },
       fetch: async () => ({ ok: true, body: { getReader: () => ({ read: async () => {
@@ -113,8 +113,8 @@ test('platform stream rejects truncated and missing completion instead of saving
       } }) } }),
     };
     vm.createContext(sandbox);
-    vm.runInContext(extract(panel, 'async function requestPlatformAnswer(', 'function platformAnswerErrorMessage('), sandbox);
-    await assert.rejects(vm.runInContext("requestPlatformAnswer(sourceContext, 'question', scope)", sandbox), /未保存为完整结论/);
+    vm.runInContext(extract(readFileSync(new URL('./platform-answer.js', import.meta.url), 'utf8'), 'export async function requestPlatformAnswer(', 'export function platformAnswerErrorMessage(').replace('export ', ''), sandbox);
+    await assert.rejects(vm.runInContext("requestPlatformAnswer(sourceContext, 'question', scope, { platformUrl: 'https://platform.test', history: [] })", sandbox), /未保存为完整结论/);
   }
 });
 

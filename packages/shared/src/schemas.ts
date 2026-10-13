@@ -222,6 +222,7 @@ export const ReadingTranslateInputSchema = z.object({
   url: ReadingUrlSchema,
   title: z.string().max(300).default('当前网页'),
   language: z.string().max(20).default('zh-CN'),
+  context: z.string().max(3500).optional(),
   blocks: z.array(z.object({ id: z.string().min(1).max(100), text: z.string().min(1).max(12_000) }).strict()).min(1).max(24),
 }).strict();
 export type ReadingTranslateInput = z.infer<typeof ReadingTranslateInputSchema>;

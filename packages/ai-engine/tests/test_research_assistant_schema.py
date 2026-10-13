@@ -40,11 +40,25 @@ def test_research_assistant_accepts_full_page_beyond_old_character_cap() -> None
 
 
 @pytest.mark.asyncio
+async def test_reader_article_fits_direct_full_context_without_map_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("READER_ANSWER_DIRECT_TOKENS", "48000")
+    async def unexpected_generation(**kwargs: object):
+        raise AssertionError("direct path must not make a map call")
+    monkeypatch.setattr(app_module, "generate_text", unexpected_generation)
+    body = ResearchAssistantBody(
+        operation="ask", scope="page",
+        body="A queue protects memory. " * 1500 + "ENDING_SENTINEL",
+    )
+    assert await app_module._generate_full_page_answer(body, request_id="direct") is None
+
+
+@pytest.mark.asyncio
 async def test_full_page_answer_reserves_before_covering_all_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
     prompts: list[str] = []
     reservations: list[int] = []
     monkeypatch.setenv("READER_ANSWER_CHUNK_TOKENS", "1000")
+    monkeypatch.setenv("READER_ANSWER_DIRECT_TOKENS", "1000")
 
     @asynccontextmanager
     async def fake_reserve(**kwargs: object):

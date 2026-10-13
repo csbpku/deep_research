@@ -37,6 +37,7 @@
   const blockIds = new WeakMap();
   const imageIds = new WeakMap();
   const translatedOriginalDisplays = new WeakMap();
+  const translatedOriginalAttributes = new WeakMap();
   let nextBlockId = 0;
   let nextImageId = 0;
   window.__deepResearchReaderRefresh = () => {
@@ -180,7 +181,7 @@
       if (!text) return;
       const id = stableNodeId(node, 'block', blockIds, () => nextBlockId++);
       node.dataset.deepResearchBlock = id;
-      blocks.push({ id, text, kind: node.matches('pre,code') ? 'code' : 'text' });
+      blocks.push({ id, text, tag: node.tagName.toLowerCase(), kind: node.matches('pre,code') ? 'code' : 'text' });
     });
     // Keep every article block so a full-document request does not silently
     // omit short captions, headings, or long paragraphs.
@@ -611,6 +612,30 @@
     );
   }
 
+  let focusedTranslationId = null;
+  function translationIdForTarget(target) {
+    const node = target instanceof Element ? target.closest('[data-deep-research-translation-for],[data-deep-research-block]') : null;
+    return node?.getAttribute('data-deep-research-translation-for') || node?.getAttribute('data-deep-research-block');
+  }
+  function toggleOriginalParagraph(id) {
+    if (!id) return false;
+    const original = document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
+    const translated = document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
+    if (!original || !translated || !translatedOriginalDisplays.has(original)) return false;
+    const showOriginal = translated.style.display !== 'none';
+    original.style.display = showOriginal ? translatedOriginalDisplays.get(original) || '' : 'none';
+    translated.style.display = showOriginal ? 'none' : translated.dataset.deepResearchDisplay || '';
+    if (!translatedOriginalAttributes.has(original)) translatedOriginalAttributes.set(original, { title: original.getAttribute('title'), tabindex: original.getAttribute('tabindex') });
+    original.title = 'Alt+Shift+O 切换译文；Alt+单击也可切换';
+    if (document.activeElement === translated && showOriginal) { original.tabIndex = 0; original.focus({ preventScroll: true }); }
+    else if (document.activeElement === original && !showOriginal) translated.focus({ preventScroll: true });
+    return true;
+  }
+  document.addEventListener('pointerover', event => { focusedTranslationId = translationIdForTarget(event.target); }, true);
+  document.addEventListener('focusin', event => { focusedTranslationId = translationIdForTarget(event.target); }, true);
+  document.addEventListener('click', event => {
+    if (event.altKey && !isTypingTarget(event.target) && toggleOriginalParagraph(translationIdForTarget(event.target))) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
   // Keep the lightweight toolbar useful without forcing the reader to reach
   // for the mouse. These are page-local shortcuts and deliberately avoid
   // firing while a user is typing in a form or editor.
@@ -626,11 +651,12 @@
     // Option changes event.key to a symbol on macOS (for example S → Í).
     // Physical letter codes keep the advertised Alt+Shift shortcuts usable.
     const letter = /^Key[A-Z]$/u.test(event.code || '') ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
+    if (letter === 'o' && toggleOriginalParagraph(focusedTranslationId)) { event.preventDefault(); return; }
     const action = shortcuts[letter];
     if (!action || !lastSelectionContext) return;
     event.preventDefault();
     send({ type: 'deep-research:selection', context: lastSelectionContext });
-    send({ type: 'deep-research:selection-action', action });
+    send({ type: 'deep-research:selection-action', action, context: lastSelectionContext });
     removeSelectionToolbar();
   }, true);
 
@@ -644,16 +670,16 @@
     toolbarHost.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(window.innerWidth - 330, rect.left))}px;top:${Math.max(8, rect.top - 46)}px;`;
     const shadow = toolbarHost.attachShadow({ mode: 'closed' });
     shadow.innerHTML = `
-      <style>:host{all:initial}div{display:flex;gap:4px;max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:5px;border:1px solid #d9ddd5;border-radius:9px;background:#fff;box-shadow:0 5px 18px #20211f2e;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button{min-height:32px;border:0;border-radius:5px;background:#fff;color:#30332f;padding:5px 7px;cursor:pointer;white-space:nowrap}button:hover{background:#eff4ff;color:#315fe8}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}</style>
+      <style>:host{all:initial}div{display:flex;gap:4px;max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:5px;border:1px solid #d9ddd5;border-radius:9px;background:#fff;box-shadow:0 5px 18px #20211f2e;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button{min-height:32px;border:0;border-radius:5px;background:#fff;color:#30332f;padding:5px 7px;cursor:pointer;white-space:nowrap}button[data-action="translate"]{background:#eef7f2;color:#256246}button[data-action="explain"],button[data-action="ask"]{background:#eef2ff;color:#3159c9}button[data-action="save"]{border-left:1px solid #ddd}button:hover{background:#eff4ff;color:#315fe8}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}</style>
       <div role="toolbar" aria-label="Deep Research 阅读操作">
-        <button data-action="summary" aria-keyshortcuts="Alt+Shift+S" title="Alt+Shift+S">总结这段</button><button data-action="explain" aria-keyshortcuts="Alt+Shift+E" title="Alt+Shift+E">解释这段</button><button data-action="translate" aria-keyshortcuts="Alt+Shift+T" title="Alt+Shift+T">翻译这段</button><button data-action="ask" aria-keyshortcuts="Alt+Shift+Q" title="Alt+Shift+Q">问这段</button><button data-action="save" aria-keyshortcuts="Alt+Shift+K" title="Alt+Shift+K">摘录</button><button data-action="annotate" aria-keyshortcuts="Alt+Shift+M" title="Alt+Shift+M">标注</button>
+        <button data-action="explain" aria-keyshortcuts="Alt+Shift+E" title="Alt+Shift+E">解释这段</button><button data-action="translate" aria-keyshortcuts="Alt+Shift+T" title="Alt+Shift+T">翻译这段</button><button data-action="ask" aria-keyshortcuts="Alt+Shift+Q" title="Alt+Shift+Q">问这段</button><button data-action="save" aria-keyshortcuts="Alt+Shift+K" title="Alt+Shift+K">摘录</button>
       </div>`;
     shadow.querySelectorAll('button').forEach((button) => {
       button.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); });
       button.addEventListener('click', () => {
         const action = button.getAttribute('data-action');
         send({ type: 'deep-research:selection', context });
-        send({ type: 'deep-research:selection-action', action });
+        send({ type: 'deep-research:selection-action', action, context });
         removeSelectionToolbar();
       });
     });
@@ -781,7 +807,7 @@
       header{display:flex;align-items:center;flex:none;gap:4px;padding:6px 8px;border-bottom:1px solid #d9e0f1;font-size:12px}
       strong{margin-right:auto;white-space:nowrap}
       button{min-height:32px;border:1px solid #c7d3f2;border-radius:5px;padding:4px 8px;background:#fff;color:#3159c9;font:inherit;cursor:pointer;white-space:nowrap}
-      button:hover{background:#eaf0ff}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}
+      button[data-action="translate"]{background:#eef7f2;color:#256246}button[data-action="explain"],button[data-action="ask"]{background:#eef2ff;color:#3159c9}button[data-action="save"]{border-left:1px solid #ddd}button:hover{background:#eaf0ff}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}
       .text{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}
     </style><div class="panel"><header><strong>选段翻译</strong><button type="button" class="copy">复制</button><button type="button" class="expand" aria-pressed="false">放大</button><button type="button" class="close" aria-label="关闭选段翻译">关闭</button></header><div class="text" tabindex="0" aria-label="译文"></div></div>`;
     shadow.querySelector('.text').textContent = text.trim();
@@ -1428,6 +1454,13 @@
     if (message?.type === 'deep-research:focus-page') {
       root.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+    if (message?.type === 'deep-research:context-action') {
+      void (async () => {
+        const context = await selectionContext();
+        if (context) { lastSelectionContext = context; send({ type: 'deep-research:selection', context }); send({ type: 'deep-research:selection-action', action: message.action, context }); }
+        else send({ type: 'deep-research:page-action', action: message.action });
+      })();
+    }
     if (message?.type === 'deep-research:request-page') {
       sendPageContext();
     }
@@ -1492,6 +1525,9 @@
         translated.dataset.deepResearchTranslation = 'true';
         translated.dataset.deepResearchTranslationFor = id;
         translated.textContent = text;
+        translated.dataset.deepResearchDisplay = getComputedStyle(node).display;
+        translated.tabIndex = 0;
+        translated.title = 'Alt+Shift+O 切换原文；Alt+单击也可切换';
         translated.style.setProperty('display', getComputedStyle(node).display);
         translated.style.setProperty('border-inline-start', '3px solid #3159c9');
         translated.style.setProperty('padding-inline-start', '0.65em');
@@ -1519,6 +1555,13 @@
         if (original && translatedOriginalDisplays.has(original)) {
           original.style.display = translatedOriginalDisplays.get(original) || '';
           translatedOriginalDisplays.delete(original);
+          const attributes = translatedOriginalAttributes.get(original);
+          if (attributes) {
+            for (const [name, value] of Object.entries(attributes)) {
+              if (value === null) original.removeAttribute(name); else original.setAttribute(name, value);
+            }
+            translatedOriginalAttributes.delete(original);
+          }
         }
         node.remove();
       });

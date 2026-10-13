@@ -1,5 +1,10 @@
+import { platformAnswerErrorMessage } from './platform-answer.js';
+import { waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { readerStore } from './reader-store.js';
 import {
+  discoverModels,
+  isLocalProvider,
+  translationContext,
   explainSelection,
   parseReadingAnswer,
   explainImage,
@@ -108,7 +113,8 @@ function focusReadingAnchor(anchor) {
 
 function setWorkspaceView(view) {
   const shell = document.querySelector('.shell');
-  if (!shell || !['chat', 'tools', 'library'].includes(view)) return;
+  if (view === 'tools') view = 'chat';
+  if (!shell || !['chat', 'library'].includes(view)) return;
   shell.dataset.workspaceView = view;
   for (const name of ['chat', 'tools', 'library']) {
     const button = $(`nav-${name}`);
@@ -264,6 +270,8 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   const send = $('send-question');
   if (send) {
     send.disabled = !canSend || discussionRunning;
+    show($('stop-answer'), discussionRunning);
+    if ($('answer-task-status')) $('answer-task-status').textContent = discussionRunning ? '回答进行中 · 可继续阅读' : '';
     send.title = canSend ? '使用上方显示的范围发送问题' : descriptor.detail;
   }
 }
@@ -337,7 +345,7 @@ function updateReadingModeUi() {
       guidance.classList.add('is-warning');
       show(guidance, true);
     } else if (!providerReady(provider)) {
-      guidance.textContent = '独立模式需要配置服务商、模型名称和 API Key。也可以切换到平台模式并连接调研平台，直接使用平台 AI Engine。';
+      guidance.textContent = '选择服务并连接，模型列表会自动读取；本地代理的 API Key 可留空。';
       guidance.classList.add('is-warning');
       show(guidance, true);
     } else {
@@ -668,6 +676,7 @@ async function resumeSession(context) {
     const pending = await consumePendingSession(context, version);
     const session = pending || await readerStore.getSession(context.url, version);
     if (!session || generation !== sessionGeneration || interaction !== interactionGeneration) return;
+    const preserveSelection = Boolean(selectionContext?.selection?.quote && selectionContext.url === context.url);
     activeSessionTitle = session.titleEdited ? (session.title || context.title || '') : '';
     if (Number(session.scrollY) > 0 || session.selection?.quote || session.image?.id || session.answer || session.discussion?.length) {
       latestAnswer = session.answer || '';
@@ -678,20 +687,20 @@ async function resumeSession(context) {
         || session.answerStructured
         || session.discussion?.length,
       );
-      discussionIntent = DISCUSSION_INTENTS.has(session.discussionIntent)
+      if (!preserveSelection) discussionIntent = DISCUSSION_INTENTS.has(session.discussionIntent)
         ? session.discussionIntent
         : session.discussion?.some((item) => item?.role === 'user') ? 'ask' : 'explain';
-      if (session.selection?.quote) {
+      if (session.selection?.quote && !preserveSelection) {
         selectionContext = { ...context, scope: 'selection', selection: session.selection };
       }
-      discussionScope = ['selection', 'page', 'image'].includes(session.discussionScope)
+      if (!preserveSelection) discussionScope = ['selection', 'page', 'image'].includes(session.discussionScope)
         ? session.discussionScope
         : 'selection';
     if (session.image?.id) imageContext = { ...context, image: session.image, restored: true };
     const restoredRadarSummaryId = normalizeRadarSummaryId(session.radarSummaryId);
     if (restoredRadarSummaryId) radarEntrySummaryId = restoredRadarSummaryId;
     renderPage();
-      sendToPage({ type: 'deep-research:restore-progress', scrollY: session.scrollY, anchor: session.selection || null });
+      if (!preserveSelection) sendToPage({ type: 'deep-research:restore-progress', scrollY: session.scrollY, anchor: session.selection || null });
       if (session.pendingEvidenceAnchor?.quote) {
         sendToPage({ type: 'deep-research:focus-anchor', anchor: session.pendingEvidenceAnchor });
       }
@@ -1105,6 +1114,9 @@ function renderPage() {
 }
 
 function renderProgress(textDone = 0, textTotal = 0, imageDone = 0, imageTotal = 0) {
+  show($('translation-summary'), translationRunning || translationPaused);
+  if ($('translation-summary-text')) $('translation-summary-text').textContent = translationPaused ? '翻译已暂停 · 已完成内容保留' : `正在翻译 ${textDone}/${textTotal} 段 · ${imageDone}/${imageTotal} 图`;
+  if ($('translation-summary-pause')) $('translation-summary-pause').textContent = translationPaused ? '继续' : '暂停';
   show($('progress-area'), Boolean(textTotal || imageTotal || translationRunning || failedTranslationItems.length));
   const textPercent = textTotal ? Math.round((textDone / textTotal) * 100) : 0;
   const imagePercent = imageTotal ? Math.round((imageDone / imageTotal) * 100) : 0;
@@ -1323,6 +1335,7 @@ function applyProviderFields() {
   if ($('provider-key')) $('provider-key').value = provider?.apiKey || '';
   if ($('translation-language')) $('translation-language').value = targetLanguage || 'zh-CN';
   updateProviderForm();
+  if ($('provider-model-list') && provider?.model) $('provider-model-list').replaceChildren(new Option(provider.model, provider.model));
   if (readingMode === 'platform') setStatus(platformConnected, platformConnected ? '平台 AI 已连接' : '平台未连接');
   else setStatus(providerReady(provider), providerReady(provider) ? `${provider.model} 已就绪` : '未配置模型');
 }
@@ -1330,10 +1343,11 @@ function applyProviderFields() {
 function updateProviderForm() {
   const kind = $('provider-kind')?.value || 'openai';
   const preset = providerPreset(kind);
-  const custom = kind === 'custom' || kind === 'custom-anthropic';
+  const custom = kind === 'custom' || kind === 'custom-anthropic' || kind === 'local-proxy';
   show($('provider-custom-url-field'), custom);
   if (!custom && $('provider-url')) $('provider-url').value = preset.baseUrl;
   if ($('provider-model')) $('provider-model').placeholder = preset.placeholder;
+  if ($('provider-key-label')) $('provider-key-label').textContent = isLocalProvider({ baseUrl: $('provider-url').value }) ? 'API Key（本地服务选填）' : 'API Key';
   if ($('provider-endpoint-hint')) {
     $('provider-endpoint-hint').textContent = custom
       ? preset.protocol === 'anthropic'
@@ -1582,111 +1596,6 @@ function platformContext(context, scope) {
   };
 }
 
-async function requestPlatformAnswer(sourceContext, question, scope, options = {}) {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
-  if (!readerToken) throw new Error('平台连接已失效，请重新连接');
-  const action = ['explain', 'translate'].includes(options.action) ? options.action : 'ask';
-  const response = await fetch(`${platformUrl}/api/reading/answer/stream`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'text/event-stream',
-      authorization: `Bearer ${readerToken}`,
-    },
-    body: JSON.stringify({
-      action,
-      context: platformContext(sourceContext, scope),
-      ...(question ? { prompt: question } : {}),
-      history: discussionHistory.slice(-20).map((item) => ({
-        role: item.role === 'assistant' ? 'assistant' : 'user',
-        content: String(item.content || '').slice(0, 8_000),
-      })),
-    }),
-    signal: options.signal,
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    if (response.status === 401 || response.status === 403) setPlatformConnected(false, '平台连接已失效，请重新连接');
-    throw new Error(platformAnswerErrorMessage(payload, response.status));
-  }
-  if (!response.body) throw new Error('平台 AI 没有返回可读取的内容');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let streamed = '';
-  let completed = null;
-  const consume = (frame) => {
-    const event = frame.match(/^event:\s*(\S+)/mu)?.[1] || '';
-    const data = frame.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
-    if (!data) return;
-    const payload = JSON.parse(data);
-    if (event === 'delta' && typeof payload.text === 'string') {
-      streamed += payload.text;
-      options.onDelta?.(payload.text);
-    } else if (event === 'error') {
-      throw new Error(platformAnswerErrorMessage(payload));
-    } else if (event === 'progress') {
-      options.onProgress?.(Number(payload.done) || 0, Number(payload.total) || 0, payload.phase || 'analyzing');
-    } else if (event === 'done') {
-      if (payload.truncated || ['length', 'max_tokens'].includes(payload.finishReason)) {
-        throw new Error('平台回答被截断，本次未保存为完整结论。请缩短问题或稍后重试。');
-      }
-      const reading = payload.reading || {
-        answer: payload.answer || payload.suggestion || streamed,
-        evidence: [],
-        background: '',
-        inference: '',
-        limitations: [],
-        warnings: payload.warnings || [],
-      };
-      if (!reading.evidence?.length && reading.answer) {
-        const recovered = parseReadingAnswer(reading.answer, sourceContext);
-        if (recovered.evidence.length) {
-          reading.evidence = recovered.evidence;
-          reading.warnings = (reading.warnings || []).filter((warning) => !/没有找到可核对的原文引文|本轮没有可核对的原文证据/u.test(warning));
-        }
-      }
-      const citations = Array.isArray(payload.citations) ? payload.citations : [];
-      const evidence = Array.isArray(reading.evidence) ? reading.evidence : [];
-      completed = {
-        ...reading,
-        evidence: evidence.map((item) => {
-          const citation = citations.find((candidate) => candidate?.quote === item?.quote);
-          return citation ? { ...item, anchor: citation.anchor || item.anchor, url: citation.url } : item;
-        }),
-      };
-    }
-  };
-  while (true) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() || '';
-    frames.forEach(consume);
-    if (chunk.done) break;
-  }
-  if (buffer.trim()) consume(buffer);
-  if (!completed) throw new Error('平台回答连接提前结束，本次未保存为完整结论。请重试。');
-  return completed;
-}
-
-function platformAnswerErrorMessage(payload = {}, status = 0) {
-  const detail = [payload.code, payload.message, payload.error?.message]
-    .filter((value) => typeof value === 'string')
-    .join(' ');
-  const requestId = typeof payload.request_id === 'string' ? payload.request_id : '';
-  let message = '平台 AI 暂时无法完成此请求，请稍后重试；如持续发生，请联系平台管理员。';
-  if (status === 402 || /insufficient[_ ]balance|insufficient[_ ]quota|credit balance|AI_QUOTA_EXCEEDED/iu.test(detail)) {
-    message = '平台模型额度不足，本次请求未完成。请联系平台管理员检查模型服务额度后重试。';
-  } else if (status === 429 || /rate[_ ]limit|too many requests/iu.test(detail)) {
-    message = '平台模型请求过于频繁，请稍后重试。';
-  } else if (/invalid[_ ]api[_ ]key|authenticationerror|invalid api key/iu.test(detail)) {
-    message = '平台模型服务鉴权失败。请联系平台管理员检查 AI Engine 配置。';
-  } else if (/timed? ?out|timeout|deadline exceeded/iu.test(detail)) {
-    message = '平台 AI 处理超时，请缩短问题范围后重试。';
-  }
-  return requestId ? `${message}（请求编号：${requestId}）` : message;
-}
 
 async function requestPlatformTranslations(context, blocks, options = {}) {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
@@ -1695,13 +1604,19 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
   const output = [];
   const completedBySource = new Map();
   const completedSourceIds = new Set();
-  const batchSize = 24;
-  const batches = Array.from({ length: Math.ceil(tasks.length / batchSize) }, (_, index) => index);
+  const batches = [];
+  let batch = [];
+  let chars = 0;
+  for (const block of tasks) {
+    if (batch.length && (batch.length >= 12 || chars + block.text.length > 3_000)) { batches.push(batch); batch = []; chars = 0; }
+    batch.push(block); chars += block.text.length;
+  }
+  if (batch.length) batches.push(batch);
   let nextBatch = 0;
   let batchError = null;
   async function processBatch(batchIndex) {
-    const offset = batchIndex * batchSize;
-    const batch = tasks.slice(offset, offset + batchSize);
+    const batch = batches[batchIndex];
+    const offset = batchIndex * 24;
     const requestIds = new Map(batch.map((block, index) => [block.id, `translation-${offset + index}`]));
     const response = await fetch(`${platformUrl}/api/reading/translate`, {
       method: 'POST',
@@ -1710,6 +1625,7 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
         url: context.url,
         title: String(context.title || '当前网页').slice(0, 300),
         language: currentReadingLanguage(),
+        context: translationContext(context, batch),
         blocks: batch.map(({ id, text }) => ({ id: requestIds.get(id), text })),
       }),
       signal: options.signal,
@@ -1758,8 +1674,8 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
       }
     }
   }
-  // Two 24-block requests keep the bounded engine pool busy without flooding it.
-  await Promise.all(Array.from({ length: Math.min(2, batches.length) }, () => batchWorker()));
+  // Smaller context-aware batches paint early; three requests keep capacity bounded.
+  await Promise.all(Array.from({ length: Math.min(3, batches.length) }, () => batchWorker()));
   if (batchError) throw batchError;
   return blocks.map((block) => {
     const parts = output.filter((item) => String(item.sourceBlockId || item.id) === String(block.id));
@@ -1849,50 +1765,68 @@ async function restoreCloudSession() {
   }
 }
 
-async function testProvider(nextProvider) {
-  await requestChat(nextProvider, [{ role: 'user', content: 'Reply with OK only.' }], { temperature: 0 });
+let modelDiscoveryController = null;
+let modelDiscoveryTimer = null;
+function providerFromFields() {
+  const kind = $('provider-kind').value;
+  return { providerKind: kind, baseUrl: $('provider-url').value.trim() || providerPreset(kind).baseUrl, model: $('provider-model-list').value || $('provider-model').value.trim(), apiKey: $('provider-key').value.trim() };
+}
+async function refreshModels({ requestPermission = false } = {}) {
+  modelDiscoveryController?.abort();
+  const controller = new AbortController();
+  modelDiscoveryController = controller;
+  const candidate = providerFromFields();
+  if (!candidate.baseUrl || (!candidate.apiKey && !isLocalProvider(candidate))) return;
+  $('model-discovery-status').textContent = '正在获取模型…';
   try {
-    await testVisionProvider(nextProvider);
-    nextProvider.visionReady = true;
+    if (requestPermission && !(await requestOriginPermission(candidate.baseUrl))) throw new Error('未获得模型服务访问权限');
+    const models = await discoverModels(candidate, { signal: controller.signal });
+    if (controller !== modelDiscoveryController) return;
+    const list = $('provider-model-list');
+    list.replaceChildren(...models.map(model => new Option(model.label, model.id)));
+    if (models.some(model => model.id === candidate.model)) list.value = candidate.model;
+    $('provider-model').value = list.value;
+    $('manual-model-settings').open = false;
+    $('model-discovery-status').textContent = `已找到 ${models.length} 个模型`;
   } catch (error) {
-    nextProvider.visionReady = false;
-    nextProvider.visionError = error instanceof Error ? error.message : '视觉模型检查失败';
+    if (controller !== modelDiscoveryController || controller.signal.aborted) return;
+    $('provider-model-list').replaceChildren(new Option('模型列表暂不可用', ''));
+    $('model-discovery-status').textContent = `${error.message || '无法连接服务'}。可重试，或使用自定义模型 ID。`;
   }
 }
-
-async function saveSettings() {
-  const selectedKind = $('provider-kind')?.value || 'openai';
-  const preset = providerPreset(selectedKind);
-  const enteredUrl = $('provider-url')?.value.trim() || preset.baseUrl;
-  // Keep old local E2E configurations and hand-edited settings working: if a
-  // preset's endpoint was replaced, treat it as a custom compatible service.
-  const providerKind = selectedKind !== 'custom' && selectedKind !== 'custom-anthropic' && enteredUrl !== preset.baseUrl
-    ? 'custom'
-    : selectedKind;
-  const nextProvider = {
-    providerKind,
-    baseUrl: enteredUrl,
-    model: $('provider-model').value,
-    apiKey: $('provider-key').value,
-  };
+function scheduleModelDiscovery() {
+  updateProviderForm();
+  modelDiscoveryController?.abort();
+  $('provider-model-list').replaceChildren(new Option('正在准备获取模型', ''));
+  clearTimeout(modelDiscoveryTimer);
+  modelDiscoveryTimer = setTimeout(() => void refreshModels(), 500);
+}
+async function testProvider(nextProvider) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
   try {
-    // Start the permission request before the first await so Chrome can keep
-    // the settings button's user gesture attached to permissions.request().
+    const payload = await requestChat(nextProvider, [{ role: 'user', content: 'Reply with OK only. Do not reason.' }], { temperature: 0, maxTokens: 128, signal: controller.signal });
+    if (!payload?.choices?.[0]?.message?.content && !payload?.content?.length) throw new Error('模型没有返回文本，请选择可聊天的模型');
+  } finally { clearTimeout(timer); }
+}
+async function saveSettings() {
+  const nextProvider = providerFromFields();
+  const started = Date.now();
+  const button = $('save-settings');
+  button.disabled = true;
+  setNotice('正在快速验证文本连接…', $('settings-notice'));
+  try {
     const granted = await requestOriginPermission(nextProvider.baseUrl);
     if (!granted) throw new Error('没有获得模型服务域名权限');
+    if (!nextProvider.model) throw new Error('请选择服务返回的模型');
     await testProvider(nextProvider);
     provider = await saveProvider(nextProvider);
     setStatus(true, `${provider.model} 已就绪`);
     updateAiAvailabilityBanner();
-    setNotice(provider.visionReady === false
-      ? `模型连接成功；图片翻译不可用时会继续保留原图。${provider.visionError || '当前模型未通过视觉能力检查'}。API Key 只保存在此浏览器。`
-      : '模型连接成功，文本与图片能力检查通过。API Key 只保存在此浏览器。', $('settings-notice'));
+    setNotice(`连接成功（${((Date.now() - started) / 1000).toFixed(1)} 秒）。图片能力可按需检测。`, $('settings-notice'));
   } catch (error) {
-    provider = null;
-    setStatus(false, '连接失败');
-    updateAiAvailabilityBanner();
     setNotice(error instanceof Error ? error.message : '模型连接失败', $('settings-notice'));
-  }
+  } finally { button.disabled = false; }
 }
 
 async function startFullTranslation() {
@@ -2300,7 +2234,31 @@ async function handlePageAction(action) {
   openDiscussion('page', 'ask');
 }
 
+async function resumeBackgroundAnswer(context) {
+  const snapshot = await chrome.runtime.sendMessage({ type: 'deep-research:answer-current', url: context.url, contentHash: context.contentHash });
+  if (!snapshot || discussionRunning || context.url !== contextUrl()) return;
+  if (['failed', 'interrupted'].includes(snapshot.status)) { setNotice(snapshot.error || '回答未完成，请重试'); if (!$('question-input').value) $('question-input').value = snapshot.prompt || snapshot.question || ''; return; }
+  if (snapshot.status !== 'running') return;
+  discussionController = new AbortController();
+  discussionRunning = true; discussionOpen = true;
+  renderPage(); renderPersistentComposer();
+  try {
+    const result = await waitForAnswerTask(snapshot.id, {
+      signal: discussionController.signal,
+      onDelta: text => { if (context.url === contextUrl()) { $('answer-output').textContent = streamAnswerPreview(text); show($('answer-output'), true); } },
+    });
+    if (context.url === contextUrl()) {
+      const session = await readerStore.getSession(context.url, context.contentHash || null);
+      discussionHistory = session?.discussion || discussionHistory;
+      latestStructuredAnswer = result; latestAnswer = result.answer || '';
+      renderConversation(); renderStructuredAnswer(result);
+    }
+  } catch (error) { if (context.url === contextUrl() && error.name !== 'AbortError') setNotice(error.message || '回答未完成'); }
+  finally { discussionRunning = false; show($('answer-output'), false); renderPersistentComposer(); }
+}
+
 async function explainOrAsk(question = '', scope = discussionScope, intent = discussionIntent) {
+  if (discussionRunning) { setNotice('当前回答仍在继续。可以选择下一段，或点击停止回答后再发起新问题。'); return; }
   interactionGeneration += 1;
   const normalizedIntent = DISCUSSION_INTENTS.has(intent) ? intent : 'ask';
   const sourceContext = scope === 'page' || scope === 'image' ? (documentContext || pageContext) : selectionContext;
@@ -2355,53 +2313,28 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
   renderPersistentComposer(scope);
   latestAnswer = '';
   let streamBuffer = '';
+  const requestSource = { ...sourceContext, scope };
+  const requestHistory = [...discussionHistory];
+  const submittedDraft = $('question-input').value;
+  const userMessage = discussionUserLabel(scope, normalizedIntent, question);
+  const requestPrompt = question || discussionPrompt(scope, normalizedIntent);
+  const taskController = discussionController;
+  const stillVisible = () => contextUrl() === requestSource.url && (!requestSource.contentHash || requestSource.contentHash === (pageContext?.contentHash || documentContext?.contentHash));
+  const updateWaiting = (text) => { if (stillVisible()) { $('answer-output').textContent = text; show($('answer-output'), true); } };
   try {
-    const intentPrompt = discussionPrompt(scope, normalizedIntent);
-    const userMessage = discussionUserLabel(scope, normalizedIntent, question);
-    const requestPrompt = question || intentPrompt;
-    const result = scope !== 'image' && platformModeReady()
-      ? await requestPlatformAnswer(sourceContext, requestPrompt, scope, {
-        action: !question && normalizedIntent === 'explain'
-          ? 'explain'
-          : !question && normalizedIntent === 'translate'
-            ? 'translate'
-            : 'ask',
-        signal: discussionController.signal,
-        onProgress: (done, total, phase) => {
-          $('answer-output').textContent = phase === 'merging'
-            ? '全文已逐块检查，正在汇总证据…'
-            : `正在阅读全文并核对证据（${done}/${total}）…`;
-        },
-        onDelta: (delta) => {
-          streamBuffer += delta;
-          $('answer-output').textContent = streamBuffer || '正在通过调研平台核对原文证据…';
-        },
-      })
-      : scope === 'image'
-      ? await explainImage(provider, sourceContext, image, question, discussionHistory, {
-        signal: discussionController.signal,
-        onDelta: (delta) => {
-          streamBuffer += delta;
-          $('answer-output').textContent = streamAnswerPreview(streamBuffer) || '正在读取图示、整理回答和核对文字证据…';
-        },
-      })
-      : await explainSelection(provider, { ...sourceContext, scope }, question, discussionHistory, {
-        signal: discussionController.signal,
-        // Reasoning-capable providers may spend output tokens on hidden
-        // thinking before emitting the JSON envelope. Keep the visible
-        // answer short in the prompt, but leave enough budget for that
-        // envelope to arrive intact.
-        maxTokens: normalizedIntent === 'summary' ? 6000 : 5000,
-        onProgress: (done, total, phase) => {
-          $('answer-output').textContent = phase === 'merging'
-            ? '全文已逐块检查，正在汇总证据…'
-            : `正在阅读全文并核对证据（${done}/${total}）…`;
-        },
-        onDelta: (delta) => {
-          streamBuffer += delta;
-          $('answer-output').textContent = streamAnswerPreview(streamBuffer) || '正在整理回答、原文证据和适用边界…';
-        },
-      });
+    const result = await requestAnswerTask({
+      id: `answer-${crypto.randomUUID()}`, context: requestSource, question: requestPrompt,
+      history: requestHistory, userMessage, scope, intent: normalizedIntent,
+      mode: platformModeReady() && scope !== 'image' ? 'platform' : 'standalone',
+      platformUrl, language: currentReadingLanguage(), image,
+      action: !question && normalizedIntent === 'explain' ? 'explain' : !question && normalizedIntent === 'translate' ? 'translate' : 'ask',
+      maxTokens: normalizedIntent === 'summary' ? 6000 : 5000,
+    }, {
+      signal: taskController.signal,
+      onProgress: (done, total, phase) => updateWaiting(phase === 'merging' ? '正在汇总全文证据…' : `正在核对原文（${done}/${total}）…`),
+      onDelta: text => { streamBuffer = text; updateWaiting(streamAnswerPreview(text) || '模型正在整理回答…'); },
+    });
+    if (!stillVisible()) { discussionRunning = false; renderPersistentComposer(); setNotice('上一篇文章的回答已完成，已保存在历史中。'); return; }
     latestStructuredAnswer = typeof result === 'string' ? { answer: result, evidence: [], background: '', inference: '', limitations: [], warnings: [] } : result;
     latestAnswer = latestStructuredAnswer.answer || '';
     discussionHistory = [
@@ -2410,7 +2343,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
       { role: 'assistant', content: latestAnswer },
     ].slice(-20);
     discussionRunning = false;
-    $('question-input').value = '';
+    if ($('question-input').value === submittedDraft) $('question-input').value = '';
     renderPersistentComposer(scope);
     renderConversation();
     renderStructuredAnswer(latestStructuredAnswer);
@@ -2686,6 +2619,49 @@ async function openHistoryPage() {
   }
 }
 
+const consumedSelectionActions = new Set();
+function handleSelectionAction(message) {
+  if (message.actionId && consumedSelectionActions.has(message.actionId)) return;
+  if (message.actionId) consumedSelectionActions.add(message.actionId);
+  void chrome.storage.session.remove('readerPendingSelectionAction').catch(() => {});
+  if (message.context?.selection?.quote) {
+    interactionGeneration += 1;
+    selectionContext = message.context;
+    pageContext ||= message.context;
+    discussionScope = 'selection';
+    imageContext = null;
+    renderPage();
+  }
+  if (message.action === 'translate' && selectionContext) {
+    if (!textModelReady()) { showModelSetupGuidance('选段翻译'); return; }
+    translationRequested = true;
+    fullTranslationEnabled = false;
+    translationRunning = true;
+    activeTranslationRun += 1;
+    activeJobRecord = { id: `translation-${crypto.randomUUID()}`, documentUrl: contextUrl(), contentHash: selectionContext?.contentHash || selectionContext?.selection?.contentHash || null, kind: 'text', status: 'queued', textDone: 0, textTotal: 1, imageDone: 0, imageTotal: 0 };
+    persistJobPatch(activeJobRecord, { status: 'queued' });
+    translationController?.abort();
+    translationController = new AbortController();
+    renderProgress(0, 1, 0, 0);
+    void processDocument({ ...selectionContext, blocks: [{ id: 'selection', text: selectionContext.selection?.quote || '' }], images: [] }, activeTranslationRun);
+  }
+  if (message.action === 'explain') void explainOrAsk('', 'selection', 'explain');
+  if (message.action === 'summary') void explainOrAsk('', 'selection', 'selection-summary');
+  if (message.action === 'ask') openDiscussion('selection', 'ask');
+  if (message.action === 'save') void saveInsight();
+  if (message.action === 'annotate') void openAnnotationDialog();
+}
+
+async function restorePendingSelectionAction() {
+  const stored = await chrome.storage.session.get('readerPendingSelectionAction');
+  const pending = stored.readerPendingSelectionAction;
+  if (!pending) return;
+  if (Date.now() - pending.createdAt > 15000) { await chrome.storage.session.remove('readerPendingSelectionAction'); return; }
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (pending.tabId !== (boundWindowTabId || tab?.id)) return;
+  handleSelectionAction(pending);
+}
+
 async function restorePendingPageAction() {
   const stored = await chrome.storage.session?.get?.('readerPendingPageAction').catch?.(() => ({}));
   const pending = stored?.readerPendingPageAction;
@@ -2734,7 +2710,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'deep-research:clear-page') {
     switchQuestionDraft();
     if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {});
-    activeTranslationRun += 1; sessionGeneration += 1; sessionResumeTasks.clear(); discussionController?.abort(); discussionRunning = false; activeJobRecord = null; pendingJob = null; failedTranslationItems = []; retryingTranslationId = null; pageContext = null; documentContext = null; selectionContext = null; imageContext = null; latestAnswer = ''; latestStructuredAnswer = null; discussionHistory = []; discussionScope = 'page'; discussionIntent = 'ask'; discussionOpen = false; activeSessionTitle = ''; resumedUrls.clear(); activationNeeded = null; pageReadState = 'idle'; lastSavedInsight = null; pendingInsightSource = null; translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; radarEntryPlatformUrl = ''; radarEntryPromptKey = ''; radarEntrySummaryId = ''; translatedTextIds.clear(); translatedImageIds.clear(); sendToPage({ type: 'deep-research:clear-annotations' }); renderPage(); return;
+    activeTranslationRun += 1; sessionGeneration += 1; sessionResumeTasks.clear(); activeJobRecord = null; pendingJob = null; failedTranslationItems = []; retryingTranslationId = null; pageContext = null; documentContext = null; selectionContext = null; imageContext = null; latestAnswer = ''; latestStructuredAnswer = null; discussionHistory = []; discussionScope = 'page'; discussionIntent = 'ask'; discussionOpen = false; activeSessionTitle = ''; resumedUrls.clear(); activationNeeded = null; pageReadState = 'idle'; lastSavedInsight = null; pendingInsightSource = null; translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; radarEntryPlatformUrl = ''; radarEntryPromptKey = ''; radarEntrySummaryId = ''; translatedTextIds.clear(); translatedImageIds.clear(); sendToPage({ type: 'deep-research:clear-annotations' }); renderPage(); return;
   }
   if (message.type === 'deep-research:page-context' && message.context) {
     switchQuestionDraft(message.context.url);
@@ -2792,7 +2768,6 @@ chrome.runtime.onMessage.addListener((message) => {
             ])],
           };
         }
-        discussionController?.abort();
         setNotice(scopeChanged
           ? '页面内容已变化；聊天记录已保留，旧引文定位已撤销，讨论范围已切换到整页。'
           : '页面内容已变化；聊天记录已保留，旧引文定位已撤销。');
@@ -2812,6 +2787,7 @@ chrome.runtime.onMessage.addListener((message) => {
     const interactionAtResumeStart = interactionGeneration;
     void (async () => {
       if (!contentChanged) await resumeSession(contextForResume);
+      if (!discussionRunning) void resumeBackgroundAnswer(contextForResume);
       if (interactionAtResumeStart !== interactionGeneration || contextForResume !== pageContext) return;
       saveLocalSession();
       await findPendingTranslation(contextForResume);
@@ -2884,9 +2860,8 @@ chrome.runtime.onMessage.addListener((message) => {
     );
     if (!sameSelection) {
       interactionGeneration += 1;
-      discussionController?.abort();
-      discussionRunning = false;
       discussionIntent = 'ask';
+      if (discussionRunning) setNotice('选段已更新，将用于下一问；当前回答继续使用发起时的原文。');
     }
     imageContext = null;
     selectionContext = message.context;
@@ -2895,7 +2870,7 @@ chrome.runtime.onMessage.addListener((message) => {
     saveLocalSession();
   }
   if (message.type === 'deep-research:image-action' && message.image) {
-    discussionController?.abort();
+    if (discussionRunning) { setNotice('当前回答继续运行；完成后可解读图示。'); return; }
     selectionContext = null;
     imageContext = { ...(documentContext || pageContext || {}), image: message.image, restored: false };
     latestAnswer = '';
@@ -2909,26 +2884,7 @@ chrome.runtime.onMessage.addListener((message) => {
     show($('discussion-section'), discussionOpen);
     renderDiscussionContext('image', 'explain', imageContext || pageContext);
   }
-  if (message.type === 'deep-research:selection-action') {
-    if (message.action === 'translate' && selectionContext) {
-      if (!textModelReady()) { showModelSetupGuidance('选段翻译'); return; }
-      translationRequested = true;
-      fullTranslationEnabled = false;
-      translationRunning = true;
-      activeTranslationRun += 1;
-      activeJobRecord = { id: `translation-${crypto.randomUUID()}`, documentUrl: contextUrl(), contentHash: selectionContext?.contentHash || selectionContext?.selection?.contentHash || null, kind: 'text', status: 'queued', textDone: 0, textTotal: 1, imageDone: 0, imageTotal: 0 };
-      persistJobPatch(activeJobRecord, { status: 'queued' });
-      translationController?.abort();
-      translationController = new AbortController();
-      renderProgress(0, 1, 0, 0);
-      void processDocument({ ...selectionContext, blocks: [{ id: 'selection', text: selectionContext.selection?.quote || '' }], images: [] }, activeTranslationRun);
-    }
-    if (message.action === 'explain') void explainOrAsk('', 'selection', 'explain');
-    if (message.action === 'summary') void explainOrAsk('', 'selection', 'selection-summary');
-    if (message.action === 'ask') openDiscussion('selection', 'ask');
-    if (message.action === 'save') void saveInsight();
-    if (message.action === 'annotate') void openAnnotationDialog();
-  }
+  if (message.type === 'deep-research:selection-action') handleSelectionAction(message);
   if (message.type === 'deep-research:page-action') {
     const pendingWrite = chrome.storage.session?.remove?.('readerPendingPageAction');
     pendingWrite?.catch?.(() => {});
@@ -2995,11 +2951,27 @@ async function init() {
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
   $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? '平台 AI' : '阅读'));
-  $('provider-kind')?.addEventListener('change', () => updateProviderForm());
+  $('provider-kind')?.addEventListener('change', () => { $('provider-url').value = providerPreset($('provider-kind').value).baseUrl; scheduleModelDiscovery(); });
   $('translation-language')?.addEventListener('change', async (event) => {
     targetLanguage = event.target.value;
     await readerStore.setSetting('targetLanguage', targetLanguage);
   });
+  $('translation-summary-pause').addEventListener('click', () => translationPaused ? void startFullTranslation() : $('pause-translation').click());
+  $('stop-answer').addEventListener('click', () => discussionController?.abort());
+  $('refresh-models').addEventListener('click', () => void refreshModels({ requestPermission: true }));
+  $('provider-url').addEventListener('input', scheduleModelDiscovery);
+  $('provider-key').addEventListener('input', scheduleModelDiscovery);
+  $('provider-model-list').addEventListener('change', () => { $('provider-model').value = $('provider-model-list').value; });
+  $('provider-model').addEventListener('input', () => { $('provider-model-list').value = ''; });
+  $('test-vision').addEventListener('click', async () => {
+    const button = $('test-vision'); button.disabled = true;
+    try { await testVisionProvider(providerFromFields()); provider = await saveProvider({ ...providerFromFields(), visionReady: true }); setNotice('图片能力检测通过。', $('settings-notice')); }
+    catch (error) { setNotice(error.message || '图片能力检测失败', $('settings-notice')); }
+    finally { button.disabled = false; }
+  });
+  $('chat-summary').addEventListener('click', () => void explainOrAsk('', activeDiscussionScope(), activeDiscussionScope() === 'selection' ? 'selection-summary' : 'summary'));
+  $('chat-translate').addEventListener('click', () => activeDiscussionScope() === 'selection' ? void explainOrAsk('', 'selection', 'translate') : void startFullTranslation());
+  $('chat-tools-menu').addEventListener('click', event => { if (event.target.closest('button') && !['pause-translation', 'cancel-translation'].includes(event.target.closest('button').id)) $('chat-tools-menu').open = false; });
   $('save-settings').addEventListener('click', () => void saveSettings()); $('translate-all').addEventListener('click', () => void startFullTranslation()); $('quick-summary')?.addEventListener('click', () => void explainOrAsk('', 'page', 'summary')); $('quick-map')?.addEventListener('click', () => void explainOrAsk('', 'page', 'map')); $('quick-mechanism')?.addEventListener('click', () => void explainOrAsk('', 'page', 'architecture')); $('quick-tradeoffs')?.addEventListener('click', () => void explainOrAsk('', 'page', 'tradeoffs')); $('pause-translation').addEventListener('click', () => { translationPaused = true; cancellationRequested = false; if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {}); translationController?.abort(); renderProgress(); }); $('cancel-translation').addEventListener('click', cancelCurrentTranslation);
   $('restore-page').addEventListener('click', () => { activeTranslationRun += 1; cancellationRequested = false; if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {}); persistJobPatch(activeJobRecord, { status: 'cancelled', error: '用户恢复了原文' }); translationController?.abort(); translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; sendToPage({ type: 'deep-research:restore-translations' }); });
   $('summarize-selection')?.addEventListener('click', () => void explainOrAsk('', 'selection', 'selection-summary'));
@@ -3053,6 +3025,7 @@ async function init() {
   $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice('翻译缓存已清除。', $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm('清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。')) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false); await loadTargetLanguage(); applyProviderFields(); setNotice('本地阅读数据已清除。', $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); provider = await loadProvider(); await loadTargetLanguage(); platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice('阅读数据已导入。', $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof Error ? error.message : '导入失败', $('settings-notice')); } });
   await updateLibrary();
   void restorePendingPageAction();
+  void restorePendingSelectionAction();
   // The content script can report page context before React finishes loading
   // this controller. Re-request the active tab after all listeners are bound
   // so opening or recreating the side panel never leaves it blank.

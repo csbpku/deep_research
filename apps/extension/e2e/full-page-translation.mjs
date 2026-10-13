@@ -192,11 +192,12 @@ try {
   await panel.locator('#settings-button').click();
   await panel.locator('#provider-kind').selectOption(process.env.READER_LIVE_PROVIDER === 'anthropic' ? 'custom-anthropic' : 'custom');
   await panel.locator('#provider-url').fill(`http://127.0.0.1:${providerPort}/v1`);
+  await panel.locator('#manual-model-settings summary').click();
   await panel.locator('#provider-model').fill(liveProvider ? process.env.READER_LIVE_MODEL : 'coverage-test');
   await panel.locator('#provider-key').fill('local-only-test-key');
   await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
-  await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('模型连接成功'), null, {
+  await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('连接成功'), null, {
     timeout: liveProvider ? 120_000 : 10_000,
   });
   await panel.locator('#close-settings').click();
@@ -209,6 +210,7 @@ try {
     .map((node) => node.getAttribute('data-deep-research-block'))) : [];
 
   const translationStartedAt = Date.now();
+  await panel.locator('#chat-tools-menu summary').first().click();
   await panel.locator('#translate-all').click();
   await panel.waitForFunction(() => {
     const notice = document.querySelector('#notice')?.textContent || '';
@@ -302,7 +304,8 @@ try {
     await fixture.screenshot({ path: '/private/tmp/deep-research-reader-live-translation-table.png' });
     await fixture.evaluate(() => [...document.querySelectorAll('[data-deep-research-translation]')].at(-1)?.scrollIntoView({ block: 'end' }));
     await fixture.screenshot({ path: '/private/tmp/deep-research-reader-live-translation-bottom.png' });
-    await panel.locator('#restore-page').click();
+    if (!await panel.locator('#restore-page').isVisible()) await panel.locator('#chat-tools-menu summary').first().click();
+  await panel.locator('#restore-page').click();
     await fixture.waitForFunction(() => document.querySelectorAll('[data-deep-research-translation]').length === 0, null, { timeout: 15_000 });
     console.log(JSON.stringify({ extensionId, targetUrl, model: process.env.READER_LIVE_MODEL, settingsNotice: await panel.locator('#settings-notice').textContent(), notice, translationElapsedMs, liveRequestMetrics, ...liveResult, translationSamples, tableCoverage, tableSamples, screenshots: ['/private/tmp/deep-research-reader-live-translation-top.png', '/private/tmp/deep-research-reader-live-translation-table.png', '/private/tmp/deep-research-reader-live-translation-bottom.png'], restoredTranslations: 0 }, null, 2));
     process.exitCode = 0;
@@ -339,6 +342,7 @@ try {
     || !result.imageTranslationVisible || !result.imageTranslationAnchored || !result.imageSourcePreserved || translationRequests > 160) {
     throw new Error(`全文覆盖断言失败：${JSON.stringify({ result, translationRequests })}`);
   }
+  if (!await panel.locator('#restore-page').isVisible()) await panel.locator('#chat-tools-menu summary').first().click();
   await panel.locator('#restore-page').click();
   await fixture.waitForFunction(() => document.querySelectorAll('[data-deep-research-translation]').length === 0, null, { timeout: 10_000 });
   const restored = await fixture.evaluate(() => ({

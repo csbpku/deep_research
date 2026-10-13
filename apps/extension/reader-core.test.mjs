@@ -1,6 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+test('loopback model discovery omits empty authentication; cloud still requires a key', async () => {
+  const { discoverModels, providerReady, requestChat } = await import('./reader-core.js');
+  const originalFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, request) => {
+    seen.push({ url: String(url), headers: request.headers });
+    return new Response(JSON.stringify(String(url).endsWith('/models') ? { data: [{ id: 'local-chat' }, { id: 'local-chat' }] } : { choices: [{ message: { content: 'OK' } }] }), { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const local = { providerKind: 'local-proxy', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local-chat', apiKey: '' };
+    assert.equal(providerReady(local), true);
+    assert.equal(providerReady({ ...local, baseUrl: 'https://cloud.example/v1' }), false);
+    assert.deepEqual((await discoverModels(local)).map(m => m.id), ['local-chat']);
+    await requestChat(local, [{ role: 'user', content: 'hi' }]);
+    assert.ok(seen.every(r => !('authorization' in r.headers)));
+    await assert.rejects(discoverModels({ ...local, baseUrl: 'https://cloud.example/v1' }), /API Key/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('translation context includes section outline and adjacent paragraphs', async () => {
+  const { translationContext } = await import('./reader-core.js');
+  const blocks = [{ id: 'a', kind: 'heading', text: 'Queues' }, { id: 'b', text: 'The queue holds work.' }, { id: 'c', text: 'It has a bounded capacity.' }, { id: 'd', text: 'This constraint protects memory.' }];
+  const context = JSON.parse(translationContext({ title: 'Scheduling', blocks }, [blocks[2]]));
+  assert.match(context.before, /queue holds work/);
+  assert.match(context.after, /protects memory/);
+  assert.match(context.outline, /Queues/);
+  assert.ok(JSON.stringify(context).length <= 3500);
+});
+
+test('ordinary long articles stream through one call with their ending retained', async () => {
+  const { explainSelection } = await import('./reader-core.js');
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const body = 'Long article paragraph. '.repeat(1000) + 'ENDING_SENTINEL';
+  globalThis.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body); requests.push(request);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"answer":"Conclusion","evidence":[]}' } }] }), { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    await explainSelection({ baseUrl: 'http://localhost:1234/v1', model: 'test' }, { title: 'Long', url: 'https://article.test', scope: 'page', body }, 'Why?', [], { onDelta: () => {} });
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].messages.at(-1).content, /ENDING_SENTINEL/);
+    assert.equal(requests[0].stream, true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 import { boundTaskContext, buildAnnotationUrl, cleanTranslationText, combineTranslationParts, explainImage, explainSelection, loadProvider, mergeProcessedIds, mergeTranslationFailures, parseReadingAnswer, providerReady, requestChat, requestChatStream, saveProvider, splitReadingText, splitTranslationBlocks, stripReasoningText, testVisionProvider, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 

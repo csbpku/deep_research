@@ -15,12 +15,11 @@ function ReaderPanel() {
   return (
     <main className="shell" data-workspace-view="chat">
       <header className="masthead">
-        <div className="wordmark"><span className="mark">R</span><span>Reader<span className="brand-caption">阅读工作台</span></span></div>
+        <div className="wordmark"><span className="mark">R</span><span>Reader</span></div>
 
       </header>
       <nav className="workspace-nav" aria-label="工作台导航">
         <button id="nav-chat" className="workspace-nav-item active" type="button" aria-pressed="true"><PanelIcon kind="chat" /><span>聊天</span></button>
-        <button id="nav-tools" className="workspace-nav-item" type="button" aria-pressed="false"><PanelIcon kind="tools" /><span>工具</span></button>
         <button id="nav-library" className="workspace-nav-item" type="button" aria-pressed="false"><PanelIcon kind="library" /><span>收藏</span></button>
         <button id="open-history-header" className="workspace-nav-item" type="button" title="查看过去的聊天会话和知识结论"><PanelIcon kind="history" /><span>历史</span></button>
         <button id="settings-button" className="workspace-nav-item nav-settings" type="button" title="模型与数据设置"><PanelIcon kind="settings" /><span>设置</span></button>
@@ -55,83 +54,9 @@ function ReaderPanel() {
             <button id="ai-availability-action" className="text-button" type="button">配置模型</button>
           </div>
           <div id="scope-notice" className="notice hidden" role="status" aria-live="polite" />
-          <div className="actions">
-            <button id="translate-all" className="primary">全文翻译</button>
-            <label className="inline-control" htmlFor="translation-language"><span>译为</span><select id="translation-language" className="compact-select" defaultValue="zh-CN"><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="ja-JP">日本語</option><option value="en-US">English</option></select></label>
-            <button id="pause-translation" className="secondary hidden">暂停</button>
-            <button id="cancel-translation" className="danger hidden">取消任务</button>
-            <button id="restore-page" className="secondary">恢复原文</button>
-          </div>
-          <div id="progress-area" className="progress hidden" role="group" aria-label="全文翻译进度">
-            <div className="progress-line"><span id="text-progress-label">正文翻译</span><span id="text-progress-value">0 / 0</span></div>
-            <div id="text-progress-track" className="track" role="progressbar" aria-labelledby="text-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始" ><div id="text-progress-bar" className="bar" /></div>
-            <div className="progress-line" style={{ marginTop: 8 }}><span id="image-progress-label">图片文字</span><span id="image-progress-value">未开始</span></div>
-            <div id="image-progress-track" className="track" role="progressbar" aria-labelledby="image-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始"><div id="image-progress-bar" className="bar image" /></div>
-            <div id="translation-failures" className="translation-failures hidden" />
-          </div>
+
         </div>
 
-
-        <section id="quick-actions-section" className="quick-actions-panel">
-          <div className="quick-actions-heading">
-            <div>
-              <div className="section-kicker">文章分析</div>
-              <h2>从结构、实现和取舍继续阅读</h2>
-            </div>
-            <div className="quick-actions-heading-actions">
-              <span id="quick-actions-scope" className="quick-actions-scope">整页正文</span>
-              <button id="open-page-chat" className="secondary quick-chat-button" type="button">打开聊天</button>
-            </div>
-          </div>
-          <div className="quick-actions-grid">
-            <button id="quick-summary" className="quick-action quick-action-featured" type="button">
-              <strong>全文总结</strong><span>问题、结论、机制和证据</span>
-            </button>
-            <button id="quick-map" className="quick-action" type="button">
-              <strong>文章地图</strong><span>按章节梳理主线和依赖</span>
-            </button>
-            <button id="quick-mechanism" className="quick-action" type="button">
-              <strong>关键机制</strong><span>组件、数据流和文中明确约束</span>
-            </button>
-            <button id="quick-tradeoffs" className="quick-action" type="button">
-              <strong>风险与取舍</strong><span>前提、反例和待核对点</span>
-            </button>
-          </div>
-        </section>
-
-        <section id="selection-section" className="card paper hidden">
-          <div className="card-title"><span>当前选段</span><span id="selection-scope">所在小节</span></div>
-          <div id="selection-quote" className="quote" />
-          <div className="selection-action-group">
-            <div className="selection-action-label">选段操作</div>
-            <div className="selection-actions">
-                <button id="summarize-selection" className="secondary selection-action" type="button" title="用几个要点总结当前选段">
-                  <strong>总结这段</strong><span>压缩成要点</span>
-                </button>
-                <button id="explain-selection" className="primary selection-action" type="button" title="解释当前选中的技术内容">
-                  <strong>解释这段</strong><span>概念、机制和例子</span>
-                </button>
-                <button id="translate-selection" className="secondary selection-action" type="button" title="翻译当前选段并保留技术术语">
-                  <strong>翻译这段</strong><span>保留 API / 代码标识</span>
-                </button>
-                <button id="ask-selection" className="secondary selection-action" type="button" title="只使用当前选段及所在小节回答问题">
-                  <strong>围绕这段提问</strong><span>在聊天中继续追问</span>
-                </button>
-                <button id="annotate-selection" className="secondary selection-action" type="button">
-                  <strong>标注原文</strong><span>保存后锚定高亮并留短注</span>
-                </button>
-                <button id="save-selection" className="secondary selection-action" type="button">
-                  <strong>保存摘录</strong><span>存入阅读库，不改原文</span>
-                </button>
-            </div>
-          </div>
-        </section>
-
-        <section id="image-section" className="card hidden">
-          <div className="card-title"><span>当前图示</span><span id="image-scope">视觉输入</span></div>
-          <div id="image-preview" className="image-preview"><div id="image-preview-title" className="image-preview-title" /><div id="image-preview-meta" className="image-preview-meta" /></div>
-          <div className="actions"><button id="explain-image" className="primary">解读图示</button><button id="ask-image" className="secondary">追问图示</button><button id="clear-image" className="secondary">清除</button></div>
-        </section>
 
         <section id="reading-section">
           <div className="section-label"><h2>我的阅读</h2><div className="section-actions"><button id="refresh-library" className="text-button">刷新</button></div></div>
@@ -163,12 +88,12 @@ function ReaderPanel() {
         <section id="discussion-section" className="discussion-panel hidden">
           <div className="section-label discussion-heading">
             <div>
-              <h2>原文对话</h2>
+              <h2>聊天</h2>
               <div id="discussion-context-detail" className="discussion-context-detail" />
             </div>
             <div className="section-actions">
               <span id="discussion-context" className="discussion-context-badge">整页正文 · 提问</span>
-              <button id="expand-chat" className="secondary discussion-action" type="button" aria-pressed="false" aria-controls="discussion-section">放大聊天</button>
+              <button id="expand-chat" className="hidden secondary discussion-action" type="button" aria-pressed="false" aria-controls="discussion-section">放大聊天</button>
               <button id="open-history-inline" className="text-button">聊天记录</button>
             </div>
           </div>
@@ -185,7 +110,7 @@ function ReaderPanel() {
               <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
             </div>
           </div>
-          <div className="discussion-reading-actions"><button id="chat-to-reading" className="text-button" type="button">查看原文</button><button id="chat-translate-all" className="text-button" type="button">翻译原网页</button><span id="chat-scope-description">基于整篇文章</span></div>
+          <div className="discussion-reading-actions"><button id="chat-to-reading" className="text-button" type="button">定位原文</button><span id="chat-scope-description">基于整篇文章</span></div>
           <details id="chat-selection-card" className="chat-selection-card hidden"><summary>当前选段 · 查看内容</summary><blockquote id="chat-selection-quote" /><button id="clear-chat-selection" className="text-button" type="button">清除选段，基于整篇</button></details>
           <div className="chat-window">
             <div id="chat-transcript" className="chat-transcript">
@@ -216,9 +141,76 @@ function ReaderPanel() {
                 <span id="composer-scope-label" className="composer-scope-label">整页正文</span>
                 <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span>
               </div>
+              <div id="translation-summary" className="translation-summary hidden" role="status"><span id="translation-summary-text" /><button id="translation-summary-pause" className="text-button" type="button">暂停</button></div><div className="composer-tools"><button id="chat-summary" className="text-button" type="button">总结</button><button id="chat-translate" className="text-button" type="button">翻译</button><details id="chat-tools-menu"><summary>更多</summary><div className="chat-tools-popover">          <div className="actions">
+            <button id="translate-all" className="primary">全文翻译</button>
+            <label className="inline-control" htmlFor="translation-language"><span>译为</span><select id="translation-language" className="compact-select" defaultValue="zh-CN"><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="ja-JP">日本語</option><option value="en-US">English</option></select></label>
+            <button id="pause-translation" className="secondary hidden">暂停</button>
+            <button id="cancel-translation" className="danger hidden">取消任务</button>
+            <button id="restore-page" className="secondary">恢复原文</button>
+          </div>
+          <div id="progress-area" className="progress hidden" role="group" aria-label="全文翻译进度">
+            <div className="progress-line"><span id="text-progress-label">正文翻译</span><span id="text-progress-value">0 / 0</span></div>
+            <div id="text-progress-track" className="track" role="progressbar" aria-labelledby="text-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始" ><div id="text-progress-bar" className="bar" /></div>
+            <div className="progress-line" style={{ marginTop: 8 }}><span id="image-progress-label">图片文字</span><span id="image-progress-value">未开始</span></div>
+            <div id="image-progress-track" className="track" role="progressbar" aria-labelledby="image-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始"><div id="image-progress-bar" className="bar image" /></div>
+            <div id="translation-failures" className="translation-failures hidden" />
+          </div>        <section id="quick-actions-section" className="chat-tool-section">
+          <span id="quick-actions-scope" className="hidden" />
+          <div className="quick-actions-grid">
+            <button id="quick-summary" className="quick-action quick-action-featured" type="button">
+              <strong>全文总结</strong><span>问题、结论、机制和证据</span>
+            </button>
+            <button id="quick-map" className="quick-action" type="button">
+              <strong>文章地图</strong><span>按章节梳理主线和依赖</span>
+            </button>
+            <button id="quick-mechanism" className="quick-action" type="button">
+              <strong>关键机制</strong><span>组件、数据流和文中明确约束</span>
+            </button>
+            <button id="quick-tradeoffs" className="quick-action" type="button">
+              <strong>风险与取舍</strong><span>前提、反例和待核对点</span>
+            </button>
+          </div>
+        </section>
+
+        <section id="selection-section" className="chat-tool-section hidden">
+          <div className="card-title"><span>当前选段</span><span id="selection-scope">所在小节</span></div>
+          <div id="selection-quote" className="quote" />
+          <div className="selection-action-group">
+            <div className="selection-action-label">选段操作</div>
+            <div className="selection-actions">
+                <button id="summarize-selection" className="secondary selection-action" type="button" title="用几个要点总结当前选段">
+                  <strong>总结这段</strong><span>压缩成要点</span>
+                </button>
+                <button id="explain-selection" className="primary selection-action" type="button" title="解释当前选中的技术内容">
+                  <strong>解释这段</strong><span>概念、机制和例子</span>
+                </button>
+                <button id="translate-selection" className="secondary selection-action" type="button" title="翻译当前选段并保留技术术语">
+                  <strong>翻译这段</strong><span>保留 API / 代码标识</span>
+                </button>
+                <button id="ask-selection" className="secondary selection-action" type="button" title="只使用当前选段及所在小节回答问题">
+                  <strong>围绕这段提问</strong><span>在聊天中继续追问</span>
+                </button>
+                <button id="annotate-selection" className="secondary selection-action" type="button">
+                  <strong>标注原文</strong><span>保存后锚定高亮并留短注</span>
+                </button>
+                <button id="save-selection" className="secondary selection-action" type="button">
+                  <strong>保存摘录</strong><span>存入阅读库，不改原文</span>
+                </button>
+            </div>
+          </div>
+        </section>
+
+        <section id="image-section" className="chat-tool-section hidden">
+          <div className="card-title"><span>当前图示</span><span id="image-scope">视觉输入</span></div>
+          <div id="image-preview" className="image-preview"><div id="image-preview-title" className="image-preview-title" /><div id="image-preview-meta" className="image-preview-meta" /></div>
+          <div className="actions"><button id="explain-image" className="primary">解读图示</button><button id="ask-image" className="secondary">追问图示</button><button id="clear-image" className="secondary">清除</button></div>
+        </section>
+
+</div></details></div>
               <label className="composer-question-label" htmlFor="question-input">继续提问</label>
               <textarea id="question-input" rows={2} placeholder="针对整篇文章提问，例如：作者的主要取舍是什么？" />
               <div className="chat-composer-footer">
+                <span id="answer-task-status" className="small" role="status" aria-live="polite" /><button id="stop-answer" className="secondary hidden" type="button">停止回答</button>
                 <button id="send-question" className="primary">发送问题</button>
               </div>
             </div>
@@ -260,13 +252,13 @@ function ReaderPanel() {
             <div><div className="settings-kicker">Standalone</div><h3>本地模型服务</h3></div>
           </div>
           <p className="small">独立模式的问答、全文翻译和图片理解直接调用这里配置的模型服务。支持 OpenAI-compatible Chat Completions 和 Anthropic Messages API。</p>
-          <div className="field"><label htmlFor="provider-kind">模型服务商</label><select id="provider-kind" defaultValue="openai"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="minimax">MiniMax</option><option value="deepseek">DeepSeek</option><option value="custom">其他 OpenAI-compatible 服务</option><option value="custom-anthropic">其他 Anthropic-compatible 服务</option></select></div>
-          <div id="provider-custom-url-field" className="field hidden"><label htmlFor="provider-url">自定义接口地址</label><input id="provider-url" className="input" placeholder="https://你的服务/v1" /></div>
+          <div className="field"><label htmlFor="provider-kind">模型服务商</label><select id="provider-kind" defaultValue="openai"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="minimax">MiniMax</option><option value="deepseek">DeepSeek</option><option value="local-proxy">Local Proxy / LM Studio / Ollama</option><option value="custom">其他 OpenAI-compatible 服务</option><option value="custom-anthropic">其他 Anthropic-compatible 服务</option></select></div>
+          <div id="provider-custom-url-field" className="field hidden"><label htmlFor="provider-url">自定义接口地址</label><input id="provider-url" type="url" className="input" placeholder="https://你的服务/v1" /></div>
           <div id="provider-endpoint-hint" className="small provider-endpoint-hint" />
-          <div className="field"><label htmlFor="provider-model">模型名称</label><input id="provider-model" className="input" placeholder="gpt-4o-mini" /></div>
-          <div className="field"><label htmlFor="provider-key">API Key</label><input id="provider-key" className="input" type="password" autoComplete="off" placeholder="sk-..." /></div>
+          <div className="field"><label id="provider-key-label" htmlFor="provider-key">API Key</label><input id="provider-key" className="input" type="password" autoComplete="off" placeholder="sk-..." /></div>
+          <div className="field"><label htmlFor="provider-model-list">模型</label><div className="model-picker"><select id="provider-model-list"><option value="">连接后自动获取模型</option></select><button id="refresh-models" className="secondary" type="button">获取模型</button></div><span id="model-discovery-status" className="small" role="status" aria-live="polite" /><details id="manual-model-settings"><summary>服务未提供模型列表？</summary><label htmlFor="provider-model">自定义模型 ID</label><input id="provider-model" className="input" placeholder="仅兼容不提供模型列表的服务" /></details></div>
           <label className="check"><input id="request-provider-origin" type="checkbox" defaultChecked />保存时请求访问该模型服务域名，只在模型调用需要时使用。</label>
-          <div className="actions"><button id="save-settings" className="primary">保存并测试连接</button></div>
+          <div className="actions"><button id="save-settings" className="primary">保存并快速验证</button><button id="test-vision" className="secondary" type="button">检测图片能力</button></div>
         </section>
               <div id="settings-notice" className="notice hidden" role="status" aria-live="polite" />
         <div className="section-label"><h2>本地数据</h2></div>
@@ -288,7 +280,7 @@ function ReaderPanel() {
       </section>
 
       <div id="mode-data-note" className="footer">独立模式：模型请求与阅读成果保存在本地，可导出或清除。</div>
-      <div id="resize-hint" className="resize-hint">选段与引用联动原网页 · 输入区上缘可拖动</div>
+      <div id="resize-hint" className="resize-hint">译文段落：Alt+Shift+O 切换原文 · 输入区可拖动</div>
     </main>
   );
 }

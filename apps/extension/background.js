@@ -1,3 +1,4 @@
+import './answer-worker.js';
 import { boundTaskContext, loadProvider, makeDocument, mergeProcessedIds, mergeTranslationFailures, providerReady, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 import { activationReason } from './activation.js';
@@ -449,6 +450,28 @@ async function makePkce() {
   return { verifier, challenge: base64Url(new Uint8Array(digest)), state: base64Url(crypto.getRandomValues(new Uint8Array(16))) };
 }
 
+function createReaderMenus() {
+  chrome.contextMenus?.removeAll(() => {
+    for (const [id, title, contexts] of [
+      ['ask', '对话 · 针对选段提问', ['selection']],
+      ['explain', '解释 · 理解选段', ['selection']],
+      ['translate', '翻译 · 选段', ['selection']],
+      ['save', '收藏 · 保存摘录', ['selection']],
+      ['chat', '对话 · 打开阅读助手', ['page']],
+      ['summary', '总结 · 整篇文章', ['page']],
+      ['translate-page', '翻译 · 整篇文章', ['page']],
+    ]) chrome.contextMenus.create({ id: `reader:${id}`, title, contexts });
+  });
+}
+chrome.runtime.onInstalled.addListener(createReaderMenus);
+chrome.runtime.onStartup.addListener(createReaderMenus);
+chrome.contextMenus?.onClicked.addListener((info, tab) => {
+  if (!String(info.menuItemId).startsWith('reader:') || !Number.isInteger(tab?.id)) return;
+  void chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  const action = String(info.menuItemId).slice(7).replace('translate-page', 'translate');
+  void activateTabForReading(tab, { engageWindow: true }).then(() => sendToTab(tab.id, { type: 'deep-research:context-action', action }));
+});
+
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id === undefined || tab.windowId === undefined) return;
 
@@ -635,7 +658,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Keep their cached context, but never let them replace the visible tab.
     if (pageTabId !== undefined) {
       chrome.tabs.query({ active: true, windowId: sender.tab.windowId }).then(([activeTab]) => {
-        if (activeTab?.id === pageTabId) chrome.runtime.sendMessage(forwarded).catch(() => {});
+        if (activeTab?.id !== pageTabId) return;
+        if (forwarded.type === 'deep-research:selection-action' && forwarded.context?.selection?.quote) {
+          const pending = { ...forwarded, actionId: crypto.randomUUID(), createdAt: Date.now() };
+          void chrome.storage.session.set({ readerPendingSelectionAction: pending }).then(() => chrome.runtime.sendMessage(pending)).catch(() => {});
+        } else chrome.runtime.sendMessage(forwarded).catch(() => {});
       }).catch(() => {});
     }
     return;
