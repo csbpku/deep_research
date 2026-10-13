@@ -1,5 +1,6 @@
 import { readerStore } from './reader-store.js';
 import { renderMarkdown } from './markdown-renderer.js';
+import { readingAnswerText } from './reader-core.js';
 import { resolvePlatformOrigin } from './platform-config.js';
 
 let sessions = [];
@@ -148,6 +149,21 @@ function makeAction(label, handler, danger = false) {
   return button;
 }
 
+function consolidateActions(actions, visibleCount) {
+  const secondary = [...actions.children].slice(visibleCount);
+  if (!secondary.length) return;
+  const disclosure = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = '更多⌄';
+  summary.setAttribute('aria-label', '更多记录操作');
+  const menu = document.createElement('div');
+  menu.className = 'history-card-menu';
+  menu.append(...secondary);
+  menu.addEventListener('click', event => { if (event.target.closest('button')) disclosure.open = false; });
+  disclosure.append(summary, menu);
+  actions.append(disclosure);
+}
+
 async function ensurePagePermission(url) {
   try {
     const parsed = new URL(url);
@@ -245,7 +261,7 @@ function renderHistoryDetail(session) {
       header.textContent = item.role === 'user' ? '你' : 'Reader';
       const body = document.createElement('div');
       body.className = 'history-detail-message-body';
-      if (item.role === 'assistant') renderMarkdown(body, item.content);
+      if (item.role === 'assistant') renderMarkdown(body, readingAnswerText(item.content));
       else body.textContent = item.content;
       message.append(header, body);
       messages.appendChild(message);
@@ -387,7 +403,7 @@ function renderSessionCard(session) {
   meta.querySelector('[data-meta="messages"]').textContent = `${messageCount(session)} 条消息`;
   const actions = document.createElement('div');
   actions.className = 'history-card-actions';
-  actions.append(makeAction('继续聊天', () => openSession(session)), makeAction('查看对话', () => renderHistoryDetail(session)), makeAction('打开原文', () => openSession(session)));
+  actions.append(makeAction('继续聊天', () => openSession(session)), makeAction('查看对话', () => renderHistoryDetail(session)));
   if (!session.remote) {
     actions.append(
       makeAction('重命名', () => renameSession(session)),
@@ -395,6 +411,7 @@ function renderSessionCard(session) {
       makeAction('删除', () => deleteSession(session), true),
     );
   }
+  consolidateActions(actions, 2);
   card.append(top, source, question, meta, actions);
   return card;
 }
@@ -418,7 +435,7 @@ function renderInsightCard(insight) {
   if (insight.aiAnswer) {
     const answer = document.createElement('div');
     answer.className = 'history-insight-answer';
-    renderMarkdown(answer, insight.aiAnswer);
+    renderMarkdown(answer, readingAnswerText(insight.aiAnswer));
     card.appendChild(answer);
   }
   if (Array.isArray(insight.tags) && insight.tags.length) {
@@ -437,6 +454,7 @@ function renderInsightCard(insight) {
     makeAction('导出', () => exportRecords('insights', [insight])),
     makeAction('删除', () => deleteInsight(insight), true),
   );
+  consolidateActions(actions, 1);
   card.append(meta, actions);
   return card;
 }
@@ -451,7 +469,7 @@ function render() {
   const filtered = source.filter(activeTab === 'sessions' ? sessionMatches : insightMatches);
   $('session-count').textContent = String(sessions.length);
   $('insight-count').textContent = String(insights.length);
-  $('history-section-kicker').textContent = activeTab === 'sessions' ? 'READING SESSIONS' : 'SAVED INSIGHTS';
+  $('history-section-kicker').textContent = activeTab === 'sessions' ? '聊天会话' : '知识结论';
   $('history-section-title').textContent = activeTab === 'sessions' ? '聊天会话' : '知识结论';
   $('history-summary-text').textContent = `${filtered.length} 条${activeTab === 'sessions' ? '会话' : '结论'}`;
   $('history-filter-text').textContent = query ? `匹配“${query}”` : '';
@@ -496,9 +514,15 @@ function setTab(next) {
   render();
 }
 
+function returnToPanel(view = 'chat') {
+  const params = new URLSearchParams({ view });
+  if (boundWindowTabId) params.set('sourceTab', String(boundWindowTabId));
+  window.location.href = chrome.runtime.getURL(`sidepanel.html?${params}`);
+}
+
 function closeHistory() {
   if (sidePanelSurface) {
-    window.location.href = chrome.runtime.getURL(`sidepanel.html${boundWindowTabId ? `?sourceTab=${boundWindowTabId}` : ''}`);
+    returnToPanel();
     return;
   }
   chrome.tabs.getCurrent((tab) => {
@@ -511,6 +535,11 @@ document.querySelectorAll('[data-history-tab]').forEach((button) => button.addEv
 $('history-search-input').addEventListener('input', (event) => { query = event.target.value.trim(); render(); });
 $('clear-history-search').addEventListener('click', () => { $('history-search-input').value = ''; query = ''; render(); });
 $('close-history').addEventListener('click', closeHistory);
+$('history-library')?.addEventListener('click', () => returnToPanel('library'));
+$('history-settings')?.addEventListener('click', () => returnToPanel('settings'));
+$('history-current')?.addEventListener('click', () => { closeHistoryDetail({ restoreFocus: false }); $('history-search-input').focus(); });
+document.addEventListener('pointerdown', event => document.querySelectorAll('.history-card-actions details[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; }));
+document.addEventListener('keydown', event => { if (event.key === 'Escape') document.querySelectorAll('.history-card-actions details[open]').forEach(menu => { menu.open = false; menu.querySelector('summary')?.focus(); }); });
 $('close-history-detail').addEventListener('click', closeHistoryDetail);
 $('continue-history-detail').addEventListener('click', () => {
   if (activeDetail) void openSession(activeDetail);

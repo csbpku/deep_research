@@ -103,7 +103,7 @@ test('platform stream rejects truncated and missing completion instead of saving
   ]) {
     let emitted = false;
     const sandbox = {
-      TextDecoder, scope: 'page', sourceContext: { url: 'https://a.test', title: 'Article', body: 'Source' }, discussionHistory: [], platformUrl: 'https://platform.test',
+      readingAnswerText: (text) => text, TextDecoder, scope: 'page', sourceContext: { url: 'https://a.test', title: 'Article', body: 'Source' }, discussionHistory: [], platformUrl: 'https://platform.test',
       platformContext: (c) => c,
       chrome: { storage: { local: { get: async () => ({ readerToken: 'test' }) } } },
       fetch: async () => ({ ok: true, body: { getReader: () => ({ read: async () => {
@@ -206,12 +206,14 @@ test('workspace navigation selects one view and composer resize is bounded and k
     nodes.set(id, { handlers: {}, attributes: {}, style: {}, classList: { toggle: () => {}, add: () => {} },
       addEventListener(type, fn) { this.handlers[type] = fn; },
       setAttribute(name, value) { this.attributes[name] = value; },
+      getClientRects() { return [{}]; },
+      scrollHeight: 60,
       getBoundingClientRect() { return { height: Number.parseInt(this.style.height || '80', 10) }; },
     });
   }
   const sandbox = {
-    document: { querySelector: () => shell }, $: (id) => nodes.get(id),
-    window: { innerHeight: 900 }, localStorage: { getItem: () => null, setItem: () => {} },
+    document: { querySelector: () => shell, addEventListener() {} }, $: (id) => nodes.get(id),
+    window: { innerHeight: 900, addEventListener() {} }, localStorage: { getItem: () => null, setItem: () => {} },
     boundWindowTabId: null,
   };
   vm.createContext(sandbox);
@@ -228,6 +230,13 @@ test('workspace navigation selects one view and composer resize is bounded and k
   key('ArrowUp');
   assert.equal(nodes.get('question-input').style.height, '76px');
   assert.equal(handle.attributes['aria-valuenow'], '76');
+  const input = nodes.get('question-input');
+  input.scrollHeight = 320;
+  input.handlers.input();
+  assert.equal(input.style.height, '240px');
+  input.scrollHeight = 60;
+  input.handlers.input();
+  assert.equal(input.style.height, '76px', 'automatic growth preserves the manual preferred height');
 });
 
 test('source messages target the bound article instead of the extension tab', async () => {

@@ -27,4 +27,20 @@
 - 全文翻译隔离浏览器：1,042/1,042 块，长段尾部、标题、目录、表格、图片锚定及恢复原文通过（56 请求）。这是受控服务完整性测试，不代表真实模型速度。
 - 真实 Chrome 最终构建显示 0.2.9；英文 MDN 验证聊天合并布局、Local Proxy Key 选填和模型选择入口。真实平台问答在设置及关闭侧栏后完成并恢复，带可定位英文证据；因观察期间还执行其他操作，未把约 50 秒的观察上界作为模型延迟。
 
-生产发布与修复后的真实模型速度复验待追加。
+## 0.2.9 发布与真实后端复验
+
+0.2.9 已于本日正式发布：[Reader release](https://github.com/csbpku/deep_research/releases/tag/reader-v0.2.9)，CI `38374325351`、Deploy `38374726519` 成功，生产 Web/AI Engine 为 `5846e9f8eec6ba42c605d0c261534674644c1c74` 且 healthy。官方 ZIP 213,043 bytes，SHA256 `35f3f198ff65ddb4f96ef0138573e7db7f5b1754cbe2b7efd79af102f78cc97b`；安装页元数据一致。
+
+生产 MiniMax-M3 对公开 Claude SDLC 文章的直接流式调用：独立 bs4 正文提取 69,391 字符（不同于上面的原生提取），首个文本增量 8.237 秒、完整结果 17.096 秒，engine latency 16,476ms，streaming=true、truncated=false，3 条证据逐字匹配。仅为本次样本，不与修复前37秒观察上界计算加速比例。真实 MDN 翻译18/18块、1/1图片，Alt+Shift+O往返与右键首次选段范围恢复通过；图片可能使用缓存。
+
+## 0.2.10 聊天和历史重设计
+
+按用户指定 UI UX Pro Max / Web Design Engineer，研究 [Open WebUI 官方界面](https://docs.openwebui.com/features/chat-conversations/chat-features/) 与 [MessageInput 源码](https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/MessageInput.svelte)。单列侧栏使用48px共享导航、36px来源行、无外框回答、22px圆角输入框、集中总结/翻译/工具、模型设置入口和空白态建议。输入框自动随长草稿增高，保留拖动/键盘调高；历史统一同套字体和导航，次要记录操作折叠。历史往返草稿通过sessionStorage保留，不承诺浏览器关闭后的持久化。
+
+真实生产模型在首次重设计验收中返回了answer字段包含未转义双引号的JSON，平台回退后整个JSON展示为代码。增加限定信封格式的正文恢复，并兼容旧本地会话；保留服务器验证后的证据，不改写存储、不绕过逐字证据检查。随后真实Chrome在聊天和历史中均恢复正文，新的MDN问题返回正常正文、1条完整英文可定位证据。背景/推断/限制中的引用也绑定到原文，避免跳到插件内部碎片URL；普通会话恢复与已完成翻译不再重复占用提示区，异常/旧版本提示保留。
+
+最终本地门禁：Node95/95、WXT production build、扩展TypeScript和diff check通过。独立Chromium验收覆盖320×560、380×860、520×720、736×740，无横向溢出；聊天滚动区分别315、611、471、491px，默认composer153px，header48px。长输入自动增长/缩回、模型设置、More边界/Escape、历史搜索/详情/继续/设置/收藏导航、草稿返回、键盘调高、停止和后台任务恢复均通过。背景引用href已断言原文章URL；问答期间选段、翻译、关闭重开仍只有1次问答请求，模型验证1次文本请求。受控服务不代表真实模型延迟。
+
+真实Chrome已加载0.2.10（原解压目录和ID不变），英文MDN验证工具分组、输入高度76→157→76、历史46会话/1结论、详情正文修复、草稿保留、⌘+Enter实际平台回答及证据。原生宽度拖动尚未确认：控制前用户切回了工作窗口，未继续操作该窗口。生产0.2.10发布及官方包复验待追加。
+
+设计约定见 [reader-conversation](../design/reader-conversation.md)。受控截图：[380px聊天](./reader-audit-20261013/chat-openwebui-380.png)、[320px聊天](./reader-audit-20261013/chat-openwebui-320.png)、[历史](./reader-audit-20261013/history-openwebui.png)；原生历史截图为 `reader-audit-20261013/history-openwebui-native.png`。

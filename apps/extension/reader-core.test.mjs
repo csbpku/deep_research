@@ -1570,3 +1570,15 @@ test('plain Markdown citations recover only exact source quotes and tolerate emp
   assert.equal(result.evidence[0].anchor.contentHash, 'current');
   assert.equal(parseReadingAnswer('原文："A combined coffee/tea pot should always return 418."', context).evidence.length, 0);
 });
+
+
+test('unescaped quotes inside a complete answer do not leak the JSON envelope or cut off the explanation', async () => {
+  const { readingAnswerText } = await import('./reader-core.js');
+  const raw = String.raw`{ "answer": "418 是永久拒绝，503 则用于"暂时缺咖啡"这种临时不可用场景。\n\n> \"A combined coffee/tea pot that is temporarily out of coffee should instead return 503.\"", "evidence": [{"quote":"A combined coffee/tea pot that is temporarily out of coffee should instead return 503."}], "background":"", "inference":"", "limitations":[] }`;
+  const displayed = readingAnswerText(raw);
+  assert.match(displayed, /"暂时缺咖啡"这种临时不可用场景/);
+  assert.match(displayed, /should instead return 503/);
+  assert.doesNotMatch(displayed, /"answer":|"evidence":/);
+  assert.equal(readingAnswerText('An ordinary Markdown answer.'), 'An ordinary Markdown answer.');
+  assert.equal(readingAnswerText('API example: {"answer":"example"}'), 'API example: {"answer":"example"}');
+});

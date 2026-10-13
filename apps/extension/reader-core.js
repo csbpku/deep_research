@@ -505,6 +505,14 @@ function structuredTextVariants(value) {
 function extractJsonStringField(value, field) {
   const escapedField = String(field).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   for (const candidate of structuredTextVariants(value)) {
+    // A compatible model may forget to escape a quote inside its answer.
+    // Recover the entire field only when a known next-field boundary exists;
+    // the ordinary string matcher below handles genuinely truncated output.
+    const bounded = candidate.match(new RegExp(`"${escapedField}"\\s*:\\s*"([\\s\\S]*?)"\\s*,\\s*"(?:answer|response|summary|evidence|citations|background|inference|limitations)"\\s*:`, 'u'));
+    if (bounded) {
+      try { return JSON.parse(`"${bounded[1]}"`); }
+      catch { return bounded[1].replace(/\\n/gu, '\n').replace(/\\"/gu, '"').replace(/\\\\/gu, '\\'); }
+    }
     const match = candidate.match(new RegExp(`"?${escapedField}"?\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`, 'u'));
     if (!match) continue;
     try {
@@ -514,6 +522,14 @@ function extractJsonStringField(value, field) {
     }
   }
   return '';
+}
+
+/** Recover an envelope's display text, including already-saved provider fallbacks. */
+export function readingAnswerText(raw) {
+  const envelope = structuredTextVariants(raw).some(text => /^(?:\{\s*)?"(?:answer|response|summary)"\s*:/u.test(text));
+  if (!envelope) return cleanAnswerText(raw);
+  const parsed = parseJsonObject(raw);
+  return cleanAnswerText(parsed?.answer || parsed?.response || parsed?.summary || extractJsonStringField(raw, 'answer') || raw);
 }
 
 function isReadingAnswerObject(value) {

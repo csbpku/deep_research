@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../../sidepanel.css';
+import { ReaderHeader, ComposerIcon } from '../../components/reader-header';
 
 /**
  * React owns the panel UI. The reading controller remains an imperative
@@ -14,20 +15,12 @@ function ReaderPanel() {
 
   return (
     <main className="shell" data-workspace-view="chat">
-      <header className="masthead">
-        <div className="wordmark"><span className="mark">R</span><span>Reader</span></div>
-
-      </header>
-      <nav className="workspace-nav" aria-label="工作台导航">
-        <button id="nav-chat" className="workspace-nav-item active" type="button" aria-pressed="true"><PanelIcon kind="chat" /><span>聊天</span></button>
-        <button id="nav-library" className="workspace-nav-item" type="button" aria-pressed="false"><PanelIcon kind="library" /><span>收藏</span></button>
-        <button id="open-history-header" className="workspace-nav-item" type="button" title="查看过去的聊天会话和知识结论"><PanelIcon kind="history" /><span>历史</span></button>
-        <button id="settings-button" className="workspace-nav-item nav-settings" type="button" title="模型与数据设置"><PanelIcon kind="settings" /><span>设置</span></button>
-      </nav>
-      <div id="reader-status-strip" className="reader-status-strip" role="status" aria-live="polite" aria-label="当前运行状态">
-        <span id="storage-status" className="mode-badge">独立模式</span>
-        <span className="status"><i id="status-dot" className="status-dot" aria-hidden="true" /><span id="status-text">未配置模型</span></span>
-      </div>
+      <ReaderHeader>
+        <div id="reader-status-strip" className="reader-status-strip" role="status" aria-live="polite" aria-label="当前运行状态">
+          <span id="storage-status" className="mode-badge">独立模式</span>
+          <span className="status"><i id="status-dot" className="status-dot" aria-hidden="true" /><span id="status-text">未配置模型</span></span>
+        </div>
+      </ReaderHeader>
 
       <section id="empty-view" className="empty">
         <div className="eyebrow">原网页阅读助手</div>
@@ -98,23 +91,17 @@ function ReaderPanel() {
             </div>
           </div>
           <div id="discussion-source" className="discussion-source-card">
-            <span className="discussion-source-mark">R</span>
+
             <div className="discussion-source-main">
               <strong id="discussion-source-title">当前页面</strong>
               <span id="discussion-source-url" />
             </div>
-            <div id="discussion-scope-options" className="discussion-scope-options" role="group" aria-label="回答依据">
-              <span className="discussion-scope-label">基于</span>
-              <button id="scope-page" className="scope-option" type="button" aria-pressed="true">整篇</button>
-              <button id="scope-selection" className="scope-option hidden" type="button" aria-pressed="false">选段</button>
-              <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
-            </div>
+            <button id="chat-to-reading" className="text-button source-link" type="button" title="在网页中定位本次回答依据">原文 ↗</button>
           </div>
-          <div className="discussion-reading-actions"><button id="chat-to-reading" className="text-button" type="button">定位原文</button><span id="chat-scope-description">基于整篇文章</span></div>
-          <details id="chat-selection-card" className="chat-selection-card hidden"><summary>当前选段 · 查看内容</summary><blockquote id="chat-selection-quote" /><button id="clear-chat-selection" className="text-button" type="button">清除选段，基于整篇</button></details>
+
           <div className="chat-window">
             <div id="chat-transcript" className="chat-transcript">
-              <div id="conversation-empty" className="conversation-empty">可以直接问整篇文章；选中原文后，也可以切换为选段继续讨论。</div>
+              <div id="conversation-empty" className="conversation-empty"><h2>一起读懂这篇文章</h2><p>直接提问，或先总结、翻译。选中原文后，可以只聊那一段。</p><div className="conversation-starters"><button id="starter-summary" type="button">文章讲了什么？</button><button id="starter-mechanism" type="button">解释关键机制</button></div></div>
               <div id="conversation-list" className="conversation-list" />
               <div id="answer-output" className="answer stream-answer hidden" />
               <div id="answer-structured" className="answer-structured hidden">
@@ -136,17 +123,28 @@ function ReaderPanel() {
               </div>
             </div>
             <div id="persistent-composer" className="chat-composer persistent-composer hidden" aria-label="围绕当前原文提问">
-              <div id="composer-resize" className="composer-resize" role="separator" tabIndex={0} aria-label="调整输入区高度" aria-orientation="horizontal" aria-valuemin={60} aria-valuemax={240} aria-valuenow={80} title="上下拖动调整输入区；方向键也可调整"><span /></div>
+              <div id="composer-resize" className="composer-resize" role="separator" tabIndex={0} aria-label="调整输入区高度" aria-orientation="horizontal" aria-valuemin={60} aria-valuemax={240} aria-valuenow={60} title="上下拖动调整输入区；方向键也可调整"><span /></div>
               <div className="composer-context-row">
-                <span id="composer-scope-label" className="composer-scope-label">整页正文</span>
-                <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span>
+            <div id="discussion-scope-options" className="discussion-scope-options" role="group" aria-label="回答依据">
+              <span className="discussion-scope-label">基于</span>
+              <button id="scope-page" className="scope-option" type="button" aria-pressed="true">整篇</button>
+              <button id="scope-selection" className="scope-option hidden" type="button" aria-pressed="false">选段</button>
+              <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
+            </div>
+                <span id="composer-scope-label" className="composer-scope-label">整页正文</span><button id="composer-model" className="composer-model" type="button" title="模型与连接设置">阅读模型⌄</button>
+                <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span><span id="chat-scope-description" className="hidden">基于整篇文章</span>
               </div>
-              <div id="translation-summary" className="translation-summary hidden" role="status"><span id="translation-summary-text" /><button id="translation-summary-pause" className="text-button" type="button">暂停</button></div><div className="composer-tools"><button id="chat-summary" className="text-button" type="button">总结</button><button id="chat-translate" className="text-button" type="button">翻译</button><details id="chat-tools-menu"><summary>更多</summary><div className="chat-tools-popover">          <div className="actions">
+              <div id="translation-summary" className="translation-summary hidden" role="status"><span id="translation-summary-text" /><button id="translation-summary-pause" className="text-button" type="button">暂停</button></div>
+              <label className="composer-question-label" htmlFor="question-input">继续提问</label>
+              <textarea id="question-input" rows={2} placeholder="问问这篇文章…" />
+              <div className="chat-composer-footer">
+                <div className="composer-tools"><button id="chat-summary" className="text-button" type="button" title="总结当前整篇或选段"><ComposerIcon kind="summary" />总结</button><button id="chat-translate" className="text-button" type="button" title="翻译当前整篇或选段"><ComposerIcon kind="translate" />翻译</button><details id="chat-tools-menu"><summary aria-label="更多工具" title="翻译管理、文章分析、选段与图片工具"><ComposerIcon kind="plus" /><span>工具</span></summary><div className="chat-tools-popover"><div className="tool-group-label">网页翻译</div><div className="actions">
             <button id="translate-all" className="primary">全文翻译</button>
             <label className="inline-control" htmlFor="translation-language"><span>译为</span><select id="translation-language" className="compact-select" defaultValue="zh-CN"><option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="ja-JP">日本語</option><option value="en-US">English</option></select></label>
             <button id="pause-translation" className="secondary hidden">暂停</button>
             <button id="cancel-translation" className="danger hidden">取消任务</button>
             <button id="restore-page" className="secondary">恢复原文</button>
+            <span className="tool-help">单段切换原文：Alt+Shift+O</span>
           </div>
           <div id="progress-area" className="progress hidden" role="group" aria-label="全文翻译进度">
             <div className="progress-line"><span id="text-progress-label">正文翻译</span><span id="text-progress-value">0 / 0</span></div>
@@ -155,7 +153,7 @@ function ReaderPanel() {
             <div id="image-progress-track" className="track" role="progressbar" aria-labelledby="image-progress-label" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} aria-valuetext="尚未开始"><div id="image-progress-bar" className="bar image" /></div>
             <div id="translation-failures" className="translation-failures hidden" />
           </div>        <section id="quick-actions-section" className="chat-tool-section">
-          <span id="quick-actions-scope" className="hidden" />
+          <div className="tool-group-label">理解文章</div><span id="quick-actions-scope" className="hidden" />
           <div className="quick-actions-grid">
             <button id="quick-summary" className="quick-action quick-action-featured" type="button">
               <strong>全文总结</strong><span>问题、结论、机制和证据</span>
@@ -174,7 +172,8 @@ function ReaderPanel() {
 
         <section id="selection-section" className="chat-tool-section hidden">
           <div className="card-title"><span>当前选段</span><span id="selection-scope">所在小节</span></div>
-          <div id="selection-quote" className="quote" />
+          <details id="chat-selection-card" className="chat-selection-card hidden"><summary>当前选段 · 查看内容</summary><blockquote id="chat-selection-quote" /><button id="clear-chat-selection" className="text-button" type="button">清除选段，基于整篇</button></details>
+          <div id="selection-quote" className="quote hidden" />
           <div className="selection-action-group">
             <div className="selection-action-label">选段操作</div>
             <div className="selection-actions">
@@ -207,11 +206,8 @@ function ReaderPanel() {
         </section>
 
 </div></details></div>
-              <label className="composer-question-label" htmlFor="question-input">继续提问</label>
-              <textarea id="question-input" rows={2} placeholder="针对整篇文章提问，例如：作者的主要取舍是什么？" />
-              <div className="chat-composer-footer">
                 <span id="answer-task-status" className="small" role="status" aria-live="polite" /><button id="stop-answer" className="secondary hidden" type="button">停止回答</button>
-                <button id="send-question" className="primary">发送问题</button>
+                <button id="send-question" className="primary" title="发送问题（⌘ / Ctrl + Enter）" aria-label="发送问题"><ComposerIcon kind="send" /></button>
               </div>
             </div>
           </div>
@@ -221,7 +217,7 @@ function ReaderPanel() {
       <section id="settings-view" className="setting-panel hidden">
         <div className="settings-view-head">
           <div><div className="eyebrow">设置</div><h2>模型与数据</h2></div>
-          <button id="close-settings" className="secondary" type="button">返回阅读</button>
+          <button id="close-settings" className="text-button" type="button">返回聊天</button>
         </div>
         <div className="mode-switch" role="group" aria-label="Reader 运行方式">
           <button id="mode-local" className="mode-option" type="button" aria-pressed="true">
@@ -280,20 +276,9 @@ function ReaderPanel() {
       </section>
 
       <div id="mode-data-note" className="footer">独立模式：模型请求与阅读成果保存在本地，可导出或清除。</div>
-      <div id="resize-hint" className="resize-hint">译文段落：Alt+Shift+O 切换原文 · 输入区可拖动</div>
+
     </main>
   );
-}
-
-function PanelIcon({ kind }: { kind: 'chat' | 'tools' | 'library' | 'history' | 'settings' }) {
-  const paths = {
-    chat: 'M4 4h16v12H9l-5 4V4',
-    tools: 'M4 4h7v16H4z M13 4h7v16h-7 M7 8h1 M16 8h1 M7 12h1 M16 12h1',
-    library: 'M6 3h12v18l-6-4-6 4V3',
-    history: 'M3 11a9 9 0 1 1 2.6 7 M3 4v7h7 M12 7v5l3 2',
-    settings: 'M4 7h16 M4 17h16 M8 4v6 M16 14v6',
-  };
-  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[kind]} /></svg>;
 }
 
 createRoot(document.getElementById('root')!).render(<ReaderPanel />);

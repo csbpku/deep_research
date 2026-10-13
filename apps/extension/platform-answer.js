@@ -1,4 +1,4 @@
-import { parseReadingAnswer } from './reader-core.js';
+import { parseReadingAnswer, readingAnswerText } from './reader-core.js';
 export async function requestPlatformAnswer(sourceContext, question, scope, options = {}) {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
@@ -55,6 +55,9 @@ export async function requestPlatformAnswer(sourceContext, question, scope, opti
         limitations: [],
         warnings: payload.warnings || [],
       };
+      // The platform may fall back to Markdown for malformed model JSON.
+      // Display its answer field while retaining the server-checked evidence.
+      reading.answer = readingAnswerText(reading.answer);
       if (!reading.evidence?.length && reading.answer) {
         const recovered = parseReadingAnswer(reading.answer, sourceContext);
         if (recovered.evidence.length) {

@@ -6,7 +6,7 @@ import {
   isLocalProvider,
   translationContext,
   explainSelection,
-  parseReadingAnswer,
+  readingAnswerText,
   explainImage,
   boundTaskContext,
   buildAnnotationUrl,
@@ -88,13 +88,19 @@ const translatedImageIds = new Set();
 const resumedUrls = new Set();
 const sessionResumeTasks = new Map();
 const questionDrafts = new Map();
+try { for (const [url, draft] of JSON.parse(sessionStorage.getItem('readerQuestionDrafts') || '[]')) questionDrafts.set(url, draft); } catch { /* Draft persistence is optional. */ }
 let draftPageUrl = '';
+let fitComposerInput = () => {};
 function switchQuestionDraft(url = '') {
   if (url === draftPageUrl) return;
   const input = $('question-input');
   if (input && draftPageUrl) questionDrafts.set(draftPageUrl, input.value);
   draftPageUrl = url;
   if (input) input.value = questionDrafts.get(url) || '';
+}
+function persistQuestionDraft() {
+  if (draftPageUrl) questionDrafts.set(draftPageUrl, $('question-input')?.value || '');
+  try { sessionStorage.setItem('readerQuestionDrafts', JSON.stringify([...questionDrafts].slice(-50))); } catch { /* Full or unavailable storage must not block chat. */ }
 }
 let sessionGeneration = 0;
 let interactionGeneration = 0;
@@ -116,6 +122,7 @@ function setWorkspaceView(view) {
   if (view === 'tools') view = 'chat';
   if (!shell || !['chat', 'library'].includes(view)) return;
   shell.dataset.workspaceView = view;
+  try { sessionStorage.setItem('readerWorkspaceView', view); } catch { /* Optional navigation preference. */ }
   for (const name of ['chat', 'tools', 'library']) {
     const button = $(`nav-${name}`);
     button?.classList.toggle('active', name === view);
@@ -127,6 +134,11 @@ function setupWorkspaceLayout() {
   $('chat-to-reading')?.addEventListener('click', () => focusReadingAnchor(activeDiscussionScope() === 'selection' ? selectionContext?.selection : null));
   $('chat-translate-all')?.addEventListener('click', () => { focusReadingAnchor(null); void startFullTranslation(); });
   $('clear-chat-selection')?.addEventListener('click', () => { selectionContext = null; discussionScope = 'page'; discussionIntent = 'ask'; renderPage(); saveLocalSession(); });
+  const toolsMenu = $('chat-tools-menu');
+  document.addEventListener('pointerdown', event => { if (toolsMenu?.open && !toolsMenu.contains(event.target)) toolsMenu.open = false; });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && toolsMenu?.open) { toolsMenu.open = false; toolsMenu.querySelector('summary')?.focus(); }
+  });
   $('dismiss-notice')?.addEventListener('click', () => setNotice(''));
   for (const view of ['chat', 'tools', 'library']) {
     $(`nav-${view}`)?.addEventListener('click', () => {
@@ -139,13 +151,28 @@ function setupWorkspaceLayout() {
   const handle = $('composer-resize');
   const input = $('question-input');
   if (!handle || !input) return;
+  let preferredHeight = 60;
   const resize = (height) => {
     const bounded = Math.round(Math.max(60, Math.min(240, window.innerHeight * 0.4, height)));
+    preferredHeight = bounded;
     input.style.height = `${bounded}px`;
     handle.setAttribute('aria-valuenow', String(bounded));
     try { localStorage.setItem('readerComposerHeight', String(bounded)); } catch { /* Optional preference. */ }
   };
   try { const saved = Number(localStorage.getItem('readerComposerHeight')); if (saved) resize(saved); } catch { /* Default height remains usable. */ }
+  fitComposerInput = () => {
+    if (!input.getClientRects().length) return;
+    const baseline = Math.max(60, Math.min(preferredHeight, 240, window.innerHeight * 0.4));
+    input.style.height = `${baseline}px`;
+    const height = Math.max(baseline, Math.min(240, window.innerHeight * 0.4, input.scrollHeight));
+    input.style.height = `${Math.round(height)}px`;
+    handle.setAttribute('aria-valuenow', String(Math.round(height)));
+  };
+  input.addEventListener('input', fitComposerInput);
+  window.addEventListener('resize', fitComposerInput);
+  $('composer-model')?.addEventListener('click', showSettings);
+  $('starter-summary')?.addEventListener('click', () => $('chat-summary')?.click());
+  $('starter-mechanism')?.addEventListener('click', () => $('quick-mechanism')?.click());
   handle.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
     const startY = event.clientY;
@@ -262,10 +289,16 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   const question = $('question-input');
   if (question) {
     question.placeholder = scope === 'selection'
-      ? '只针对当前选段提问，例如：它为什么这样设计？'
+      ? '问问这段内容…'
       : scope === 'image'
-        ? '针对当前图示提问，例如：这条数据流的瓶颈在哪里？'
-        : '针对整篇文章提问，例如：作者的主要取舍是什么？';
+        ? '问问这张图…'
+        : '问问这篇文章…';
+  }
+  fitComposerInput();
+  const model = $('composer-model');
+  if (model) {
+    model.textContent = readingMode === 'platform' ? (platformConnected ? '平台模型⌄' : '连接平台⌄') : `${provider?.model || '配置模型'}⌄`;
+    model.title = readingMode === 'platform' ? `平台模式 · ${platformConnected ? '已连接' : '未连接'} · 点击查看设置` : `独立模式 · ${provider?.model || '未配置'} · 点击查看设置`;
   }
   const send = $('send-question');
   if (send) {
@@ -430,7 +463,7 @@ function renderStructuredAnswer(result) {
   }
   const evidenceItems = Array.isArray(answer.evidence) ? answer.evidence : [];
   const answerOutput = $('answer-output');
-  renderMarkdown(answerOutput, answer.answer || latestAnswer || '');
+  renderMarkdown(answerOutput, readingAnswerText(answer.answer || latestAnswer));
   bindCitationReferences(answerOutput, evidenceItems);
   const evidenceLabel = evidencePart?.querySelector('.answer-label');
   if (evidenceLabel) evidenceLabel.textContent = evidenceItems.length ? `原文证据 · ${evidenceItems.length}` : '原文证据';
@@ -478,14 +511,17 @@ function renderStructuredAnswer(result) {
   });
   show(evidencePart, evidenceList.childElementCount > 0);
   renderMarkdown($('answer-background-text'), answer.background || '');
+  bindCitationReferences($('answer-background-text'), evidenceItems);
   show(backgroundPart, Boolean(answer.background));
   renderMarkdown($('answer-inference-text'), answer.inference || '');
+  bindCitationReferences($('answer-inference-text'), evidenceItems);
   show(inferencePart, Boolean(answer.inference));
   const limitationList = $('answer-limitations-list');
   limitationList.textContent = '';
     (Array.isArray(answer.limitations) ? answer.limitations : []).forEach((item) => {
       const li = document.createElement('li');
       renderMarkdown(li, item);
+      bindCitationReferences(li, evidenceItems);
       limitationList.appendChild(li);
     });
   show(limitationsPart, limitationList.childElementCount > 0);
@@ -704,11 +740,7 @@ async function resumeSession(context) {
       if (session.pendingEvidenceAnchor?.quote) {
         sendToPage({ type: 'deep-research:focus-anchor', anchor: session.pendingEvidenceAnchor });
       }
-      setNotice(session.resumedFromHistory
-        ? session.stale
-          ? '已恢复历史会话；当前原文版本不同，旧证据请重新核对后再继续。'
-          : '已恢复历史会话，可以继续提问。'
-        : '已恢复上次阅读位置；选择原文后可以继续讨论。');
+      if (session.stale) setNotice('已恢复历史会话；当前原文版本不同，旧证据请重新核对后再继续。');
       if (session.resumedFromHistory) window.setTimeout(() => $('question-input')?.focus(), 0);
     }
   })();
@@ -823,7 +855,7 @@ function renderDiscussionContext(scope = discussionScope, intent = discussionInt
   const detail = $('discussion-context-detail');
   const source = context || activeDiscussionContext(scope);
   if (label) label.textContent = discussionLabel(scope, intent);
-  if ($('discussion-source-title')) $('discussion-source-title').textContent = source?.title || pageContext?.title || '当前页面';
+  if ($('discussion-source-title')) { $('discussion-source-title').textContent = source?.title || pageContext?.title || '当前页面'; $('discussion-source-title').title = `${source?.title || '当前页面'}\n${source?.url || ''}`; }
   if ($('discussion-source-url')) $('discussion-source-url').textContent = source?.url || pageContext?.url || '';
   if (detail) {
     detail.textContent = formatCoverage(source, scope);
@@ -879,6 +911,7 @@ function renderConversation() {
   if (!list) return;
   list.textContent = '';
   const messages = discussionHistory.filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  const latestAssistant = [...messages].reverse().find(candidate => candidate.role === 'assistant');
   messages.forEach((item) => {
     const message = document.createElement('article');
     message.className = `conversation-message ${item.role === 'user' ? 'user' : 'assistant'}`;
@@ -888,8 +921,7 @@ function renderConversation() {
     const body = document.createElement('div');
     body.className = 'conversation-message-body';
     if (item.role === 'assistant') {
-      renderMarkdown(body, String(item.content || ''));
-      const latestAssistant = [...messages].reverse().find((candidate) => candidate.role === 'assistant');
+      renderMarkdown(body, readingAnswerText(item.content));
       if (item === latestAssistant && item.content === latestStructuredAnswer?.answer) {
         bindCitationReferences(body, Array.isArray(latestStructuredAnswer.evidence) ? latestStructuredAnswer.evidence : []);
       } else {
@@ -898,6 +930,22 @@ function renderConversation() {
     }
     else body.textContent = String(item.content || '');
     message.append(header, body);
+    // The latest answer keeps its evidence-aware actions below the response.
+    // Earlier responses can be copied in place without changing the active answer.
+    if (item.role === 'assistant' && item !== latestAssistant) {
+      const actions = document.createElement('div');
+      actions.className = 'conversation-message-tools';
+      const copy = document.createElement('button');
+      copy.className = 'text-button conversation-copy';
+      copy.type = 'button';
+      copy.textContent = '复制';
+      copy.setAttribute('aria-label', '复制这条回答');
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(readingAnswerText(item.content)); copy.textContent = '已复制'; }
+        catch { setNotice('浏览器没有开放剪贴板权限，请手动选择回答复制。'); }
+      });
+      actions.appendChild(copy); message.appendChild(actions);
+    }
     list.appendChild(message);
   });
   show(list, messages.length > 0);
@@ -1105,7 +1153,7 @@ function renderPage() {
   show($('discussion-section'), discussionVisible);
   renderDiscussionContext(visibleDiscussionScope, discussionIntent, activeDiscussionContext(visibleDiscussionScope));
   renderConversation();
-  renderMarkdown($('answer-output'), latestAnswer);
+  renderMarkdown($('answer-output'), readingAnswerText(latestAnswer));
   show($('answer-output'), discussionOpen && (discussionRunning || !discussionHistory.length));
   renderStructuredAnswer(latestStructuredAnswer);
   renderDiscussionFollowups(visibleDiscussionScope, discussionIntent);
@@ -1306,7 +1354,8 @@ async function findPendingTranslation(context) {
         : job.status === 'failed'
           ? `上次全文翻译中断：${progress}；点击“全文翻译”可从本地缓存重试。`
           : `上次全文翻译尚未结束：${progress}；已完成内容会从本地缓存跳过。`;
-  setNotice(statusNotice);
+  // Completed progress remains available in Tools; don't replay its success banner on every reopen.
+  if (job.status !== 'completed' || failedTranslationItems.length) setNotice(statusNotice);
   // A side-panel document can be destroyed while a request is in flight. A
   // queued/running job is therefore a durable recovery signal. A completed
   // job is only history: translation results are a bounded cache, so opening
@@ -2184,10 +2233,10 @@ function openDiscussion(scope = 'page', intent = 'ask') {
   renderDiscussionContext(nextScope, discussionIntent, context);
   if ($('question-input')) {
     $('question-input').placeholder = nextScope === 'selection'
-      ? '只针对当前选段提问，例如：它为什么这样设计？'
+      ? '问问这段内容…'
       : nextScope === 'image'
-        ? '针对当前图示提问，例如：这条数据流的瓶颈在哪里？'
-        : '针对整篇文章提问，例如：作者的主要取舍是什么？';
+        ? '问问这张图…'
+        : '问问这篇文章…';
     revealDiscussion({ focusInput: true });
   }
 }
@@ -2612,6 +2661,7 @@ function showReading() {
 
 async function openHistoryPage() {
   try {
+    persistQuestionDraft();
     await sessionSaveQueue;
     window.location.href = chrome.runtime.getURL(`reading-history.html?surface=sidepanel${boundWindowTabId ? `&sourceTab=${boundWindowTabId}` : ''}`);
   } catch {
@@ -2940,6 +2990,12 @@ chrome.runtime.onMessage.addListener((message) => {
 
 async function init() {
   setupWorkspaceLayout();
+  try { setWorkspaceView(new URLSearchParams(location.search).get('view') || sessionStorage.getItem('readerWorkspaceView') || 'chat'); } catch { /* Default chat. */ }
+  $('question-input').addEventListener('input', persistQuestionDraft);
+  window.addEventListener('pagehide', persistQuestionDraft);
+  $('question-input').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); $('send-question').click(); }
+  });
   provider = await loadProvider();
   await loadTargetLanguage();
   readingMode = await readerStore.getSetting('readingMode', 'local');
@@ -3016,7 +3072,7 @@ async function init() {
   $('copy-answer')?.addEventListener('click', () => void copyAnswer());
   $('continue-answer')?.addEventListener('click', () => {
     $('question-input')?.focus();
-    $('question-input')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // The composer remains visible below the transcript.
   });
   $('continue-saved-discussion')?.addEventListener('click', () => {
     openDiscussion(activeDiscussionScope(), 'ask');
@@ -3030,6 +3086,7 @@ async function init() {
   // this controller. Re-request the active tab after all listeners are bound
   // so opening or recreating the side panel never leaves it blank.
   void activateCurrentPage();
+  if (new URLSearchParams(location.search).get('view') === 'settings') showSettings();
   document.documentElement.dataset.readerReady = 'true';
 }
 

@@ -4,7 +4,7 @@ import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 const requests = [];
-const answer = JSON.stringify({ answer: 'Queues protect memory and keep work responsive.', evidence: [{ quote: 'A bounded queue protects memory.', claim: 'Memory bound' }], background: '', inference: '', limitations: [] });
+const answer = JSON.stringify({ answer: 'Queues protect memory and keep work responsive.', evidence: [{ quote: 'A bounded queue protects memory.', claim: 'Memory bound' }], background: 'Context for the bounded queue [1].', inference: '', limitations: [] });
 const server = createServer(async (req, res) => {
   res.setHeader('access-control-allow-origin', '*');
   if (req.url === '/article') { res.setHeader('content-type', 'text/html'); res.end('<html><title>Queue guide</title><body><article><h1>Queue guide</h1><h2>Capacity</h2><p>A bounded queue protects memory.</p><p>It provides backpressure when workers are busy.</p><p>Tasks should continue when a reader selects another paragraph.</p></article></body></html>'); return; }
@@ -62,7 +62,7 @@ try {
   await fixture.evaluate(() => { const p = document.querySelectorAll('p')[1]; const range = document.createRange(); range.selectNodeContents(p); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); p.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); });
   await panel.locator('#scope-selection').waitFor({ state: 'visible' });
   assert.ok(await panel.locator('#stop-answer').isVisible());
-  await panel.locator('#chat-tools-menu summary').first().click();
+  await panel.locator('#chat-tools-menu > summary').first().click();
   await panel.locator('#translate-all').click();
   await fixture.locator('[data-deep-research-translation-for]').first().waitFor();
   await panel.close();
@@ -72,6 +72,7 @@ try {
   await fixture.bringToFront();
   await worker.evaluate(async () => { const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' }); });
   await panel.locator('#conversation-list').filter({ hasText: 'Queues protect memory' }).waitFor();
+  assert.equal(await panel.locator('#answer-background-text .reader-citation-ref').getAttribute('href'), 'http://127.0.0.1:8879/article');
   const answerRequests = requests.filter(r => r.stream);
   assert.equal(answerRequests.length, 1, 'reopening panel does not restart the answer');
   const translated = fixture.locator('[data-deep-research-translation-for]').first();
@@ -82,7 +83,7 @@ try {
   await fixture.locator(`[data-deep-research-block="${blockId}"]`).hover(); await fixture.keyboard.press('Alt+Shift+KeyO');
   await translated.waitFor({ state: 'visible' });
   // A selection action survives a panel that has not mounted yet.
-  await panel.locator('#chat-tools-menu summary').first().click();
+  await panel.locator('#chat-tools-menu > summary').first().click();
   await panel.locator('#restore-page').click();
   await fixture.locator('[data-deep-research-translation-for]').first().waitFor({ state: 'hidden' });
   await panel.close();
@@ -102,6 +103,82 @@ try {
   await panel.locator('#stop-answer').click();
   await panel.locator('#stop-answer').waitFor({ state: 'hidden' });
   assert.equal(await panel.locator('#conversation-list').filter({ hasText: 'Stop this test answer.' }).count(), 0);
+  const shortInputHeight = await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height);
+  await panel.locator('#question-input').fill(Array(8).fill('This is a longer question with several lines.').join('\n'));
+  assert.ok(await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height) > shortInputHeight);
+  await panel.locator('#question-input').fill('');
+  assert.equal(await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height), shortInputHeight);
+  await panel.locator('#composer-model').click();
+  await panel.locator('#settings-view').waitFor({state:'visible'});
+  await panel.locator('#close-settings').click();
+  // The redesigned surfaces share one header; history returns without losing a draft.
+  const runtimeErrors = [];
+  panel.on('pageerror', error => runtimeErrors.push(error.message));
+  const layout = async () => panel.evaluate(() => {
+    const bounds = id => { const box = document.querySelector(id).getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height, bottom: box.bottom }; };
+    return { viewport: { width: innerWidth, height: innerHeight }, overflow: document.documentElement.scrollWidth > innerWidth, transcript: bounds('#chat-transcript'), composer: bounds('#persistent-composer'), header: bounds('.masthead') };
+  });
+  const measurements = [];
+  for (const viewport of [{width:320,height:560},{width:380,height:860},{width:520,height:720},{width:736,height:740}]) {
+    await panel.setViewportSize(viewport);
+    if (await panel.locator('#dismiss-notice').isVisible()) await panel.locator('#dismiss-notice').click();
+    const measured = await layout();
+    assert.equal(measured.overflow, false, JSON.stringify(measured));
+    assert.ok(measured.transcript.height >= viewport.height * .48, JSON.stringify(measured));
+    assert.ok(measured.composer.bottom <= viewport.height, JSON.stringify(measured));
+    assert.equal(measured.header.height, 48);
+    measurements.push(measured);
+    await panel.locator('#chat-tools-menu > summary').click();
+    const popover = await panel.locator('.chat-tools-popover').boundingBox();
+    assert.ok(popover.x >= 0 && popover.y >= 0 && popover.x + popover.width <= viewport.width, JSON.stringify(popover));
+    await panel.keyboard.press('Escape');
+    assert.equal(await panel.locator('#chat-tools-menu').getAttribute('open'), null);
+    await panel.screenshot({path: root+`/chat-${viewport.width}.png`});
+  }
+  await panel.setViewportSize({width:380,height:860});
+  await panel.locator('#question-input').fill('Keep this unsent draft when viewing history.');
+  await panel.locator('#open-history-header').click();
+  await panel.waitForURL('**/reading-history.html?**');
+  await panel.locator('#history-tabs[aria-busy="false"]').waitFor();
+  assert.equal(await panel.locator('.masthead').count(), 1);
+  await panel.locator('#history-search-input').fill('Queues protect memory');
+  const record = panel.locator('.history-card').filter({hasText:'Queue guide'}).first();
+  await record.waitFor();
+  await panel.screenshot({path: root+'/history.png'});
+  await record.getByRole('button', {name:'查看对话',exact:true}).click();
+  await panel.locator('#history-detail').filter({hasText:'Queues protect memory'}).waitFor();
+  await panel.screenshot({path: root+'/history-detail.png'});
+  await panel.locator('#close-history-detail').click();
+  await record.locator('summary').click();
+  await record.getByRole('button',{name:'重命名',exact:true}).waitFor({state:'visible'});
+  await panel.keyboard.press('Escape');
+  await panel.locator('#close-history').click();
+  await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+  await panel.locator('#question-input').waitFor({state:'visible'});
+  assert.equal(await panel.locator('#question-input').inputValue(), 'Keep this unsent draft when viewing history.');
+  await panel.locator('#open-history-header').click();
+  await panel.locator('#history-tabs[aria-busy="false"]').waitFor();
+  await panel.locator('.history-card').filter({hasText:'Queue guide'}).first().getByRole('button',{name:'继续聊天',exact:true}).click();
+  await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+  await panel.locator('#conversation-list').filter({hasText:'Queues protect memory'}).waitFor();
+  assert.equal(requests.filter(r => r.stream).length, 2, 'history does not replay a stopped or completed answer');
+  await panel.locator('#open-history-header').click();
+  await panel.locator('#history-settings').click();
+  await panel.locator('#settings-view').waitFor({state:'visible'});
+  await panel.screenshot({path: root+'/settings.png'});
+  await panel.locator('#nav-chat').click();
+  await panel.locator('#question-input').waitFor({state:'visible'});
+  await panel.locator('#open-history-header').click();
+  await panel.locator('#history-library').click();
+  await panel.waitForFunction(() => document.querySelector('.shell')?.dataset.workspaceView === 'library');
+  await panel.locator('#library-list').waitFor({state:'visible'});
+  await panel.locator('#nav-chat').click();
+  const initialHeight = await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height);
+  await panel.locator('#composer-resize').focus();
+  await panel.keyboard.press('ArrowUp');
+  assert.equal(await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height), initialHeight+16);
+  assert.deepEqual(runtimeErrors, []);
+  console.log(JSON.stringify({redesign:true,historyDetail:true,historyContinue:true,draftPreserved:true,historyToSettings:true,historyToLibrary:true,keyboardResize:true,measurements}));
   await panel.screenshot({ path: root+'/chat.png' });
   console.log(JSON.stringify({ pass: true, quickValidationCalls: 1, answerCallsAfterSelectionTranslationAndPanelReopen: answerRequests.length, paragraphToggle: true, deferredSelectionAction: true, explicitStop: true, artifact: root+'/chat.png' }));
 } catch (error) { for (const page of context.pages()) if (page.url().includes('sidepanel')) { await page.screenshot({ path: root+'/failure.png' }); console.error('Screenshot:', root+'/failure.png'); console.error((await page.locator('#notice').textContent()) || ''); } throw error; } finally { await context.close(); server.close(); }
