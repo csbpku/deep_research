@@ -131,7 +131,7 @@ function ReaderPanel() {
               <button id="scope-selection" className="scope-option hidden" type="button" aria-pressed="false">选段</button>
               <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
             </div>
-                <span id="composer-scope-label" className="composer-scope-label">整页正文</span><button id="composer-model" className="composer-model" type="button" title="模型与连接设置">阅读模型⌄</button>
+                <button id="copy-chat-selection" className="selection-copy hidden" type="button" aria-label="复制当前原文选段" title="复制当前原文选段">复制选段</button><span id="composer-scope-label" className="composer-scope-label">整页正文</span><button id="composer-model" className="composer-model" type="button" title="模型与连接设置">阅读模型⌄</button>
                 <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span><span id="chat-scope-description" className="hidden">基于整篇文章</span>
               </div>
               <div id="translation-summary" className="translation-summary hidden" role="status"><span id="translation-summary-text" /><button id="translation-summary-pause" className="text-button" type="button">暂停</button></div>

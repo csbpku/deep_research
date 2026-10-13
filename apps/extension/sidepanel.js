@@ -133,6 +133,7 @@ function setWorkspaceView(view) {
 function setupWorkspaceLayout() {
   $('chat-to-reading')?.addEventListener('click', () => focusReadingAnchor(activeDiscussionScope() === 'selection' ? selectionContext?.selection : null));
   $('chat-translate-all')?.addEventListener('click', () => { focusReadingAnchor(null); void startFullTranslation(); });
+  $('copy-chat-selection')?.addEventListener('click', () => void copyCurrentSelection());
   $('clear-chat-selection')?.addEventListener('click', () => { selectionContext = null; discussionScope = 'page'; discussionIntent = 'ask'; renderPage(); saveLocalSession(); });
   const toolsMenu = $('chat-tools-menu');
   document.addEventListener('pointerdown', event => { if (toolsMenu?.open && !toolsMenu.contains(event.target)) toolsMenu.open = false; });
@@ -209,6 +210,21 @@ function setChatExpanded(expanded) {
   }
 }
 
+async function copyCurrentSelection() {
+  const quote = selectionContext?.selection?.quote;
+  if (activeDiscussionScope() !== 'selection' || !quote) return;
+  try {
+    await navigator.clipboard.writeText(quote);
+    const button = $('copy-chat-selection');
+    if (button) {
+      button.textContent = '已复制';
+      window.setTimeout(() => { button.textContent = '复制选段'; }, 1800);
+    }
+  } catch {
+    setNotice('浏览器没有开放剪贴板权限，请在原网页选择原文复制。');
+  }
+}
+
 function setNotice(message = '', target = $('notice')) {
   target.textContent = message;
   show(target, Boolean(message));
@@ -278,6 +294,7 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   show(composer, visible);
   const descriptor = pageReadDescriptor(context);
   const selectionReady = scope === 'selection' && Boolean(context?.selection?.quote);
+  show($('copy-chat-selection'), selectionReady);
   const pageReady = scope !== 'page' || contextHasReadableBody(context);
   const canSend = scope === 'page'
     ? contextHasReadableBody(context)

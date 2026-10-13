@@ -97,6 +97,15 @@ try {
   await fixture.bringToFront();
   await panel.locator('#chat-selection-quote').filter({ hasText: 'Tasks should continue' }).waitFor({ state: 'attached' });
   await panel.waitForFunction(() => document.querySelector('#scope-selection')?.getAttribute('aria-pressed') === 'true');
+  await panel.evaluate(() => { window.copiedSelection = ''; Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async text => { window.copiedSelection = text; } }); });
+  await panel.locator('#copy-chat-selection').click();
+  assert.equal(await panel.evaluate(() => window.copiedSelection), 'Tasks should continue when a reader selects another paragraph.');
+  await panel.locator('#copy-chat-selection').filter({hasText:'已复制'}).waitFor();
+  await panel.locator('#scope-page').click();
+  assert.equal(await panel.locator('#copy-chat-selection').isVisible(), false);
+  await panel.locator('#scope-selection').click();
+  await panel.locator('#copy-chat-selection').waitFor({state:'visible'});
+
   await panel.locator('#question-input').fill('Stop this test answer.');
   await panel.locator('#send-question').click();
   await panel.locator('#stop-answer').waitFor({ state: 'visible' });

@@ -283,3 +283,23 @@ test('source block extraction excludes nested translations and stays stable when
   translated = true;
   assert.equal(vm.runInNewContext(fn + '\nsourceBlockText(node)', sandbox), 'Original');
 });
+
+
+test('copy selection uses the current original quote and never the answer', async () => {
+  let copied = '';
+  const button = { textContent: '复制选段' };
+  const sandbox = {
+    selectionContext: { selection: { quote: 'Original selected passage.' } },
+    activeDiscussionScope: () => 'selection',
+    navigator: { clipboard: { writeText: async text => { copied = text; } } },
+    $: () => button, window: { setTimeout() {} }, setNotice() {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'async function copyCurrentSelection(', 'function setNotice('), sandbox);
+  await vm.runInContext('copyCurrentSelection()', sandbox);
+  assert.equal(copied, 'Original selected passage.');
+  assert.equal(button.textContent, '已复制');
+  sandbox.activeDiscussionScope = () => 'page'; copied = '';
+  await vm.runInContext('copyCurrentSelection()', sandbox);
+  assert.equal(copied, '');
+});

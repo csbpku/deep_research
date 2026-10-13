@@ -94,12 +94,12 @@ h1, h2, h3, p { margin: 0; }
 .composer-scope-label { color: var(--muted); font-size: 11px; }
 .composer-context-status { display: none; }
 .composer-question-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.composer-model { margin-left: auto; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 28px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; }
+.composer-model { margin-left: auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 28px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 11px; }
 .composer-model:hover { background: var(--line); color: var(--ink); }
 .composer-context-row:has(.discussion-scope-options:not(.hidden)) .composer-scope-label { display: none; }
-.discussion-scope-options { display: flex; align-items: center; gap: 4px; }
-.discussion-scope-label { color: var(--muted); font-size: 11px; }
-.scope-option { min-height: 28px; padding: 3px 8px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 12px; }
+.discussion-scope-options { display: flex; flex: none; align-items: center; gap: 4px; }
+.discussion-scope-label { white-space: nowrap; color: var(--muted); font-size: 11px; }
+.scope-option { flex: none; white-space: nowrap; min-height: 28px; padding: 3px 8px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 12px; }
 .scope-option.active { color: var(--accent); background: var(--accent-soft); }
 .chat-composer textarea { display: block; width: 100%; height: 60px; min-height: 60px; max-height: min(240px,40dvh); padding: 4px 0; margin: 0; border: 0; border-radius: 0; outline: none; background: transparent; font-size: 15px; line-height: 1.65; resize: none; }
 .chat-composer textarea:focus-visible { outline: none; }
@@ -209,3 +209,6 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 @media (max-height: 560px) { .masthead { height: 48px; } .discussion-source-card { min-height: 36px; padding-block: 2px; } .chat-composer { margin-bottom: 8px; } .chat-transcript { padding-block: 12px; } }
 
 @media (max-width: 359px) { .composer-tools > button, .composer-tools > details > summary { padding-inline: 7px; gap: 4px; } }
+
+.selection-copy { flex: none; min-height: 30px; padding: 3px 6px; border: 0; border-radius: 6px; color: var(--accent); background: transparent; font-size: 11px; white-space: nowrap; }
+.selection-copy:hover { background: var(--accent-soft); }
