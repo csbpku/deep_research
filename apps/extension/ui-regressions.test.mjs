@@ -317,3 +317,20 @@ test('paragraph context menu toggles the clicked page without opening chat or st
   handler({ menuItemId: 'reader:toggle-paragraph', frameId: 5 }, { id: 12, windowId: 3 });
   assert.equal(sent.length, 1, 'a subframe cannot toggle an unrelated top-page paragraph');
 });
+
+test('paragraph menu updates in message order and hiding preserves its direction', () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const updates = [];
+  const sandbox = { chrome: { contextMenus: { update(id, properties) { updates.push({ id, ...properties }); } } } };
+  vm.createContext(sandbox);
+  const branch = extract(background, "if (pagePayload?.type === 'deep-research:paragraph-menu') {", 'if (pageTabId !== undefined && (');
+  const update = vm.runInContext(`(function(pagePayload, sender) { const pageTabId = sender.tab?.id; ${branch} })`, sandbox);
+  const active = { tab: { id: 12, active: true }, frameId: 0 };
+  update({ type: 'deep-research:paragraph-menu', available: true, showingTranslation: true }, active);
+  update({ type: 'deep-research:paragraph-menu', available: false, showingTranslation: false }, active);
+  update({ type: 'deep-research:paragraph-menu', available: true, showingTranslation: false }, active);
+  assert.deepEqual(updates.map(p => [p.visible, p.title]), [[true, '查看这一段原文'], [false, undefined], [true, '查看这一段译文']]);
+  update({ type: 'deep-research:paragraph-menu', available: true, showingTranslation: true }, { tab: { id: 13, active: false }, frameId: 0 });
+  update({ type: 'deep-research:paragraph-menu', available: true, showingTranslation: true }, { ...active, frameId: 3 });
+  assert.equal(updates.length, 3, 'inactive tabs and subframes cannot overwrite the top-page menu');
+});

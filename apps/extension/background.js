@@ -634,13 +634,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const pageTabId = sender.tab?.id;
     const pagePayload = message.payload;
     if (pagePayload?.type === 'deep-research:paragraph-menu') {
-      if (Number.isInteger(pageTabId) && !sender.frameId) {
-        void chrome.tabs.get(pageTabId).then(tab => {
-          if (tab.active) chrome.contextMenus?.update('reader:toggle-paragraph', {
-            visible: Boolean(pagePayload.available),
-            title: pagePayload.showingTranslation ? '查看这一段原文' : '查看这一段译文',
-          }, () => void chrome.runtime.lastError);
-        }).catch(() => {});
+      if (Number.isInteger(pageTabId) && !sender.frameId && sender.tab.active) {
+        const properties = { visible: Boolean(pagePayload.available) };
+        // Hiding an unavailable action must retain its last direction. Use the
+        // sender's tab snapshot so updates keep message order before Chrome
+        // snapshots the native menu; an async tabs.get can reorder hover events.
+        if (pagePayload.available) properties.title = pagePayload.showingTranslation ? '查看这一段原文' : '查看这一段译文';
+        chrome.contextMenus?.update('reader:toggle-paragraph', properties, () => void chrome.runtime.lastError);
       }
       return false;
     }
