@@ -303,3 +303,17 @@ test('copy selection uses the current original quote and never the answer', asyn
   await vm.runInContext('copyCurrentSelection()', sandbox);
   assert.equal(copied, '');
 });
+
+
+test('paragraph context menu toggles the clicked page without opening chat or starting a task', () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const sent = []; let handler; let opens = 0;
+  const sandbox = { chrome: { contextMenus: { onClicked: { addListener(fn) { handler = fn; } } }, sidePanel: { open() { opens++; return Promise.resolve(); } } }, sendToTab: (id, payload) => { sent.push([id, payload.type]); return Promise.resolve(); } };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(background, 'chrome.contextMenus?.onClicked.addListener(', 'chrome.action.onClicked.addListener('), sandbox);
+  handler({ menuItemId: 'reader:toggle-paragraph', frameId: 0 }, { id: 12, windowId: 3 });
+  assert.deepEqual(sent, [[12, 'deep-research:toggle-paragraph']]);
+  assert.equal(opens, 0);
+  handler({ menuItemId: 'reader:toggle-paragraph', frameId: 5 }, { id: 12, windowId: 3 });
+  assert.equal(sent.length, 1, 'a subframe cannot toggle an unrelated top-page paragraph');
+});

@@ -461,12 +461,17 @@ function createReaderMenus() {
       ['summary', '总结 · 整篇文章', ['page']],
       ['translate-page', '翻译 · 整篇文章', ['page']],
     ]) chrome.contextMenus.create({ id: `reader:${id}`, title, contexts });
+    chrome.contextMenus.create({ id: 'reader:toggle-paragraph', title: '查看这一段原文 / 译文', contexts: ['page', 'selection'], visible: false });
   });
 }
 chrome.runtime.onInstalled.addListener(createReaderMenus);
 chrome.runtime.onStartup.addListener(createReaderMenus);
 chrome.contextMenus?.onClicked.addListener((info, tab) => {
   if (!String(info.menuItemId).startsWith('reader:') || !Number.isInteger(tab?.id)) return;
+  if (info.menuItemId === 'reader:toggle-paragraph') {
+    if (!info.frameId) void sendToTab(tab.id, { type: 'deep-research:toggle-paragraph' });
+    return;
+  }
   void chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
   const action = String(info.menuItemId).slice(7).replace('translate-page', 'translate');
   void activateTabForReading(tab, { engageWindow: true }).then(() => sendToTab(tab.id, { type: 'deep-research:context-action', action }));
@@ -491,6 +496,7 @@ chrome.action.onClicked.addListener((tab) => {
 // only for a window that the user already engaged with the toolbar action and
 // never requests a new host permission from a background event.
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  chrome.contextMenus?.update('reader:toggle-paragraph', { visible: false }, () => void chrome.runtime.lastError);
   void (async () => {
     if (!(await isReadingWindow(windowId))) return;
     cancelTranslationJobsExceptTab(tabId);
@@ -627,6 +633,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'deep-research:from-page') {
     const pageTabId = sender.tab?.id;
     const pagePayload = message.payload;
+    if (pagePayload?.type === 'deep-research:paragraph-menu') {
+      if (Number.isInteger(pageTabId) && !sender.frameId) {
+        void chrome.tabs.get(pageTabId).then(tab => {
+          if (tab.active) chrome.contextMenus?.update('reader:toggle-paragraph', {
+            visible: Boolean(pagePayload.available),
+            title: pagePayload.showingTranslation ? '查看这一段原文' : '查看这一段译文',
+          }, () => void chrome.runtime.lastError);
+        }).catch(() => {});
+      }
+      return false;
+    }
     if (pageTabId !== undefined && (
       pagePayload?.type === 'deep-research:page-context'
       || pagePayload?.type === 'deep-research:selection'

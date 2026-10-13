@@ -91,6 +91,69 @@ const questionDrafts = new Map();
 try { for (const [url, draft] of JSON.parse(sessionStorage.getItem('readerQuestionDrafts') || '[]')) questionDrafts.set(url, draft); } catch { /* Draft persistence is optional. */ }
 let draftPageUrl = '';
 let fitComposerInput = () => {};
+let composerModelCache = null;
+let composerModelController = null;
+function sameModelConnection(a, b) { return Boolean(a && b && a.baseUrl === b.baseUrl && a.apiKey === b.apiKey && a.providerKind === b.providerKind); }
+function closeComposerModelMenu({ restoreFocus = false } = {}) {
+  composerModelController?.abort();
+  show($('composer-model-menu'), false);
+  $('composer-model')?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('composer-model')?.focus();
+}
+function renderComposerModelOptions() {
+  const search = $('composer-model-search').value.trim().toLocaleLowerCase();
+  const models = new Map([[provider.model, { id: provider.model, label: provider.model }]]);
+  if (sameModelConnection(composerModelCache?.connection, provider)) for (const item of composerModelCache.models) models.set(item.id, item);
+  const options = [...models.values()].filter(item => `${item.label} ${item.id}`.toLocaleLowerCase().includes(search));
+  const nodes = options.map(item => {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'composer-model-option'; button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(item.id === provider.model)); button.textContent = item.label;
+    button.title = item.id; button.dataset.modelId = item.id;
+    button.addEventListener('click', () => void chooseComposerModel(item.id));
+    return button;
+  });
+  $('composer-model-options').replaceChildren(...nodes);
+  if (!nodes.length) $('composer-model-status').textContent = '没有匹配的模型。';
+}
+async function refreshComposerModels() {
+  if (readingMode !== 'local' || !providerReady(provider)) return;
+  composerModelController?.abort();
+  const controller = new AbortController(); composerModelController = controller;
+  const connection = { ...provider };
+  $('composer-model-status').textContent = '正在读取模型列表…';
+  try {
+    const models = await discoverModels(connection, { signal: controller.signal });
+    if (controller.signal.aborted || !sameModelConnection(connection, provider) || readingMode !== 'local') return;
+    composerModelCache = { connection, models, fetchedAt: Date.now() };
+    renderComposerModelOptions();
+    $('composer-model-status').textContent = '切换用于下一次提问；当前回答继续使用原模型。';
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    $('composer-model-status').textContent = `${error.message || '模型列表暂不可用'}。可继续使用当前模型，或打开连接设置。`;
+  }
+}
+async function chooseComposerModel(model) {
+  if (readingMode !== 'local' || !providerReady(provider)) return;
+  try {
+    if (model !== provider.model) provider = await saveProvider({ ...provider, model, visionReady: false });
+    closeComposerModelMenu();
+    applyProviderFields(); renderPersistentComposer();
+    $('question-input')?.focus();
+  } catch (error) { $('composer-model-status').textContent = error.message || '模型切换失败，请重试。'; }
+}
+function toggleComposerModelMenu() {
+  if (readingMode !== 'local') return;
+  if (!providerReady(provider)) { showSettings(); return; }
+  if (!$('composer-model-menu').classList.contains('hidden')) { closeComposerModelMenu({ restoreFocus: true }); return; }
+  if ($('chat-tools-menu')) $('chat-tools-menu').open = false;
+  $('composer-model-search').value = '';
+  renderComposerModelOptions();
+  show($('composer-model-menu'), true); $('composer-model').setAttribute('aria-expanded', 'true');
+  $('composer-model-search').focus();
+  if (!sameModelConnection(composerModelCache?.connection, provider) || Date.now() - composerModelCache.fetchedAt > 60_000) void refreshComposerModels();
+  else $('composer-model-status').textContent = '切换用于下一次提问；当前回答继续使用原模型。';
+}
 function switchQuestionDraft(url = '') {
   if (url === draftPageUrl) return;
   const input = $('question-input');
@@ -131,12 +194,38 @@ function setWorkspaceView(view) {
 }
 
 function setupWorkspaceLayout() {
+  // Text fields match :focus-visible after mouse clicks too. Track keyboard
+  // navigation so only a deliberate keyboard focus gets an outer composer ring.
+  document.addEventListener('pointerdown', () => document.documentElement.classList.remove('keyboard-navigation'), true);
+  document.addEventListener('keydown', event => { if (event.key === 'Tab') document.documentElement.classList.add('keyboard-navigation'); }, true);
   $('chat-to-reading')?.addEventListener('click', () => focusReadingAnchor(activeDiscussionScope() === 'selection' ? selectionContext?.selection : null));
   $('chat-translate-all')?.addEventListener('click', () => { focusReadingAnchor(null); void startFullTranslation(); });
   $('copy-chat-selection')?.addEventListener('click', () => void copyCurrentSelection());
   $('clear-chat-selection')?.addEventListener('click', () => { selectionContext = null; discussionScope = 'page'; discussionIntent = 'ask'; renderPage(); saveLocalSession(); });
+  $('toggle-chat-selection')?.addEventListener('click', () => {
+    const expanded = !$('chat-selection-card').classList.contains('expanded');
+    $('chat-selection-card').classList.toggle('expanded', expanded);
+    $('toggle-chat-selection').setAttribute('aria-expanded', String(expanded));
+    $('toggle-chat-selection').textContent = expanded ? '收起' : '展开';
+  });
   const toolsMenu = $('chat-tools-menu');
-  document.addEventListener('pointerdown', event => { if (toolsMenu?.open && !toolsMenu.contains(event.target)) toolsMenu.open = false; });
+  document.addEventListener('pointerdown', event => {
+    if (toolsMenu?.open && !toolsMenu.contains(event.target)) toolsMenu.open = false;
+    if (!$('composer-model-menu')?.contains(event.target) && !$('composer-model')?.contains(event.target)) closeComposerModelMenu();
+  });
+  $('composer-model-search')?.addEventListener('input', renderComposerModelOptions);
+  $('composer-model-refresh')?.addEventListener('click', () => void refreshComposerModels());
+  $('composer-model-settings')?.addEventListener('click', () => { closeComposerModelMenu(); showSettings(); });
+  $('composer-model-menu')?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeComposerModelMenu({ restoreFocus: true }); return; }
+    if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+    if (event.target === $('composer-model-search') && event.key !== 'ArrowDown') return;
+    const options = [...$('composer-model-options').querySelectorAll('button')];
+    if (!options.length) return;
+    event.preventDefault(); const current = options.indexOf(document.activeElement);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1) : (current + 1) % options.length;
+    options[index].focus();
+  });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && toolsMenu?.open) { toolsMenu.open = false; toolsMenu.querySelector('summary')?.focus(); }
   });
@@ -171,7 +260,7 @@ function setupWorkspaceLayout() {
   };
   input.addEventListener('input', fitComposerInput);
   window.addEventListener('resize', fitComposerInput);
-  $('composer-model')?.addEventListener('click', showSettings);
+  $('composer-model')?.addEventListener('click', toggleComposerModelMenu);
   $('starter-summary')?.addEventListener('click', () => $('chat-summary')?.click());
   $('starter-mechanism')?.addEventListener('click', () => $('quick-mechanism')?.click());
   handle.addEventListener('pointerdown', (event) => {
@@ -295,6 +384,14 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   const descriptor = pageReadDescriptor(context);
   const selectionReady = scope === 'selection' && Boolean(context?.selection?.quote);
   show($('copy-chat-selection'), selectionReady);
+  show($('chat-selection-card'), selectionReady);
+  const selectionQuote = $('chat-selection-quote');
+  if (selectionQuote && selectionQuote.textContent !== (context?.selection?.quote || '')) {
+    selectionQuote.textContent = context?.selection?.quote || '';
+    $('chat-selection-card').classList.remove('expanded');
+    $('toggle-chat-selection').setAttribute('aria-expanded', 'false');
+    $('toggle-chat-selection').textContent = '展开';
+  }
   const pageReady = scope !== 'page' || contextHasReadableBody(context);
   const canSend = scope === 'page'
     ? contextHasReadableBody(context)
@@ -314,8 +411,11 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   fitComposerInput();
   const model = $('composer-model');
   if (model) {
-    model.textContent = readingMode === 'platform' ? (platformConnected ? '平台模型⌄' : '连接平台⌄') : `${provider?.model || '配置模型'}⌄`;
-    model.title = readingMode === 'platform' ? `平台模式 · ${platformConnected ? '已连接' : '未连接'} · 点击查看设置` : `独立模式 · ${provider?.model || '未配置'} · 点击查看设置`;
+    model.disabled = readingMode === 'platform';
+    model.textContent = readingMode === 'platform' ? '平台模型' : `${provider?.model || '配置模型'}⌄`;
+    model.title = readingMode === 'platform' ? '由平台配置固定模型' : `独立模式 · ${provider?.model || '未配置'} · 点击切换模型`;
+    if (readingMode === 'platform') { closeComposerModelMenu(); model.removeAttribute('aria-haspopup'); }
+    else model.setAttribute('aria-haspopup', 'dialog');
   }
   const send = $('send-question');
   if (send) {
@@ -482,7 +582,7 @@ function renderStructuredAnswer(result) {
   const answerOutput = $('answer-output');
   renderMarkdown(answerOutput, readingAnswerText(answer.answer || latestAnswer));
   bindCitationReferences(answerOutput, evidenceItems);
-  const evidenceLabel = evidencePart?.querySelector('.answer-label');
+  const evidenceLabel = evidencePart?.querySelector('.response-section-label');
   if (evidenceLabel) evidenceLabel.textContent = evidenceItems.length ? `原文证据 · ${evidenceItems.length}` : '原文证据';
   evidenceList.textContent = '';
   evidenceItems.forEach((item, index) => {
@@ -542,6 +642,9 @@ function renderStructuredAnswer(result) {
       limitationList.appendChild(li);
     });
   show(limitationsPart, limitationList.childElementCount > 0);
+  const moreParts = [answer.background && '背景', answer.inference && '推断', limitationList.childElementCount && '未知项'].filter(Boolean);
+  $('answer-more-summary').textContent = moreParts.join(' · ');
+  show($('answer-more'), moreParts.length > 0);
   const warningText = Array.isArray(answer.warnings) ? [...new Set(answer.warnings.filter(Boolean))].join('\n') : '';
   warnings.textContent = warningText;
   show(warnings, Boolean(warningText));
@@ -879,8 +982,6 @@ function renderDiscussionContext(scope = discussionScope, intent = discussionInt
   }
   renderDiscussionScopeControls(scope);
   if ($('chat-scope-description')) $('chat-scope-description').textContent = scope === 'selection' ? '基于当前选段' : scope === 'image' ? '基于当前图示' : '基于整篇文章';
-  show($('chat-selection-card'), scope === 'selection' && Boolean(selectionContext?.selection?.quote));
-  if ($('chat-selection-quote')) $('chat-selection-quote').textContent = selectionContext?.selection?.quote || '';
   updatePageContextUi(source || pageContext || documentContext);
   renderPersistentComposer(scope);
 }

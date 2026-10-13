@@ -4,11 +4,11 @@ import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 const requests = [];
-const answer = JSON.stringify({ answer: 'Queues protect memory and keep work responsive.', evidence: [{ quote: 'A bounded queue protects memory.', claim: 'Memory bound' }], background: 'Context for the bounded queue [1].', inference: '', limitations: [] });
+const answer = JSON.stringify({ answer: 'Queues protect memory and keep work responsive.', evidence: [{ quote: 'A bounded queue protects memory.', claim: 'Memory bound' }], background: 'Context for the bounded queue [1].', inference: 'Capacity should match the available memory.', limitations: ['The article does not specify the queue capacity.'] });
 const server = createServer(async (req, res) => {
   res.setHeader('access-control-allow-origin', '*');
   if (req.url === '/article') { res.setHeader('content-type', 'text/html'); res.end('<html><title>Queue guide</title><body><article><h1>Queue guide</h1><h2>Capacity</h2><p>A bounded queue protects memory.</p><p>It provides backpressure when workers are busy.</p><p>Tasks should continue when a reader selects another paragraph.</p></article></body></html>'); return; }
-  if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'local-test-chat' }, { id: 'local-test-vision' }] })); return; }
+  if (req.url === '/v1/models') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'local-test-chat' }, { id: 'local-test-chat-alt' }, { id: 'local-test-vision' }] })); return; }
   let raw = ''; for await (const chunk of req) raw += chunk;
   const input = JSON.parse(raw || '{}'); requests.push(input);
   res.setHeader('content-type', input.stream ? 'text/event-stream' : 'application/json');
@@ -58,6 +58,13 @@ try {
   await panel.locator('#question-input').fill('Why does the queue have a bound?');
   await panel.locator('#send-question').click();
   await panel.locator('#stop-answer').waitFor({ state: 'visible' });
+  await panel.locator('#composer-model').click();
+  await panel.locator('.composer-model-option[data-model-id="local-test-chat-alt"]').waitFor({state:'visible'});
+  await panel.locator('#composer-model-search').fill('chat-alt');
+  assert.equal(await panel.locator('.composer-model-option').count(), 1);
+  await panel.locator('.composer-model-option').click();
+  await panel.locator('#composer-model').filter({hasText:'local-test-chat-alt'}).waitFor();
+  assert.ok(await panel.locator('#stop-answer').isVisible(), 'switching the next model does not stop a running answer');
   // A real selection event used to abort this request.
   await fixture.evaluate(() => { const p = document.querySelectorAll('p')[1]; const range = document.createRange(); range.selectNodeContents(p); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); p.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); });
   await panel.locator('#scope-selection').waitFor({ state: 'visible' });
@@ -72,11 +79,43 @@ try {
   await fixture.bringToFront();
   await worker.evaluate(async () => { const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' }); });
   await panel.locator('#conversation-list').filter({ hasText: 'Queues protect memory' }).waitFor();
+  assert.equal(await panel.locator('#answer-more').getAttribute('open'), null, 'supplementary parts start collapsed');
+  await panel.locator('#answer-more > summary').click();
+  await panel.locator('#answer-background-text').waitFor({state:'visible'});
   assert.equal(await panel.locator('#answer-background-text .reader-citation-ref').getAttribute('href'), 'http://127.0.0.1:8879/article');
+  const responseType = await panel.locator('#conversation-list .assistant .conversation-message-body').first().evaluate(el => { const c = getComputedStyle(el); return [c.fontFamily,c.fontSize,c.lineHeight]; });
+  const backgroundType = await panel.locator('#answer-background-text').evaluate(el => { const c = getComputedStyle(el); return [c.fontFamily,c.fontSize,c.lineHeight]; });
+  assert.deepEqual(backgroundType, responseType, 'background and live response use the same typography');
+  const sectionColors = await panel.locator('.response-section').evaluateAll(sections => sections.map(el => ({kind:el.dataset.answerSection, fill:getComputedStyle(el).backgroundColor, label:getComputedStyle(el.querySelector('.response-section-label')).color})));
+  assert.equal(new Set(sectionColors.map(s => s.fill)).size, 4, 'each labeled section has a distinct semantic fill');
+  assert.equal(new Set(sectionColors.map(s => s.label)).size, 4, 'each labeled section has a distinct heading color');
+  await panel.locator('#answer-more > summary').click();
+  assert.equal(await panel.locator('#answer-background-text').isVisible(), false);
+  assert.equal(await panel.locator('#answer-evidence').isVisible(), true, 'verified evidence stays visible when details are collapsed');
+
   const answerRequests = requests.filter(r => r.stream);
   assert.equal(answerRequests.length, 1, 'reopening panel does not restart the answer');
+  assert.equal(answerRequests[0].model, 'local-test-chat', 'the running request retains its original model');
+  await panel.locator('#composer-model').filter({hasText:'local-test-chat-alt'}).waitFor();
   const translated = fixture.locator('[data-deep-research-translation-for]').first();
   const blockId = await translated.getAttribute('data-deep-research-translation-for');
+  await worker.evaluate(() => {
+    globalThis.readerMenuUpdates = [];
+    const update = chrome.contextMenus.update.bind(chrome.contextMenus);
+    chrome.contextMenus.update = (id, properties, callback) => { if (id === 'reader:toggle-paragraph') globalThis.readerMenuUpdates.push(properties); return update(id, properties, callback); };
+  });
+  await translated.hover();
+  const paragraphControl = fixture.locator('[data-deep-research-paragraph-control] button');
+  await paragraphControl.filter({hasText:'查看这一段原文'}).waitFor();
+  const requestsBeforeToggle = requests.length;
+  await paragraphControl.click();
+  assert.ok(await translated.isHidden());
+  const menuToTranslation = await worker.evaluate(async () => { for (let i = 0; i < 30; i++) { if (globalThis.readerMenuUpdates.some(p => p.visible && p.title === '查看这一段译文')) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; });
+  assert.equal(menuToTranslation, true, 'the native menu changes to return to the cached translation');
+  await paragraphControl.filter({hasText:'查看这一段译文'}).click();
+  await translated.waitFor({state:'visible'});
+  assert.equal(requests.length, requestsBeforeToggle, 'paragraph switching reuses the existing translation');
+
   await translated.hover(); await fixture.keyboard.press('Alt+Shift+KeyO');
   await fixture.locator(`[data-deep-research-block="${blockId}"]`).waitFor({ state: 'visible' });
   assert.ok(await translated.isHidden());
@@ -95,7 +134,12 @@ try {
   panel = await context.newPage(); await panel.goto(`chrome-extension://${id}/sidepanel.html?sourceTab=${sourceTab}`);
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
   await fixture.bringToFront();
-  await panel.locator('#chat-selection-quote').filter({ hasText: 'Tasks should continue' }).waitFor({ state: 'attached' });
+  await panel.locator('#chat-selection-quote').filter({ hasText: 'Tasks should continue' }).waitFor({ state: 'visible' });
+  assert.equal(await panel.locator('#persistent-composer #chat-selection-card').count(), 1, 'selected original appears directly in the composer');
+  await panel.locator('#toggle-chat-selection').click();
+  assert.equal(await panel.locator('#toggle-chat-selection').getAttribute('aria-expanded'), 'true');
+  await panel.locator('#toggle-chat-selection').click();
+  assert.equal(await panel.locator('#toggle-chat-selection').getAttribute('aria-expanded'), 'false');
   await panel.waitForFunction(() => document.querySelector('#scope-selection')?.getAttribute('aria-pressed') === 'true');
   await panel.evaluate(() => { window.copiedSelection = ''; Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async text => { window.copiedSelection = text; } }); });
   await panel.locator('#copy-chat-selection').click();
@@ -103,14 +147,24 @@ try {
   await panel.locator('#copy-chat-selection').filter({hasText:'已复制'}).waitFor();
   await panel.locator('#scope-page').click();
   assert.equal(await panel.locator('#copy-chat-selection').isVisible(), false);
+  assert.equal(await panel.locator('#chat-selection-card').isVisible(), false);
   await panel.locator('#scope-selection').click();
   await panel.locator('#copy-chat-selection').waitFor({state:'visible'});
+  await panel.locator('#question-input').click();
+  assert.equal(await panel.locator('#persistent-composer').evaluate(el => getComputedStyle(el).outlineStyle), 'none', 'mouse focus has no outer blue outline');
+  await panel.keyboard.press('Shift+Tab');
+  await panel.keyboard.press('Tab');
+  assert.equal(await panel.locator('#question-input').evaluate(el => el === document.activeElement), true);
+  assert.equal(await panel.locator('#persistent-composer').evaluate(el => getComputedStyle(el).outlineStyle), 'solid', 'keyboard navigation keeps a visible focus ring');
+  await panel.locator('#question-input').click();
+  assert.equal(await panel.locator('#persistent-composer').evaluate(el => getComputedStyle(el).outlineStyle), 'none');
 
   await panel.locator('#question-input').fill('Stop this test answer.');
   await panel.locator('#send-question').click();
   await panel.locator('#stop-answer').waitFor({ state: 'visible' });
   await panel.locator('#stop-answer').click();
   await panel.locator('#stop-answer').waitFor({ state: 'hidden' });
+  assert.equal(requests.filter(r => r.stream).at(-1).model, 'local-test-chat-alt', 'the next request uses the chosen model');
   assert.equal(await panel.locator('#conversation-list').filter({ hasText: 'Stop this test answer.' }).count(), 0);
   const shortInputHeight = await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height);
   await panel.locator('#question-input').fill(Array(8).fill('This is a longer question with several lines.').join('\n'));
@@ -118,7 +172,15 @@ try {
   await panel.locator('#question-input').fill('');
   assert.equal(await panel.locator('#question-input').evaluate(el => el.getBoundingClientRect().height), shortInputHeight);
   await panel.locator('#composer-model').click();
+  await panel.locator('#composer-model-settings').click();
   await panel.locator('#settings-view').waitFor({state:'visible'});
+  await panel.locator('#mode-platform').click();
+  await panel.locator('#close-settings').click();
+  await panel.waitForFunction(() => document.querySelector('#composer-model')?.disabled === true);
+  assert.equal(await panel.locator('#composer-model').textContent(), '平台模型');
+  assert.equal(await panel.locator('#composer-model-menu').isVisible(), false, 'platform mode does not offer a model chooser');
+  await panel.locator('#settings-button').click();
+  await panel.locator('#mode-local').click();
   await panel.locator('#close-settings').click();
   // The redesigned surfaces share one header; history returns without losing a draft.
   const runtimeErrors = [];
@@ -156,6 +218,13 @@ try {
   await panel.screenshot({path: root+'/history.png'});
   await record.getByRole('button', {name:'查看对话',exact:true}).click();
   await panel.locator('#history-detail').filter({hasText:'Queues protect memory'}).waitFor();
+  assert.equal(await panel.locator('#history-detail-more').getAttribute('open'), null);
+  await panel.locator('#history-detail-more > summary').click();
+  const historyType = await panel.locator('.history-detail-message-body').first().evaluate(el => { const c = getComputedStyle(el); return [c.fontFamily,c.fontSize,c.lineHeight]; });
+  assert.deepEqual(historyType, responseType, 'history and live response use the same typography');
+  const historySectionColors = await panel.locator('.response-section').evaluateAll(sections => sections.map(el => ({kind:el.dataset.answerSection, fill:getComputedStyle(el).backgroundColor, label:getComputedStyle(el.querySelector('.response-section-label')).color})));
+  assert.deepEqual(historySectionColors, sectionColors, 'history and live responses share the same section colors');
+
   await panel.screenshot({path: root+'/history-detail.png'});
   await panel.locator('#close-history-detail').click();
   await record.locator('summary').click();
@@ -189,5 +258,10 @@ try {
   assert.deepEqual(runtimeErrors, []);
   console.log(JSON.stringify({redesign:true,historyDetail:true,historyContinue:true,draftPreserved:true,historyToSettings:true,historyToLibrary:true,keyboardResize:true,measurements}));
   await panel.screenshot({ path: root+'/chat.png' });
+  await panel.setViewportSize({width:380,height:1100});
+  await panel.locator('#question-input').click();
+  await panel.screenshot({path:root+'/chat-structure.png'});
+  await panel.locator('#answer-more > summary').click();
+  await panel.screenshot({path:root+'/chat-structure-expanded.png'});
   console.log(JSON.stringify({ pass: true, quickValidationCalls: 1, answerCallsAfterSelectionTranslationAndPanelReopen: answerRequests.length, paragraphToggle: true, deferredSelectionAction: true, explicitStop: true, artifact: root+'/chat.png' }));
 } catch (error) { for (const page of context.pages()) if (page.url().includes('sidepanel')) { await page.screenshot({ path: root+'/failure.png' }); console.error('Screenshot:', root+'/failure.png'); console.error((await page.locator('#notice').textContent()) || ''); } throw error; } finally { await context.close(); server.close(); }

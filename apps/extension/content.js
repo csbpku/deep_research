@@ -8,7 +8,7 @@
   // An extension update can leave closed-shadow hosts in the page after the
   // previous isolated world is invalidated. Remove only transient controls;
   // translations and user annotations are intentionally preserved.
-  document.querySelectorAll('[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]')
+  document.querySelectorAll('[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]')
     .forEach((node) => node.remove());
 
   const MIN_INLINE_IMAGE_CONFIDENCE = 0.75;
@@ -409,7 +409,7 @@
     let fallback = '';
     if (!body) {
       const clone = root.cloneNode(true);
-      clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside,[data-deep-research-translation],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]').forEach((node) => node.remove());
+      clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside,[data-deep-research-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]').forEach((node) => node.remove());
       fallback = clean(clone.innerText || clone.textContent || '');
     }
     const entry = entryContext();
@@ -613,6 +613,45 @@
   }
 
   let focusedTranslationId = null;
+  let contextParagraphId = null;
+  let paragraphControl = null;
+  let paragraphMenuState = '';
+  function syncParagraphControl(id) {
+    const original = id && document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
+    const translated = id && document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
+    const available = Boolean(original && translated && translatedOriginalDisplays.has(original));
+    const showingTranslation = available && translated.style.display !== 'none';
+    const title = showingTranslation ? '查看这一段原文' : '查看这一段译文';
+    const menuState = `${available ? id : ''}:${showingTranslation}`;
+    if (menuState !== paragraphMenuState) {
+      paragraphMenuState = menuState;
+      send({ type: 'deep-research:paragraph-menu', available, showingTranslation });
+    }
+    if (!available) { if (paragraphControl) paragraphControl.style.display = 'none'; return; }
+    if (!paragraphControl) {
+      paragraphControl = document.createElement('div');
+      paragraphControl.setAttribute('data-deep-research-paragraph-control', 'true');
+      paragraphControl.style.cssText = 'position:fixed;z-index:2147483000;';
+      const shadow = paragraphControl.attachShadow({ mode: 'open' });
+      shadow.innerHTML = '<style>button{font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;min-height:32px;padding:6px 10px;border:1px solid #cdd3de;border-radius:8px;background:#fff;color:#3159c9;box-shadow:0 2px 8px #20273518;cursor:pointer}button:hover{background:#eef2fc}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}</style><button type="button"></button>';
+      shadow.querySelector('button').addEventListener('click', () => { toggleOriginalParagraph(focusedTranslationId); });
+      document.body.appendChild(paragraphControl);
+    }
+    const button = paragraphControl.shadowRoot.querySelector('button');
+    button.textContent = title;
+    button.setAttribute('aria-label', title);
+    button.title = `${title}（Alt+Shift+O）；保留翻译，可随时切回`;
+    paragraphControl.style.display = '';
+    const box = (showingTranslation ? translated : original).getBoundingClientRect();
+    const controlWidth = paragraphControl.getBoundingClientRect().width;
+    paragraphControl.style.left = `${Math.max(8, Math.min(innerWidth - controlWidth - 8, box.right - controlWidth))}px`;
+    paragraphControl.style.top = `${Math.max(8, Math.min(innerHeight - 40, box.bottom + 2))}px`;
+  }
+  function updateFocusedParagraph(event) {
+    if (event.target instanceof Element && event.target.closest('[data-deep-research-paragraph-control]')) return;
+    focusedTranslationId = translationIdForTarget(event.target);
+    syncParagraphControl(focusedTranslationId);
+  }
   function translationIdForTarget(target) {
     const node = target instanceof Element ? target.closest('[data-deep-research-translation-for],[data-deep-research-block]') : null;
     return node?.getAttribute('data-deep-research-translation-for') || node?.getAttribute('data-deep-research-block');
@@ -626,13 +665,28 @@
     original.style.display = showOriginal ? translatedOriginalDisplays.get(original) || '' : 'none';
     translated.style.display = showOriginal ? 'none' : translated.dataset.deepResearchDisplay || '';
     if (!translatedOriginalAttributes.has(original)) translatedOriginalAttributes.set(original, { title: original.getAttribute('title'), tabindex: original.getAttribute('tabindex') });
-    original.title = 'Alt+Shift+O 切换译文；Alt+单击也可切换';
+    original.title = '右键或段落按钮可切回译文；Alt+Shift+O / Alt+单击也可切换';
     if (document.activeElement === translated && showOriginal) { original.tabIndex = 0; original.focus({ preventScroll: true }); }
     else if (document.activeElement === original && !showOriginal) translated.focus({ preventScroll: true });
+    focusedTranslationId = id;
+    syncParagraphControl(id);
     return true;
   }
-  document.addEventListener('pointerover', event => { focusedTranslationId = translationIdForTarget(event.target); }, true);
-  document.addEventListener('focusin', event => { focusedTranslationId = translationIdForTarget(event.target); }, true);
+  document.querySelectorAll('[data-deep-research-translation-for]').forEach(translated => {
+    const id = translated.getAttribute('data-deep-research-translation-for');
+    const original = document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
+    if (!original) return;
+    translatedOriginalDisplays.set(original, translated.dataset.deepResearchOriginalDisplay || '');
+    try { const attributes = JSON.parse(translated.dataset.deepResearchOriginalAttributes || 'null'); if (attributes) translatedOriginalAttributes.set(original, attributes); } catch { /* Older translations have no persisted attributes. */ }
+  });
+  document.addEventListener('pointerover', updateFocusedParagraph, true);
+  document.addEventListener('focusin', updateFocusedParagraph, true);
+  document.addEventListener('contextmenu', event => {
+    contextParagraphId = translationIdForTarget(event.target);
+    syncParagraphControl(contextParagraphId);
+  }, true);
+  window.addEventListener('scroll', () => { if (paragraphControl?.style.display !== 'none') syncParagraphControl(focusedTranslationId); }, { passive: true });
+  window.addEventListener('resize', () => syncParagraphControl(focusedTranslationId));
   document.addEventListener('click', event => {
     if (event.altKey && !isTypingTarget(event.target) && toggleOriginalParagraph(translationIdForTarget(event.target))) { event.preventDefault(); event.stopPropagation(); }
   }, true);
@@ -1402,10 +1456,10 @@
   const observer = new MutationObserver((records) => {
     const pageChanged = records.some((record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
-      if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
-      if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
+      if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
+      if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
       return record.type === 'childList' && (Array.from(record.addedNodes).some((node) => {
-        return !(node instanceof Element && node.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom]'));
+        return !(node instanceof Element && node.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom]'));
       }) || record.removedNodes.length > 0) || record.type === 'characterData';
     });
     if (!pageChanged) return;
@@ -1453,6 +1507,10 @@
     }
     if (message?.type === 'deep-research:focus-page') {
       root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (message?.type === 'deep-research:toggle-paragraph') {
+      toggleOriginalParagraph(contextParagraphId);
+      return;
     }
     if (message?.type === 'deep-research:context-action') {
       void (async () => {
@@ -1527,10 +1585,12 @@
         translated.textContent = text;
         translated.dataset.deepResearchDisplay = getComputedStyle(node).display;
         translated.tabIndex = 0;
-        translated.title = 'Alt+Shift+O 切换原文；Alt+单击也可切换';
+        translated.title = '右键或段落按钮可查看原文；Alt+Shift+O / Alt+单击也可切换';
         translated.style.setProperty('display', getComputedStyle(node).display);
         translated.style.setProperty('border-inline-start', '3px solid #3159c9');
         translated.style.setProperty('padding-inline-start', '0.65em');
+        translated.dataset.deepResearchOriginalDisplay = node.style.display;
+        translated.dataset.deepResearchOriginalAttributes = JSON.stringify({ title: node.getAttribute('title'), tabindex: node.getAttribute('tabindex') });
         translatedOriginalDisplays.set(node, node.style.display);
         node.style.display = 'none';
         node.insertAdjacentElement('afterend', translated);
@@ -1565,6 +1625,7 @@
         }
         node.remove();
       });
+      focusedTranslationId = null; contextParagraphId = null; syncParagraphControl(null);
       removeSelectionTranslation();
       restoreImageTranslations();
       send({ type: 'deep-research:translations-restored' });

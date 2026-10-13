@@ -105,10 +105,12 @@ function ReaderPanel() {
               <div id="conversation-list" className="conversation-list" />
               <div id="answer-output" className="answer stream-answer hidden" />
               <div id="answer-structured" className="answer-structured hidden">
-                <div id="answer-evidence" className="answer-part hidden"><div className="answer-label">原文证据</div><div id="answer-evidence-list" className="evidence-list" /></div>
-                <div id="answer-background" className="answer-part hidden"><div className="answer-label">必要背景</div><div id="answer-background-text" /></div>
-                <div id="answer-inference" className="answer-part hidden"><div className="answer-label">AI 推断</div><div id="answer-inference-text" /></div>
-                <div id="answer-limitations" className="answer-part hidden"><div className="answer-label">适用条件与未知项</div><ul id="answer-limitations-list" /></div>
+                <div id="answer-evidence" className="answer-part response-section hidden" data-answer-section="evidence"><div className="response-section-label">原文证据</div><div id="answer-evidence-list" className="evidence-list" /></div>
+                <details id="answer-more" className="response-more hidden"><summary>补充说明<span id="answer-more-summary" className="response-more-summary" /></summary>
+                <div id="answer-background" className="answer-part response-section hidden" data-answer-section="background"><div className="response-section-label">必要背景</div><div id="answer-background-text" /></div>
+                <div id="answer-inference" className="answer-part response-section hidden" data-answer-section="inference"><div className="response-section-label">AI 推断</div><div id="answer-inference-text" /></div>
+                <div id="answer-limitations" className="answer-part response-section hidden" data-answer-section="limitations"><div className="response-section-label">适用条件与未知项</div><ul id="answer-limitations-list" /></div>
+                </details>
                 <div id="answer-warnings" className="answer-warning hidden" />
               </div>
               <div id="answer-actions" className="answer-actions hidden">
@@ -131,9 +133,11 @@ function ReaderPanel() {
               <button id="scope-selection" className="scope-option hidden" type="button" aria-pressed="false">选段</button>
               <button id="scope-image" className="scope-option hidden" type="button" aria-pressed="false">图示</button>
             </div>
-                <button id="copy-chat-selection" className="selection-copy hidden" type="button" aria-label="复制当前原文选段" title="复制当前原文选段">复制选段</button><span id="composer-scope-label" className="composer-scope-label">整页正文</span><button id="composer-model" className="composer-model" type="button" title="模型与连接设置">阅读模型⌄</button>
+                <button id="copy-chat-selection" className="selection-copy hidden" type="button" aria-label="复制当前原文选段" title="复制当前原文选段">复制选段</button><span id="composer-scope-label" className="composer-scope-label">整页正文</span><button id="composer-model" className="composer-model" type="button" aria-expanded="false" aria-controls="composer-model-menu" title="模型与连接设置">阅读模型⌄</button>
                 <span id="composer-context-status" className="composer-context-status">正文状态：正在读取</span><span id="chat-scope-description" className="hidden">基于整篇文章</span>
               </div>
+              <div id="composer-model-menu" className="composer-model-menu hidden" role="dialog" aria-label="切换模型"><label htmlFor="composer-model-search">选择模型</label><input id="composer-model-search" type="search" placeholder="搜索模型…" autoComplete="off" /><div id="composer-model-options" className="composer-model-options" role="listbox" aria-label="可用模型" /><div id="composer-model-status" className="small" role="status" /><div className="composer-model-actions"><button id="composer-model-refresh" className="text-button" type="button">刷新列表</button><button id="composer-model-settings" className="text-button" type="button">连接设置</button></div></div>
+              <div id="chat-selection-card" className="chat-selection-card hidden" aria-label="当前选中的原文"><blockquote id="chat-selection-quote" /><div className="selection-preview-actions"><button id="toggle-chat-selection" className="text-button" type="button" aria-expanded="false" aria-controls="chat-selection-quote">展开</button><button id="clear-chat-selection" className="text-button" type="button" aria-label="清除选段，基于整篇" title="清除选段，基于整篇">×</button></div></div>
               <div id="translation-summary" className="translation-summary hidden" role="status"><span id="translation-summary-text" /><button id="translation-summary-pause" className="text-button" type="button">暂停</button></div>
               <label className="composer-question-label" htmlFor="question-input">继续提问</label>
               <textarea id="question-input" rows={2} placeholder="问问这篇文章…" />
@@ -172,7 +176,6 @@ function ReaderPanel() {
 
         <section id="selection-section" className="chat-tool-section hidden">
           <div className="card-title"><span>当前选段</span><span id="selection-scope">所在小节</span></div>
-          <details id="chat-selection-card" className="chat-selection-card hidden"><summary>当前选段 · 查看内容</summary><blockquote id="chat-selection-quote" /><button id="clear-chat-selection" className="text-button" type="button">清除选段，基于整篇</button></details>
           <div id="selection-quote" className="quote hidden" />
           <div className="selection-action-group">
             <div className="selection-action-label">选段操作</div>

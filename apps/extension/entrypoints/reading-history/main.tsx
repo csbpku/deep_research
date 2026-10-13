@@ -51,10 +51,12 @@ function HistoryPage() {
             <div id="history-detail-messages" className="history-detail-messages" />
             <div id="history-detail-structured" className="history-detail-structured hidden">
               <div className="history-detail-label">最新回答的证据与边界</div>
-              <div id="history-detail-evidence" className="history-detail-evidence" />
-              <div id="history-detail-background" className="history-detail-part hidden"><strong>必要背景</strong><span /></div>
-              <div id="history-detail-inference" className="history-detail-part hidden"><strong>AI 推断</strong><span /></div>
-              <div id="history-detail-limitations" className="history-detail-part hidden"><strong>适用条件与未知项</strong><span /></div>
+              <div id="history-detail-evidence-section" className="response-section hidden" data-answer-section="evidence"><div className="response-section-label">原文证据</div><div id="history-detail-evidence" className="history-detail-evidence" /></div>
+              <details id="history-detail-more" className="response-more hidden"><summary>补充说明<span id="history-detail-more-summary" className="response-more-summary" /></summary>
+              <div id="history-detail-background" className="history-detail-part response-section hidden" data-answer-section="background"><strong className="response-section-label">必要背景</strong><span /></div>
+              <div id="history-detail-inference" className="history-detail-part response-section hidden" data-answer-section="inference"><strong className="response-section-label">AI 推断</strong><span /></div>
+              <div id="history-detail-limitations" className="history-detail-part response-section hidden" data-answer-section="limitations"><strong className="response-section-label">适用条件与未知项</strong><span /></div>
+              </details>
             </div>
           </section>
         </section>

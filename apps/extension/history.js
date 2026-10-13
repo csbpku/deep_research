@@ -274,6 +274,7 @@ function renderHistoryDetail(session) {
   evidence.textContent = '';
   if (answer) {
     const evidenceItems = Array.isArray(answer.evidence) ? answer.evidence : [];
+    $('history-detail-evidence-section').classList.toggle('hidden', !evidenceItems.length);
     evidenceItems.forEach((item, index) => {
       const row = document.createElement('button');
       row.type = 'button';
@@ -307,6 +308,10 @@ function renderHistoryDetail(session) {
     const limitations = $('history-detail-limitations');
     renderMarkdown(limitations.querySelector('span'), Array.isArray(answer.limitations) ? answer.limitations.join('\n') : '');
     limitations.classList.toggle('hidden', !answer.limitations?.length);
+    const moreParts = [answer.background && '背景', answer.inference && '推断', answer.limitations?.length && '未知项'].filter(Boolean);
+    $('history-detail-more-summary').textContent = moreParts.join(' · ');
+    $('history-detail-more').classList.toggle('hidden', !moreParts.length);
+    $('history-detail-more').open = false;
     structured.classList.toggle('hidden', Boolean(!evidenceItems.length && !answer.background && !answer.inference && !answer.limitations?.length));
   } else {
     structured.classList.add('hidden');
