@@ -7,7 +7,7 @@
 - `docker-compose.yml`：PostgreSQL、Web、AI engine、内网 AnythingLLM 与 nginx；另提供可选的 `browser-review` Chromium profile。
 - `docker-compose.registry.yml`：默认生产覆盖文件，使用 GHCR 中按 commit SHA 固定的 Web / AI engine 镜像，不在 VPS 上重新构建。
 - `docker-compose.registry-render-review.yml`：可选浏览器审核覆盖文件，仅在需要真实页面审核时启用。
-- `nginx.conf`：Web/AI 反代、5 MB 上传、300 秒 AI 超时、JSON access log、健康路径 `/healthz` 和 `/ai-healthz`。
+- `nginx.conf`：Web/AI 反代、5 MB 上传、300 秒 AI 超时、JSON access log、健康路径 `/healthz`（liveness）、`/readyz`（DB-aware readiness）和 `/ai-healthz`。
 - `pg-backup.sh`：`pg_dump` + 保留最新 7 个备份文件（不是按天数清理）。POSIX sh（postgres:16-alpine 无 bash），已只读挂载到 postgres 容器 `/usr/local/bin/pg-backup.sh`；失败时删除半成品文件并返回非 0。**仓库内没有自动调度**，需运维自行配置（见下文「备份与恢复契约」的 cron 示例）。
 - `pg-restore.sh`：恢复脚本；恢复会覆盖目标库，默认交互确认，非交互需 `--yes`；目标是生产默认库 `deep_research` 时还需 `--confirm-db deep_research`（交互则手动键入库名）；`--dry-run` 只校验不连库；恢复后做行数校验。
 - `import-tmp-cleanup.sh`：24h 导入临时清理，默认 dry-run，加 `--apply` 才真删。需要 `bash`、`psql` 和 `DATABASE_URL`；无法取得受保护文件列表时直接中止（不再以空列表继续）。web 镜像（node:alpine）自带既无 bash 也无 psql，因此应在带 psql 的宿主机上并能访问 import-tmp 卷的位置运行。
@@ -17,7 +17,7 @@
 - `render-review.Dockerfile`：Node 20 + Playwright Chromium sidecar，内置 HEALTHCHECK；不属于默认生产部署。
 - Web BFF 已实现 `/api/healthz` liveness 端点（`apps/web/src/app/api/healthz/route.ts`）。
   - 它**只是 liveness**，不查数据库。`scripts/docker-entrypoint-web.sh` 在 `prisma migrate deploy` 失败时现在会 `exit 1`（容器不再带着旧 schema 启动），所以迁移失败表现为容器退出 → 发布后 `/healthz` 检查失败 → deploy.yml 回滚。
-  - 仍是 follow-up（需改 `apps/web/src`，不在本次范围）：增加 DB-aware readiness 端点（例如 `SELECT 1` 加 `_prisma_migrations` 最新迁移校验），并让 compose/HEALTHCHECK/deploy.yml 改用它。
+  - `/api/readyz`（nginx 暴露为 `/readyz`）执行 `SELECT 1`（2 秒超时），失败返回 503；deploy.yml 发布后同时检查 `/healthz` 与 `/readyz`。容器 HEALTHCHECK 仍用 liveness。未做 `_prisma_migrations` 最新迁移校验（follow-up）。
 - Schema 漂移：CI（`web-e2e` job）在 `prisma migrate deploy` 之后运行 `scripts/check-schema-drift.sh`，对比 `schema.prisma` 与迁移后的数据库；仅允许两处已登记的无害差异（`topics.synthesisVersion` 的 client 端默认值，以及 `summaries_distilledProfile_distilledTotal_idx` 的 partial 谓词）。
 - AI engine `/healthz` 已存在（W1）。
 

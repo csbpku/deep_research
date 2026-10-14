@@ -185,6 +185,8 @@ model User {
   avatarUrl   String?   @db.VarChar(2048)
   passwordHash String?  @db.VarChar(255)
   role        UserRole  @default(member)
+  // OAuth 登录过的 IdP（google/github；回填行为 'oauth'）。activate 据此拒绝接管 OAuth 账号。
+  oauthProviders String[] @default([])
   disabledAt  DateTime? @db.Timestamptz(3)
   // P1-C: per-user preferences (JsonB). Empty object by default; 应用层
   // zod 校验具体 keys（defaultReportType / defaultSourcePolicy / timezone / notifyPrefs）。

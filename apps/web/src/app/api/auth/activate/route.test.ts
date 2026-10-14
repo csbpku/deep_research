@@ -172,7 +172,7 @@ describe('POST /api/auth/activate', () => {
       passwordHash: null,
       disabledAt: null,
       role: 'member',
-      avatarUrl: null,
+      oauthProviders: [],
     });
 
     const response = await POST(
@@ -196,8 +196,10 @@ describe('POST /api/auth/activate', () => {
   });
 
   it.each([
-    ['an admin account', { role: 'admin', avatarUrl: null }],
-    ['an OAuth-created account', { role: 'member', avatarUrl: 'https://lh3.googleusercontent.com/a' }],
+    ['an admin account', { role: 'admin', oauthProviders: [] }],
+    ['a Google-linked account', { role: 'member', oauthProviders: ['google'] }],
+    ['a GitHub-linked account', { role: 'member', oauthProviders: ['github'] }],
+    ['a backfilled OAuth account', { role: 'member', oauthProviders: ['oauth'] }],
   ])('refuses to attach a password to %s via the shared invite code', async (_name, extra) => {
     mocks.findUnique.mockResolvedValue({ id: 'victim', passwordHash: null, disabledAt: null, ...extra });
     const response = await POST(
@@ -209,7 +211,7 @@ describe('POST /api/auth/activate', () => {
   });
 
   it('still activates an admin-precreated member without OAuth markers', async () => {
-    mocks.findUnique.mockResolvedValue({ id: 'm1', passwordHash: null, disabledAt: null, role: 'member', avatarUrl: null });
+    mocks.findUnique.mockResolvedValue({ id: 'm1', passwordHash: null, disabledAt: null, role: 'member', oauthProviders: [] });
     mocks.update.mockResolvedValue({ id: 'm1', role: 'member' });
     const response = await POST(
       request({ email: 'member@example.com', inviteCode: 'invite-2026', password: 'correct horse battery staple' }),

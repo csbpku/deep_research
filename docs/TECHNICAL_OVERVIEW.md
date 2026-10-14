@@ -128,7 +128,7 @@ Token 用量预算由 `LLM_TOKEN_BUDGET_USER_LIMIT`、`LLM_TOKEN_BUDGET_USER_PER
 - `AUTH_EMAIL_VERIFICATION=1` 时，密码注册必须先通过 SMTP 邮件中的一次性验证码；已存在但无密码的账号（Admin 预创建或仅 OAuth）只能在验证通过后设置密码，验证关闭时 `/api/auth/register` 直接拒绝，避免任何人凭邮箱地址接管账号；验证码仅以 HMAC 形式持久化，并有过期、重发和尝试次数限制；
 - OAuth 首次登录要求邮箱已验证（Google `email_verified`，GitHub 取已验证邮箱）；`Origin: null` 的写请求被 CSRF 检查拒绝；限流用的客户端 IP 只取 nginx 设置的 `x-real-ip`（设置 `TRUSTED_PROXY_HOPS` 才信任 XFF）；雷达 `refresh` 仅管理员，`migrate`/`transform` 需登录；
 - Google 和 GitHub OAuth 可选，均不限制邮箱域；`AUTH_GOOGLE_ONLY=1` 是兼容旧部署的开关，仅保留 Google；
-- `ALLOWED_EMAIL_DOMAINS` 和 `AUTH_INVITE_CODE` 仅供旧 `/api/auth/activate` 兼容接口使用，不参与公开注册或 OAuth；
+- `ALLOWED_EMAIL_DOMAINS` 和 `AUTH_INVITE_CODE` 仅供旧 `/api/auth/activate` 兼容接口使用，不参与公开注册或 OAuth；该接口只能给 Admin 预建、`users.oauthProviders` 为空的普通成员设密码，admin 或任何 OAuth 登录过的账号一律 403（OAuth 成功登录时写入 `oauthProviders`，迁移已对有头像或无密码 admin 的存量用户保守回填）；
 - `shaobo.chen@shopee.com` 是默认 bootstrap Admin；
 - Admin、成员和匿名访问由 Web BFF 服务端校验，前端隐藏不是权限边界；
 - 生产密码登录必须使用 HTTPS。
@@ -204,7 +204,8 @@ GitHub Actions 在 CI 通过后构建 Web 和 AI engine 的 Linux/amd64 镜像�
 
 ```bash
 docker compose ps
-curl -fsS https://<host>/healthz
+curl -fsS https://<host>/healthz   # liveness
+curl -fsS https://<host>/readyz    # readiness（web 经 prisma SELECT 1，2 秒超时，失败 503）
 curl -fsS https://<host>/ai-healthz
 ```
 

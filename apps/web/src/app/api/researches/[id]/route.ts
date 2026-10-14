@@ -400,11 +400,14 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   }
 
   // A passed review belongs to this exact public snapshot. Mutating a
-  // published AI report in place would make the old verdict appear to cover
+  // PUBLISHED AI report in place would make the old verdict appear to cover
   // new text, so callers must create a revision draft first.
-  // Archived AI reports were published too (restore returns them to
-  // published without a new review), so they are equally immutable.
-  if (existing.status !== RESEARCH_STATUS.DRAFT && existing.creationMethod === 'ai_research') {
+  // ARCHIVED AI reports may be edited by the owner (the status stays
+  // archived). Integrity is kept at the exit: restore returns a report to
+  // published without a new review, so restore of an ai_research is gated on
+  // the current revision having a passing review (see
+  // ResearchRestoreReviewRequiredError in lib/research-status-actions.ts).
+  if (existing.status === RESEARCH_STATUS.PUBLISHED && existing.creationMethod === 'ai_research') {
     return toApiErrorResponse({
       code: ERROR_CODES.AI_PUBLISHED_IMMUTABLE,
       message: '已发布的 AI 调研不可原地修改，请先创建修订草稿',
@@ -462,6 +465,19 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
     // $transaction: update + audit 原子
     const result = await prisma.$transaction(async (tx) => {
+      if (existing.creationMethod === 'ai_research' && Object.keys(diff).length > 0) {
+        // Same as draft PUT / version restore: an in-flight review belongs to
+        // the old content and must not certify the edited revision.
+        const reviewRuns = (tx as typeof tx & {
+          researchReviewRun?: { updateMany: (args: unknown) => Promise<unknown> };
+        }).researchReviewRun;
+        if (reviewRuns) {
+          await reviewRuns.updateMany({
+            where: { researchId: parsed.data.id, executionStatus: { in: ['queued', 'reviewing'] } },
+            data: { executionStatus: 'stale', outcome: 'stale', completedAt: new Date() },
+          });
+        }
+      }
       const updated = await tx.research.update({
         where: { id: parsed.data.id },
         data: {

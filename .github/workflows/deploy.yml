@@ -564,6 +564,7 @@ jobs:
             return 1
           }
           wait_for_endpoint web https://techradar.top/healthz
+          wait_for_endpoint web-ready https://techradar.top/readyz
           wait_for_endpoint ai https://techradar.top/ai-healthz
           for path in /ai/docs /ai/openapi.json /ai/api/ai/jobs; do
             status="$(curl --silent --show-error --max-time 10 \

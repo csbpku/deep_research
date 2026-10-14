@@ -184,6 +184,14 @@ export const authConfig: NextAuthConfig = {
         });
         return false;
       }
+      // 记录 IdP 供 jwt callback 的 upsert 写入 oauthProviders（不额外访问 DB）。
+      const provider = account?.provider;
+      if (provider === 'google' || provider === 'github') {
+        const known = existing?.oauthProviders ?? [];
+        (user as { oauthProviders?: string[] }).oauthProviders = known.includes(provider)
+          ? known
+          : [...known, provider];
+      }
       return true;
     },
 
@@ -192,22 +200,29 @@ export const authConfig: NextAuthConfig = {
      * 首次登录（user 非空）时从 DB 读 user 注入 uid/role/disabledAt。
      * 后续请求（user 为空）也再读一次 DB，让 admin 设的 disable 立即生效。
      */
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
       const env = getWebEnv();
       if (user?.email) {
         // 首次登录；upsert User（不在 signIn 内做是为了让 signIn 失败时 DB 干净）
         const email = user.email.toLowerCase();
+        const provider = account?.provider;
+        const isOAuth = provider === 'google' || provider === 'github';
+        const oauthProviders = isOAuth
+          ? ((user as { oauthProviders?: string[] }).oauthProviders ?? [provider])
+          : undefined;
         const u = await prisma.user.upsert({
           where: { email },
           create: {
             email,
             name: user.name ?? email.split('@')[0],
             avatarUrl: user.image ?? null,
+            ...(oauthProviders ? { oauthProviders } : {}),
             role: isBootstrapAdminEmail(email, env.BOOTSTRAP_ADMIN_EMAIL) ? 'admin' : 'member',
           },
           update: {
             name: user.name ?? undefined,
             avatarUrl: user.image ?? undefined,
+            ...(oauthProviders ? { oauthProviders: { set: oauthProviders } } : {}),
             role: isBootstrapAdminEmail(email, env.BOOTSTRAP_ADMIN_EMAIL) ? 'admin' : undefined,
           },
         });

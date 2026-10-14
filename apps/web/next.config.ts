@@ -18,6 +18,20 @@ const config: NextConfig = {
   // artifacts. NEXT_DIST_DIR remains available for CI and isolated builds.
   distDir: process.env.NEXT_DIST_DIR ?? (process.env.NODE_ENV === 'development' ? '.next-dev' : '.next'),
   outputFileTracingRoot: path.join(__dirname, '../..'),
+  // No current client iframes this app (the extension no longer embeds
+  // /reading/panel; the only <iframe> in web is a sandboxed srcDoc preview),
+  // so framing is limited to same-origin everywhere.
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        ],
+      },
+    ];
+  },
   experimental: {
     // Server Actions 默认开启
     serverActions: {

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   researchFindUnique: vi.fn(),
   researchUpdate: vi.fn(),
+  reviewRunUpdateMany: vi.fn(),
   auditCreate: vi.fn(),
   transaction: vi.fn(),
 }));
@@ -26,10 +27,10 @@ vi.mock('@/lib/db', () => ({
 
 import { PUT } from '../researches/[id]/route';
 
-function existing(creationMethod: string) {
+function existing(creationMethod: string, status = 'archived') {
   return {
     id: RESEARCH_ID, type: 'research', title: 't', body: 'old', background: null, conclusion: null, risks: null,
-    tags: [], authorId: USER_ID, status: 'archived', creationMethod, aiAssisted: false, readingSaveKey: null,
+    tags: [], authorId: USER_ID, status, creationMethod, aiAssisted: false, readingSaveKey: null,
     knowledgeIndexText: null, sourceAiJob: null,
   };
 }
@@ -41,7 +42,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.requireUser.mockResolvedValue({ id: USER_ID, role: 'member' });
   mocks.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb({
-    research: { update: mocks.researchUpdate }, researchAudit: { create: mocks.auditCreate },
+    research: { update: mocks.researchUpdate }, researchReviewRun: { updateMany: mocks.reviewRunUpdateMany }, researchAudit: { create: mocks.auditCreate },
   }));
   mocks.researchUpdate.mockResolvedValue({
     id: RESEARCH_ID, type: 'research', status: 'archived', title: 't', body: 'new body', tags: [],
@@ -61,10 +62,23 @@ describe('PUT /api/researches/[id] on archived research', () => {
     expect(mocks.researchUpdate.mock.calls[0]![0].data).not.toHaveProperty('status');
   });
 
-  it('keeps archived AI research immutable with a typed error', async () => {
+  it('lets the owner edit an archived AI research and stales in-flight reviews', async () => {
     mocks.researchFindUnique.mockResolvedValue(existing('ai_research'));
+    const res = await put();
+    expect(res.status).toBe(200);
+    expect(mocks.researchUpdate.mock.calls[0]![0].data).not.toHaveProperty('status');
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.reviewRunUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { researchId: RESEARCH_ID, executionStatus: { in: ['queued', 'reviewing'] } },
+      data: expect.objectContaining({ executionStatus: 'stale' }),
+    }));
+  });
+
+  it('keeps published AI research immutable with a typed error', async () => {
+    mocks.researchFindUnique.mockResolvedValue(existing('ai_research', 'published'));
     const res = await put();
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: 'AI_PUBLISHED_IMMUTABLE' });
+    expect(mocks.researchUpdate).not.toHaveBeenCalled();
   });
 });

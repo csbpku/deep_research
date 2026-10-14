@@ -12,7 +12,11 @@ import {
   ADMIN_RESEARCH_ACTIONS,
   newAdminActionRequestId,
 } from '../../../../../lib/radar/admin-actions';
-import { transitionResearchStatus } from '../../../../../lib/research-status-actions';
+import {
+  ResearchRestoreReviewRequiredError,
+  restoreReviewRequiredResponse,
+  transitionResearchStatus,
+} from '../../../../../lib/research-status-actions';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 
@@ -62,14 +66,22 @@ export const POST = apiHandler<
   const adminAction = u.role === 'admin'
     ? { action: ADMIN_RESEARCH_ACTIONS.RESTORE, requestId: newAdminActionRequestId() }
     : undefined;
-  const result = await prisma.$transaction((tx) =>
+  let result;
+  try {
+    result = await prisma.$transaction((tx) =>
     transitionResearchStatus(tx, {
       id: existing.id,
       actorId: u.id,
       action: 'restore',
       adminAction,
     }),
-  );
+    );
+  } catch (error) {
+    if (error instanceof ResearchRestoreReviewRequiredError) {
+      return restoreReviewRequiredResponse(error, requestId);
+    }
+    throw error;
+  }
 
   log.info('research.restore', 'research restored by owner/admin', {
     requestId,
