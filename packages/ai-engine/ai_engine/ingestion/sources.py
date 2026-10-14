@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import io
 import logging
 import re as _re
 from datetime import datetime, timezone
@@ -405,7 +406,9 @@ def _parse_via_feedparser(text: str) -> list[dict[str, str]] | None:
     except ImportError:
         return None
     try:
-        parsed = feedparser.parse(text)
+        # Never hand feedparser a bare str: it treats URL-/path-looking strings
+        # as something to fetch or open, bypassing safe_fetch (SSRF / file read).
+        parsed = feedparser.parse(io.BytesIO(text.encode("utf-8")))
     except Exception:
         return None
     out: list[dict[str, str]] = []

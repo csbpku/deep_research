@@ -110,7 +110,7 @@ describe('POST /api/auth/register', () => {
     });
   });
 
-  it('sets a password for an existing OAuth-only account', async () => {
+  it('refuses to set a password on a passwordless account without email verification', async () => {
     mocks.getWebEnv.mockReturnValue({
       NODE_ENV: 'test',
       ALLOWED_EMAIL_DOMAINS: [],
@@ -120,6 +120,34 @@ describe('POST /api/auth/register', () => {
       AUTH_ALLOW_INSECURE_HTTP: false,
       BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
       NEXTAUTH_SECRET: 'test-verification-secret',
+    });
+    mocks.findUnique.mockResolvedValue({ id: 'oauth-user', passwordHash: null, disabledAt: null });
+
+    const response = await POST(
+      request({ email: 'alice@example.com', password: 'correct horse battery staple' }),
+    );
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('sets a password for an existing OAuth-only account after email verification', async () => {
+    mocks.getWebEnv.mockReturnValue({
+      NODE_ENV: 'test',
+      ALLOWED_EMAIL_DOMAINS: [],
+      AUTH_GOOGLE_ONLY: false,
+      AUTH_BETA_MODE: true,
+      AUTH_EMAIL_VERIFICATION: true,
+      AUTH_ALLOW_INSECURE_HTTP: false,
+      BOOTSTRAP_ADMIN_EMAIL: 'shaobo.chen@shopee.com',
+      NEXTAUTH_SECRET: 'test-verification-secret',
+    });
+    mocks.challengeFindUnique.mockResolvedValue({
+      id: 'challenge-1',
+      codeHash: hashVerificationCode('alice@example.com', '123456', 'test-verification-secret'),
+      attempts: 0,
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
     });
     mocks.findUnique.mockResolvedValue({
       id: 'oauth-user',
@@ -132,6 +160,7 @@ describe('POST /api/auth/register', () => {
         email: 'alice@example.com',
         name: 'Alice Updated',
         password: 'correct horse battery staple',
+        verificationCode: '123456',
       }),
     );
 

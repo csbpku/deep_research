@@ -125,7 +125,7 @@ Token 用量预算由 `LLM_TOKEN_BUDGET_USER_LIMIT`、`LLM_TOKEN_BUDGET_USER_PER
 ## 5. 认证与权限
 
 - 默认开放邮箱密码注册/登录；`AUTH_BETA_MODE=1` 时，密码注册和 OAuth 首次开户都只接受 Admin 预先加入白名单的邮箱；
-- `AUTH_EMAIL_VERIFICATION=1` 时，密码注册必须先通过 SMTP 邮件中的一次性验证码；验证码仅以 HMAC 形式持久化，并有过期、重发和尝试次数限制；
+- `AUTH_EMAIL_VERIFICATION=1` 时，密码注册必须先通过 SMTP 邮件中的一次性验证码；已存在但无密码的账号（Admin 预创建或仅 OAuth）只能在验证通过后设置密码，验证关闭时 `/api/auth/register` 直接拒绝，避免任何人凭邮箱地址接管账号；验证码仅以 HMAC 形式持久化，并有过期、重发和尝试次数限制；
 - Google 和 GitHub OAuth 可选，均不限制邮箱域；`AUTH_GOOGLE_ONLY=1` 是兼容旧部署的开关，仅保留 Google；
 - `ALLOWED_EMAIL_DOMAINS` 和 `AUTH_INVITE_CODE` 仅供旧 `/api/auth/activate` 兼容接口使用，不参与公开注册或 OAuth；
 - `shaobo.chen@shopee.com` 是默认 bootstrap Admin；

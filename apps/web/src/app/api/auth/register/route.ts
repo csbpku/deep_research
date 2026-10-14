@@ -62,6 +62,16 @@ export async function POST(request: Request) {
   if (existing?.passwordHash) {
     return error(request, ERROR_CODES.AUTH_ACCOUNT_EXISTS, '该邮箱已注册，请直接登录');
   }
+  // An account without a password (admin pre-created, or OAuth-only) may only
+  // gain one by proving ownership of the mailbox; otherwise anyone who knows the
+  // email could set a password on it and sign in as that user.
+  if (existing && !env.AUTH_EMAIL_VERIFICATION) {
+    return error(
+      request,
+      ERROR_CODES.AUTH_REGISTRATION_DISABLED,
+      '该邮箱已有账号但尚未设置密码，请使用原有登录方式',
+    );
+  }
   if (!canCreateAccountInBeta({
     betaMode: env.AUTH_BETA_MODE,
     email,

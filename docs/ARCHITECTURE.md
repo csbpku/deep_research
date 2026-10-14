@@ -74,7 +74,7 @@ flowchart LR
 
 - Web：Next.js 15、TypeScript、Tailwind CSS、shadcn/ui、TanStack Query。
 - 编辑器：react-md-editor。
-- Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；`AUTH_BETA_MODE=0`（默认）允许公开邮箱注册，`=1` 仅允许 Admin 预创建账号及 bootstrap Admin；`AUTH_EMAIL_VERIFICATION=1` 时验证码只用于密码注册，后续登录使用密码。
+- Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；`AUTH_BETA_MODE=0`（默认）允许公开邮箱注册，`=1` 仅允许 Admin 预创建账号及 bootstrap Admin；`AUTH_EMAIL_VERIFICATION=1` 时验证码只用于密码注册，后续登录使用密码；已存在但无密码的账号只有通过验证码才能设置密码，验证关闭时注册接口拒绝。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
 - AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计，`llm_token_budget_events` 记录预留与结算。用户滚动周期和平台 UTC 日 token 上限由环境变量配置，默认关闭；当前以单次模型调用为预留单位。
 - 数据源：Tavily、arxiv、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；AnythingLLM sidecar 承担可选讨论与个人向量索引，GBrain MCP 为可选知识检索集成。

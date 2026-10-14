@@ -106,6 +106,27 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
   return lines.join('\n');
 }
 
+/**
+ * The BFF creates the job row before asking the engine to accept it. When the
+ * engine definitively rejects (quota, source policy, 4xx/5xx) or is unreachable,
+ * the row must not stay `queued`: the engine's DB worker claims queued rows and
+ * would run the rejected research anyway. Only touches rows still `queued`, so a
+ * job the engine already claimed is never overwritten.
+ */
+async function failRejectedJob(jobId: string, code: string, message: string): Promise<void> {
+  await prisma.aiResearchJob
+    .updateMany({
+      where: { id: jobId, status: 'queued' },
+      data: { status: 'failed', errorCode: code, errorMessage: message, completedAt: new Date() },
+    })
+    .catch((err: unknown) => {
+      log.error('ai.bff.fail_rejected_job_failed', 'could not mark rejected job failed', {
+        jobId,
+        error: String(err),
+      });
+    });
+}
+
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
   const u = await requireUser(req);
@@ -292,6 +313,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     });
   } catch (err) {
     log.error('ai.bff.upstream_unreachable', 'upstream unreachable', { requestId, jobId, error: String(err) });
+    // A timeout is ambiguous (the engine may already have accepted the job), so
+    // only fail the row when the request never reached the engine.
+    if (!(err instanceof Error && err.name === 'AbortError')) {
+      await failRejectedJob(jobId, ERROR_CODES.AI_ENGINE_UNAVAILABLE, 'AI engine 不可达');
+    }
     return toApiErrorResponse({
       code: ERROR_CODES.AI_ENGINE_UNAVAILABLE,
       message: 'AI engine 不可达',
@@ -308,6 +334,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     } catch {
       parsed = {};
     }
+    await failRejectedJob(
+      jobId,
+      parsed.code ?? ERROR_CODES.AI_ENGINE_UNAVAILABLE,
+      parsed.message ?? `ai-engine 返回 ${upstreamRes.status}`,
+    );
     return toApiErrorResponse({
       code: (parsed.code as keyof typeof ERROR_CODES | undefined) ?? ERROR_CODES.AI_ENGINE_UNAVAILABLE,
       message: parsed.message ?? `ai-engine 返回 ${upstreamRes.status}`,
