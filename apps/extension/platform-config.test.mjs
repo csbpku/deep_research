@@ -6,6 +6,8 @@ import {
   LEGACY_LOCAL_WEB_APP_URL,
   normalizePlatformOrigin,
   resolvePlatformOrigin,
+  trustedPlatformHint,
+  tokenBoundToOrigin,
 } from './platform-config.js';
 
 test('platform connection defaults to the public Deep Research site', () => {
@@ -26,4 +28,18 @@ test('explicit platform origins are normalized and preserved', () => {
   assert.equal(resolvePlatformOrigin('https://research.example.test/path', 'http://localhost:3000'), 'https://research.example.test');
   assert.equal(normalizePlatformOrigin('https://user:secret@research.example.test'), '');
   assert.equal(normalizePlatformOrigin('ftp://research.example.test'), '');
+});
+
+test('page-supplied platform hints cannot name an arbitrary origin', () => {
+  assert.equal(trustedPlatformHint('https://evil.example', ''), '');
+  assert.equal(trustedPlatformHint('https://evil.example', 'https://techradar.top'), '');
+  assert.equal(trustedPlatformHint('https://techradar.top/x', ''), DEFAULT_WEB_APP_URL);
+  assert.equal(trustedPlatformHint('http://localhost:3000', ''), 'http://localhost:3000');
+  assert.equal(trustedPlatformHint('https://research.example.test', 'https://research.example.test/a'), 'https://research.example.test');
+});
+
+test('reader token is bound to the origin it was issued for', () => {
+  assert.equal(tokenBoundToOrigin('', DEFAULT_WEB_APP_URL), true);
+  assert.equal(tokenBoundToOrigin('', 'https://evil.example'), false);
+  assert.equal(tokenBoundToOrigin('https://research.example.test', 'https://research.example.test'), true);
 });

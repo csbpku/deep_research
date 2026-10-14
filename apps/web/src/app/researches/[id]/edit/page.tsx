@@ -241,6 +241,8 @@ export default function EditorPage() {
   const workbenchRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<'outline' | 'tools' | null>(null);
   const skipExistingSyncRef = useRef(false);
+  const hydratedRecordIdRef = useRef<string | null>(null);
+  const formDirtyRef = useRef(false);
   const reviewClaimHandledRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -314,8 +316,14 @@ export default function EditorPage() {
     if (existing) {
       if (skipExistingSyncRef.current) {
         skipExistingSyncRef.current = false;
+        hydratedRecordIdRef.current = existing.id;
         return;
       }
+      // Refetches (e.g. after a manual save or review) must not overwrite text
+      // typed meanwhile: only hydrate on first load of a record or when clean.
+      const firstLoad = hydratedRecordIdRef.current !== existing.id;
+      if (!firstLoad && formDirtyRef.current) return;
+      hydratedRecordIdRef.current = existing.id;
       setTitle(existing.title);
       setBody(cleanResearchMarkdown(existing.body));
       setBackground(existing.background ?? '');
@@ -395,6 +403,7 @@ export default function EditorPage() {
     [title, body, background, conclusion, risks, tagsInput],
   );
   const isDirty = currentSnapshot !== savedSnapshot;
+  formDirtyRef.current = isDirty;
   // 编辑器离开保护：dirty 时拦截同窗口导航与浏览器关闭，并弹确认。
   const { guardedRouter, allowNext, confirmDialog } = useUnsavedGuard(isDirty, '尚未保存的修改会在离开后丢失。');
 
@@ -599,17 +608,20 @@ export default function EditorPage() {
         const err = await res.json();
         throw new Error(err.message ?? '保存失败');
       }
-      return res.json();
+      // Remember exactly what this request persisted. onSuccess runs later
+      // and must not read the live form (the user may have kept typing).
+      const saved = await res.json();
+      return { ...saved, persistedSnapshot: draftSnapshot(fields) } as typeof saved & { persistedSnapshot: string };
     },
     onSuccess: (data, variables) => {
       // Mark clean only when the response belongs to the editor's current
       // snapshot. A late auto-save must not make newer local edits appear
       // saved, even if the server accepted the older request.
-      const persistedSnapshot = variables?.snapshot ?? currentSnapshot;
-      if (persistedSnapshot === currentSnapshot) {
-        setSavedSnapshot(persistedSnapshot);
-        setLastSavedAt(new Date());
-      }
+      const persistedSnapshot = data.persistedSnapshot ?? variables?.snapshot ?? currentSnapshot;
+      // The saved baseline is always what was actually persisted; newer local
+      // edits therefore stay dirty instead of being replaced by a refetch.
+      setSavedSnapshot(persistedSnapshot);
+      if (persistedSnapshot === currentSnapshot) setLastSavedAt(new Date());
       queryClient.invalidateQueries({ queryKey: ['researches'] });
       if (!isNew && params?.id && variables?.mode === 'manual') {
         // Keep the right rail (audits, review status, citations) in sync with

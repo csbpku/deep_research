@@ -152,7 +152,8 @@ test('duplicate saved insight explicitly updates the cloud and reports unsupport
     const methods = [];
     const notices = [];
     const sandbox = {
-      chrome: { storage: { local: { get: async () => ({ readerToken: 'test' }) } } },
+      chrome: { storage: { local: { get: async () => ({ readerToken: 'test', readerTokenOrigin: 'https://platform.test' }) } } },
+      tokenBoundToOrigin: (a, b) => a === b,
       platformUrl: 'https://platform.test', insightSyncFailed: false,
       updateReadingModeUi: () => {}, setNotice: (n) => notices.push(n),
       fetch: async (_url, request) => {
@@ -163,7 +164,7 @@ test('duplicate saved insight explicitly updates the cloud and reports unsupport
       },
     };
     vm.createContext(sandbox);
-    vm.runInContext(extract(panel, 'async function syncInsight(', 'async function syncCurrentSession('), sandbox);
+    vm.runInContext(extract(panel, 'async function readPlatformToken(', 'async function connectPlatform(') + extract(panel, 'async function syncInsight(', 'async function syncCurrentSession('), sandbox);
     await vm.runInContext("syncInsight({ id: 'saved-id', url: 'https://source.test', title: 'Source', quote: 'Quote', note: 'Edited' })", sandbox);
     assert.deepEqual(methods, ['POST', 'PUT']);
     assert.equal(sandbox.insightSyncFailed, !updateOk);
@@ -333,4 +334,31 @@ test('paragraph menu updates in message order and hiding preserves its direction
   update({ type: 'deep-research:paragraph-menu', available: true, showingTranslation: true }, { tab: { id: 13, active: false }, frameId: 0 });
   update({ type: 'deep-research:paragraph-menu', available: true, showingTranslation: true }, { ...active, frameId: 3 });
   assert.equal(updates.length, 3, 'inactive tabs and subframes cannot overwrite the top-page menu');
+});
+
+test('a second translation start during the job-record read is queued instead of dropped', async () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const start = background.indexOf('async function executeTranslationJob(');
+  const end = background.indexOf('  // Commit the recoverable job', start);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const translationJobs = new Map();
+  const sandbox = {
+    translationJobs, AbortController, DOMException,
+    boundTaskContext: (context) => context,
+    readerStore: { getJob: async () => { await gate; return null; }, saveJob: async () => { throw new Error('stop'); } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`${background.slice(start, end)}\n  throw new Error('stop');\n}`, sandbox);
+  const first = vm.runInContext("executeTranslationJob({ jobId: 'j', tabId: 1, context: { url: 'u', contentHash: 'a' } }).catch(() => {})", sandbox);
+  const entry = translationJobs.get('j');
+  await vm.runInContext("executeTranslationJob({ jobId: 'j', tabId: 1, context: { url: 'u', contentHash: 'b' } })", sandbox);
+  entry.preserveForRecovery = true;
+  release();
+  await first;
+  assert.equal(translationJobs.get('j'), entry, 'entry is mutated in place, not replaced');
+  assert.equal(entry.pending?.context.contentHash, 'b');
+  assert.equal(entry.preserveForRecovery, true);
+  assert.ok(entry.job, 'job assigned after the await');
+  assert.equal(entry.controller.signal.aborted, true);
 });

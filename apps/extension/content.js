@@ -1072,14 +1072,25 @@
     annotationHighlights.delete(id);
   }
 
+  // Latest apply request per annotation id. Applying awaits anchor resolution
+  // (SHA-256), so a newer apply or a clear must invalidate older in-flight ones.
+  const pendingAnnotationApplies = new Map();
+  let annotationApplySeq = 0;
+
   function clearAnnotationHighlights() {
+    pendingAnnotationApplies.clear();
     Array.from(annotationHighlights.keys()).forEach(removeAnnotationHighlight);
   }
 
   async function applyAnnotationHighlight(annotation) {
     if (!annotation?.id || !annotation.anchor?.quote) return false;
     removeAnnotationHighlight(annotation.id);
+    const token = ++annotationApplySeq;
+    pendingAnnotationApplies.set(annotation.id, token);
     const resolved = await resolveAnchorRange(annotation.anchor);
+    if (pendingAnnotationApplies.get(annotation.id) !== token) return false;
+    pendingAnnotationApplies.delete(annotation.id);
+    removeAnnotationHighlight(annotation.id);
     if (resolved.error) {
       send({ type: 'deep-research:annotation-unresolved', id: annotation.id, reason: resolved.error });
       return false;

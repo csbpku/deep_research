@@ -1,7 +1,7 @@
 import { readerStore } from './reader-store.js';
 import { renderMarkdown } from './markdown-renderer.js';
 import { readingAnswerText } from './reader-core.js';
-import { resolvePlatformOrigin } from './platform-config.js';
+import { resolvePlatformOrigin, tokenBoundToOrigin } from './platform-config.js';
 
 let sessions = [];
 let insights = [];
@@ -36,9 +36,10 @@ function sessionIdentity(session) {
 }
 
 async function loadCloudSessions() {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const { readerToken, readerTokenOrigin, readerPlatformUrl } = await chrome.storage.local.get(['readerToken', 'readerTokenOrigin', 'readerPlatformUrl']);
   if (!readerToken) return [];
   const platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''));
+  if (!tokenBoundToOrigin(readerTokenOrigin || readerPlatformUrl || '', platformUrl)) return [];
   try {
     const response = await fetch(`${platformUrl}/api/reading/session`, {
       headers: { authorization: `Bearer ${readerToken}` },

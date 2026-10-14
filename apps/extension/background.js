@@ -108,7 +108,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
   if (existing) {
     existing.tabId = tabId;
     const nextHash = context?.contentHash || context?.version || null;
-    const currentHash = existing.job?.contentHash || null;
+    const currentHash = existing.job?.contentHash || existing.contextHash || null;
     // A duplicate start for the same snapshot is harmless. A newer DOM
     // snapshot, however, must wait for the current request to unwind; simply
     // returning here loses the dynamic update because the side panel has
@@ -123,7 +123,8 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
   const boundedContext = boundTaskContext(context, { preserveAllBlocks: true });
   // Reserve the job ID before any IndexedDB await so duplicate messages from
   // a recreated panel cannot start two model pipelines.
-  translationJobs.set(jobId, { controller, tabId, job: null, pending: null });
+  const entry = { controller, tabId, job: null, pending: null, contextHash: boundedContext.contentHash || boundedContext.version || null };
+  translationJobs.set(jobId, entry);
   const persisted = await readerStore.getJob(jobId).catch(() => null);
   const job = {
     ...(persisted || {}),
@@ -145,7 +146,9 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
     error: null,
     tabId,
   };
-  translationJobs.set(jobId, { controller, tabId, job });
+  // Mutate in place: a second start or tab-close recovery flag may have been
+  // recorded on the entry while the job record was being read.
+  entry.job = job;
   // Commit the recoverable job before storing its (potentially large) input.
   // If MV3 suspends the worker between these awaits, the next alarm/startup
   // can still see a queued job and decide whether it is safe to resume.
@@ -614,7 +617,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload.token) throw new Error(payload.message || '授权交换失败');
-      await chrome.storage.local.set({ readerToken: payload.token });
+      await chrome.storage.local.set({ readerToken: payload.token, readerTokenOrigin: baseUrl });
       await chrome.storage.session.remove('readerPkce');
       chrome.runtime.sendMessage({ type: 'deep-research:connection-state', connected: true }).catch(() => {});
       sendResponse?.({ ok: true });

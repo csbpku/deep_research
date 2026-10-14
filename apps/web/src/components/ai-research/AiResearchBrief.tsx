@@ -183,6 +183,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     })
       .then(async (response) => {
         if (!response.ok) {
+          if (cancelled) return;
           setState({
             status: 'error',
             error: friendlyMessage(

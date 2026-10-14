@@ -226,6 +226,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   const topicQuery = searchParams.get('topic');
   const topicIdQuery = searchParams.get('topicId');
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(conversationId ?? null);
+  const currentConversationIdRef = useRef<string | null>(conversationId ?? null);
   const [phase, setPhase] = useState<ResearchConversationPhase>('understand');
   const [topic, setTopic] = useState('');
   const [context, setContext] = useState('');
@@ -282,10 +283,14 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   useEffect(() => {
     const nextConversationId = conversationId ?? null;
     const previousConversationId = previousConversationIdRef.current;
-    if (nextConversationId === null && previousConversationId !== null) {
-      resetForNewConversation();
-    }
+    // Leaving a conversation (to a new one or to a different saved one) must
+    // drop every piece of the previous conversation's state. An id equal to the
+    // one this component just created itself is not a switch.
+    const switchedAway = nextConversationId !== currentConversationIdRef.current
+      && (nextConversationId !== null || previousConversationId !== null);
+    if (switchedAway) resetForNewConversation();
     previousConversationIdRef.current = nextConversationId;
+    currentConversationIdRef.current = nextConversationId;
     setCurrentConversationId(nextConversationId);
   }, [conversationId]);
 
@@ -311,7 +316,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         setTopic(state.topic);
         setContext(state.context);
         setPhase(state.phase);
-        if (conversation.jobId) setActiveJobId(conversation.jobId);
+        setActiveJobId(conversation.jobId ?? null);
         setError(null);
       })
       .catch((err: unknown) => {
@@ -399,6 +404,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       });
       if (!response.ok) throw await toApiHttpError(response, '对话创建失败');
       const conversation = await response.json() as AiResearchConversationDetail;
+      currentConversationIdRef.current = conversation.id;
       setCurrentConversationId(conversation.id);
       setMessages(conversation.messages.map((message) => ({
         id: message.id,

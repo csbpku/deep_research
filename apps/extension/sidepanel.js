@@ -30,6 +30,8 @@ import {
   LEGACY_LOCAL_WEB_APP_URL,
   normalizePlatformOrigin,
   resolvePlatformOrigin,
+  trustedPlatformHint,
+  tokenBoundToOrigin,
 } from './platform-config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -737,7 +739,7 @@ function applyRadarEntryContext(context) {
     radarEntrySummaryId = '';
     return;
   }
-  const hintedOrigin = normalizePlatformOrigin(context.entryPlatformUrl);
+  const hintedOrigin = trustedPlatformHint(context.entryPlatformUrl, platformUrl);
   const summaryId = normalizeRadarSummaryId(context.entrySummaryId);
   if (hintedOrigin) radarEntryPlatformUrl = hintedOrigin;
   if (summaryId) radarEntrySummaryId = summaryId;
@@ -746,7 +748,9 @@ function applyRadarEntryContext(context) {
   const canUseHint = !configuredOrigin
     || configuredOrigin === LEGACY_LOCAL_WEB_APP_URL
     || configuredOrigin === DEFAULT_WEB_APP_URL;
-  if (hintedOrigin && canUseHint) {
+  // Never retarget a connected platform from page-controlled input; the hint
+  // only applies while no token exists, and is never persisted here.
+  if (hintedOrigin && canUseHint && !platformConnected) {
     platformUrl = hintedOrigin;
     updatePlatformTarget();
   }
@@ -1606,9 +1610,21 @@ async function loadPlatformState() {
   setPlatformConnected(hasToken);
 }
 
+async function readPlatformToken() {
+  const stored = await chrome.storage.local.get(['readerToken', 'readerTokenOrigin', 'readerPlatformUrl']);
+  if (!stored.readerToken) return '';
+  const bound = stored.readerTokenOrigin || stored.readerPlatformUrl || '';
+  return tokenBoundToOrigin(bound, platformUrl) ? stored.readerToken : '';
+}
+
 async function connectPlatform() {
   platformUrl = resolvePlatformOrigin(platformUrl, radarEntryPlatformUrl);
   updatePlatformTarget();
+  if (platformUrl !== DEFAULT_WEB_APP_URL
+    && !window.confirm(`将连接到非默认平台 ${platformUrl}，并把阅读内容和访问令牌发送到该地址。仅在你信任它时继续。`)) {
+    setPlatformConnected(false, '已取消连接');
+    return;
+  }
   try {
     const granted = await requestSpecificOrigin(platformUrl);
     if (!granted) { setPlatformConnected(false, '没有获得平台访问权限'); return; }
@@ -1639,7 +1655,7 @@ async function connectPlatform() {
 }
 
 async function disconnectPlatform() {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const readerToken = await readPlatformToken();
   if (readerToken) {
     try {
       await fetch(`${platformUrl}/api/reading/token/revoke`, { method: 'POST', headers: { authorization: `Bearer ${readerToken}` } });
@@ -1653,7 +1669,7 @@ async function disconnectPlatform() {
 
 async function syncInsight(insight = lastSavedInsight) {
   if (!insight) { setNotice('先收藏一个选段，再同步到研究库。'); return; }
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const readerToken = await readPlatformToken();
   if (!readerToken) {
     insightSyncFailed = true;
     updateReadingModeUi();
@@ -1697,7 +1713,7 @@ async function syncInsight(insight = lastSavedInsight) {
 }
 
 async function syncCurrentSession({ quiet = false } = {}) {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const readerToken = await readPlatformToken();
   if (!readerToken) { setNotice('先在设置中连接 Deep Research。'); return; }
   const context = documentContext || pageContext || selectionContext;
   if (!context?.url) { setNotice('当前没有可同步的阅读会话。'); return; }
@@ -1765,7 +1781,7 @@ function platformContext(context, scope) {
 
 
 async function requestPlatformTranslations(context, blocks, options = {}) {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const readerToken = await readPlatformToken();
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
   const tasks = splitTranslationBlocks(blocks);
   const output = [];
@@ -1852,7 +1868,7 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
 }
 
 async function requestPlatformImageTranslation(context, image, options = {}) {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const readerToken = await readPlatformToken();
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
   const imageProvider = {
     baseUrl: `${platformUrl}/api/reading`,
@@ -1896,7 +1912,7 @@ async function requestPlatformImageTranslation(context, image, options = {}) {
 }
 
 async function restoreCloudSession() {
-  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  const readerToken = await readPlatformToken();
   if (!readerToken) { setNotice('先在设置中连接 Deep Research。', $('settings-notice')); return; }
   const context = documentContext || pageContext || selectionContext;
   if (!context?.url) { setNotice('当前没有可恢复的阅读页面。', $('settings-notice')); return; }

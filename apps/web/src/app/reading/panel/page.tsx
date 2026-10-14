@@ -35,7 +35,17 @@ type ReadingAnswer = {
   warnings?: string[];
 };
 
-const panelMessage = (payload: unknown) => window.parent.postMessage(payload, '*');
+// Only post to the embedding page's actual origin; never broadcast with '*'.
+function parentOrigin(): string | null {
+  const ancestor = window.location.ancestorOrigins?.[0];
+  if (ancestor && ancestor !== 'null') return ancestor;
+  try { return new URL(document.referrer).origin; } catch { return null; }
+}
+
+const panelMessage = (payload: unknown) => {
+  const target = parentOrigin();
+  if (target) window.parent.postMessage(payload, target);
+};
 
 function apiReadingContext(context: ReadingContext): Omit<ReadingContext, 'translatedBlockIds' | 'translationDetected'> {
   const { translatedBlockIds: _translatedBlockIds, translationDetected: _translationDetected, ...safeContext } = context;
