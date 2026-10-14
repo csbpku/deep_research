@@ -508,10 +508,18 @@ class _QuotaStoreProxy:
         *,
         requester_id: str | None = None,
         team_scope: bool = False,
+        exclude_job_id: str | None = None,
     ) -> int:
         if team_scope:
             return self._team_count
         return self._user_count
+
+    async def enqueue_with_quota(self, snapshot: object, **kwargs: int) -> object:
+        # Reuse the store's check-then-enqueue default, but over the canned
+        # counts above.
+        from ai_engine.job_runner.store import JobStore  # noqa: PLC0415
+
+        return await JobStore.enqueue_with_quota(self, snapshot, **kwargs)  # type: ignore[arg-type]
 
 
 async def _make_quota_client(

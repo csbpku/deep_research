@@ -24,8 +24,9 @@ import logging
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
-from ai_engine.fetcher.safe_fetch import safe_fetch
+from ai_engine.fetcher.safe_fetch import raise_for_document_status, safe_fetch
 from ai_engine.radar.enrichment_worker import (
     DEFAULT_ENRICHMENT_KINDS,
     request_enrichment_run,
@@ -179,16 +180,46 @@ async def _read_file(path: str) -> bytes:
         return f.read()
 
 
+class PdfTextExtractionError(ValueError):
+    """Uploaded PDF yielded no extractable text (scanned / encrypted / corrupt)."""
+
+
+def _strip_nul(value: str) -> str:
+    """Postgres text columns reject NUL (0x00)."""
+    return value.replace("\x00", "")
+
+
+def _pdf_to_text(buf: bytes) -> str:
+    """Extract readable text from PDF bytes with pymupdf; never decode raw bytes."""
+    try:
+        import fitz  # type: ignore[import-untyped]  # pymupdf - no type stubs
+
+        doc = fitz.open(stream=buf, filetype="pdf")
+        try:
+            pages = [str(page.get_text("text") or "") for page in doc]
+        finally:
+            doc.close()
+    except Exception as exc:
+        raise PdfTextExtractionError("PDF 无法解析（文件损坏或加密）") from exc
+    text = _strip_nul("\n\n".join(pages)).strip()
+    if not text:
+        raise PdfTextExtractionError("PDF 未提取到可读文本（可能为扫描件）")
+    return text
+
+
+def _html_to_safe_markdown(html: str) -> str:
+    """Convert HTML to Markdown/text; raw HTML (script/iframe/on*) is never stored."""
+    from ai_engine.server.share import html_to_markdown
+
+    return _strip_nul(html_to_markdown(html))
+
+
 def _markdown_or_text(buf: bytes, kind: str) -> str:
     if kind == "pdf":
-        # 真正的 PDF 解析交给 enrich_arxiv_candidate 或专门的 PDF worker；
-        # 此处只做"提取可读文本"的最少工作。
-        return buf.decode("utf-8", errors="replace")
-    text = buf.decode("utf-8", errors="replace")
+        return _pdf_to_text(buf)
+    text = _strip_nul(buf.decode("utf-8", errors="replace"))
     if kind == "html":
-        # 极简：去掉 script/style；其它交给前端渲染
-        text = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
+        return _html_to_safe_markdown(text)
     return text
 
 
@@ -357,10 +388,13 @@ async def _process_one(pool: Any, row: dict[str, Any]) -> bool:
         if fetched is None or not fetched.content:
             raise RuntimeError("safe_fetch 返回空内容")
 
-        text = fetched.content.decode("utf-8", errors="replace")
-        # 极简：HTML 去 script/style
-        text = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
+        raise_for_document_status(fetched, host=urlsplit(canonical_url).hostname)
+        text = _strip_nul(fetched.content.decode("utf-8", errors="replace"))
+        if "html" in (fetched.content_type or "").lower() or re.match(
+            r"\s*<(?:!doctype|html|head|body|div|p|article|main)\b", text, re.IGNORECASE
+        ):
+            # Never store raw HTML: convert via the structured converter.
+            text = _html_to_safe_markdown(text)
         title = (raw_input.split("/")[-1] or canonical_url)[:300]
         snippet = text[:500]
         url_kind = _url_kind(canonical_url)

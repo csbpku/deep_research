@@ -287,6 +287,12 @@ async def run_once(
                 heartbeat = None
             if heartbeat is None or not heartbeat.renewed:
                 hooks.on_lease_lost(lease)
+                # Lease lost (cancelled, reaped or taken over): the adapter task
+                # must stop spending tokens for a job we no longer own.
+                try:
+                    await asyncio.wait_for(adapter.cancel(lease.job_id), timeout=5.0)
+                except (AdapterError, asyncio.TimeoutError):
+                    pass
                 return RunOutcome(
                     job_id=lease.job_id,
                     final_status="failed",

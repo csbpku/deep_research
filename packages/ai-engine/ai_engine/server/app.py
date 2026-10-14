@@ -436,12 +436,13 @@ async def _ai_job_worker_loop(app_instance: FastAPI) -> None:
     while True:
         try:
             await store.open()
-            outcome = await run_one_available_job(
-                store=store,
-                adapter=adapter,
-                worker_id=wid,
-                draft_factory=_make_draft_factory(store),
-            )
+            async with _run_gate():
+                outcome = await run_one_available_job(
+                    store=store,
+                    adapter=adapter,
+                    worker_id=wid,
+                    draft_factory=_make_draft_factory(store),
+                )
             if outcome is None:
                 await asyncio.sleep(1.0)
             else:
@@ -1680,11 +1681,16 @@ def _store_singleton() -> JobStore:
 
 
 def _adapter_singleton() -> ResearchEngineAdapter:
-    """Return whatever `build_adapter()` produces."""
-    adapter = build_adapter()
-    # The `claude`/`gpt_researcher` factories raise before returning, so the
-    # only thing that comes back here conforms to the Protocol.
-    return adapter
+    """Return the process-wide adapter (``app.state.adapter``).
+
+    Submit, status, cancel, health and the worker loop must all see the same
+    instance; otherwise cancel hits an empty adapter and the run keeps going.
+    """
+    adapter = getattr(app.state, "adapter", None)
+    if adapter is None:
+        adapter = build_adapter()
+        app.state.adapter = adapter
+    return cast(ResearchEngineAdapter, adapter)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -3210,24 +3216,11 @@ async def submit_ai_job(
             )
 
     # W6: Quota check — happens AFTER idempotency replay so replays don't
-    # double-charge. Counts today's accepted submissions for the user and the
-    # team (DB path sums across all users).
-    user_used = await store.count_submissions_today(requester_id=body.requester_id)
-    team_used = await store.count_submissions_today(team_scope=True)
+    # double-charge. The check and the enqueue run as one atomic store call
+    # (see JobStore.enqueue_with_quota) and exclude this job's own
+    # BFF-precreated row, so the effective limit is exactly BUDGET_USER_DAILY.
     user_limit = int(os.environ.get("BUDGET_USER_DAILY", "5"))
     team_limit = int(os.environ.get("BUDGET_TEAM_DAILY", "20"))
-    if user_used >= user_limit:
-        raise _http_error_with_details(
-            "AI_QUOTA_EXCEEDED",
-            "个人今日 AI 调研配额已用完",
-            {"scope": "user", "used": user_used, "limit": user_limit},
-        )
-    if team_used >= team_limit:
-        raise _http_error_with_details(
-            "AI_QUOTA_EXCEEDED",
-            "团队今日 AI 调研配额已用完",
-            {"scope": "team", "used": team_used, "limit": team_limit},
-        )
 
     # 1. Persist the snapshot so subsequent GET can find it.
     snapshot = make_job_snapshot(
@@ -3254,7 +3247,17 @@ async def submit_ai_job(
         idempotency_key=body.idempotency_key,
         source_refs=resolved_source_refs,
     )
-    await store.enqueue(snapshot)
+    exceeded = await store.enqueue_with_quota(
+        snapshot, user_limit=user_limit, team_limit=team_limit
+    )
+    if exceeded is not None:
+        raise _http_error_with_details(
+            "AI_QUOTA_EXCEEDED",
+            "个人今日 AI 调研配额已用完"
+            if exceeded.scope == "user"
+            else "团队今日 AI 调研配额已用完",
+            {"scope": exceeded.scope, "used": exceeded.used, "limit": exceeded.limit},
+        )
     if isinstance(store, DbJobStore):
         await store.persist_source_refs(body.job_id, resolved_source_refs)
 
@@ -3268,13 +3271,11 @@ async def submit_ai_job(
     adapter = _adapter_singleton()
     job_id = body.job_id
     request_id = getattr(request.state, "request_id", None)
-    asyncio.create_task(
-        _background_run(
-            store=store,
-            adapter=adapter,
-            job_id=job_id,
-            request_id=request_id,
-        )
+    _spawn_background_run(
+        store=store,
+        adapter=adapter,
+        job_id=job_id,
+        request_id=request_id,
     )
 
     return SubmitAiJobResponse(
@@ -3291,6 +3292,48 @@ async def submit_ai_job(
         error_message=None,
         request_id=request_id,
     )
+
+
+_BACKGROUND_TASKS: set["asyncio.Task[None]"] = set()
+_RUN_GATE: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore, int] | None = None
+
+
+def _ai_job_max_concurrency() -> int:
+    """Max simultaneous research runs in this process (AI_JOB_MAX_CONCURRENCY, default 2)."""
+    try:
+        value = int(os.environ.get("AI_JOB_MAX_CONCURRENCY", "2"))
+    except (TypeError, ValueError):
+        value = 2
+    return max(1, value)
+
+
+def _run_gate() -> asyncio.Semaphore:
+    """Process-wide semaphore bounding concurrent runs (re-created per event loop)."""
+    global _RUN_GATE
+    loop = asyncio.get_running_loop()
+    limit = _ai_job_max_concurrency()
+    if _RUN_GATE is None or _RUN_GATE[0] is not loop or _RUN_GATE[2] != limit:
+        _RUN_GATE = (loop, asyncio.Semaphore(limit), limit)
+    return _RUN_GATE[1]
+
+
+def _spawn_background_run(
+    *,
+    store: JobStore,
+    adapter: ResearchEngineAdapter,
+    job_id: str,
+    request_id: str | None,
+) -> "asyncio.Task[None]":
+    """Schedule a bounded run and keep a strong reference until it finishes."""
+    task = asyncio.create_task(
+        _background_run(
+            store=store, adapter=adapter, job_id=job_id, request_id=request_id
+        ),
+        name=f"ai-job-run-{job_id}",
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
 
 
 async def _background_run(
@@ -3316,10 +3359,14 @@ async def _background_run(
     """
     log = structlog.get_logger("ai_engine.runner")
     try:
-        outcome = await run_one_available_job(
-            store=store, adapter=adapter,
-            draft_factory=_make_draft_factory(store),
-        )
+        # Bounded concurrency + a unique worker id per run so lease ownership
+        # (lockedBy) is never shared between concurrent runs.
+        async with _run_gate():
+            outcome = await run_one_available_job(
+                store=store, adapter=adapter,
+                worker_id=f"ai-run-{os.getpid()}-{uuid.uuid4().hex[:8]}",
+                draft_factory=_make_draft_factory(store),
+            )
         if outcome is None:
             log.warning(
                 "ai-engine.background.no_job",

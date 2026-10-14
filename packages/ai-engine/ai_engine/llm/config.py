@@ -91,6 +91,27 @@ def _credential_value(profile: str, suffix: str) -> str:
     return _env(f"{upper}_{suffix}", f"{lower}_{suffix.lower()}")
 
 
+def _tier_pair(profile: str, tier: LlmTier) -> tuple[str, str]:
+    """Return the (api_key, base_url) pair for one profile and tier.
+
+    Heavy calls prefer the ``*_HEAVY`` pair and otherwise fall back to the
+    light pair as a unit. A key is never combined with a base URL from a
+    different tier: a heavy URL without a heavy key is ignored unless no key exists at all, and a heavy
+    key without a heavy URL uses the profile's light URL (same provider).
+    """
+    light_key = _credential_value(profile, "API_KEY")
+    light_url = _credential_value(profile, "BASE_URL")
+    if tier == "heavy":
+        heavy_key = _credential_value(profile, "API_KEY_HEAVY")
+        if heavy_key:
+            return heavy_key, _credential_value(profile, "BASE_URL_HEAVY") or light_url
+        heavy_url = _credential_value(profile, "BASE_URL_HEAVY")
+        if heavy_url and not light_key:
+            # Keyless gateway: no secret exists that could be misdirected.
+            return "", heavy_url
+    return light_key, light_url
+
+
 def resolve_route(
     purpose: LlmPurpose,
     *,
@@ -109,25 +130,18 @@ def resolve_route(
             f"unsupported LLM protocol {protocol!r}; expected openai or anthropic"
         )
 
-    key_suffix = "API_KEY_HEAVY" if tier == "heavy" else "API_KEY"
-    url_suffix = "BASE_URL_HEAVY" if tier == "heavy" else "BASE_URL"
-    api_key = _credential_value(profile, key_suffix)
-    if not api_key and tier == "heavy":
-        api_key = _credential_value(profile, "API_KEY")
-    if not api_key and profile not in {"openai", "anthropic"}:
-        api_key = _credential_value(protocol, key_suffix) or _credential_value(
-            protocol, "API_KEY"
-        )
-
-    base_url: str | None = _credential_value(profile, url_suffix) or None
-    if not base_url and tier == "heavy":
-        base_url = _credential_value(profile, "BASE_URL") or None
-    if not base_url and profile not in {"openai", "anthropic"}:
-        base_url = (
-            _credential_value(protocol, url_suffix)
-            or _credential_value(protocol, "BASE_URL")
-            or None
-        )
+    native = profile in {"openai", "anthropic"}
+    api_key, own_url = _tier_pair(profile, tier)
+    base_url: str | None = own_url or None
+    if not api_key and not native:
+        # Borrowing a wire-protocol key (e.g. OPENAI_API_KEY for a minimax
+        # route) is only safe when the protocol's base URL is explicitly
+        # configured and is the host this route would talk to anyway. A key is
+        # never sent to the vendor's default host it does not belong to; the
+        # route is then unavailable (empty key).
+        borrowed_key, borrowed_url = _tier_pair(protocol, tier)
+        if borrowed_key and borrowed_url and (not base_url or base_url == borrowed_url):
+            api_key, base_url = borrowed_key, borrowed_url
     if not base_url:
         base_url = _DEFAULT_BASE_URLS.get(profile)
 

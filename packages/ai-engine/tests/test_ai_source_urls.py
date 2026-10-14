@@ -42,7 +42,8 @@ class _MockTransport(httpx.AsyncBaseTransport):
         self._routes = routes
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        host = request.url.host or ""
+        # safe_fetch pins the connection to the resolved IP; route by Host header.
+        host = (request.headers.get("host") or request.url.host or "").split(":")[0]
         handler = self._routes.get(host)
         if handler is None:
             return httpx.Response(599, text=f"no route for host {host}")
@@ -84,7 +85,7 @@ def patch_resolver(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, str], None
             )
         return str(infos[0][4][0])
 
-    monkeypatch.setattr(sf, "_resolve_ip", _resolve)
+    monkeypatch.setattr(sf, "_resolve_ips", lambda h: [_resolve(h)])
     return table.__setitem__
 
 

@@ -19,6 +19,7 @@ from ai_engine.llm.config import (
     resolve_route,
 )
 from ai_engine.llm.usage_audit import LlmUsageAttempt, record_llm_usage
+from ai_engine.text_chunking import count_text_tokens
 from ai_engine.llm.token_budget import (
     TokenBudgetError,
     current_budget_task,
@@ -295,10 +296,25 @@ async def _with_token_reservation(
     max_tokens: int,
     budget_user_id: str | None,
     call: Callable[[], Awaitable[TextGenerationResult]],
+    consumed_estimate: Callable[[], tuple[int, int]] | None = None,
 ) -> TextGenerationResult:
+    """Reserve, run, settle.
+
+    ``consumed_estimate`` (streaming only) returns estimated
+    ``(input_tokens, output_tokens)`` already spent when the call fails. When
+    output deltas were delivered the provider has billed them, so that part is
+    settled (or recorded) instead of releasing the whole reservation as zero.
+    """
     budget_task = current_budget_task()
     if budget_task is not None:
-        result = await call()
+        try:
+            result = await call()
+        except BaseException:
+            if consumed_estimate is not None:
+                spent_in, spent_out = consumed_estimate()
+                if spent_out > 0:
+                    budget_task.record(spent_in, spent_out)
+            raise
         budget_task.record(result.input_tokens, result.output_tokens)
         return result
 
@@ -315,8 +331,17 @@ async def _with_token_reservation(
         result = await call()
     except BaseException:
         if reservation is not None:
+            spent_in, spent_out = consumed_estimate() if consumed_estimate else (0, 0)
             try:
-                await asyncio.shield(release_llm_tokens(reservation))
+                if spent_out > 0:
+                    await asyncio.shield(
+                        settle_llm_tokens(
+                            reservation,
+                            min(spent_in + spent_out, reservation.reserved_tokens),
+                        )
+                    )
+                else:
+                    await asyncio.shield(release_llm_tokens(reservation))
             except Exception:
                 # Expiry recovery releases a reservation if cleanup is interrupted.
                 pass
@@ -673,6 +698,7 @@ async def stream_text(
     retry_count = max(0, int(os.environ.get("LLM_RETRY_ATTEMPTS", "1")))
     routes = [primary_spec] + ([fallback_spec] if fallback_spec else [])
     emitted = False
+    emitted_parts: list[str] = []
     last_error: BaseException | None = None
     total_attempts = 0
 
@@ -681,7 +707,16 @@ async def stream_text(
         if not value:
             return
         emitted = True
+        emitted_parts.append(value)
         await on_delta(value)
+
+    def consumed_estimate() -> tuple[int, int]:
+        if not emitted_parts:
+            return (0, 0)
+        prompt = count_text_tokens(user_prompt) + (
+            count_text_tokens(system_prompt) if system_prompt else 0
+        )
+        return (prompt, count_text_tokens("".join(emitted_parts)))
 
     for route_index, route_spec in enumerate(routes):
         used_fallback = route_index > 0
@@ -700,6 +735,7 @@ async def stream_text(
                     system_prompt=system_prompt,
                     max_tokens=max_tokens,
                     budget_user_id=budget_user_id,
+                    consumed_estimate=consumed_estimate,
                     call=lambda: _stream_text_once(
                         llm_spec=route_spec,
                         user_prompt=user_prompt,
@@ -987,9 +1023,12 @@ async def _stream_text_once(
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_prompt})
         async with _llm_semaphore():
-            stream_kwargs: dict[str, Any] = {}
-            if provider == "minimax":
-                stream_kwargs["stream_options"] = {"include_usage": True}
+            # Ask every OpenAI-protocol endpoint for a final usage chunk so the
+            # budget settles real tokens; callers fall back to the reservation
+            # estimate when a provider omits it.
+            stream_kwargs: dict[str, Any] = {
+                "stream_options": {"include_usage": True}
+            }
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,

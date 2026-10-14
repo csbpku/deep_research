@@ -162,10 +162,10 @@ def _parse_reddit_rss(xml_text: str, sub: str, max_per: int, cutoff_ts: float) -
         if published_m:
             raw_date = published_m.group(1).strip()
             try:
-                published = parsedate_to_datetime(raw_date).astimezone(timezone.utc)
+                published = _utc(parsedate_to_datetime(raw_date))
             except (TypeError, ValueError, OverflowError):
                 try:
-                    published = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).astimezone(timezone.utc)
+                    published = _utc(datetime.fromisoformat(raw_date.replace("Z", "+00:00")))
                 except ValueError:
                     pass
         if published and published.timestamp() < cutoff_ts:
@@ -194,6 +194,8 @@ async def fetch_reddit_candidates(
     http = client or httpx.AsyncClient(timeout=10.0, headers={"User-Agent": _REDDIT_UA})
     candidates: list[RadarCandidate] = []
     seen_urls: set[str] = set()
+    failures = 0
+    last_error: Exception | None = None
 
     try:
         for sub in subreddits:
@@ -203,7 +205,8 @@ async def fetch_reddit_candidates(
                 resp = await http.get(url)
                 resp.raise_for_status()
                 data = resp.json()
-            except Exception:
+            except Exception as json_exc:
+                last_error = json_exc
                 try:
                     rss_url = f"{_REDDIT_BASE}/{sub}/.rss"
                     rss_resp = await http.get(rss_url)
@@ -214,8 +217,9 @@ async def fetch_reddit_candidates(
                             seen_urls.add(c.url)
                             candidates.append(c)
                     used_rss = True
-                except Exception:
-                    pass
+                except Exception as rss_exc:
+                    failures += 1
+                    last_error = rss_exc
                 await asyncio.sleep(2)
                 continue
             if used_rss:
@@ -264,7 +268,27 @@ async def fetch_reddit_candidates(
     finally:
         if owns_client:
             await http.aclose()
+    _raise_if_all_failed(len(subreddits), failures, last_error, "reddit")
     return candidates
+
+
+def _utc(value: datetime) -> datetime:
+    """Zone-less timestamps are UTC, never host-local time."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _raise_if_all_failed(
+    attempted: int, failures: int, last_error: Exception | None, source: str
+) -> None:
+    """Surface total failure so the source circuit breaker / run status see it.
+
+    A partial failure still returns what was collected; every request failing
+    must not look like a successful empty sync.
+    """
+    if attempted > 0 and failures >= attempted and last_error is not None:
+        raise last_error
 
 
 # ── Lobste.rs (tag-based JSON endpoints) ──
@@ -283,6 +307,8 @@ async def fetch_lobsters_candidates(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=10.0)
     by_url: dict[str, tuple[RadarCandidate, int]] = {}
+    failures = 0
+    last_error: Exception | None = None
 
     try:
         for tag_url in _LOBSTERS_TAG_URLS:
@@ -290,7 +316,9 @@ async def fetch_lobsters_candidates(
                 resp = await http.get(tag_url)
                 resp.raise_for_status()
                 data = resp.json()
-            except Exception:
+            except Exception as exc:
+                failures += 1
+                last_error = exc
                 continue
             if not isinstance(data, list):
                 continue
@@ -307,7 +335,7 @@ async def fetch_lobsters_candidates(
                 published = None
                 if isinstance(created_at, str):
                     try:
-                        published = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        published = _utc(datetime.fromisoformat(created_at.replace("Z", "+00:00")))
                     except ValueError:
                         pass
                 if not published or published.timestamp() < cutoff_ts:
@@ -335,6 +363,7 @@ async def fetch_lobsters_candidates(
     finally:
         if owns_client:
             await http.aclose()
+    _raise_if_all_failed(len(_LOBSTERS_TAG_URLS), failures, last_error, "lobsters")
     ranked = sorted(by_url.values(), key=lambda pair: pair[1], reverse=True)
     return [candidate for candidate, _ in ranked[:max_results]]
 
@@ -361,6 +390,8 @@ async def fetch_devto_candidates(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "deep-research-radar/0.1"})
     by_url: dict[str, tuple[RadarCandidate, int]] = {}
+    failures = 0
+    last_error: Exception | None = None
 
     try:
         for tag in tags:
@@ -369,7 +400,9 @@ async def fetch_devto_candidates(
                 resp = await http.get(url)
                 resp.raise_for_status()
                 data = resp.json()
-            except Exception:
+            except Exception as exc:
+                failures += 1
+                last_error = exc
                 continue
             if not isinstance(data, list):
                 continue
@@ -396,7 +429,7 @@ async def fetch_devto_candidates(
                 published = None
                 if isinstance(pub_str, str):
                     try:
-                        published = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                        published = _utc(datetime.fromisoformat(pub_str.replace("Z", "+00:00")))
                     except ValueError:
                         pass
                 if cutoff is not None and published is not None and published.timestamp() < cutoff:
@@ -420,5 +453,6 @@ async def fetch_devto_candidates(
     finally:
         if owns_client:
             await http.aclose()
+    _raise_if_all_failed(len(tags), failures, last_error, "devto")
     ranked = sorted(by_url.values(), key=lambda pair: pair[1], reverse=True)
     return [candidate for candidate, _ in ranked[:max_results]]

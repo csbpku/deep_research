@@ -59,6 +59,15 @@ class _Row:
     output_text: str | None = None
 
 
+@dataclass(frozen=True)
+class QuotaExceeded:
+    """Result of a rejected ``enqueue_with_quota`` call."""
+
+    scope: Literal["user", "team"]
+    used: int
+    limit: int
+
+
 class JobStore:
     """Protocol seam; concrete impls below.
 
@@ -76,6 +85,32 @@ class JobStore:
         return None
 
     async def enqueue(self, snapshot: JobSnapshot) -> None:
+        return None
+
+    async def enqueue_with_quota(
+        self,
+        snapshot: JobSnapshot,
+        *,
+        user_limit: int,
+        team_limit: int,
+    ) -> QuotaExceeded | None:
+        """Check the daily quota and enqueue as one step.
+
+        The job being submitted (``snapshot.job_id``) never counts toward its
+        own quota. Default implementation is check-then-enqueue; concrete
+        stores override it to make the step atomic.
+        """
+        user_used = await self.count_submissions_today(
+            requester_id=snapshot.requester_id, exclude_job_id=snapshot.job_id
+        )
+        if user_used >= user_limit:
+            return QuotaExceeded("user", user_used, user_limit)
+        team_used = await self.count_submissions_today(
+            team_scope=True, exclude_job_id=snapshot.job_id
+        )
+        if team_used >= team_limit:
+            return QuotaExceeded("team", team_used, team_limit)
+        await self.enqueue(snapshot)
         return None
 
     async def acquire_next_job(self, worker_id: str) -> tuple[JobLease, JobSnapshot] | None:
@@ -167,6 +202,7 @@ class JobStore:
         *,
         requester_id: str | None = None,
         team_scope: bool = False,
+        exclude_job_id: str | None = None,
     ) -> int:
         """W6: 返回当天 UTC 内的提交总数(queued/running/succeeded/partial/failed/cancelled)。
 
@@ -225,6 +261,7 @@ class InMemoryJobStore(JobStore):
     heartbeat_seconds: int = 15
     _rows: dict[str, _Row] = field(default_factory=dict)
     _global_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _quota_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _row_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
     def _row_lock(self, job_id: str) -> asyncio.Lock:
@@ -238,6 +275,18 @@ class InMemoryJobStore(JobStore):
         async with self._global_lock:
             self._rows[snapshot.job_id] = _Row(snapshot=snapshot)
             self._row_locks.setdefault(snapshot.job_id, asyncio.Lock())
+
+    async def enqueue_with_quota(
+        self,
+        snapshot: JobSnapshot,
+        *,
+        user_limit: int,
+        team_limit: int,
+    ) -> QuotaExceeded | None:
+        async with self._quota_lock:
+            return await JobStore.enqueue_with_quota(
+                self, snapshot, user_limit=user_limit, team_limit=team_limit
+            )
 
     async def list_jobs(
         self,
@@ -514,6 +563,7 @@ class InMemoryJobStore(JobStore):
         *,
         requester_id: str | None = None,
         team_scope: bool = False,
+        exclude_job_id: str | None = None,
     ) -> int:
         """W6: in-memory 实现 — 线性扫。
 
@@ -529,6 +579,8 @@ class InMemoryJobStore(JobStore):
             rows = list(self._rows.values())
         count = 0
         for r in rows:
+            if exclude_job_id is not None and r.snapshot.job_id == exclude_job_id:
+                continue
             # InMemoryJobStore 没有显式 created_at 字段;用 enqueue 顺序不可靠。
             # 测试路径以 row.snapshot.job_id 时间戳不可靠,所以这里仅按"已存在行"
             # 计入;测试路径不依赖日期边界过滤(测试统一用同一个 fixture 当天)。

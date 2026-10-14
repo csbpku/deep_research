@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, replace
@@ -3142,6 +3143,8 @@ class _Job:
     # its lease budget expires. A flag alone cannot cancel an HTTP/LLM await.
     task: asyncio.Task[None] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # First time prune observed this job in a terminal state (monotonic).
+    terminal_seen_at: float | None = None
 
 
 # P1.8: reportLength → gpt-researcher ceiling mapping. The deep preset
@@ -3700,6 +3703,57 @@ def _resolved_internal_sources(
 
 # ── Adapter ────────────────────────────────────────────────────────
 
+_TERMINAL_JOB_STATUSES = frozenset(
+    {
+        AI_JOB_STATUS["SUCCEEDED"],
+        AI_JOB_STATUS["FAILED"],
+        AI_JOB_STATUS["PARTIAL"],
+        AI_JOB_STATUS["CANCELLED"],
+    }
+)
+
+# Env vars a gpt-researcher run mutates; provider credential vars
+# (``*_API_KEY`` / ``*_BASE_URL``) are matched by suffix because the provider
+# set is dynamic (ANTHROPIC, OPENAI, MINIMAX, DEEPSEEK, ...).
+_RUN_MUTATED_ENV = frozenset(
+    {
+        "RETRIEVER", "SMART_LLM", "FAST_LLM", "STRATEGIC_LLM", "LANGUAGE",
+        "TOTAL_WORDS", "MAX_SEARCH_RESULTS_PER_QUERY", "MAX_URLS_TO_SCRAPE",
+        "COMPRESSION_THRESHOLD", "SIMILARITY_THRESHOLD", "DOC_PATH",
+    }
+)
+_ENV_SCOPE_LOCK = threading.Lock()
+_ENV_SCOPE_DEPTH = 0
+_ENV_SCOPE_SNAPSHOT: dict[str, str] = {}
+
+
+def _is_run_mutated_env(key: str) -> bool:
+    return key in _RUN_MUTATED_ENV or key.endswith(("_API_KEY", "_BASE_URL"))
+
+
+def _enter_env_scope() -> None:
+    global _ENV_SCOPE_DEPTH, _ENV_SCOPE_SNAPSHOT
+    with _ENV_SCOPE_LOCK:
+        if _ENV_SCOPE_DEPTH == 0:
+            _ENV_SCOPE_SNAPSHOT = {
+                k: v for k, v in os.environ.items() if _is_run_mutated_env(k)
+            }
+        _ENV_SCOPE_DEPTH += 1
+
+
+def _exit_env_scope() -> None:
+    global _ENV_SCOPE_DEPTH
+    with _ENV_SCOPE_LOCK:
+        _ENV_SCOPE_DEPTH = max(0, _ENV_SCOPE_DEPTH - 1)
+        if _ENV_SCOPE_DEPTH > 0:
+            return
+        for key in [k for k in os.environ if _is_run_mutated_env(k)]:
+            if key not in _ENV_SCOPE_SNAPSHOT:
+                os.environ.pop(key, None)
+        for key, prior in _ENV_SCOPE_SNAPSHOT.items():
+            os.environ[key] = prior
+
+
 class GptResearcherAdapter(ResearchEngineAdapter):
     """GPT Researcher adapter implementing ``ResearchEngineAdapter``.
 
@@ -3755,6 +3809,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
 
     async def submit(self, request: ResearchRequest) -> str:
         async with self._global_lock:
+            self._prune_jobs_locked()
             if request.job_id in self._jobs:
                 return request.job_id
             job = _Job(
@@ -3764,6 +3819,38 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             self._jobs[request.job_id] = job
         job.task = asyncio.create_task(self._run(job))
         return request.job_id
+
+    def _prune_jobs_locked(self) -> None:
+        """Drop terminal jobs past a TTL, then oldest terminal jobs past a cap.
+
+        Running/queued jobs are never evicted. The TTL leaves callers time to
+        read the final status. Env: ``ADAPTER_JOB_TTL_SECONDS`` (default 3600),
+        ``ADAPTER_JOB_MAX_RETAINED`` (terminal jobs kept, default 200).
+        """
+        try:
+            ttl = float(os.environ.get("ADAPTER_JOB_TTL_SECONDS", "3600"))
+        except ValueError:
+            ttl = 3600.0
+        try:
+            max_kept = int(os.environ.get("ADAPTER_JOB_MAX_RETAINED", "200"))
+        except ValueError:
+            max_kept = 200
+        now = time.monotonic()
+        terminal: list[tuple[float, str]] = []
+        for job_id, job in list(self._jobs.items()):
+            if job.status not in _TERMINAL_JOB_STATUSES:
+                continue
+            if job.terminal_seen_at is None:
+                job.terminal_seen_at = now
+            if now - job.terminal_seen_at >= ttl:
+                del self._jobs[job_id]
+            else:
+                terminal.append((job.terminal_seen_at, job_id))
+        overflow = len(terminal) - max(0, max_kept)
+        if overflow > 0:
+            terminal.sort()
+            for _, job_id in terminal[:overflow]:
+                del self._jobs[job_id]
 
     async def get_status(self, job_id: str) -> AdapterStatus:
         job = self._require_job(job_id)
@@ -3988,16 +4075,9 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         # gpt-researcher reads ANTHROPIC_API_KEY / *_LLM at construction
         # time, but we must NOT leak heavy creds into the process-wide
         # env (which would corrupt _run_brief / distilled_scorer later).
-        _saved_env = {
-            "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
-            "ANTHROPIC_BASE_URL": os.environ.get("ANTHROPIC_BASE_URL"),
-            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
-            "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL"),
-            "RETRIEVER": os.environ.get("RETRIEVER"),
-            "SMART_LLM": os.environ.get("SMART_LLM"),
-            "FAST_LLM": os.environ.get("FAST_LLM"),
-            "STRATEGIC_LLM": os.environ.get("STRATEGIC_LLM"),
-        }
+        # Concurrent runs share one process-wide env, so the snapshot is
+        # reference-counted: the first run in saves, the last one out restores.
+        _enter_env_scope()
         try:
             # Configure environment for gpt-researcher's Config class.
             # Use heavy-tier credentials (Shopee compass gateway) so
@@ -4783,11 +4863,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         finally:
             # Restore env so light-tier callers (_run_brief / scorer)
             # are not contaminated by heavy creds.
-            for key, prior in _saved_env.items():
-                if prior is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = prior
+            _exit_env_scope()
 
     async def _load_locked_user_sources(
         self,

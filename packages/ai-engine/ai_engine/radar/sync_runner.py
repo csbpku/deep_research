@@ -30,7 +30,13 @@ from ai_engine.radar.diagnostic_policy import (
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
 from ai_engine.contracts.states import AI_JOB_STATUS
-from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError, safe_fetch
+from ai_engine.fetcher.safe_fetch import (
+    FetchedDocument,
+    SafeFetchError,
+    UpstreamHttpError,
+    raise_for_document_status,
+    safe_fetch,
+)
 from ai_engine.ingestion.pipeline import _generate_brief
 from ai_engine.markdown_pipeline import normalize_markdown
 from ai_engine.radar.models import RadarCandidate, RadarSource
@@ -353,24 +359,49 @@ def _source_domain(source: RadarSource) -> str:
     return ""
 
 
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_RETRYABLE_ERROR_CODES = frozenset(
+    {"URL_FETCH_DNS", "URL_FETCH_TIMEOUT", "UPSTREAM_RATE_LIMITED", "URL_FETCH_NETWORK"}
+)
+
+
 def _is_retryable_transport_error(exc: BaseException) -> bool:
-    if isinstance(exc, SafeFetchError):
-        return exc.code in {"URL_FETCH_DNS", "URL_FETCH_TIMEOUT"}
-    if isinstance(exc, socket.gaierror):
-        return True
+    """Classify retryability by exception type / HTTP status, never by message text.
+
+    Wrapped exceptions are followed through ``__cause__`` / ``__context__`` so a
+    source adapter that re-raises with a stable prefix keeps the verdict.
+    """
     import httpx as _httpx
 
-    if isinstance(exc, (_httpx.TimeoutException, _httpx.ConnectError,
-                        _httpx.NetworkError, _httpx.RemoteProtocolError)):
-        return True
-    # Some source adapters deliberately wrap their HTTP exception to keep a
-    # stable source-specific prefix. Retry only when that wrapper still
-    # contains an unambiguous transient transport/rate-limit marker.
-    message = str(exc).lower()
-    return any(marker in message for marker in (
-        "connecttimeout", "readtimeout", "connecterror", "networkerror",
-        "timed out", "timeout", "rate limit", "status code 429", " 429 ",
-    ))
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, UpstreamHttpError):
+            return current.status in _RETRYABLE_HTTP_STATUSES or (
+                current.code == "UPSTREAM_RATE_LIMITED"
+            )
+        if isinstance(current, SafeFetchError):
+            return current.code in _RETRYABLE_ERROR_CODES
+        if isinstance(current, socket.gaierror):
+            return True
+        if isinstance(current, _httpx.HTTPStatusError):
+            response = current.response
+            if response.status_code in _RETRYABLE_HTTP_STATUSES:
+                return True
+            if (
+                response.status_code == 403
+                and response.headers.get("x-ratelimit-remaining", "").strip() == "0"
+            ):
+                return True
+            return False
+        if isinstance(current, (_httpx.TimeoutException, _httpx.ConnectError,
+                                _httpx.NetworkError, _httpx.RemoteProtocolError)):
+            return True
+        if getattr(current, "error_code", None) in _RETRYABLE_ERROR_CODES:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _is_retryable_source_result(result: SourceRunResult) -> bool:
@@ -551,8 +582,15 @@ async def _fetch_document_with_content_retries(
     for document_url in _preferred_document_urls(url, source_type):
         for attempt in range(RADAR_CONTENT_RETRIES + 1):
             try:
+                async def _fetch_checked(target: str = document_url) -> FetchedDocument:
+                    doc = await document_fetcher(target)
+                    if doc.status not in (404, 410):
+                        # 403/429/5xx error pages are failures, not content.
+                        raise_for_document_status(doc, host=domain)
+                    return doc
+
                 fetched = await _with_transport_retries(
-                    lambda: document_fetcher(document_url),
+                    _fetch_checked,
                     run_id=run_id,
                     source_id=source_id,
                     domain=domain,
@@ -745,13 +783,27 @@ async def _finish_run(
         await conn.commit()
 
 
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Cut ``text`` to at most ``max_bytes`` UTF-8 bytes on a character boundary."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _stored_original(markdown: str) -> tuple[str, int, str]:
+    """Return (stored_text, byte_length, sha256) describing what is actually stored."""
+    stored = _truncate_utf8(markdown, ORIGINAL_MARKDOWN_MAX_BYTES)
+    raw = stored.encode("utf-8")
+    return stored, len(raw), hashlib.sha256(raw).hexdigest()
+
+
 async def _existing_candidate(pool: Any, canonical_url: str) -> dict[str, Any] | None:
     async with pool.connection() as conn:
         row = await (
             await conn.execute(
-                'SELECT "id", "body", "originalMarkdown", "tags" FROM "summaries" '
-                'WHERE "canonicalUrl" = %s '
-                "AND \"status\" <> 'archived' LIMIT 1",
+                'SELECT "id", "status", "body", "originalMarkdown", "tags" FROM "summaries" '
+                'WHERE "canonicalUrl" = %s LIMIT 1',
                 (canonical_url,),
             )
         ).fetchone()
@@ -804,7 +856,7 @@ async def _retry_existing_summary_content(
     except Exception:
         pass
     body = _best_content_body(interpretation, markdown, candidate.snippet)
-    content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    stored_markdown, stored_bytes, stored_sha256 = _stored_original(markdown)
     async with pool.connection() as conn:
         await conn.execute(
             'UPDATE "summaries" SET "title" = %s, "body" = %s, '
@@ -817,8 +869,7 @@ async def _retry_existing_summary_content(
             'WHERE "id" = %s',
             (
                 candidate.title[:300], body, interpretation or None,
-                markdown[:ORIGINAL_MARKDOWN_MAX_BYTES],
-                len(markdown.encode("utf-8")), content_sha256,
+                stored_markdown, stored_bytes, stored_sha256,
                 candidate.published_at or datetime.now(timezone.utc),
                 run_id, summary_id,
             ),
@@ -848,9 +899,7 @@ async def _record_sync_diagnostic(
     original_kind = None
     if markdown and DEEPDIVE_ENABLED and not browser_reading_mode_enabled():
         original_kind = _classify_original_kind(source.source_type, candidate.url)
-        original_markdown = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES].decode(
-            "utf-8", errors="replace"
-        )
+        original_markdown = _truncate_utf8(markdown, ORIGINAL_MARKDOWN_MAX_BYTES)
     distilled_payload = None
     distilled_tier = None
     if distilled is not None and not getattr(distilled, "is_default", False):
@@ -998,10 +1047,8 @@ async def _insert_candidate(
             original_kind_override
             or _classify_original_kind(source.source_type, stored_url)
         )
-        truncated = markdown.encode("utf-8")[:ORIGINAL_MARKDOWN_MAX_BYTES]
-        original_markdown = truncated.decode("utf-8", errors="replace")
-        original_bytes = len(truncated)
-        original_sha256 = content_sha256
+        # Truncate on a UTF-8 boundary and describe exactly what is stored.
+        original_markdown, original_bytes, original_sha256 = _stored_original(markdown)
 
     async with pool.connection() as conn:
         async with conn.transaction():
@@ -1653,6 +1700,12 @@ async def _run_source(
                     existing = await _existing_candidate(pool, normalized.canonical_url)
                     if existing is not None:
                         existing_id = str(existing["id"])
+                        if str(existing.get("status") or "") == "archived":
+                            # Archived rows are tombstones: never re-fetch, re-brief,
+                            # re-score or resurrect them (INSERT would DO NOTHING anyway).
+                            total_skipped += 1
+                            skipped_existing += 1
+                            return
                         # In browser mode the URL is the reading source. An
                         # old candidate that still has a pending enrichment
                         # state must not cause the new sync to fetch its body

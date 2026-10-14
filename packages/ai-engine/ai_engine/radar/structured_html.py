@@ -44,11 +44,37 @@ def _clean_inline(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+_ALLOWED_LINK_SCHEMES = frozenset({"http", "https", "mailto"})
+_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
+_STRIP_CONTROLS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _escape_md_label(value: str) -> str:
+    """Neutralise Markdown link/image syntax inside labels and alt text."""
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _md_destination(url: str) -> str:
+    """Make a URL safe as an inline Markdown link destination."""
+    return (
+        url.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+        .replace("<", "%3C").replace(">", "%3E")
+    )
+
+
 def _href(node: Tag) -> str:
-    href = str(node.get("href") or "").strip()
-    if href.startswith(("javascript:", "data:")):
+    raw = str(node.get("href") or "")
+    # Browsers ignore tabs/newlines/controls inside a URL scheme, so the scheme
+    # check must run on a whitespace/control-free, case-folded form.
+    compact = re.sub(r"\s+", "", _STRIP_CONTROLS_RE.sub("", raw))
+    if not compact:
         return ""
-    return href
+    match = _SCHEME_RE.match(compact)
+    if match and match.group(1).lower() not in _ALLOWED_LINK_SCHEMES:
+        return ""
+    if match is None and ":" in compact.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]:
+        return ""  # e.g. "1:foo" / odd scheme forms: not a plain relative URL
+    return _md_destination(_STRIP_CONTROLS_RE.sub("", raw).strip())
 
 
 def _image_url(node: Tag, base_url: str | None) -> str:
@@ -64,7 +90,7 @@ def _image_url(node: Tag, base_url: str | None) -> str:
     if not raw:
         return ""
     value = urljoin(base_url or "", raw)
-    return value if urlparse(value).scheme in {"http", "https"} else ""
+    return _md_destination(value) if urlparse(value).scheme in {"http", "https"} else ""
 
 
 def _clean_svg_text(value: str) -> str:
@@ -218,11 +244,16 @@ def _figure_fragment(value: Any) -> str:
     return f"#{figure_id}" if re.fullmatch(r"[A-Za-z]\d+\.F\d+", figure_id) else ""
 
 
-def _inline(node: Any, base_url: str | None = None, figure_id: str = "") -> str:
+def _inline(
+    node: Any,
+    base_url: str | None = None,
+    figure_id: str = "",
+    escape: bool = False,
+) -> str:
     if isinstance(node, Comment):
         return ""
     if isinstance(node, NavigableString):
-        return str(node)
+        return _escape_md_label(str(node)) if escape else str(node)
     if not isinstance(node, Tag):
         return ""
     name = node.name.lower()
@@ -238,7 +269,9 @@ def _inline(node: Any, base_url: str | None = None, figure_id: str = "") -> str:
     if name == "object":
         src = _image_url(node, base_url)
         src += _figure_fragment(figure_id)
-        alt = _clean_inline(str(node.get("aria-label") or node.get("title") or "图形"))
+        alt = _escape_md_label(
+            _clean_inline(str(node.get("aria-label") or node.get("title") or "图形"))
+        )
         return f"![{alt}]({src})" if src else ""
     if name == "math":
         alttext = str(node.get("alttext") or "").strip()
@@ -249,23 +282,31 @@ def _inline(node: Any, base_url: str | None = None, figure_id: str = "") -> str:
     if name == "br":
         return "\n"
     if name == "a":
-        label = _clean_inline("".join(_inline(child, base_url) for child in node.children))
+        label = _clean_inline(
+            "".join(_inline(child, base_url, escape=True) for child in node.children)
+        )
         href = _href(node)
         return f"[{label}]({href})" if label and href else label
     if name == "img":
         src = _image_url(node, base_url)
         src += _figure_fragment(figure_id)
-        alt = _clean_inline(str(node.get("alt") or node.get("title") or "图片"))
+        alt = _escape_md_label(
+            _clean_inline(str(node.get("alt") or node.get("title") or "图片"))
+        )
         return f"![{alt}]({src})" if src else ""
     if name == "code" and node.parent and node.parent.name != "pre":
         return f"`{node.get_text('', strip=False).strip()}`"
     if name in {"strong", "b"}:
-        text = _clean_inline("".join(_inline(child, base_url) for child in node.children))
+        text = _clean_inline(
+            "".join(_inline(child, base_url, escape=escape) for child in node.children)
+        )
         return f"**{text}**" if text else ""
     if name in {"em", "i"}:
-        text = _clean_inline("".join(_inline(child, base_url) for child in node.children))
+        text = _clean_inline(
+            "".join(_inline(child, base_url, escape=escape) for child in node.children)
+        )
         return f"*{text}*" if text else ""
-    return "".join(_inline(child, base_url) for child in node.children)
+    return "".join(_inline(child, base_url, escape=escape) for child in node.children)
 
 
 def _render(node: Any, level: int = 0, base_url: str | None = None) -> str:

@@ -40,7 +40,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
-from ai_engine.fetcher.safe_fetch import safe_fetch
+from ai_engine.fetcher.safe_fetch import raise_for_document_status, safe_fetch
 from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import resolve_spec
 from ai_engine.radar.distilled_scorer import _parse_llm_response
@@ -833,7 +833,10 @@ async def enrich_web_candidate(
         )
     else:
         try:
-            doc = await safe_fetch(canonical_url, timeout=15.0)
+            fetched_doc = await safe_fetch(canonical_url, timeout=15.0)
+            # 403/429/5xx error pages are failures, never article content.
+            raise_for_document_status(fetched_doc)
+            doc = fetched_doc
         except Exception:
             if not existing_markdown or _is_low_quality_content(existing_markdown):
                 return None

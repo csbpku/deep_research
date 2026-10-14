@@ -38,7 +38,10 @@ from ai_engine.llm.token_budget import (
     reserve_llm_token_task,
 )
 from ai_engine.text_chunking import split_text_by_token_budget
-from ai_engine.untrusted_text import sanitize_external_instruction_text
+from ai_engine.untrusted_text import (
+    UNTRUSTED_SOURCE_NOTICE,
+    sanitize_external_instruction_text,
+)
 
 ReviewStatus = Literal["passed", "needs_revision", "blocked", "review_unavailable"]
 ReviewProgressCallback = Callable[[str, dict[str, object]], Awaitable[None]]
@@ -1262,7 +1265,7 @@ _CLAIM_INVENTORY_SYSTEM = """你是研究报告的声明抽取器，不负责判
 research_process、interpretation、citation_relationship 不需要事实判断，但不能从清单中省略。
 只输出合法 JSON，不要 Markdown 或解释：
 {"coverage_status":"complete|insufficient","claims":[{"claim_id":"C1","claim":"...","claim_type":"external_fact|research_process|interpretation|citation_relationship","risk":"high|medium|low|opinion"}]}
-"""
+""" + UNTRUSTED_SOURCE_NOTICE + "\n"
 
 
 _CLAIM_ADJUDICATION_SYSTEM = """你是研究报告的证据裁判，只能判断给定声明与给定来源摘录之间的关系。
@@ -1278,7 +1281,7 @@ verified、contradicted、correctable 必须绑定给定来源中的逐字 excer
 同时返回 source_type、published_at、evidence_strength（high|medium|low）和 counterexamples（字符串数组）。
 没有直接摘录时只能返回 unsupported 或 unverified。只输出合法 JSON：
 {"claims":[{"claim_id":"C1","claim":"原声明","verdict":"verified|correctable|contradicted|unsupported|unverified|not_applicable","evidence":{"source_url":null,"excerpt":null,"observed_at":null,"resolver":null,"source_type":null,"published_at":null,"evidence_strength":"unknown","counterexamples":[]},"correction":null,"reason":null}],"revision_instructions":[]}
-"""
+""" + UNTRUSTED_SOURCE_NOTICE + "\n"
 
 _FACT_CHALLENGE_SYSTEM = """你是独立的第二位事实核验员。
 你只判断给定的一条外部事实声明与给定来源摘录的关系，不参考其他审核员的判断，也不重写报告。
@@ -1286,7 +1289,7 @@ _FACT_CHALLENGE_SYSTEM = """你是独立的第二位事实核验员。
 如果声明与来源明确冲突，使用 contradicted；如果来源直接支持声明的全部关键范围，使用 verified。
 只输出合法 JSON，不要 Markdown 或解释：
 {"claims":[{"claim_id":"C1","claim":"原声明","verdict":"verified|correctable|contradicted|unsupported|unverified","evidence":{"source_url":null,"excerpt":null,"observed_at":null,"resolver":null},"correction":null,"reason":null}],"revision_instructions":[]}
-"""
+""" + UNTRUSTED_SOURCE_NOTICE + "\n"
 
 
 _REVIEW_SYSTEM = """你是独立的事实审核 Agent，不负责重写报告。
@@ -1298,13 +1301,13 @@ _REVIEW_SYSTEM = """你是独立的事实审核 Agent，不负责重写报告。
 每条声明都必须带 claim_type：external_fact（外部事实）、research_process（本轮研究过程观察）、interpretation（观点/推断/建议）或 citation_relationship（仅表示报告引用了来源）。后 3 类必须使用 not_applicable，不需要外部摘录，也不进入事实发布门禁。
 只输出合法 JSON，不要 Markdown，不要补充 JSON 之外的文字。
 JSON 格式：{"status":"passed|needs_revision|blocked","claims":[{"claim_id":"...","claim":"...","claim_type":"external_fact|research_process|interpretation|citation_relationship","risk":"high|medium|low|opinion","verdict":"verified|correctable|contradicted|unsupported|unverified|not_applicable","evidence":{"source_url":null,"excerpt":null,"observed_at":null,"resolver":null},"correction":null,"reason":null}],"revision_instructions":[]}
-"""
+""" + UNTRUSTED_SOURCE_NOTICE + "\n"
 
 _REVIEW_RETRY_SYSTEM = """你是事实审核器。上一次输出无法解析。
 现在只返回一个紧凑、合法的 JSON 对象，不要输出 <think>、Markdown、解释或代码围栏。
 最多返回 12 条最重要的 high/medium 声明；没有直接证据时 verdict 必须是 unverified，不能省略该声明。
 JSON 格式：{"status":"passed|needs_revision|blocked","claims":[],"revision_instructions":[]}
-"""
+""" + UNTRUSTED_SOURCE_NOTICE + "\n"
 
 
 def _claim_gap_instructions(

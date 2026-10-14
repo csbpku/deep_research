@@ -158,7 +158,9 @@ def patch_resolver(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, str], None
             )
         return str(infos[0][4][0])
 
-    monkeypatch.setattr("ai_engine.fetcher.safe_fetch._resolve_ip", _resolve)
+    monkeypatch.setattr(
+        "ai_engine.fetcher.safe_fetch._resolve_ips", lambda h: [_resolve(h)]
+    )
     return table.__setitem__
 
 
@@ -269,8 +271,8 @@ async def test_ssrf_07_dns_rebinding_rejected(
     import ai_engine.fetcher.safe_fetch as sf
 
     # Override resolver directly so we can mutate per-call.
-    prev = sf._resolve_ip
-    sf._resolve_ip = _resolve_rebind  # type: ignore[assignment]
+    prev = sf._resolve_ips
+    sf._resolve_ips = lambda h: [_resolve_rebind(h)]  # type: ignore[assignment]
 
     def _resolve_safe(host: str) -> str:
         return "8.8.8.8"
@@ -287,16 +289,16 @@ async def test_ssrf_07_dns_rebinding_rejected(
     client = _client(transport)
 
     try:
-        sf._resolve_ip = _resolve_safe  # type: ignore[assignment]  # shape check ok
+        sf._resolve_ips = lambda h: [_resolve_safe(h)]  # type: ignore[assignment]
         # The redirect path calls _validate_url_shape + _resolve_ip
         # again; restore the rebind variant for that.
-        sf._resolve_ip = _resolve_rebind  # type: ignore[assignment]
+        sf._resolve_ips = lambda h: [_resolve_rebind(h)]  # type: ignore[assignment]
         with pytest.raises(SafeFetchError) as exc_info:
             await safe_fetch("http://public.example/", client=client)
         assert exc_info.value.code == "URL_FETCH_BLOCKED"
         assert "10.0.0.1" in exc_info.value.message
     finally:
-        sf._resolve_ip = prev  # type: ignore[assignment]
+        sf._resolve_ips = prev  # type: ignore[assignment]
 
 
 @pytest.mark.asyncio

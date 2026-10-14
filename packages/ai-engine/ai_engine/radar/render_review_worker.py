@@ -395,6 +395,10 @@ async def _run_browser_service(
         async with httpx.AsyncClient(timeout=timeout_seconds + 5) as client:
             response = await client.post(
                 endpoint,
+                headers={
+                    "x-render-review-token": os.environ.get("RENDER_REVIEW_TOKEN")
+                    or os.environ.get("INTERNAL_SERVICE_TOKEN", ""),
+                },
                 json={
                     "summaryId": summary_id,
                     "round": round_number,

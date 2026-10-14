@@ -45,7 +45,7 @@ from ai_engine.job_runner.models import (
     LeaseLostError,
     ReviewWorkItem,
 )
-from ai_engine.job_runner.store import JobRowView, JobStore
+from ai_engine.job_runner.store import JobRowView, JobStore, QuotaExceeded
 
 logger = logging.getLogger("ai_engine.job_runner.db_store")
 
@@ -201,6 +201,27 @@ def _view_from_row(row_dict: dict[str, Any]) -> DbJobView:
     )
 
 
+# DB CHECK constraints (ai_jobs_attempts_range, content_import_attempts_range,
+# review attempts) cap ``attempts`` at 3; a larger WORKER_MAX_RETRIES would make
+# the requeue UPDATE violate the constraint and abort the whole reaper step.
+DB_MAX_ATTEMPTS = 3
+
+
+def _effective_max_retries() -> int:
+    raw = os.environ.get("WORKER_MAX_RETRIES", str(DB_MAX_ATTEMPTS))
+    try:
+        configured = int(raw)
+    except (TypeError, ValueError):
+        configured = DB_MAX_ATTEMPTS
+    effective = max(0, min(configured, DB_MAX_ATTEMPTS))
+    if effective != configured:
+        logger.warning(
+            "ai-engine.worker.max_retries_clamped",
+            extra={"configured": configured, "effective": effective},
+        )
+    return effective
+
+
 class DbJobStore(JobStore):
     """PostgreSQL-backed JobStore using AsyncConnectionPool."""
 
@@ -276,7 +297,7 @@ class DbJobStore(JobStore):
             self._heartbeat_seconds * 4,
             int(os.environ.get("AI_JOB_STALE_HEARTBEAT_SECONDS", "60")),
         )
-        self._max_retries = int(os.environ.get("WORKER_MAX_RETRIES", "3"))
+        self._max_retries = _effective_max_retries()
         self._pool_min_size = min_size if min_size is not None else int(
             os.environ.get("DB_POOL_MIN_SIZE", "2")
         )
@@ -519,6 +540,57 @@ class DbJobStore(JobStore):
 
     async def enqueue(self, snapshot: JobSnapshot) -> None:
         await self.open()
+        sql, params = self._enqueue_statement(snapshot)
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(sql, params)
+
+    async def enqueue_with_quota(
+        self,
+        snapshot: JobSnapshot,
+        *,
+        user_limit: int,
+        team_limit: int,
+    ) -> "QuotaExceeded | None":
+        """Atomically check the daily quota and enqueue.
+
+        A transaction-scoped advisory lock serialises concurrent submissions so
+        N simultaneous requests cannot all observe ``used < limit``. The row the
+        BFF pre-created for ``snapshot.job_id`` is excluded from the count, so
+        the effective limit is exactly ``user_limit``.
+        """
+        await self.open()
+        if self._table_name != AI_TABLE:
+            await self.enqueue(snapshot)
+            return None
+        sql, params = self._enqueue_statement(snapshot)
+        t = f'"{self._table_name}"'
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))", ("ai-job-quota",)
+                )
+                base = (
+                    f'SELECT count(*) AS cnt FROM {t} WHERE "createdAt" >= '
+                    f"date_trunc('day', now()) AND \"status\" <> 'cancelled' AND \"id\" <> %s"
+                )
+                row = await (
+                    await conn.execute(
+                        base + ' AND "requesterId" = %s',
+                        (snapshot.job_id, snapshot.requester_id),
+                    )
+                ).fetchone()
+                user_used = int(cast(dict[str, Any], row)["cnt"]) if row else 0
+                if user_used >= user_limit:
+                    return QuotaExceeded("user", user_used, user_limit)
+                row = await (await conn.execute(base, (snapshot.job_id,))).fetchone()
+                team_used = int(cast(dict[str, Any], row)["cnt"]) if row else 0
+                if team_used >= team_limit:
+                    return QuotaExceeded("team", team_used, team_limit)
+                await conn.execute(sql, params)
+        return None
+
+    def _enqueue_statement(self, snapshot: JobSnapshot) -> tuple[str, tuple[object, ...]]:
         t = f'"{self._table_name}"'
         params: tuple[object, ...]
         if self._table_name == IMPORT_TABLE:
@@ -583,9 +655,7 @@ class DbJobStore(JobStore):
                 json.dumps([]),
             )
             params = ai_params
-        async with self.pool.connection() as conn:
-            async with conn.transaction():
-                await conn.execute(sql, params)
+        return sql, params
 
     async def persist_source_refs(
         self,
@@ -647,6 +717,7 @@ class DbJobStore(JobStore):
         *,
         requester_id: str | None = None,
         team_scope: bool = False,
+        exclude_job_id: str | None = None,
     ) -> int:
         """W6: count submissions since today UTC midnight.
 
@@ -668,6 +739,9 @@ class DbJobStore(JobStore):
         if requester_id is not None:
             where.append('"requesterId" = %s')
             params.append(requester_id)
+        if exclude_job_id is not None:
+            where.append('"id" <> %s')
+            params.append(exclude_job_id)
         sql = f"SELECT count(*) AS cnt FROM {t} WHERE {' AND '.join(where)}"
         async with self.pool.connection() as conn:
             row = await (await conn.execute(sql, tuple(params))).fetchone()
@@ -1047,7 +1121,17 @@ class DbJobStore(JobStore):
                 raw = cast(dict[str, object], row)
                 run_id = str(raw["reviewRunId"])
                 job_id = str(raw["jobId"]) if raw.get("jobId") else None
-                attempt = _json_int(raw.get("attempt"), 0) + 1
+                prior_attempts = _json_int(raw.get("attempt"), 0)
+                if raw.get("executionStatus") == "reviewing" and (
+                    prior_attempts >= self._max_retries
+                ):
+                    # Reclaiming an expired lease would start yet another
+                    # attempt for a review that already crashed the worker
+                    # ``max_retries`` times. Stop the crash loop: close the run
+                    # as unavailable (the report itself stays readable).
+                    await self._exhaust_review_run(conn, raw, run_id, job_id)
+                    return None
+                attempt = prior_attempts + 1
                 await conn.execute(
                     'UPDATE "research_review_runs" SET '
                     '  "executionStatus" = \'reviewing\', "attempt" = %s, '
@@ -1140,6 +1224,57 @@ class DbJobStore(JobStore):
             claim_token=claim_token,
             review_mode=cast(Any, review_mode),
             target_claim=target_claim,
+        )
+
+    async def _exhaust_review_run(
+        self,
+        conn: Any,
+        raw: dict[str, object],
+        run_id: str,
+        job_id: str | None,
+    ) -> None:
+        """Terminate a review run whose lease expired past the retry cap."""
+        details = json.dumps(
+            {
+                "phase": "completed",
+                "status": "review_unavailable",
+                "error_code": "REVIEW_RETRY_EXHAUSTED",
+                "attempts": _json_int(raw.get("attempt"), 0),
+            }
+        )
+        await conn.execute(
+            'UPDATE "research_review_runs" SET '
+            '  "executionStatus" = \'unavailable\', "outcome" = \'unavailable\', '
+            '  "details" = COALESCE("details", \'{}\'::jsonb) || %s::jsonb, '
+            '  "leaseExpiresAt" = NULL, "heartbeatAt" = NULL, "completedAt" = now() '
+            'WHERE "id" = %s',
+            (details, run_id),
+        )
+        mirror = (
+            '  "reviewStatus" = \'review_unavailable\', "reviewStartedAt" = NULL, '
+            '  "reviewRunToken" = NULL, "reviewedAt" = now(), '
+            '  "reviewDetails" = COALESCE("reviewDetails", \'{}\'::jsonb) || %s::jsonb '
+        )
+        if job_id:
+            await conn.execute(
+                'UPDATE "ai_research_jobs" SET' + mirror
+                + 'WHERE "id" = %s AND "reviewStatus" = \'reviewing\'',
+                (details, job_id),
+            )
+        await conn.execute(
+            'UPDATE "researches" SET' + mirror
+            + 'WHERE "id" = %s AND "reviewStatus" = \'reviewing\'',
+            (details, str(raw["researchId"])),
+        )
+        await conn.execute(
+            'UPDATE "research_evidence_tasks" SET "status" = \'completed\', '
+            '  "completedAt" = now(), "errorCode" = \'REVIEW_UNAVAILABLE\' '
+            'WHERE "reviewRunId" = %s AND "status" IN (\'review_queued\', \'evidence_ready\')',
+            (run_id,),
+        )
+        logger.warning(
+            "ai-engine.review.retry_exhausted",
+            extra={"review_run_id": run_id, "max_retries": self._max_retries},
         )
 
     async def heartbeat_review(self, work: ReviewWorkItem) -> bool:
@@ -1716,23 +1851,32 @@ class DbJobStore(JobStore):
             f'  AND "attempts" < %s '
             f'RETURNING "id"'
         )
-        async with self.pool.connection() as conn:
-            async with conn.transaction():
-                rows_partial: Sequence[object] = ()
-                if sql_partial:
-                    cur0 = await conn.execute(sql_partial, recovery_params)
-                    rows_partial = await cur0.fetchall()
-                cur1 = await conn.execute(
-                    sql_failed,
-                    (*recovery_params, self._max_retries),
+        # Each step runs in its own transaction so a failure in one (e.g. a
+        # constraint violation while requeueing) cannot roll back the others.
+        async def _step(name: str, sql: str, params: tuple[object, ...]) -> Sequence[object]:
+            try:
+                async with self.pool.connection() as conn:
+                    async with conn.transaction():
+                        cur = await conn.execute(sql, params)
+                        return await cur.fetchall()
+            except psycopg.Error:
+                logger.warning(
+                    "ai-engine.reaper.step_failed",
+                    extra={"step": name, "table": self._table_name},
+                    exc_info=True,
                 )
-                rows_failed = await cur1.fetchall()
-                cur2 = await conn.execute(
-                    sql_requeue,
-                    (*recovery_params, self._max_retries),
-                )
-                rows_requeued = await cur2.fetchall()
-                total = len(rows_partial) + len(rows_failed) + len(rows_requeued)
+                return ()
+
+        rows_partial: Sequence[object] = ()
+        if sql_partial:
+            rows_partial = await _step("partial", sql_partial, recovery_params)
+        rows_failed = await _step(
+            "failed", sql_failed, (*recovery_params, self._max_retries)
+        )
+        rows_requeued = await _step(
+            "requeue", sql_requeue, (*recovery_params, self._max_retries)
+        )
+        total = len(rows_partial) + len(rows_failed) + len(rows_requeued)
         if total:
             logger.info(
                 "ai-engine.reaper.sweep",

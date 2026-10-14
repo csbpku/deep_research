@@ -82,16 +82,23 @@ def _clean_wewe_content(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()[:WEWE_CONTENT_MAX_CHARS]
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Zone-less timestamps are UTC (never the host's local timezone)."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _published_at(raw: str) -> datetime | None:
     if not raw:
         return None
     from email.utils import parsedate_to_datetime
 
     try:
-        return parsedate_to_datetime(raw).astimezone(timezone.utc)
+        return _as_utc(parsedate_to_datetime(raw))
     except (TypeError, ValueError, OverflowError):
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+            return _as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
         except ValueError:
             return None
 

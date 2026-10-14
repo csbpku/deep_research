@@ -44,6 +44,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _max_retries() -> int:
+    try:
+        return max(0, int(os.getenv("WORKER_MAX_RETRIES", "3")))
+    except ValueError:
+        return 3
+
+
 async def _acquire(pool: Any, worker_id: str) -> tuple[ShareLease, dict[str, Any]] | None:
     lease_seconds = int(os.getenv("WORKER_LEASE_SECONDS", "1020"))
     heartbeat_seconds = float(os.getenv("WORKER_HEARTBEAT_SECONDS", "15"))
@@ -62,8 +69,21 @@ async def _acquire(pool: Any, worker_id: str) -> tuple[ShareLease, dict[str, Any
         'RETURNING s."id", s."submitterId", s."url", s."canonicalUrl", '
         's."userNote", s."attempts"'
     )
+    max_retries = _max_retries()
+    # A crashed worker leaves attempts incremented but the lease expired.
+    # Without a cap the row would be reclaimed forever; close it terminally
+    # before claiming so the crash loop ends.
+    exhaust_sql = (
+        'UPDATE "share_submissions" SET "completedAt" = now(), '
+        '"fetchErrorCode" = \'WORKER_RETRY_EXHAUSTED\', '
+        '"fetchErrorMessage" = \'lease expired past WORKER_MAX_RETRIES\', "lockedBy" = NULL, "leaseExpiresAt" = NULL, '
+        '"heartbeatAt" = NULL '
+        'WHERE "status" = \'pending\' AND "completedAt" IS NULL AND "attempts" >= %s '
+        'AND ("lockedBy" IS NULL OR "leaseExpiresAt" < now())'
+    )
     async with pool.connection() as conn:
         async with conn.transaction():
+            await conn.execute(exhaust_sql, (max_retries,))
             row = await (await conn.execute(sql, (worker_id, expiry, now))).fetchone()
     if row is None:
         return None

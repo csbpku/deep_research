@@ -300,9 +300,14 @@ def _parse_pubdate_from_rss(xml: str, url: str) -> datetime | None:
         pd_m = _re.search(r"<pubDate[^>]*>(.*?)</pubDate>", block, _re.DOTALL)
         if pd_m:
             try:
-                return parsedate_to_datetime(pd_m.group(1).strip())
+                parsed = parsedate_to_datetime(pd_m.group(1).strip())
             except Exception:
-                pass
+                continue
+            # "-0000" / zone-less dates parse as naive: treat as UTC so they can
+            # be compared with the aware cutoff.
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
     return None
 
 
@@ -418,15 +423,22 @@ async def check_and_fetch_vendor_news(
         for url, lastmod in current_urls.items():
             prev = previous.get(url)
             if prev is None or (lastmod and prev != lastmod):
-                # Apply the time window using RSS pubDate when present; for
-                # sitemap-only vendors fall back to <lastmod> so max_age_hours
-                # still bounds what we fetch.
-                pub_date = _parse_pubdate_from_rss(xml, url)
-                if pub_date is None:
-                    pub_date = _coerce_utc(lastmod)
-                if pub_date is not None and pub_date < cutoff:
+                try:
+                    # Apply the time window using RSS pubDate when present; for
+                    # sitemap-only vendors fall back to <lastmod> so max_age_hours
+                    # still bounds what we fetch.
+                    pub_date = _parse_pubdate_from_rss(xml, url)
+                    if pub_date is None:
+                        pub_date = _coerce_utc(lastmod)
+                    if pub_date is not None and pub_date < cutoff:
+                        continue
+                    new_or_changed.append((url, pub_date or datetime.now(timezone.utc)))
+                except Exception as exc:  # one malformed item must not abort the source
+                    logger.warning(
+                        "vendor_news_item_date_skipped",
+                        extra={"vendor": vendor, "error": type(exc).__name__},
+                    )
                     continue
-                new_or_changed.append((url, pub_date or datetime.now(timezone.utc)))
 
         # First-run cap: only fetch the N most recent URLs to avoid
         # overwhelming the vendor site and our pipeline on initial setup.
