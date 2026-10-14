@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass
 from collections.abc import Mapping
 from typing import Any, Literal, cast
 
+from ai_engine.untrusted_text import UNTRUSTED_CONTENT_NOTICE
 from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import resolve_spec
 from ai_engine.radar.distilled_scorer import _parse_llm_response
@@ -545,6 +546,7 @@ async def _review_with_agent(
         "只有 FINAL EXCERPT 的真实文档末尾不完整，或确定性检查明确指出截断时，"
         "才报告 truncated_content。若没有可识别的 finding，必须返回 approved，"
         "不要返回没有证据的 needs_manual_review。"
+        + UNTRUSTED_CONTENT_NOTICE
     )
     user_prompt = (
         "请审核下面这条 enrichment 内容。已知的确定性检查结果也附在 JSON 中，"
@@ -576,6 +578,7 @@ async def _review_with_agent(
                     "摘录边界不是原文问题；没有明确展示风险就必须 approved。"
                     '格式：{"status":"approved|needs_repair|needs_manual_review",'
                     '"summary":"...", "findings":[]}'
+                    + UNTRUSTED_CONTENT_NOTICE
                 ),
                 user_prompt=(
                     "上一次审核没有给出可识别的 finding。请重新判断；"
@@ -606,6 +609,7 @@ async def _review_with_agent(
                     "只输出一个合法 JSON 对象，不要解释、不要 markdown、不要 <think>。"
                     '格式：{"status":"approved|needs_repair|needs_manual_review",'
                     '"summary":"...", "findings":[]}'
+                    + UNTRUSTED_CONTENT_NOTICE
                 ),
                 user_prompt=(
                     "请只判断下面内容是否存在前端展示/抽取问题。"

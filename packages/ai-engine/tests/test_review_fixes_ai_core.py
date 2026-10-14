@@ -731,3 +731,18 @@ def test_benign_text_is_not_flagged() -> None:
 
 
 _ = JobStore  # keep import for type reference
+
+
+def test_content_prompts_state_untrusted_boundary() -> None:
+    """Summarising / presentation-review prompts must carry the untrusted-data notice."""
+    import inspect
+
+    from ai_engine.radar import content_reviewer, enrichment_worker
+    from ai_engine.untrusted_text import UNTRUSTED_CONTENT_NOTICE
+
+    for module in (content_reviewer, enrichment_worker):
+        source = inspect.getsource(module)
+        assert "UNTRUSTED_CONTENT_NOTICE" in source
+    assert "不可信数据" in UNTRUSTED_CONTENT_NOTICE
+    assert inspect.getsource(content_reviewer).count("UNTRUSTED_CONTENT_NOTICE") >= 4
+    assert inspect.getsource(enrichment_worker).count("UNTRUSTED_CONTENT_NOTICE") >= 4

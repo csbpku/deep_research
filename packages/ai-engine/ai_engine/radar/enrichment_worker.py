@@ -40,6 +40,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
 
+from ai_engine.untrusted_text import UNTRUSTED_CONTENT_NOTICE
 from ai_engine.fetcher.safe_fetch import raise_for_document_status, safe_fetch
 from ai_engine.llm.client import generate_text
 from ai_engine.llm.config import resolve_spec
@@ -2415,7 +2416,8 @@ async def _generate_arxiv_analysis(
         "Avoid unnecessarily long replies; provide concise, detailed, and "
         "precise answers using correct terminology. "
         "Do not fabricate numbers or citations — only describe what the paper says. "
-        "Output language: simplified Chinese."
+        "Output language: simplified Chinese. "
+        + UNTRUSTED_CONTENT_NOTICE
     )
     analysis_context = _build_arxiv_analysis_context(markdown)
     user_prompt = (
@@ -2521,7 +2523,8 @@ async def _generate_repo_summary(
         "lists, no file paths): what this project does, why it exists, how "
         "it works at a high level (main components and their roles), one "
         "key architectural decision, and who should use it. "
-        "Output language: simplified Chinese."
+        "Output language: simplified Chinese. "
+        + UNTRUSTED_CONTENT_NOTICE
     )
     user_prompt = (
         f"仓库: {owner}/{repo}\n\n"
@@ -3776,7 +3779,8 @@ async def _generate_web_highlights(
     system_prompt = (
         "You are a professional article analyst. "
         "Extract the most important points concisely. "
-        "Do not fabricate. Output language: simplified Chinese."
+        "Do not fabricate. Output language: simplified Chinese. "
+        + UNTRUSTED_CONTENT_NOTICE
     )
     user_prompt = (
         f"标题: {title}\n\n"
