@@ -26,6 +26,8 @@ WORKDIR /repo
 
 COPY apps/web apps/web
 COPY packages/shared packages/shared
+# The public Reader policy and the packaged offline policy share one source.
+COPY apps/extension/privacy-policy.json apps/extension/privacy-policy.json
 
 RUN mkdir -p apps/web/public
 

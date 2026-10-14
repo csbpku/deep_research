@@ -1,6 +1,6 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "private": true,
   "type": "module",
   "scripts": {
@@ -29,6 +29,7 @@
     "build:e2e": "READER_E2E=1 node scripts/sync-static.mjs && READER_E2E=1 wxt build",
     "package": "node scripts/sync-static.mjs && wxt zip",
     "package:beta": "node scripts/package-beta.mjs",
+    "package:store": "node scripts/sync-static.mjs && wxt build && node scripts/package-store.mjs",
     "typecheck": "wxt prepare && tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

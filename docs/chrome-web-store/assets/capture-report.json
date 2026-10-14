@@ -1,0 +1,41 @@
+{
+  "version": "0.2.15",
+  "extensionId": "doopmkblckigfncakbfcbeajoamgmkmg",
+  "scratch": "/private/tmp/reader-store-capture-ySLuHS",
+  "screenshots": [
+    "01-chat-and-evidence.png",
+    "02-translation.png",
+    "03-model-and-data.png"
+  ],
+  "screenshotSize": [
+    1280,
+    800
+  ],
+  "promoSize": [
+    440,
+    280
+  ],
+  "localKeyOptional": true,
+  "modelDiscovery": true,
+  "sourceEvidenceLocated": true,
+  "paragraphToggleWithoutModelCall": true,
+  "offlinePrivacyLoaded": true,
+  "requests": [
+    {
+      "stream": false
+    },
+    {
+      "model": "reader-demo-model",
+      "stream": false
+    },
+    {
+      "model": "reader-demo-model",
+      "stream": true
+    },
+    {
+      "model": "reader-demo-model",
+      "stream": false
+    }
+  ],
+  "demonstration": "Deterministic local model and authored demo article. Not a live-model performance test."
+}

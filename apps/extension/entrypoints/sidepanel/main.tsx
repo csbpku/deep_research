@@ -264,6 +264,7 @@ function ReaderPanel() {
         <div className="actions"><button id="export-data" className="secondary">导出阅读数据</button><button id="import-data" className="secondary">导入数据</button><button id="clear-cache" className="danger">清除翻译缓存</button><button id="clear-data" className="danger">清除本地数据</button></div>
         <p className="small" style={{ marginTop: 8 }}>卸载扩展前请先导出需要保留的阅读成果；卸载后浏览器本地数据不保证恢复。</p>
         <input id="import-file" type="file" accept="application/json" className="hidden" />
+        <p className="small" style={{ marginTop: 20 }}><a href="privacy.html" target="_blank" rel="noreferrer">隐私政策</a> · <a href="https://techradar.top/reading/support" target="_blank" rel="noreferrer">使用与支持 ↗</a></p>
       </section>
 
       <section id="save-dialog" className="setting-panel hidden">

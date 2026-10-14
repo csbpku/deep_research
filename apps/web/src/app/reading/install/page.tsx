@@ -81,7 +81,11 @@ export default async function ReadingInstallPage() {
         <h2 className="text-base font-semibold">数据边界</h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">独立模式默认留在浏览器本地。平台模式会自动同步有界会话元数据，并在你确认保存结论时创建研究库草稿；完整网页正文、图片字节、翻译缓存和 API Key 都不会写入平台数据库。</p>
       </section>
-      <Link href="/radar" className="mt-8 inline-flex text-sm font-medium text-primary hover:underline">返回雷达</Link>
+      <nav className="mt-8 flex flex-wrap gap-5 text-sm font-medium text-primary" aria-label="Reader 相关页面">
+        <Link href="/radar" className="hover:underline">返回雷达</Link>
+        <Link href="/reading/privacy" className="hover:underline">隐私政策</Link>
+        <Link href="/reading/support" className="hover:underline">使用与支持</Link>
+      </nav>
     </main>
   );
 }

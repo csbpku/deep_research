@@ -73,7 +73,7 @@
 
 这是一个可直接加载的独立 Beta，便于小团队试用并验证全文翻译、图片文字覆盖、技术讨论和本地知识积累。当前构建使用 WXT + React + TypeScript；独立模式的长时间翻译任务由 MV3 service worker 执行，侧栏关闭后仍会继续，重新打开侧栏会根据本地 jobs 状态和翻译缓存重新接管。平台模式目前由侧栏执行，按批保存已完成正文译文；暂停/取消后继续会复用缓存，关闭侧栏后的任务延续尚未完成真实验收。进行中的任务输入放在独立的临时 IndexedDB store，任务结束或取消后清除，不进入导出包。正文识别包含通用规则以及 GitHub/Zread 的容器适配。
 
-Beta 交付边界见 [PRIVACY.md](./PRIVACY.md)、[COMPATIBILITY.md](./COMPATIBILITY.md)、[BETA_CHECKLIST.md](./BETA_CHECKLIST.md) 和 [BETA_TRIAL_REPORT.md](./BETA_TRIAL_REPORT.md)。它们描述本地数据流、真实页面退化方式、个人/小团队安装路径和仍需真实参与者填写的对照试用；商店发布不在当前范围内。
+Beta 交付边界见 [PRIVACY.md](./PRIVACY.md)、[COMPATIBILITY.md](./COMPATIBILITY.md)、[BETA_CHECKLIST.md](./BETA_CHECKLIST.md) 和 [BETA_TRIAL_REPORT.md](./BETA_TRIAL_REPORT.md)。它们描述本地数据流、真实页面退化方式、个人/小团队安装路径和仍需真实参与者填写的对照试用；商店发布材料已准备，账号注册、商店版安装验收与审核仍待完成。
 
 ## 构建与发布产物
 
@@ -81,6 +81,9 @@ Beta 交付边界见 [PRIVACY.md](./PRIVACY.md)、[COMPATIBILITY.md](./COMPATIBI
 - `npm run build`：生成可加载目录 `.output/chrome-mv3`。
 - `npm run package`：生成 Chrome ZIP `.output/deep-researchreader-extension-<version>-chrome.zip`，用于商店上传或分发给测试用户。
 - `npm run package:beta`：把已生成的 `.output/chrome-mv3`、安装说明、隐私边界和兼容矩阵打成 `.output/deep-research-reader-beta-<version>.zip`；这是给个人和小团队解压后加载的独立试用包。
+- `npm run package:store`：构建并检查普通生产包，生成独立的 Chrome Web Store ZIP 和 SHA-256 报告；保留默认 Beta 公钥，只在商店上传副本中移除它。材料与账号操作见 [商店发布指南](../../docs/chrome-web-store/README.md)。商店发布尚需开发者注册、上传草稿取得 Item ID、平台来源白名单、审核凭据和提交审核。
+
+隐私政策内容源是 `privacy-policy.json`。构建时生成扩展内离线 `privacy.html` 和本目录 `PRIVACY.md`；公开页面 `/reading/privacy` 使用同一份内容。设置中提供离线隐私与公开使用支持入口。
 
 Beta 白名单分发由仓库的 Deploy 工作流统一发布：CI 成功后，工作流构建并校验 ZIP，
 创建不可覆盖的 `reader-v<version>` GitHub Pre-release，再把下载 URL、版本和 SHA-256

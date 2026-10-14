@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Deep Research Reader</title>
+  <rect x="16" y="16" width="96" height="96" rx="24" fill="#202735"/>
+  <path fill="#fff" d="M42 36h23c15 0 23 8 23 20 0 9-5 16-13 19l16 20H77L63 77H54v18H42V36Zm12 11v19h10c8 0 12-3 12-10s-4-9-12-9H54Z"/>
+</svg>
