@@ -19,7 +19,8 @@
 #   docker compose up -d
 #
 # 备份：
-#   docker compose exec postgres bash -c '/usr/local/bin/pg-backup.sh'
+#   docker compose --env-file .env -f infra/docker-compose.yml exec -T -u root postgres /usr/local/bin/pg-backup.sh /backups
+#   (pg-backup.sh 以只读方式挂入 postgres 容器；postgres:16-alpine 无 bash，脚本为 POSIX sh)
 #
 # 清理：
 #   docker compose exec web bash -c '/usr/local/bin/import-tmp-cleanup.sh --apply'
@@ -51,6 +52,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./backups:/backups
+      # pg-backup.sh 需要在容器内可执行（见文件头注释里的备份命令）；只读挂载。
+      - ./pg-backup.sh:/usr/local/bin/pg-backup.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -236,6 +239,8 @@ services:
       # This is the Compose-internal Web address; do not inherit a native
       # developer value such as 127.0.0.1 into the sidecar.
       RADAR_RENDER_REVIEW_BASE_URL: http://web:3000
+      # Same shared secret as the render-review sidecar (sent as x-render-review-token).
+      RENDER_REVIEW_TOKEN: ${RENDER_REVIEW_TOKEN:-${INTERNAL_SERVICE_TOKEN:?set in .env}}
       RADAR_RENDER_REVIEW_INTERVAL_SECONDS: ${RADAR_RENDER_REVIEW_INTERVAL_SECONDS:-30}
       RADAR_RENDER_REVIEW_BATCH_SIZE: ${RADAR_RENDER_REVIEW_BATCH_SIZE:-1}
       RADAR_RENDER_REVIEW_TIMEOUT_SECONDS: ${RADAR_RENDER_REVIEW_TIMEOUT_SECONDS:-150}
@@ -296,6 +301,11 @@ services:
     environment:
       RENDER_REVIEW_PORT: 4100
       RADAR_RENDER_REVIEW_BASE_URL: http://web:3000
+      # Callers must send this in the x-render-review-token header; the sidecar
+      # refuses to start without it. Defaults to INTERNAL_SERVICE_TOKEN so no new
+      # secret is required. baseUrl is restricted to this allowlist (comma-separated origins).
+      RENDER_REVIEW_TOKEN: ${RENDER_REVIEW_TOKEN:-${INTERNAL_SERVICE_TOKEN:?set in .env}}
+      RENDER_REVIEW_ALLOWED_BASE_URLS: ${RENDER_REVIEW_ALLOWED_BASE_URLS:-http://web:3000}
       RADAR_RENDER_REVIEW_TIMEOUT_SECONDS: ${RADAR_RENDER_REVIEW_TIMEOUT_SECONDS:-150}
     expose:
       - "4100"

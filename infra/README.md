@@ -8,14 +8,17 @@
 - `docker-compose.registry.yml`：默认生产覆盖文件，使用 GHCR 中按 commit SHA 固定的 Web / AI engine 镜像，不在 VPS 上重新构建。
 - `docker-compose.registry-render-review.yml`：可选浏览器审核覆盖文件，仅在需要真实页面审核时启用。
 - `nginx.conf`：Web/AI 反代、5 MB 上传、300 秒 AI 超时、JSON access log、健康路径 `/healthz` 和 `/ai-healthz`。
-- `pg-backup.sh`：定期 `pg_dump` + 保留最新 7 个备份文件（不是按天数清理）。
-- `pg-restore.sh`：恢复脚本，支持 `--yes` 强制覆盖；恢复后做行数校验。
-- `import-tmp-cleanup.sh`：24h 导入临时清理，默认 dry-run，加 `--apply` 才真删。
+- `pg-backup.sh`：`pg_dump` + 保留最新 7 个备份文件（不是按天数清理）。POSIX sh（postgres:16-alpine 无 bash），已只读挂载到 postgres 容器 `/usr/local/bin/pg-backup.sh`；失败时删除半成品文件并返回非 0。**仓库内没有自动调度**，需运维自行配置（见下文「备份与恢复契约」的 cron 示例）。
+- `pg-restore.sh`：恢复脚本；恢复会覆盖目标库，默认交互确认，非交互需 `--yes`；目标是生产默认库 `deep_research` 时还需 `--confirm-db deep_research`（交互则手动键入库名）；`--dry-run` 只校验不连库；恢复后做行数校验。
+- `import-tmp-cleanup.sh`：24h 导入临时清理，默认 dry-run，加 `--apply` 才真删。需要 `bash`、`psql` 和 `DATABASE_URL`；无法取得受保护文件列表时直接中止（不再以空列表继续）。web 镜像（node:alpine）自带既无 bash 也无 psql，因此应在带 psql 的宿主机上并能访问 import-tmp 卷的位置运行。
 - `web.Dockerfile`：Next.js 多阶段构建（deps → build → runner），生产使用 standalone
   server + 隔离的 Prisma/tsx 运行时依赖，内置 HEALTHCHECK。
 - `ai-engine.Dockerfile`：Python 3.11 + uv 多阶段构建，内置 HEALTHCHECK。
 - `render-review.Dockerfile`：Node 20 + Playwright Chromium sidecar，内置 HEALTHCHECK；不属于默认生产部署。
 - Web BFF 已实现 `/api/healthz` liveness 端点（`apps/web/src/app/api/healthz/route.ts`）。
+  - 它**只是 liveness**，不查数据库。`scripts/docker-entrypoint-web.sh` 在 `prisma migrate deploy` 失败时现在会 `exit 1`（容器不再带着旧 schema 启动），所以迁移失败表现为容器退出 → 发布后 `/healthz` 检查失败 → deploy.yml 回滚。
+  - 仍是 follow-up（需改 `apps/web/src`，不在本次范围）：增加 DB-aware readiness 端点（例如 `SELECT 1` 加 `_prisma_migrations` 最新迁移校验），并让 compose/HEALTHCHECK/deploy.yml 改用它。
+- Schema 漂移：CI（`web-e2e` job）在 `prisma migrate deploy` 之后运行 `scripts/check-schema-drift.sh`，对比 `schema.prisma` 与迁移后的数据库；仅允许两处已登记的无害差异（`topics.synthesisVersion` 的 client 端默认值，以及 `summaries_distilledProfile_distilledTotal_idx` 的 partial 谓词）。
 - AI engine `/healthz` 已存在（W1）。
 
 本地默认运行方式是原生 PostgreSQL + `pnpm dev:web` / `pnpm dev:ai`；Docker Compose 是独立的部署/恢复演练拓扑，不是本地默认依赖。
@@ -110,6 +113,8 @@ docker compose \
   config --quiet
 
 # Optional browser audit:
+# render-review sidecar 需要共享 token（默认复用 INTERNAL_SERVICE_TOKEN，也可单独设 RENDER_REVIEW_TOKEN；
+# 缺失时 sidecar 拒绝启动），并只接受 RENDER_REVIEW_ALLOWED_BASE_URLS（默认 http://web:3000）中的 baseUrl。
 COMPOSE_PROFILES=browser-review \
 RENDER_REVIEW_IMAGE=ghcr.io/csbpku/deep-research/render-review:local \
 docker compose \
@@ -133,10 +138,21 @@ GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Envir
 
 ## 备份与恢复契约
 
-- **RPO**：24 小时（每日 0:00 / 12:00 跑 `pg-backup.sh`；保留 7 天）。
+- **RPO**：目标 24 小时——前提是运维已自行配置每日调度（仓库**不**自带调度；未配置则没有自动备份）。保留最新 7 份。
 - **RTO**：2 小时（恢复时间受网络 + 数据库大小影响；Week 8 演练验证）。
 - 备份写入 `./backups/deep_research-YYYYMMDD-HHMMSS.sql.gz`；不上传异地。
-- 恢复演练脚本：`infra/pg-restore.sh <file> --yes`；恢复后自动校验核心表行数。
+- 手动备份（在仓库根目录；脚本已挂载进 postgres 容器，以 root 运行以便写入宿主机挂载的 `./backups`，产物为 root 所有、权限 0600）：
+  ```bash
+  docker compose --env-file .env -f infra/docker-compose.yml \
+    exec -T -u root postgres /usr/local/bin/pg-backup.sh /backups
+  ```
+  首次启用该挂载需要重建 postgres 容器：`docker compose --env-file .env -f infra/docker-compose.yml up -d postgres`。
+- 定时备份示例（**运维动作**，仓库不会自动安装；以 deploy 用户 crontab 为例）：
+  ```cron
+  0 0,12 * * * cd /opt/deep-research && docker compose --env-file .env -f infra/docker-compose.yml exec -T -u root postgres /usr/local/bin/pg-backup.sh /backups >> infra/logs/pg-backup.log 2>&1
+  ```
+- 发布前快照：`.github/workflows/deploy.yml` 在启动新版本（web 入口会执行 Prisma migrate）之前，若 postgres 容器在运行，会写入 `infra/backups/pre-deploy-<sha>-<时间>.sql.gz`（保留最近 5 份）；dump 失败会中止发布并回滚 Beta 配置。
+- 恢复演练脚本：`infra/pg-restore.sh <file> <target_db> --yes`（恢复到生产默认库 `deep_research` 还需 `--confirm-db deep_research`；先用 `--dry-run` 自检）；恢复后自动校验核心表行数。
 
 完成真实构建与恢复演练前，不把以上项目标为已部署或 live verified。
 

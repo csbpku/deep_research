@@ -1,9 +1,48 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 
 const port = Number(process.env.RENDER_REVIEW_PORT ?? '4100');
 const script = process.env.RENDER_REVIEW_SCRIPT ?? '/app/radar-render-review.mjs';
 const timeoutMs = Math.max(30_000, Number(process.env.RADAR_RENDER_REVIEW_TIMEOUT_SECONDS ?? '150') * 1000);
+
+// Shared secret the caller (ai-engine) must present in the x-render-review-token
+// header. Without it anyone on the Compose network could make this Chromium
+// browse arbitrary URLs (SSRF). The sidecar refuses to start without a token.
+const authToken = process.env.RENDER_REVIEW_TOKEN ?? '';
+if (!authToken) {
+  console.error('RENDER_REVIEW_TOKEN is required; refusing to start the render-review sidecar without it');
+  process.exit(1);
+}
+
+// Only these origins may be passed as baseUrl. Default: the Compose web service.
+function originOf(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    if (url.username || url.password) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+const defaultBaseUrl = process.env.RADAR_RENDER_REVIEW_BASE_URL ?? 'http://web:3000';
+const allowedOrigins = new Set(
+  (process.env.RENDER_REVIEW_ALLOWED_BASE_URLS ?? defaultBaseUrl)
+    .split(',')
+    .map((entry) => originOf(entry.trim()))
+    .filter(Boolean),
+);
+if (allowedOrigins.size === 0) {
+  console.error('No valid origin in RENDER_REVIEW_ALLOWED_BASE_URLS / RADAR_RENDER_REVIEW_BASE_URL');
+  process.exit(1);
+}
+
+function tokenMatches(header) {
+  const provided = Buffer.from(typeof header === 'string' ? header : '');
+  const expected = Buffer.from(authToken);
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
 
 function respond(response, status, payload) {
   response.writeHead(status, {
@@ -28,9 +67,21 @@ function runReview(payload) {
   return new Promise((resolve) => {
     const summaryId = typeof payload.summaryId === 'string' ? payload.summaryId : '';
     const round = Number.isFinite(Number(payload.round)) ? Number(payload.round) : 1;
-    const baseUrl = typeof payload.baseUrl === 'string' && payload.baseUrl
+    const requestedBaseUrl = typeof payload.baseUrl === 'string' && payload.baseUrl
       ? payload.baseUrl
-      : (process.env.RADAR_RENDER_REVIEW_BASE_URL ?? 'http://web:3000');
+      : defaultBaseUrl;
+    const baseOrigin = originOf(requestedBaseUrl);
+    // Exact-origin allowlist: private/link-local/metadata addresses and any
+    // other host are rejected unless explicitly listed by the operator.
+    if (!baseOrigin || !allowedOrigins.has(baseOrigin)) {
+      resolve({
+        status: 'unavailable',
+        summary: 'Render-review baseUrl is not on the sidecar allowlist.',
+        error: 'base_url_not_allowed',
+      });
+      return;
+    }
+    const baseUrl = baseOrigin;
     if (!summaryId || !/^[a-zA-Z0-9-]+$/u.test(summaryId)) {
       resolve({
         status: 'unavailable',
@@ -51,7 +102,10 @@ function runReview(payload) {
     ], {
       cwd: '/app',
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      // The browser script does not need the sidecar auth token.
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => key !== 'RENDER_REVIEW_TOKEN'),
+      ),
     });
     const stdout = [];
     const stderr = [];
@@ -107,6 +161,10 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.method !== 'POST' || request.url !== '/review') {
     respond(response, 404, { error: 'not_found' });
+    return;
+  }
+  if (!tokenMatches(request.headers['x-render-review-token'])) {
+    respond(response, 401, { status: 'unavailable', error: 'unauthorized' });
     return;
   }
   try {

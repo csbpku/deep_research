@@ -11,9 +11,10 @@ PRISMA_BIN="/app/node_modules/prisma/build/index.js"
 TSX_BIN="/app/node_modules/.bin/tsx"
 
 echo "[entrypoint] Running Prisma migrations..."
-node "$PRISMA_BIN" migrate deploy --schema "$APP_ROOT/prisma/schema.prisma" 2>&1 || {
-  echo "[entrypoint] Migration failed, continuing anyway (DB may already be migrated)"
-}
+if ! node "$PRISMA_BIN" migrate deploy --schema "$APP_ROOT/prisma/schema.prisma" 2>&1; then
+  echo "[entrypoint] FATAL: prisma migrate deploy failed; refusing to start new code on an unmigrated schema" >&2
+  exit 1
+fi
 
 if [ "${BOOTSTRAP_ADMIN_EMAIL:-}" != "off" ] && [ "${BOOTSTRAP_ADMIN_EMAIL:-}" != "disabled" ]; then
   echo "[entrypoint] Bootstrapping initial Admin..."

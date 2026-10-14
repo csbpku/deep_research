@@ -99,6 +99,11 @@ jobs:
         # 导致 schema 永远没 migrate，dev server 一查表就 500。
         run: pnpm --filter @deep-research/web exec prisma migrate deploy
 
+      - name: Prisma schema drift check (schema.prisma vs migrated DB)
+        # Fails if schema.prisma diverges from what the SQL migrations produce.
+        # Known harmless noise is allow-listed in scripts/check-schema-drift.sh.
+        run: scripts/check-schema-drift.sh
+
       - name: Seed minimal test data
         run: pnpm --filter @deep-research/web db:seed:e2e
         continue-on-error: true  # 大多数测试兼容空库；只在跨模块 list/detail 联动时需要

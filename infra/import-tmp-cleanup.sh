@@ -48,13 +48,23 @@ fi
 
 echo "[import-tmp-cleanup] scanning: $TEMP_DIR (max_age=${MAX_AGE_HOURS}h, apply=$APPLY)"
 
-# Pull the protected list from the DB if DATABASE_URL is available.
-PROTECTED=""
+# Pull the protected list from the DB. The list is what prevents deleting temp
+# files still referenced by in-flight import jobs, so if it cannot be obtained
+# we ABORT rather than continue with an empty list (which would treat every
+# old file as unreferenced).
 DATABASE_URL="${DATABASE_URL:-}"
-if [ -n "$DATABASE_URL" ] && command -v psql &>/dev/null; then
-    PROTECTED=$(psql "${DATABASE_URL}" -A -t \
-        -c 'SELECT "tempObjectKey" FROM content_import_jobs WHERE "tempObjectKey" IS NOT NULL;' \
-        2>/dev/null || true)
+if [ -z "$DATABASE_URL" ]; then
+    echo "[import-tmp-cleanup] ERROR: DATABASE_URL is not set; cannot determine protected files. Aborting." >&2
+    exit 1
+fi
+if ! command -v psql >/dev/null 2>&1; then
+    echo "[import-tmp-cleanup] ERROR: psql not found; cannot determine protected files. Aborting." >&2
+    exit 1
+fi
+if ! PROTECTED=$(psql "${DATABASE_URL}" -A -t -v ON_ERROR_STOP=1 \
+        -c 'SELECT "tempObjectKey" FROM content_import_jobs WHERE "tempObjectKey" IS NOT NULL;'); then
+    echo "[import-tmp-cleanup] ERROR: protected-file query failed; nothing was removed. Aborting." >&2
+    exit 1
 fi
 
 removed=0

@@ -219,6 +219,8 @@ model User {
   notificationsReceived Notification[]     @relation("notification_recipient")
   notificationsSent     Notification[]     @relation("notification_actor")
   readingSessions       ReadingSession[]
+  radarAnnotations      RadarAnnotation[]
+  radarAnnotationStars  RadarAnnotationStar[]
 
   @@index([role, disabledAt])
   @@map("users")
@@ -257,7 +259,7 @@ model ReadingSession {
   state           Json     @db.JsonB
   lastSyncKey     String   @db.Uuid
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -275,7 +277,7 @@ model ConfluenceConnection {
   expiresAt       DateTime? @db.Timestamptz(3)
   oauthStateHash  String?   @db.Char(64)
   createdAt       DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+  updatedAt       DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@map("confluence_connections")
 }
@@ -343,7 +345,7 @@ model Summary {
   // retry diagnostics.
   enrichmentStatus          String?   @db.VarChar(24) // pending | running | ready | retryable | manual
   enrichmentAttempts        Int       @default(0)
-  enrichmentLockedBy        String?
+  enrichmentLockedBy        String?       @db.VarChar(255)
   enrichmentLeaseExpiresAt  DateTime? @db.Timestamptz(3)
   enrichmentHeartbeatAt     DateTime? @db.Timestamptz(3)
   enrichmentNextRetryAt     DateTime? @db.Timestamptz(3)
@@ -411,6 +413,7 @@ model Summary {
   shareSource        ShareSubmission?         @relation("share_to_summary")
   syncRun            RadarSyncRun?            @relation("sync_to_candidates", fields: [syncRunId], references: [id], onDelete: SetNull)
   feedbacks          RadarFeedback[]
+  annotations        RadarAnnotation[]
   seedChatSessions   AiChatSession[]          @relation("summary_seed_chat")
   radarSubmission    RadarSubmission?         @relation("radar_submission_to_summary")
   topicLinks         TopicCandidate[]         @relation("topic_candidate_summary")
@@ -421,10 +424,19 @@ model Summary {
   @@index([status, createdAt(sort: Desc)])
   @@index([summaryDate])
   @@index([sharedByUserId])
+  // DB 侧为 partial index (WHERE "syncRunId" IS NOT NULL)，Prisma 5 无法表达；drift 白名单已登记。
   @@index([distilledProfile, distilledTotal(sort: Desc)])
-  @@index([enrichmentStatus, enrichmentNextRetryAt])
-  @@index([enrichmentLeaseExpiresAt])
+  @@index([enrichmentStatus, enrichmentNextRetryAt], map: "summaries_enrichmentStatus_nextRetry_idx")
+  @@index([enrichmentLeaseExpiresAt], map: "summaries_enrichmentLease_idx")
   @@index([enrichmentRunId])
+  @@index([contentReviewClaimId], map: "summaries_contentReviewClaimId_idx")
+  @@index([contentReviewStatus, contentReviewStartedAt], map: "summaries_contentReviewLease_idx")
+  @@index([contentReviewStatus, contentReviewedAt], map: "summaries_contentReviewStatus_idx")
+  @@index([distilledTargetTier], map: "summaries_distilledTargetTier_idx")
+  @@index([enrichmentClaimId], map: "summaries_enrichmentClaimId_idx")
+  @@index([readerQualityStatus, readerQualityCheckedAt], map: "summaries_readerQualityStatus_idx")
+  @@index([renderReviewClaimId], map: "summaries_renderReviewClaimId_idx")
+  @@index([renderReviewStatus, renderReviewedAt], map: "summaries_renderReviewStatus_idx")
   @@map("summaries")
 }
 
@@ -498,6 +510,7 @@ model Research {
   @@unique([authorId, readingSaveKey])
   @@index([sourceCommentId])
   @@index([supersedesResearchId])
+  @@index([featuredAt], map: "researches_featuredAt_idx")
   @@map("researches")
 }
 
@@ -521,7 +534,7 @@ model PersonalKnowledgeIndexTask {
   createdAt      DateTime @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @db.Timestamptz(3)
 
-  @@index([status, nextRetryAt, leaseExpiresAt])
+  @@index([status, nextRetryAt, leaseExpiresAt], map: "personal_knowledge_index_tasks_claim_idx")
   @@index([ownerId])
   @@map("personal_knowledge_index_tasks")
 }
@@ -633,7 +646,7 @@ model AiResearchJob {
 
   requester     User      @relation(fields: [requesterId], references: [id], onDelete: Restrict)
   draftResearch Research? @relation("ai_job_draft", fields: [draftResearchId], references: [id], onDelete: SetNull)
-  primaryTopic  Topic?    @relation("ai_job_primary_topic", fields: [primaryTopicId], references: [id], onDelete: SetNull)
+  primaryTopic  Topic?    @relation("ai_job_primary_topic", fields: [primaryTopicId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   researchConversation AiResearchConversation? @relation("ai_research_job_conversation")
 
   aiResearchSources AiResearchSource[]
@@ -648,6 +661,8 @@ model AiResearchJob {
   // 由 migrations/init_constraints 加，避免 PG 段 非 partial + partial unique 冲突
   @@index([requesterId, createdAt(sort: Desc)])
   @@index([primaryTopicId, createdAt(sort: Desc)])
+  @@index([reviewStatus, reviewStartedAt, createdAt], map: "ai_research_jobs_review_queue_idx")
+  @@index([reviewRunToken], map: "ai_research_jobs_review_run_token_idx")
   @@map("ai_research_jobs")
 }
 
@@ -669,17 +684,17 @@ model ResearchEvidenceTask {
   errorCode        String?  @db.VarChar(64)
   errorMessage     String?  @db.VarChar(500)
   createdAt        DateTime @default(now()) @db.Timestamptz(3)
-  startedAt        DateTime?
-  completedAt      DateTime?
-  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+  startedAt        DateTime? @db.Timestamptz(3)
+  completedAt      DateTime? @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
-  research  Research         @relation(fields: [researchId], references: [id], onDelete: Cascade)
-  aiJob     AiResearchJob    @relation(fields: [aiResearchJobId], references: [id], onDelete: Cascade)
-  reviewRun ResearchReviewRun? @relation(fields: [reviewRunId], references: [id], onDelete: SetNull)
+  research  Research         @relation(fields: [researchId], references: [id], onDelete: Cascade, map: "research_evidence_tasks_research_fkey")
+  aiJob     AiResearchJob    @relation(fields: [aiResearchJobId], references: [id], onDelete: Cascade, map: "research_evidence_tasks_job_fkey")
+  reviewRun ResearchReviewRun? @relation(fields: [reviewRunId], references: [id], onDelete: SetNull, map: "research_evidence_tasks_review_run_fkey")
 
-  @@index([researchId, claimId, createdAt(sort: Desc)])
-  @@index([status, createdAt(sort: Asc)])
-  @@index([reviewRunId])
+  @@index([researchId, claimId, createdAt(sort: Desc)], map: "research_evidence_tasks_research_claim_created_idx")
+  @@index([status, createdAt(sort: Asc)], map: "research_evidence_tasks_status_created_idx")
+  @@index([reviewRunId], map: "research_evidence_tasks_review_run_idx")
   // A partial unique index in migration 20260907000009 prevents duplicate
   // active searches for one claim/revision; Prisma cannot express its WHERE.
   @@map("research_evidence_tasks")
@@ -741,11 +756,11 @@ model ResearchReviewDecision {
   actorId           String   @db.Uuid
   createdAt         DateTime @default(now()) @db.Timestamptz(3)
 
-  run   ResearchReviewRun @relation(fields: [researchReviewRunId], references: [id], onDelete: Cascade)
-  actor User              @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  run   ResearchReviewRun @relation(fields: [researchReviewRunId], references: [id], onDelete: Cascade, map: "research_review_decisions_run_fkey")
+  actor User              @relation(fields: [actorId], references: [id], onDelete: Restrict, map: "research_review_decisions_actor_fkey")
 
-  @@index([researchReviewRunId, claimId, createdAt(sort: Desc)])
-  @@index([actorId, createdAt(sort: Desc)])
+  @@index([researchReviewRunId, claimId, createdAt(sort: Desc)], map: "research_review_decisions_run_claim_created_idx")
+  @@index([actorId, createdAt(sort: Desc)], map: "research_review_decisions_actor_created_idx")
   @@map("research_review_decisions")
 }
 
@@ -958,6 +973,7 @@ model ContentImportJob {
   heartbeatAt      DateTime?        @db.Timestamptz(3)
   nextRetryAt      DateTime?        @db.Timestamptz(3)
   createdAt        DateTime         @default(now()) @db.Timestamptz(3)
+  startedAt        DateTime?        @db.Timestamptz(3)
   completedAt      DateTime?        @db.Timestamptz(3)
 
   requester      User      @relation(fields: [requesterId], references: [id], onDelete: Restrict)
@@ -1052,13 +1068,15 @@ model SearchDoc {
   refId       String        @db.Uuid // summary.id / research.id
   title       String        @db.VarChar(300)
   snippet     String        @db.VarChar(1000) // 摘要片段，给搜索结果展示
-  // tsvector 列与 GIN 索引由 SQL migration 加（Prisma 不支持原生 tsvector）
+  // doc_tsv 由 SQL migration 加；Prisma 以 Unsupported 镜像（生成的 client 不暴露该字段）。
+  doc_tsv     Unsupported("tsvector")?
   // publishedAt 用于排序：未发布草稿不进 search_doc
   publishedAt DateTime      @db.Timestamptz(3)
   indexedAt   DateTime      @default(now()) @db.Timestamptz(3)
 
   @@unique([type, refId])
   @@index([type, publishedAt(sort: Desc)])
+  @@index([doc_tsv], type: Gin, map: "search_docs_doc_tsv_gin")
   @@map("search_docs")
 }
 
@@ -1162,7 +1180,7 @@ model RadarSyncDiagnostic {
   distilledTier     String?                @db.VarChar(16)
   promotedSummaryId String?                @db.Uuid
   createdAt         DateTime               @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime               @updatedAt @db.Timestamptz(3)
+  updatedAt         DateTime               @default(now()) @updatedAt @db.Timestamptz(3)
 
   run    RadarSyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   source RadarSource  @relation(fields: [sourceId], references: [id], onDelete: Restrict)
@@ -1228,9 +1246,9 @@ model TopicIssue {
   lastSeenAt      DateTime        @default(now()) @db.Timestamptz(3)
   synthesisPayload Json?          @db.JsonB
   createdAt       DateTime        @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime        @updatedAt @db.Timestamptz(3)
+  updatedAt       DateTime        @default(now()) @updatedAt @db.Timestamptz(3)
 
-  topic      Topic               @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  topic      Topic               @relation(fields: [topicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   candidates TopicIssueCandidate[]
 
   @@index([topicId, status, lastSeenAt(sort: Desc)])
@@ -1244,8 +1262,8 @@ model TopicIssueCandidate {
   relevanceScore Float?
   addedAt        DateTime @default(now()) @db.Timestamptz(3)
 
-  issue   TopicIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  summary Summary    @relation("issue_candidate_summary", fields: [summaryId], references: [id], onDelete: Cascade)
+  issue   TopicIssue @relation(fields: [issueId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  summary Summary    @relation("issue_candidate_summary", fields: [summaryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([issueId, summaryId])
   @@index([summaryId])
@@ -1259,8 +1277,8 @@ model ResearchTopic {
   relationType ResearchTopicRelation @default(auto)
   createdAt    DateTime              @default(now()) @db.Timestamptz(3)
 
-  research Research @relation(fields: [researchId], references: [id], onDelete: Cascade)
-  topic    Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  research Research @relation(fields: [researchId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  topic    Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([researchId, topicId])
   @@index([topicId, createdAt(sort: Desc)])
@@ -1284,7 +1302,7 @@ model AiChatSession {
   seedSnapshot  Json                @default("{}")
   status        AiChatSessionStatus @default(active)
   createdAt     DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime            @updatedAt @db.Timestamptz(3)
+  updatedAt     DateTime            @default(now()) @updatedAt @db.Timestamptz(3)
 
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   seedSummary Summary? @relation("summary_seed_chat", fields: [seedSummaryId], references: [id], onDelete: SetNull)
@@ -1372,8 +1390,8 @@ model LlmTokenBudgetEvent {
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  @@index([userId, createdAt(sort: Desc)])
-  @@index([createdAt(sort: Desc), status, expiresAt])
+  @@index([userId, createdAt(sort: Desc)], map: "llm_token_budget_events_user_created_idx")
+  @@index([createdAt(sort: Desc), status, expiresAt], map: "llm_token_budget_events_created_status_expiry_idx")
   @@map("llm_token_budget_events")
 }
 
@@ -1381,9 +1399,48 @@ model LlmTokenBudgetEvent {
 //
 // radar_annotations stores per-user text selection anchors against the canonical
 // originalMarkdown text. radar_annotation_stars is a per-user-per-annotation
-// fav toggle (same ergonomics as comment_stars). Neither uses a @relation on
-// Summary because the Prisma relation traversal was broken by the model order
-// and scaffolding regeneration is fragile—we use raw SQL instead.
+// fav toggle (same ergonomics as comment_stars). The tables were created by
+// SQL migration 20260730000040_phase3_annotations; the app still reads/writes
+// them via raw SQL (apps/web/src/app/api/radar/annotations/*), which stays valid.
+// Models below only mirror the migrated schema so `prisma migrate diff` is clean.
+// kind is VARCHAR(32) (not an enum) — see 20260909000002_expand_radar_annotation_kind.
+
+model RadarAnnotation {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  summaryId   String   @db.Uuid
+  authorId    String   @db.Uuid
+  kind        String   @db.VarChar(32)
+  quote       String
+  startOffset Int
+  endOffset   Int
+  body        String?  @db.VarChar(2000)
+  parentId    String?  @db.Uuid
+  color       String?  @db.VarChar(16)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  summary Summary               @relation(fields: [summaryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  author  User                  @relation(fields: [authorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  parent  RadarAnnotation?      @relation("radar_annotation_replies", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  replies RadarAnnotation[]     @relation("radar_annotation_replies")
+  stars   RadarAnnotationStar[]
+
+  @@index([summaryId, kind])
+  @@index([summaryId, startOffset])
+  @@map("radar_annotations")
+}
+
+model RadarAnnotationStar {
+  annotationId String   @db.Uuid
+  userId       String   @db.Uuid
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  annotation RadarAnnotation @relation(fields: [annotationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([annotationId, userId])
+  @@map("radar_annotation_stars")
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // 20. radar_tracked_repos — Week 13 自动跟踪的 GitHub 仓库
@@ -1452,14 +1509,14 @@ model RadarSubmission {
   nextRetryAt    DateTime?             @db.Timestamptz(3)
   createdAt      DateTime              @default(now()) @db.Timestamptz(3)
   completedAt    DateTime?             @db.Timestamptz(3)
-  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  updatedAt      DateTime              @default(now()) @updatedAt @db.Timestamptz(3)
 
-  submitter User     @relation("radar_submission_submitter", fields: [submitterId], references: [id], onDelete: Restrict)
-  summary   Summary? @relation("radar_submission_to_summary", fields: [summaryId], references: [id], onDelete: SetNull)
+  submitter User     @relation("radar_submission_submitter", fields: [submitterId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  summary   Summary? @relation("radar_submission_to_summary", fields: [summaryId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   // 同一用户对同一 URL 在非终态唯一（partial unique 由 SQL migration 加）
-  @@index([status, createdAt(sort: Asc)])
-  @@index([submitterId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Asc)], map: "radar_submissions_status_created_idx")
+  @@index([submitterId, createdAt(sort: Desc)], map: "radar_submissions_submitter_idx")
   @@index([canonicalUrl])
   @@index([contentSha256])
   @@map("radar_submissions")
@@ -1487,10 +1544,10 @@ model UserBookmark {
   note       String?            @db.VarChar(500)
   createdAt  DateTime           @default(now()) @db.Timestamptz(3)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([userId, targetType, targetId])
-  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)], map: "user_bookmarks_user_created_idx")
   @@map("user_bookmarks")
 }
 
@@ -1506,11 +1563,11 @@ model ResearchTemplate {
   useCount     Int       @default(0)
   lastUsedAt   DateTime? @db.Timestamptz(3)
   createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
 
-  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  @@index([ownerId, updatedAt(sort: Desc)])
+  @@index([ownerId, updatedAt(sort: Desc)], map: "research_templates_owner_idx")
   @@map("research_templates")
 }
 
@@ -1577,6 +1634,7 @@ model Topic {
   synthesisGeneratedAt   DateTime? @db.Timestamptz(3)
   lastSynthesisSuccessAt DateTime? @db.Timestamptz(3)
   synthesisModel         String?   @db.VarChar(64)
+  // 默认值仅由 Prisma client 填充，DB 列无 default；drift 白名单已登记。
   synthesisVersion       String?   @default("v2") @db.VarChar(16)
   // ADR 0010: 综述输入 hash；变化时才重生成
   synthesisInputHash     String?   @db.VarChar(64)
@@ -1596,7 +1654,7 @@ model Topic {
   refreshCron            String    @default("06:00") @db.VarChar(16)
   enabled                Boolean   @default(true)
   createdAt              DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt              DateTime  @updatedAt @db.Timestamptz(3)
+  updatedAt              DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
 
   candidates TopicCandidate[]
   followers  TopicFollow[]
@@ -1604,9 +1662,11 @@ model Topic {
   researches ResearchTopic[]
   aiJobs     AiResearchJob[] @relation("ai_job_primary_topic")
 
-  @@index([tier, candidateCount(sort: Desc), updatedAt(sort: Desc)])
-  @@index([aggregationWindowEnd(sort: Desc)])
-  @@index([issueNextRetryAt])
+  @@index([tier, candidateCount(sort: Desc), updatedAt(sort: Desc)], map: "topics_tier_candidate_idx")
+  @@index([aggregationWindowEnd(sort: Desc)], map: "topics_window_idx")
+  @@index([issueNextRetryAt, updatedAt], map: "topics_issue_retry_idx")
+  publishedProposal TopicProposal? @relation("topic_proposal_published_topic")
+
   @@map("topics")
 }
 
@@ -1618,11 +1678,11 @@ model TopicCandidate {
   addedAt         DateTime             @default(now()) @db.Timestamptz(3)
   addedReason     TopicCandidateReason @default(auto)
 
-  topic   Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
-  summary Summary @relation("topic_candidate_summary", fields: [summaryId], references: [id], onDelete: Cascade)
+  topic   Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  summary Summary @relation("topic_candidate_summary", fields: [summaryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([topicId, summaryId])
-  @@index([summaryId])
+  @@index([summaryId], map: "topic_candidates_summary_idx")
   @@map("topic_candidates")
 }
 
@@ -1634,11 +1694,11 @@ model TopicFollow {
   // ADR 0010: 用户上次进入专题详情时间，用于未读议题计数
   lastViewedAt DateTime? @db.Timestamptz(3)
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  topic Topic @relation(fields: [topicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([userId, topicId])
-  @@index([topicId, createdAt(sort: Desc)])
+  @@index([topicId, createdAt(sort: Desc)], map: "topic_follows_topic_idx")
   @@map("topic_follows")
 }
 
@@ -1663,13 +1723,14 @@ model TopicProposal {
   reviewReason     String?             @db.VarChar(500)
   reviewedAt       DateTime?           @db.Timestamptz(3)
   createdAt        DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
+  updatedAt        DateTime            @default(now()) @updatedAt @db.Timestamptz(3)
 
-  reviewer   User?                    @relation("topic_proposal_reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  publishedTopic Topic?               @relation("topic_proposal_published_topic", fields: [publishedTopicId], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "topic_proposals_published_topic_fk")
+  reviewer   User?                    @relation("topic_proposal_reviewer", fields: [reviewerId], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "topic_proposals_reviewer_fk")
   candidates TopicProposalCandidate[]
 
-  @@index([status, createdAt(sort: Desc)])
-  @@index([windowEnd(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)], map: "topic_proposals_status_created_idx")
+  @@index([windowEnd(sort: Desc)], map: "topic_proposals_window_idx")
   @@map("topic_proposals")
 }
 
@@ -1682,13 +1743,13 @@ model TopicProposalCandidate {
   included        Boolean  @default(true)
   exclusionReason String?  @db.VarChar(300)
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
-  proposal TopicProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  summary  Summary       @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+  proposal TopicProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  summary  Summary       @relation(fields: [summaryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([proposalId, summaryId])
-  @@index([summaryId])
+  @@index([summaryId], map: "topic_proposal_candidates_summary_idx")
   @@map("topic_proposal_candidates")
 }
 
@@ -1715,7 +1776,7 @@ model RadarTrackedRepo {
   // 首次发现时间
   firstSeenAt    DateTime               @default(now()) @db.Timestamptz(3)
   createdAt      DateTime               @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime               @updatedAt @db.Timestamptz(3)
+  updatedAt      DateTime               @default(now()) @updatedAt @db.Timestamptz(3)
 
   @@index([status, signalCount7d(sort: Desc)])
   @@index([status, lastActivityAt(sort: Desc)])

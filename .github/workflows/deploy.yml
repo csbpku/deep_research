@@ -450,8 +450,11 @@ jobs:
             -f infra/docker-compose.registry.yml)
           previous_tag="$(cat .deployed-image-tag 2>/dev/null || true)"
 
+          # rollback [exit_status]: also called explicitly where `exit 1` would
+          # otherwise bypass the ERR trap (exit never fires ERR).
           rollback() {
-            status=$?
+            status=${1:-$?}
+            [ "$status" -ne 0 ] || status=1
             trap - ERR
             set +e
             echo "[deploy] release failed; restoring previous Beta config and attempting image rollback" >&2
@@ -481,6 +484,27 @@ jobs:
 
           echo "[deploy] validating compose configuration"
           "${compose[@]}" config --quiet
+          # Pre-migration safety dump: the web entrypoint applies Prisma migrations
+          # on start, which are not automatically reversible. Skip only when the
+          # postgres container is not running yet (first deploy). A failed dump
+          # aborts the release (ERR trap -> rollback) before any service changes.
+          if "${compose[@]}" ps --status running --services 2>/dev/null | grep -qx postgres; then
+            mkdir -p infra/backups
+            predeploy_dump="infra/backups/pre-deploy-${IMAGE_TAG}-$(date +%Y%m%d-%H%M%S).sql.gz"
+            echo "[deploy] writing pre-migration dump $predeploy_dump"
+            if ! ( umask 077
+                   "${compose[@]}" exec -T postgres pg_dump -U postgres -d deep_research \
+                     --clean --if-exists --no-owner --no-privileges </dev/null \
+                     | gzip > "$predeploy_dump" ); then
+              rm -f "$predeploy_dump"
+              echo "[deploy] pre-migration pg_dump failed; aborting release" >&2
+              rollback 1
+            fi
+            # keep only the 5 most recent pre-deploy dumps
+            ls -1t infra/backups/pre-deploy-*.sql.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+          else
+            echo "[deploy] postgres not running; skipping pre-migration dump"
+          fi
           echo "[deploy] pulling $IMAGE_TAG"
           pull_one_image() {
             local service="$1"
@@ -514,7 +538,7 @@ jobs:
           done
           if [ "$pull_failed" -ne 0 ]; then
             echo "[deploy] one or more image pulls failed" >&2
-            exit 1
+            rollback 1
           fi
           echo "[deploy] starting services; web entrypoint will apply migrations"
           "${compose[@]}" up -d --no-build --remove-orphans
@@ -547,7 +571,7 @@ jobs:
               -o /dev/null -w '%{http_code}' "https://techradar.top$path")"
             test "$status" = 404 || {
               echo "[deploy] public $path returned $status instead of 404" >&2
-              exit 1
+              rollback 1
             }
           done
           printf '%s\n' "$IMAGE_TAG" > .deployed-image-tag
