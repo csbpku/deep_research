@@ -1,13 +1,13 @@
 # 项目文档入口
 
-> 更新日期：2026-09-28
+> 更新日期：2026-10-14
 > 当前技术方案只保留一份摘要；日期化运行证据与历史材料分开存放。
 
 ## 先看哪一份
 
 | 目的 | 文档 | 说明 |
 |---|---|---|
-| 快速理解当前技术方案 | [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md) | 当前实现、个人知识索引边界、运行拓扑、服务生命周期和文档分层 |
+| 快速理解当前技术方案 | [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md) | 当前实现、个人知识索引边界、运行拓扑、服务生命周期、雷达缺分维护和文档分层 |
 | 理解 Reader 产品边界与 Monica 对照 | [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md) | 原网页 UI 观察、技术阅读差异化、双模式权威数据边界和非目标 |
 | 查看日期化进度、部署和验证证据 | [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) | 只记录事实，不承载架构说明 |
 | 测试用户功能 | [`FUNCTIONAL_CHECKLIST.md`](./FUNCTIONAL_CHECKLIST.md) | 短冒烟路径、功能矩阵、失败恢复和验收记录模板 |
@@ -44,7 +44,8 @@
 5. 任何“已通过”“已修复”“已部署”都要带验证日期和证据，不以代码存在或旧周报替代真实验证。
 6. 不把 `PROJECT_STATUS.md`、weekly、一次性评审或中间计划当作技术方案摘要；它们只回答“何时发生过什么”。
 
-补充：`contracts/`、`wiki/`、`weekly/`、`archive/` 和 `PROJECT_STATUS.md` 按仓库
-`.gitignore` 约定属于本地知识层，不会自动进入 Git 提交。需要让某份契约或运维页
-成为公开仓库的一部分时，应先明确取消忽略并单独 review；当前技术方案摘要已放在
-未忽略的 `TECHNICAL_OVERVIEW.md`。
+补充：`.gitignore` 默认排除 `contracts/`、`wiki/`、`weekly/`、`archive/` 和
+`PROJECT_STATUS.md` 中尚未纳入版本控制的文件；已跟踪文件仍会进入提交。目前
+`PROJECT_STATUS.md`、`contracts/radar-governance.md` 及部分 Reader 验收证据已跟踪。
+新增公开契约或运行证据需要单独 review；不要整体强制加入忽略目录，更不能提交
+数据库快照、用户数据或备份。当前技术方案权威摘要为 `TECHNICAL_OVERVIEW.md`。

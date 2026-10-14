@@ -40,10 +40,12 @@ async def _load_rows(
     *,
     limit: int,
     summary_ids: tuple[str, ...],
+    include_archived: bool = False,
 ) -> list[dict[str, Any]]:
+    statuses = "('candidate', 'published', 'archived')" if include_archived else "('candidate', 'published')"
     predicates = [
         's."source" = \'daily\'',
-        's."status" IN (\'candidate\', \'published\')',
+        f's."status" IN {statuses}',
         '(btrim(COALESCE(s."interpretation", \'\')) = \'\')',
     ]
     params: list[Any] = []
@@ -54,7 +56,7 @@ async def _load_rows(
     async with pool.connection() as conn:
         rows = await (
             await conn.execute(
-                'SELECT s."id", s."title", s."url", s."canonicalUrl", s."body", '
+                'SELECT s."id", s."title", s."url", s."canonicalUrl", s."body", s."status", '
                 's."originalMarkdown", s."source", s."tags", s."syncRunId", '
                 'COALESCE(rs."sourceType", \'rss\') AS "sourceType" '
                 'FROM "summaries" s '
@@ -73,9 +75,11 @@ async def _backfill_one(
     row: dict[str, Any],
     *,
     timeout_seconds: float,
+    include_archived: bool = False,
 ) -> BackfillResult:
     summary_id = str(row["id"])
-    if "external_reading" in (row.get("tags") or []):
+    archived = include_archived and row.get("status") == "archived"
+    if "external_reading" in (row.get("tags") or []) and not archived:
         source = await transient_scoring_input(pool, row)
         if source is None:
             return BackfillResult(summary_id, "skipped", "external source unavailable")
@@ -115,11 +119,12 @@ async def _backfill_one(
     if len(interpretation) < MIN_JUDGEMENT_OUTPUT_CHARS:
         return BackfillResult(summary_id, "skipped", "judgement output too short")
 
+    statuses = "('candidate', 'published', 'archived')" if include_archived else "('candidate', 'published')"
     async with pool.connection() as conn:
         cursor = await conn.execute(
             'UPDATE "summaries" SET "interpretation" = %s, "updatedAt" = now() '
             'WHERE "id" = %s AND btrim(COALESCE("interpretation", \'\')) = \'\' '
-            'AND "status" IN (\'candidate\', \'published\') '
+            f'AND "status" IN {statuses} '
             'RETURNING "id"',
             (interpretation, summary_id),
         )
@@ -139,9 +144,10 @@ async def _run(
     concurrency: int,
     timeout: float,
     state_file: Path | None,
+    include_archived: bool = False,
 ) -> dict[str, int]:
     state: dict[str, Any] = {
-        "scope": "missing_judgements_v1",
+        "scope": "missing_judgements_archived_local_v1" if include_archived else "missing_judgements_v1",
         "targets": [str(row["id"]) for row in rows],
         "completed": [],
         "unresolved": [],
@@ -170,7 +176,10 @@ async def _run(
             return counts
         batch = pending[:max(1, concurrency)]
         results = await asyncio.gather(*(
-            _backfill_one(pool, by_id[item], timeout_seconds=timeout)
+            _backfill_one(
+                pool, by_id[item], timeout_seconds=timeout,
+                include_archived=include_archived,
+            )
             if item in by_id else asyncio.sleep(
                 0, result=BackfillResult(item, "skipped", "no longer eligible")
             )
@@ -215,10 +224,13 @@ async def main() -> int:
     parser.add_argument("--summary-id", action="append", default=[])
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--minimax-only", action="store_true")
+    parser.add_argument("--include-archived", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if bool(args.state_file) != args.minimax_only:
         parser.error("--state-file and --minimax-only must be used together")
+    if args.include_archived and not args.minimax_only:
+        parser.error("--include-archived requires --minimax-only and --state-file")
     if args.minimax_only:
         require_minimax_only()
 
@@ -233,6 +245,7 @@ async def main() -> int:
             store.pool,
             limit=args.limit,
             summary_ids=tuple(args.summary_id),
+            include_archived=args.include_archived,
         )
         print(f"eligible_judgements={len(rows)}", flush=True)
         if args.dry_run or not rows:
@@ -244,11 +257,13 @@ async def main() -> int:
                 counts = await _run(
                     store.pool, rows, concurrency=args.concurrency,
                     timeout=args.timeout, state_file=args.state_file,
+                    include_archived=args.include_archived,
                 )
         else:
             counts = await _run(
                 store.pool, rows, concurrency=args.concurrency,
                 timeout=args.timeout, state_file=None,
+                include_archived=args.include_archived,
             )
         print(f"judgement_results={counts}", flush=True)
     finally:

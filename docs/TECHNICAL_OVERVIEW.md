@@ -104,6 +104,18 @@ Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式�
 
 格式统一为 `<provider>:<model>`。当前默认模型路由为 MiniMax 主模型、DeepSeek fallback；凭据只通过运行时环境注入。旧的 `SMART_LLM`、`FAST_LLM`、`STRATEGIC_LLM`、`BRIEF_LLM` 只作为兼容镜像，不是业务真相源。
 
+有效 fallback 与主路由相同时会被归一化为 `None`；清空变量仍可能使用代码默认值。AnythingLLM 的对话供应商是独立持久配置，切换模型时需分别核对 AI Engine 有效路由与 AnythingLLM 设置。生产时点配置及验收记录只写入 `PROJECT_STATUS.md`。
+
+### 雷达缺分与判断维护
+
+`packages/ai-engine/scripts/rescore_active_radar.py` 只补 `distilledScore IS NULL` 的条目，选取、处理前检查及落库均保护已有评分，包括旧版本评分；禁止 enrichment。`--minimax-only --state-file <path>` 必须成对使用，要求 research/utility 的 light/heavy 主路由均为 MiniMax 且有效 fallback 为 `None`。断点固定目标清单，按评分版本和证据范围隔离；普通失败进入 unresolved，需显式 `--retry-unresolved` 才重试。
+
+`--include-archived` 同样要求 MiniMax 断点模式，默认仅使用库内已有证据；评分脚本可另外显式指定 `--transient-external` 临时获取原文，不落全文缓存。`backfill_radar_briefs.py` 只补空判断：活跃 external-reading 条目临时获取原文，归档条目在 `--include-archived` 模式下仅使用已有快照。证据或判断不足保持未解决，不根据标题生成占位内容。两种脚本的归档/活跃范围使用独立断点，不得混用。
+
+评分脚本遇额度/429错误会取消同批未完成任务并保存断点；`--quota-wait-seconds` 默认18000秒，但当前循环最多等待900秒即清空等待截止时间并再次探测，因此不能保证实际退避5小时。判断脚本按15分钟暂停重试。两者均非已知供应商账户重置时间。评分日志记录各阶段耗时、调用和分块数量，模型审计 `requestId` 可与 `llm_usage_events` 对照，不记录正文。
+
+`infra/docker-compose.radar-rescore.yml` 仅供独立 `compose run --no-deps` 维护容器使用，不能用于生产 API 的 `compose up`。`RADAR_RESCORE_DIR` 指向包含所挂载脚本及 `state/` 的目录，UID/GID 1000需有断点写权限；主 Compose 提供网络、数据库和凭据。`compose run` 的重启策略不能仅凭配置推定生效，实际运行后应核对容器策略。此配置不会自动运行补救或部署。
+
 Reader 平台模式图片翻译仅接收扩展从当前页面读取的 PNG/JPEG/WebP 图片字节，不接收远程 URL 供服务端抓取。默认复用 `UTILITY_LLM`，因此该路由必须支持图片输入；若部署提供独立视觉模型，可设置 `READING_VISION_LLM` 覆盖。MiniMax-M3 的真实视觉请求已确认可调用，但合成图文字识别与坐标覆盖质量尚未通过验收；不能将接口连通性视作图片翻译可用。详细真实调用记录保存在本机未纳入版本控制的 `docs/PROJECT_STATUS.md`。
 
 共享 LLM client 负责有限重试、fallback、endpoint 熔断和 token usage 审计。业务 worker 仍必须提供自己的确定性降级或可恢复状态，不能用空结果冒充成功。

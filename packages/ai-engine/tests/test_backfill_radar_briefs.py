@@ -81,6 +81,36 @@ async def test_missing_external_evidence_does_not_invent_judgement(
     assert not pool.conn.statements
 
 
+async def test_archived_judgement_uses_existing_snapshot_without_fetching(
+    monkeypatch: Any,
+) -> None:
+    pool = _Pool()
+    calls: list[dict[str, Any]] = []
+
+    async def unexpected_fetch(*args: Any) -> None:
+        raise AssertionError("archived source must not be fetched")
+
+    async def generate(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return SimpleNamespace(text="依据已存档的技术说明，该工具适合受控部署；实际效果仍需按项目环境验证。")
+
+    monkeypatch.setattr(job, "transient_scoring_input", unexpected_fetch)
+    monkeypatch.setattr(job, "generate_text", generate)
+    result = await job._backfill_one(
+        pool,
+        {
+            "id": "archived-one", "title": "Archived project",
+            "status": "archived", "tags": ["external_reading"],
+            "originalMarkdown": "Verified archived evidence. " * 15,
+        },
+        timeout_seconds=30,
+        include_archived=True,
+    )
+    assert result.state == "updated"
+    assert "Verified archived evidence" in calls[0]["user_prompt"]
+    assert "'archived'" in pool.conn.statements[0][0]
+
+
 async def test_quota_is_retried_after_fifteen_minutes_without_losing_progress(
     monkeypatch: Any, tmp_path: Any,
 ) -> None:

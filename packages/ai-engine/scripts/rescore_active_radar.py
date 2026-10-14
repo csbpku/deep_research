@@ -30,6 +30,13 @@ from ai_engine.radar.scoring_input import transient_scoring_input
 SCOPE = "unscored_only"
 TRANSIENT_SCOPE = "unscored_transient_v1"
 ARCHIVED_SCOPE = "unscored_transient_including_archived_v1"
+ARCHIVED_LOCAL_SCOPE = "unscored_local_including_archived_v1"
+
+
+def checkpoint_scope(*, transient_external: bool, include_archived: bool) -> str:
+    if include_archived:
+        return ARCHIVED_SCOPE if transient_external else ARCHIVED_LOCAL_SCOPE
+    return TRANSIENT_SCOPE if transient_external else SCOPE
 
 
 def enable_stage_logging() -> None:
@@ -94,9 +101,9 @@ async def run_resumable(
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if path.exists():
             state = json.loads(path.read_text())
-            scope = (
-                ARCHIVED_SCOPE if include_archived else
-                TRANSIENT_SCOPE if transient_external else SCOPE
+            scope = checkpoint_scope(
+                transient_external=transient_external,
+                include_archived=include_archived,
             )
             if state["version"] != DISTILLED_VERSION or state.get("scope") != scope:
                 raise RuntimeError("checkpoint score version or scope mismatch")
@@ -106,8 +113,10 @@ async def run_resumable(
         else:
             done = await current_ids(store.pool, ids)
             state = {"version": DISTILLED_VERSION,
-                     "scope": ARCHIVED_SCOPE if include_archived else
-                              TRANSIENT_SCOPE if transient_external else SCOPE,
+                     "scope": checkpoint_scope(
+                         transient_external=transient_external,
+                         include_archived=include_archived,
+                     ),
                      "targets": [i for i in ids if i not in done],
                      "completed": [], "unresolved": [], "pause_until": 0, "status": "running"}
         save_state(path, state)
@@ -269,8 +278,8 @@ async def main() -> int:
         parser.error("--quota-wait-seconds must be positive")
     if args.transient_external and not args.minimax_only:
         parser.error("--transient-external requires --minimax-only and --state-file")
-    if args.include_archived and not args.transient_external:
-        parser.error("--include-archived requires --transient-external")
+    if args.include_archived and not args.minimax_only:
+        parser.error("--include-archived requires --minimax-only and --state-file")
 
     limit = max(1, min(args.limit, 10_000))
     concurrency = max(1, min(args.concurrency, 5))

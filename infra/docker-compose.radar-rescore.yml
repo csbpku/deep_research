@@ -1,0 +1,47 @@
+# Unscored-only maintenance override. Use with `compose run --no-deps -d ai-engine`,
+# never with `compose up`: the production API must keep its normal command.
+services:
+  ai-engine:
+    # Match the VPS deploy account that owns the checkpoint directory.
+    user: "1000:1000"
+    restart: "on-failure:3"
+    healthcheck:
+      disable: true
+    environment:
+      RESEARCH_LLM: minimax:MiniMax-M3
+      UTILITY_LLM: minimax:MiniMax-M3
+      FALLBACK_LLM: minimax:MiniMax-M3
+      LLM_FALLBACK_LLM: minimax:MiniMax-M3
+      LLM_RETRY_ATTEMPTS: "0"
+      RADAR_LLM_CONCURRENCY: "3"
+      RADAR_SCORING_CONCURRENCY: "3"
+      DB_POOL_MIN_SIZE: "1"
+      DB_POOL_MAX_SIZE: "2"
+      ANYTHINGLLM_ENABLED: "false"
+      ANYTHINGLLM_PERSONAL_KNOWLEDGE_ENABLED: "0"
+    volumes:
+      - ${RADAR_RESCORE_DIR:?set maintenance directory}/state:/maintenance
+      - ${RADAR_RESCORE_DIR:?set maintenance directory}/rescore_active_radar.py:/app/scripts/rescore_active_radar.py:ro
+      - ${RADAR_RESCORE_DIR:?set maintenance directory}/distilled_scorer.py:/app/ai_engine/radar/distilled_scorer.py:ro
+      - ${RADAR_RESCORE_DIR:?set maintenance directory}/client.py:/app/ai_engine/llm/client.py:ro
+      - ${RADAR_RESCORE_DIR:?set maintenance directory}/candidate_postprocessor.py:/app/ai_engine/radar/candidate_postprocessor.py:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "0.5"
+    command:
+      - python
+      - -u
+      - scripts/rescore_active_radar.py
+      - --batch-size
+      - "3"
+      - --concurrency
+      - "3"
+      - --minimax-only
+      - --state-file
+      - /maintenance/progress-unscored.json
+      - --timeout-seconds
+      - "600"
+      - --quota-wait-seconds
+      - "18000"

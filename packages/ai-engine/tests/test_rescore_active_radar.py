@@ -158,6 +158,33 @@ async def test_archived_scope_isolated_and_passed_to_scoring(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_archived_local_evidence_scope_does_not_fetch_external_source(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(job, "require_minimax_only", lambda: None)
+    completed = set()
+
+    async def current(pool, ids):
+        return completed.intersection(ids)
+
+    async def score(pool, **kwargs):
+        assert kwargs["include_archived"] is True
+        assert kwargs["transient_input"] is None
+        assert kwargs["only_unscored"] is True
+        completed.update(kwargs["summary_ids"])
+        return 1
+
+    monkeypatch.setattr(job, "current_ids", current)
+    monkeypatch.setattr(job, "score_missing_candidates", score)
+    state = tmp_path / "archived-local.json"
+    assert await job.run_resumable(
+        SimpleNamespace(pool=None), ("a",), path=state, timeout=30,
+        quota_wait=18000, include_archived=True,
+    ) == 0
+    assert json.loads(state.read_text())["scope"] == job.ARCHIVED_LOCAL_SCOPE
+
+
+@pytest.mark.asyncio
 async def test_explicit_retry_requeues_only_unresolved_targets(monkeypatch, tmp_path):
     monkeypatch.setattr(job, "require_minimax_only", lambda: None)
     path = tmp_path / "retry.json"
