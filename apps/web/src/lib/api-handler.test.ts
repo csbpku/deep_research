@@ -73,6 +73,22 @@ describe('apiHandler', () => {
     }
   });
 
+  it('rejects `Origin: null` and unparsable origins on state-changing requests, allows same-origin and absent Origin', async () => {
+    const wrapped = apiHandler<[Request]>(async () => NextResponse.json({ ok: true }));
+    const post = (headers: Record<string, string>, method = 'POST') => new Request('https://techradar.top/api/x', {
+      method, headers: { host: 'techradar.top', ...headers },
+    });
+    for (const origin of ['null', 'not a url']) {
+      const denied = await wrapped(post({ origin }));
+      expect(denied.status).toBe(403);
+      expect((await denied.json()).code).toBe(ERROR_CODES.CSRF_ORIGIN_MISMATCH);
+    }
+    expect((await wrapped(post({ referer: 'garbage' }))).status).toBe(403);
+    expect((await wrapped(post({ origin: 'https://techradar.top' }))).status).toBe(200);
+    expect((await wrapped(post({}))).status).toBe(200);
+    expect((await wrapped(post({ origin: 'null' }, 'GET'))).status).toBe(200);
+  });
+
   it('returns handler response on success', async () => {
     const wrapped = apiHandler<[Request]>(async () => NextResponse.json({ ok: true }));
     const res = await wrapped(mockReq({}));

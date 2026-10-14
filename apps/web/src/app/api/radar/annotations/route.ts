@@ -78,11 +78,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
 
   const url = new URL(req.url);
   const summaryId = url.searchParams.get('summaryId');
-  const mineOnly = url.searchParams.get('mine') === 'true';
-  if (!summaryId) {
+  // 批注是用户私有的阅读轨迹（见 POST 注释）：不论是否带 mine=true，
+  // 一律只返回调用者自己的批注；mine 参数仅为向后兼容而保留。
+  if (!summaryId || !z.string().uuid().safeParse(summaryId).success) {
     return toApiErrorResponse({
       code: ERROR_CODES.VALIDATION_FAILED,
-      message: 'missing summaryId',
+      message: 'summaryId 必须为 UUID',
       requestId,
     });
   }
@@ -94,10 +95,10 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             a."createdAt"::text, u.name AS author_name,
             (SELECT count(*) FROM radar_annotation_stars s WHERE s."annotationId" = a.id)::int AS stars
       FROM radar_annotations a JOIN users u ON u.id = a."authorId"
-      WHERE a."summaryId" = $1::uuid ${mineOnly ? 'AND a."authorId" = $2::uuid' : ''}
+      WHERE a."summaryId" = $1::uuid AND a."authorId" = $2::uuid
       ORDER BY a."createdAt" DESC
       LIMIT 200`,
-    ...(mineOnly ? [summaryId, user.id] : [summaryId]),
+    summaryId, user.id,
   );
   return NextResponse.json({ annotations });
 });

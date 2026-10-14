@@ -49,7 +49,62 @@ export function canonicalizeUrl(raw: string): string {
   }
 }
 
-/** SSRF 黑名单：与 ai-engine `safe_fetch` 保持一致（简单版；host=localhost/private 拒绝）。 */
+function isPrivateIpv4(a: number, b: number): boolean {
+  return (
+    a === 0 || a === 10 || a === 127 || a >= 224
+    || (a === 100 && b >= 64 && b <= 127) // 100.64.0.0/10 CGNAT
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 192 && b === 0) // 192.0.0.0/24, 192.0.2.0/24
+    || (a === 198 && (b === 18 || b === 19)) // benchmarking
+  );
+}
+
+/** 把（已被 URL 规范化的）IPv6 字面量展开成 8 个 16-bit 段；无法解析返回 null。 */
+function parseIpv6(host: string): number[] | null {
+  let value = host;
+  const dotted = value.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/u);
+  if (dotted) {
+    const [, a, b, c, d] = dotted.map(Number);
+    value = value.slice(0, dotted.index) + ((a! << 8) | b!).toString(16) + ':' + ((c! << 8) | d!).toString(16);
+  }
+  const halves = value.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...tail];
+  if (groups.length !== 8) return null;
+  const nums = groups.map((g) => (/^[0-9a-f]{1,4}$/iu.test(g) ? parseInt(g, 16) : Number.NaN));
+  return nums.some(Number.isNaN) ? null : nums;
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const g = parseIpv6(host);
+  if (!g) return true; // 无法解析的 IPv6 字面量一律拒绝
+  const allZeroHigh = g.slice(0, 5).every((x) => x === 0);
+  if (g.slice(0, 7).every((x) => x === 0) && (g[7] === 0 || g[7] === 1)) return true; // :: 与 ::1
+  // IPv4-mapped (::ffff:a.b.c.d)、IPv4-compatible (::a.b.c.d)、NAT64 (64:ff9b::/96)
+  const embeddedV4 =
+    (allZeroHigh && (g[5] === 0xffff || g[5] === 0))
+    || (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0));
+  if (embeddedV4 && isPrivateIpv4(g[6]! >> 8, g[6]! & 0xff)) return true;
+  if ((g[0]! & 0xfe00) === 0xfc00) return true; // fc00::/7 ULA
+  if ((g[0]! & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((g[0]! & 0xffc0) === 0xfec0) return true; // fec0::/10 site-local（已废弃）
+  if ((g[0]! & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+  return false;
+}
+
+const INTERNAL_SUFFIXES = ['.local', '.localhost', '.internal', '.lan', '.intranet', '.corp', '.home', '.home.arpa'];
+
+/**
+ * SSRF 前置过滤（纵深防御）：ai-engine 的 `safe_fetch` 才是权威（含 DNS 解析后校验）。
+ * 这里只做字面量层面的拒绝：回环/私网/链路本地/CGNAT 的 IPv4 与 IPv6（含 [::1]、
+ * [::ffff:127.0.0.1]、[fd00::1]）、内部后缀，以及没有点号的裸主机名（如 `intranet`）。
+ */
 export function isLikelySafeUrl(raw: string): { ok: true } | { ok: false; reason: string } {
   let u: URL;
   try {
@@ -60,19 +115,27 @@ export function isLikelySafeUrl(raw: string): { ok: true } | { ok: false; reason
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     return { ok: false, reason: '仅允许 http(s) 协议' };
   }
-  const host = u.hostname.toLowerCase();
+  if (u.username || u.password) {
+    return { ok: false, reason: '禁止在 URL 中携带凭据' };
+  }
+  // URL 会把 `[::1]` 的 hostname 保留方括号；统一去掉并去掉末尾点。
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/gu, '').replace(/\.$/u, '');
+  if (host.includes(':')) {
+    return isPrivateIpv6(host) ? { ok: false, reason: '禁止内网/回环 IPv6 地址' } : { ok: true };
+  }
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return isPrivateIpv4(a, b) ? { ok: false, reason: '禁止私网 IPv4' } : { ok: true };
+  }
   if (
-    host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === '0.0.0.0' ||
-    host === '::1' ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal')
+    host === 'localhost'
+    || INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix))
   ) {
     return { ok: false, reason: '禁止内网/回环地址' };
   }
-  if (/^(10|127|169\.254|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\./.test(host)) {
-    return { ok: false, reason: '禁止私网 IPv4' };
+  if (!host.includes('.')) {
+    return { ok: false, reason: '禁止无域名后缀的内部主机名' };
   }
   return { ok: true };
 }

@@ -89,29 +89,19 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
     });
   }
 
-  const existing = await prisma.commentStar.findUnique({
-    where: { commentId_userId: { commentId: idParsed.data.id, userId: u.id } },
-    select: { id: true },
-  });
-  if (!existing) {
-    // 已经没点赞了；返回当前计数（幂等成功）
-    const cur = await prisma.comment.findUnique({
-      where: { id: idParsed.data.id },
-      select: { starCount: true },
-    });
-    return NextResponse.json({ ok: true, starCount: cur?.starCount ?? 0 });
-  }
-
+  // 幂等：用 deleteMany 而不是 findUnique + delete（后者在并发取消点赞时会 P2025 → 500）。
+  // 只有真正删掉一行时才递减计数，重复/并发的取消点赞直接返回当前计数。
   await prisma.$transaction(async (tx) => {
-    await tx.commentStar.delete({
-      where: { commentId_userId: { commentId: idParsed.data.id, userId: u.id } },
-      select: { id: true },
+    const removed = await tx.commentStar.deleteMany({
+      where: { commentId: idParsed.data.id, userId: u.id },
     });
-    await tx.comment.update({
-      where: { id: idParsed.data.id },
-      data: { starCount: { decrement: 1 } },
-      select: { id: true },
-    });
+    if (removed.count > 0) {
+      await tx.comment.update({
+        where: { id: idParsed.data.id },
+        data: { starCount: { decrement: removed.count } },
+        select: { id: true },
+      });
+    }
   });
 
   const after = await prisma.comment.findUnique({

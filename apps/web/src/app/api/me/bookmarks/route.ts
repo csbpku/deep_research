@@ -11,7 +11,7 @@ import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
 import { toApiErrorResponse } from '@/lib/errors';
 import { withRequestId } from '@/lib/log';
-import { hydrateBookmarks } from '@/lib/me/bookmarks';
+import { hydrateBookmarks, isBookmarkTargetVisible } from '@/lib/me/bookmarks';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const postSchema = z.object({
@@ -30,7 +30,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     take: 100,
   });
   return NextResponse.json({
-    items: await hydrateBookmarks(items),
+    items: await hydrateBookmarks(items, user),
     requestId,
   });
 });
@@ -51,18 +51,13 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  if (body.targetType === 'radar_candidate') {
-    const radar = await prisma.summary.findUnique({
-      where: { id: body.targetId },
-      select: { source: true, syncRunId: true },
+  // 缺失与不可见（他人的草稿/归档、未审核/noise 雷达等）统一 404，不暴露存在性。
+  if (!(await isBookmarkTargetVisible(body.targetType, body.targetId, user))) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.DRAFT_NOT_FOUND,
+      message: '收藏目标不存在',
+      requestId,
     });
-    if (!radar || radar.source !== 'daily' || radar.syncRunId === null) {
-      return toApiErrorResponse({
-        code: ERROR_CODES.DRAFT_NOT_FOUND,
-        message: '雷达候选不存在',
-        requestId,
-      });
-    }
   }
 
   const existing = await prisma.userBookmark.findUnique({

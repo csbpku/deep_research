@@ -129,8 +129,8 @@ beforeEach(() => {
   mocks.requireUser.mockResolvedValue(MEMBER);
   mocks.requireAdmin.mockResolvedValue(ADMIN);
   mocks.transaction.mockImplementation((cb) => cb({
-    summary: { create: mocks.summaryCreate, update: mocks.summaryUpdate },
-    shareSubmission: { update: mocks.shareSubmissionUpdate },
+    summary: { create: mocks.summaryCreate, update: mocks.summaryUpdate, findUnique: vi.fn().mockResolvedValue(null) },
+    shareSubmission: { update: mocks.shareSubmissionUpdate, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     radarFeedback: {
       create: mocks.radarFeedbackCreate,
       upsert: mocks.radarFeedbackUpsert,

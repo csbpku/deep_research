@@ -73,6 +73,17 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const actionRequestId = newAdminActionRequestId();
 
   const result = await prisma.$transaction(async (tx) => {
+    // 原子认领：只有 promoteStatus 仍未处理的评论能转为 approved，
+    // 双击/并发提交时第二个得到 count=0，不会重复创建 knowledge。
+    const claimed = await tx.comment.updateMany({
+      where: {
+        id: comment.id,
+        promoteStatus: { notIn: [PROMOTE_STATUS.APPROVED, PROMOTE_STATUS.REJECTED] },
+      },
+      data: { promoteStatus: PROMOTE_STATUS.APPROVED },
+    });
+    if (claimed.count === 0) return null;
+
     const research = await tx.research.create({
       data: {
         type: RESEARCH_TYPE.KNOWLEDGE,
@@ -94,12 +105,6 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       },
     });
 
-    await tx.comment.update({
-      where: { id: comment.id },
-      data: { promoteStatus: PROMOTE_STATUS.APPROVED },
-      select: { id: true },
-    });
-
     await writeAdminAction(tx, {
       actorId: u.id,
       action: ADMIN_COMMENT_ACTIONS.PROMOTE,
@@ -115,6 +120,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
     return research;
   });
+
+  if (result === null) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '该评论已被处理',
+      requestId,
+    });
+  }
 
   log.info('admin.comment.promote', 'comment promoted to knowledge', {
     requestId,

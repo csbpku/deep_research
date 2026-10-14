@@ -61,7 +61,7 @@ function request(email: string): Request {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-forwarded-for': '203.0.113.5',
+      'x-real-ip': '203.0.113.5',
     },
     body: JSON.stringify({ email }),
   });

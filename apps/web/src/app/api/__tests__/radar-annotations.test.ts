@@ -152,4 +152,23 @@ describe('GET /api/radar/annotations', () => {
       USER.id,
     );
   });
+
+  it('only returns the caller own annotations even without mine=true', async () => {
+    const response = await GET(new NextRequest(
+      'http://localhost/api/radar/annotations?summaryId=22222222-2222-2222-2222-222222222222',
+      { method: 'GET' },
+    ));
+    expect(response.status).toBe(200);
+    expect(mocks.queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('a."authorId" = $2::uuid'),
+      '22222222-2222-2222-2222-222222222222',
+      USER.id,
+    );
+  });
+
+  it('rejects a non-UUID summaryId with 400 instead of hitting the database', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/radar/annotations?summaryId=abc', { method: 'GET' }));
+    expect(response.status).toBe(400);
+    expect(mocks.queryRawUnsafe).not.toHaveBeenCalled();
+  });
 });

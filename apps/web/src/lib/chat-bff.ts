@@ -127,7 +127,8 @@ export async function streamChatEngine(
         accept: 'text/event-stream',
         ...aiEngineServiceAuthHeaders(),
       },
-      // No signal — long-lived stream.
+      // 无超时；`init.signal`（调用方传入的请求 abort signal）经上面的 ...init 透传给 fetch。
+      ...(init.signal ? { signal: init.signal } : {}),
     });
     return res;
   } catch (err) {

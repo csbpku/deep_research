@@ -60,12 +60,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
   const actionRequestId = newAdminActionRequestId();
 
-  await prisma.$transaction(async (tx) => {
-    await tx.comment.update({
-      where: { id: comment.id },
+  const handled = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.comment.updateMany({
+      where: {
+        id: comment.id,
+        promoteStatus: { notIn: [PROMOTE_STATUS.APPROVED, PROMOTE_STATUS.REJECTED] },
+      },
       data: { promoteStatus: PROMOTE_STATUS.REJECTED },
-      select: { id: true },
     });
+    if (claimed.count === 0) return false;
     await writeAdminAction(tx, {
       actorId: u.id,
       action: ADMIN_COMMENT_ACTIONS.DISMISS,
@@ -74,7 +77,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       requestId: actionRequestId,
       metadata: { reason: body.reason },
     });
+    return true;
   });
+  if (!handled) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '该评论已被处理',
+      requestId,
+    });
+  }
 
   log.info('admin.comment.dismiss', 'comment nomination dismissed', {
     requestId,

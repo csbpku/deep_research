@@ -3,6 +3,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
+import { ERROR_CODES } from '@deep-research/shared/errors';
 
 import { apiHandler, parseBody } from '../../../../../lib/api-handler';
 import { requireUser } from '../../../../../lib/auth/session';
@@ -37,7 +39,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   const conversation = await prisma.aiResearchConversation.findUnique({
     where: { id: parsed.data.id },
     include: {
-      messages: { orderBy: { createdAt: 'asc' } },
+      messages: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
       _count: { select: { messages: true } },
     },
   });
@@ -112,10 +114,21 @@ export const PATCH = apiHandler<[NextRequest, { params: Promise<{ id: string }> 
       ...(input.jobId !== undefined ? { jobId: input.jobId } : {}),
     },
     include: {
-      messages: { orderBy: { createdAt: 'asc' } },
+      messages: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
       _count: { select: { messages: true } },
     },
+  }).catch((err: unknown) => {
+    // jobId 在 conversation 上唯一：已被另一会话绑定时是客户端冲突，不是 500。
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return null;
+    throw err;
   });
+  if (conversation === null) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.AI_IDEMPOTENCY_MISMATCH,
+      message: '该调研任务已绑定到另一个会话',
+      requestId,
+    });
+  }
 
   return NextResponse.json({
     id: conversation.id,

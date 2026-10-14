@@ -27,3 +27,13 @@ describe('chat BFF internal authentication', () => {
     });
   });
 });
+
+describe('streamChatEngine abort propagation', () => {
+  it('forwards the request abort signal to the upstream fetch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ac = new AbortController();
+    await streamChatEngine('http://ai.test/s', { method: 'POST', signal: ac.signal }, 'r', 'test.stream');
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(ac.signal);
+  });
+});

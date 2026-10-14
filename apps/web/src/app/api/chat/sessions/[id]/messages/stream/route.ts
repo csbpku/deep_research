@@ -74,6 +74,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     chatEngineUrl(`/api/chat/sessions/${parsed.data.id}/messages/stream`),
     {
       method: 'POST',
+      signal: req.signal, // 客户端断开 → 取消上游 LLM 流
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         user_id: user.id,

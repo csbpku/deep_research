@@ -90,7 +90,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         : undefined,
     },
     include: {
-      messages: { orderBy: { createdAt: 'asc' } },
+      messages: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
       _count: { select: { messages: true } },
     },
   });

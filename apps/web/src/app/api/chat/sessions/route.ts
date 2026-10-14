@@ -9,6 +9,7 @@ import { prisma } from '../../../../lib/db';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
+import { canSeedChatFromSummary, radarVisibilitySelect } from '../../../../lib/radar/visibility';
 import {
   CHAT_WRITE_TIMEOUT_MS,
   chatEngineUrl,
@@ -38,9 +39,11 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   // （source='daily' 且 syncRunId 非空），防止拿任意 summary 开对话。
   const seed = await prisma.summary.findUnique({
     where: { id: input.seedSummaryId },
-    select: { id: true, status: true, source: true, syncRunId: true },
+    select: { ...radarVisibilitySelect, status: true },
   });
-  if (!seed || (seed.status !== 'published' && !(seed.source === 'daily' && seed.syncRunId != null))) {
+  // 与 /api/radar/[id] 共用同一可见性规则（lib/radar/visibility.ts），
+  // 避免对话 seed 绕过详情页对未评分 / noise / 未审核高价值内容的隐藏。
+  if (!seed || !canSeedChatFromSummary(seed, user.role === 'admin')) {
     return toApiErrorResponse({
       code: ERROR_CODES.AI_CHAT_FORBIDDEN_SEED,
       message: '该摘要不可用于对话',

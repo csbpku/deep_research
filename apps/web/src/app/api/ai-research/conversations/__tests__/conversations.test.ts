@@ -33,6 +33,8 @@ vi.mock('@/lib/db', () => ({
 
 import { POST as createConversation } from '../route';
 import { POST as appendMessages } from '../[id]/messages/route';
+import { PATCH as patchConversation } from '../[id]/route';
+import { Prisma } from '@prisma/client';
 
 function request(url: string, body: unknown, method = 'POST') {
   return new Request(`http://localhost${url}`, {
@@ -111,5 +113,21 @@ describe('POST /api/ai-research/conversations/[id]/messages', () => {
         },
       },
     });
+  });
+});
+
+describe('PATCH /api/ai-research/conversations/[id]', () => {
+  it('maps a duplicate jobId (unique violation) to 409 instead of 500', async () => {
+    const JOB_ID = '33333333-3333-4333-8333-333333333333';
+    mocks.conversationFindUnique.mockResolvedValue({ userId: USER_ID });
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID });
+    mocks.conversationUpdate.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('unique', { code: 'P2002', clientVersion: 'test' }),
+    );
+    const res = await patchConversation(
+      request(`/api/ai-research/conversations/${CONVERSATION_ID}`, { jobId: JOB_ID }, 'PATCH'),
+      { params: Promise.resolve({ id: CONVERSATION_ID }) },
+    );
+    expect(res.status).toBe(409);
   });
 });

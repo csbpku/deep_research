@@ -76,6 +76,10 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    // READ COMMITTED 下两个并发请求各自看到 2 个 active admin、再各自降级一个，
+    // 会把系统降到 0 admin。用事务级 advisory lock 串行化所有 admin 角色/禁用变更
+    // （事务结束自动释放），计数检查发生在锁之后。
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('admin_users_role_change'))`;
     const target = await tx.user.findUnique({
       where: { id: targetId },
       select: { id: true, role: true, disabledAt: true, email: true, name: true },

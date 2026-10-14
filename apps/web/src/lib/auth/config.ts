@@ -24,6 +24,7 @@ import { verifyPassword } from './password';
 import { isBootstrapAdminEmail } from './invitation';
 import { canCreateAccountInBeta } from './beta-access';
 import { log } from '../log';
+import { isOAuthEmailTrusted } from './oauth-email';
 import { isProductionAuthAllowed } from './transport';
 import { canUseE2EProvider, isAllowedE2EIdentity } from './e2e-access';
 
@@ -152,6 +153,16 @@ export const authConfig: NextAuthConfig = {
       const email = user.email ?? profile?.email ?? null;
       if (!email) {
         log.warn('auth.signin', 'no email in profile', { provider: account?.provider });
+        return false;
+      }
+      // 按邮箱关联账号前必须确认 IdP 已验证该邮箱，否则可被未验证邮箱接管他人账号。
+      if (!(await isOAuthEmailTrusted({
+        provider: account?.provider,
+        email,
+        profile: profile as { email_verified?: unknown } | null | undefined,
+        accessToken: account?.access_token ?? null,
+      }))) {
+        log.warn('auth.signin', 'oauth email not verified', { provider: account?.provider });
         return false;
       }
       const env = getWebEnv();

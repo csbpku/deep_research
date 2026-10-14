@@ -72,7 +72,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const conversation = await prisma.aiResearchConversation.findUnique({
     where: { id: parsed.data.id },
     include: {
-      messages: { orderBy: { createdAt: 'asc' } },
+      messages: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
       _count: { select: { messages: true } },
     },
   });

@@ -11,6 +11,8 @@ import { prisma } from '@/lib/db';
 import { toApiErrorResponse } from '@/lib/errors';
 import { getWebEnv } from '@/lib/env';
 import { withRequestId } from '@/lib/log';
+import { rateLimitKey } from '@/lib/net/client-ip';
+import { isRadarSummaryVisible } from '@/lib/radar/visibility';
 import { RadarIdParam } from '@/lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
@@ -54,25 +56,31 @@ type RadarGuideV2 = {
   highlights?: Array<{ quote?: string; rationale?: string }>;
 };
 
-const anonymousHits = new Map<string, { windowStartedAt: number; count: number }>();
-const ANONYMOUS_LIMIT = 12;
-const ANONYMOUS_WINDOW_MS = 60_000;
+// 按已登录用户 id 限流；Map 有上限并在写入时清理过期窗口，避免被无限 key 撑爆内存。
+const userHits = new Map<string, { windowStartedAt: number; count: number }>();
+const USER_LIMIT = 30;
+const USER_WINDOW_MS = 60_000;
+const MAX_TRACKED_KEYS = 5_000;
 
-function clientKey(req: NextRequest): string {
-  return req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || req.headers.get('x-real-ip')
-    || 'anonymous';
-}
-
-function allowAnonymous(req: NextRequest): boolean {
-  const now = Date.now();
-  const key = clientKey(req);
-  const current = anonymousHits.get(key);
-  if (!current || now - current.windowStartedAt >= ANONYMOUS_WINDOW_MS) {
-    anonymousHits.set(key, { windowStartedAt: now, count: 1 });
+function allowRequest(key: string, now = Date.now()): boolean {
+  if (userHits.size >= MAX_TRACKED_KEYS) {
+    for (const [k, v] of userHits) {
+      if (now - v.windowStartedAt >= USER_WINDOW_MS) userHits.delete(k);
+    }
+    // 仍然超限（全部在窗口内）→ 淘汰最早插入的条目（Map 保持插入顺序）
+    while (userHits.size >= MAX_TRACKED_KEYS) {
+      const oldest = userHits.keys().next().value;
+      if (oldest === undefined) break;
+      userHits.delete(oldest);
+    }
+  }
+  const current = userHits.get(key);
+  if (!current || now - current.windowStartedAt >= USER_WINDOW_MS) {
+    userHits.delete(key);
+    userHits.set(key, { windowStartedAt: now, count: 1 });
     return true;
   }
-  if (current.count >= ANONYMOUS_LIMIT) return false;
+  if (current.count >= USER_LIMIT) return false;
   current.count += 1;
   return true;
 }
@@ -291,10 +299,17 @@ function normalizeGuide(value: unknown): RadarGuideV2 | null {
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
   const user = await getCurrentUser();
-  if (!user && !allowAnonymous(req)) {
+  if (!user) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.AUTH_NOT_AUTHENTICATED,
+      message: '需要登录',
+      requestId,
+    });
+  }
+  if (!allowRequest(rateLimitKey(req.headers, user.id))) {
     return toApiErrorResponse({
       code: ERROR_CODES.UPSTREAM_RATE_LIMITED,
-      message: '匿名阅读请求过于频繁，请稍后再试',
+      message: '阅读请求过于频繁，请稍后再试',
       requestId,
     });
   }
@@ -322,15 +337,16 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       source: true,
       syncRunId: true,
       distilledTier: true,
+      distilledScore: true,
       tags: true,
+      enrichmentStatus: true,
+      readerQualityStatus: true,
+      contentReviewStatus: true,
       shareSource: { select: { status: true } },
     },
   });
-  const visible = summary && (
-    (summary.source === 'daily' && summary.syncRunId !== null)
-    || (summary.source === 'user' && summary.shareSource?.status === 'approved')
-  );
-  if (!visible) {
+  // 与 /api/radar/[id] 完全一致的可见性规则（未评分/noise/未审核高价值对非 admin 隐藏）。
+  if (!summary || !isRadarSummaryVisible(summary, user.role === 'admin')) {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',
@@ -345,7 +361,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
   if (
-    user?.role !== 'admin'
+    user.role !== 'admin'
     && summary.distilledTier !== 'collection'
     && summary.distilledTier !== 'deep_read'
   ) {

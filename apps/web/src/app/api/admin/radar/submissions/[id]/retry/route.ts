@@ -11,6 +11,9 @@ import { withRequestId } from '@/lib/log';
 import { enqueueRadarSubmission } from '@/lib/radar/submissions/worker-bridge';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
+class SubmissionNotFoundError extends Error {}
+class SubmissionNotFailedError extends Error {}
+
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const admin = await requireAdmin(req);
   if (admin instanceof NextResponse) return admin;
@@ -22,14 +25,21 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
 
   const updated = await prisma.$transaction(async (tx) => {
     const sub = await tx.radarSubmission.findUnique({ where: { id }, select: { id: true, status: true, submitterId: true } });
-    if (!sub) throw new Error('NOT_FOUND');
-    if (sub.status !== 'failed') throw new Error('NOT_FAILED');
-    return tx.radarSubmission.update({
-      where: { id },
+    if (!sub) throw new SubmissionNotFoundError();
+    if (sub.status !== 'failed') throw new SubmissionNotFailedError();
+    // 以 status='failed' 为前置条件的条件更新，防止并发重试/状态变化被覆盖。
+    const claimed = await tx.radarSubmission.updateMany({
+      where: { id, status: 'failed' },
       data: { status: 'received', errorCode: null, errorMessage: null, nextRetryAt: null },
-      select: { id: true, status: true },
     });
-  }).catch((err: Error) => ({ __error: err.message }));
+    if (claimed.count === 0) throw new SubmissionNotFailedError();
+    return { id, status: 'received' as const };
+  }).catch((err: unknown) => {
+    // 只映射预期的“不存在/状态不对”；数据库故障等真实错误必须照常抛出（500 + 日志）。
+    if (err instanceof SubmissionNotFoundError) return { __error: 'NOT_FOUND' as const };
+    if (err instanceof SubmissionNotFailedError) return { __error: 'NOT_FAILED' as const };
+    throw err;
+  });
 
   if ('__error' in updated) {
     if (updated.__error === 'NOT_FOUND') {

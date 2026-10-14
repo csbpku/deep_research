@@ -71,8 +71,8 @@ function _checkOrigin(req: Request): NextResponse | undefined {
     const pathname = new URL(req.url).pathname;
     if (pathname.startsWith('/api/reading/') && origin && isAllowedReadingExtensionOrigin(origin)) return;
   } catch {
-    // 非标准格式，放行（只做 best-effort）
-    return;
+    // 无法解析的 Origin/Referer（含 `Origin: null`，即 'null' 字符串）不能证明同源，
+    // 对变更请求按跨域处理；仅“完全没有 Origin/Referer”才放行（非浏览器客户端）。
   }
 
   return toApiErrorResponse({

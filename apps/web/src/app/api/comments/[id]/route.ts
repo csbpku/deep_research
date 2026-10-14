@@ -3,7 +3,8 @@
 // 删除策略：
 //   - 作者可以删自己的
 //   - admin 可以删任何
-//   - 删除时把子回复一并删（Cascade）；Research.commentCount 同步减
+//   - 子回复不会被删除：schema 的 parent 关系是 onDelete: SetNull，
+//     被删评论的直接回复会变成顶层评论（parentId=null）；Research.commentCount 同步为剩余总数
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -67,11 +68,9 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
     });
   }
 
-  // 计算实际要减的 commentCount：删自己 + 删多少 children
-  // 最简方式：直接用 transaction 删除，然后通过删除前后 total count 差来减
   const actionRequestId = newAdminActionRequestId();
   await prisma.$transaction(async (tx) => {
-    // 删自己（cascade 删 children 与 stars）
+    // 删自己：stars 级联删除；子回复因 SetNull 保留并升为顶层评论
     await tx.comment.delete({
       where: { id: comment.id },
       select: { id: true },
@@ -102,7 +101,8 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
           deletedAuthor: comment.authorId,
           researchId: comment.researchId ?? null,
           summaryId: comment.summaryId ?? null,
-          childCount: comment._count.children,
+          // 回复未被删除，而是 parentId 置空变成顶层评论
+          orphanedReplyCount: comment._count.children,
           starCount: comment._count.stars,
         },
       });
@@ -114,7 +114,7 @@ export const DELETE = apiHandler<[NextRequest, { params: Promise<{ id: string }>
     userId: u.id,
     commentId: comment.id,
     targetType: comment.targetType,
-    deletedChildren: comment._count.children,
+    orphanedReplies: comment._count.children,
     deletedStars: comment._count.stars,
     actor: isAdmin && !isAuthor ? 'admin' : 'author',
   });

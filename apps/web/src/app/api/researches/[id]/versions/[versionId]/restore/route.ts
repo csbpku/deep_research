@@ -3,6 +3,13 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
+import { RESEARCH_STATUS } from '@deep-research/shared/states';
+import {
+  confirmedKnowledgeIndexText,
+  queuePersonalKnowledgeIndex,
+  readingKnowledgeIndexTextFromBody,
+} from '../../../../../../../lib/personal-knowledge-index';
 import { prisma } from '../../../../../../../lib/db';
 import { apiHandler } from '../../../../../../../lib/api-handler';
 import { requireUser } from '../../../../../../../lib/auth/session';
@@ -24,9 +31,23 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string; ver
 
   const research = await prisma.research.findUnique({
     where: { id: parsed.data.id },
-    select: { id: true, authorId: true, status: true, creationMethod: true },
+    select: {
+      id: true,
+      authorId: true,
+      status: true,
+      creationMethod: true,
+      type: true,
+      readingSaveKey: true,
+      sourceAiJob: { select: { id: true } },
+    },
   });
-  if (!research || (research.authorId !== user.id && user.role !== 'admin')) {
+  // 与 PUT /api/researches/[id] 同一规则：owner 可操作自己的任意状态；
+  // admin 仅可操作已发布内容，不能写入他人的私有草稿/归档（对外同样表现为 404，不暴露存在性）。
+  if (
+    !research
+    || (research.authorId !== user.id
+      && !(user.role === 'admin' && research.status === RESEARCH_STATUS.PUBLISHED))
+  ) {
     return toApiErrorResponse({ code: ERROR_CODES.NOT_FOUND, message: '调研库不存在', requestId });
   }
   if (research.status === 'published' && research.creationMethod === 'ai_research') {
@@ -53,7 +74,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string; ver
       select: { title: true, body: true, background: true, conclusion: true, risks: true, tags: true },
     });
     if (!current) throw new Error('research disappeared');
-    const next = {
+    const next: Record<string, unknown> & { title: string; body: string; background: string | null; conclusion: string | null; risks: string | null; tags: string[] } = {
       title: typeof value.title === 'string' ? value.title : current.title,
       body: typeof value.body === 'string' ? value.body : current.body,
       background: typeof value.background === 'string' ? value.background : null,
@@ -62,7 +83,53 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string; ver
       tags: Array.isArray(value.tags) ? value.tags.filter((tag): tag is string => typeof tag === 'string') : current.tags,
     };
     const diff = computeDiff(current, next);
-    const result = await tx.research.update({ where: { id: research.id }, data: next });
+    const contentChanged = Object.keys(diff).length > 0;
+    const knowledgeIndexText = research.type === 'knowledge'
+      ? research.readingSaveKey
+        ? readingKnowledgeIndexTextFromBody(next.body)
+        : confirmedKnowledgeIndexText(next)
+      : undefined;
+    if (contentChanged) {
+      // 与 PUT 一致：旧审核结论只对旧内容有效，恢复后必须作废并让在途审核失效。
+      const reviewRuns = (tx as typeof tx & {
+        researchReviewRun?: { updateMany: (args: unknown) => Promise<unknown> };
+      }).researchReviewRun;
+      if (reviewRuns) {
+        await reviewRuns.updateMany({
+          where: { researchId: research.id, executionStatus: { in: ['queued', 'reviewing'] } },
+          data: { executionStatus: 'stale', outcome: 'stale', completedAt: new Date() },
+        });
+      }
+      const clearedReview = {
+        reviewStatus: null,
+        reviewAttempts: 0,
+        reviewSummary: Prisma.DbNull,
+        reviewClaims: [] as Prisma.InputJsonValue,
+        reviewedAt: null,
+        reviewStartedAt: null,
+        reviewRunToken: null,
+        reviewDetails: Prisma.DbNull,
+      };
+      const aiResearchJob = (tx as { aiResearchJob?: { update?: (args: unknown) => Promise<unknown> } }).aiResearchJob;
+      if (research.sourceAiJob?.id && aiResearchJob?.update) {
+        await aiResearchJob.update({ where: { id: research.sourceAiJob.id }, data: clearedReview });
+      }
+      Object.assign(next, clearedReview);
+    }
+    const result = await tx.research.update({
+      where: { id: research.id },
+      data: {
+        ...next,
+        ...(research.type === 'knowledge' && contentChanged ? { knowledgeIndexText } : {}),
+      },
+    });
+    if (contentChanged && research.type === 'knowledge') {
+      await queuePersonalKnowledgeIndex(tx, {
+        ownerId: research.authorId,
+        researchId: research.id,
+        operation: knowledgeIndexText ? 'upsert' : 'delete',
+      });
+    }
     await tx.researchAudit.create({
       data: {
         researchId: research.id,

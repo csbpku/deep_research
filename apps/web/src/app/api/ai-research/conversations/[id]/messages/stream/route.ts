@@ -44,7 +44,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const conversation = await prisma.aiResearchConversation.findUnique({
     where: { id: parsed.data.id },
     include: {
-      messages: { orderBy: { createdAt: 'asc' } },
+      messages: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
     },
   });
   if (!conversation || conversation.userId !== user.id) {
@@ -106,6 +106,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     chatEngineUrl('/api/ai-research/chat/follow-up'),
     {
       method: 'POST',
+      signal: req.signal, // 客户端断开 → 取消上游 LLM 流
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         user_id: user.id,
@@ -187,6 +188,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         controller.enqueue(encoder.encode(`event: persisted\ndata: ${JSON.stringify({ ok: true, message_id: persistedMessageId })}\n\n`));
         controller.close();
       } catch (err) {
+        if (req.signal?.aborted) {
+          // 客户端断开：上游已被取消。尽力落一条“中断”消息保持对话连贯，然后安静收尾。
+          await persistAssistantMessage('回答中断，请重试。').catch(() => undefined);
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
         controller.error(err);
       }
     },

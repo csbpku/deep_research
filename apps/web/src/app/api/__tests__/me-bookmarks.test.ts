@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   summaryFindMany: vi.fn(),
   summaryFindUnique: vi.fn(),
   researchFindMany: vi.fn(),
+  researchFindUnique: vi.fn(),
   radarFeedbackUpsert: vi.fn(),
   radarFeedbackDeleteMany: vi.fn(),
   transaction: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock('../../../lib/db.js', () => ({
       findMany: mocks.summaryFindMany,
       findUnique: mocks.summaryFindUnique,
     },
-    research: { findMany: mocks.researchFindMany },
+    research: { findMany: mocks.researchFindMany, findUnique: mocks.researchFindUnique },
     radarFeedback: {
       upsert: mocks.radarFeedbackUpsert,
       deleteMany: mocks.radarFeedbackDeleteMany,
@@ -53,6 +54,11 @@ const USER = {
   image: null,
   role: 'member' as const,
   disabledAt: null,
+};
+const VISIBLE_SUMMARY = {
+  status: 'candidate', source: 'daily', syncRunId: 'run-1', shareSource: null, distilledScore: { tier: 'deep_read' },
+  distilledTier: 'deep_read', tags: [], enrichmentStatus: 'ready', readerQualityStatus: 'ready',
+  contentReviewStatus: 'approved', sharedByUserId: null,
 };
 const TARGET_ID = '22222222-2222-4222-8222-222222222222';
 const BOOKMARK_ID = '33333333-3333-4333-8333-333333333333';
@@ -83,7 +89,7 @@ describe('/api/me/bookmarks', () => {
       note: '稍后细读',
       createdAt: new Date('2026-08-04T00:00:00Z'),
     }]);
-    mocks.summaryFindMany.mockResolvedValue([{ id: TARGET_ID, title: 'Postgres 18 技术解读' }]);
+    mocks.summaryFindMany.mockResolvedValue([{ id: TARGET_ID, title: 'Postgres 18 技术解读', ...VISIBLE_SUMMARY }]);
 
     const response = await GET(new Request('http://localhost/api/me/bookmarks') as never);
     const body = await response.json();
@@ -113,7 +119,7 @@ describe('/api/me/bookmarks', () => {
   });
 
   it('creates a radar bookmark and favorite feedback in one transaction', async () => {
-    mocks.summaryFindUnique.mockResolvedValue({ source: 'daily', syncRunId: TARGET_ID });
+    mocks.summaryFindUnique.mockResolvedValue({ ...VISIBLE_SUMMARY });
     mocks.userBookmarkFindUnique.mockResolvedValue(null);
     mocks.userBookmarkCreate.mockResolvedValue({ id: BOOKMARK_ID, createdAt: new Date('2026-08-04T00:00:00Z') });
     mocks.radarFeedbackUpsert.mockResolvedValue({ id: 'feedback' });
@@ -148,5 +154,37 @@ describe('/api/me/bookmarks', () => {
     expect(mocks.radarFeedbackDeleteMany).toHaveBeenCalledWith({
       where: { summaryId: TARGET_ID, userId: USER.id, feedbackType: 'favorite' },
     });
+  });
+
+  const post = (targetType: string) => POST(new Request('http://localhost/api/me/bookmarks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ targetType, targetId: TARGET_ID }),
+  }) as never);
+
+  it('refuses to bookmark another user\'s private draft (same 404 as a missing target)', async () => {
+    mocks.researchFindUnique.mockResolvedValue({ status: 'draft', authorId: 'someone-else' });
+    const hidden = await post('research');
+    mocks.researchFindUnique.mockResolvedValue(null);
+    const missing = await post('research');
+    expect(hidden.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(await hidden.json()).toMatchObject({ code: (await missing.json()).code });
+    expect(mocks.userBookmarkCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to bookmark an unapproved radar candidate', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({ ...VISIBLE_SUMMARY, contentReviewStatus: 'pending' });
+    expect((await post('radar_candidate')).status).toBe(404);
+    expect(mocks.userBookmarkCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not leak the title of a non-visible target when listing', async () => {
+    mocks.userBookmarkFindMany.mockResolvedValue([{
+      id: BOOKMARK_ID, targetType: 'research', targetId: TARGET_ID, note: null, createdAt: new Date('2026-08-04T00:00:00Z'),
+    }]);
+    mocks.researchFindMany.mockResolvedValue([{ id: TARGET_ID, title: '别人的私有草稿', status: 'draft', authorId: 'someone-else' }]);
+    const body = await (await GET(new Request('http://localhost/api/me/bookmarks') as never)).json();
+    expect(body.items[0]).toMatchObject({ title: '内容已不存在', href: null, available: false });
   });
 });

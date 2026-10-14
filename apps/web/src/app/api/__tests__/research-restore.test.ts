@@ -76,4 +76,41 @@ describe('POST research version restore', () => {
     expect(response.status).toBe(404);
     expect(mocks.auditFindFirst).not.toHaveBeenCalled();
   });
+
+  it('does not let an admin restore into another user\'s private draft', async () => {
+    mocks.requireUser.mockResolvedValueOnce({ id: 'admin-1', role: 'admin' });
+    mocks.researchFindUnique.mockResolvedValueOnce({ id: RESEARCH_ID, authorId: USER.id, status: 'draft' });
+    const response = await request();
+    expect(response.status).toBe(404);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin restore published content', async () => {
+    mocks.requireUser.mockResolvedValueOnce({ id: 'admin-1', role: 'admin' });
+    mocks.researchFindUnique.mockResolvedValueOnce({ id: RESEARCH_ID, authorId: USER.id, status: 'published', creationMethod: 'manual' });
+    expect((await request()).status).toBe(200);
+  });
+
+  it('stales in-flight review runs and re-queues the personal knowledge index', async () => {
+    const runUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const indexUpsert = vi.fn().mockResolvedValue({});
+    mocks.researchFindUnique.mockResolvedValueOnce({
+      id: RESEARCH_ID, authorId: USER.id, status: 'draft', type: 'knowledge', readingSaveKey: null,
+    });
+    mocks.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      research: { findUnique: mocks.currentFindUnique, update: mocks.researchUpdate },
+      researchAudit: { create: mocks.auditCreate },
+      researchReviewRun: { updateMany: runUpdateMany },
+      personalKnowledgeIndexTask: { upsert: indexUpsert },
+    }));
+    expect((await request()).status).toBe(200);
+    expect(runUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ executionStatus: { in: ['queued', 'reviewing'] } }),
+      data: expect.objectContaining({ executionStatus: 'stale' }),
+    }));
+    expect(mocks.researchUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ reviewStatus: null, knowledgeIndexText: expect.anything() }),
+    }));
+    expect(indexUpsert).toHaveBeenCalledTimes(1);
+  });
 });

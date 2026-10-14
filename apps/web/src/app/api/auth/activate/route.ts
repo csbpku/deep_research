@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 
   const existing = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, passwordHash: true, disabledAt: true },
+    select: { id: true, passwordHash: true, disabledAt: true, role: true, avatarUrl: true },
   });
 
   if (existing?.disabledAt) {
@@ -67,6 +67,16 @@ export async function POST(request: Request) {
   }
   if (existing?.passwordHash) {
     return error(request, ERROR_CODES.AUTH_ACCOUNT_EXISTS, '该邮箱已激活，请直接登录');
+  }
+  // 共享邀请码不能证明邮箱所有权：给已存在的无密码账号附加密码 = 接管该账号。
+  // 仅允许“管理员预建的普通成员”：admin 账号一律拒绝；由 OAuth 登录创建的账号
+  // （schema 无 Account 表，只能以 IdP 头像 avatarUrl 作为标记）也拒绝，应继续使用 OAuth 登录。
+  if (existing && (existing.role === 'admin' || existing.avatarUrl)) {
+    return error(
+      request,
+      ERROR_CODES.AUTH_REGISTRATION_DISABLED,
+      '该邮箱已有账号但尚未设置密码，请使用原有登录方式',
+    );
   }
   if (!canCreateAccountInBeta({
     betaMode: env.AUTH_BETA_MODE,

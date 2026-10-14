@@ -171,6 +171,8 @@ describe('POST /api/auth/activate', () => {
       id: 'bootstrap-admin',
       passwordHash: null,
       disabledAt: null,
+      role: 'member',
+      avatarUrl: null,
     });
 
     const response = await POST(
@@ -191,6 +193,28 @@ describe('POST /api/auth/activate', () => {
       },
       select: { id: true, role: true },
     });
+  });
+
+  it.each([
+    ['an admin account', { role: 'admin', avatarUrl: null }],
+    ['an OAuth-created account', { role: 'member', avatarUrl: 'https://lh3.googleusercontent.com/a' }],
+  ])('refuses to attach a password to %s via the shared invite code', async (_name, extra) => {
+    mocks.findUnique.mockResolvedValue({ id: 'victim', passwordHash: null, disabledAt: null, ...extra });
+    const response = await POST(
+      request({ email: 'victim@example.com', inviteCode: 'invite-2026', password: 'correct horse battery staple' }),
+    );
+    expect(response.status).toBe(403);
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('still activates an admin-precreated member without OAuth markers', async () => {
+    mocks.findUnique.mockResolvedValue({ id: 'm1', passwordHash: null, disabledAt: null, role: 'member', avatarUrl: null });
+    mocks.update.mockResolvedValue({ id: 'm1', role: 'member' });
+    const response = await POST(
+      request({ email: 'member@example.com', inviteCode: 'invite-2026', password: 'correct horse battery staple' }),
+    );
+    expect(response.status).toBe(200);
   });
 
   it('rejects an invalid invite code before reading the user', async () => {

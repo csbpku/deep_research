@@ -81,9 +81,26 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   const actionRequestId = newAdminActionRequestId();
 
   const result = await prisma.$transaction(async (tx) => {
+    // 原子认领：以 status='pending' 为前置条件的条件更新，
+    // 并发的两次审核只有一个能把 pending 改走，另一个得到 count=0。
+    const claimed = await tx.shareSubmission.updateMany({
+      where: { id: share.id, status: 'pending' },
+      data: {
+        status: body.action === 'approve' ? 'approved' : 'rejected',
+        reviewerId: u.id,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claimed.count === 0) return { alreadyHandled: true as const };
+
     if (body.action === 'approve') {
-      // 创建 candidate Summary 记录（不发布到每日摘要，需要后续雷达审核选入）
-      const summary = await tx.summary.create({
+      // canonicalUrl 在 summaries 上唯一：若已存在（例如同一链接已被自动雷达收录），
+      // 直接把分享关联到已有 summary，而不是 create 撞唯一约束返回 500。
+      const existingSummary = await tx.summary.findUnique({
+        where: { canonicalUrl: share.canonicalUrl },
+        select: { id: true },
+      });
+      const summary = existingSummary ?? await tx.summary.create({
         data: {
           title: share.fetchedTitle ?? share.url,
           body: share.summaryText ?? '',
@@ -114,12 +131,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       // 关联 share → summary
       await tx.shareSubmission.update({
         where: { id: share.id },
-        data: {
-          status: 'approved',
-          reviewerId: u.id,
-          reviewedAt: new Date(),
-          publishedSummaryId: summary.id,
-        },
+        data: { publishedSummaryId: summary.id },
         select: { id: true },
       });
 
@@ -129,18 +141,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         targetType: ADMIN_TARGET_TYPE,
         targetId: share.id,
         requestId: actionRequestId,
-        metadata: { summaryId: summary.id },
+        metadata: { summaryId: summary.id, linkedExisting: existingSummary !== null },
       });
 
-      return { summaryId: summary.id };
+      return { alreadyHandled: false as const, summaryId: summary.id };
     }
 
-    // reject
-    await tx.shareSubmission.update({
-      where: { id: share.id },
-      data: { status: 'rejected', reviewerId: u.id, reviewedAt: new Date() },
-      select: { id: true },
-    });
     await writeAdminAction(tx, {
       actorId: u.id,
       action: ADMIN_SHARE_ACTIONS.REJECT,
@@ -149,8 +155,16 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       requestId: actionRequestId,
       metadata: { reason: body.reason },
     });
-    return { summaryId: null };
+    return { alreadyHandled: false as const, summaryId: null };
   });
+
+  if (result.alreadyHandled) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: '该分享已被处理',
+      requestId,
+    });
+  }
 
   log.info('admin.share.review', `share ${body.action}d`, {
     requestId,

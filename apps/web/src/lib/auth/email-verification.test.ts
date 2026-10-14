@@ -18,8 +18,8 @@ describe('email verification helpers', () => {
     expect(verificationCodeMatches(hash, hashVerificationCode('alice@example.com', '654321', 'secret'))).toBe(false);
   });
 
-  it('uses the first forwarded client address', () => {
-    expect(requestIp(new Headers({ 'x-forwarded-for': '203.0.113.5, 10.0.0.1' }))).toBe('203.0.113.5');
+  it('ignores client-supplied forwarded addresses', () => {
+    expect(requestIp(new Headers({ 'x-forwarded-for': '203.0.113.5, 10.0.0.1' }))).toBe('unknown');
     expect(requestIp(new Headers({
       'x-real-ip': '198.51.100.8',
       'x-forwarded-for': 'spoofed, 10.0.0.1',

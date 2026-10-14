@@ -402,7 +402,9 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   // A passed review belongs to this exact public snapshot. Mutating a
   // published AI report in place would make the old verdict appear to cover
   // new text, so callers must create a revision draft first.
-  if (existing.status === RESEARCH_STATUS.PUBLISHED && existing.creationMethod === 'ai_research') {
+  // Archived AI reports were published too (restore returns them to
+  // published without a new review), so they are equally immutable.
+  if (existing.status !== RESEARCH_STATUS.DRAFT && existing.creationMethod === 'ai_research') {
     return toApiErrorResponse({
       code: ERROR_CODES.AI_PUBLISHED_IMMUTABLE,
       message: '已发布的 AI 调研不可原地修改，请先创建修订草稿',
@@ -434,8 +436,10 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   }
 
   // 不允许 edited→published（发布必须走 publish endpoint）
-  if (existing.status === RESEARCH_STATUS.PUBLISHED) {
-    // 已发布的用 $transaction 包住 update + audit
+  // 契约（state-machines.md §5）：owner 可编辑自己的 draft / published / archived。
+  // archived 与 published 同走“update + audit”路径且不改变状态（恢复仍须走 restore）。
+  if (existing.status !== RESEARCH_STATUS.DRAFT) {
+    // 已发布/已归档的用 $transaction 包住 update + audit
     const prevSnapshot = {
       title: existing.title,
       body: existing.body,

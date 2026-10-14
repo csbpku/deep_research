@@ -17,6 +17,9 @@ import { enqueueRadarSubmission } from '@/lib/radar/submissions/worker-bridge';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 const PAGE_SIZE = 20;
+const SUBMISSION_STATUSES: ReadonlySet<string> = new Set([
+  'received', 'type_detected', 'extracting', 'scoring', 'enriching', 'completed', 'duplicate', 'failed',
+]);
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
   const user = await requireUser(req);
@@ -134,8 +137,23 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
 
   const url = new URL(req.url);
-  const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'));
+  const pageRaw = url.searchParams.get('page') ?? '1';
+  const page = /^\d{1,6}$/u.test(pageRaw) ? Math.max(1, Number(pageRaw)) : Number.NaN;
   const status = url.searchParams.get('status');
+  if (!Number.isFinite(page)) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'page 必须为正整数',
+      requestId,
+    });
+  }
+  if (status && !SUBMISSION_STATUSES.has(status)) {
+    return toApiErrorResponse({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'status 取值不合法',
+      requestId,
+    });
+  }
 
   const where = {
     submitterId: user.id,

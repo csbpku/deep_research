@@ -32,8 +32,15 @@ vi.mock('../../../lib/env.js', () => ({
 
 import { POST } from '../radar/[id]/transform/route';
 
+const USER_ID = '99999999-9999-4999-8999-999999999999';
 const SUMMARY_ID = '11111111-1111-4111-8111-111111111111';
 let requestSequence = 0;
+const VISIBLE = {
+  distilledScore: { tier: 'deep_read' },
+  enrichmentStatus: 'ready',
+  readerQualityStatus: 'ready',
+  contentReviewStatus: 'approved',
+};
 
 function request(mode: 'translate' | 'ai_reading' = 'translate', selection?: string) {
   requestSequence += 1;
@@ -41,7 +48,7 @@ function request(mode: 'translate' | 'ai_reading' = 'translate', selection?: str
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-forwarded-for': `192.0.2.${requestSequence}`,
+      'x-real-ip': `192.0.2.${requestSequence}`,
     },
     body: JSON.stringify({ mode, language: 'zh-CN', ...(selection ? { selection } : {}) }),
   }) as unknown as NextRequest;
@@ -49,7 +56,7 @@ function request(mode: 'translate' | 'ai_reading' = 'translate', selection?: str
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.getCurrentUser.mockResolvedValue(null);
+  mocks.getCurrentUser.mockResolvedValue({ id: USER_ID, role: 'member' });
   mocks.getWebEnv.mockReturnValue({
     AI_ENGINE_URL: 'http://ai.test',
     INTERNAL_SERVICE_TOKEN: 'internal',
@@ -64,6 +71,7 @@ beforeEach(() => {
     syncRunId: 'run-1',
     distilledTier: 'deep_read',
     shareSource: null,
+    ...VISIBLE,
   });
   mocks.summaryUpdate.mockImplementation(async ({ data }: { data: { originalMeta: unknown } }) => {
     mocks.summaryFindUnique.mockResolvedValueOnce({
@@ -76,6 +84,8 @@ beforeEach(() => {
       syncRunId: 'run-1',
       distilledTier: 'deep_read',
       shareSource: null,
+    ...VISIBLE,
+      ...VISIBLE,
     });
     return {};
   });
@@ -99,6 +109,8 @@ describe('POST /api/radar/[id]/transform', () => {
       distilledTier: 'deep_read',
       tags: ['external_reading'],
       shareSource: null,
+    ...VISIBLE,
+      ...VISIBLE,
     });
 
     const response = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
@@ -111,7 +123,7 @@ describe('POST /api/radar/[id]/transform', () => {
     expect(mocks.summaryUpdate).not.toHaveBeenCalled();
   });
 
-  it('allows anonymous transforms and persists a source-hash cache', async () => {
+  it('persists a source-hash cache', async () => {
     const first = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({
@@ -139,6 +151,8 @@ describe('POST /api/radar/[id]/transform', () => {
       source: 'daily',
       syncRunId: 'run-1',
       shareSource: null,
+    ...VISIBLE,
+      ...VISIBLE,
     });
     const second = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
     expect(second.status).toBe(200);
@@ -218,6 +232,8 @@ describe('POST /api/radar/[id]/transform', () => {
       syncRunId: 'run-1',
       distilledTier: 'deep_read',
       shareSource: null,
+    ...VISIBLE,
+      ...VISIBLE,
     });
     mocks.fetchAiEngine.mockImplementation(async ({ context }: { context: string }) => {
       if (context.endsWith('section.0')) return { ok: false, status: 502, code: 'UPSTREAM_UNAVAILABLE', message: 'section failed' };
@@ -246,6 +262,8 @@ describe('POST /api/radar/[id]/transform', () => {
       syncRunId: 'run-1',
       distilledTier: 'skim',
       shareSource: null,
+    ...VISIBLE,
+      ...VISIBLE,
     });
 
     const response = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
@@ -265,6 +283,8 @@ describe('POST /api/radar/[id]/transform', () => {
       syncRunId: 'run-1',
       distilledTier: 'noise',
       shareSource: null,
+    ...VISIBLE,
+      ...VISIBLE,
     });
 
     const response = await POST(request('ai_reading'), { params: Promise.resolve({ id: SUMMARY_ID }) });
@@ -327,5 +347,39 @@ describe('POST /api/radar/[id]/transform', () => {
     const response = await POST(request('translate', 'A long selected paragraph'), { params: Promise.resolve({ id: SUMMARY_ID }) });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ selected: true, complete: false, failedChunkIndexes: [0], truncatedChunkIndexes: [0] });
+  });
+
+  it('rejects anonymous callers', async () => {
+    mocks.getCurrentUser.mockResolvedValue(null);
+    const response = await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) });
+    expect(response.status).toBe(401);
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+  });
+
+  it('hides unscored and unapproved deep_read items from members like the detail page', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUMMARY_ID, title: 'x', body: 'b', originalMarkdown: '# x', originalMeta: null,
+      source: 'daily', syncRunId: 'run-1', distilledTier: 'deep_read', shareSource: null,
+      ...VISIBLE, contentReviewStatus: 'pending',
+    });
+    expect((await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) })).status).toBe(404);
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUMMARY_ID, title: 'x', body: 'b', originalMarkdown: '# x', originalMeta: null,
+      source: 'daily', syncRunId: 'run-1', distilledTier: 'deep_read', shareSource: null,
+      ...VISIBLE, distilledScore: null,
+    });
+    expect((await POST(request(), { params: Promise.resolve({ id: SUMMARY_ID }) })).status).toBe(404);
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+  });
+
+  it('rate limits per user id regardless of spoofed forwarding headers', async () => {
+    mocks.getCurrentUser.mockResolvedValue({ id: 'rate-limited-user', role: 'member' });
+    const statuses: number[] = [];
+    for (let i = 0; i < 31; i += 1) {
+      const res = await POST(request('translate', 'sel'), { params: Promise.resolve({ id: SUMMARY_ID }) });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 30).every((status) => status === 200)).toBe(true);
+    expect(statuses[30]).toBe(429);
   });
 });

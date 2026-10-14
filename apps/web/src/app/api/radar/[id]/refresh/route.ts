@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 import { apiHandler } from '@/lib/api-handler';
+import { requireAdmin } from '@/lib/auth/session';
 import { getWebEnv } from '@/lib/env';
 import { prisma } from '@/lib/db';
 import { withRequestId } from '@/lib/log';
@@ -21,6 +22,9 @@ function isVisibleRadarSummary(summary: {
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
+  // force 重新 enrich 会消耗 LLM/抓取成本，属于运维级动作：仅 admin。
+  const admin = await requireAdmin(req);
+  if (admin instanceof NextResponse) return admin;
   if (!radarEnrichmentEnabled()) {
     return NextResponse.json(
       {

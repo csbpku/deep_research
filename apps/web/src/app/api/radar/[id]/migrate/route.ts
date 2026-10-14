@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 import { apiHandler } from '@/lib/api-handler';
+import { requireUser } from '@/lib/auth/session';
 import { getWebEnv } from '@/lib/env';
 import { prisma } from '@/lib/db';
 import { withRequestId } from '@/lib/log';
@@ -139,6 +140,10 @@ function needsMigration(summary: {
 
 export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]>(async (req, ctx) => {
   const requestId = withRequestId(req.headers);
+  // 渐进迁移由详情页访问触发（成员即可），但会向 AI engine 投递 force enrich，
+  // 因此必须是已登录用户；匿名调用不再允许。
+  const user = await requireUser(req);
+  if (user instanceof NextResponse) return user;
   if (!radarEnrichmentEnabled()) {
     return NextResponse.json(
       {
@@ -218,13 +223,15 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
     if (!upstream.ok) throw new Error(`migration_enqueue_${upstream.status}`);
   } catch {
-    await prisma.summary.update({
-      where: { id: summary.id },
-      data: {
-        tags: { set: summary.tags.filter((tag) => tag !== MIGRATION_TAG) },
-        ...(shouldPromoteToArxiv ? { originalKind: summary.originalKind } : {}),
-      },
-    });
+    // 定向回滚：只摘掉本次加上的标记（array_remove 是单条原子语句），
+    // 不用请求开头读到的 tags 快照覆盖期间被其他写入改过的 tags。
+    await prisma.$executeRaw`UPDATE summaries SET tags = array_remove(tags, ${MIGRATION_TAG}) WHERE id = ${summary.id}::uuid`;
+    if (shouldPromoteToArxiv) {
+      await prisma.summary.updateMany({
+        where: { id: summary.id, originalKind: 'arxiv' },
+        data: { originalKind: summary.originalKind },
+      });
+    }
     return NextResponse.json({ queued: false, requestId }, { status: 503 });
   }
   return NextResponse.json({ queued: true, requestId }, { status: 202 });

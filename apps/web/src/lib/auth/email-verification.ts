@@ -1,3 +1,4 @@
+import { clientIp } from '../net/client-ip';
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 
 export const VERIFICATION_CODE_LENGTH = 6;
@@ -27,8 +28,5 @@ export function verificationCodeMatches(actualHash: string, expectedHash: string
 }
 
 export function requestIp(headers: Headers): string {
-  const realIp = headers.get('x-real-ip')?.trim();
-  if (realIp) return realIp;
-  const forwarded = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwarded || 'unknown';
+  return clientIp(headers);
 }
