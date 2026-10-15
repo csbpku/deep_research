@@ -26,10 +26,10 @@ async def deleted_publication(pool: Any, source_id: str, url: str, title: str, p
     """Minimal audit tombstone; a different publication remains eligible."""
     async with pool.connection() as conn:
         row = await (await conn.execute(
-            "SELECT 1 FROM admin_actions a WHERE a.action='radar_noise_delete' "
+            "SELECT 1 FROM admin_actions a WHERE a.action IN ('radar_noise_delete','radar_source_unavailable_delete') "
             "AND a.metadata->>'canonicalUrl'=%s AND a.metadata->>'sourceId'=%s "
             "AND a.metadata->>'publicationIdentity'=%s "
-            "AND NOT EXISTS (SELECT 1 FROM admin_actions r WHERE r.action='radar_noise_restore' "
+            "AND NOT EXISTS (SELECT 1 FROM admin_actions r WHERE r.action IN ('radar_noise_restore','radar_source_unavailable_restore') "
             "AND r.metadata->>'deletionAuditId'=a.id::text) LIMIT 1",
             (url, str(source_id), publication_identity(title, published_at)),
         )).fetchone()

@@ -38,6 +38,9 @@ from ai_engine.radar.distilled_scorer import (
 )
 from ai_engine.radar.enrichment_contract import effective_tier, is_enrichment_ready
 from ai_engine.radar.noise_policy import NOISE_POLICY, confirmed_noise
+from ai_engine.radar.source_disposal import (
+    SOURCE_DISPOSAL_ACTION, SOURCE_DISPOSAL_POLICY, source_disposal_eligible,
+)
 from ai_engine.radar.scoring_input import _arxiv_abstract_input, _usable_content
 from ai_engine.radar.sync_runner import _extract_article_content
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
@@ -526,7 +529,8 @@ async def deletion_batch(pool: Any, rows: list[dict[str, Any]]) -> AsyncIterator
 
 async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: dict[str, Any],
                  evidence: Evidence | None, *, delete: bool, directory: Path,
-                 deletion_policy: str = 'complete_grounded_noise') -> str:
+                 deletion_policy: str = 'complete_grounded_noise',
+                 source_failure: dict[str, Any] | None = None) -> str:
     async with pool.connection() as conn:
         async with conn.transaction():
             actor = await g.verify_admin(conn, actor)
@@ -546,11 +550,23 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     or any(g.serial(current.get(k)) != g.serial(row.get(k)) for k in snapshot_fields)):
                 raise RepairFailure('STATE_CHANGED', '处理期间条目已改变，本次写入跳过并重新评估')
             if delete:
-                eligible = (confirmed_noise(current.get('distilledScore')) if deletion_policy == NOISE_POLICY
+                action = SOURCE_DISPOSAL_ACTION if deletion_policy == SOURCE_DISPOSAL_POLICY else 'radar_noise_delete'
+                fingerprint = None
+                if deletion_policy == SOURCE_DISPOSAL_POLICY:
+                    token = await (await conn.execute(
+                        'SELECT md5(to_jsonb(s)::text) AS fingerprint FROM summaries s WHERE id=%s',
+                        (row['id'],))).fetchone()
+                    fingerprint = token['fingerprint']
+                eligible = (source_disposal_eligible({**current, 'fingerprint': fingerprint}, source_failure,
+                            incomplete=not has_score(current) or needs_summary(current))
+                            if deletion_policy == SOURCE_DISPOSAL_POLICY else
+                            confirmed_noise(current.get('distilledScore')) if deletion_policy == NOISE_POLICY
                             else deletion_policy == 'complete_grounded_noise' and evidence is not None
                             and noise_grounded(current, evidence))
                 if not eligible or current.get('source') != 'daily':
-                    raise RepairFailure('NOISE_NOT_CONFIRMED', '当前有效噪声评分或自动雷达身份不满足删除条件', retryable=False)
+                    raise RepairFailure('SOURCE_DISPOSAL_NOT_CONFIRMED' if deletion_policy == SOURCE_DISPOSAL_POLICY
+                                        else 'NOISE_NOT_CONFIRMED',
+                                        '当前快照、证据或自动雷达身份不满足所选删除策略', retryable=False)
                 protected = pool.protected.get(str(row['id'])) if guarded else await g.protected_ids(conn, [current])
                 if current.get('userNote') or current.get('sharedByUserId') or protected:
                     return 'protected'
@@ -559,14 +575,16 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     'SELECT * FROM radar_sync_diagnostics WHERE "runId"=%s AND "canonicalUrl"=%s AND '
                     + OWN_DIAGNOSTICS + ' FOR UPDATE',
                     (row.get('syncRunId'), row['canonicalUrl']))).fetchall()]
-                g.save(archive, {'format': 1, 'summary': current, 'diagnostics': diagnostics})
+                g.save(archive, {'format': 1, 'summary': current, 'diagnostics': diagnostics,
+                                 'sourceFailure': source_failure if deletion_policy == SOURCE_DISPOSAL_POLICY else None})
                 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-                await audit(conn, actor, run, row, 'radar_noise_delete', {
+                await audit(conn, actor, run, row, action, {
                     'reason': deletion_policy, 'deletionPolicy': deletion_policy,
                     'archive': str(archive), 'archiveSha256': digest,
                     'evidenceSha256': evidence.sha256 if evidence else None,
                     'sourceVerificationRequired': deletion_policy != NOISE_POLICY,
-                    'scoreVersion': current['distilledScore']['version'],
+                    'scoreVersion': (current.get('distilledScore') or {}).get('version'),
+                    'sourceFailure': source_failure if deletion_policy == SOURCE_DISPOSAL_POLICY else None,
                     'canonicalUrl': current['canonicalUrl'], 'sourceId': str(row.get('sourceId') or ''),
                     'publicationIdentity': publication_identity(current['title'], current.get('publishedAt'))})
                 # Remove only this insertion's diagnostics; same URL/different run remains independent.
@@ -642,7 +660,7 @@ async def restore_deleted(pool: Any, actor: str, directory: Path, archive: Path)
         async with conn.transaction():
             actor = await g.verify_admin(conn, actor)
             proof = await (await conn.execute(
-                "SELECT id FROM admin_actions WHERE action='radar_noise_delete' "
+                "SELECT id,action FROM admin_actions WHERE action IN ('radar_noise_delete','radar_source_unavailable_delete') "
                 'AND "targetId"=%s AND metadata->>\'archive\'=%s AND metadata->>\'archiveSha256\'=%s',
                 (row['id'], str(archive), digest))).fetchone()
             if not proof:
@@ -661,7 +679,8 @@ async def restore_deleted(pool: Any, actor: str, directory: Path, archive: Path)
                     await conn.execute(sql.SQL('INSERT INTO {} ({}) SELECT {} FROM jsonb_populate_record(NULL::{},%s)').format(
                         sql.Identifier(table), sql.SQL(',').join(map(sql.Identifier, columns)),
                         sql.SQL(',').join(map(sql.Identifier, columns)), sql.Identifier(table)), (Jsonb(record),))
-            await audit(conn, actor, str(uuid4()), row, 'radar_noise_restore', {
+            await audit(conn, actor, str(uuid4()), row,
+                        'radar_source_unavailable_restore' if proof['action'] == SOURCE_DISPOSAL_ACTION else 'radar_noise_restore', {
                 'archiveSha256': digest, 'archive': str(archive), 'deletionAuditId': str(proof['id'])})
     return str(row['id'])
 

@@ -1747,7 +1747,7 @@ async def _run_source(
                     if await deleted_publication(pool, source.id, normalized.canonical_url,
                                                  raw_candidate.title, raw_candidate.published_at):
                         total_skipped += 1
-                        skipped_rule_noise += 1
+                        skipped_existing += 1
                         return
 
                     if await skipped_noise_publication(pool, source.id, normalized.canonical_url,
