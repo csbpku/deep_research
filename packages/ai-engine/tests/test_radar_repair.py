@@ -110,6 +110,17 @@ async def test_summary_requires_grounded_quote_and_preserves_valid_score() -> No
     assert '摘要字符数1' in caught.value.detail
     assert '判断字符数1' in caught.value.detail
     assert '无法逐字匹配原文' in caught.value.detail
+    call.return_value = SimpleNamespace(text=json.dumps({
+        'summary': '摘要' * 100, 'judgement': '判断' * 30, 'evidence_index': 0,
+    }))
+    assert 'interpretation' in await r.derive(row, r.Evidence(source, 'article', True), call)
+    assert '<untrusted-source-quote-options>' in call.await_args.kwargs['user_prompt']
+    for index in (True, -1, 999):
+        call.return_value = SimpleNamespace(text=json.dumps({
+            'summary': '摘要' * 100, 'judgement': '判断' * 30, 'evidence_index': index,
+        }))
+        with pytest.raises(r.RepairFailure, match='MODEL_SUMMARY_INVALID'):
+            await r.derive(row, r.Evidence(source, 'article', True), call)
 
 
 async def test_model_error_never_persists_fake_scores() -> None:

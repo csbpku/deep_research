@@ -72,6 +72,11 @@ summaries/judgements. Source text is transient; limited abstracts/excerpts may
 support a limited-evidence score but never prove deletion eligibility.
 Each attempt reserves at most two single-attempt model calls, and writes score
 and summary separately so a later summary failure cannot discard a score.
+Summary evidence options are extracted verbatim from the source; the model may
+select an integer index or supply a direct quote. Both paths must match the actual
+source, allowing only layout whitespace differences. Invalid/missing evidence,
+invalid JSON or short summaries remain explicit failures. A completion checkpoint
+is accepted only while a valid score and usable summary/judgement are present.
 
 `--delete-confirmed-noise` requires complete source proof, a current valid noise
 score and its verbatim weak-point evidence, plus explicit user authorization for
