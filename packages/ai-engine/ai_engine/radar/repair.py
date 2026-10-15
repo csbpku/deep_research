@@ -73,6 +73,10 @@ def needs_body_summary(row: dict[str, Any]) -> bool:
 
 
 def needs_summary(row: dict[str, Any]) -> bool:
+    # Scored noise goes through deletion/protection/evidence disposition, not
+    # paid brief completion. A noise score still needs full proof before delete.
+    if has_score(row) and row['distilledScore'].get('tier') == 'noise':
+        return False
     return len(str(row.get('interpretation') or '').strip()) < 30 or needs_body_summary(row)
 
 

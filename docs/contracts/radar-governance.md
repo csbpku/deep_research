@@ -1,5 +1,9 @@
 # Radar governance
 
+Every-row quality requirements and the read-only inspection command are defined
+in [the radar quality checklist](./radar-quality-checklist.md). Structural completeness,
+source evidence, and public eligibility remain separate results.
+
 Admin-only `POST /api/admin/radar/governance` accepts `mode` (`preview`, `report`,
 `apply`, `recover`, `rollback`), optional `batchId`, and `limit` (1–100). The BFF
 supplies the session identity; the internal engine checks the real database Admin
@@ -70,6 +74,9 @@ The default 20-item limit is per cycle, not a limit on the inventory. It retains
 valid legacy scores, prioritizes missing scores and references, then fills missing
 summaries/judgements. Source text is transient; limited abstracts/excerpts may
 support a limited-evidence score but never prove deletion eligibility.
+Valid scored noise is excluded from brief completion and content-completeness
+statistics. It proceeds directly to deletion/protection/evidence disposition;
+the same complete-source, current-score and reference guards still apply.
 Each attempt reserves at most two single-attempt model calls, and writes score
 and summary separately so a later summary failure cannot discard a score.
 Summary evidence options are extracted verbatim from the source; the model may

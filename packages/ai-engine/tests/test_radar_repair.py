@@ -43,6 +43,17 @@ def test_invalid_score_and_summary_are_not_success() -> None:
     assert r.needs_summary(row)
 
 
+async def test_valid_noise_never_spends_model_calls_on_brief_completion() -> None:
+    row = {**scored(), 'body': '', 'interpretation': ''}
+    assert not r.needs_summary(row)
+    call = AsyncMock()
+    assert await r.derive(row, r.Evidence('Only a verified source excerpt', 'source_excerpt', False),
+                          call, fields='summary') == {}
+    call.assert_not_awaited()
+    row['distilledScore']['version'] = '4.7'
+    assert not r.needs_summary(row)  # Still not permission to delete a legacy score.
+
+
 def test_retries_are_bounded_and_preserve_precise_reason() -> None:
     missing = r.RepairFailure('SOURCE_HTTP_404', '原始来源返回HTTP 404')
     one = r.retry_state(missing, 1, 1000)

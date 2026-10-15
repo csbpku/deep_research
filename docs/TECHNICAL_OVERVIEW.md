@@ -91,6 +91,8 @@ Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式�
 
 雷达生产治理通过 Admin 批量预检/执行和同源 SSH 维护核心完成，保留正文、历史诊断及引用，支持审计、条件写入、断点补救和安全回滚；接口、预算和操作边界见 [`contracts/radar-governance.md`](./contracts/radar-governance.md)。
 
+每条雷达的必需内容、条件字段与检查状态见 [质量清单](./contracts/radar-quality-checklist.md)。`scripts.audit_radar_quality` 在一致性只读快照下检查全部保留雷达，输出逐条问题、证据和后续动作；字段齐全、评分有效、公开资格和语义质量分别记录。
+
 来源轮询遇到有效运行租约时保留“仍到期”状态，下个 tick 再核查；部署中断留下的过期运行会先标记 `STALE_RUN_REAPED` 再按正常链路重试，避免一次跳过消耗整个轮询窗口。确定性抓取失败上限按来源、规范 URL、规范标题与出版时间共同判断，不阻断相同 URL 上的不同出版内容。
 
 ## 4. LLM 路由
