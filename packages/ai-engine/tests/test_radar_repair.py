@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -89,6 +90,110 @@ async def test_http_403_is_explicit_and_never_calls_model(monkeypatch: Any) -> N
     with pytest.raises(r.RepairFailure) as caught:
         await r.acquire_evidence(scored())
     assert caught.value.code == 'SOURCE_HTTP_403'
+
+
+def test_fetch_and_model_errors_have_precise_safe_reasons() -> None:
+    from ai_engine.fetcher.safe_fetch import SafeFetchError, UpstreamHttpError
+
+    error = r.failure(SafeFetchError('CONTENT_TYPE_REJECTED', 'private response with a secret'))
+    assert error.code == 'CONTENT_TYPE_REJECTED' and not error.retryable
+    assert 'secret' not in error.detail
+    limited = r.failure(UpstreamHttpError('UPSTREAM_RATE_LIMITED', 'secret', status=429))
+    assert limited.code == 'SOURCE_RATE_LIMITED'
+    assert r.retry_state(limited, 1, 1000)['nextAttemptAt'] == 4600
+    missing = r.failure(UpstreamHttpError('UPSTREAM_HTTP_ERROR', 'secret', status=404))
+    assert missing.code == 'SOURCE_HTTP_404'
+    assert r.retry_state(missing, 3, 1000)['status'] == 'blocked'
+
+    class Rejected(Exception):
+        status_code = 422
+
+    rejected = r.failure(Rejected('request included secret credentials'))
+    assert rejected.code == 'MODEL_REQUEST_REJECTED' and not rejected.retryable
+    assert 'HTTP 422' in rejected.detail and 'secret' not in rejected.detail
+
+
+async def test_github_api_readme_preserves_size_proof(monkeypatch: Any) -> None:
+    monkeypatch.setattr(r, '_github_api_retry_at', 0)
+    text = 'This project implements a local execution engine with documented limitations. ' * 20
+    api_url = 'https://api.github.com/repos/owner/repo/readme'
+    payload = {'encoding': 'base64', 'content': base64.b64encode(text.encode()).decode(),
+               'size': len(text.encode())}
+    doc = SimpleNamespace(status=200, url=api_url, content=json.dumps(payload).encode(), headers={})
+    fetch = AsyncMock(return_value=doc)
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    evidence = await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+    assert evidence.text == text and evidence.complete and evidence.kind == 'github_readme'
+    assert fetch.await_count == 1
+    payload['size'] += 1
+    doc.content = json.dumps(payload).encode()
+    with pytest.raises(r.RepairFailure, match='SOURCE_TRUNCATED'):
+        await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+
+
+async def test_github_api_cooldown_uses_same_repo_raw_readme(monkeypatch: Any) -> None:
+    monkeypatch.setattr(r, '_github_api_retry_at', 0)
+    monkeypatch.setattr(r.time, 'time', lambda: 1000)
+    text = 'This project implements a local execution engine with documented limitations. ' * 20
+
+    async def fetch(url: str, **kwargs: Any) -> Any:
+        assert kwargs['max_redirects'] == 0
+        if 'api.github.com' in url:
+            return SimpleNamespace(status=403, url=url, headers={'x-ratelimit-remaining': '0'})
+        assert kwargs['allowed_hosts'] == ('raw.githubusercontent.com',)
+        return SimpleNamespace(status=200, url=url, headers={'content-type': 'text/plain'}, content=text.encode())
+
+    mock = AsyncMock(side_effect=fetch)
+    monkeypatch.setattr(r, 'safe_fetch', mock)
+    evidence = await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+    assert evidence.complete and evidence.kind == 'github_raw_readme' and evidence.text == text
+    assert r._github_api_retry_at == 4600
+    await r.github_readme_evidence('other/repo', 'https://github.com/other/repo')
+    assert [call.args[0] for call in mock.await_args_list] == [
+        'https://api.github.com/repos/owner/repo/readme',
+        'https://raw.githubusercontent.com/owner/repo/HEAD/README.md',
+        'https://raw.githubusercontent.com/other/repo/HEAD/README.md',
+    ]
+
+
+@pytest.mark.parametrize('problem', ['html', 'identity', 'large', 'missing'])
+async def test_raw_readme_does_not_overclaim_identity_or_completeness(monkeypatch: Any, problem: str) -> None:
+    monkeypatch.setattr(r, '_github_api_retry_at', float('inf'))
+    text = 'This project implements a local execution engine with documented limitations. ' * 300
+
+    async def fetch(url: str, **kwargs: Any) -> Any:
+        return SimpleNamespace(status=404 if problem == 'missing' else 200,
+                               url=url + '/redirect' if problem == 'identity' else url,
+                               headers={'content-type': 'text/html' if problem == 'html' else 'text/plain'},
+                               content=text.encode())
+
+    monkeypatch.setattr(r, 'safe_fetch', AsyncMock(side_effect=fetch))
+    if problem == 'large':
+        evidence = await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+        assert len(evidence.text) == 18000 and not evidence.complete
+    else:
+        with pytest.raises(r.RepairFailure) as caught:
+            await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+        assert caught.value.code == ('SOURCE_RATE_LIMITED' if problem == 'missing'
+                                     else 'SOURCE_IDENTITY_MISMATCH')
+
+
+async def test_readme_path_fallback_and_traversal_are_bounded(monkeypatch: Any) -> None:
+    monkeypatch.setattr(r, '_github_api_retry_at', 0)
+    text = 'This project implements a local execution engine with documented limitations. ' * 20
+
+    async def fetch(url: str, **kwargs: Any) -> Any:
+        return SimpleNamespace(status=200 if url.endswith('/README.rst') else 404,
+                               url=url, headers={}, content=text.encode())
+
+    mock = AsyncMock(side_effect=fetch)
+    monkeypatch.setattr(r, 'safe_fetch', mock)
+    evidence = await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+    assert evidence.complete and mock.await_count == 3
+    for identity in ('../repo', 'owner/..', 'owner/repo/another'):
+        with pytest.raises(r.RepairFailure, match='SOURCE_UNSAFE_URL'):
+            await r.github_readme_evidence(identity, 'https://github.com/' + identity)
+    assert mock.await_count == 3
 
 
 async def test_summary_requires_grounded_quote_and_preserves_valid_score() -> None:

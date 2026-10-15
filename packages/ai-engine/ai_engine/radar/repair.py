@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from ai_engine.fetcher.safe_fetch import safe_fetch
+from ai_engine.fetcher.safe_fetch import SafeFetchError, UpstreamHttpError, safe_fetch
 from ai_engine.llm.client import generate_text, is_quota_error
 from ai_engine.radar import governance as g
 from ai_engine.radar.diagnostic_policy import close_scored_pending, publication_identity, retire_duplicate_pending
@@ -39,6 +39,7 @@ from ai_engine.scoring.scoring_profiles import profile_for_source_url
 from ai_engine.untrusted_text import sanitize_external_instruction_text
 
 MAX_ATTEMPTS = 5
+_github_api_retry_at = 0.0
 SCOPE_SQL = """(s.source='daily' OR EXISTS (
  SELECT 1 FROM share_submissions sh WHERE sh."publishedSummaryId"=s.id AND sh.status='approved'))"""
 OWN_DIAGNOSTICS = '("reasonCode"=\'PENDING_SCORE\' OR left("reasonCode",7)=\'REPAIR_\')'
@@ -94,11 +95,21 @@ def noise_grounded(row: dict[str, Any], evidence: Evidence) -> bool:
 def failure(exc: Exception) -> RepairFailure:
     if isinstance(exc, RepairFailure):
         return exc
+    if isinstance(exc, UpstreamHttpError):
+        if exc.code == 'UPSTREAM_RATE_LIMITED':
+            return RepairFailure('SOURCE_RATE_LIMITED', '原始来源请求限流，一小时后重试')
+        return RepairFailure(f'SOURCE_HTTP_{exc.status}', f'原始来源返回HTTP {exc.status}')
+    if isinstance(exc, SafeFetchError):
+        return RepairFailure(exc.code, f'来源安全读取失败：{exc.code}',
+                             retryable=exc.code not in {'URL_FETCH_BLOCKED', 'CONTENT_TYPE_REJECTED'})
     if is_quota_error(exc):
         return RepairFailure('MODEL_QUOTA', '模型额度或速率限制，冷却后重试')
     status = getattr(exc, 'status_code', None)
     if status in (401, 403):
         return RepairFailure('MODEL_AUTHENTICATION', f'模型接口认证失败：HTTP {status}', retryable=False)
+    if status in (400, 404, 422):
+        return RepairFailure('MODEL_REQUEST_REJECTED', f'模型接口拒绝请求：HTTP {status}，需修正请求后再试',
+                             retryable=False)
     if type(exc).__name__ == 'ForeignKeyViolation':
         constraint = str(getattr(getattr(exc, 'diag', None), 'constraint_name', 'unknown'))[:100]
         return RepairFailure('REFERENCED_DATA', '条目仍被数据库引用：' + constraint, retryable=False)
@@ -122,6 +133,67 @@ def retry_state(error: RepairFailure, attempts: int, now: float) -> dict[str, An
             'attempts': attempts, 'retryable': not terminal}
 
 
+async def github_readme_evidence(owner_repo: str, canonical_url: str) -> Evidence:
+    """Read the same repository through its API or public raw files.
+
+    API cooldown never pauses the independent raw host. Neither path follows
+    redirects, treats an HTML error page as evidence, or asserts truncated text
+    is complete. Unknown README paths remain unresolved until the API recovers.
+    """
+    global _github_api_retry_at
+    if (not re.fullmatch(r'[\w.-]+/[\w.-]+', owner_repo)
+            or any(part in {'.', '..'} for part in owner_repo.split('/'))):
+        raise RepairFailure('SOURCE_UNSAFE_URL', 'GitHub仓库身份不合法', retryable=False)
+    api_limited = time.time() < _github_api_retry_at
+    if not api_limited:
+        api_url = f'https://api.github.com/repos/{owner_repo}/readme'
+        doc = await safe_fetch(api_url, allowed_hosts=('api.github.com',), max_bytes=1_000_000,
+                               timeout=10, max_redirects=0)
+        if doc.status == 429 or (doc.status == 403 and doc.headers.get('x-ratelimit-remaining') == '0'):
+            _github_api_retry_at = time.time() + 3600
+            api_limited = True
+        elif doc.status == 200:
+            if doc.url != api_url:
+                raise RepairFailure('SOURCE_IDENTITY_MISMATCH', 'README API来源身份不匹配', retryable=False)
+            try:
+                payload = json.loads(doc.content)
+                if not isinstance(payload, dict) or payload.get('encoding') != 'base64':
+                    raise ValueError('encoding')
+                raw = base64.b64decode(payload['content'])
+                if payload.get('size') != len(raw):
+                    raise RepairFailure('SOURCE_TRUNCATED', 'README响应大小与来源声明不一致')
+                text = raw.decode('utf-8')
+            except (ValueError, KeyError, TypeError):
+                raise RepairFailure('SOURCE_INVALID_README', 'README响应格式不可解析') from None
+            if not _usable_content(text, source_type='github', url=canonical_url):
+                raise RepairFailure('SOURCE_INSUFFICIENT', 'README正文为空、过短或属于错误/登录页面')
+            return Evidence(text[:18000], 'github_readme', len(text) <= 18000)
+        elif doc.status not in (403, 404):
+            raise RepairFailure(f'SOURCE_HTTP_{doc.status}', f'GitHub README返回HTTP {doc.status}')
+    for filename in ('README.md', 'README.rst', 'README'):
+        raw_url = f'https://raw.githubusercontent.com/{owner_repo}/HEAD/{filename}'
+        doc = await safe_fetch(raw_url, allowed_hosts=('raw.githubusercontent.com',), max_bytes=1_000_000,
+                               timeout=6, max_redirects=0)
+        if doc.status == 404:
+            continue
+        if doc.status == 429:
+            raise RepairFailure('SOURCE_RATE_LIMITED', 'GitHub原始文件限流，一小时后重试')
+        if doc.status != 200:
+            raise RepairFailure(f'SOURCE_HTTP_{doc.status}', f'GitHub原始文件返回HTTP {doc.status}')
+        if doc.url != raw_url or 'html' in doc.headers.get('content-type', '').lower():
+            raise RepairFailure('SOURCE_IDENTITY_MISMATCH', '原始README来源身份或类型不匹配', retryable=False)
+        try:
+            text = doc.content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise RepairFailure('SOURCE_INVALID_README', '原始README不是可读取的UTF-8文本') from None
+        if not _usable_content(text, source_type='github', url=canonical_url):
+            raise RepairFailure('SOURCE_INSUFFICIENT', '原始README正文为空、过短或属于错误/登录页面')
+        return Evidence(text[:18000], 'github_raw_readme', len(text) <= 18000)
+    if api_limited:
+        raise RepairFailure('SOURCE_RATE_LIMITED', 'GitHub API限流，常规README路径未找到，一小时后重试')
+    raise RepairFailure('SOURCE_README_PATH_UNVERIFIED', '未找到常规README路径，不能证明仓库无正文')
+
+
 async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     source_type = str(row.get('sourceType') or 'rss')
     url = str(row['canonicalUrl'])
@@ -137,25 +209,7 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     host = parts.hostname
     allowed = (host, host[4:] if host.startswith('www.') else 'www.' + host)
     if host == 'github.com' and re.fullmatch(r'/[\w.-]+/[\w.-]+/?', parts.path):
-        owner, repo = parts.path.strip('/').split('/')
-        doc = await safe_fetch(f'https://api.github.com/repos/{owner}/{repo}/readme',
-                               allowed_hosts=('api.github.com',), max_bytes=1_000_000,
-                               timeout=20, max_redirects=0)
-        if doc.status == 429 or (doc.status == 403 and doc.headers.get('x-ratelimit-remaining') == '0'):
-            raise RepairFailure('SOURCE_RATE_LIMITED', 'GitHub来源请求限流，一小时后重试')
-        if doc.status != 200:
-            raise RepairFailure(f'SOURCE_HTTP_{doc.status}', f'GitHub README返回HTTP {doc.status}')
-        try:
-            payload = json.loads(doc.content)
-            if payload.get('encoding') != 'base64':
-                raise ValueError('encoding')
-            raw = base64.b64decode(payload['content'])
-            if payload.get('size') != len(raw):
-                raise RepairFailure('SOURCE_TRUNCATED', 'README响应大小与来源声明不一致')
-            text = raw.decode('utf-8')
-        except (ValueError, KeyError, TypeError):
-            raise RepairFailure('SOURCE_INVALID_README', 'README响应格式不可解析') from None
-        kind, complete = 'github_readme', len(text) <= 18000
+        return await github_readme_evidence(parts.path.strip('/'), url)
     else:
         doc = await safe_fetch(url, allowed_hosts=allowed, max_bytes=2_000_000,
                                timeout=25, max_redirects=3)

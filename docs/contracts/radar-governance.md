@@ -85,6 +85,14 @@ source, allowing only layout whitespace differences. Invalid/missing evidence,
 invalid JSON or short summaries remain explicit failures. A completion checkpoint
 is accepted only while a valid score and usable summary/judgement are present.
 
+GitHub repository evidence prefers the README API. API rate limiting cools that
+API for one hour within the running worker while allowing same-repository public
+raw `HEAD/README.md`, `README.rst`, or `README` reads. Both hosts use bounded safe
+fetches without redirects; raw HTML/error pages and identity mismatches are
+rejected. A missing conventional path does not prove there is no README. Only a
+fully read source of at most 18,000 characters can prove completeness; larger
+sources remain limited evidence. No source body is persisted by this fallback.
+
 `--delete-confirmed-noise` requires complete source proof, a current valid noise
 score and its verbatim weak-point evidence, plus explicit user authorization for
 production deletion. Production leaves deletion disabled by default; after that
@@ -104,6 +112,11 @@ starts at five minutes, doubles to at most one day, and stops at five attempts;
 404/410/oversize stop at three. Source rate limits and model quota pause for one
 hour. A restart defers an interrupted attempt with unknown outcome and retains its
 call reservation. Blocked items require an explicit Admin requeue with a reason:
+
+Safe-fetch errors retain their original code without raw exception text or
+credentials. Rejected media types and unsafe URLs stop immediately. Model HTTP
+400/404/422 responses are explicit request-rejection failures requiring a corrected
+request before Admin requeue; they do not consume repeated identical attempts.
 
 ```sh
 python -m scripts.repair_radar --actor <admin> --state-dir <path> --report
