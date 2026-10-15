@@ -4,7 +4,7 @@ import json
 import base64
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -111,6 +111,50 @@ def test_fetch_and_model_errors_have_precise_safe_reasons() -> None:
     rejected = r.failure(Rejected('request included secret credentials'))
     assert rejected.code == 'MODEL_REQUEST_REJECTED' and not rejected.retryable
     assert 'HTTP 422' in rejected.detail and 'secret' not in rejected.detail
+
+
+@pytest.mark.parametrize('name,status,message,code,retryable', [
+    ('InternalServerError', 503, 'private provider response', 'MODEL_UPSTREAM_ERROR', True),
+    ('APITimeoutError', None, 'private request', 'MODEL_TIMEOUT', True),
+    ('APIConnectionError', None, 'private endpoint', 'MODEL_CONNECTION', True),
+    ('RuntimeError', None, 'LLM endpoint circuit open: private endpoint', 'MODEL_CIRCUIT_OPEN', True),
+    ('RuntimeError', None, 'no usable LLM route configured', 'MODEL_CONFIGURATION', False),
+])
+def test_model_failures_report_actionable_safe_categories(name, status, message, code, retryable) -> None:
+    cls = RuntimeError if name == 'RuntimeError' else type(name, (Exception,), {'status_code': status})
+    result = r.failure(cls(message))
+    assert result.code == code and result.retryable is retryable
+    assert 'private' not in result.detail
+    assert result.detail != name
+
+
+def test_unclassified_error_records_code_location_without_request_text() -> None:
+    try:
+        raise RuntimeError('private request including sensitive-data')
+    except RuntimeError as exc:
+        result = r.failure(exc)
+    assert result.code == 'REPAIR_RUNTIMEERROR'
+    assert 'test_radar_repair.py:' in result.detail
+    assert 'sensitive-data' not in result.detail and 'private request' not in result.detail
+
+
+def test_row_version_updates_preserve_failed_retry_budget_and_model_usage() -> None:
+    previous = {'observedUpdatedAt': 'before', 'attempts': 5, 'status': 'blocked', 'modelCalls': 8,
+                'errorCode': 'SOURCE_HTTP_403', 'reason': '原始来源返回HTTP 403', 'nextAttemptAt': None}
+    observed = r.observe_row(previous, {'updatedAt': 'after-display-only-governance'})
+    assert observed == {**previous, 'observedUpdatedAt': 'after-display-only-governance'}
+    assert previous['observedUpdatedAt'] == 'before'
+
+
+def test_bounded_failure_message_preserves_json_and_stage() -> None:
+    item = {'errorCode': 'REPAIR_RUNTIMEERROR', 'reason': '\n"detailed failure"' * 200,
+            'attempts': 5, 'nextAttemptAt': None, 'status': 'blocked', 'failedPhase': 'write_summary'}
+    message = r.failure_message(item)
+    parsed = json.loads(message)
+    assert len(message) <= 500
+    assert parsed['failedPhase'] == 'write_summary' and parsed['attempts'] == 5
+    assert parsed['errorCode'] == item['errorCode']
+    assert item['reason'].startswith(parsed['reason'])
 
 
 async def test_github_api_readme_preserves_size_proof(monkeypatch: Any) -> None:
@@ -316,6 +360,7 @@ async def test_cycle_saves_successful_score_before_summary_failure_and_resumes(t
     state = json.loads((tmp_path / 'state.json').read_text())
     assert r.has_score(row)
     assert state['items']['test-id']['status'] == 'retry_wait'
+    assert state['items']['test-id']['failedPhase'] == 'summary'
     assert state['items']['test-id']['observedUpdatedAt'] == 'after-score'
     await r.cycle(Pool(), 'actor', tmp_path)
     assert phase_calls == ['score', 'summary']  # Cooldown prevents duplicate charge.
@@ -333,7 +378,7 @@ async def test_interrupted_or_false_completion_keeps_budget_and_retry_limit(
     tmp_path, monkeypatch, previous, attempts, expected,
 ) -> None:
     from contextlib import asynccontextmanager
-    row = {**scored(), 'id': 'interrupted', 'updatedAt': 'before', 'distilledScore': None}
+    row = {**scored(), 'id': 'interrupted', 'updatedAt': 'after-display-change', 'distilledScore': None}
     class Pool:
         @asynccontextmanager
         async def connection(self):
@@ -354,3 +399,60 @@ async def test_interrupted_or_false_completion_keeps_budget_and_retry_limit(
     assert state['items']['interrupted']['status'] == expected
     assert state['items']['interrupted']['attempts'] == attempts
     fetch.assert_not_awaited()
+
+
+@pytest.mark.parametrize('previous,next_at', [('blocked', None), ('retry_wait', 9999999999)])
+async def test_display_changes_do_not_restart_blocked_or_cooling_items(tmp_path, monkeypatch, previous, next_at) -> None:
+    from contextlib import asynccontextmanager
+
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield None
+
+    row = {**scored(), 'id': 'same-content', 'updatedAt': 'after-display-governance', 'distilledScore': None}
+    monkeypatch.setattr(r.g, 'verify_admin', AsyncMock(return_value='actor'))
+    monkeypatch.setattr(r.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(r.g, 'protected_ids', AsyncMock(return_value={}))
+    monkeypatch.setattr(r, 'inventory', AsyncMock(return_value=[row]))
+    fetch = AsyncMock()
+    monkeypatch.setattr(r, 'acquire_evidence', fetch)
+    r.g.save(tmp_path / 'state.json', {'modelCalls': 7, 'items': {'same-content': {
+        'observedUpdatedAt': 'before', 'attempts': 5, 'status': previous, 'modelCalls': 7,
+        'errorCode': 'SOURCE_HTTP_403', 'reason': 'HTTP 403', 'nextAttemptAt': next_at}}})
+    result = await r.cycle(Pool(), 'actor', tmp_path)
+    item = json.loads((tmp_path / 'state.json').read_text())['items']['same-content']
+    assert result['processed'] == 0 and result['modelCalls'] == 7
+    assert item['attempts'] == 5 and item['modelCalls'] == 7
+    assert item['observedUpdatedAt'] == row['updatedAt']
+    assert item['status'] == previous and item['nextAttemptAt'] == next_at
+    fetch.assert_not_awaited()
+
+
+async def test_explicit_requeue_audits_previous_budget_and_preserves_usage(tmp_path, monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+
+    class Conn:
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield Conn()
+
+    monkeypatch.setattr(r.g, 'verify_admin', AsyncMock(return_value='actor'))
+    backup = Mock()
+    monkeypatch.setattr(r.g, 'verify_backup', backup)
+    audit = AsyncMock()
+    monkeypatch.setattr(r, 'audit', audit)
+    previous = {'observedUpdatedAt': 'before', 'attempts': 5, 'status': 'blocked', 'modelCalls': 7}
+    r.g.save(tmp_path / 'state.json', {'modelCalls': 7, 'items': {'same-content': previous}})
+    await r.requeue(Pool(), 'actor', tmp_path, 'same-content', 'source access restored and verified')
+    state = json.loads((tmp_path / 'state.json').read_text())
+    assert state['modelCalls'] == 7 and state['items']['same-content']['modelCalls'] == 7
+    assert state['items']['same-content']['attempts'] == 0
+    assert state['requeueHistory'][0]['previous'] == previous
+    assert audit.await_args.args[-1]['previous'] == previous
+    backup.assert_called_once()

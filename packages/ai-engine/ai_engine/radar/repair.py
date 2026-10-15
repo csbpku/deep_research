@@ -14,6 +14,7 @@ import json
 import os
 import re
 import time
+import traceback
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,6 +111,17 @@ def failure(exc: Exception) -> RepairFailure:
     if status in (400, 404, 422):
         return RepairFailure('MODEL_REQUEST_REJECTED', f'模型接口拒绝请求：HTTP {status}，需修正请求后再试',
                              retryable=False)
+    if isinstance(status, int) and 500 <= status <= 599:
+        return RepairFailure('MODEL_UPSTREAM_ERROR', f'模型服务暂时失败：HTTP {status}，按退避重试')
+    if type(exc).__name__ == 'APITimeoutError':
+        return RepairFailure('MODEL_TIMEOUT', '模型接口请求超时，调用结果未知，按退避重试')
+    if type(exc).__name__ == 'APIConnectionError':
+        return RepairFailure('MODEL_CONNECTION', '无法连接模型接口，按退避重试')
+    if isinstance(exc, RuntimeError):
+        if str(exc).startswith('LLM endpoint circuit open: '):
+            return RepairFailure('MODEL_CIRCUIT_OPEN', '模型接口熔断中，未发起本次供应商请求，冷却后重试')
+        if str(exc) == 'no usable LLM route configured':
+            return RepairFailure('MODEL_CONFIGURATION', '未配置可用文本模型路由，修正配置后再试', retryable=False)
     if type(exc).__name__ == 'ForeignKeyViolation':
         constraint = str(getattr(getattr(exc, 'diag', None), 'constraint_name', 'unknown'))[:100]
         return RepairFailure('REFERENCED_DATA', '条目仍被数据库引用：' + constraint, retryable=False)
@@ -121,7 +133,37 @@ def failure(exc: Exception) -> RepairFailure:
     if code.startswith(('URL_', 'UPSTREAM_')):
         return RepairFailure(code[:54], f'来源抓取失败：{code[:54]}', retryable=code != 'URL_FETCH_BLOCKED')
     # Never persist raw exception strings (may contain request data or keys).
-    return RepairFailure('REPAIR_' + type(exc).__name__[:40].upper(), type(exc).__name__)
+    frames = traceback.extract_tb(exc.__traceback__)
+    location = ' → '.join(f'{Path(f.filename).name}:{f.lineno}:{f.name}' for f in frames[-3:])
+    detail = f'未分类内部异常：{type(exc).__name__}；需排查失败阶段与代码位置'
+    if location:
+        detail += '；' + location
+    return RepairFailure('REPAIR_' + type(exc).__name__[:40].upper(), detail)
+
+
+def observe_row(item: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    """A row version is a CAS token, never permission for a fresh retry budget.
+
+    Governance, bookmarks and successful repair phases can all update the row.
+    Only an explicit audited requeue may reset this ID's attempt allowance.
+    Older checkpoints are adopted conservatively without erasing failures.
+    """
+    return {**item, 'observedUpdatedAt': str(row['updatedAt']),
+            'attempts': int(item.get('attempts') or 0)}
+
+
+def failure_message(item: dict[str, Any]) -> str:
+    """Keep the bounded diagnostic column valid JSON; full detail stays in audit."""
+    payload = {k: item.get(k) for k in
+               ('errorCode', 'reason', 'attempts', 'nextAttemptAt', 'status', 'failedPhase')}
+    payload['reason'] = str(payload['reason'] or '')[:240]
+    message = json.dumps(payload, ensure_ascii=False)
+    while len(message) > 500 and payload['reason']:
+        payload['reason'] = payload['reason'][:-16]
+        message = json.dumps(payload, ensure_ascii=False)
+    if len(message) > 500:
+        raise ValueError('invalid repair diagnostic metadata')
+    return message
 
 
 def retry_state(error: RepairFailure, attempts: int, now: float) -> dict[str, Any]:
@@ -447,8 +489,7 @@ async def record_failure(pool: Any, actor: str, run: str, row: dict[str, Any], i
                                    '"reasonCode","reasonMessage","errorType","updatedAt") '
                                    "VALUES (%s,%s,%s,'failed',%s,%s,%s,%s,%s,%s,now())",
                                    (str(uuid4()), row['sourceId'], row['syncRunId'], row['title'], row['url'],
-                                    row['canonicalUrl'], code, json.dumps({k: item.get(k) for k in
-                                        ('errorCode', 'reason', 'attempts', 'nextAttemptAt', 'status')}, ensure_ascii=False)[:500],
+                                    row['canonicalUrl'], code, failure_message(item),
                                     item['errorCode']))
 
 
@@ -493,6 +534,7 @@ async def requeue(pool: Any, actor: str, directory: Path, sid: str, reason: str)
     """An explicit operator retry creates history instead of erasing failures."""
     if not reason.strip():
         raise ValueError('a requeue reason is required')
+    g.verify_backup()
     with (directory / 'worker.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = json.loads((directory / 'state.json').read_text())
@@ -580,10 +622,8 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
         processed = 0
         for row in candidates:
             sid = str(row['id'])
-            observed = str(row['updatedAt'])
-            item = state['items'].get(sid, {})
-            if item.get('observedUpdatedAt') != observed:
-                item = {'observedUpdatedAt': observed, 'attempts': 0}
+            item = observe_row(state['items'].get(sid, {}), row)
+            state['items'][sid] = item
             if item.get('status') == 'running':
                 item.update(retry_state(RepairFailure('RECOVERY_INTERRUPTED', '前次进程已退出，调用结果未知，延迟重试'),
                                         int(item.get('attempts') or 1), time.time()))
@@ -619,6 +659,7 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
             item.update(attempts=item.get('attempts', 0) + 1, status='running', startedAt=time.time(), runId=run)
             state['items'][sid] = item
             g.save(state_path, state)
+            phase = 'source'
             try:
                 evidence = await asyncio.wait_for(acquire_evidence(row), timeout=35)
                 calls = 0
@@ -637,13 +678,16 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
                 outcome = 'complete'
                 protected = False
                 if delete_noise and noise_grounded(row, evidence):
+                    phase = 'delete'
                     outcome = await mutate(pool, actor, run, row, {}, evidence, delete=True, directory=directory)
                     protected = outcome == 'protected'
                 if outcome != 'deleted':
-                    for phase in ('score', 'summary'):
-                        changes = await asyncio.wait_for(derive(row, evidence, call, fields=phase), timeout=95)
+                    for field in ('score', 'summary'):
+                        phase = field
+                        changes = await asyncio.wait_for(derive(row, evidence, call, fields=field), timeout=95)
                         if changes:
-                            phase_run = str(uuid5(NAMESPACE_URL, run + ':' + phase))
+                            phase = 'write_' + field
+                            phase_run = str(uuid5(NAMESPACE_URL, run + ':' + field))
                             outcome = await mutate(pool, actor, phase_run, row, changes, evidence,
                                                    delete=False, directory=directory)
                             async with pool.connection() as conn:
@@ -668,11 +712,13 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
                             contentComplete=evidence.complete, finishedAt=time.time(), nextAttemptAt=None)
                 item.pop('errorCode', None)
                 item.pop('retryable', None)
+                item.pop('failedPhase', None)
                 if item['status'] in {'complete', 'deleted'}:
                     item.pop('reason', None)
             except Exception as exc:
                 problem = failure(exc)
                 item.update(retry_state(problem, item['attempts'], time.time()))
+                item['failedPhase'] = phase
                 if problem.code == 'MODEL_QUOTA':
                     state['pauseUntil'] = time.time() + 3600
                 if problem.code == 'SOURCE_RATE_LIMITED':

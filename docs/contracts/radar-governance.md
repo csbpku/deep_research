@@ -113,10 +113,22 @@ starts at five minutes, doubles to at most one day, and stops at five attempts;
 hour. A restart defers an interrupted attempt with unknown outcome and retains its
 call reservation. Blocked items require an explicit Admin requeue with a reason:
 
+The allowance belongs to the existing summary ID. `updatedAt` is a conditional-write
+token, not a new retry allowance: display cleanup, bookmarks and other row edits
+preserve attempts, cooldown, terminal state and cumulative model reservations.
+Only an explicit audited Admin requeue resets attempts, retaining previous state
+and cumulative usage; it also verifies the backup gate.
+
 Safe-fetch errors retain their original code without raw exception text or
 credentials. Rejected media types and unsafe URLs stop immediately. Model HTTP
 400/404/422 responses are explicit request-rejection failures requiring a corrected
 request before Admin requeue; they do not consume repeated identical attempts.
+Model 5xx, connection, timeout and open-circuit failures have distinct safe reasons;
+configuration failures require correction before requeue. Each item failure records
+its source/score/summary/write/delete phase. Unclassified internal failures retain
+the exception class and code location for investigation without raw request text.
+The 500-character diagnostic message remains valid JSON; full safe details stay
+in the audit and durable checkpoint.
 
 ```sh
 python -m scripts.repair_radar --actor <admin> --state-dir <path> --report
