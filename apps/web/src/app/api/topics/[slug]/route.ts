@@ -1,11 +1,13 @@
 // BFF handler: GET /api/topics/[slug] — 主题详情（候选 + 综述 + 关注状态）。
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { Prisma } from '@prisma/client';
 
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { findTopicBySlugOrId, loadTopicCandidateTrend } from '@/lib/topics';
+import { TOPIC_ELIGIBILITY_SQL } from '@/lib/radar/topic-eligibility';
 
 export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> }]>(async (req, ctx) => {
   const { slug } = await ctx.params;
@@ -34,31 +36,40 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
   if (!topic) return NextResponse.json({ code: 'NOT_FOUND', message: 'topic 不存在' }, { status: 404 });
 
   const [candidates, followed] = await Promise.all([
-    prisma.topicCandidate.findMany({
-      where: { topicId: topic.id },
-      orderBy: { addedAt: 'desc' },
-      take: 50,
-      select: {
-        id: true,
-        similarityScore: true,
-        addedAt: true,
-        addedReason: true,
-        summary: {
-          select: {
-            id: true,
-            title: true,
-            url: true,
-            canonicalUrl: true,
-            originalKind: true,
-            tags: true,
-            interpretation: true,
-            publishedAt: true,
-            originalFetchedAt: true,
-            createdAt: true,
+    prisma.$transaction(async (tx) => {
+      const eligible = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT tc.id FROM topic_candidates tc
+        JOIN summaries s ON s.id = tc."summaryId"
+        WHERE tc."topicId" = ${topic.id}::uuid
+          AND ${Prisma.raw(TOPIC_ELIGIBILITY_SQL)}
+        ORDER BY tc."addedAt" DESC, tc.id ASC LIMIT 50
+      `);
+      return tx.topicCandidate.findMany({
+        where: { topicId: topic.id, id: { in: eligible.map(row => row.id) } },
+        orderBy: { addedAt: 'desc' },
+        take: 50,
+        select: {
+          id: true,
+          similarityScore: true,
+          addedAt: true,
+          addedReason: true,
+          summary: {
+            select: {
+              id: true,
+              title: true,
+              url: true,
+              canonicalUrl: true,
+              originalKind: true,
+              tags: true,
+              interpretation: true,
+              publishedAt: true,
+              originalFetchedAt: true,
+              createdAt: true,
+            },
           },
         },
-      },
-    }),
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30_000 }),
     user
       ? prisma.topicFollow.findUnique({ where: { userId_topicId: { userId: user.id, topicId: topic.id } } })
       : Promise.resolve(null),

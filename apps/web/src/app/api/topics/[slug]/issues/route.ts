@@ -4,13 +4,14 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import type { TopicIssueStatus } from '@prisma/client';
+import { Prisma, type TopicIssueStatus } from '@prisma/client';
 
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { collapseTopicIssues, findTopicBySlugOrId } from '@/lib/topics';
 import { recordProductEvent } from '@/lib/product-events';
+import { TOPIC_ELIGIBILITY_SQL } from '@/lib/radar/topic-eligibility';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,28 +61,38 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ slug: string }> 
     ...(statusFilter === 'all' ? {} : { status: statusFilter }),
   };
 
-  const issueRowsRaw = await prisma.topicIssue.findMany({
-    where,
-    orderBy:
-      sort === 'newest'
-        ? [{ lastSeenAt: 'desc' }, { id: 'asc' }]
-        : [{ importanceScore: 'desc' }, { lastSeenAt: 'desc' }, { id: 'asc' }],
-    select: {
-      id: true,
-      kind: true,
-      status: true,
-      title: true,
-      proposition: true,
-      summary: true,
-      importanceScore: true,
-      firstSeenAt: true,
-      lastSeenAt: true,
-      candidates: { select: { summaryId: true } },
-    },
-  });
+  const issueRowsRaw = await prisma.$transaction(async (tx) => {
+    const eligible = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT DISTINCT s.id FROM topic_issue_candidates tic
+      JOIN topic_issues ti ON ti.id = tic."issueId"
+      JOIN summaries s ON s.id = tic."summaryId"
+      WHERE ti."topicId" = ${topic.id}::uuid
+        AND ${Prisma.raw(TOPIC_ELIGIBILITY_SQL)}
+    `);
+    const eligibleIds = eligible.map(row => row.id);
+    return tx.topicIssue.findMany({
+      where,
+      orderBy:
+        sort === 'newest'
+          ? [{ lastSeenAt: 'desc' }, { id: 'asc' }]
+          : [{ importanceScore: 'desc' }, { lastSeenAt: 'desc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        kind: true,
+        status: true,
+        title: true,
+        proposition: true,
+        summary: true,
+        importanceScore: true,
+        firstSeenAt: true,
+        lastSeenAt: true,
+        candidates: { where: { summaryId: { in: eligibleIds } }, select: { summaryId: true } },
+      },
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30_000 });
 
   const publicIssues = collapseTopicIssues(
-    issueRowsRaw.map((issue) => ({
+    issueRowsRaw.filter(issue => issue.candidates.length > 0).map((issue) => ({
       ...issue,
       candidateIds: issue.candidates.map((candidate) => candidate.summaryId),
     })),

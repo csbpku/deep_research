@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import { prisma } from '@/lib/db';
+import { TOPIC_ELIGIBILITY_SQL } from '@/lib/radar/topic-eligibility';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -280,13 +281,14 @@ export async function loadTopicCandidateTrend(
 ): Promise<TopicCandidateTrendPoint[]> {
   const since = new Date(Date.now() - days * MS_PER_DAY);
   type TrendRow = { day: Date; count: bigint };
-  const rows = await prisma.$queryRaw<TrendRow[]>`
-    SELECT date_trunc('day', "addedAt") AS day, COUNT(*) AS count
-    FROM "topic_candidates"
-    WHERE "topicId" = ${topicId}::uuid AND "addedAt" >= ${since}::timestamptz
+  const rows = await prisma.$queryRaw<TrendRow[]>(Prisma.sql`
+    SELECT date_trunc('day', tc."addedAt") AS day, COUNT(*) AS count
+    FROM "topic_candidates" tc JOIN summaries s ON s.id = tc."summaryId"
+    WHERE tc."topicId" = ${topicId}::uuid AND tc."addedAt" >= ${since}::timestamptz
+      AND ${Prisma.raw(TOPIC_ELIGIBILITY_SQL)}
     GROUP BY 1
     ORDER BY 1
-  `;
+  `);
   return fillTrendDays(
     rows.map((r) => ({ date: r.day, count: r.count })),
     since,
