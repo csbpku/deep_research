@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
+from ai_engine.radar import repair as r
+from ai_engine.llm.config import LlmRoute
+from ai_engine.radar.distilled_scorer import DISTILLED_VERSION
+
+
+def scored(tier: str = 'noise') -> dict[str, Any]:
+    return {'id': 'row', 'title': 'An actual tool', 'body': 'source summary ' * 20,
+            'interpretation': 'a technical judgement with sufficient details and concrete limitations',
+            'canonicalUrl': 'https://example.org/article', 'sourceType': 'rss', 'tags': ['external_reading'],
+            'distilledTier': tier, 'distilledScore': {'isDefault': False, 'version': DISTILLED_VERSION,
+                'tier': tier, 'dimensions': dict.fromkeys('abcdefg', 1),
+                'weakPoint': 'No implementation', 'weakPointEvidence': 'only a landing page'}}
+
+
+def test_only_complete_grounded_current_noise_can_be_deleted() -> None:
+    row = scored()
+    full = r.Evidence('Evidence: only a landing page', 'article', True)
+    assert r.noise_grounded(row, full)
+    assert not r.noise_grounded(row, r.Evidence(full.text, 'source_abstract', False))
+    assert not r.noise_grounded(row, r.Evidence('unrelated article evidence', 'article', True))
+    row['distilledScore']['version'] = '4.7'
+    assert not r.noise_grounded(row, full)
+    assert r.has_score(row)  # Legacy scores are retained, not needlessly overwritten.
+
+
+def test_invalid_score_and_summary_are_not_success() -> None:
+    row = scored()
+    row['distilledScore']['isDefault'] = True
+    assert not r.has_score(row)
+    row['distilledScore']['isDefault'] = False
+    row['distilledScore']['dimensions'] = dict.fromkeys('abcdefg', 0)
+    assert not r.has_score(row)
+    row.update(body=row['title'], interpretation='')
+    assert r.needs_summary(row)
+
+
+def test_retries_are_bounded_and_preserve_precise_reason() -> None:
+    missing = r.RepairFailure('SOURCE_HTTP_404', '原始来源返回HTTP 404')
+    one = r.retry_state(missing, 1, 1000)
+    assert one['nextAttemptAt'] == 1300
+    assert one['status'] == 'retry_wait'
+    three = r.retry_state(missing, 3, 1000)
+    assert three['status'] == 'blocked' and three['nextAttemptAt'] is None
+    assert three['reason'] == '原始来源返回HTTP 404'
+    quota = r.retry_state(r.RepairFailure('MODEL_QUOTA', 'quota'), 1, 1000)
+    assert quota['nextAttemptAt'] == 4600
+    assert r.retry_state(r.RepairFailure('MODEL_QUOTA', 'quota'), 5, 1000)['status'] == 'blocked'
+
+
+def test_credential_repr_is_safe() -> None:
+    route = LlmRoute('minimax', 'openai', 'test', 'https://example.org', 'a-secret-key', 'minimax:test')
+    assert 'a-secret-key' not in str(route)
+    assert 'a-secret-key' not in repr(route)
+    assert route.api_key == 'a-secret-key'
+
+
+async def test_abstract_never_claims_complete_source(monkeypatch: Any) -> None:
+    doc = SimpleNamespace(status=200, url='https://arxiv.org/abs/2610.12345', headers={}, content=b'html')
+    monkeypatch.setattr(r, 'safe_fetch', AsyncMock(return_value=doc))
+    monkeypatch.setattr(r, '_arxiv_abstract_input', lambda *a: ('verified abstract', 'source_abstract'))
+    row = {**scored(), 'canonicalUrl': doc.url, 'sourceType': 'arxiv'}
+    evidence = await r.acquire_evidence(row)
+    assert evidence.kind == 'source_abstract' and not evidence.complete
+
+
+async def test_http_403_is_explicit_and_never_calls_model(monkeypatch: Any) -> None:
+    doc = SimpleNamespace(status=403, url='https://example.org/article', headers={})
+    monkeypatch.setattr(r, 'safe_fetch', AsyncMock(return_value=doc))
+    with pytest.raises(r.RepairFailure) as caught:
+        await r.acquire_evidence(scored())
+    assert caught.value.code == 'SOURCE_HTTP_403'
+
+
+async def test_summary_requires_grounded_quote_and_preserves_valid_score() -> None:
+    source = 'Precise source evidence and implementation limitations. ' * 30
+    call = AsyncMock(return_value=SimpleNamespace(text=json.dumps({
+        'summary': '基于原文的具体能力、方法与限制。' * 10,
+        'judgement': '适用于受控工具调用环境，性能和可靠性仍需在实际任务中验证。' * 2,
+        'evidence_quote': 'Precise source evidence and implementation limitations.',
+    })))
+    row = {**scored('skim'), 'interpretation': '', 'body': 'title only'}
+    changes = await r.derive(row, r.Evidence(source, 'article', True), call)
+    assert 'distilledScore' not in changes
+    assert len(changes['body']) >= 80
+    assert call.await_count == 1
+    call.return_value = SimpleNamespace(text=json.dumps({'summary': '摘要' * 100,
+                                                        'judgement': '判断' * 30, 'evidence_quote': 'invented quote'}))
+    with pytest.raises(r.RepairFailure, match='MODEL_SUMMARY_INVALID'):
+        await r.derive(row, r.Evidence(source, 'article', True), call)
+
+
+async def test_model_error_never_persists_fake_scores() -> None:
+    row = {**scored(), 'distilledScore': None}
+    call = AsyncMock(return_value=SimpleNamespace(text='not valid JSON'))
+    with pytest.raises(r.RepairFailure, match='MODEL_SCORE_FORMAT'):
+        await r.derive(row, r.Evidence('source evidence ' * 60, 'article', True), call)
+
+
+def test_article_container_is_not_proof_of_completeness() -> None:
+    text = 'A substantive technical article. ' * 40
+    html = '<html><article>' + text + '</article></html>'
+    assert not r.complete_article(html, text, 'https://example.org/article')
+    payload = json.dumps({'@type': 'TechArticle', 'articleBody': text})
+    html = html.replace('</html>', '<script type="application/ld+json">' + payload + '</script></html>')
+    assert r.complete_article(html, text, 'https://example.org/article')
+    assert not r.complete_article(html.replace('<article>', '<article class="paywall">'), text, 'https://example.org/article')
+    assert not r.complete_article(html.replace('"articleBody"', '"excerpt"'), text, 'https://example.org/article')
+    assert not r.complete_article(html.replace('"@type":', '"isAccessibleForFree": false, "@type":'), text, 'https://example.org/article')
+
+
+def test_publication_identity_preserves_new_article_and_utc_equivalence() -> None:
+    from ai_engine.radar.diagnostic_policy import publication_identity as identity
+    assert identity(' Article ', '2026-10-15T08:00:00+08:00') == identity('article', '2026-10-15T00:00:00Z')
+    assert identity('article', None) != identity('new article', None)
+    assert identity('article', '2026-10-15T00:00:00Z') != identity('article', '2026-10-16T00:00:00Z')
+
+
+async def test_cycle_saves_successful_score_before_summary_failure_and_resumes(tmp_path, monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+    row = {**scored('skim'), 'id': 'test-id', 'updatedAt': 'before', 'distilledScore': None, 'interpretation': ''}
+    class Cursor:
+        async def fetchone(self):
+            return dict(row)
+    class Conn:
+        async def execute(self, *args):
+            return Cursor()
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield Conn()
+    monkeypatch.setattr(r.g, 'verify_admin', AsyncMock(return_value='actor'))
+    monkeypatch.setattr(r.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(r.g, 'protected_ids', AsyncMock(return_value={}))
+    monkeypatch.setattr(r, 'inventory', AsyncMock(side_effect=lambda _: [dict(row)]))
+    monkeypatch.setattr(r, 'acquire_evidence', AsyncMock(return_value=r.Evidence('source', 'article', False)))
+    monkeypatch.setattr(r, 'record_failure', AsyncMock())
+    phase_calls = []
+    async def derive(current, evidence, call, *, fields):
+        if fields == 'score' and not r.has_score(current):
+            phase_calls.append('score')
+            return {'distilledScore': scored('skim')['distilledScore']}
+        if fields == 'summary':
+            phase_calls.append('summary')
+            raise r.RepairFailure('MODEL_SUMMARY_INVALID', 'invalid summary')
+        return {}
+    async def mutate(*args, **kwargs):
+        row.update(args[4], updatedAt='after-score')
+        return 'repaired'
+    monkeypatch.setattr(r, 'derive', derive)
+    monkeypatch.setattr(r, 'mutate', mutate)
+    await r.cycle(Pool(), 'actor', tmp_path)
+    state = json.loads((tmp_path / 'state.json').read_text())
+    assert r.has_score(row)
+    assert state['items']['test-id']['status'] == 'retry_wait'
+    assert state['items']['test-id']['observedUpdatedAt'] == 'after-score'
+    await r.cycle(Pool(), 'actor', tmp_path)
+    assert phase_calls == ['score', 'summary']  # Cooldown prevents duplicate charge.
+    state['items']['test-id']['nextAttemptAt'] = 0
+    r.g.save(tmp_path / 'state.json', state)
+    await r.cycle(Pool(), 'actor', tmp_path)
+    state = json.loads((tmp_path / 'state.json').read_text())
+    assert phase_calls == ['score', 'summary', 'summary']
+    assert state['items']['test-id']['attempts'] == 2
+
+
+async def test_interrupted_attempt_retains_call_reservation(tmp_path, monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+    row = {**scored(), 'id': 'interrupted', 'updatedAt': 'before', 'distilledScore': None}
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield None
+    monkeypatch.setattr(r.g, 'verify_admin', AsyncMock(return_value='actor'))
+    monkeypatch.setattr(r.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(r.g, 'protected_ids', AsyncMock(return_value={}))
+    monkeypatch.setattr(r, 'inventory', AsyncMock(return_value=[row]))
+    monkeypatch.setattr(r, 'record_failure', AsyncMock())
+    fetch = AsyncMock()
+    monkeypatch.setattr(r, 'acquire_evidence', fetch)
+    r.g.save(tmp_path / 'state.json', {'modelCalls': 1, 'items': {'interrupted': {
+        'observedUpdatedAt': 'before', 'attempts': 1, 'status': 'running', 'modelCalls': 1}}})
+    await r.cycle(Pool(), 'actor', tmp_path)
+    state = json.loads((tmp_path / 'state.json').read_text())
+    assert state['modelCalls'] == 1
+    assert state['items']['interrupted']['errorCode'] == 'RECOVERY_INTERRUPTED'
+    assert state['items']['interrupted']['status'] == 'retry_wait'
+    fetch.assert_not_awaited()

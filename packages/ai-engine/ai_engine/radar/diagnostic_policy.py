@@ -1,9 +1,34 @@
 """Preserve diagnostic evidence while bounding current work and retries."""
 from __future__ import annotations
 
+import hashlib
+import re
+from datetime import datetime, timezone
 from typing import Any
 
 DETERMINISTIC_ERRORS = ('TOO_LARGE', 'URL_FETCH_TOO_LARGE', 'SOURCE_NOT_FOUND')
+
+
+def publication_identity(title: str, published_at: Any) -> str:
+    stamp = ''
+    if published_at is not None:
+        parsed = published_at if isinstance(published_at, datetime) else datetime.fromisoformat(str(published_at))
+        stamp = parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc).isoformat(timespec='milliseconds')
+    return hashlib.sha256((re.sub(r'\s+', ' ', title).strip().casefold() + '\n' + stamp).encode()).hexdigest()
+
+
+async def deleted_publication(pool: Any, source_id: str, url: str, title: str, published_at: Any) -> bool:
+    """Minimal audit tombstone; a different publication remains eligible."""
+    async with pool.connection() as conn:
+        row = await (await conn.execute(
+            "SELECT 1 FROM admin_actions a WHERE a.action='radar_noise_delete' "
+            "AND a.metadata->>'canonicalUrl'=%s AND a.metadata->>'sourceId'=%s "
+            "AND a.metadata->>'publicationIdentity'=%s "
+            "AND NOT EXISTS (SELECT 1 FROM admin_actions r WHERE r.action='radar_noise_restore' "
+            "AND r.metadata->>'deletionAuditId'=a.id::text) LIMIT 1",
+            (url, str(source_id), publication_identity(title, published_at)),
+        )).fetchone()
+    return row is not None
 
 
 async def retire_duplicate_pending(conn: Any, source_id: str, url: str, reason: str,

@@ -25,7 +25,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from ai_engine.radar.diagnostic_policy import (
-    close_scored_pending, deterministic_retry_blocked, retire_duplicate_pending,
+    close_scored_pending, deleted_publication, deterministic_retry_blocked, retire_duplicate_pending,
 )
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
@@ -1730,6 +1730,12 @@ async def _run_source(
                     if await deterministic_retry_blocked(pool, source.id, normalized.canonical_url,
                                                          raw_candidate.published_at):
                         total_skipped += 1
+                        return
+
+                    if await deleted_publication(pool, source.id, normalized.canonical_url,
+                                                 raw_candidate.title, raw_candidate.published_at):
+                        total_skipped += 1
+                        skipped_rule_noise += 1
                         return
 
                     # Heuristic score (for admin-queue sort only) + noise-pattern filter.

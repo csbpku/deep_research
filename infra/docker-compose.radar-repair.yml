@@ -1,0 +1,42 @@
+# Independent project: main deployment's --remove-orphans cannot remove this worker.
+# docker compose --env-file .env -f infra/docker-compose.radar-repair.yml up -d --no-build
+name: deep-research-repair
+services:
+  repair:
+    extends:
+      file: docker-compose.yml
+      service: ai-engine
+    image: ${AI_ENGINE_IMAGE:?set immutable AI_ENGINE_IMAGE}
+    build: !reset null
+    ports: !reset []
+    depends_on: !reset {}
+    healthcheck:
+      disable: true
+    environment:
+      RADAR_GOVERNANCE_STATE_DIR: ${RADAR_REPAIR_DIR:?set verified governance backup directory}
+      ANYTHINGLLM_ENABLED: "false"
+      ANYTHINGLLM_PERSONAL_KNOWLEDGE_ENABLED: "0"
+      DB_POOL_MIN_SIZE: "1"
+      DB_POOL_MAX_SIZE: "2"
+      IMPORT_WORKER_ENABLED: "0"
+    command:
+      - python
+      - -u
+      - -m
+      - scripts.repair_radar
+      - --actor
+      - ${RADAR_REPAIR_ACTOR:?set verified real Admin id or email}
+      - --state-dir
+      - ${RADAR_REPAIR_DIR:?set verified governance backup directory}/repair
+      - --delete-confirmed-noise
+networks:
+  default:
+    external: true
+    name: deep-research_default
+volumes:
+  import-tmp:
+    external: true
+    name: deep-research_import-tmp
+  zread-work:
+    external: true
+    name: deep-research_zread-work

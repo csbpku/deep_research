@@ -26,7 +26,7 @@ SUMMARY_FIELDS = (
     'distilledTargetTier', 'distilledProfile', 'interpretation',
 )
 REFERENCE_TABLES = (
-    'comments', 'user_bookmarks', 'radar_feedback', 'researches', 'research_sources',
+    'comments', 'user_bookmarks', 'radar_feedback', 'radar_annotations', 'share_submissions', 'researches', 'research_sources',
     'research_citations', 'ai_research_jobs', 'ai_research_sources',
     'ai_chat_sessions', 'ai_chat_messages', 'ai_research_conversations',
     'ai_research_conversation_messages', 'radar_submissions', 'topic_candidates',

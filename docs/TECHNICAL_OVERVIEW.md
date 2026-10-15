@@ -108,6 +108,8 @@ Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式�
 
 ### 雷达缺分与判断维护
 
+默认外部阅读模式在同步阶段尝试初评；初评降级后会保留缺分内容和诊断，URL 去重不会补分。`scripts.repair_radar` 提供独立于 enrichment 的持久恢复进程，覆盖现有自动雷达和已批准分享，包含归档/拒绝项；优先补有效评分，再补摘要与判断。每次至多两次单次模型请求，评分和摘要分阶段审计落库，已有有效评分保留；失败有明确代码、退避与次数上限，断点和调用预留先写持久卷。完整原文、当前有效噪声证据且无用户/研究引用才允许物理删除，先将内容与关联诊断归档到库外，再同事务写审计和删除；审计中的最小出版身份阻止同篇噪声重新入库。操作、重排队及恢复边界见 [治理契约](./contracts/radar-governance.md)；部署与实际积压以带日期的 PROJECT_STATUS 为准。
+
 `packages/ai-engine/scripts/rescore_active_radar.py` 只补 `distilledScore IS NULL` 的条目，选取、处理前检查及落库均保护已有评分，包括旧版本评分；禁止 enrichment。`--minimax-only --state-file <path>` 必须成对使用，要求 research/utility 的 light/heavy 主路由均为 MiniMax 且有效 fallback 为 `None`。断点固定目标清单，按评分版本和证据范围隔离；普通失败进入 unresolved，需显式 `--retry-unresolved` 才重试。
 
 `--include-archived` 同样要求 MiniMax 断点模式，默认仅使用库内已有证据；评分脚本可另外显式指定 `--transient-external` 临时获取原文，不落全文缓存。`backfill_radar_briefs.py` 只补空判断：活跃 external-reading 条目临时获取原文，归档条目在 `--include-archived` 模式下仅使用已有快照。证据或判断不足保持未解决，不根据标题生成占位内容。两种脚本的归档/活跃范围使用独立断点，不得混用。

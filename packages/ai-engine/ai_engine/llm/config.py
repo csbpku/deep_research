@@ -8,7 +8,7 @@ out of the business configuration.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 LlmPurpose = Literal["research", "utility"]
@@ -31,7 +31,7 @@ class LlmRoute:
     protocol: str
     model: str
     base_url: str | None
-    api_key: str
+    api_key: str = field(repr=False)
     spec: str
 
     @property

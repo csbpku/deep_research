@@ -344,6 +344,7 @@ jobs:
             infra/docker-compose.registry.yml \
             infra/docker-compose.registry-render-review.yml \
             infra/docker-compose.certbot.yml \
+            infra/docker-compose.radar-repair.yml \
             infra/certbot.Dockerfile \
             infra/nginx.conf \
             infra/nginx-tls.conf \
@@ -500,8 +501,7 @@ jobs:
               echo "[deploy] pre-migration pg_dump failed; aborting release" >&2
               rollback 1
             fi
-            # keep only the 5 most recent pre-deploy dumps
-            ls -1t infra/backups/pre-deploy-*.sql.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+            # Retention is explicit maintenance; deploy never removes backups.
           else
             echo "[deploy] postgres not running; skipping pre-migration dump"
           fi
@@ -579,5 +579,9 @@ jobs:
           rm -f "$beta_env_backup"
           trap - ERR
           "${compose[@]}" ps
+          # Independent worker follows formal images once explicitly enabled.
+          if [ -f .radar-repair-enabled ]; then
+            docker compose --env-file .env -f infra/docker-compose.radar-repair.yml up -d --no-build
+          fi
           echo "[deploy] release $IMAGE_TAG is healthy"
           REMOTE_SCRIPT

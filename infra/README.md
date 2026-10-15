@@ -233,3 +233,14 @@ docker compose --env-file .env \
 
 之后每天运行 `infra/certbot-renew.sh` 即可自动创建 DNS TXT、续期并 reload
 nginx；建议用 `flock` 防止 cron 重复执行。
+
+## Continuous radar repair
+
+The optional independent repair project and its backup/Admin/retry/deletion gates
+are specified in [the governance contract](../docs/contracts/radar-governance.md#continuous-repair-and-confirmed-noise-deletion).
+Use the formal immutable `AI_ENGINE_IMAGE` and the VPS `.env` values
+`RADAR_REPAIR_DIR`/`RADAR_REPAIR_ACTOR`; after a verified pilot, enable
+`.radar-repair-enabled` so deployment updates the worker as well as the API.
+Start with `docker compose --env-file .env -f infra/docker-compose.radar-repair.yml up -d --no-build`.
+This separate project shares existing network/volumes and is not an orphan of the
+main deployment. Preserve its checkpoint, deletion archives and verified backup.

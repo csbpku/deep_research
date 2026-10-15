@@ -5,7 +5,9 @@ Admin-only `POST /api/admin/radar/governance` accepts `mode` (`preview`, `report
 supplies the session identity; the internal engine checks the real database Admin
 and batch owner again. Existing single-item governance remains available.
 
-No schema change or physical deletion is involved. Preview fixes a server-owned
+This batch API changes no schema and performs no physical deletion. The separate
+opt-in continuous repair command below supports confirmed-noise deletion.
+Preview fixes a server-owned
 inventory, evidence, protections, before/after fields and timestamps. Duplicate
 titles are review suggestions only. Apply uses at most 100 operations per atomic
 transaction, locks target rows, checks snapshot values and `updatedAt`, rechecks
@@ -55,3 +57,55 @@ Noise and unassessable results retain different reasons.
 After execution, export the plan, audits/results, fresh statistics, call counts,
 unresolved/deferred lists, and verify public radar/search/topics/references. A
 24-hour review is read-only and reports recurrence rather than silently repairing it.
+
+## Continuous repair and confirmed-noise deletion
+
+`python -m scripts.repair_radar --actor <real-admin> --state-dir <durable-path>`
+scans automatic radar plus approved shares, including archived/rejected rows.
+The default 20-item limit is per cycle, not a limit on the inventory. It retains
+valid legacy scores, prioritizes missing scores and references, then fills missing
+summaries/judgements. Source text is transient; limited abstracts/excerpts may
+support a limited-evidence score but never prove deletion eligibility.
+Each attempt reserves at most two single-attempt model calls, and writes score
+and summary separately so a later summary failure cannot discard a score.
+
+`--delete-confirmed-noise` requires complete source proof, a current valid noise
+score and its verbatim weak-point evidence. A generic HTML article container is
+not completeness proof. User notes, shares, bookmarks, annotations and research/
+chat/topic references protect the row. Reference tables are locked during the
+final check. The full summary and only same-run/URL missing-score or repair
+diagnostics are fsynced to `<state-dir>/deleted/` before the delete transaction.
+The transaction records the archive hash, evidence hash and minimal publication
+identity in `admin_actions`; source/body is removed from the business database.
+Other diagnostics at the same URL remain independent. Original backup and archive
+files must remain available; no backup retention cleanup runs during deployment.
+
+Failures have precise source/model/DB codes and a durable audit outbox. Retry
+starts at five minutes, doubles to at most one day, and stops at five attempts;
+404/410/oversize stop at three. Source rate limits and model quota pause for one
+hour. A restart defers an interrupted attempt with unknown outcome and retains its
+call reservation. Blocked items require an explicit Admin requeue with a reason:
+
+```sh
+python -m scripts.repair_radar --actor <admin> --state-dir <path> --report
+python -m scripts.repair_radar --actor <admin> --state-dir <path> --requeue <id> --reason '<new evidence or repaired cause>'
+python -m scripts.repair_radar --actor <admin> --state-dir <path> --restore-archive <path>/deleted/<id>-<run>.json
+python -m scripts.repair_radar --actor <admin> --state-dir <path> --rollback-audit <repair-apply-audit-id>
+```
+
+Stop the worker before requeue/restore. Restore verifies the archive against the
+committed deletion audit and refuses any existing ID/URL; it restores the row and
+archived diagnostics in one transaction and audits restoration. Ordinary repair
+updates carry before/after fields and timestamps; rollback checks the recorded
+post-write row and diagnostic fields/times and refuses later edits. The database check
+`python -m scripts.verify_radar_repair --database governance_verify_<name>` is
+restricted to an isolated restore and rolls back all synthetic fixtures.
+
+Production uses the independent `deep-research-repair` Compose project from
+`infra/docker-compose.radar-repair.yml`, sharing the existing network and persistent
+volume. Set `RADAR_REPAIR_DIR` (verified-backup root) and `RADAR_REPAIR_ACTOR` in the
+VPS environment. After the backup gate and pilot, `.radar-repair-enabled` makes
+formal deploys update the worker to the same immutable image. Its restart policy
+and checkpoint survive host/container replacement; main `--remove-orphans` cannot
+remove the independent project. Inspect each unresolved item and public/referenced
+paths before claiming that the backlog is cleared.
