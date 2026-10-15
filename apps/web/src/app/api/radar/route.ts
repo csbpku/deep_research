@@ -347,7 +347,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       return read(tx, invalid.length
         ? { AND: [where, { NOT: { id: { in: invalid.map(row => row.id) } } }] }
         : where);
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30_000 })
     : await read(prisma, where);
   const total = totalResult ?? 0;
 

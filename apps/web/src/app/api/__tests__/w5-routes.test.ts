@@ -285,7 +285,7 @@ describe('GET /api/radar', () => {
     mocks.summaryCount.mockResolvedValue(0);
     const response = await radarList(new Request('http://localhost/api/radar?page=2') as never);
     expect(response.status).toBe(200);
-    expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead' });
+    expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead', timeout: 30_000 });
     const where = mocks.summaryFindMany.mock.calls[0][0].where;
     expect(where.AND[1]).toEqual({ NOT: { id: { in: [SUM_ID] } } });
     expect(mocks.summaryCount).toHaveBeenCalledWith({ where });
@@ -299,6 +299,16 @@ describe('GET /api/radar', () => {
     await radarList(new Request('http://localhost/api/radar?status=candidate&quality=all') as never);
     expect(mocks.transaction).not.toHaveBeenCalled();
     expect(mocks.summaryQueryRaw).not.toHaveBeenCalled();
+  });
+
+  it('supports the all-items mode with a bounded snapshot timeout', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+    const response = await radarList(new Request('http://localhost/api/radar?per_page=all') as never);
+    expect(response.status).toBe(200);
+    expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead', timeout: 30_000 });
+    expect(mocks.summaryFindMany.mock.calls[0][0]).not.toHaveProperty('take');
+    expect(mocks.summaryFindMany.mock.calls[0][0].skip).toBe(0);
   });
 
   it('does not expose soft-hidden content to regular members', async () => {
