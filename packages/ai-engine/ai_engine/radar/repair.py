@@ -325,9 +325,11 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     'WHERE "runId"=%s AND "canonicalUrl"=%s AND status=\'pending\' AND ' + OWN_DIAGNOSTICS + ' FOR UPDATE',
                     (row.get('syncRunId'), row['canonicalUrl']))).fetchall()]
                 await close_scored_pending(conn, str(row['id']))
-                await conn.execute("UPDATE radar_sync_diagnostics SET status='dismissed',\"updatedAt\"=clock_timestamp() "
-                                   'WHERE "runId"=%s AND "canonicalUrl"=%s AND left("reasonCode",7)=\'REPAIR_\' AND status=\'pending\'',
-                                   (row.get('syncRunId'), row['canonicalUrl']))
+                effective = {**current, **changes}
+                if has_score(effective) and not needs_summary(effective):
+                    await conn.execute("UPDATE radar_sync_diagnostics SET status='dismissed',\"updatedAt\"=clock_timestamp() "
+                                       'WHERE "runId"=%s AND "canonicalUrl"=%s AND left("reasonCode",7)=\'REPAIR_\' AND status=\'pending\'',
+                                       (row.get('syncRunId'), row['canonicalUrl']))
                 after = [dict(d) for d in await (await conn.execute(
                     'SELECT id,status,"updatedAt","reasonCode" FROM radar_sync_diagnostics WHERE id=ANY(%s::uuid[])',
                     ([str(d['id']) for d in pending],))).fetchall()]
@@ -563,6 +565,10 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
                     item['status'] = 'deleted'
                 item.update(result=outcome, evidenceSha256=evidence.sha256, evidenceKind=evidence.kind,
                             contentComplete=evidence.complete, finishedAt=time.time(), nextAttemptAt=None)
+                item.pop('errorCode', None)
+                item.pop('retryable', None)
+                if item['status'] in {'complete', 'deleted'}:
+                    item.pop('reason', None)
             except Exception as exc:
                 problem = failure(exc)
                 item.update(retry_state(problem, item['attempts'], time.time()))

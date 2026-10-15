@@ -149,6 +149,20 @@ async def verify(database: str) -> dict[str, bool]:
                         "SELECT count(*) n FROM admin_actions WHERE action='radar_repair_failed' AND \"targetId\"=%s", (sid,))).fetchone()
                     assert failures and failures['n'] == 1
                     checks['failure_outbox_idempotence'] = True
+                    incomplete = await (await conn.execute(
+                        'UPDATE summaries SET interpretation=NULL,"updatedAt"=clock_timestamp() WHERE id=%s RETURNING *',
+                        (sid,))).fetchone()
+                    assert incomplete
+                    incomplete = {**dict(incomplete), 'sourceId': seed['sourceId']}
+                    await r.record_failure(pool, actor, str(uuid4()), incomplete, {
+                        **item, 'errorCode': 'MODEL_SUMMARY_INVALID', 'reason': 'missing judgement'})
+                    await r.mutate(pool, actor, str(uuid4()), incomplete, {'body': 'summary ' * 30},
+                                   evidence, delete=False, directory=directory)
+                    pending_summary = await (await conn.execute(
+                        'SELECT status FROM radar_sync_diagnostics WHERE "runId"=%s AND "canonicalUrl"=%s '
+                        'AND "reasonCode"=\'REPAIR_MODEL_SUMMARY_INVALID\'', (seed['id'], url))).fetchone()
+                    assert pending_summary and pending_summary['status'] == 'pending'
+                    checks['partial_repair_keeps_unresolved_summary_diagnostic'] = True
                 finally:
                     r.g.verify_backup = original_verify
     finally:
