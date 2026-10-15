@@ -731,6 +731,9 @@ async def restore_deleted(pool: Any, actor: str, directory: Path, archive: Path)
                 (row['id'], str(archive), digest))).fetchone()
             if not proof:
                 raise ValueError('archive is not backed by a matching committed deletion audit')
+            if proof['action'] == SOURCE_DISPOSAL_ACTION:
+                await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                                   ('source-diagnostic-preservation:' + str(row['id']),))
             existing = await (await conn.execute(
                 'SELECT id FROM summaries WHERE id=%s OR "canonicalUrl"=%s',
                 (row['id'], row['canonicalUrl']))).fetchone()
