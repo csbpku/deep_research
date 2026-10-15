@@ -354,6 +354,7 @@ async def safe_fetch(
     extra_allowed_ports: tuple[int, ...] = (),
     allow_localhost: bool = False,
     allowed_hosts: tuple[str, ...] | None = None,
+    allow_pdf: bool = False,
 ) -> FetchedDocument:
     """Fetch `url` with SSRF guards; returns a `FetchedDocument`.
 
@@ -363,6 +364,9 @@ async def safe_fetch(
     - redirect limit exceeded
     - timeout (httpx.TimeoutException → URL_FETCH_TIMEOUT)
     - response > max_bytes (the *would be* cap; we abort early).
+
+    PDF is opt-in for callers that validate and parse bounded PDF bytes. The
+    default text-only contract, DNS pinning and all redirect/size limits remain.
 
     Logs:
     - `host` (no query), final IP family (v4/v6), elapsed_ms, status, error code.
@@ -488,7 +492,7 @@ async def safe_fetch(
                 # CONTENT_TYPE_REJECTED（HTTP 415 → 映射为 Bad Request）。
                 if content_type:
                     mime = content_type.split(";", 1)[0].strip()
-                    if mime not in _ALLOWED_CONTENT_TYPES:
+                    if mime not in _ALLOWED_CONTENT_TYPES and not (allow_pdf and mime == "application/pdf"):
                         raise SafeFetchError(
                             code="CONTENT_TYPE_REJECTED",
                             message=f"Content-Type {mime!r} not allowed; "
