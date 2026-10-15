@@ -107,7 +107,9 @@ sources remain limited evidence. No source body is persisted by this fallback.
 Dev.to articles use their official article API with no redirects. The response
 must be JSON from the exact API URL, with a positive article ID and matching
 article URL, canonical URL and title. Only its `body_markdown` is evidence;
-missing/short bodies remain unresolved. A complete body of at most 18,000
+this path takes precedence over legacy cached captures, which can contain unrelated
+widgets despite having valid hashes. The old cache remains unchanged; an API
+failure does not fall back to it. Missing/short bodies remain unresolved. A complete body of at most 18,000
 characters may prove completeness, while a longer body is limited evidence.
 Verified API/raw Markdown may contain an interior `access denied` error example
 without being mistaken for a fetch failure. Leading error pages, HTML shells and

@@ -259,6 +259,21 @@ async def test_devto_unsafe_identity_is_rejected_without_fetch(monkeypatch: Any,
     fetch.assert_not_awaited()
 
 
+async def test_devto_legacy_widget_cache_cannot_replace_verified_article_body(monkeypatch: Any) -> None:
+    row = {**scored('skim'), 'canonicalUrl': 'https://dev.to/author/technical-guide-1234',
+           'originalMarkdown': 'Unrelated sidebar promotion and navigation. ' * 50}
+    assert r._usable_content(row['originalMarkdown'], source_type='devto', url=row['canonicalUrl'])
+    evidence = r.Evidence('Official matching article body', 'devto_article_api', True)
+    adapter = AsyncMock(return_value=evidence)
+    monkeypatch.setattr(r, 'devto_article_evidence', adapter)
+    assert await r.acquire_evidence(row) is evidence
+    adapter.assert_awaited_once_with(row)
+    assert row['originalMarkdown'].startswith('Unrelated sidebar promotion')
+    adapter.side_effect = r.RepairFailure('SOURCE_IDENTITY_MISMATCH', 'different publication', retryable=False)
+    with pytest.raises(r.RepairFailure, match='SOURCE_IDENTITY_MISMATCH'):
+        await r.acquire_evidence(row)  # An API failure must never fall back to the old widget cache.
+
+
 async def test_github_api_cooldown_uses_same_repo_raw_readme(monkeypatch: Any) -> None:
     monkeypatch.setattr(r, '_github_api_retry_at', 0)
     monkeypatch.setattr(r.time, 'time', lambda: 1000)

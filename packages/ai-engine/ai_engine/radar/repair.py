@@ -301,6 +301,11 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     parts = urlsplit(url)
     if parts.scheme not in {'http', 'https'} or not parts.hostname or parts.username or parts.password:
         raise RepairFailure('SOURCE_UNSAFE_URL', '原始URL不符合安全读取规则', retryable=False)
+    # Historical Dev.to captures can be unrelated page widgets with plausible
+    # length and valid hashes. Verify the article envelope before considering
+    # any legacy cache; retain that cache unchanged for audit/review.
+    if parts.hostname == 'dev.to':
+        return await devto_article_evidence(row)
     cached = str(row.get('originalMarkdown') or '')
     if _usable_content(cached, source_type=source_type, url=url):
         return Evidence(cached[:18000], 'cached_original',
@@ -311,8 +316,6 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     allowed = (host, host[4:] if host.startswith('www.') else 'www.' + host)
     if host == 'github.com' and re.fullmatch(r'/[\w.-]+/[\w.-]+/?', parts.path):
         return await github_readme_evidence(parts.path.strip('/'), url)
-    elif host == 'dev.to':
-        return await devto_article_evidence(row)
     else:
         doc = await safe_fetch(url, allowed_hosts=allowed, max_bytes=2_000_000,
                                timeout=25, max_redirects=3)
