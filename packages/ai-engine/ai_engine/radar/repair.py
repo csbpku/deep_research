@@ -29,6 +29,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from ai_engine.fetcher.safe_fetch import SafeFetchError, UpstreamHttpError, safe_fetch
+from ai_engine.fetcher.pdf_text import MAX_PDF_BYTES, PdfReadError, read_pdf
 from ai_engine.llm.client import generate_text, is_quota_error
 from ai_engine.radar import governance as g
 from ai_engine.radar.diagnostic_policy import close_scored_pending, publication_identity, retire_duplicate_pending
@@ -317,6 +318,26 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
                         and row.get('originalSha256') == hashlib.sha256(cached.encode()).hexdigest())
     host = parts.hostname
     allowed = (host, host[4:] if host.startswith('www.') else 'www.' + host)
+    if parts.path.lower().endswith('.pdf'):
+        # Explicit PDF identities only. Never widen generic HTML fetches or
+        # decode binary bytes as text; source and extraction remain transient.
+        doc = await safe_fetch(url, allowed_hosts=(host,), max_bytes=MAX_PDF_BYTES,
+                               timeout=25, max_redirects=0, allow_pdf=True)
+        if doc.status == 429:
+            raise RepairFailure('SOURCE_RATE_LIMITED', 'PDF来源HTTP 429，一小时后重试')
+        if doc.status != 200:
+            raise RepairFailure(f'SOURCE_HTTP_{doc.status}', f'PDF来源返回HTTP {doc.status}')
+        if (doc.url != url or doc.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/pdf'):
+            raise RepairFailure('SOURCE_IDENTITY_MISMATCH', 'PDF来源身份或类型不匹配', retryable=False)
+        try:
+            pdf = await read_pdf(doc.content)
+        except PdfReadError as exc:
+            raise RepairFailure(exc.code, 'PDF损坏、加密、无可读文字或超过提取限制，需来源修复', retryable=False) from None
+        except TimeoutError:
+            raise RepairFailure('SOURCE_PDF_EXTRACTION_TIMEOUT', 'PDF提取超过12秒限制，需来源修复', retryable=False) from None
+        if not _usable_content(pdf.text, source_type=source_type, url=url):
+            raise RepairFailure('SOURCE_INSUFFICIENT', 'PDF可读文字不足，不能可靠判断')
+        return Evidence(pdf.text[:18000], 'source_pdf', pdf.complete and len(pdf.text) <= 18000)
     if host == 'github.com' and re.fullmatch(r'/[\w.-]+/[\w.-]+/?', parts.path):
         return await github_readme_evidence(parts.path.strip('/'), url)
     else:

@@ -80,6 +80,29 @@ def _client(transport: httpx.AsyncBaseTransport) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=transport)
 
 
+@pytest.mark.parametrize('allow_pdf,mime,accepted', [
+    (False, 'application/pdf', False), (True, 'application/pdf', True),
+    (True, 'application/zip', False), (True, 'application/octet-stream', False),
+])
+async def test_pdf_mime_is_explicit_and_does_not_allow_other_binary(
+    monkeypatch: Any, allow_pdf: bool, mime: str, accepted: bool,
+) -> None:
+    monkeypatch.setattr('ai_engine.fetcher.safe_fetch._resolve_ips', lambda host: ['8.8.8.8'])
+    transport = _MockTransport({'example.org': lambda req: _ok_response(b'%PDF-content', mime)})
+    async with _client(transport) as client:
+        if accepted:
+            result = await safe_fetch('https://example.org/doc.pdf', client=client, allow_pdf=allow_pdf)
+            assert result.content == b'%PDF-content'
+            # The opt-in is per request; it must never mutate the global gate.
+            with pytest.raises(SafeFetchError) as caught:
+                await safe_fetch('https://example.org/doc.pdf', client=client)
+            assert caught.value.code == 'CONTENT_TYPE_REJECTED'
+        else:
+            with pytest.raises(SafeFetchError) as caught:
+                await safe_fetch('https://example.org/doc.pdf', client=client, allow_pdf=allow_pdf)
+            assert caught.value.code == 'CONTENT_TYPE_REJECTED'
+
+
 def _ok_response(body: bytes = b"hi", content_type: str = "text/html") -> httpx.Response:
     return httpx.Response(
         200,

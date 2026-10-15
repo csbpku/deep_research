@@ -109,6 +109,43 @@ async def test_http_403_is_explicit_and_never_calls_model(monkeypatch: Any) -> N
     assert caught.value.code == 'SOURCE_HTTP_403'
 
 
+async def test_pdf_evidence_uses_bounded_parser_and_never_overclaims_complete(monkeypatch: Any) -> None:
+    from ai_engine.fetcher.pdf_text import PdfText, MAX_PDF_BYTES
+
+    url = 'https://example.org/research.pdf'
+    doc = SimpleNamespace(status=200, url=url, headers={'content-type': 'application/pdf'}, content=b'%PDF-source')
+    fetch = AsyncMock(return_value=doc)
+    parse = AsyncMock(return_value=PdfText('Verified technical evidence and limitations. ' * 800, True))
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    monkeypatch.setattr(r, 'read_pdf', parse)
+    evidence = await r.acquire_evidence({**scored(), 'canonicalUrl': url})
+    assert evidence.kind == 'source_pdf' and len(evidence.text) == 18000 and not evidence.complete
+    assert fetch.call_args.kwargs['max_bytes'] == MAX_PDF_BYTES
+    assert fetch.call_args.kwargs['max_redirects'] == 0 and fetch.call_args.kwargs['allow_pdf']
+    parse.assert_awaited_once_with(doc.content)
+
+
+@pytest.mark.parametrize('problem', ['identity', 'mime', 'encrypted'])
+async def test_pdf_identity_and_parser_failure_cannot_reach_scoring(monkeypatch: Any, problem: str) -> None:
+    from ai_engine.fetcher.pdf_text import PdfReadError
+
+    url = 'https://example.org/research.pdf'
+    doc = SimpleNamespace(status=200, url=url if problem != 'identity' else 'https://example.org/other.pdf',
+                          headers={'content-type': 'text/html' if problem == 'mime' else 'application/pdf'},
+                          content=b'%PDF-source')
+    parser = AsyncMock(side_effect=PdfReadError('SOURCE_PDF_ENCRYPTED'))
+    monkeypatch.setattr(r, 'safe_fetch', AsyncMock(return_value=doc))
+    monkeypatch.setattr(r, 'read_pdf', parser)
+    with pytest.raises(r.RepairFailure) as caught:
+        await r.acquire_evidence({**scored(), 'canonicalUrl': url})
+    assert not caught.value.retryable
+    if problem == 'encrypted':
+        assert caught.value.code == 'SOURCE_PDF_ENCRYPTED'
+    else:
+        assert caught.value.code == 'SOURCE_IDENTITY_MISMATCH'
+        parser.assert_not_awaited()
+
+
 def test_fetch_and_model_errors_have_precise_safe_reasons() -> None:
     from ai_engine.fetcher.safe_fetch import SafeFetchError, UpstreamHttpError
 
