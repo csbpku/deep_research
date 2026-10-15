@@ -97,7 +97,7 @@ async def test_cron_job_reaps_stale_runs_before_starting(
 
     monkeypatch.setattr(sync_endpoint, "_run_background", fake_background)
 
-    await sync_endpoint.run_radar_sync_job(
+    started = await sync_endpoint.run_radar_sync_job(
         pool=pool,
         adapter=FakeAdapter(),
         triggered_by="cron",
@@ -105,6 +105,7 @@ async def test_cron_job_reaps_stale_runs_before_starting(
     )
 
     assert pool.connection_value.commits == 1
+    assert started is True
     assert len(background_calls) == 1
     assert background_calls[0]["request_id"] == "cron-1"
 
@@ -122,12 +123,43 @@ async def test_cron_job_skips_when_a_live_run_remains(
 
     monkeypatch.setattr(sync_endpoint, "_run_background", fake_background)
 
-    await sync_endpoint.run_radar_sync_job(
+    started = await sync_endpoint.run_radar_sync_job(
         pool=pool,
         adapter=FakeAdapter(),
         triggered_by="cron",
         request_id="cron-2",
     )
+    assert started is False
 
     assert pool.connection_value.commits == 1
     assert background_called is False
+
+
+async def test_tiered_loop_rechecks_due_sources_after_active_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import importlib
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    server = importlib.import_module('ai_engine.server.app')
+    row = {'id': 'arxiv-source', 'sourceType': 'arxiv', 'config': {},
+           'lastSyncAt': datetime.now(timezone.utc) - timedelta(hours=2)}
+    pool = _Pool()
+    pool.connection_value.execute = AsyncMock(return_value=_Cursor(rows=[row]))  # type: ignore[method-assign]
+    job = AsyncMock(side_effect=[False, True])
+    monkeypatch.setattr(sync_endpoint, 'run_radar_sync_job', job)
+    ticks = 0
+
+    async def tick(_: float) -> None:
+        nonlocal ticks
+        ticks += 1
+        if ticks > 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(server.asyncio, 'sleep', tick)
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool, adapter=FakeAdapter()))
+    with pytest.raises(asyncio.CancelledError):
+        await server._radar_tiered_sync_loop(app)
+    assert job.await_count == 2
+    assert all(c.kwargs['source_ids'] == {'arxiv-source'} for c in job.await_args_list)

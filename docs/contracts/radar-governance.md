@@ -50,9 +50,13 @@ recovery, not the normal rollback path.
 Sync retains diagnostic history while keeping one current pending action per
 source/URL/reason; filtered rows also require identical evidence. Score success
 closes missing-score diagnostics only for the same source run and URL. After three
-deterministic oversized/missing-source failures for the same publication identity,
+deterministic oversized/missing-source failures for the same publication identity
+(source, canonical URL, normalized title and publication timestamp),
 sync stops automatic attempts. A new publication identity permits new attempts.
 Noise and unassessable results retain different reasons.
+The scheduled loop does not consume a source's polling window when a live-run
+guard skips work; the next tick checks again and reaps any lease that expired
+in the meantime. A stale run then records `STALE_RUN_REAPED` before normal retry.
 
 After execution, export the plan, audits/results, fresh statistics, call counts,
 unresolved/deferred lists, and verify public radar/search/topics/references. A

@@ -1069,7 +1069,7 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
             continue
 
         try:
-            await run_radar_sync_job(
+            started = await run_radar_sync_job(
                 pool=app_instance.state.db_pool,
                 adapter=app_instance.state.adapter,
                 triggered_by="cron",
@@ -1077,6 +1077,11 @@ async def _radar_tiered_sync_loop(app_instance: FastAPI) -> None:
                 source_ids=set(due_source_ids),
                 lock=getattr(app_instance.state, "radar_sync_lock", None),
             )
+            if started is False:
+                # An active-run guard did no work. Keep due sources eligible
+                # so the next tick can reap a lease that expires meanwhile.
+                for source_id in due_source_ids:
+                    last_run_at_per_source.pop(source_id, None)
             consecutive_failures = 0
         except asyncio.CancelledError:
             raise

@@ -1728,7 +1728,7 @@ async def _run_source(
                         return
 
                     if await deterministic_retry_blocked(pool, source.id, normalized.canonical_url,
-                                                         raw_candidate.published_at):
+                                                         raw_candidate.title, raw_candidate.published_at):
                         total_skipped += 1
                         return
 

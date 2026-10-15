@@ -19,7 +19,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from ai_engine.radar import repair as r
-from ai_engine.radar.diagnostic_policy import deleted_publication
+from ai_engine.radar.diagnostic_policy import deleted_publication, deterministic_retry_blocked
 from ai_engine.radar.distilled_scorer import DISTILLED_VERSION
 
 
@@ -62,6 +62,15 @@ async def verify(database: str) -> dict[str, bool]:
                     "VALUES (%s,%s,%s,'failed','fixture',%s,%s,'PENDING_SCORE','fixture',now())",
                     (diagnostic_id, seed['sourceId'], run_id, url, url))
             evidence = r.Evidence('The complete source states: only a landing page', 'github_readme', True)
+            failed_url = url + '/failed-publication'
+            for _ in range(3):
+                await conn.execute('INSERT INTO radar_sync_diagnostics '
+                    '(id,"sourceId","runId",kind,title,url,"canonicalUrl","reasonCode","updatedAt") '
+                    "VALUES (%s,%s,%s,'failed','Old  title',%s,%s,'URL_FETCH_TOO_LARGE',now())",
+                    (str(uuid4()), seed['sourceId'], seed['id'], failed_url, failed_url))
+            assert await deterministic_retry_blocked(pool, str(seed['sourceId']), failed_url, ' old title ', None)
+            assert not await deterministic_retry_blocked(pool, str(seed['sourceId']), failed_url, 'new title', None)
+            checks['deterministic_retry_publication_identity'] = True
             with tempfile.TemporaryDirectory(prefix='radar-repair-check-') as temp:
                 directory = Path(temp)
                 try:

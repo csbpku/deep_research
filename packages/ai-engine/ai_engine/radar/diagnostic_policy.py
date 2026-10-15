@@ -47,14 +47,15 @@ async def retire_duplicate_pending(conn: Any, source_id: str, url: str, reason: 
 
 
 async def deterministic_retry_blocked(pool: Any, source_id: str, url: str,
-                                      published_at: Any) -> bool:
+                                      title: str, published_at: Any) -> bool:
     async with pool.connection() as conn:
         row = await (await conn.execute(
             'SELECT count(*) AS attempts FROM radar_sync_diagnostics '
             'WHERE "sourceId"=%s AND "canonicalUrl"=%s '
             'AND ("reasonCode"=ANY(%s) OR "errorType"=\'SourceNotFoundError\') '
+            "AND lower(regexp_replace(btrim(title), '\\s+', ' ', 'g'))=lower(%s) "
             'AND "publishedAt" IS NOT DISTINCT FROM %s::timestamptz',
-            (source_id, url, list(DETERMINISTIC_ERRORS), published_at),
+            (source_id, url, list(DETERMINISTIC_ERRORS), re.sub(r'\s+', ' ', title[:300]).strip(), published_at),
         )).fetchone()
     return bool(row and dict(row)['attempts'] >= 3)
 

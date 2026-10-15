@@ -414,14 +414,14 @@ async def run_radar_sync_job(
     request_id: str,
     lock: asyncio.Lock | None = None,
     source_ids: set[str] | None = None,
-) -> None:
+) -> bool:
     """Shared radar task used by the cron loop and host-level script."""
     if await _has_active_run(pool):
         structlog.get_logger("ai_engine.radar").info(
             "ai-engine.radar.sync_skipped_active_run",
             request_id=request_id,
         )
-        return
+        return False
     await _run_background(
         pool=pool,
         adapter=adapter,
@@ -430,6 +430,7 @@ async def run_radar_sync_job(
         lock=lock,
         source_ids=source_ids,
     )
+    return True
 
 
 @router.get("/runs", response_model=list[RadarRunView])
