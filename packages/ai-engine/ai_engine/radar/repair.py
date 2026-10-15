@@ -66,11 +66,14 @@ def has_score(row: dict[str, Any]) -> bool:
     return isinstance(score, dict) and g.valid_score({**row, 'distilledTier': score.get('tier')})
 
 
-def needs_summary(row: dict[str, Any]) -> bool:
+def needs_body_summary(row: dict[str, Any]) -> bool:
     body = str(row.get('body') or '').strip()
-    return (len(str(row.get('interpretation') or '').strip()) < 30
-            or len(body) < 80 or body == str(row.get('title') or '').strip()
+    return (len(body) < 80 or body == str(row.get('title') or '').strip()
             or bool(re.search(r'^(待生成|暂无摘要|抓取失败|内容加载中|summary unavailable)', body, re.I)))
+
+
+def needs_summary(row: dict[str, Any]) -> bool:
+    return len(str(row.get('interpretation') or '').strip()) < 30 or needs_body_summary(row)
 
 
 def noise_grounded(row: dict[str, Any], evidence: Evidence) -> bool:
@@ -261,8 +264,7 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
         if invalid:
             raise RepairFailure('MODEL_SUMMARY_INVALID', '；'.join(invalid))
         changes['interpretation'] = judgement
-        if ('external_reading' in (row.get('tags') or []) or len(str(row.get('body') or '')) < 80
-                or str(row.get('body') or '').strip() == str(row.get('title') or '').strip()):
+        if 'external_reading' in (row.get('tags') or []) or needs_body_summary(row):
             changes['body'] = summary
     if changes:
         changes['originalMeta'] = {**(row.get('originalMeta') or {}), 'radarRepair': {
@@ -515,6 +517,15 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
                 item.pop('auditPending')
                 g.save(state_path, state)
                 continue
+            if item.get('status') == 'complete' and (not has_score(row) or needs_summary(row)):
+                item.update(retry_state(RepairFailure('REPAIR_INCOMPLETE', '旧完成状态与实际缺口不符，重新核验'),
+                                        int(item.get('attempts') or 1), time.time()))
+                item.update(runId=str(uuid4()), auditPending=True)
+                state['items'][sid] = item
+                g.save(state_path, state)
+                await record_failure(pool, actor, item['runId'], row, item)
+                item.pop('auditPending')
+                g.save(state_path, state)
             if item.get('status') in {'blocked', 'complete', 'deleted', 'protected', 'not_deletable'}:
                 continue
             host = urlsplit(str(row['canonicalUrl'])).hostname or ''
@@ -564,6 +575,8 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
                             row = {**row, **dict(fresh)}
                             item['observedUpdatedAt'] = str(row['updatedAt'])
                             g.save(state_path, state)
+                    if not has_score(row) or needs_summary(row):
+                        raise RepairFailure('REPAIR_INCOMPLETE', '补救后仍缺有效评分或摘要/判断，未标记完成')
                     if delete_noise and (row.get('distilledScore') or {}).get('tier') == 'noise':
                         item['status'] = ('protected' if protected else
                                           'ready_for_noise_check' if outcome == 'repaired' else 'not_deletable')

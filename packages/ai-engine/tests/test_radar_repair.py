@@ -119,6 +119,20 @@ async def test_model_error_never_persists_fake_scores() -> None:
         await r.derive(row, r.Evidence('source evidence ' * 60, 'article', True), call)
 
 
+async def test_long_failure_placeholder_gets_a_real_summary_without_overwriting_score() -> None:
+    row = {**scored('skim'), 'tags': [], 'body': '抓取失败，请查看原文。' * 20}
+    assert r.needs_summary(row)
+    call = AsyncMock(return_value=SimpleNamespace(text=json.dumps({
+        'summary': '具体能力与方法，以及来源明确披露的工程限制。' * 8,
+        'judgement': '适用于受控环境验证，部署前还需评估来源中未覆盖的可靠性限制。' * 2,
+        'evidence_quote': 'Precise source evidence and implementation limitations.',
+    })))
+    changes = await r.derive(row, r.Evidence('Precise source evidence and implementation limitations. ' * 20,
+                                          'article', False), call, fields='summary')
+    assert 'body' in changes and 'distilledScore' not in changes
+    assert not r.needs_summary({**row, **changes})
+
+
 def test_article_container_is_not_proof_of_completeness() -> None:
     text = 'A substantive technical article. ' * 40
     html = '<html><article>' + text + '</article></html>'
@@ -186,7 +200,11 @@ async def test_cycle_saves_successful_score_before_summary_failure_and_resumes(t
     assert state['items']['test-id']['attempts'] == 2
 
 
-async def test_interrupted_attempt_retains_call_reservation(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize('previous,attempts,expected', [('running', 1, 'retry_wait'),
+                                                     ('complete', 1, 'retry_wait'), ('complete', 5, 'blocked')])
+async def test_interrupted_or_false_completion_keeps_budget_and_retry_limit(
+    tmp_path, monkeypatch, previous, attempts, expected,
+) -> None:
     from contextlib import asynccontextmanager
     row = {**scored(), 'id': 'interrupted', 'updatedAt': 'before', 'distilledScore': None}
     class Pool:
@@ -201,10 +219,11 @@ async def test_interrupted_attempt_retains_call_reservation(tmp_path, monkeypatc
     fetch = AsyncMock()
     monkeypatch.setattr(r, 'acquire_evidence', fetch)
     r.g.save(tmp_path / 'state.json', {'modelCalls': 1, 'items': {'interrupted': {
-        'observedUpdatedAt': 'before', 'attempts': 1, 'status': 'running', 'modelCalls': 1}}})
+        'observedUpdatedAt': 'before', 'attempts': attempts, 'status': previous, 'modelCalls': 1}}})
     await r.cycle(Pool(), 'actor', tmp_path)
     state = json.loads((tmp_path / 'state.json').read_text())
     assert state['modelCalls'] == 1
-    assert state['items']['interrupted']['errorCode'] == 'RECOVERY_INTERRUPTED'
-    assert state['items']['interrupted']['status'] == 'retry_wait'
+    assert state['items']['interrupted']['errorCode'] == ('RECOVERY_INTERRUPTED' if previous=='running' else 'REPAIR_INCOMPLETE')
+    assert state['items']['interrupted']['status'] == expected
+    assert state['items']['interrupted']['attempts'] == attempts
     fetch.assert_not_awaited()
