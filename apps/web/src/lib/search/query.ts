@@ -9,6 +9,7 @@
 
 import type { Prisma } from '@prisma/client';
 import { cleanResearchLabel } from '@/lib/research-markdown-cleanup';
+import { RADAR_PUBLIC_SCORE_SQL } from '@/lib/radar/score-validity';
 
 /**
  * 搜索参数。
@@ -149,7 +150,8 @@ export function buildSearchSql(args: BuildSearchArgs): {
       WHERE s.source::text = 'daily'
         AND s."syncRunId" IS NOT NULL
         AND s."distilledScore" IS NOT NULL
-        AND s.status::text <> 'archived'
+        AND ${RADAR_PUBLIC_SCORE_SQL}
+        AND s.status::text IN ('candidate', 'published')
         AND (
           s."distilledTier" = 'skim'
           OR (

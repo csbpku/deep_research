@@ -6,7 +6,9 @@ Every caller aliases summaries as ``s``. COALESCE makes stale-link removal
 safe for nullable legacy state, including under NOT.
 """
 
-TOPIC_ELIGIBILITY_SQL = """
+from ai_engine.radar.score_validity import RADAR_PUBLIC_SCORE_SQL
+
+TOPIC_ELIGIBILITY_SQL = f"""
 COALESCE((
     s."status" IN ('candidate', 'published')
     AND s."distilledTier" IN ('collection', 'deep_read')
@@ -23,6 +25,7 @@ COALESCE((
         OR (
             s."source" = 'daily' AND s."syncRunId" IS NOT NULL
             AND s."distilledScore" IS NOT NULL
+            AND {RADAR_PUBLIC_SCORE_SQL}
             AND (
                 'external_reading' = ANY(s."tags")
                 OR (

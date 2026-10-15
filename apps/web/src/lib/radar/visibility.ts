@@ -6,6 +6,8 @@
 //   - 非 admin：自动雷达的高价值（collection/deep_read）需 enrichment、reader 质量、
 //     内容审核全部通过（external_reading 除外）。
 
+import { hasPublicRadarScore } from './score-validity';
+
 export type RadarVisibilityInput = {
   source: string;
   syncRunId: string | null;
@@ -52,7 +54,7 @@ export function isRadarSummaryVisible(summary: RadarVisibilityInput, isAdmin: bo
   if (!isRadarSource(summary)) return false;
   if (isAdmin) return true;
   const automatic = summary.source === 'daily' && summary.syncRunId !== null;
-  if (automatic && (summary.distilledScore === null || summary.distilledScore === undefined)) return false;
+  if (automatic && !hasPublicRadarScore(summary)) return false;
   const tier = radarTier(summary);
   if (tier === null || tier === 'noise') return false;
   const externalReading = Boolean(summary.tags?.includes('external_reading'));

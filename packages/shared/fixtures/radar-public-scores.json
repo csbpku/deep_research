@@ -1,0 +1,1132 @@
+[
+  {
+    "name": "valid legacy score",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "paper",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "paper",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "tech_blog",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "tech_blog",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "news",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "news",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "null",
+    "row": {
+      "distilledScore": null,
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "scalar",
+    "row": {
+      "distilledScore": 1,
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "array",
+    "row": {
+      "distilledScore": [],
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "empty",
+    "row": {
+      "distilledScore": {},
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "tier only",
+    "row": {
+      "distilledScore": {
+        "tier": "deep_read"
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "default",
+    "row": {
+      "distilledScore": {
+        "isDefault": true,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "missing default",
+    "row": {
+      "distilledScore": {
+        "isDefault": null,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "string default",
+    "row": {
+      "distilledScore": {
+        "isDefault": "false",
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "all zero",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 0,
+          "analysisDepth": 0,
+          "actionability": 0,
+          "factualReliability": 0,
+          "currentApplicability": 0,
+          "expressionQuality": 0,
+          "audienceFit": 0
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "unknown keys",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "a": 2,
+          "b": 2,
+          "c": 2,
+          "d": 2,
+          "e": 2,
+          "f": 2,
+          "g": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "missing dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "extra dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2,
+          "unknown": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "negative total",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": -1,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "large total",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 101,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "bool total",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": true,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "string total",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": "60",
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "profile array",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": [
+          "engineering"
+        ],
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "profile object",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": {},
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "unknown profile",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "other",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "version newline",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "5.0\n",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "version space",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": " 5.0",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "version long",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "noise",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "noise",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "tier array",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": [
+          "deep_read"
+        ],
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "float dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 1.5,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "bool dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": true,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "nested array dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": [
+            2
+          ],
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "nested object dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": {
+            "a": 2
+          },
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "null dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": null,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "range dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 4,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "negative dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": -1,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "string dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": "2",
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "integral float dimension",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2.0,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "mismatched tier",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "collection",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "external downgrade",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "skim",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": false
+  },
+  {
+    "name": "internal downgrade",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "skim",
+      "tags": []
+    },
+    "expected": true
+  },
+  {
+    "name": "skim",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "skim",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "skim",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "collection",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "collection",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "collection",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "snake case",
+    "row": {
+      "distilledScore": {
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "info_increment": 2,
+          "analysis_depth": 2,
+          "actionability": 2,
+          "fact_credibility": 2,
+          "timeliness": 2,
+          "expression_quality": 2,
+          "audience_fit": 2
+        },
+        "is_default": false
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "nullish default fallback",
+    "row": {
+      "distilledScore": {
+        "isDefault": null,
+        "version": "4.7",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        },
+        "is_default": false
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "version punctuation",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "v5.0-beta+1",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  },
+  {
+    "name": "version max length",
+    "row": {
+      "distilledScore": {
+        "isDefault": false,
+        "version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "profile": "engineering",
+        "tier": "deep_read",
+        "total": 60,
+        "dimensions": {
+          "informationGain": 2,
+          "analysisDepth": 2,
+          "actionability": 2,
+          "factualReliability": 2,
+          "currentApplicability": 2,
+          "expressionQuality": 2,
+          "audienceFit": 2
+        }
+      },
+      "distilledTier": "deep_read",
+      "tags": [
+        "external_reading"
+      ]
+    },
+    "expected": true
+  }
+]

@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildSearchSql } from './query';
+import { RADAR_PUBLIC_SCORE_SQL } from '../radar/score-validity';
 
 describe('buildSearchSql', () => {
   it('includes external-reading candidates without searching or returning cached body text', () => {
-    const { rowsSql } = buildSearchSql({
+    const { rowsSql, countSql } = buildSearchSql({
       q: 'repository',
       type: 'radar',
       userId: null,
@@ -17,5 +18,7 @@ describe('buildSearchSql', () => {
     expect(rowsSql).toContain("THEN '' ELSE COALESCE(s.body, '') END");
     expect(rowsSql).toContain('s."readerQualityStatus" = \'ready\'');
     expect(rowsSql).toContain('s."contentReviewStatus" = \'approved\'');
+    expect(rowsSql).toContain(RADAR_PUBLIC_SCORE_SQL);
+    expect(countSql).toContain(RADAR_PUBLIC_SCORE_SQL);
   });
 });

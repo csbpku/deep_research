@@ -1,3 +1,5 @@
+import { validRadarScore } from '../../../lib/radar/test-score';
+import scoreCases from '../../../../../../packages/shared/fixtures/radar-public-scores.json';
 // Unit tests: W5 BFF routes —— /api/radar / /api/radar/[id] / /api/radar-feedback
 // / /api/admin/radar / /api/admin/radar/[id]/dismiss|retry-interpretation
 //
@@ -125,11 +127,13 @@ const SUM_ID = '11111111-1111-4111-8111-111111111111';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.summaryQueryRaw.mockResolvedValue([]);
   mocks.getCurrentUser.mockResolvedValue(MEMBER);
   mocks.requireUser.mockResolvedValue(MEMBER);
   mocks.requireAdmin.mockResolvedValue(ADMIN);
   mocks.transaction.mockImplementation((cb) => cb({
-    summary: { create: mocks.summaryCreate, update: mocks.summaryUpdate, findUnique: vi.fn().mockResolvedValue(null) },
+    $queryRaw: mocks.summaryQueryRaw,
+    summary: { create: mocks.summaryCreate, update: mocks.summaryUpdate, findUnique: vi.fn().mockResolvedValue(null), findMany: mocks.summaryFindMany, count: mocks.summaryCount },
     shareSubmission: { update: mocks.shareSubmissionUpdate, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     radarFeedback: {
       create: mocks.radarFeedbackCreate,
@@ -275,6 +279,28 @@ describe('GET /api/admin/radar/runs', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar', () => {
+  it('filters invalid scores before pagination and counting in one snapshot', async () => {
+    mocks.summaryQueryRaw.mockResolvedValueOnce([{ id: SUM_ID }]);
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+    const response = await radarList(new Request('http://localhost/api/radar?page=2') as never);
+    expect(response.status).toBe(200);
+    expect(mocks.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead' });
+    const where = mocks.summaryFindMany.mock.calls[0][0].where;
+    expect(where.AND[1]).toEqual({ NOT: { id: { in: [SUM_ID] } } });
+    expect(mocks.summaryCount).toHaveBeenCalledWith({ where });
+    expect(mocks.summaryFindMany.mock.calls[0][0]).toMatchObject({ skip: 20, take: 20 });
+  });
+
+  it('keeps invalid scores available in the explicit Admin governance queue', async () => {
+    mocks.getCurrentUser.mockResolvedValueOnce(ADMIN);
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+    await radarList(new Request('http://localhost/api/radar?status=candidate&quality=all') as never);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.summaryQueryRaw).not.toHaveBeenCalled();
+  });
+
   it('does not expose soft-hidden content to regular members', async () => {
     const response = await radarList(
       new Request('http://localhost/api/radar?status=rejected') as never,
@@ -501,6 +527,21 @@ describe('GET /api/radar', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('GET /api/radar/[id]', () => {
+  it.each(scoreCases.filter(test => !test.expected))('hides invalid score: $name on both detail surfaces', async (test) => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: SUM_ID, title: 'Invalid score', body: 'brief', url: 'https://example.com',
+      status: 'candidate', source: 'daily', syncRunId: 'run', shareSource: null,
+      ...test.row,
+    });
+    for (const surface of ['', '?surface=content']) {
+      mocks.getCurrentUser.mockResolvedValueOnce(null);
+      const response = await radarDetail(new Request(`http://localhost/api/radar/${SUM_ID}${surface}`) as never,
+        { params: Promise.resolve({ id: SUM_ID }) });
+      expect(response.status).toBe(404);
+    }
+    expect(mocks.radarFeedbackGroupBy).not.toHaveBeenCalled();
+  });
+
   it('hides a stale skim tier without a persisted score from members and anonymous readers', async () => {
     mocks.summaryFindUnique.mockResolvedValue({
       id: SUM_ID, title: 'Unscored card', body: 'brief', url: 'https://example.com',
@@ -555,7 +596,7 @@ describe('GET /api/radar/[id]', () => {
       scoreReason: null, scoreVersion: null, relevanceScore: null,
       timelinessScore: null, sourceQualityScore: null, selectionReason: null,
       sortOrder: null, syncRunId: null, source: 'user', sharedBy: { id: MEMBER.id, name: 'M' },
-      distilledTier: 'deep_read',
+      distilledTier: 'deep_read', distilledScore: validRadarScore,
       syncRun: null, shareSource: { status: 'approved' },
     });
     mocks.radarFeedbackGroupBy.mockResolvedValue([]);
@@ -579,7 +620,7 @@ describe('GET /api/radar/[id]', () => {
       publishedAt: null, createdAt: new Date(),
       interpretation: 'cover', scoreReason: 'high', scoreVersion: 'v1',
       relevanceScore: 0.9, timelinessScore: 0.8, sourceQualityScore: 0.7,
-      distilledTier: 'deep_read',
+      distilledTier: 'deep_read', distilledScore: validRadarScore,
       enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
@@ -605,7 +646,7 @@ describe('GET /api/radar/[id]', () => {
       summaryDate: new Date('2026-09-24'), publishedAt: null, createdAt: new Date(),
       interpretation: 'A useful repository', scoreReason: 'strong project signals', scoreVersion: 'v1',
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
-      distilledTier: 'deep_read', enrichmentStatus: null, readerQualityStatus: null,
+      distilledTier: 'deep_read', distilledScore: validRadarScore, enrichmentStatus: null, readerQualityStatus: null,
       contentReviewStatus: null, originalKind: 'github_repo', originalMarkdown: '# Cached README',
       originalMeta: { zread: { pages: [{ title: 'Overview' }] } }, repoSummary: 'Cached repo summary',
       selectionReason: null, sortOrder: null, syncRunId: 'r', source: 'daily', sharedBy: null,
@@ -639,7 +680,7 @@ describe('GET /api/radar/[id]', () => {
       publishedAt: null, createdAt: new Date(),
       interpretation: 'cover', scoreReason: null, scoreVersion: null,
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
-      distilledTier: 'deep_read',
+      distilledTier: 'deep_read', distilledScore: validRadarScore,
       enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
@@ -670,7 +711,7 @@ describe('GET /api/radar/[id]', () => {
       interpretation: 'short AI summary', scoreReason: 'skim', scoreVersion: 'v4',
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
       selectionReason: null, sortOrder: null, syncRunId: 'r', source: 'daily',
-      distilledTier: 'skim',
+      distilledTier: 'skim', distilledScore: { ...validRadarScore, tier: 'skim' },
       originalKind: 'arxiv', originalMarkdown: '# Full paper',
       originalMeta: { enrichmentVersion: '2.0' }, repoSummary: 'deep repo summary',
       highlights: { summary: 'deep highlights' }, arxivAnalysis: { tldr: 'deep analysis' },
@@ -707,7 +748,7 @@ describe('GET /api/radar/[id]', () => {
       status: 'candidate', summaryDate: new Date('2026-08-31'), publishedAt: null,
       createdAt: new Date(), interpretation: 'quick read', scoreReason: null,
       scoreVersion: null, relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
-      distilledTier: 'deep_read', selectionReason: null, sortOrder: null, syncRunId: 'r',
+      distilledTier: 'deep_read', distilledScore: validRadarScore, selectionReason: null, sortOrder: null, syncRunId: 'r',
       enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       source: 'daily', originalKind: 'arxiv', repoSummary: null,
       highlights: { summary: 'highlights', highlights: [], keyQuote: null },
@@ -744,7 +785,7 @@ describe('GET /api/radar/[id]', () => {
       status: 'candidate', summaryDate: new Date('2026-08-31'), publishedAt: null,
       createdAt: new Date(), interpretation: 'quick read', scoreReason: null,
       scoreVersion: null, relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
-      distilledTier: 'deep_read', selectionReason: null, sortOrder: null, syncRunId: 'r',
+      distilledTier: 'deep_read', distilledScore: validRadarScore, selectionReason: null, sortOrder: null, syncRunId: 'r',
       enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
       source: 'daily', originalKind: 'rss', originalMarkdown: '# Full article',
       originalMeta: { provider: 'rss' }, arxivAnalysis: null, figures: null, authors: [],
@@ -823,7 +864,7 @@ describe('GET /api/radar/[id]', () => {
       summaryDate: new Date(), publishedAt: null, createdAt: new Date(),
       interpretation: null, scoreReason: null, scoreVersion: null,
       relevanceScore: null, timelinessScore: null, sourceQualityScore: null,
-      distilledTier: 'deep_read',
+      distilledTier: 'deep_read', distilledScore: validRadarScore,
       selectionReason: null, sortOrder: null, syncRunId: 'r',
       source: 'daily', sharedBy: null,
       syncRun: { id: 'r', completedAt: null, source: { sourceType: 'rss', name: 'R' } },

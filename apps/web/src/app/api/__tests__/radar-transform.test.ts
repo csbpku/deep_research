@@ -1,3 +1,4 @@
+import { validRadarScore } from '../../../lib/radar/test-score';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
@@ -36,7 +37,7 @@ const USER_ID = '99999999-9999-4999-8999-999999999999';
 const SUMMARY_ID = '11111111-1111-4111-8111-111111111111';
 let requestSequence = 0;
 const VISIBLE = {
-  distilledScore: { tier: 'deep_read' },
+  distilledScore: validRadarScore,
   enrichmentStatus: 'ready',
   readerQualityStatus: 'ready',
   contentReviewStatus: 'approved',

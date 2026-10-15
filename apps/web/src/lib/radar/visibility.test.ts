@@ -1,8 +1,9 @@
+import { validRadarScore } from './test-score';
 import { describe, expect, it } from 'vitest';
 import { isRadarSummaryVisible } from './visibility';
 
 const base = {
-  source: 'daily', syncRunId: 'r1', shareSource: null, distilledScore: { tier: 'deep_read' },
+  source: 'daily', syncRunId: 'r1', shareSource: null, distilledScore: validRadarScore,
   distilledTier: 'deep_read', tags: [], enrichmentStatus: 'ready', readerQualityStatus: 'ready',
   contentReviewStatus: 'approved',
 };

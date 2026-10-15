@@ -7,6 +7,7 @@ import pytest
 
 from ai_engine.adapters.base import AdapterError
 from ai_engine.job_runner.db_store import DbJobStore
+from ai_engine.radar.score_validity import RADAR_PUBLIC_SCORE_SQL
 
 REQUESTER_ID = "11111111-1111-4111-8111-111111111111"
 RESEARCH_ID = "22222222-2222-4222-8222-222222222222"
@@ -111,6 +112,7 @@ async def test_internal_summary_ref_rechecks_public_radar_visibility() -> None:
     assert "requester.role = 'admin'" in connection.sql
     assert "s.status::text IN ('candidate', 'published')" in connection.sql
     assert 's."syncRunId" IS NOT NULL' in connection.sql
+    assert RADAR_PUBLIC_SCORE_SQL in connection.sql
     assert "s.\"readerQualityStatus\" = 'ready'" in connection.sql
     assert "share.status::text = 'approved'" in connection.sql
     assert connection.params == (RESEARCH_ID, REQUESTER_ID)

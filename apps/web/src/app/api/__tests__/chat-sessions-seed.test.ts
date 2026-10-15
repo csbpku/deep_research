@@ -1,3 +1,4 @@
+import { validRadarScore } from '../../../lib/radar/test-score';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -27,7 +28,7 @@ const req = () => new Request('http://localhost/api/chat/sessions', {
 }) as never;
 
 const ok = {
-  status: 'candidate', source: 'daily', syncRunId: 'r', shareSource: null, distilledScore: { tier: 'deep_read' },
+  status: 'candidate', source: 'daily', syncRunId: 'r', shareSource: null, distilledScore: validRadarScore,
   distilledTier: 'deep_read', tags: [], enrichmentStatus: 'ready', readerQualityStatus: 'ready', contentReviewStatus: 'approved',
 };
 

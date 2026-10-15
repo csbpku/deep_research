@@ -64,7 +64,8 @@ def test_invalid_score_cannot_count_as_complete(change: str) -> None:
     result = audit(r)
     assert not result['basicComplete']
     assert result['checks']['score']['state'] == 'invalid'
-    assert result['checks']['lifecycle']['state'] == 'invalid'
+    assert result['checks']['lifecycle']['state'] == 'passed'
+    assert not result['checks']['lifecycle']['evidence']['defaultListGateEligible']
 
 
 def test_delivered_skim_downgrade_is_valid_but_missing_reader_is_explicit() -> None:

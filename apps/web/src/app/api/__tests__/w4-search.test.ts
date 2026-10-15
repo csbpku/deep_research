@@ -215,7 +215,7 @@ describe('buildSearchSql', () => {
     expect(rowsSql).toContain('UNION ALL');
     expect(rowsSql).toContain('FROM summaries s');
     expect(rowsSql).toContain("s.source::text = 'daily'");
-    expect(rowsSql).toContain("s.status::text <> 'archived'");
+    expect(rowsSql).toContain("s.status::text IN ('candidate', 'published')");
   });
 
   it('excludes type filter from WHERE when not provided', () => {

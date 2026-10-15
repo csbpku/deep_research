@@ -400,8 +400,11 @@ class DbJobStore(JobStore):
                     ) from exc
 
                 if kind == "summary":
+                    # Radar package initialization also imports the job store.
+                    from ai_engine.radar.score_validity import RADAR_PUBLIC_SCORE_SQL
+
                     row = await conn.execute(
-                        """
+                        f"""
                         SELECT s.title, s.url, s.interpretation, s.body
                         FROM summaries s
                         LEFT JOIN share_submissions share ON share."publishedSummaryId" = s.id
@@ -420,6 +423,7 @@ class DbJobStore(JobStore):
                               AND (
                                 (
                                   s.source::text = 'daily'
+                                  AND {RADAR_PUBLIC_SCORE_SQL}
                                   AND (
                                     s."distilledTier" = 'skim'
                                     OR (

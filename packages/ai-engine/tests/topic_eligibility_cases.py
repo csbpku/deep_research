@@ -1,23 +1,25 @@
 """Read-only PostgreSQL regression cases; no fixtures or database writes."""
 
 import json
+from pathlib import Path
 from typing import Any
 
 from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
 
 
 def assert_topic_eligibility_cases(conn: Any) -> int:
+    score = json.loads((Path(__file__).resolve().parents[2] / 'shared/fixtures/radar-public-scores.json').read_text())[0]['row']['distilledScore']
     base = {
         "id": "00000000-0000-4000-8000-000000000001",
         "source": "daily", "status": "candidate", "distilledTier": "deep_read",
         "syncRunId": "00000000-0000-4000-8000-000000000002",
-        "distilledScore": {"version": "5.0"}, "tags": ["external_reading"],
+        "distilledScore": score, "tags": ["external_reading"],
         "canonicalUrl": "https://github.com/example/tool",
     }
     cases = [
         ({}, True),
         ({"status": "published"}, True),
-        ({"distilledTier": "collection"}, True),
+        ({"distilledTier": "collection", "distilledScore": score | {"tier": "collection"}}, True),
         ({"status": "archived"}, False),
         ({"status": "rejected"}, False),
         ({"distilledTier": "noise"}, False),

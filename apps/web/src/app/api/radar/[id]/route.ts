@@ -17,6 +17,7 @@ import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import { RadarIdParam } from '../../../../lib/schemas';
 import { aggregateFeedbacks, shapeCandidate } from '../../../../lib/radar/shape';
+import { hasPublicRadarScore } from '../../../../lib/radar/score-validity';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 type SourceOutlineItem = { heading: string; level: number };
@@ -185,7 +186,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       requestId,
     });
   }
-  if (isAutomaticRadar && summary.distilledScore === null && u?.role !== 'admin') {
+  if (isAutomaticRadar && !hasPublicRadarScore(summary) && u?.role !== 'admin') {
     return toApiErrorResponse({
       code: ERROR_CODES.DRAFT_NOT_FOUND,
       message: '雷达候选不存在',

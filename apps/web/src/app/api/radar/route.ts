@@ -30,6 +30,7 @@ import {
 } from '../../../lib/radar/source-labels';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { SUMMARY_STATUS } from '@deep-research/shared/states';
+import { RADAR_PUBLIC_SCORE_SQL } from '../../../lib/radar/score-validity';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
   const requestId = withRequestId(req.headers);
@@ -256,9 +257,9 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     { createdAt: 'desc' },
   ];
 
-  const [rawItems, totalResult] = await Promise.all([
-    prisma.summary.findMany({
-      where,
+  const read = (db: Pick<Prisma.TransactionClient, 'summary'>, scopedWhere: Prisma.SummaryWhereInput) => Promise.all([
+    db.summary.findMany({
+      where: scopedWhere,
       orderBy,
       skip: perPage === 'all' ? 0 : (page - 1) * perPage,
       ...(perPage === 'all' ? {} : { take: perPage }),
@@ -330,8 +331,24 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         },
       },
     }),
-    includeTotal ? prisma.summary.count({ where }) : Promise.resolve(null),
+    includeTotal ? db.summary.count({ where: scopedWhere }) : Promise.resolve(null),
   ]);
+  // Exclude malformed scores before pagination. The ID scan, items and count
+  // share a snapshot so concurrent sync cannot make the filters disagree.
+  const [rawItems, totalResult] = u?.role !== 'admin' || !status
+    ? await prisma.$transaction(async (tx) => {
+      const invalid = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT s.id FROM summaries s
+        WHERE s.source = 'daily' AND s."syncRunId" IS NOT NULL
+          AND s."distilledTier" IN ('collection', 'deep_read', 'skim')
+          AND s."distilledScore" IS NOT NULL
+          AND NOT (${Prisma.raw(RADAR_PUBLIC_SCORE_SQL)})
+      `);
+      return read(tx, invalid.length
+        ? { AND: [where, { NOT: { id: { in: invalid.map(row => row.id) } } }] }
+        : where);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
+    : await read(prisma, where);
   const total = totalResult ?? 0;
 
   // sourceType is filtered in the Prisma query so pagination and total align.

@@ -1,3 +1,4 @@
+import { validRadarScore } from '../../../lib/radar/test-score';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -56,7 +57,7 @@ const USER = {
   disabledAt: null,
 };
 const VISIBLE_SUMMARY = {
-  status: 'candidate', source: 'daily', syncRunId: 'run-1', shareSource: null, distilledScore: { tier: 'deep_read' },
+  status: 'candidate', source: 'daily', syncRunId: 'run-1', shareSource: null, distilledScore: validRadarScore,
   distilledTier: 'deep_read', tags: [], enrichmentStatus: 'ready', readerQualityStatus: 'ready',
   contentReviewStatus: 'approved', sharedByUserId: null,
 };

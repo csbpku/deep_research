@@ -17,6 +17,7 @@ from uuid import UUID
 from ai_engine.radar import repair
 from ai_engine.radar.distilled_scorer import SERIAL_KEYS
 from ai_engine.radar.enrichment_contract import is_enrichment_ready
+from ai_engine.radar.score_validity import has_public_radar_score
 
 TIERS = {'collection', 'deep_read', 'skim', 'noise'}
 CHECKS = {
@@ -186,7 +187,7 @@ def audit_row(row: dict[str, Any], *, now: datetime, protections: list[str],
     reader_item = (row.get('originalKind') not in {'github_issue', 'github_pr', 'github_release'}
                    and not any(s in str(row.get('canonicalUrl')) for s in ('/issues/', '/pull/', '/releases/tag/')))
     visible = bool(active and reader_item and lineage_ok and row.get('distilledTier') in TIERS - {'noise'}
-                   and (row.get('source') == 'user' or (row.get('distilledScore') is not None
+                   and (row.get('source') == 'user' or (has_public_radar_score(row)
                         and (row.get('distilledTier') == 'skim' or external or (
                             row.get('enrichmentStatus') == row.get('readerQualityStatus') == 'ready'
                             and row.get('contentReviewStatus') == 'approved')))))
