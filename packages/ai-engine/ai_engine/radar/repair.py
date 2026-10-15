@@ -494,6 +494,68 @@ async def audit(conn: Any, actor: str, run: str, row: dict[str, Any], action: st
                         str(uuid5(NAMESPACE_URL, run + ':' + str(row['id']) + ':' + action)), Jsonb(metadata)))
 
 
+async def _retain_source_diagnostics(conn: Any, actor: str, run: str, row: dict[str, Any],
+                                     archive: Path, digest: str, diagnostics: list[dict[str, Any]], *,
+                                     restore_missing: bool = False) -> dict[str, Any]:
+    """Keep historical diagnostics; only pending work ends when its content is disposed."""
+    prior = await (await conn.execute(
+        "SELECT metadata FROM admin_actions WHERE action='radar_source_diagnostics_preserve' "
+        'AND "targetId"=%s AND metadata->>\'archive\'=%s AND metadata->>\'archiveSha256\'=%s',
+        (str(row['id']), str(archive), digest))).fetchone()
+    if prior:
+        return {'status': 'already_preserved', 'restored': 0, 'closedPending': 0}
+    after = []
+    restored = closed = 0
+    for diagnostic in diagnostics:
+        current = await (await conn.execute('SELECT * FROM radar_sync_diagnostics WHERE id=%s FOR UPDATE',
+                                            (diagnostic['id'],))).fetchone()
+        if current is not None and g.serial(dict(current)) != g.serial(diagnostic):
+            raise RepairFailure('DIAGNOSTIC_CHANGED', '诊断已发生后续修改，拒绝覆盖', retryable=False)
+        if current is None:
+            if not restore_missing:
+                raise RepairFailure('DIAGNOSTIC_CHANGED', '删除期间诊断已变化，拒绝继续', retryable=False)
+            await conn.execute('INSERT INTO radar_sync_diagnostics SELECT * FROM '
+                               'jsonb_populate_record(NULL::radar_sync_diagnostics,%s)', (Jsonb(g.serial(diagnostic)),))
+            restored += 1
+        if diagnostic['status'] == 'pending':
+            await conn.execute("UPDATE radar_sync_diagnostics SET status='dismissed',\"updatedAt\"=now() WHERE id=%s",
+                               (diagnostic['id'],))
+            closed += 1
+        token = await (await conn.execute('SELECT id,status,"updatedAt",md5(to_jsonb(d)::text) AS fingerprint '
+                                          'FROM radar_sync_diagnostics d WHERE id=%s', (diagnostic['id'],))).fetchone()
+        after.append(g.serial(token))
+    await audit(conn, actor, run, row, 'radar_source_diagnostics_preserve', {
+        'reason': '保留历史诊断；当前待办因对应内容已按授权删除而结束，不表示补分成功',
+        'archive': str(archive), 'archiveSha256': digest,
+        'before': g.serial([{k: item.get(k) for k in ('id', 'status', 'updatedAt')} for item in diagnostics]), 'after': after,
+        'restoredMissing': restored, 'closedPending': closed})
+    return {'status': 'preserved', 'restored': restored, 'closedPending': closed}
+
+
+async def retain_deleted_diagnostics(pool: Any, actor: str, directory: Path, archive: Path) -> dict[str, Any]:
+    """Idempotently recover diagnostics previously moved out with source disposal."""
+    g.verify_backup()
+    archive = archive.resolve()
+    if archive.parent != (directory / 'deleted').resolve():
+        raise ValueError('archive must belong to this disposal directory')
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    payload = json.loads(archive.read_text())
+    row = payload['summary']
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            actor = await g.verify_admin(conn, actor)
+            await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                               ('source-diagnostic-preservation:' + str(row['id']),))
+            proof = await (await conn.execute(
+                "SELECT id FROM admin_actions WHERE action='radar_source_unavailable_delete' "
+                'AND "targetId"=%s AND metadata->>\'archive\'=%s AND metadata->>\'archiveSha256\'=%s',
+                (row['id'], str(archive), digest))).fetchone()
+            if not proof or await (await conn.execute('SELECT id FROM summaries WHERE id=%s', (row['id'],))).fetchone():
+                raise ValueError('requires a matching committed source disposal and absent content')
+            return await _retain_source_diagnostics(conn, actor, str(proof['id']), row, archive, digest,
+                                                    payload['diagnostics'], restore_missing=True)
+
+
 @asynccontextmanager
 async def deletion_batch(pool: Any, rows: list[dict[str, Any]]) -> AsyncIterator[Any]:
     """Keep reference protection valid for one <=100-row atomic transaction.
@@ -588,9 +650,13 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     'canonicalUrl': current['canonicalUrl'], 'sourceId': str(row.get('sourceId') or ''),
                     'publicationIdentity': publication_identity(current['title'], current.get('publishedAt'))})
                 # Remove only this insertion's diagnostics; same URL/different run remains independent.
-                await conn.execute('DELETE FROM radar_sync_diagnostics WHERE "runId"=%s AND "canonicalUrl"=%s AND '
-                                   + OWN_DIAGNOSTICS,
-                                   (row.get('syncRunId'), row['canonicalUrl']))
+                if deletion_policy == SOURCE_DISPOSAL_POLICY:
+                    if diagnostics:
+                        await _retain_source_diagnostics(conn, actor, run, current, archive, digest, diagnostics)
+                else:
+                    await conn.execute('DELETE FROM radar_sync_diagnostics WHERE "runId"=%s AND "canonicalUrl"=%s AND '
+                                       + OWN_DIAGNOSTICS,
+                                       (row.get('syncRunId'), row['canonicalUrl']))
                 await conn.execute('DELETE FROM summaries WHERE id=%s', (row['id'],))
                 return 'deleted'
             if changes:
@@ -665,17 +731,40 @@ async def restore_deleted(pool: Any, actor: str, directory: Path, archive: Path)
                 (row['id'], str(archive), digest))).fetchone()
             if not proof:
                 raise ValueError('archive is not backed by a matching committed deletion audit')
+            if proof['action'] == SOURCE_DISPOSAL_ACTION:
+                await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                                   ('source-diagnostic-preservation:' + str(row['id']),))
             existing = await (await conn.execute(
                 'SELECT id FROM summaries WHERE id=%s OR "canonicalUrl"=%s',
                 (row['id'], row['canonicalUrl']))).fetchone()
             if existing:
                 raise RepairFailure('RESTORE_CONFLICT', '已有同ID或URL内容，恢复不得覆盖后续修改', retryable=False)
+            retained: dict[str, str] = {}
+            if proof['action'] == SOURCE_DISPOSAL_ACTION:
+                history = await (await conn.execute(
+                    "SELECT metadata FROM admin_actions WHERE action='radar_source_diagnostics_preserve' "
+                    'AND "targetId"=%s AND metadata->>\'archive\'=%s AND metadata->>\'archiveSha256\'=%s',
+                    (row['id'], str(archive), digest))).fetchone()
+                if history:
+                    retained = {item['id']: item['fingerprint'] for item in history['metadata']['after']}
+                    for sid, fingerprint in retained.items():
+                        current = await (await conn.execute('SELECT md5(to_jsonb(d)::text) AS fingerprint '
+                            'FROM radar_sync_diagnostics d WHERE id=%s FOR UPDATE', (sid,))).fetchone()
+                        if not current or current['fingerprint'] != fingerprint:
+                            raise RepairFailure('RESTORE_CONFLICT', '保留的诊断已发生后续修改，拒绝覆盖', retryable=False)
             for table, records in [('summaries', [row]), ('radar_sync_diagnostics', payload['diagnostics'])]:
                 columns = [x['column_name'] for x in await (await conn.execute(
                     'SELECT column_name FROM information_schema.columns WHERE table_schema=\'public\' '
                     'AND table_name=%s AND is_generated=\'NEVER\' ORDER BY ordinal_position', (table,))).fetchall()
                     if x['column_name'] in records[0]] if records else []
                 for record in records:
+                    if table == 'radar_sync_diagnostics' and record['id'] in retained:
+                        await conn.execute(sql.SQL('UPDATE {} SET ({})=(SELECT {} FROM '
+                            'jsonb_populate_record(NULL::{},%s)) WHERE id=%s').format(
+                            sql.Identifier(table), sql.SQL(',').join(map(sql.Identifier, columns)),
+                            sql.SQL(',').join(map(sql.Identifier, columns)), sql.Identifier(table)),
+                            (Jsonb(record), record['id']))
+                        continue
                     await conn.execute(sql.SQL('INSERT INTO {} ({}) SELECT {} FROM jsonb_populate_record(NULL::{},%s)').format(
                         sql.Identifier(table), sql.SQL(',').join(map(sql.Identifier, columns)),
                         sql.SQL(',').join(map(sql.Identifier, columns)), sql.Identifier(table)), (Jsonb(record),))

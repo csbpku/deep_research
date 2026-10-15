@@ -227,3 +227,45 @@ async def test_mutation_checks_protection_CAS_and_archives_distinct_reason(tmp_p
     else:
         audit.assert_not_awaited()
         assert not list(tmp_path.glob("deleted/*"))
+
+
+@pytest.mark.parametrize("state", ["pending", "dismissed", "missing", "changed", "already"])
+async def test_diagnostic_history_is_retained_with_CAS_and_idempotence(tmp_path, monkeypatch, state):
+    record = {"id": "diagnostic", "status": "pending" if state == "pending" else "dismissed", "body": "original"}
+    statements = []
+
+    class Cursor:
+        def __init__(self, value):
+            self.value = value
+
+        async def fetchone(self):
+            return self.value
+
+    class Conn:
+        async def execute(self, query, params=None):
+            statements.append(query)
+            if query.startswith("SELECT metadata"):
+                return Cursor({"metadata": {}} if state == "already" else None)
+            if query.startswith("SELECT *"):
+                return Cursor(None if state == "missing" else {**record, "body": "later"} if state == "changed" else record)
+            return Cursor({"id": "diagnostic", "fingerprint": "actual-post-write-fingerprint"})
+
+    audit = AsyncMock()
+    monkeypatch.setattr(r, "audit", audit)
+    if state == "changed":
+        with pytest.raises(r.RepairFailure, match="DIAGNOSTIC_CHANGED"):
+            await r._retain_source_diagnostics(Conn(), "actor", "run", {"id": "summary"},
+                tmp_path / "archive.json", "hash", [record], restore_missing=True)
+        audit.assert_not_awaited()
+    else:
+        result = await r._retain_source_diagnostics(Conn(), "actor", "run", {"id": "summary"},
+            tmp_path / "archive.json", "hash", [record], restore_missing=True)
+        assert result["restored"] == int(state == "missing")
+        assert result["closedPending"] == int(state == "pending")
+        if state == "already":
+            audit.assert_not_awaited()
+            assert len(statements) == 1
+        else:
+            assert audit.call_args.args[4] == "radar_source_diagnostics_preserve"
+    assert not any(query.startswith("DELETE") for query in statements)
+    assert any(query.startswith("UPDATE") for query in statements) is (state == "pending")

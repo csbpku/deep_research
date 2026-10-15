@@ -32,10 +32,20 @@ async def main() -> None:
             rows = [dict(x) for x in await (await conn.execute(
                 'SELECT s.*,rr."sourceId",md5(to_jsonb(s)::text) AS fingerprint FROM summaries s '
                 'LEFT JOIN radar_sync_runs rr ON rr.id=s."syncRunId" '
-                "WHERE s.source='daily' AND s.\"distilledScore\" IS NULL ORDER BY s.id")).fetchall()]
+                "WHERE s.source='daily' AND s.\"distilledScore\" IS NULL AND s.\"syncRunId\" IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM admin_actions a WHERE a.action='radar_source_unavailable_delete' "
+                'AND a."targetId"=s.id) ORDER BY s.id')).fetchall()]
             protected = await g.protected_ids(conn, rows)
         row = next(x for x in rows if str(x['id']) not in protected and not x.get('userNote') and not x.get('sharedByUserId'))
         sid = str(row['id'])
+        fixture_ids = [str(uuid4()), str(uuid4())]
+        async with store.pool.connection() as conn:
+            async with conn.transaction():
+                for fixture, status in zip(fixture_ids, ('pending', 'dismissed'), strict=True):
+                    await conn.execute('INSERT INTO radar_sync_diagnostics '
+                        '(id,"sourceId","runId",kind,status,title,url,"canonicalUrl",body,"reasonCode","updatedAt") '
+                        "VALUES (%s,%s,%s,'failed',%s,'fixture',%s,%s,'fixture','REPAIR_HISTORY_FIXTURE',now())",
+                        (fixture, row['sourceId'], row['syncRunId'], status, row['canonicalUrl'], row['canonicalUrl']))
         proof = {'id': sid, 'fingerprint': row['fingerprint'], 'updatedAt': str(row['updatedAt']),
                  'checkedAt': time.time(), 'status': 'unavailable', 'errorCode': 'SOURCE_HTTP_403',
                  'prior': {'status': 'blocked', 'attempts': 5, 'errorCode': 'SOURCE_HTTP_403',
@@ -64,6 +74,10 @@ async def main() -> None:
         try:
             async with r.deletion_batch(store.pool, [row]) as pool:
                 assert await mutate(pool, failed) == 'deleted'
+                async with pool.connection() as conn:
+                    kept = await (await conn.execute('SELECT id,status FROM radar_sync_diagnostics '
+                        'WHERE id=ANY(%s::uuid[])', (fixture_ids,))).fetchall()
+                    assert len(kept) == 2 and all(x['status'] == 'dismissed' for x in kept)
                 raise RuntimeError('intentional atomic transaction failure')
         except RuntimeError:
             pass
@@ -95,8 +109,24 @@ async def main() -> None:
         plan = g.serial({'actorId': actor, 'batchId': run, 'policy': SOURCE_DISPOSAL_POLICY,
                          'rows': [{**row, 'decision': 'delete', 'sourceFailure': proof}], 'results': {}})
         g.save(directory/'plan.json', plan)
-        first = await apply(store.pool, actor, directory, 10, policy=SOURCE_DISPOSAL_POLICY, action=SOURCE_DISPOSAL_ACTION)
+        # Reproduce a legacy archive with missing diagnostics, then correct it.
+        original_retention = r._retain_source_diagnostics
+
+        async def legacy_move(conn, *args, **kwargs):
+            await conn.execute('DELETE FROM radar_sync_diagnostics WHERE "runId"=%s AND "canonicalUrl"=%s AND '
+                               + r.OWN_DIAGNOSTICS, (row['syncRunId'], row['canonicalUrl']))
+            return {}
+
+        r._retain_source_diagnostics = legacy_move
+        try:
+            first = await apply(store.pool, actor, directory, 10, policy=SOURCE_DISPOSAL_POLICY, action=SOURCE_DISPOSAL_ACTION)
+        finally:
+            r._retain_source_diagnostics = original_retention
         assert first['results'] == {'deleted': 1}
+        archive = directory/'deleted'/f'{sid}-{run}.json'
+        correction = await r.retain_deleted_diagnostics(store.pool, actor, directory, archive)
+        assert correction['restored'] >= 2 and correction['closedPending'] >= 1
+        assert (await r.retain_deleted_diagnostics(store.pool, actor, directory, archive))['status'] == 'already_preserved'
         assert await deleted_publication(store.pool, str(row['sourceId']), row['canonicalUrl'], row['title'], row['publishedAt'])
         # A lost checkpoint after commit reconciles with the stable audit key.
         g.save(directory/'plan.json', plan)
@@ -104,7 +134,20 @@ async def main() -> None:
         assert again['results'] == {'deleted': 1}
         assert (await apply(store.pool, actor, directory, 10, policy=SOURCE_DISPOSAL_POLICY,
                             action=SOURCE_DISPOSAL_ACTION))['processed'] == 0
-        archive = directory/'deleted'/f'{sid}-{run}.json'
+        async with store.pool.connection() as conn:
+            pending_after = dict(await (await conn.execute('SELECT * FROM radar_sync_diagnostics WHERE id=%s',
+                                                           (fixture_ids[0],))).fetchone())
+            assert pending_after['status'] == 'dismissed'
+            await conn.execute('UPDATE radar_sync_diagnostics SET "reasonMessage"=\'later edit\',"updatedAt"=now() WHERE id=%s',
+                               (fixture_ids[0],))
+        try:
+            await r.restore_deleted(store.pool, actor, directory, archive)
+            raise AssertionError('later diagnostic changes overwritten')
+        except r.RepairFailure as exc:
+            assert exc.code == 'RESTORE_CONFLICT'
+        async with store.pool.connection() as conn:
+            await conn.execute('UPDATE radar_sync_diagnostics SET "reasonMessage"=%s,"updatedAt"=%s WHERE id=%s',
+                (pending_after['reasonMessage'], pending_after['updatedAt'], fixture_ids[0]))
         assert await r.restore_deleted(store.pool, actor, directory, archive) == sid
         assert not await deleted_publication(store.pool, str(row['sourceId']), row['canonicalUrl'], row['title'], row['publishedAt'])
         try:
@@ -119,9 +162,14 @@ async def main() -> None:
             audit = await (await conn.execute('SELECT count(*) n FROM admin_actions WHERE "targetId"=%s AND action=%s',
                                               (sid, SOURCE_DISPOSAL_ACTION))).fetchone()
             assert audit['n'] == 1
+            fixtures = await (await conn.execute('SELECT id,status FROM radar_sync_diagnostics WHERE id=ANY(%s::uuid[])',
+                                                (fixture_ids,))).fetchall()
+            assert {str(x['id']): x['status'] for x in fixtures} == dict(zip(fixture_ids, ('pending', 'dismissed'), strict=True))
         print(json.dumps({'passed': True, 'database': database, 'checks': ['real_admin', 'snapshot_CAS',
             'model_error_retained', 'references_protected', 'atomic_rollback', 'orphan_archive_rejected',
-            'commit_reconciliation', 'repeat_idempotent', 'exact_row_restore', 'restore_conflict', 'publication_tombstone']}))
+            'commit_reconciliation', 'repeat_idempotent', 'exact_row_restore', 'restore_conflict', 'publication_tombstone',
+            'diagnostic_history_retained', 'legacy_history_recovered', 'pending_closed', 'history_recovery_idempotent',
+            'later_diagnostic_edit_protected', 'original_diagnostic_states_restored']}))
     finally:
         await store.close()
 
