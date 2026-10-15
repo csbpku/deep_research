@@ -16,6 +16,8 @@ import re
 import time
 import traceback
 from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -468,12 +470,47 @@ async def audit(conn: Any, actor: str, run: str, row: dict[str, Any], action: st
                         str(uuid5(NAMESPACE_URL, run + ':' + str(row['id']) + ':' + action)), Jsonb(metadata)))
 
 
+@asynccontextmanager
+async def deletion_batch(pool: Any, rows: list[dict[str, Any]]) -> AsyncIterator[Any]:
+    """Keep reference protection valid for one <=100-row atomic transaction.
+
+    The connection is pinned and reference tables stay locked until commit. The
+    guard cannot be reused on another connection or after this context exits.
+    Full source rows are still loaded individually, rather than retained in RAM.
+    """
+    if not 1 <= len(rows) <= 100:
+        raise ValueError('deletion batch must contain 1..100 rows')
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute(sql.SQL('LOCK TABLE {} IN SHARE MODE').format(
+                sql.SQL(',').join(sql.Identifier(t) for t in g.REFERENCE_TABLES)))
+            protections = await g.protected_ids(conn, rows)
+
+            class PinnedPool:
+                active = True
+                connection_identity = conn
+                protected = protections
+                ids = {str(row['id']) for row in rows}
+
+                @asynccontextmanager
+                async def connection(self) -> AsyncIterator[Any]:
+                    yield conn
+
+            pinned = PinnedPool()
+            try:
+                yield pinned
+            finally:
+                pinned.active = False
+
+
 async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: dict[str, Any],
                  evidence: Evidence | None, *, delete: bool, directory: Path,
                  deletion_policy: str = 'complete_grounded_noise') -> str:
     async with pool.connection() as conn:
         async with conn.transaction():
             actor = await g.verify_admin(conn, actor)
+            guarded = (getattr(pool, 'active', False) and getattr(pool, 'connection_identity', None) is conn
+                       and str(row['id']) in getattr(pool, 'ids', set()))
             if delete:
                 # Freeze loose JSON/URL references as well as FK references while checking.
                 await conn.execute(sql.SQL('LOCK TABLE {} IN SHARE MODE').format(
@@ -493,7 +530,8 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                             and noise_grounded(current, evidence))
                 if not eligible or current.get('source') != 'daily':
                     raise RepairFailure('NOISE_NOT_CONFIRMED', '当前有效噪声评分或自动雷达身份不满足删除条件', retryable=False)
-                if current.get('userNote') or current.get('sharedByUserId') or await g.protected_ids(conn, [current]):
+                protected = pool.protected.get(str(row['id'])) if guarded else await g.protected_ids(conn, [current])
+                if current.get('userNote') or current.get('sharedByUserId') or protected:
                     return 'protected'
                 archive = directory / 'deleted' / (str(row['id']) + '-' + run + '.json')
                 diagnostics = [dict(d) for d in await (await conn.execute(

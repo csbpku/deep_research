@@ -49,43 +49,44 @@ async def apply(pool: Any, actor: str, directory: Path, limit: int) -> dict[str,
         actor = await g.verify_admin(conn, actor)
     if actor != plan['actorId'] or plan['policy'] != NOISE_POLICY:
         raise PermissionError('plan owner/policy mismatch')
-    processed = 0
-    for item in plan['rows']:
-        sid = str(item['id'])
-        if item['decision'] != 'delete' or sid in plan['results']:
-            continue
-        if processed >= limit:
-            break
-        processed += 1
-        # Stable per-item run makes a crash after commit recoverable from audit.
-        run = plan['batchId']
-        async with pool.connection() as conn:
-            current = await (await conn.execute(
-                'SELECT s.*,rr."sourceId",md5(to_jsonb(s)::text) AS fingerprint '
-                'FROM summaries s LEFT JOIN radar_sync_runs rr ON rr.id=s."syncRunId" WHERE s.id=%s',
-                (sid,))).fetchone()
-            if current is None:
-                audit = await (await conn.execute(
-                    "SELECT metadata FROM admin_actions WHERE action='radar_noise_delete' "
-                    'AND "targetId"=%s AND "requestId"=%s',
-                    (sid, str(uuid5(NAMESPACE_URL, run + ':' + sid + ':radar_noise_delete'))))).fetchone()
-                result = {'status': 'deleted' if audit else 'missing_elsewhere', 'reconciled': True}
-            elif str(current['fingerprint']) != item['fingerprint']:
-                result = {'status': 'snapshot_changed'}
-            else:
-                result = {}
-        if current is not None and not result:
-            try:
-                status = await r.mutate(pool, actor, run, dict(current), {}, None, delete=True,
-                                        directory=directory, deletion_policy=NOISE_POLICY)
-                result = {'status': status}
-            except r.RepairFailure as exc:
-                result = {'status': 'skipped', 'reason': exc.code}
-        if result['status'] == 'deleted':
-            archive = directory / 'deleted' / f'{sid}-{run}.json'
-            result.update(archive=str(archive), archiveSha256=hashlib.sha256(archive.read_bytes()).hexdigest())
-        plan['results'][sid] = result
-        g.save(path, plan)
+    selected = [item for item in plan['rows'] if item['decision'] == 'delete'
+                and str(item['id']) not in plan['results']][:limit]
+    processed = len(selected)
+    committed: dict[str, Any] = {}
+    if selected:
+        async with r.deletion_batch(pool, selected) as batch_pool:
+            for item in selected:
+                sid = str(item['id'])
+                # Stable per-item run makes a crash after commit recoverable from audit.
+                run = plan['batchId']
+                async with batch_pool.connection() as conn:
+                    current = await (await conn.execute(
+                        'SELECT s.*,rr."sourceId",md5(to_jsonb(s)::text) AS fingerprint '
+                        'FROM summaries s LEFT JOIN radar_sync_runs rr ON rr.id=s."syncRunId" WHERE s.id=%s',
+                        (sid,))).fetchone()
+                    if current is None:
+                        audit = await (await conn.execute(
+                            "SELECT metadata FROM admin_actions WHERE action='radar_noise_delete' "
+                            'AND "targetId"=%s AND "requestId"=%s',
+                            (sid, str(uuid5(NAMESPACE_URL, run + ':' + sid + ':radar_noise_delete'))))).fetchone()
+                        result = {'status': 'deleted' if audit else 'missing_elsewhere', 'reconciled': True}
+                    elif str(current['fingerprint']) != item['fingerprint']:
+                        result = {'status': 'snapshot_changed'}
+                    else:
+                        result = {}
+                if current is not None and not result:
+                    try:
+                        status = await r.mutate(batch_pool, actor, run, dict(current), {}, None, delete=True,
+                                                directory=directory, deletion_policy=NOISE_POLICY)
+                        result = {'status': status}
+                    except r.RepairFailure as exc:
+                        result = {'status': 'skipped', 'reason': exc.code}
+                if result['status'] == 'deleted':
+                    archive = directory / 'deleted' / f'{sid}-{run}.json'
+                    result.update(archive=str(archive), archiveSha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+                committed[sid] = result
+    plan['results'].update(committed)
+    g.save(path, plan)
     return {'batchId': plan['batchId'], 'processed': processed,
             'decisions': dict(Counter(x['decision'] for x in plan['rows'])),
             'results': dict(Counter(x['status'] for x in plan['results'].values())),

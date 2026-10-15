@@ -151,6 +151,36 @@ async def verify(database: str) -> dict[str, bool]:
                     assert await r.mutate(pool, actor, str(uuid4()), row, {}, None, delete=True,
                                           directory=directory, deletion_policy=NOISE_POLICY) == 'protected'
                     await conn.execute('DELETE FROM user_bookmarks WHERE "targetId"=%s', (sid,))
+                    clone_id = str(uuid4())
+                    clone = await (await conn.execute(
+                        'INSERT INTO summaries SELECT * FROM jsonb_populate_record(NULL::summaries,%s) RETURNING *',
+                        (Jsonb(g.serial({**row, 'id': clone_id, 'url': url + '/clone',
+                                         'canonicalUrl': url + '/clone'})),))).fetchone()
+                    assert clone
+                    clone = {**dict(clone), 'sourceId': seed['sourceId']}
+
+                    async def fail_second(conn: Any, actor: str, run: str, row: dict[str, Any],
+                                          action: str, metadata: dict[str, Any]) -> None:
+                        if str(row['id']) == clone_id:
+                            raise RuntimeError('synthetic second-row audit failure')
+                        await original_audit(conn, actor, run, row, action, metadata)
+
+                    r.audit = fail_second
+                    try:
+                        try:
+                            async with r.deletion_batch(pool, [row, clone]) as grouped:
+                                for target in (row, clone):
+                                    await r.mutate(grouped, actor, str(uuid4()), target, {}, None, delete=True,
+                                                   directory=directory, deletion_policy=NOISE_POLICY)
+                        except RuntimeError:
+                            pass
+                        restored_count = await (await conn.execute('SELECT count(*) n FROM summaries WHERE id=ANY(%s::uuid[])',
+                                                                   ([sid, clone_id],))).fetchone()
+                        assert restored_count and restored_count['n'] == 2
+                    finally:
+                        r.audit = original_audit
+                    await conn.execute('DELETE FROM summaries WHERE id=%s', (clone_id,))
+                    checks['grouped_delete_rolls_back_prior_row_on_second_audit_failure'] = True
                     r.audit = fail_audit
                     try:
                         try:
@@ -162,10 +192,12 @@ async def verify(database: str) -> dict[str, bool]:
                     finally:
                         r.audit = original_audit
                     no_source_run = str(uuid4())
-                    assert await r.mutate(pool, actor, no_source_run, row, {}, None, delete=True,
-                                          directory=directory, deletion_policy=NOISE_POLICY) == 'deleted'
-                    assert await r.mutate(pool, actor, no_source_run, row, {}, None, delete=True,
-                                          directory=directory, deletion_policy=NOISE_POLICY) == 'missing'
+                    async with r.deletion_batch(pool, [row]) as grouped:
+                        assert await r.mutate(grouped, actor, no_source_run, row, {}, None, delete=True,
+                                              directory=directory, deletion_policy=NOISE_POLICY) == 'deleted'
+                        assert await r.mutate(grouped, actor, no_source_run, row, {}, None, delete=True,
+                                              directory=directory, deletion_policy=NOISE_POLICY) == 'missing'
+                    assert not grouped.active
                     no_source_archive = directory / 'deleted' / f'{sid}-{no_source_run}.json'
                     assert await r.restore_deleted(pool, actor, directory, no_source_archive) == sid
                     checks['scored_noise_no_source_atomic_protected_idempotent_restore'] = True

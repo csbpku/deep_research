@@ -146,7 +146,11 @@ python -m scripts.purge_scored_noise apply --actor <admin> --state-dir <same-pat
 
 Preview fixes row fingerprints, timestamps, scores and protection reasons. Changed
 rows are skipped. Execution loads full rows individually and reuses Admin checks,
-reference locks, CAS, archive and audit transactions. Old `complete_grounded_noise`
+reference locks, CAS, archive and audit transactions. Each <=100-row execution
+holds reference locks in one pinned transaction and scans references once; every
+row still checks its actual snapshot and score. An audit failure rolls back the
+whole database batch. The checkpoint advances only after commit; stable audit IDs
+reconcile a crash between commit and checkpoint. Old `complete_grounded_noise`
 audits keep their original meaning and remain restorable.
 
 User notes, shares, bookmarks, annotations, manually pinned repositories and research/
