@@ -101,7 +101,7 @@ def test_changed_stale_unproven_or_complete_records_cannot_be_deleted(changed):
     elif changed == "history_version":
         proof["prior"]["observedUpdatedAt"] = "older"
     elif changed == "history_status":
-        proof["prior"]["status"] = "retry_wait"
+        proof["prior"]["status"] = "pending"
     elif changed == "history_attempts":
         proof["prior"]["attempts"] = 0
     elif changed == "history_model":
@@ -122,6 +122,14 @@ def test_timeout_requires_repeated_observations():
     proof["errorCode"] = "URL_FETCH_TIMEOUT"
     assert not source_disposal_eligible(row, proof, incomplete=True, now=1010)
     proof["checks"] = [{"errorCode": "URL_FETCH_TIMEOUT", "checkedAt": stamp} for stamp in (900, 1000)]
+    assert source_disposal_eligible(row, proof, incomplete=True, now=1010)
+
+
+def test_repeated_source_failures_can_be_disposed_during_backoff():
+    row, proof = candidate()
+    proof["prior"].update(status="retry_wait", attempts=2)
+    assert not source_disposal_eligible(row, proof, incomplete=True, now=1010)
+    proof["prior"]["attempts"] = 3
     assert source_disposal_eligible(row, proof, incomplete=True, now=1010)
     proof.pop("checks")
     proof["prior"].update(errorCode="URL_FETCH_TIMEOUT", attempts=3)

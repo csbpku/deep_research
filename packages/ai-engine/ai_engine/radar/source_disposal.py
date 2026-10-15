@@ -1,7 +1,7 @@
 """Explicit Admin disposal of incomplete automatic radar with unavailable evidence.
 
 This policy never asserts noise. A recent failed source-only preflight must agree
-with a terminal historical source failure and the exact unchanged database row.
+with bounded historical source failures and the exact unchanged database row.
 Model, rate-limit, size-limit and unverified README-path failures are ineligible.
 """
 
@@ -47,8 +47,9 @@ def source_disposal_eligible(
         or not row.get("fingerprint")
         or proof.get("fingerprint") != row["fingerprint"]
         or prior.get("observedUpdatedAt") != str(row.get("updatedAt"))
-        or prior.get("status") != "blocked"
+        or prior.get("status") not in {"blocked", "retry_wait"}
         or int(prior.get("attempts") or 0) < 1
+        or prior.get("status") == "retry_wait" and int(prior.get("attempts") or 0) < 3
         or not str(prior.get("errorCode") or "").startswith(("SOURCE_", "URL_", "CONTENT_TYPE_"))
         or proof.get("status") != "unavailable"
         or proof.get("errorCode") not in UNAVAILABLE_CODES
