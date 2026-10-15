@@ -28,7 +28,6 @@ services:
       - ${RADAR_REPAIR_ACTOR:?set verified real Admin id or email}
       - --state-dir
       - ${RADAR_REPAIR_DIR:?set verified governance backup directory}/repair
-      - --delete-confirmed-noise
 networks:
   default:
     external: true
