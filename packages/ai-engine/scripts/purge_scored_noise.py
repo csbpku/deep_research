@@ -39,7 +39,8 @@ async def preview(pool: Any, actor: str, directory: Path) -> dict[str, Any]:
     return plan
 
 
-async def apply(pool: Any, actor: str, directory: Path, limit: int) -> dict[str, Any]:
+async def apply(pool: Any, actor: str, directory: Path, limit: int, *,
+                policy: str = NOISE_POLICY, action: str = 'radar_noise_delete') -> dict[str, Any]:
     if not 1 <= limit <= 100:
         raise ValueError('batch limit must be 1..100')
     g.verify_backup()
@@ -47,7 +48,7 @@ async def apply(pool: Any, actor: str, directory: Path, limit: int) -> dict[str,
     plan = json.loads(path.read_text())
     async with pool.connection() as conn:
         actor = await g.verify_admin(conn, actor)
-    if actor != plan['actorId'] or plan['policy'] != NOISE_POLICY:
+    if actor != plan['actorId'] or plan['policy'] != policy:
         raise PermissionError('plan owner/policy mismatch')
     selected = [item for item in plan['rows'] if item['decision'] == 'delete'
                 and str(item['id']) not in plan['results']][:limit]
@@ -66,9 +67,9 @@ async def apply(pool: Any, actor: str, directory: Path, limit: int) -> dict[str,
                         (sid,))).fetchone()
                     if current is None:
                         audit = await (await conn.execute(
-                            "SELECT metadata FROM admin_actions WHERE action='radar_noise_delete' "
+                            'SELECT metadata FROM admin_actions WHERE action=%s '
                             'AND "targetId"=%s AND "requestId"=%s',
-                            (sid, str(uuid5(NAMESPACE_URL, run + ':' + sid + ':radar_noise_delete'))))).fetchone()
+                            (action, sid, str(uuid5(NAMESPACE_URL, run + ':' + sid + ':' + action))))).fetchone()
                         result = {'status': 'deleted' if audit else 'missing_elsewhere', 'reconciled': True}
                     elif str(current['fingerprint']) != item['fingerprint']:
                         result = {'status': 'snapshot_changed'}
@@ -77,7 +78,8 @@ async def apply(pool: Any, actor: str, directory: Path, limit: int) -> dict[str,
                 if current is not None and not result:
                     try:
                         status = await r.mutate(batch_pool, actor, run, dict(current), {}, None, delete=True,
-                                                directory=directory, deletion_policy=NOISE_POLICY)
+                                                directory=directory, deletion_policy=policy,
+                                                source_failure=item.get('sourceFailure'))
                         result = {'status': status}
                     except r.RepairFailure as exc:
                         result = {'status': 'skipped', 'reason': exc.code}
