@@ -169,7 +169,8 @@ def failure_message(item: dict[str, Any]) -> str:
 def retry_state(error: RepairFailure, attempts: int, now: float) -> dict[str, Any]:
     maximum = 3 if error.code in {'SOURCE_HTTP_404', 'SOURCE_HTTP_410', 'URL_FETCH_TOO_LARGE'} else MAX_ATTEMPTS
     terminal = not error.retryable or attempts >= maximum
-    delay = 3600 if error.code in {'MODEL_QUOTA', 'SOURCE_RATE_LIMITED'} else min(86400, 300 * 2 ** (attempts - 1))
+    delay = (3600 if error.code in {'MODEL_QUOTA', 'SOURCE_RATE_LIMITED', 'SOURCE_GITHUB_API_RATE_LIMITED'}
+             else min(86400, 300 * 2 ** (attempts - 1)))
     return {'status': 'blocked' if terminal else 'retry_wait', 'errorCode': error.code,
             'reason': error.detail, 'nextAttemptAt': None if terminal else now + delay,
             'attempts': attempts, 'retryable': not terminal}
@@ -232,7 +233,9 @@ async def github_readme_evidence(owner_repo: str, canonical_url: str) -> Evidenc
             raise RepairFailure('SOURCE_INSUFFICIENT', '原始README正文为空、过短或属于错误/登录页面')
         return Evidence(text[:18000], 'github_raw_readme', len(text) <= 18000)
     if api_limited:
-        raise RepairFailure('SOURCE_RATE_LIMITED', 'GitHub API限流，常规README路径未找到，一小时后重试')
+        # Only this unresolved repository waits for the API. The raw host is
+        # available for other repositories and must not inherit an API pause.
+        raise RepairFailure('SOURCE_GITHUB_API_RATE_LIMITED', 'GitHub API限流，常规README路径未找到，一小时后重试')
     raise RepairFailure('SOURCE_README_PATH_UNVERIFIED', '未找到常规README路径，不能证明仓库无正文')
 
 

@@ -235,8 +235,41 @@ async def test_raw_readme_does_not_overclaim_identity_or_completeness(monkeypatc
     else:
         with pytest.raises(r.RepairFailure) as caught:
             await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
-        assert caught.value.code == ('SOURCE_RATE_LIMITED' if problem == 'missing'
+        assert caught.value.code == ('SOURCE_GITHUB_API_RATE_LIMITED' if problem == 'missing'
                                      else 'SOURCE_IDENTITY_MISMATCH')
+
+
+@pytest.mark.parametrize('code,expected_fetches', [('SOURCE_GITHUB_API_RATE_LIMITED', 2),
+                                                ('SOURCE_RATE_LIMITED', 1)])
+async def test_api_only_rate_limit_does_not_pause_other_raw_repositories(
+    tmp_path, monkeypatch, code, expected_fetches,
+) -> None:
+    from contextlib import asynccontextmanager
+
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield None
+
+    rows = [{**scored('skim'), 'id': sid, 'canonicalUrl': f'https://github.com/owner/{sid}',
+             'updatedAt': 'now', 'body': ''} for sid in ('unknown-readme', 'readable-raw')]
+    monkeypatch.setattr(r.g, 'verify_admin', AsyncMock(return_value='actor'))
+    monkeypatch.setattr(r.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(r.g, 'protected_ids', AsyncMock(return_value={}))
+    monkeypatch.setattr(r, 'inventory', AsyncMock(return_value=rows))
+    monkeypatch.setattr(r, 'record_failure', AsyncMock())
+    monkeypatch.setattr(r, 'derive', AsyncMock(return_value={}))
+    fetch = AsyncMock(side_effect=[r.RepairFailure(code, 'limited'), r.Evidence('source', 'github_raw_readme', True)])
+    monkeypatch.setattr(r, 'acquire_evidence', fetch)
+    await r.cycle(Pool(), 'actor', tmp_path)
+    state = json.loads((tmp_path/'state.json').read_text())
+    assert fetch.await_count == expected_fetches
+    assert bool(state.get('sourcePauses', {}).get('github.com')) is (code == 'SOURCE_RATE_LIMITED')
+    first = state['items']['unknown-readme']
+    assert first['status'] == 'retry_wait'
+    assert first['nextAttemptAt'] == pytest.approx(first['startedAt'] + 3600, abs=1)
+    assert r.retry_state(r.RepairFailure(code, 'limited'), 5, 1000)['status'] == 'blocked'
+    assert state['modelCalls'] == 0
 
 
 async def test_readme_path_fallback_and_traversal_are_bounded(monkeypatch: Any) -> None:

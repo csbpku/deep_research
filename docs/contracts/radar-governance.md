@@ -91,7 +91,10 @@ GitHub repository evidence prefers the README API. API rate limiting cools that
 API for one hour within the running worker while allowing same-repository public
 raw `HEAD/README.md`, `README.rst`, or `README` reads. Both hosts use bounded safe
 fetches without redirects; raw HTML/error pages and identity mismatches are
-rejected. A missing conventional path does not prove there is no README. Only a
+rejected. An unresolved path during API cooldown records
+`SOURCE_GITHUB_API_RATE_LIMITED` for that repository with a one-hour retry delay;
+it does not pause other repositories' raw reads. Actual raw-host rate limiting
+still pauses the source. A missing conventional path does not prove there is no README. Only a
 fully read source of at most 18,000 characters can prove completeness; larger
 sources remain limited evidence. No source body is persisted by this fallback.
 
