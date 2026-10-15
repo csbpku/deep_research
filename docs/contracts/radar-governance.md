@@ -122,7 +122,9 @@ fetch failures, excerpts and missing quotations do not block deletion. Missing,
 invalid and legacy scores remain reviewable; fetch failure alone is not noise.
 Existing valid scores are preserved rather than replaced to force eligibility.
 
-New sync skips confirmed noise before inserting into `summaries`. A dismissed
+New sync skips unreferenced confirmed noise before inserting into `summaries`.
+Research/chat URL references and pinned repositories that predate a summary also
+protect that discovery. A dismissed
 `NOISE_NOT_STORED` receipt keeps only source, URL, publication identity, scoring
 version and policy; no body, brief or dimensional score is stored. The same
 publication/version is skipped before fetch/model work. A new identity or scoring

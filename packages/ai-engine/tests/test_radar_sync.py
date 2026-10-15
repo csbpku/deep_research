@@ -89,6 +89,8 @@ class _Connection:
         yield
 
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
+        if not isinstance(sql, str):
+            sql = sql.as_string()
         self.executions.append((sql, params))
         if 'FROM "radar_sources" WHERE "enabled"' in sql:
             return _Cursor(rows=self.sources)
@@ -506,6 +508,29 @@ async def test_sync_scores_limited_abstract_instead_of_default() -> None:
     )
     assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
     assert any('NOISE_NOT_STORED' in sql for sql, _ in pool.connection_value.executions)
+
+
+async def test_new_noise_with_prior_research_url_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_engine.radar import sync_runner
+    from unittest.mock import AsyncMock
+
+    pool = _Pool([_source()])
+    monkeypatch.setattr(sync_runner, '_noise_has_references', AsyncMock(return_value=True))
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate()]
+
+    async def score_noise(title: str, content: str, **kwargs: Any) -> Any:
+        return compute_score(dict.fromkeys(
+            ('信息增量', '分析深度', '可行动性', '事实可信度', '时效性', '表达质量', '综合信号'), 1))
+
+    result = await run_radar_sync(pool, triggered_by='admin', adapter=FakeAdapter(),
+                                  fetchers={'rss': fetcher}, document_fetcher=_safe_fetch,
+                                  distilled_scorer=score_noise)
+    assert result.runs[0].total_new == 1
+    assert result.runs[0].skipped_distilled_noise == 0
+    assert not any(sql.startswith('INSERT INTO radar_sync_diagnostics') and 'NOISE_NOT_STORED' in sql
+                   for sql, _ in pool.connection_value.executions)
 
 
 async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() -> None:

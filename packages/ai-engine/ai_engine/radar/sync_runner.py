@@ -880,6 +880,16 @@ async def _retry_existing_summary_content(
     return True
 
 
+async def _noise_has_references(pool: Any, canonical_url: str) -> bool:
+    # Research/chat URLs and manually pinned repositories can predate a radar
+    # row. Preserve those discoveries even if their initial score is noise.
+    from ai_engine.radar.governance import protected_ids
+
+    async with pool.connection() as conn:
+        return bool(await protected_ids(conn, [{'id': str(uuid.uuid5(uuid.NAMESPACE_URL, canonical_url)),
+                                                 'canonicalUrl': canonical_url}]))
+
+
 async def _record_sync_diagnostic(
     pool: Any,
     *,
@@ -2084,7 +2094,8 @@ async def _run_source(
                             extra_tags_list.append("github_content_pending")
                     # Confirmed noise never enters summaries. A minimal identity
                     # receipt prevents rediscovery from paying for the same work.
-                    if distilled_result is not None and confirmed_noise(distilled_result.to_dict()):
+                    if (distilled_result is not None and confirmed_noise(distilled_result.to_dict())
+                            and not await _noise_has_references(pool, persisted_candidate_url)):
                         await record_noise_disposition(pool, source.id, run_id, raw_candidate,
                                                        persisted_candidate_url)
                         total_skipped += 1
