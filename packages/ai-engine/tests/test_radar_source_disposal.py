@@ -123,6 +123,9 @@ def test_timeout_requires_repeated_observations():
     assert not source_disposal_eligible(row, proof, incomplete=True, now=1010)
     proof["checks"] = [{"errorCode": "URL_FETCH_TIMEOUT", "checkedAt": stamp} for stamp in (900, 1000)]
     assert source_disposal_eligible(row, proof, incomplete=True, now=1010)
+    proof.pop("checks")
+    proof["prior"].update(errorCode="URL_FETCH_TIMEOUT", attempts=3)
+    assert source_disposal_eligible(row, proof, incomplete=True, now=1010)
 
 
 def test_repeated_source_failures_can_be_disposed_during_backoff():
@@ -130,9 +133,6 @@ def test_repeated_source_failures_can_be_disposed_during_backoff():
     proof["prior"].update(status="retry_wait", attempts=2)
     assert not source_disposal_eligible(row, proof, incomplete=True, now=1010)
     proof["prior"]["attempts"] = 3
-    assert source_disposal_eligible(row, proof, incomplete=True, now=1010)
-    proof.pop("checks")
-    proof["prior"].update(errorCode="URL_FETCH_TIMEOUT", attempts=3)
     assert source_disposal_eligible(row, proof, incomplete=True, now=1010)
 
 
