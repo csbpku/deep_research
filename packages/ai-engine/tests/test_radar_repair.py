@@ -96,6 +96,20 @@ async def test_summary_requires_grounded_quote_and_preserves_valid_score() -> No
                                                         'judgement': '判断' * 30, 'evidence_quote': 'invented quote'}))
     with pytest.raises(r.RepairFailure, match='MODEL_SUMMARY_INVALID'):
         await r.derive(row, r.Evidence(source, 'article', True), call)
+    call.return_value = SimpleNamespace(text=json.dumps({
+        'summary': '摘要' * 100, 'judgement': '判断' * 30,
+        'evidence_quote': 'Precise source evidence and implementation limitations.',
+    }))
+    layout_source = source.replace('source evidence', 'source\n    evidence')
+    assert 'interpretation' in await r.derive(row, r.Evidence(layout_source, 'article', True), call)
+    call.return_value = SimpleNamespace(text=json.dumps({
+        'summary': '短', 'judgement': '短', 'evidence_quote': 'invented quote',
+    }))
+    with pytest.raises(r.RepairFailure) as caught:
+        await r.derive(row, r.Evidence(source, 'article', True), call)
+    assert '摘要字符数1' in caught.value.detail
+    assert '判断字符数1' in caught.value.detail
+    assert '无法逐字匹配原文' in caught.value.detail
 
 
 async def test_model_error_never_persists_fake_scores() -> None:

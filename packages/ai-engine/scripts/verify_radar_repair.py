@@ -89,6 +89,7 @@ async def verify(database: str) -> dict[str, bool]:
                 pins = await r.g.protected_ids(conn, [{'id': sid, 'canonicalUrl': 'https://github.com/' + owner_repo}])
                 assert 'radar_tracked_repos' in pins[sid]
                 checks['manual_repo_pin_protection'] = True
+                await conn.execute('DELETE FROM radar_tracked_repos WHERE "ownerRepo"=%s', (owner_repo,))
                 original_audit = r.audit
 
                 async def fail_audit(*args: Any, **kwargs: Any) -> None:

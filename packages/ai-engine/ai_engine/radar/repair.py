@@ -245,11 +245,20 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
             parsed = _parse_llm_response(result.text)
             summary, judgement, quote = (str(parsed.get(k) or '').strip()
                                          for k in ('summary', 'judgement', 'evidence_quote'))
-            if not (80 <= len(summary) <= 1200 and 30 <= len(judgement) <= 500
-                    and len(quote) >= 12 and quote in evidence.text):
-                raise ValueError('ungrounded or incomplete summary')
         except (ValueError, TypeError, KeyError):
-            raise RepairFailure('MODEL_SUMMARY_INVALID', '摘要长度/结构/原文引文校验失败') from None
+            raise RepairFailure('MODEL_SUMMARY_INVALID', '摘要JSON结构不可解析') from None
+        invalid = []
+        if not 80 <= len(summary) <= 1200:
+            invalid.append(f'摘要字符数{len(summary)}，要求80–1200')
+        if not 30 <= len(judgement) <= 500:
+            invalid.append(f'判断字符数{len(judgement)}，要求30–500')
+        # Models may collapse layout whitespace in an otherwise verbatim quote.
+        # Keep every non-whitespace character; never accept paraphrased evidence.
+        normalized_quote = re.sub(r'\s+', ' ', quote)
+        if len(normalized_quote) < 12 or normalized_quote not in re.sub(r'\s+', ' ', evidence.text):
+            invalid.append('引文不足12字符或无法逐字匹配原文（仅忽略空白布局）')
+        if invalid:
+            raise RepairFailure('MODEL_SUMMARY_INVALID', '；'.join(invalid))
         changes['interpretation'] = judgement
         if ('external_reading' in (row.get('tags') or []) or len(str(row.get('body') or '')) < 80
                 or str(row.get('body') or '').strip() == str(row.get('title') or '').strip()):
