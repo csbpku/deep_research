@@ -217,7 +217,7 @@ async def github_readme_evidence(owner_repo: str, canonical_url: str) -> Evidenc
                 text = raw.decode('utf-8')
             except (ValueError, KeyError, TypeError):
                 raise RepairFailure('SOURCE_INVALID_README', 'README响应格式不可解析') from None
-            if not _usable_content(text, source_type='github', url=canonical_url):
+            if not usable_verified_markdown(text, source_type='github', url=canonical_url):
                 raise RepairFailure('SOURCE_INSUFFICIENT', 'README正文为空、过短或属于错误/登录页面')
             return Evidence(text[:18000], 'github_readme', len(text) <= 18000)
         elif doc.status not in (403, 404):
@@ -238,7 +238,7 @@ async def github_readme_evidence(owner_repo: str, canonical_url: str) -> Evidenc
             text = doc.content.decode('utf-8')
         except UnicodeDecodeError:
             raise RepairFailure('SOURCE_INVALID_README', '原始README不是可读取的UTF-8文本') from None
-        if not _usable_content(text, source_type='github', url=canonical_url):
+        if not usable_verified_markdown(text, source_type='github', url=canonical_url):
             raise RepairFailure('SOURCE_INSUFFICIENT', '原始README正文为空、过短或属于错误/登录页面')
         return Evidence(text[:18000], 'github_raw_readme', len(text) <= 18000)
     if api_limited:
@@ -246,6 +246,53 @@ async def github_readme_evidence(owner_repo: str, canonical_url: str) -> Evidenc
         # available for other repositories and must not inherit an API pause.
         raise RepairFailure('SOURCE_GITHUB_API_RATE_LIMITED', 'GitHub API限流，常规README路径未找到，一小时后重试')
     raise RepairFailure('SOURCE_README_PATH_UNVERIFIED', '未找到常规README路径，不能证明仓库无正文')
+
+
+def usable_verified_markdown(text: str, *, source_type: str, url: str) -> bool:
+    """Check a verified document without mistaking an error example for a shell.
+
+    Only callers that have checked the exact API/raw URL and document envelope
+    may use this. The original evidence is never rewritten. Generic HTML and
+    cached content keep the stricter page heuristics.
+    """
+    if re.match(r'\s*(?:#{1,6}\s*)?(?:access denied\b|<!doctype\s+html\b|<html\b|<body\b)', text, re.I):
+        return False
+    heuristic_text = re.sub(r'access denied', '', text, flags=re.I)
+    return _usable_content(heuristic_text, source_type=source_type, url=url)
+
+
+async def devto_article_evidence(row: dict[str, Any]) -> Evidence:
+    url = str(row['canonicalUrl'])
+    parts = urlsplit(url)
+    if (parts.scheme != 'https' or parts.netloc != 'dev.to' or parts.query or parts.fragment
+            or not re.fullmatch(r'/[\w-]+/[\w-]+', parts.path)):
+        raise RepairFailure('SOURCE_UNSAFE_URL', 'Dev.to文章身份不合法', retryable=False)
+    api_url = 'https://dev.to/api/articles' + parts.path
+    doc = await safe_fetch(api_url, allowed_hosts=('dev.to',), max_bytes=1_000_000,
+                           timeout=10, max_redirects=0)
+    if doc.status == 429:
+        raise RepairFailure('SOURCE_RATE_LIMITED', 'Dev.to文章API限流，一小时后重试')
+    if doc.status != 200:
+        raise RepairFailure(f'SOURCE_HTTP_{doc.status}', f'Dev.to文章API返回HTTP {doc.status}')
+    if doc.url != api_url or doc.headers.get('content-type', '').split(';')[0].strip() != 'application/json':
+        raise RepairFailure('SOURCE_IDENTITY_MISMATCH', 'Dev.to文章API来源或类型不匹配', retryable=False)
+    try:
+        payload = json.loads(doc.content)
+    except (ValueError, UnicodeDecodeError):
+        raise RepairFailure('SOURCE_INVALID_ARTICLE', 'Dev.to文章API响应不可解析') from None
+    if not isinstance(payload, dict):
+        raise RepairFailure('SOURCE_INVALID_ARTICLE', 'Dev.to文章API未返回文章对象')
+    def title_key(value: Any) -> str:
+        return re.sub(r'\s+', ' ', str(value or '')).strip().casefold()
+    if (type(payload.get('id')) is not int or payload['id'] <= 0
+            or payload.get('url') != url or payload.get('canonical_url') != url
+            or not title_key(row.get('title')) or title_key(payload.get('title')) != title_key(row['title'])):
+        raise RepairFailure('SOURCE_IDENTITY_MISMATCH', 'Dev.to文章URL、标题或出版身份不匹配', retryable=False)
+    text = payload.get('body_markdown')
+    if not isinstance(text, str) or not usable_verified_markdown(text, source_type='devto', url=url):
+        raise RepairFailure('SOURCE_INSUFFICIENT', 'Dev.to文章API正文为空、过短或属于错误页面')
+    # A syndication link, truncated response or excerpt never proves deletion eligibility.
+    return Evidence(text[:18000], 'devto_article_api', len(text) <= 18000)
 
 
 async def acquire_evidence(row: dict[str, Any]) -> Evidence:
@@ -264,6 +311,8 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     allowed = (host, host[4:] if host.startswith('www.') else 'www.' + host)
     if host == 'github.com' and re.fullmatch(r'/[\w.-]+/[\w.-]+/?', parts.path):
         return await github_readme_evidence(parts.path.strip('/'), url)
+    elif host == 'dev.to':
+        return await devto_article_evidence(row)
     else:
         doc = await safe_fetch(url, allowed_hosts=allowed, max_bytes=2_000_000,
                                timeout=25, max_redirects=3)

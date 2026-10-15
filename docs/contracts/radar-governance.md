@@ -104,6 +104,16 @@ still pauses the source. A missing conventional path does not prove there is no 
 fully read source of at most 18,000 characters can prove completeness; larger
 sources remain limited evidence. No source body is persisted by this fallback.
 
+Dev.to articles use their official article API with no redirects. The response
+must be JSON from the exact API URL, with a positive article ID and matching
+article URL, canonical URL and title. Only its `body_markdown` is evidence;
+missing/short bodies remain unresolved. A complete body of at most 18,000
+characters may prove completeness, while a longer body is limited evidence.
+Verified API/raw Markdown may contain an interior `access denied` error example
+without being mistaken for a fetch failure. Leading error pages, HTML shells and
+other challenge markers are still rejected; generic HTML and cached content keep
+their existing checks. This exception never rewrites the evidence text.
+
 `--delete-confirmed-noise` requires complete source proof, a current valid noise
 score and its verbatim weak-point evidence, plus explicit user authorization for
 production deletion. Production leaves deletion disabled by default; after that

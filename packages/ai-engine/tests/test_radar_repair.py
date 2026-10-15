@@ -192,6 +192,73 @@ async def test_github_api_readme_preserves_size_proof(monkeypatch: Any) -> None:
         await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
 
 
+async def test_verified_readme_allows_interior_error_example_without_changing_evidence(monkeypatch: Any) -> None:
+    monkeypatch.setattr(r, '_github_api_retry_at', 0)
+    text = '# Local execution\n' + ('A technical tool documents permissions and isolation. ' * 20) + '\nExample: access denied'
+    assert not r._usable_content(text, source_type='github', url='https://github.com/owner/repo')
+    payload = {'encoding': 'base64', 'content': base64.b64encode(text.encode()).decode(), 'size': len(text.encode())}
+    async def fetch(url: str, **kwargs: Any) -> Any:
+        return SimpleNamespace(status=200, url=url, headers={}, content=json.dumps(payload).encode())
+    monkeypatch.setattr(r, 'safe_fetch', AsyncMock(side_effect=fetch))
+    evidence = await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+    assert evidence.text == text and evidence.complete
+    for bad in ('Access denied\n' + text, '<html>' + text, '# Access Denied\n' + text,
+                'Enable javascript and cookies\n' + text):
+        assert not r.usable_verified_markdown(bad, source_type='github', url='https://github.com/owner/repo')
+
+
+@pytest.mark.parametrize('problem', [None, 'long', 'title', 'url', 'canonical', 'id', 'mime', 'redirect',
+                                    'short', 'shell', 'json', 'array', 'status', 'rate'])
+async def test_devto_api_requires_matching_publication_and_complete_body(monkeypatch: Any, problem: str | None) -> None:
+    url = 'https://dev.to/author/technical-guide-1234'
+    text = '# Local execution\n' + ('This guide documents API permissions and implementation limits. ' * 20)
+    if problem == 'long':
+        text *= 30
+    elif problem == 'short':
+        text = 'Only a title'
+    elif problem == 'shell':
+        text = 'Access denied\n' + text
+    text += '\nWhen access denied occurs, check the configured permissions.'
+    payload = {'id': 1234, 'url': url, 'canonical_url': url, 'title': 'Technical guide', 'body_markdown': text}
+    if problem in {'title', 'url', 'canonical', 'id'}:
+        key = {'canonical': 'canonical_url'}.get(problem, problem)
+        payload[key] = True if problem == 'id' else 'different publication'
+    doc = SimpleNamespace(status=429 if problem == 'rate' else 503 if problem == 'status' else 200,
+                          url='https://dev.to/api/articles/another/guide' if problem == 'redirect'
+                          else 'https://dev.to/api/articles/author/technical-guide-1234',
+                          headers={'content-type': 'text/html' if problem == 'mime' else 'application/json; charset=utf-8'},
+                          content=b'invalid json' if problem == 'json' else
+                          json.dumps([] if problem == 'array' else payload).encode())
+    fetch = AsyncMock(return_value=doc)
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    row = {**scored('skim'), 'title': 'Technical guide', 'canonicalUrl': url, 'sourceType': 'devto'}
+    if problem in (None, 'long'):
+        evidence = await r.acquire_evidence(row)
+        assert evidence.kind == 'devto_article_api' and evidence.text == text[:18000]
+        assert evidence.complete is (problem is None)
+        assert not r.noise_grounded(scored(), r.Evidence(evidence.text, evidence.kind, False))
+    else:
+        with pytest.raises(r.RepairFailure) as error:
+            await r.acquire_evidence(row)
+        expected = ('SOURCE_INSUFFICIENT' if problem in {'short', 'shell'} else
+                    'SOURCE_INVALID_ARTICLE' if problem in {'json', 'array'} else
+                    'SOURCE_HTTP_503' if problem == 'status' else
+                    'SOURCE_RATE_LIMITED' if problem == 'rate' else 'SOURCE_IDENTITY_MISMATCH')
+        assert error.value.code == expected
+    fetch.assert_awaited_once_with('https://dev.to/api/articles/author/technical-guide-1234',
+                                  allowed_hosts=('dev.to',), max_bytes=1_000_000, timeout=10, max_redirects=0)
+
+
+@pytest.mark.parametrize('url', ['http://dev.to/author/slug', 'https://dev.to:443/author/slug',
+                               'https://dev.to/author/slug?other=1', 'https://dev.to/author/../slug'])
+async def test_devto_unsafe_identity_is_rejected_without_fetch(monkeypatch: Any, url: str) -> None:
+    fetch = AsyncMock()
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    with pytest.raises(r.RepairFailure, match='SOURCE_UNSAFE_URL'):
+        await r.devto_article_evidence({**scored(), 'canonicalUrl': url})
+    fetch.assert_not_awaited()
+
+
 async def test_github_api_cooldown_uses_same_repo_raw_readme(monkeypatch: Any) -> None:
     monkeypatch.setattr(r, '_github_api_retry_at', 0)
     monkeypatch.setattr(r.time, 'time', lambda: 1000)
