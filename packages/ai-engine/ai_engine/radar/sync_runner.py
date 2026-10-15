@@ -26,7 +26,9 @@ from urllib.parse import urlsplit
 
 from ai_engine.radar.diagnostic_policy import (
     close_scored_pending, deleted_publication, deterministic_retry_blocked, retire_duplicate_pending,
+    record_noise_disposition, skipped_noise_publication,
 )
+from ai_engine.radar.noise_policy import confirmed_noise
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -1738,6 +1740,12 @@ async def _run_source(
                         skipped_rule_noise += 1
                         return
 
+                    if await skipped_noise_publication(pool, source.id, normalized.canonical_url,
+                                                       raw_candidate.title, raw_candidate.published_at):
+                        total_skipped += 1
+                        skipped_distilled_noise += 1
+                        return
+
                     # Heuristic score (for admin-queue sort only) + noise-pattern filter.
                     score = score_candidate(normalized, source_type=source.source_type)
                     filter_result = filter_candidate(normalized, score, source.source_type)
@@ -2074,9 +2082,17 @@ async def _run_source(
                         extra_tags_list.append("content_pending")
                         if source.source_type in {"github", "github_trending"}:
                             extra_tags_list.append("github_content_pending")
-                    # Persist every scored result, including tier=noise. The
-                    # public radar/search surfaces apply the quality gate;
-                    # Admin governance keeps the diagnostic for review.
+                    # Confirmed noise never enters summaries. A minimal identity
+                    # receipt prevents rediscovery from paying for the same work.
+                    if distilled_result is not None and confirmed_noise(distilled_result.to_dict()):
+                        await record_noise_disposition(pool, source.id, run_id, raw_candidate,
+                                                       persisted_candidate_url)
+                        total_skipped += 1
+                        skipped_distilled_noise += 1
+                        return
+
+                    # Unassessable/default results remain unresolved candidates;
+                    # source failures and zero dimensions do not establish noise.
                     if (
                         distilled_result is not None
                         and brief is not None

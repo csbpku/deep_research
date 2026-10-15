@@ -104,7 +104,7 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `RADAR_ENRICHMENT_ITEM_TIMEOUT_SECONDS` | float | enrichment 单条外层超时；`0` 交给 durable worker/Zread CLI 自己控制，正数仅用于显式有界修复 | `0` |
 | `RADAR_RUN_LEASE_SECONDS` | int | 来源级 run 租约；候选完成续期，过期行由 cron/Admin 入口回收 | `900` |
 | `RADAR_GOVERNANCE_STATE_DIR` | path | Admin 治理备份校验和批次目录；独立 repair Compose 将它设为 `RADAR_REPAIR_DIR`，不能指向未验证的备份 | `/data/zread/governance` |
-| `RADAR_REPAIR_DELETE_CONFIRMED_NOISE` | enum: 0/1 | 持久补分/摘要 worker 的物理删除开关；设为 `1` 前须有明确生产删除授权，仍逐条检查完整原文、当前有效噪声证据和引用保护 | `0` |
+| `RADAR_REPAIR_DELETE_CONFIRMED_NOISE` | enum: 0/1 | 持久补分/摘要 worker 的物理删除开关；设为 `1` 前须有明确生产删除授权，逐条检查当前有效噪声评分和引用保护，不要求重抓完整原文 | `0` |
 | `RADAR_GITHUB_ENRICHMENT_RETRY_SECONDS` | int | GitHub/Zread 失败后的重试退避；Admin 强制刷新可绕过延迟 | `7200` |
 | `RADAR_RENDER_REVIEW_ENABLED` | bool | 是否运行可选的 Chromium 页面审核；生产 registry 默认强制关闭，正文质量和内容审核不受影响 | `0`（生产） |
 | `RADAR_RENDER_REVIEW_BASE_URL` | URL | 渲染审核打开的 Web 基地址 | `http://127.0.0.1:3000` |

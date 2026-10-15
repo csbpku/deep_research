@@ -6,6 +6,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
+from ai_engine.radar.distilled_scorer import DISTILLED_VERSION
+from ai_engine.radar.noise_policy import NOISE_POLICY
+
 DETERMINISTIC_ERRORS = ('TOO_LARGE', 'URL_FETCH_TOO_LARGE', 'SOURCE_NOT_FOUND')
 
 
@@ -29,6 +34,47 @@ async def deleted_publication(pool: Any, source_id: str, url: str, title: str, p
             (url, str(source_id), publication_identity(title, published_at)),
         )).fetchone()
     return row is not None
+
+
+async def skipped_noise_publication(pool: Any, source_id: str, url: str, title: str, published_at: Any) -> bool:
+    async with pool.connection() as conn:
+        row = await (await conn.execute(
+            "SELECT 1 FROM radar_sync_diagnostics WHERE \"sourceId\"=%s AND \"canonicalUrl\"=%s "
+            "AND \"reasonCode\"='NOISE_NOT_STORED' AND status='dismissed' "
+            "AND \"distilledScore\"->>'version'=%s AND \"distilledScore\"->>'policy'=%s "
+            "AND \"distilledScore\"->>'publicationIdentity'=%s LIMIT 1",
+            (source_id, url, DISTILLED_VERSION, NOISE_POLICY, publication_identity(title, published_at)),
+        )).fetchone()
+    return row is not None
+
+
+async def record_noise_disposition(pool: Any, source_id: str, run_id: str, candidate: Any, url: str) -> None:
+    """Only an identity tombstone, never a candidate, body, score or current task.
+
+    Called exclusively after confirmed_noise. Do not swallow a DB error: the
+    source run must report failure if its disposition could not be recorded.
+    """
+    from uuid import uuid4
+
+    identity = publication_identity(candidate.title, candidate.published_at)
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                               (f'noise-disposition:{source_id}:{url}:{identity}',))
+            await conn.execute(
+                'INSERT INTO radar_sync_diagnostics '
+                '(id,"sourceId","runId",kind,status,title,url,"canonicalUrl",body,"publishedAt",'
+                '"reasonCode","reasonMessage","distilledScore","createdAt","updatedAt") '
+                "SELECT %s,%s,%s,'filtered','dismissed',%s,%s,%s,'',%s,'NOISE_NOT_STORED',%s,%s,now(),now() "
+                'WHERE NOT EXISTS (SELECT 1 FROM radar_sync_diagnostics WHERE "sourceId"=%s '
+                'AND "canonicalUrl"=%s AND "reasonCode"=\'NOISE_NOT_STORED\' AND status=\'dismissed\' '
+                'AND "distilledScore"=%s)',
+                (str(uuid4()), source_id, run_id, candidate.title[:300], candidate.url[:2048], url,
+                 candidate.published_at, '当前有效评分为噪声；按库主规则不入库',
+                 Jsonb({'version': DISTILLED_VERSION, 'policy': NOISE_POLICY, 'publicationIdentity': identity}),
+                 source_id, url,
+                 Jsonb({'version': DISTILLED_VERSION, 'policy': NOISE_POLICY, 'publicationIdentity': identity})),
+            )
 
 
 async def retire_duplicate_pending(conn: Any, source_id: str, url: str, reason: str,

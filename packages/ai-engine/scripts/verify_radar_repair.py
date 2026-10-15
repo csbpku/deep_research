@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,9 +19,11 @@ from psycopg import AsyncConnection, conninfo
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from ai_engine.radar import repair as r
+from ai_engine.radar import governance as g, repair as r
 from ai_engine.radar.diagnostic_policy import deleted_publication, deterministic_retry_blocked
 from ai_engine.radar.distilled_scorer import DISTILLED_VERSION
+from ai_engine.radar.noise_policy import NOISE_POLICY
+from ai_engine.radar.score_validity import ALIASES
 
 
 async def verify(database: str) -> dict[str, bool]:
@@ -31,7 +34,7 @@ async def verify(database: str) -> dict[str, bool]:
 
     class Pool:
         @asynccontextmanager
-        async def connection(self):
+        async def connection(self) -> AsyncIterator[Any]:
             yield conn
 
     pool = Pool()
@@ -46,7 +49,8 @@ async def verify(database: str) -> dict[str, bool]:
             sid, did, other_did = str(uuid4()), str(uuid4()), str(uuid4())
             url = 'https://example.org/governance-fixture/' + sid
             score = {'isDefault': False, 'version': DISTILLED_VERSION, 'tier': 'noise',
-                     'dimensions': dict.fromkeys('abcdefg', 1), 'weakPoint': 'No implementation',
+                     'dimensions': dict.fromkeys([a for a, _ in ALIASES], 1), 'total': 20,
+                     'profile': 'tech_blog', 'weakPoint': 'No implementation',
                      'weakPointEvidence': 'only a landing page'}
             row = await (await conn.execute('INSERT INTO summaries '
                 '(id,title,body,url,"canonicalUrl",source,"summaryDate","updatedAt","distilledScore",'
@@ -95,7 +99,7 @@ async def verify(database: str) -> dict[str, bool]:
                 owner_repo = 'governance-fixture/' + sid
                 await conn.execute('INSERT INTO radar_tracked_repos (id,"ownerRepo",status) VALUES (%s,%s,\'pinned\')',
                                    (str(uuid4()), owner_repo))
-                pins = await r.g.protected_ids(conn, [{'id': sid, 'canonicalUrl': 'https://github.com/' + owner_repo}])
+                pins = await g.protected_ids(conn, [{'id': sid, 'canonicalUrl': 'https://github.com/' + owner_repo}])
                 assert 'radar_tracked_repos' in pins[sid]
                 checks['manual_repo_pin_protection'] = True
                 await conn.execute('DELETE FROM radar_tracked_repos WHERE "ownerRepo"=%s', (owner_repo,))
@@ -125,12 +129,12 @@ async def verify(database: str) -> dict[str, bool]:
                 assert not await deleted_publication(pool, str(seed['sourceId']), url, 'new publication', None)
                 checks['delete_same_evidence_only_and_tombstone'] = True
                 archive = directory / 'deleted' / f'{sid}-{run}.json'
-                original_verify = r.g.verify_backup
-                r.g.verify_backup = lambda: None  # Database name guard above; this script uses the verified restore.
+                original_verify = g.verify_backup
+                setattr(g, 'verify_backup', lambda: None)  # Database name guard above; this script uses the verified restore.
                 try:
                     assert await r.restore_deleted(pool, actor, directory, archive) == sid
                     restored = await (await conn.execute('SELECT * FROM summaries WHERE id=%s', (sid,))).fetchone()
-                    assert restored and r.g.serial(restored) == r.g.serial({k: v for k, v in row.items() if k != 'sourceId'})
+                    assert restored and g.serial(restored) == g.serial({k: v for k, v in row.items() if k != 'sourceId'})
                     assert await (await conn.execute('SELECT id FROM radar_sync_diagnostics WHERE id=%s', (did,))).fetchone()
                     assert not await deleted_publication(pool, str(seed['sourceId']), url, row['title'], None)
                     try:
@@ -140,6 +144,44 @@ async def verify(database: str) -> dict[str, bool]:
                     else:
                         raise AssertionError('restore overwrote existing row')
                     checks['restore_exact_row_diagnostics_and_conflict'] = True
+                    # The standing owner policy permits unreadable/partial-source
+                    # noise, with the same transaction/reference/restore guards.
+                    await conn.execute('INSERT INTO user_bookmarks (id,"userId","targetType","targetId") '
+                                       "VALUES (%s,%s,'summary',%s)", (str(uuid4()), actor, sid))
+                    assert await r.mutate(pool, actor, str(uuid4()), row, {}, None, delete=True,
+                                          directory=directory, deletion_policy=NOISE_POLICY) == 'protected'
+                    await conn.execute('DELETE FROM user_bookmarks WHERE "targetId"=%s', (sid,))
+                    r.audit = fail_audit
+                    try:
+                        try:
+                            await r.mutate(pool, actor, str(uuid4()), row, {}, None, delete=True,
+                                           directory=directory, deletion_policy=NOISE_POLICY)
+                        except RuntimeError:
+                            pass
+                        assert await (await conn.execute('SELECT id FROM summaries WHERE id=%s', (sid,))).fetchone()
+                    finally:
+                        r.audit = original_audit
+                    no_source_run = str(uuid4())
+                    assert await r.mutate(pool, actor, no_source_run, row, {}, None, delete=True,
+                                          directory=directory, deletion_policy=NOISE_POLICY) == 'deleted'
+                    assert await r.mutate(pool, actor, no_source_run, row, {}, None, delete=True,
+                                          directory=directory, deletion_policy=NOISE_POLICY) == 'missing'
+                    no_source_archive = directory / 'deleted' / f'{sid}-{no_source_run}.json'
+                    assert await r.restore_deleted(pool, actor, directory, no_source_archive) == sid
+                    checks['scored_noise_no_source_atomic_protected_idempotent_restore'] = True
+                    from ai_engine.radar.diagnostic_policy import record_noise_disposition, skipped_noise_publication
+                    from ai_engine.radar.models import RadarCandidate
+                    candidate = RadarCandidate(title='minimal noise receipt', url=url + '/not-stored')
+                    for _ in range(2):
+                        await record_noise_disposition(pool, str(seed['sourceId']), str(seed['id']), candidate, candidate.url)
+                    assert await skipped_noise_publication(pool, str(seed['sourceId']), candidate.url, candidate.title, None)
+                    assert not await skipped_noise_publication(pool, str(seed['sourceId']), candidate.url, 'different article', None)
+                    minimal = await (await conn.execute('SELECT * FROM radar_sync_diagnostics WHERE "canonicalUrl"=%s',
+                                                       (candidate.url,))).fetchall()
+                    assert len(minimal) == 1 and minimal[0]['status'] == 'dismissed'
+                    assert minimal[0]['body'] == '' and minimal[0]['originalMarkdown'] is None
+                    assert 'dimensions' not in minimal[0]['distilledScore']
+                    checks['noise_identity_receipt_no_content_idempotent'] = True
                     await r.mutate(pool, actor, str(uuid4()), row, {'body': 'repaired body'},
                                    evidence, delete=False, directory=directory)
                     repair_audit = await (await conn.execute(
@@ -166,7 +208,9 @@ async def verify(database: str) -> dict[str, bool]:
                     assert failures and failures['n'] == 1
                     checks['failure_outbox_idempotence'] = True
                     incomplete = await (await conn.execute(
-                        'UPDATE summaries SET interpretation=NULL,"updatedAt"=clock_timestamp() WHERE id=%s RETURNING *',
+                        'UPDATE summaries SET interpretation=NULL,"distilledTier"=\'skim\','
+                        '"distilledScore"=jsonb_set("distilledScore",\'{tier}\',\'"skim"\'),'
+                        '"updatedAt"=clock_timestamp() WHERE id=%s RETURNING *',
                         (sid,))).fetchone()
                     assert incomplete
                     incomplete = {**dict(incomplete), 'sourceId': seed['sourceId']}
@@ -180,7 +224,7 @@ async def verify(database: str) -> dict[str, bool]:
                     assert pending_summary and pending_summary['status'] == 'pending'
                     checks['partial_repair_keeps_unresolved_summary_diagnostic'] = True
                 finally:
-                    r.g.verify_backup = original_verify
+                    setattr(g, 'verify_backup', original_verify)
     finally:
         await conn.close()
     return checks

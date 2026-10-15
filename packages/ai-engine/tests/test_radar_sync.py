@@ -496,19 +496,16 @@ async def test_sync_scores_limited_abstract_instead_of_default() -> None:
         distilled_scorer=score_abstract,
     )
 
-    assert result.runs[0].total_new == 1
+    assert result.runs[0].total_new == 0
+    assert result.runs[0].skipped_distilled_noise == 1
     assert len(content_calls) == 1
     assert 300 <= len(content_calls[0]) < 1000
     assert not any(
         sql.startswith('INSERT INTO "radar_sync_diagnostics"') and 'PENDING_SCORE' in params
         for sql, params in pool.connection_value.executions
     )
-    insert_sql, insert_params = next(
-        item
-        for item in pool.connection_value.executions
-        if 'INSERT INTO "summaries"' in item[0]
-    )
-    assert "低置信度初筛" in insert_params[15]
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+    assert any('NOISE_NOT_STORED' in sql for sql, _ in pool.connection_value.executions)
 
 
 async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() -> None:
@@ -571,7 +568,9 @@ async def test_github_repo_metadata_fallback_still_gets_one_distilled_score() ->
         distilled_scorer=score_repo,
     )
 
-    assert result.runs[0].total_new == 1
+    assert result.runs[0].total_new == 0
+    assert result.runs[0].skipped_distilled_noise == 1
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
     assert len(calls) == 1
     assert "acme/agent" in calls[0][1]
     assert calls[0][2]["structured_signals"]["stars"] == 1200

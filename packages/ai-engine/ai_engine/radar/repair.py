@@ -34,6 +34,7 @@ from ai_engine.radar.distilled_scorer import (
     DISTILLED_VERSION, SYSTEM_PROMPT, _parse_llm_response, build_user_prompt, compute_score,
 )
 from ai_engine.radar.enrichment_contract import effective_tier, is_enrichment_ready
+from ai_engine.radar.noise_policy import NOISE_POLICY, confirmed_noise
 from ai_engine.radar.scoring_input import _arxiv_abstract_input, _usable_content
 from ai_engine.radar.sync_runner import _extract_article_content
 from ai_engine.scoring.scoring_profiles import profile_for_source_url
@@ -76,7 +77,7 @@ def needs_body_summary(row: dict[str, Any]) -> bool:
 
 def needs_summary(row: dict[str, Any]) -> bool:
     # Scored noise goes through deletion/protection/evidence disposition, not
-    # paid brief completion. A noise score still needs full proof before delete.
+    # paid brief completion. Deletion still checks score validity and references.
     if has_score(row) and row['distilledScore'].get('tier') == 'noise':
         return False
     return len(str(row.get('interpretation') or '').strip()) < 30 or needs_body_summary(row)
@@ -468,7 +469,8 @@ async def audit(conn: Any, actor: str, run: str, row: dict[str, Any], action: st
 
 
 async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: dict[str, Any],
-                 evidence: Evidence, *, delete: bool, directory: Path) -> str:
+                 evidence: Evidence | None, *, delete: bool, directory: Path,
+                 deletion_policy: str = 'complete_grounded_noise') -> str:
     async with pool.connection() as conn:
         async with conn.transaction():
             actor = await g.verify_admin(conn, actor)
@@ -486,8 +488,11 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     or any(g.serial(current.get(k)) != g.serial(row.get(k)) for k in snapshot_fields)):
                 raise RepairFailure('STATE_CHANGED', '处理期间条目已改变，本次写入跳过并重新评估')
             if delete:
-                if not noise_grounded(current, evidence):
-                    raise RepairFailure('NOISE_NOT_CONFIRMED', '完整性或噪声证据不满足删除条件', retryable=False)
+                eligible = (confirmed_noise(current.get('distilledScore')) if deletion_policy == NOISE_POLICY
+                            else deletion_policy == 'complete_grounded_noise' and evidence is not None
+                            and noise_grounded(current, evidence))
+                if not eligible or current.get('source') != 'daily':
+                    raise RepairFailure('NOISE_NOT_CONFIRMED', '当前有效噪声评分或自动雷达身份不满足删除条件', retryable=False)
                 if current.get('userNote') or current.get('sharedByUserId') or await g.protected_ids(conn, [current]):
                     return 'protected'
                 archive = directory / 'deleted' / (str(row['id']) + '-' + run + '.json')
@@ -498,8 +503,11 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                 g.save(archive, {'format': 1, 'summary': current, 'diagnostics': diagnostics})
                 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
                 await audit(conn, actor, run, row, 'radar_noise_delete', {
-                    'reason': 'complete_grounded_noise', 'archive': str(archive), 'archiveSha256': digest,
-                    'evidenceSha256': evidence.sha256, 'scoreVersion': current['distilledScore']['version'],
+                    'reason': deletion_policy, 'deletionPolicy': deletion_policy,
+                    'archive': str(archive), 'archiveSha256': digest,
+                    'evidenceSha256': evidence.sha256 if evidence else None,
+                    'sourceVerificationRequired': deletion_policy != NOISE_POLICY,
+                    'scoreVersion': current['distilledScore']['version'],
                     'canonicalUrl': current['canonicalUrl'], 'sourceId': str(row.get('sourceId') or ''),
                     'publicationIdentity': publication_identity(current['title'], current.get('publishedAt'))})
                 # Remove only this insertion's diagnostics; same URL/different run remains independent.
@@ -509,6 +517,8 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                 await conn.execute('DELETE FROM summaries WHERE id=%s', (row['id'],))
                 return 'deleted'
             if changes:
+                if evidence is None:
+                    raise ValueError('repair updates require source evidence')
                 allowed = set(g.SUMMARY_FIELDS) | {'body', 'originalMeta'}
                 if not set(changes) <= allowed:
                     raise ValueError('unsupported repair fields')
@@ -691,6 +701,26 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
             sid = str(row['id'])
             item = observe_row(state['items'].get(sid, {}), row)
             state['items'][sid] = item
+            # Policy changes do not reset source/model budgets. Dispose scored
+            # noise without another fetch or model call, including old terminals.
+            if (delete_noise and confirmed_noise(row.get('distilledScore'))
+                    and row.get('source') == 'daily' and item.get('noisePolicy') != NOISE_POLICY):
+                if processed >= limit:
+                    break
+                processed += 1
+                run = str(uuid4())
+                try:
+                    result = await mutate(pool, actor, run, row, {}, None, delete=True,
+                                          directory=directory, deletion_policy=NOISE_POLICY)
+                    item.update(status=result, noisePolicy=NOISE_POLICY, nextAttemptAt=None,
+                                reason='按当前有效噪声评分处置；原文读取不作为删除条件')
+                except Exception as exc:
+                    problem = failure(exc)
+                    item.update(status='blocked', noisePolicy=NOISE_POLICY,
+                                errorCode=problem.code, reason=problem.detail, nextAttemptAt=None)
+                    await record_failure(pool, actor, run, row, {**item, 'phase': 'delete'})
+                g.save(state_path, state)
+                continue
             if item.get('status') == 'running':
                 item.update(retry_state(RepairFailure('RECOVERY_INTERRUPTED', '前次进程已退出，调用结果未知，延迟重试'),
                                         int(item.get('attempts') or 1), time.time()))
@@ -766,11 +796,14 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
                             g.save(state_path, state)
                     if not has_score(row) or needs_summary(row):
                         raise RepairFailure('REPAIR_INCOMPLETE', '补救后仍缺有效评分或摘要/判断，未标记完成')
-                    if delete_noise and (row.get('distilledScore') or {}).get('tier') == 'noise':
-                        item['status'] = ('protected' if protected else
-                                          'ready_for_noise_check' if outcome == 'repaired' else 'not_deletable')
-                        item['reason'] = ('等待下一轮重新验证后删除' if outcome == 'repaired' else
-                                          '原文完整性或当前噪声逐字证据尚不满足删除条件，保留内容')
+                    if delete_noise and confirmed_noise(row.get('distilledScore')):
+                        item['status'] = await mutate(pool, actor, str(uuid4()), row, {}, None, delete=True,
+                                                      directory=directory, deletion_policy=NOISE_POLICY)
+                        item['noisePolicy'] = NOISE_POLICY
+                        item['reason'] = '按当前有效噪声评分处置；原文读取不作为删除条件'
+                    elif delete_noise and (row.get('distilledScore') or {}).get('tier') == 'noise':
+                        item['status'] = 'protected' if protected else 'not_deletable'
+                        item['reason'] = '评分未满足当前有效噪声门槛，保留复核'
                     else:
                         item['status'] = 'complete'
                 else:

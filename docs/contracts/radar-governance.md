@@ -77,12 +77,12 @@ scans automatic radar plus approved shares, including archived/rejected rows.
 The default 20-item limit is per cycle, not a limit on the inventory. It retains
 valid legacy scores, prioritizes missing scores and references, then fills missing
 summaries/judgements. Source text is transient; limited abstracts/excerpts may
-support a limited-evidence score but never prove deletion eligibility.
+support a limited-evidence score. Source completeness is separate from noise disposal.
 Brief repair writes only the missing summary or judgement fields. A valid existing
 summary, judgement or score is preserved when another field needs recovery.
 Valid scored noise is excluded from brief completion and content-completeness
 statistics. It proceeds directly to deletion/protection/evidence disposition;
-the same complete-source, current-score and reference guards still apply.
+current-score validity and reference guards still apply, without a fetch/model call.
 Each attempt reserves at most two single-attempt model calls, and writes score
 and summary separately so a later summary failure cannot discard a score.
 Summary evidence options are extracted verbatim from the source; the model may
@@ -116,16 +116,44 @@ without being mistaken for a fetch failure. Leading error pages, HTML shells and
 other challenge markers are still rejected; generic HTML and cached content keep
 their existing checks. This exception never rewrites the evidence text.
 
-`--delete-confirmed-noise` requires complete source proof, a current valid noise
-score and its verbatim weak-point evidence, plus explicit user authorization for
-production deletion. Production leaves deletion disabled by default; after that
-authorization, explicitly set `RADAR_REPAIR_DELETE_CONFIRMED_NOISE=1` in the VPS environment.
-A generic HTML article container is
-not completeness proof. User notes, shares, bookmarks, annotations, manually pinned repositories and research/
+The owner's standing policy `current_valid_noise_v1` disposes automatic radar
+with a current, valid, non-default, non-zero seven-dimension noise score. Source
+fetch failures, excerpts and missing quotations do not block deletion. Missing,
+invalid and legacy scores remain reviewable; fetch failure alone is not noise.
+Existing valid scores are preserved rather than replaced to force eligibility.
+
+New sync skips confirmed noise before inserting into `summaries`. A dismissed
+`NOISE_NOT_STORED` receipt keeps only source, URL, publication identity, scoring
+version and policy; no body, brief or dimensional score is stored. The same
+publication/version is skipped before fetch/model work. A new identity or scoring
+version remains eligible. Receipt errors are reported as failures. Unassessable
+and default results remain distinct pending work.
+
+`--delete-confirmed-noise` or `RADAR_REPAIR_DELETE_CONFIRMED_NOISE=1` opts the Admin
+worker into this standing policy, including old source-failure terminals without
+resetting their source/model budgets. Production enablement requires explicit
+owner authorization and the verified backup gate.
+
+For a fixed inventory with zero source/model calls, stop the repair worker between
+cycles, preview into a new private directory, execute 10, inspect archives/audits,
+then apply at most 100 per batch. Repeated apply is idempotent:
+
+```sh
+python -m scripts.purge_scored_noise preview --actor <admin> --state-dir <new-private-path>
+python -m scripts.purge_scored_noise apply --actor <admin> --state-dir <same-path> --limit 10
+python -m scripts.purge_scored_noise apply --actor <admin> --state-dir <same-path> --limit 100
+```
+
+Preview fixes row fingerprints, timestamps, scores and protection reasons. Changed
+rows are skipped. Execution loads full rows individually and reuses Admin checks,
+reference locks, CAS, archive and audit transactions. Old `complete_grounded_noise`
+audits keep their original meaning and remain restorable.
+
+User notes, shares, bookmarks, annotations, manually pinned repositories and research/
 chat/topic references protect the row. Reference tables are locked during the
 final check. The full summary and only same-run/URL missing-score or repair
 diagnostics are fsynced to `<state-dir>/deleted/` before the delete transaction.
-The transaction records the archive hash, evidence hash and minimal publication
+The transaction records the archive hash, deletion policy, optional evidence hash and minimal publication
 identity in `admin_actions`; source/body is removed from the business database.
 Other diagnostics at the same URL remain independent. Original backup and archive
 files must remain available; no backup retention cleanup runs during deployment.
