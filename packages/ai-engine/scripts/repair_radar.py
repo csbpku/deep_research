@@ -19,7 +19,8 @@ async def main() -> None:
     parser.add_argument('--state-dir', type=Path, required=True)
     parser.add_argument('--limit', type=int, default=20)
     parser.add_argument('--interval', type=int, default=60)
-    parser.add_argument('--delete-confirmed-noise', action='store_true')
+    parser.add_argument('--delete-confirmed-noise', action='store_true',
+                        default=os.environ.get('RADAR_REPAIR_DELETE_CONFIRMED_NOISE') == '1')
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--report', action='store_true')
     parser.add_argument('--requeue', metavar='ID')

@@ -71,7 +71,8 @@ and summary separately so a later summary failure cannot discard a score.
 
 `--delete-confirmed-noise` requires complete source proof, a current valid noise
 score and its verbatim weak-point evidence, plus explicit user authorization for
-production deletion. The production Compose command leaves deletion disabled.
+production deletion. Production leaves deletion disabled by default; after that
+authorization, explicitly set `RADAR_REPAIR_DELETE_CONFIRMED_NOISE=1` in the VPS environment.
 A generic HTML article container is
 not completeness proof. User notes, shares, bookmarks, annotations and research/
 chat/topic references protect the row. Reference tables are locked during the

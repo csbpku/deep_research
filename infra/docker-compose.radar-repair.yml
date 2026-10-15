@@ -14,6 +14,8 @@ services:
       disable: true
     environment:
       RADAR_GOVERNANCE_STATE_DIR: ${RADAR_REPAIR_DIR:?set verified governance backup directory}
+      # Set to 1 only after explicit user authorization for production deletion.
+      RADAR_REPAIR_DELETE_CONFIRMED_NOISE: ${RADAR_REPAIR_DELETE_CONFIRMED_NOISE:-0}
       ANYTHINGLLM_ENABLED: "false"
       ANYTHINGLLM_PERSONAL_KNOWLEDGE_ENABLED: "0"
       DB_POOL_MIN_SIZE: "1"
