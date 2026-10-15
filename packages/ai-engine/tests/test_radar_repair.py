@@ -217,6 +217,39 @@ async def test_github_api_cooldown_uses_same_repo_raw_readme(monkeypatch: Any) -
     ]
 
 
+async def test_github_api_redirect_reads_original_raw_repo_without_following_target(monkeypatch: Any) -> None:
+    from ai_engine.fetcher.safe_fetch import SafeFetchError
+
+    monkeypatch.setattr(r, '_github_api_retry_at', 0)
+    text = 'The original repository documents its implementation and limitations. ' * 20
+
+    async def fetch(url: str, **kwargs: Any) -> Any:
+        assert kwargs['max_redirects'] == 0
+        if url == 'https://api.github.com/repos/owner/repo/readme':
+            raise SafeFetchError('URL_REDIRECT_LIMIT', 'redirected more than 0 times')
+        assert url == 'https://raw.githubusercontent.com/owner/repo/HEAD/README.md'
+        return SimpleNamespace(status=200, url=url, headers={'content-type': 'text/plain'}, content=text.encode())
+
+    mock = AsyncMock(side_effect=fetch)
+    monkeypatch.setattr(r, 'safe_fetch', mock)
+    evidence = await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+    assert evidence.text == text and evidence.kind == 'github_raw_readme' and evidence.complete
+    assert mock.await_count == 2
+    assert r._github_api_retry_at == 0
+
+
+async def test_github_api_safety_rejection_cannot_be_hidden_by_raw_fallback(monkeypatch: Any) -> None:
+    from ai_engine.fetcher.safe_fetch import SafeFetchError
+
+    monkeypatch.setattr(r, '_github_api_retry_at', 0)
+    fetch = AsyncMock(side_effect=SafeFetchError('URL_FETCH_BLOCKED', 'blocked destination'))
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    with pytest.raises(SafeFetchError) as error:
+        await r.github_readme_evidence('owner/repo', 'https://github.com/owner/repo')
+    assert error.value.code == 'URL_FETCH_BLOCKED'
+    assert fetch.await_count == 1
+
+
 @pytest.mark.parametrize('problem', ['html', 'identity', 'large', 'missing'])
 async def test_raw_readme_does_not_overclaim_identity_or_completeness(monkeypatch: Any, problem: str) -> None:
     monkeypatch.setattr(r, '_github_api_retry_at', float('inf'))

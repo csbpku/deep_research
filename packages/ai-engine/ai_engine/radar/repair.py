@@ -190,9 +190,18 @@ async def github_readme_evidence(owner_repo: str, canonical_url: str) -> Evidenc
     api_limited = time.time() < _github_api_retry_at
     if not api_limited:
         api_url = f'https://api.github.com/repos/{owner_repo}/readme'
-        doc = await safe_fetch(api_url, allowed_hosts=('api.github.com',), max_bytes=1_000_000,
-                               timeout=10, max_redirects=0)
-        if doc.status == 429 or (doc.status == 403 and doc.headers.get('x-ratelimit-remaining') == '0'):
+        try:
+            doc = await safe_fetch(api_url, allowed_hosts=('api.github.com',), max_bytes=1_000_000,
+                                   timeout=10, max_redirects=0)
+        except SafeFetchError as exc:
+            if exc.code != 'URL_REDIRECT_LIMIT':
+                raise
+            # A moved API path is not evidence for the requested repository.
+            # Read its original raw URL instead; never follow the API target.
+            doc = None
+        if doc is None:
+            pass
+        elif doc.status == 429 or (doc.status == 403 and doc.headers.get('x-ratelimit-remaining') == '0'):
             _github_api_retry_at = time.time() + 3600
             api_limited = True
         elif doc.status == 200:

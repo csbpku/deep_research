@@ -385,9 +385,8 @@ async def safe_fetch(
     timeout = timeout or float(
         os.environ.get("URL_FETCH_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_SECONDS)
     )
-    max_redirects = max_redirects or int(
-        os.environ.get("URL_FETCH_MAX_REDIRECTS", _DEFAULT_MAX_REDIRECTS)
-    )
+    if max_redirects is None:
+        max_redirects = int(os.environ.get("URL_FETCH_MAX_REDIRECTS", _DEFAULT_MAX_REDIRECTS))
 
     # Validate the initial URL shape up front (fail fast, no DNS for bad URLs).
     host, _port = _validate_url_shape(

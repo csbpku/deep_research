@@ -94,8 +94,10 @@ is accepted only while a valid score and usable summary/judgement are present.
 GitHub repository evidence prefers the README API. API rate limiting cools that
 API for one hour within the running worker while allowing same-repository public
 raw `HEAD/README.md`, `README.rst`, or `README` reads. Both hosts use bounded safe
-fetches without redirects; raw HTML/error pages and identity mismatches are
-rejected. An unresolved path during API cooldown records
+fetches without redirects; an explicit zero redirect limit overrides the default
+and environment. An API redirect falls back to the original repository's raw
+path without following the API destination. Other safety errors, raw HTML/error
+pages and identity mismatches are rejected. An unresolved path during API cooldown records
 `SOURCE_GITHUB_API_RATE_LIMITED` for that repository with a one-hour retry delay;
 it does not pause other repositories' raw reads. Actual raw-host rate limiting
 still pauses the source. A missing conventional path does not prove there is no README. Only a

@@ -117,6 +117,36 @@ async def test_allowed_hosts_rejects_redirect_before_requesting_target(
     await client.aclose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('same_host', [True, False])
+async def test_explicit_zero_redirects_overrides_environment_and_never_requests_target(
+    patch_resolver: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch, same_host: bool,
+) -> None:
+    patch_resolver('public.example', '8.8.8.8')
+    monkeypatch.setenv('URL_FETCH_MAX_REDIRECTS', '3')
+    target = 'https://public.example/moved' if same_host else 'https://other.example/moved'
+    transport = _MockTransport({'public.example': lambda r: _redirect_response(target)})
+    async with _client(transport) as client:
+        with pytest.raises(SafeFetchError) as error:
+            await safe_fetch('https://public.example/article', client=client, max_redirects=0)
+    assert error.value.code == 'URL_REDIRECT_LIMIT'
+    assert transport.record == ['https://public.example/article']
+
+
+@pytest.mark.asyncio
+async def test_unspecified_redirect_limit_still_uses_environment(
+    patch_resolver: Callable[[str, str], None], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patch_resolver('public.example', '8.8.8.8')
+    monkeypatch.setenv('URL_FETCH_MAX_REDIRECTS', '0')
+    transport = _MockTransport({'public.example': lambda r: _redirect_response('/moved')})
+    async with _client(transport) as client:
+        with pytest.raises(SafeFetchError) as error:
+            await safe_fetch('https://public.example/article', client=client)
+    assert error.value.code == 'URL_REDIRECT_LIMIT'
+    assert transport.record == ['https://public.example/article']
+
+
 def test_dns_resolver_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """Transient resolver failures should recover before becoming URL_FETCH_DNS."""
     calls = 0
