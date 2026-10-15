@@ -17,6 +17,10 @@ titles are review suggestions only. Apply uses at most 100 operations per atomic
 transaction, locks target rows, checks snapshot values and `updatedAt`, rechecks
 references for noise, and writes `admin_actions` in the same transaction. Start
 with a 10-operation pilot. A shared batch lock serializes apply/recover/rollback.
+Audits use the actual `UPDATE RETURNING` row, including trigger-normalized tags
+and retired enrichment queue fields, and retain the requested values separately.
+Rollback checks these actual values; the narrowly scoped legacy external-reading
+tag normalization remains compatible without accepting later edits.
 
 Before writes, `RADAR_GOVERNANCE_STATE_DIR/backup-verified.json` must identify a
 full dump, its SHA256, `restoreVerified: true`, and an isolated restored database

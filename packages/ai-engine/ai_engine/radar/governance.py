@@ -252,6 +252,22 @@ def verify_backup() -> None:
         raise RuntimeError('backup checksum mismatch')
 
 
+def audited_after(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Older reading migrations recorded requested tags before trigger normalization.
+
+    Accept only the exact existing trigger transformation for that operation;
+    the row version check still rejects every later edit. New audits contain
+    the actual RETURNING row and do not need this compatibility adjustment.
+    """
+    after = dict(metadata['after'])
+    if (metadata.get('reason') == 'verified_legacy_external_reading'
+            and after.get('distilledTier') in {'collection', 'deep_read'}
+            and 'external_reading' in after.get('tags', [])):
+        after['tags'] = [tag for tag in after['tags'] if not (tag.startswith('tier') and len(tag) >= 5)]
+        after['tags'].append('tier_' + after['distilledTier'])
+    return after
+
+
 async def apply_one(conn: Any, actor_id: str, batch: str, op: dict[str, Any], *, rollback: bool = False, protections: dict[str, list[str]] | None = None) -> str:
     if op['table'] not in ('summaries', 'radar_sync_diagnostics'):
         raise ValueError('invalid governance target')
@@ -282,7 +298,7 @@ async def apply_one(conn: Any, actor_id: str, batch: str, op: dict[str, Any], *,
             if (transition['batchId'] == recovery_namespace
                     and transition.get('beforeUpdatedAt') == expected):
                 expected = transition['afterUpdatedAt']
-        if any(serial(row.get(k)) != value for k, value in original['after'].items()):
+        if any(serial(row.get(k)) != value for k, value in audited_after(original).items()):
             return 'conflict'
     else:
         expected, changes = op['expectedUpdatedAt'], op['after']
@@ -294,20 +310,28 @@ async def apply_one(conn: Any, actor_id: str, batch: str, op: dict[str, Any], *,
     if datetime.fromisoformat(str(row['updatedAt'])) != datetime.fromisoformat(expected):
         return 'conflict'
     allowed = set(SUMMARY_FIELDS) if op['table'] == 'summaries' else {'status'}
+    if rollback and op['table'] == 'summaries':
+        allowed |= {'enrichmentStatus', 'enrichmentNextRetryAt'}
     if not set(changes) <= allowed:
         raise ValueError('unsupported governance fields')
-    before = {k: serial(row[k]) for k in changes}
     assignments = [sql.SQL('{}=%s').format(sql.Identifier(k)) for k in changes]
     params = [Jsonb(v) if k == 'distilledScore' and v is not None else v for k, v in changes.items()]
-    saved = await (await conn.execute(sql.SQL('UPDATE {} SET {}, "updatedAt"=clock_timestamp() WHERE id=%s RETURNING "updatedAt"').format(
+    saved = await (await conn.execute(sql.SQL('UPDATE {} SET {}, "updatedAt"=clock_timestamp() WHERE id=%s RETURNING *').format(
         sql.Identifier(op['table']), sql.SQL(',').join(assignments)), (*params, op['id']))).fetchone()
     assert saved is not None
+    saved = dict(saved)
+    # BEFORE triggers may normalize tags, deliver a tier or retire an obsolete
+    # enrichment queue. Record actual values and every resulting changed field.
+    fields = set(changes) | {k for k in saved if k != 'updatedAt' and serial(saved[k]) != serial(row.get(k))}
+    before = {k: serial(row[k]) for k in fields}
+    after = {k: serial(saved[k]) for k in fields}
     await conn.execute('INSERT INTO admin_actions (id,"actorId",action,"targetType","targetId","requestId",metadata,"createdAt") '
         'VALUES (%s,%s,%s,%s,%s,%s,%s,now())',
         (str(uuid4()), actor_id, 'radar_governance_rollback' if rollback else 'radar_governance_apply',
          'radar_summary' if op['table'] == 'summaries' else 'radar_diagnostic', op['id'], request_id,
-         Jsonb({'batchId': batch, 'reason': op['reason'], 'before': before, 'after': serial(changes),
-                'evidence': op.get('evidence', {}), 'beforeUpdatedAt': str(row['updatedAt']), 'afterUpdatedAt': str(dict(saved)['updatedAt']), 'protectedBy': op.get('protectedBy', [])})))
+         Jsonb({'batchId': batch, 'reason': op['reason'], 'before': before, 'after': after,
+                'requestedAfter': serial(changes), 'evidence': op.get('evidence', {}),
+                'beforeUpdatedAt': str(row['updatedAt']), 'afterUpdatedAt': str(saved['updatedAt']), 'protectedBy': op.get('protectedBy', [])})))
     return 'rolled_back' if rollback else 'applied'
 
 
