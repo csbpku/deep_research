@@ -74,7 +74,7 @@ score and its verbatim weak-point evidence, plus explicit user authorization for
 production deletion. Production leaves deletion disabled by default; after that
 authorization, explicitly set `RADAR_REPAIR_DELETE_CONFIRMED_NOISE=1` in the VPS environment.
 A generic HTML article container is
-not completeness proof. User notes, shares, bookmarks, annotations and research/
+not completeness proof. User notes, shares, bookmarks, annotations, manually pinned repositories and research/
 chat/topic references protect the row. Reference tables are locked during the
 final check. The full summary and only same-run/URL missing-score or repair
 diagnostics are fsynced to `<state-dir>/deleted/` before the delete transaction.

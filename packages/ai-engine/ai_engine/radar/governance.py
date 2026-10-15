@@ -30,7 +30,7 @@ REFERENCE_TABLES = (
     'research_citations', 'ai_research_jobs', 'ai_research_sources',
     'ai_chat_sessions', 'ai_chat_messages', 'ai_research_conversations',
     'ai_research_conversation_messages', 'radar_submissions', 'topic_candidates',
-    'topic_issue_candidates', 'topic_proposal_candidates', 'topics',
+    'topic_issue_candidates', 'topic_proposal_candidates', 'topics', 'radar_tracked_repos',
 )
 UUID_RE = re.compile(r'\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b', re.I)
 URL_RE = re.compile(r'https?://[^\s"<>\\)]+')
@@ -68,6 +68,8 @@ async def protected_ids(conn: Any, rows: list[dict[str, Any]]) -> dict[str, list
     for row in rows:
         lookup[str(row['id']).lower()].add(str(row['id']))
         lookup[str(row['canonicalUrl']).rstrip('/')].add(str(row['id']))
+        if str(row['canonicalUrl']).startswith('https://github.com/'):
+            lookup[str(row['canonicalUrl']).rstrip('/').casefold()].add(str(row['id']))
     protected: dict[str, set[str]] = defaultdict(set)
     for table in REFERENCE_TABLES:
         # Reference-bearing tables only; never enumerate users or credentials.
@@ -77,6 +79,10 @@ async def protected_ids(conn: Any, rows: list[dict[str, Any]]) -> dict[str, list
             # A bookmark to a research with a coincident ID is not a radar bookmark.
             if table == 'user_bookmarks' and payload.get('targetType') not in ('summary', 'radar_candidate'):
                 continue
+            if table == 'radar_tracked_repos':
+                if payload.get('status') != 'pinned':
+                    continue
+                payload['url'] = 'https://github.com/' + str(payload['ownerRepo']).casefold()
             # A record's own id is not an outgoing reference.
             payload.pop('id', None)
             for token in reference_tokens(payload):

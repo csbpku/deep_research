@@ -83,6 +83,12 @@ async def verify(database: str) -> dict[str, bool]:
                 assert await r.mutate(pool, actor, str(uuid4()), row, {}, evidence, delete=True, directory=directory) == 'protected'
                 await conn.execute('DELETE FROM radar_annotations WHERE id=%s', (annotation,))
                 checks['bookmark_annotation_protection'] = True
+                owner_repo = 'governance-fixture/' + sid
+                await conn.execute('INSERT INTO radar_tracked_repos (id,"ownerRepo",status) VALUES (%s,%s,\'pinned\')',
+                                   (str(uuid4()), owner_repo))
+                pins = await r.g.protected_ids(conn, [{'id': sid, 'canonicalUrl': 'https://github.com/' + owner_repo}])
+                assert 'radar_tracked_repos' in pins[sid]
+                checks['manual_repo_pin_protection'] = True
                 original_audit = r.audit
 
                 async def fail_audit(*args: Any, **kwargs: Any) -> None:
