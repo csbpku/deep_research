@@ -120,6 +120,10 @@ beforeEach(() => {
   mocks.requireAdmin.mockResolvedValue(ADMIN);
   mocks.topicIssueCount.mockResolvedValue(0);
   mocks.researchUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.transaction.mockImplementation((callback) => callback({
+    $queryRaw: vi.fn(async () => [{ id: 's1' }]),
+    topicIssue: { findMany: mocks.topicIssueFindMany },
+  }));
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -431,7 +435,7 @@ describe('GET /api/topics/[slug]/issues', () => {
         importanceScore: 0.5,
         firstSeenAt: new Date('2026-08-15'),
         lastSeenAt: new Date('2026-08-19'),
-        candidates: [],
+        candidates: [{ summaryId: 's1' }],
       },
     ]);
 
@@ -807,7 +811,7 @@ describe('GET /api/topics/[slug]/issues — topic_issue_viewed event', () => {
         importanceScore: 0.5,
         firstSeenAt: new Date(),
         lastSeenAt: new Date(),
-        candidates: [],
+        candidates: [{ summaryId: 's1' }],
       },
     ]);
     // 已关注用户 lastViewedAt
