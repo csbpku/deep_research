@@ -372,9 +372,11 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
         except (ValueError, TypeError, KeyError):
             raise RepairFailure('MODEL_SUMMARY_INVALID', '摘要JSON结构不可解析') from None
         invalid = []
-        if not 80 <= len(summary) <= 1200:
+        missing_body = needs_body_summary(row)
+        missing_judgement = len(str(row.get('interpretation') or '').strip()) < 30
+        if missing_body and not 80 <= len(summary) <= 1200:
             invalid.append(f'摘要字符数{len(summary)}，要求80–1200')
-        if not 30 <= len(judgement) <= 500:
+        if missing_judgement and not 30 <= len(judgement) <= 500:
             invalid.append(f'判断字符数{len(judgement)}，要求30–500')
         # Models may collapse layout whitespace in an otherwise verbatim quote.
         # Keep every non-whitespace character; never accept paraphrased evidence.
@@ -383,8 +385,9 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
             invalid.append('引文不足12字符或无法逐字匹配原文（仅忽略空白布局）')
         if invalid:
             raise RepairFailure('MODEL_SUMMARY_INVALID', '；'.join(invalid))
-        changes['interpretation'] = judgement
-        if 'external_reading' in (row.get('tags') or []) or needs_body_summary(row):
+        if missing_judgement:
+            changes['interpretation'] = judgement
+        if missing_body:
             changes['body'] = summary
     if changes:
         changes['originalMeta'] = {**(row.get('originalMeta') or {}), 'radarRepair': {

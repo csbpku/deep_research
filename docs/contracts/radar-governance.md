@@ -74,6 +74,8 @@ The default 20-item limit is per cycle, not a limit on the inventory. It retains
 valid legacy scores, prioritizes missing scores and references, then fills missing
 summaries/judgements. Source text is transient; limited abstracts/excerpts may
 support a limited-evidence score but never prove deletion eligibility.
+Brief repair writes only the missing summary or judgement fields. A valid existing
+summary, judgement or score is preserved when another field needs recovery.
 Valid scored noise is excluded from brief completion and content-completeness
 statistics. It proceeds directly to deletion/protection/evidence disposition;
 the same complete-source, current-score and reference guards still apply.

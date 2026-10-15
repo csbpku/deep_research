@@ -55,6 +55,23 @@ async def test_valid_noise_never_spends_model_calls_on_brief_completion() -> Non
     assert not r.needs_summary(row)  # Still not permission to delete a legacy score.
 
 
+@pytest.mark.parametrize('missing_body,missing_judgement', [(True, False), (False, True), (True, True)])
+async def test_brief_repair_only_fills_missing_fields(missing_body, missing_judgement) -> None:
+    row = scored('skim')
+    if missing_body:
+        row['body'] = ''
+    if missing_judgement:
+        row['interpretation'] = ''
+    source = 'A verified implementation provides local execution and clearly documents its limitations. ' * 4
+    call = AsyncMock(return_value=SimpleNamespace(text=json.dumps({
+        'summary': '具体实现与限制。' * 20 if missing_body else '',
+        'judgement': '适用场景与限制。' * 8 if missing_judgement else '', 'evidence_index': 0})))
+    changes = await r.derive(row, r.Evidence(source, 'article', True), call, fields='summary')
+    assert ('body' in changes) is missing_body
+    assert ('interpretation' in changes) is missing_judgement
+    assert 'distilledScore' not in changes
+
+
 def test_retries_are_bounded_and_preserve_precise_reason() -> None:
     missing = r.RepairFailure('SOURCE_HTTP_404', '原始来源返回HTTP 404')
     one = r.retry_state(missing, 1, 1000)
