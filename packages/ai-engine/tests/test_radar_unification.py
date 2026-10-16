@@ -23,9 +23,11 @@ def test_taxonomy_upgrade_preserves_all_numerical_evidence():
     before = deepcopy(original)
     changes = u.version_changes(original)
     assert changes['distilledTier'] == 'deep_read'
-    assert changes['distilledScore'] == {**original['distilledScore'], 'tier': 'deep_read', 'version': DISTILLED_VERSION}
+    assert changes['distilledScore'] == {**original['distilledScore'], 'tier': 'deep_read'}
     assert original == before
-    assert not u.version_changes(row('4.7'))  # cannot relabel legacy evidence
+    legacy = row('4.7')
+    assert u.version_changes(legacy)['distilledScore'] == {**legacy['distilledScore'], 'tier': 'deep_read'}
+    assert 'scoreVersion' not in changes
     assert not u.version_changes({**original, 'distilledScore': None})
 
 
@@ -77,11 +79,12 @@ class Pool:
 
 
 async def test_format_retries_are_bounded_and_rerun_does_not_pay(tmp_path, monkeypatch):
-    source_row = {**row('4.7', 'deep_read'), 'fingerprint': 'same', 'updatedAt': '2026-10-16T00:00:00Z',
+    source_row = {**row('4.7', 'noise'), 'fingerprint': 'same', 'updatedAt': '2026-10-16T00:00:00Z',
                   'body': 'Useful existing summary. ' * 8, 'interpretation': 'Useful existing judgement. ' * 5}
     state = {'policy': u.POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()), 'actor': 'admin',
              'modelCalls': 0, 'maxModelCalls': 2, 'quotaStopped': False, 'items': {},
-             'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': []}]}
+             'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': []}],
+             'noiseReviewIds': [source_row['id']]}
     u.g.save(tmp_path / 'state.json', state)
     monkeypatch.setattr(u.g, 'verify_backup', lambda: None)
     monkeypatch.setattr(u, 'fetch_row', AsyncMock(return_value=source_row))
@@ -98,7 +101,7 @@ async def test_format_retries_are_bounded_and_rerun_does_not_pay(tmp_path, monke
 
 
 async def test_unknown_reserved_call_is_not_repeated(tmp_path, monkeypatch):
-    source_row = {**row('4.7'), 'fingerprint': 'same'}
+    source_row = {**row('4.7', 'noise'), 'fingerprint': 'same'}
     state = {'policy': u.POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()), 'actor': 'admin',
              'modelCalls': 1, 'maxModelCalls': 2, 'quotaStopped': False,
              'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': []}],
@@ -116,10 +119,11 @@ async def test_unknown_reserved_call_is_not_repeated(tmp_path, monkeypatch):
 
 
 async def test_paid_response_cannot_be_reused_for_changed_source(tmp_path, monkeypatch):
-    source_row = {**row('4.7'), 'fingerprint': 'same'}
+    source_row = {**row('4.7', 'noise'), 'fingerprint': 'same'}
     state = {'policy': u.POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()), 'actor': 'admin',
              'modelCalls': 1, 'maxModelCalls': 2, 'quotaStopped': False,
              'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': []}],
+             'noiseReviewIds': [source_row['id']],
              'items': {source_row['id']: {'status': 'running', 'calls': 1, 'responses': ['old response'],
                                          'sourceEvidence': {'sha256': 'old', 'kind': 'fixture', 'complete': True}}}}
     u.g.save(tmp_path / 'state.json', state)
@@ -135,3 +139,25 @@ async def test_paid_response_cannot_be_reused_for_changed_source(tmp_path, monke
     assert saved['modelCalls'] == 1
     assert saved['items'][source_row['id']]['error'] == 'SOURCE_CHANGED_AFTER_MODEL'
     model.assert_not_awaited()
+
+
+async def test_retained_legacy_reading_migration_never_calls_model(tmp_path, monkeypatch):
+    source_row = {**row('4.7', 'collection'), 'fingerprint': 'same', 'updatedAt': '2026-10-16T00:00:00Z'}
+    state = {'policy': u.POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()), 'actor': 'admin',
+             'modelCalls': 0, 'maxModelCalls': 0, 'quotaStopped': False, 'items': {},
+             'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': []}]}
+    u.g.save(tmp_path / 'state.json', state)
+    monkeypatch.setattr(u.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(u, 'fetch_row', AsyncMock(return_value=source_row))
+    monkeypatch.setattr(u, 'live_evidence', AsyncMock(return_value=u.r.Evidence('Source text', 'fixture', True)))
+    apply = AsyncMock(return_value='applied')
+    monkeypatch.setattr(u, 'apply', apply)
+    model = AsyncMock()
+    monkeypatch.setattr(u, 'generate_text', model)
+    await u.run(Pool(), 'admin', tmp_path, limit=1)
+    changes = apply.await_args.args[4]
+    assert changes['distilledScore'] == {**source_row['distilledScore'], 'tier': 'deep_read'}
+    assert 'scoreVersion' not in changes and 'scoreReason' not in changes
+    assert 'external_reading' in changes['tags']
+    model.assert_not_awaited()
+    assert json.loads((tmp_path / 'state.json').read_text())['modelCalls'] == 0

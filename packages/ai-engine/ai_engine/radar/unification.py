@@ -1,7 +1,7 @@
 """Explicit Admin migration to one reading mode and the current scoring rubric.
 
-This is a bounded, owner-authorized replacement of legacy scores, separate from
-continuous repair (which still preserves valid scores). No schema changes.
+Reading migration preserves scores and their versions. Explicitly selected
+legacy noise alone may receive bounded paid review. No schema changes.
 """
 from __future__ import annotations
 
@@ -30,10 +30,10 @@ from ai_engine.radar.noise_policy import NOISE_POLICY, confirmed_noise
 from ai_engine.radar.scoring_input import _usable_content
 from ai_engine.radar.sync_runner import _extract_article_content
 
-POLICY = 'external_three_tiers_5_1'
+POLICY = 'external_three_tiers_preserve_scores_1'
 MAX_CALLS_PER_ITEM = 2
 JSON_FIELDS = {'distilledScore', 'originalMeta'}
-FIELDS = set(g.SUMMARY_FIELDS) | {'scoreVersion', 'scoreReason', 'originalMeta',
+FIELDS = set(g.SUMMARY_FIELDS) | {'body', 'scoreVersion', 'scoreReason', 'originalMeta',
     'originalMarkdown', 'originalBytes', 'originalSha256', 'contentSha256',
     'originalFetchedAt', 'enrichmentStatus', 'enrichmentNextRetryAt'}
 
@@ -52,14 +52,16 @@ def request_id(batch: str, sid: str, phase: str = 'apply') -> str:
 
 
 def version_changes(row: dict[str, Any]) -> dict[str, Any]:
-    """5.0 -> 5.1 changes taxonomy only; never relabel an older rubric."""
+    """Merge the reading label without changing any score or its provenance."""
     score = row.get('distilledScore') or {}
-    if not r.has_score(row) or score.get('version') != '5.0':
+    if not r.has_score(row) or score.get('tier') != 'collection':
         return {}
-    tier = 'deep_read' if score['tier'] == 'collection' else score['tier']
-    return {'distilledScore': {**score, 'version': DISTILLED_VERSION, 'tier': tier},
-            'distilledTargetTier': tier, 'distilledTier': tier,
-            'scoreVersion': DISTILLED_VERSION}
+    return {'distilledScore': {**score, 'tier': 'deep_read'},
+            'distilledTargetTier': 'deep_read', 'distilledTier': 'deep_read'}
+
+
+def taxonomy_only(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    return old.get('tier') == 'collection' and new == {**old, 'tier': 'deep_read'}
 
 
 def reading_changes(row: dict[str, Any]) -> dict[str, Any]:
@@ -77,7 +79,8 @@ def reading_changes(row: dict[str, Any]) -> dict[str, Any]:
     return changes
 
 
-async def snapshot(pool: Any, actor: str, directory: Path) -> dict[str, Any]:
+async def snapshot(pool: Any, actor: str, directory: Path, *, review_legacy_noise: bool = False,
+                   previous_state: Path | None = None) -> dict[str, Any]:
     path = directory / 'state.json'
     if path.exists():
         return json.loads(path.read_text())  # type: ignore[no-any-return]
@@ -92,12 +95,19 @@ async def snapshot(pool: Any, actor: str, directory: Path) -> dict[str, Any]:
                 FROM summaries s WHERE ''' + r.SCOPE_SQL + ' ORDER BY s."createdAt" DESC,s.id')).fetchall()]
             protections = await g.protected_ids(conn, rows)
     rows.sort(key=lambda x: not bool(protections.get(str(x['id'])) or x['directNote'] or x['directShare']))
+    previous = json.loads(previous_state.read_text()) if previous_state else {}
+    prior_items = previous.get('items', {})
+    noise_ids = [str(x['id']) for x in rows if review_legacy_noise
+                 and (x.get('distilledScore') or {}).get('tier') == 'noise'
+                 and (x.get('distilledScore') or {}).get('version') not in ('5.0', DISTILLED_VERSION)]
     state = {'policy': POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()),
              'actor': actor, 'createdAt': time.time(), 'modelCalls': 0, 'quotaStopped': False,
-             'maxModelCalls': sum((x.get('distilledScore') or {}).get('version') not in ('5.0', DISTILLED_VERSION)
-                                  for x in rows) * MAX_CALLS_PER_ITEM,
+             'noiseReviewIds': noise_ids, 'previousBatch': previous.get('batch'),
+             'maxModelCalls': sum(max(0, MAX_CALLS_PER_ITEM - prior_items.get(sid, {}).get('calls', 0))
+                                  for sid in noise_ids),
              'beforeCounts': dict(Counter((x.get('distilledScore') or {}).get('version') for x in rows)),
-             'targets': [{**g.serial(x), 'protectedBy': protections.get(str(x['id']), [])} for x in rows],
+             'targets': [{**g.serial(x), 'protectedBy': protections.get(str(x['id']), []),
+                          'priorCalls': prior_items.get(str(x['id']), {}).get('calls', 0)} for x in rows],
              'items': {}}
     g.save(path, state)
     return state
@@ -176,10 +186,12 @@ async def apply(pool: Any, actor: str, batch: str, row: dict[str, Any], changes:
             current = dict(current)
             if 'distilledScore' in changes:
                 new = changes['distilledScore']
-                if new.get('version') != DISTILLED_VERSION or new.get('tier') == 'collection' or not r.has_score({'distilledScore': new}):
+                label_only = taxonomy_only(current.get('distilledScore') or {}, new)
+                if ((not label_only and new.get('version') != DISTILLED_VERSION)
+                        or new.get('tier') == 'collection' or not r.has_score({'distilledScore': new})):
                     raise ValueError('invalid current score')
                 old_version = (current.get('distilledScore') or {}).get('version')
-                if old_version not in ('5.0', DISTILLED_VERSION) and evidence is None:
+                if not label_only and old_version not in ('5.0', DISTILLED_VERSION) and evidence is None:
                     raise ValueError('legacy rescore requires source evidence')
             assignments = [sql.SQL('{}=%s').format(sql.Identifier(k)) for k in changes]
             values = [Jsonb(v) if k in JSON_FIELDS else v for k, v in changes.items()]
@@ -192,12 +204,12 @@ async def apply(pool: Any, actor: str, batch: str, row: dict[str, Any], changes:
                 'after': {k: g.serial(saved[k]) for k in fields},
                 'beforeUpdatedAt': str(current['updatedAt']), 'afterUpdatedAt': str(saved['updatedAt']),
                 'evidenceSha256': evidence.sha256 if evidence else None,
-                'evidenceKind': evidence.kind if evidence else '5.0_taxonomy_only',
+                'evidenceKind': evidence.kind if evidence else 'preserved_score_taxonomy_only',
                 'sourceComplete': evidence.complete if evidence else None})
             return 'applied'
 
 
-async def rollback(pool: Any, actor: str, audit_id: str) -> str:
+async def rollback(pool: Any, actor: str, audit_id: str, *, scores_only: bool = False) -> str:
     """Restore audited values only while their exact post-write version holds."""
     g.verify_backup()
     async with pool.connection() as conn:
@@ -207,6 +219,11 @@ async def rollback(pool: Any, actor: str, audit_id: str) -> str:
                                               (audit_id,))).fetchone()
             if not proof:
                 raise ValueError('unification audit not found')
+            if scores_only:
+                rid = str(uuid5(NAMESPACE_URL, audit_id + ':' + str(proof['targetId']) + ':radar_unification_score_restore'))
+                await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (rid,))
+                if await (await conn.execute('SELECT id FROM admin_actions WHERE "requestId"=%s', (rid,))).fetchone():
+                    return str(proof['targetId'])
             meta = proof['metadata']
             row = await (await conn.execute('SELECT * FROM summaries WHERE id=%s FOR UPDATE', (proof['targetId'],))).fetchone()
             if (not row or str(row['updatedAt']) != meta['afterUpdatedAt']
@@ -214,13 +231,29 @@ async def rollback(pool: Any, actor: str, audit_id: str) -> str:
                 raise r.RepairFailure('ROLLBACK_CONFLICT', '条目有后续修改，拒绝覆盖', retryable=False)
             if not set(meta['before']) <= FIELDS:
                 raise ValueError('unsupported rollback fields')
-            fields = list(meta['before'])
-            values = [Jsonb(meta['before'][k]) if k in JSON_FIELDS and meta['before'][k] is not None
-                      else meta['before'][k] for k in fields]
+            restore = dict(meta['before'])
+            if scores_only:
+                original = restore.get('distilledScore')
+                if not isinstance(original, dict) or original.get('tier') == 'noise':
+                    raise ValueError('score-only restoration is restricted to originally retained scores')
+                score_fields = {'distilledScore', 'distilledTotal', 'distilledTier', 'distilledTargetTier',
+                                'distilledProfile', 'scoreVersion', 'scoreReason'}
+                restore = {k: v for k, v in restore.items() if k in score_fields}
+                tier = 'deep_read' if original['tier'] == 'collection' else original['tier']
+                restore['distilledScore'] = {**original, 'tier': tier}
+                restore['distilledTargetTier'] = tier
+                if 'external_reading' in (row.get('tags') or []):
+                    restore['distilledTier'] = tier
+                restore['tags'] = [t for t in row.get('tags') or [] if not t.startswith('tier_')] + ['tier_' + tier]
+            fields = list(restore)
+            values = [Jsonb(restore[k]) if k in JSON_FIELDS and restore[k] is not None
+                      else restore[k] for k in fields]
             saved = dict(await (await conn.execute(sql.SQL('UPDATE summaries SET {},"updatedAt"=clock_timestamp() WHERE id=%s RETURNING *').format(
                 sql.SQL(',').join(sql.SQL('{}=%s').format(sql.Identifier(k)) for k in fields)), (*values, row['id']))).fetchone())
-            await r.audit(conn, actor, audit_id, dict(row), 'radar_unification_rollback',
-                {'policy': POLICY, 'originalAuditId': audit_id, 'before': meta['after'],
+            await r.audit(conn, actor, audit_id, dict(row),
+                'radar_unification_score_restore' if scores_only else 'radar_unification_rollback',
+                {'policy': POLICY, 'originalAuditId': audit_id,
+                 'before': {k: g.serial(row[k]) for k in fields},
                  'after': {k: g.serial(saved[k]) for k in fields}, 'afterUpdatedAt': str(saved['updatedAt'])})
             return str(row['id'])
 
@@ -244,7 +277,7 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
                 break
             processed += 1
             row = await fetch_row(pool, sid)
-            item = state['items'].setdefault(sid, {'calls': 0, 'status': 'running'})
+            item = state['items'].setdefault(sid, {'calls': target.get('priorCalls', 0), 'status': 'running'})
             # A reserved call with no recorded result must never be charged a
             # second time by a restart. An operator can inspect its usage ID.
             if item.get('inflight'):
@@ -271,17 +304,21 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
             evidence = None
             changes = version_changes(row)
             legacy = (row.get('distilledScore') or {}).get('version') not in ('5.0', DISTILLED_VERSION)
+            rescore = legacy and sid in state.get('noiseReviewIds', [])
             cache_invalid = cache_anomaly(row)
-            needs_live = 'external_reading' not in (row.get('tags') or []) or cache_invalid
-            if legacy and state['quotaStopped']:
+            # Reading migration never opts a retained legacy score into paid
+            # review. Only explicitly selected legacy noise may be rescored.
+            needs_live = ('external_reading' not in (row.get('tags') or [])
+                          and (row.get('distilledScore') or {}).get('tier') != 'noise') or cache_invalid
+            if rescore and state['quotaStopped']:
                 # Still finish deterministic migration of other rows.
                 item.update(status='unresolved', error='MODEL_QUOTA_STOPPED')
                 g.save(path, state)
                 continue
             try:
-                if legacy or needs_live:
+                if rescore or needs_live:
                     evidence = await asyncio.wait_for(live_evidence(row), timeout=65)
-                if legacy:
+                if rescore:
                     assert evidence is not None
                     proof = {'sha256': evidence.sha256, 'kind': evidence.kind, 'complete': evidence.complete}
                     if item.get('responses') and item.get('sourceEvidence') != proof:
@@ -328,11 +365,11 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
                     if r.needs_summary({**row, **changes}):
                         changes.update(await r.derive({**row, **changes}, evidence, call, fields='summary'))
                 effective = {**row, **changes}
-                if 'distilledScore' in changes:
+                if rescore and 'distilledScore' in changes:
                     s = changes['distilledScore']
                     changes['scoreReason'] = (f"Distilled {DISTILLED_VERSION}；等级={s['tier']}；"
                         f"等级分={s.get('tierScore', s['total'])}/100；{s.get('weakPoint', '')}")
-                if needs_live:
+                if needs_live or rescore:
                     assert evidence is not None
                     changes.update(reading_changes(effective))
                     changes['originalMeta'] = {**(changes.get('originalMeta') or row.get('originalMeta') or {}),
@@ -355,8 +392,9 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
                     if target['protectedBy'] or row.get('userNote') or row.get('sharedByUserId'):
                         changes.update(status='archived', tags=list(dict.fromkeys([*(changes.get('tags') or row.get('tags') or []),
                                                                                   'reference_only_noise'])))
+                changes = {k: v for k, v in changes.items() if g.serial(v) != g.serial(row.get(k))}
                 outcome = await apply(pool, actor, state['batch'], row, changes, evidence,
-                                      'source_backed_legacy_rescore' if legacy else 'unified_external_reading_and_tiers')
+                                      'source_backed_legacy_noise_review' if rescore else 'preserve_scores_external_reading_and_tiers')
                 item['status'] = outcome
                 if outcome in {'applied', 'unchanged', 'already_applied'}:
                     current = await fetch_row(pool, sid)

@@ -4,7 +4,7 @@
 //
 // 功能：
 //  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
-//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（核心材料 / 推荐精读 / 速览）
+//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（精读 / 速读）
 //  - 分页（Pagination domain component）
 //  - 标题在列表内打开文章概览；独立详情页仍支持直达和新标签页阅读
 

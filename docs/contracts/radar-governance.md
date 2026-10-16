@@ -219,30 +219,32 @@ The former `collection` tier is included in `deep_read`; personal bookmarks are
 independent and remain unchanged. Readers accept the legacy tier and filters
 as aliases during migration. New scoring never emits `collection`.
 
-Version 5.1 preserves the numerical rubric of 5.0. An explicit Admin migration
-can upgrade 5.0 by changing the version and tier taxonomy while retaining every
-dimension and numeric score. Older versions require source-backed evaluation;
-changing their version string alone does not establish current validity.
-Minimal 5.0 noise-disposition receipts remain usable under 5.1 so this label
-change cannot trigger repeat model charges. Older content scores are still
-reevaluated rather than accepted as current noise.
-Continuous repair still preserves valid scores. Only the explicitly scoped
-`scripts.unify_radar` operation replaces valid legacy scores.
+Version 5.1 preserves the numerical rubric of 5.0. Reading migration keeps every
+existing numeric score, dimension and scoring version. It only merges the
+`collection` label into `deep_read` and verifies the external reading path.
+It does not relabel an old score as current or implicitly call a model.
+Continuous repair also preserves valid scores. An explicit
+`--review-legacy-noise` scope alone permits source-backed paid review of legacy
+noise; retained legacy content is never included in that scoring scope.
 
 ```sh
 python -m scripts.unify_radar --actor <real-admin> --state-dir <private-persistent-dir> --preview
 python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --limit 10
 python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --limit 100
 python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --rollback-audit <audit-id>
+# Optional, separately authorized legacy-noise review; carry previous reservations:
+python -m scripts.unify_radar --actor <real-admin> --state-dir <new-dir> --review-legacy-noise --previous-state <stopped-dir>/state.json --preview
 ```
 
 The immutable preview captures row fingerprints and references. Execution needs
 the verified independent backup receipt, a real Admin, row-version comparison
 and same-transaction audit. It uses one source/model operation at a time and at
-most two reserved model calls per legacy item, including format retries and
+most two reserved model calls per explicitly selected legacy-noise item, including format retries and
 brief completion. Reservations and responses persist before applying changes;
 reruns reuse recorded responses, uncertain calls remain unresolved, and quota
-errors stop further model work. Budgets from other repair scopes are untouched.
+errors stop further model work. Previous per-item reservations are carried into
+a replacement batch; budgets from other repair scopes are untouched. Default
+reading-only migration has a zero model-call budget.
 
 Legacy server reading changes to external reading only after a safe live read
 matches the publication identity. Cached originals and review outcomes remain
