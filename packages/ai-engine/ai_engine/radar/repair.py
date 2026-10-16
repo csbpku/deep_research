@@ -34,7 +34,8 @@ from ai_engine.llm.client import generate_text, is_quota_error
 from ai_engine.radar import governance as g
 from ai_engine.radar.diagnostic_policy import close_scored_pending, publication_identity, retire_duplicate_pending
 from ai_engine.radar.distilled_scorer import (
-    DISTILLED_VERSION, SYSTEM_PROMPT, _parse_llm_response, build_user_prompt, compute_score,
+    DIM_NAMES, DISTILLED_VERSION, SYSTEM_PROMPT, _normalize_dim_key, _parse_llm_response,
+    build_user_prompt, compute_score,
 )
 from ai_engine.radar.enrichment_contract import effective_tier, is_enrichment_ready
 from ai_engine.radar.noise_policy import NOISE_POLICY, confirmed_noise
@@ -47,6 +48,7 @@ from ai_engine.scoring.scoring_profiles import profile_for_source_url
 from ai_engine.untrusted_text import sanitize_external_instruction_text
 
 MAX_ATTEMPTS = 5
+REPAIR_MAX_HTML_BYTES = 8_000_000
 _github_api_retry_at = 0.0
 SCOPE_SQL = """(s.source='daily' OR EXISTS (
  SELECT 1 FROM share_submissions sh WHERE sh."publishedSummaryId"=s.id AND sh.status='approved'))"""
@@ -314,11 +316,11 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     if parts.hostname == 'dev.to':
         return await devto_article_evidence(row)
     cached = str(row.get('originalMarkdown') or '')
-    if _usable_content(cached, source_type=source_type, url=url):
-        return Evidence(cached[:18000], 'cached_original',
-                        row.get('readerQualityStatus') == 'ready' and len(cached) <= 18000
-                        and row.get('originalBytes') == len(cached.encode())
-                        and row.get('originalSha256') == hashlib.sha256(cached.encode()).hexdigest())
+    verified_cache = (row.get('readerQualityStatus') == 'ready'
+                      and row.get('originalBytes') == len(cached.encode())
+                      and row.get('originalSha256') == hashlib.sha256(cached.encode()).hexdigest())
+    if verified_cache and _usable_content(cached, source_type=source_type, url=url):
+        return Evidence(cached[:18000], 'cached_original', len(cached) <= 18000)
     host = parts.hostname
     allowed = (host, host[4:] if host.startswith('www.') else 'www.' + host)
     if parts.path.lower().endswith('.pdf'):
@@ -344,8 +346,19 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     if host == 'github.com' and re.fullmatch(r'/[\w.-]+/[\w.-]+/?', parts.path):
         return await github_readme_evidence(parts.path.strip('/'), url)
     else:
-        doc = await safe_fetch(url, allowed_hosts=allowed, max_bytes=2_000_000,
-                               timeout=25, max_redirects=3)
+        large_page = False
+        try:
+            doc = await safe_fetch(url, allowed_hosts=allowed, max_bytes=2_000_000,
+                                   timeout=25, max_redirects=3)
+        except SafeFetchError as exc:
+            if exc.code != 'URL_FETCH_TOO_LARGE':
+                raise
+            # Hydrated pages often contain megabytes of scripts but usable
+            # article text. Keep a separate bounded repair read; never claim
+            # this larger page or its 18k-character extract covers the source.
+            large_page = True
+            doc = await safe_fetch(url, allowed_hosts=allowed, max_bytes=REPAIR_MAX_HTML_BYTES,
+                                   timeout=15, max_redirects=3)
         if doc.status == 429:
             raise RepairFailure('SOURCE_RATE_LIMITED', '原始来源HTTP 429，一小时后重试')
         if doc.status != 200:
@@ -353,13 +366,20 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
         if urlsplit(doc.url).hostname not in allowed:
             raise RepairFailure('SOURCE_IDENTITY_MISMATCH', '跳转后来源身份不匹配', retryable=False)
         html = doc.content.decode('utf-8', errors='replace')
+        if re.search(r'<title[^>]*>\s*Security Check\s*</title>', html, re.I):
+            envelope = BeautifulSoup(html, 'html.parser')
+            heading = envelope.find('h1')
+            heading_text = heading.get_text(' ', strip=True).casefold() if heading else ''
+            if re.search(r'checking.*(?:not a robot|human)', heading_text):
+                raise RepairFailure('SOURCE_INSUFFICIENT', '来源返回机器人验证页，未取得文章正文')
+            del envelope
         if host == 'arxiv.org' and parts.path.startswith('/abs/'):
             result = _arxiv_abstract_input(html, doc.url)
             if result is None:
                 raise RepairFailure('SOURCE_ABSTRACT_MISSING', 'arXiv摘要或标题不可验证')
             return Evidence(result[0], 'source_abstract', False)
         text = _extract_article_content(html, doc.url, source_type, max_chars=200_001)
-        complete = complete_article(html, text, url)
+        complete = not large_page and complete_article(html, text, url)
         kind = 'article' if complete else 'source_excerpt'
     if not _usable_content(text, source_type=source_type, url=url):
         raise RepairFailure('SOURCE_INSUFFICIENT', '抓取成功但正文为空、过短或属于错误/登录页面')
@@ -410,17 +430,32 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
     if fields in {'both', 'score'} and not has_score(row):
         result = await call(system_prompt=SYSTEM_PROMPT, user_prompt=build_user_prompt(
             title, text, profile=profile, source_type=source_type, url=str(row['canonicalUrl']),
-            content_is_chunk_evidence=not evidence.complete,
+            content_is_source_excerpt=not evidence.complete,
         ), max_tokens=4000, operation='radar.repair_score')
         try:
             parsed = _parse_llm_response(result.text)
+            hard_veto = any(parsed.get(k) in ('title_content_mismatch', 'unsafe_content')
+                            for k in ('veto', 'hard_veto'))
+            if not hard_veto:
+                dimensions = {_normalize_dim_key(str(k)): v for k, v in parsed.items()
+                              if _normalize_dim_key(str(k)) is not None}
+                if (set(dimensions) != set(DIM_NAMES)
+                        or any(type(v) is not int or not 0 <= v <= 3 for v in dimensions.values())):
+                    raise ValueError('incomplete dimension scores')
             score = compute_score(parsed, profile=profile, source_type=source_type,
                                   evidence_text=title + '\n' + text, url=str(row['canonicalUrl']))
         except (ValueError, TypeError, KeyError):
             raise RepairFailure('MODEL_SCORE_FORMAT', '模型未返回有效七维评分结构') from None
         value = score.to_dict()
+        if score.veto is not None:
+            raise RepairFailure('MODEL_TITLE_MISMATCH' if score.veto == 'title_content_mismatch'
+                                else 'MODEL_UNSAFE_VETO',
+                                '模型判断标题与来源不匹配，需核验来源身份后重试'
+                                if score.veto == 'title_content_mismatch' else
+                                '模型返回内容安全否决，需复核来源后重试', retryable=False)
         if not g.valid_score({'distilledScore': value, 'distilledTier': score.tier}):
-            raise RepairFailure('MODEL_UNASSESSABLE', '模型结果全零或无法评估，未写占位分数')
+            raise RepairFailure('MODEL_UNASSESSABLE', '模型七维结果全零，需新证据或修正请求后重试；未写占位分数',
+                                retryable=False)
         deliverable = effective_tier(score.tier, enrichment_ready=is_enrichment_ready(
             enrichment_status=row.get('enrichmentStatus'), reader_quality_status=row.get('readerQualityStatus'),
             original_kind=row.get('originalKind'), original_meta=row.get('originalMeta')),
@@ -925,7 +960,7 @@ async def cycle(pool: Any, actor: str, directory: Path, *, limit: int = 20, dele
             g.save(state_path, state)
             phase = 'source'
             try:
-                evidence = await asyncio.wait_for(acquire_evidence(row), timeout=35)
+                evidence = await asyncio.wait_for(acquire_evidence(row), timeout=55)
                 calls = 0
 
                 async def call(**kwargs: Any) -> Any:

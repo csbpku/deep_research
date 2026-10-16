@@ -430,11 +430,31 @@ def structured_html_to_markdown(html: str, base_url: str | None = None) -> str:
     # extracted arXiv figures remain valid when serialized as image data URLs.
     soup = BeautifulSoup(html, "html5lib")
     root: Tag | None = None
-    for selector in _ROOT_SELECTORS:
+    for selector in _ROOT_SELECTORS[:3]:
         candidate = soup.select_one(selector)
         if candidate and len(candidate.get_text(" ", strip=True)) >= 80:
             root = candidate
             break
+    if root is None:
+        articles = [node for node in soup.select('article')
+                    if not node.find_parent(['nav', 'aside', 'footer', 'header'])
+                    and len(node.get_text(' ', strip=True)) >= 80]
+        main = soup.find('main')
+        heading = main.find('h1') if isinstance(main, Tag) else None
+        matching = [node for node in articles if node.find('h1') is not None]
+        substantial = [node for node in articles if len(node.get_text(' ', strip=True)) >= 500]
+        if matching:
+            root = max(matching, key=lambda node: len(node.get_text(' ', strip=True)))
+        elif isinstance(main, Tag) and heading is not None:
+            # A tiny recommendation card is often the first <article>, while
+            # the actual page heading and prose are in its surrounding main.
+            root = main
+        elif substantial:
+            root = max(substantial, key=lambda node: len(node.get_text(' ', strip=True)))
+        elif isinstance(main, Tag) and len(main.get_text(' ', strip=True)) >= 80:
+            root = main
+        elif len(articles) == 1 and soup.find('h1') is None:
+            root = articles[0]
     if root is None:
         return ""
 

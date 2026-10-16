@@ -226,3 +226,22 @@ def test_preserves_arxiv_tables_inside_transformed_span_wrappers() -> None:
     assert "|  | MATH500 | GPQA-D |" in markdown
     assert "| Full | 0.939 | 0.562 |" in markdown
     assert "MATH500\n\n$K{=}1024$" not in markdown
+
+
+def test_recommendation_card_does_not_replace_the_main_article() -> None:
+    prose = 'This article explains the implementation, evaluation and deployment limitations. ' * 25
+    html = '<main><h1>The actual article</h1><p>' + prose + '</p><section><article><a href="/unrelated">' + 'A related recommendation card. ' * 5 + '</a></article></section></main>'
+    result = structured_html_to_markdown(html)
+    assert 'The actual article' in result and prose.strip() in result
+
+
+def test_later_full_article_is_chosen_over_an_earlier_card() -> None:
+    prose = 'The matching source contains concrete implementation and evaluation evidence. ' * 20
+    html = '<article><a href="/other">' + 'A recommendation card. ' * 5 + '</a></article><article><h1>Source identity</h1><p>' + prose + '</p></article>'
+    result = structured_html_to_markdown(html)
+    assert prose.strip() in result and 'A recommendation card.' not in result
+
+
+def test_unrelated_cards_without_an_article_root_defer_to_generic_extraction() -> None:
+    card = '<article><a href="/other">' + 'A related headline and description. ' * 4 + '</a></article>'
+    assert structured_html_to_markdown('<h1>Actual page title</h1><div>' + card * 3 + '</div>') == ''
