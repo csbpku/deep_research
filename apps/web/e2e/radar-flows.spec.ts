@@ -16,7 +16,11 @@ test.describe('Radar flows', () => {
     // 列表骨架或空态：页面上至少有标题
     await expect(page.locator('body')).toContainText(/雷达|radar/i);
     await expect(page.getByRole('button', { name: '阅读等级筛选' }))
-      .toContainText('核心材料、推荐精读');
+      .toContainText('精读');
+    await page.getByRole('button', { name: '阅读等级筛选' }).click();
+    await expect(page.getByRole('menuitemcheckbox', { name: '精读', exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitemcheckbox', { name: '速读', exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitemcheckbox', { name: /核心材料|推荐精读|收藏/ })).toHaveCount(0);
   });
 
   test('candidate title opens an in-place overview across narrow and desktop layouts', async ({ page }) => {

@@ -94,8 +94,8 @@ describe('DistilledScorePanel', () => {
       },
     }));
 
-    expect(html).toContain('速览');
-    expect(html).toContain('目标：推荐精读');
+    expect(html).toContain('速读');
+    expect(html).toContain('目标：精读');
   });
 
   it('does not present a normal 2/3 score as a user-facing weakness', () => {

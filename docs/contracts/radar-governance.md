@@ -210,3 +210,47 @@ formal deploys update the worker to the same immutable image. Its restart policy
 and checkpoint survive host/container replacement; main `--remove-orphans` cannot
 remove the independent project. Inspect each unresolved item and public/referenced
 paths before claiming that the backlog is cleared.
+
+
+# Unified external reading and scoring (5.1)
+
+Current reading tiers are `deep_read`（精读）、`skim`（速读）and `noise`.
+The former `collection` tier is included in `deep_read`; personal bookmarks are
+independent and remain unchanged. Readers accept the legacy tier and filters
+as aliases during migration. New scoring never emits `collection`.
+
+Version 5.1 preserves the numerical rubric of 5.0. Reading migration keeps every
+existing numeric score, dimension and scoring version. It only merges the
+`collection` label into `deep_read` and verifies the external reading path.
+It does not relabel an old score as current or implicitly call a model.
+Continuous repair also preserves valid scores. An explicit
+`--review-legacy-noise` scope alone permits source-backed paid review of legacy
+noise; retained legacy content is never included in that scoring scope.
+
+```sh
+python -m scripts.unify_radar --actor <real-admin> --state-dir <private-persistent-dir> --preview
+python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --limit 10
+python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --limit 100
+python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --rollback-audit <audit-id>
+# Optional, separately authorized legacy-noise review; carry previous reservations:
+python -m scripts.unify_radar --actor <real-admin> --state-dir <new-dir> --review-legacy-noise --previous-state <stopped-dir>/state.json --preview
+```
+
+The immutable preview captures row fingerprints and references. Execution needs
+the verified independent backup receipt, a real Admin, row-version comparison
+and same-transaction audit. It uses one source/model operation at a time and at
+most two reserved model calls per explicitly selected legacy-noise item, including format retries and
+brief completion. Reservations and responses persist before applying changes;
+reruns reuse recorded responses, uncertain calls remain unresolved, and quota
+errors stop further model work. Previous per-item reservations are carried into
+a replacement batch; budgets from other repair scopes are untouched. Default
+reading-only migration has a zero model-call budget.
+
+Legacy server reading changes to external reading only after a safe live read
+matches the publication identity. Cached originals and review outcomes remain
+historical evidence. Cache replacement retains the old value in backup/audit.
+Current noise without references uses the standing deletion policy; referenced
+noise is archived with `reference_only_noise`, preserving direct citations.
+Deletion retains historical diagnostics, and restore checks their later versions.
+Unverified sources or model failures remain explicit unresolved items; the
+migration does not grant a review pass or manufacture a score.

@@ -129,7 +129,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
             ? [{ distilledTier: { in: ['collection', 'deep_read'] } }]
             : []),
           ...(qualityValues.some((value) => ['collection', 'deep_read', 'skim', 'noise'].includes(value))
-            ? [{ distilledTier: { in: qualityValues.filter((value): value is 'collection' | 'deep_read' | 'skim' | 'noise' => ['collection', 'deep_read', 'skim', 'noise'].includes(value)) } }]
+            ? [{ distilledTier: { in: [...new Set(qualityValues.flatMap((value) => value === 'collection' || value === 'deep_read' ? ['collection', 'deep_read'] : ['skim', 'noise'].includes(value) ? [value] : []))] as Array<'collection' | 'deep_read' | 'skim' | 'noise'> } }]
             : []),
           ...(qualityValues.includes('pending') ? [{ distilledTier: null }] : []),
         ],

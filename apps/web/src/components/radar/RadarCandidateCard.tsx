@@ -142,11 +142,11 @@ export function RadarCandidateCard({
     ?? null;
   const tierLabel =
     tier === 'deep_read'
-        ? '推荐精读'
+        ? '精读'
         : tier === 'skim'
-          ? '速览'
+          ? '速读'
         : tier === 'collection'
-          ? '核心材料'
+          ? '精读'
           : tier === 'noise'
             ? '不推荐'
             : null;

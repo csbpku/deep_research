@@ -1,4 +1,4 @@
-# Independent project: main deployment's --remove-orphans cannot remove this worker.
+# Independent project: deployment and repair have separate lifecycles.
 # docker compose --env-file .env -f infra/docker-compose.radar-repair.yml up -d --no-build
 name: deep-research-repair
 services:

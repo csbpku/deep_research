@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ai_engine.radar.distilled_scorer import compute_score
-from ai_engine.radar.noise_policy import NOISE_POLICY, confirmed_noise
+from ai_engine.radar.noise_policy import NOISE_POLICY, NOISE_RECEIPT_VERSIONS, confirmed_noise
 from ai_engine.radar import repair as r
 
 
@@ -21,6 +21,12 @@ def test_source_completeness_and_quote_are_not_noise_gates() -> None:
     score.pop('weakPointEvidence', None)
     score['weakPoint'] = None
     assert confirmed_noise(score)
+
+
+def test_taxonomy_upgrade_retains_noise_receipts_without_accepting_old_scores() -> None:
+    assert NOISE_RECEIPT_VERSIONS == ('5.0', '5.1')
+    assert '4.7' not in NOISE_RECEIPT_VERSIONS
+    assert not confirmed_noise({**noise_score(), 'version': '5.0'})
 
 
 @pytest.mark.parametrize('change', [

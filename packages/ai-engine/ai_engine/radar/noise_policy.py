@@ -7,6 +7,9 @@ from ai_engine.radar.distilled_scorer import DISTILLED_VERSION
 from ai_engine.radar.score_validity import has_public_radar_score
 
 NOISE_POLICY = 'current_valid_noise_v1'
+# 5.1 changes reading labels, not the noise decision. Minimal 5.0 skip
+# receipts remain valid so the taxonomy migration cannot trigger paid repeats.
+NOISE_RECEIPT_VERSIONS = ('5.0', '5.1') if DISTILLED_VERSION == '5.1' else (DISTILLED_VERSION,)
 
 
 def confirmed_noise(score: Any) -> bool:

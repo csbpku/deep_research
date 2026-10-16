@@ -9,7 +9,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from ai_engine.radar.distilled_scorer import DISTILLED_VERSION
-from ai_engine.radar.noise_policy import NOISE_POLICY
+from ai_engine.radar.noise_policy import NOISE_POLICY, NOISE_RECEIPT_VERSIONS
 
 DETERMINISTIC_ERRORS = ('TOO_LARGE', 'URL_FETCH_TOO_LARGE', 'SOURCE_NOT_FOUND')
 
@@ -41,9 +41,9 @@ async def skipped_noise_publication(pool: Any, source_id: str, url: str, title: 
         row = await (await conn.execute(
             "SELECT 1 FROM radar_sync_diagnostics WHERE \"sourceId\"=%s AND \"canonicalUrl\"=%s "
             "AND \"reasonCode\"='NOISE_NOT_STORED' AND status='dismissed' "
-            "AND \"distilledScore\"->>'version'=%s AND \"distilledScore\"->>'policy'=%s "
+            "AND \"distilledScore\"->>'version'=ANY(%s) AND \"distilledScore\"->>'policy'=%s "
             "AND \"distilledScore\"->>'publicationIdentity'=%s LIMIT 1",
-            (source_id, url, DISTILLED_VERSION, NOISE_POLICY, publication_identity(title, published_at)),
+            (source_id, url, list(NOISE_RECEIPT_VERSIONS), NOISE_POLICY, publication_identity(title, published_at)),
         )).fetchone()
     return row is not None
 

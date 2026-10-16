@@ -410,8 +410,8 @@ def test_user_prompt_meta_includes_domain_published_current() -> None:
     assert "2026-07-30" in prompt
 
 
-def test_version_string_is_v5_0() -> None:
-    assert DISTILLED_VERSION == "5.0"
+def test_version_string_is_v5_1() -> None:
+    assert DISTILLED_VERSION == "5.1"
 
 
 def test_scoring_content_skips_client_side_docs_shell() -> None:
@@ -501,7 +501,7 @@ def test_compute_score_all_max_engineering() -> None:
     """All dimensions at 3 → total 100 under engineering weights."""
     result = compute_score(_all_max_parsed())
     assert result.total == 100.0
-    assert result.tier == TIER_COLLECTION
+    assert result.tier == TIER_DEEP_READ
     assert result.tier_score == 100.0
     assert result.profile_id == PROFILE_ENGINEERING
 
@@ -557,7 +557,7 @@ def test_direct_relevance_three_preserves_normal_tier() -> None:
         parsed,
         evidence_text="本文提供 API 重试代码、压测结果和延迟/可靠性取舍。",
     )
-    assert result.tier == TIER_COLLECTION
+    assert result.tier == TIER_DEEP_READ
     assert result.effective_total == 100.0
 
 
@@ -592,7 +592,7 @@ def test_collection_requires_complete_engineering_evidence() -> None:
     # V5: strong breadth plus validation can qualify even when one quality
     # dimension is conservatively scored 2.
     assert result.ranking_score == 95.84
-    assert result.tier == TIER_COLLECTION
+    assert result.tier == TIER_DEEP_READ
 def test_collection_cannot_bypass_news_ranking_threshold() -> None:
     """Editorial readiness must not turn a sub-threshold news item into collection."""
     parsed = _all_max_parsed()
@@ -800,7 +800,7 @@ def test_compute_score_all_max_paper() -> None:
     """paper profile: tier thresholds favor 8."""
     result = compute_score(_all_max_parsed(PAPER_PROFILE), profile=PAPER_PROFILE)
     assert result.total == 100.0
-    assert result.tier == TIER_COLLECTION
+    assert result.tier == TIER_DEEP_READ
     assert result.profile_id == PROFILE_PAPER
 
 
@@ -1261,7 +1261,7 @@ async def test_score_with_llm_custom_scorer() -> None:
 
     result = await score_with_llm("title", "content", scorer=mock_scorer)
     assert result.total == 100.0
-    assert result.tier == TIER_COLLECTION
+    assert result.tier == TIER_DEEP_READ
     assert result.is_default is False
 
 

@@ -54,6 +54,7 @@ legacy enriched mode (explicit opt-in only)
 
 ### Enrichment 与审核
 
+- 阅读等级统一为精读（`deep_read`）、速读（`skim`）、噪声（`noise`），原 `collection` 并入精读，用户收藏保持独立。新评分使用 Distilled 5.1，已有有效分数及版本保留；站外阅读迁移使用显式 Admin 来源核验和审计，默认不重评分。只有单独选定的旧噪声允许按当前标准复核。
 - `distilledTargetTier` 保存评分得到的目标层级；`distilledTier` 表示雷达展示层级。传统服务端阅读模式下，目标为 `collection/deep_read` 但 enrichment 未完成时，实际层级为 `skim`；带 `external_reading` 标记的候选通过原文 URL/Reader 阅读，不要求服务端 enrichment，可保留评分层级。数据库 trigger 区分两种阅读路径，详情接口仍不返回外部阅读候选的缓存原文。
 - `enrichmentStatus` 表示来源正文资产是否完成；
 - `readerQualityStatus` 表示正文是否满足阅读质量门槛；

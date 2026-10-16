@@ -4,7 +4,7 @@
 //
 // 功能：
 //  - 搜索：标题 / 解读 / 标签（后端 ILIKE + unnest）；前端按 Form submit 触发
-//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（核心材料 / 推荐精读 / 速览）
+//  - 过滤器：sourceType（GitHub / arXiv / RSS）、quality（精读 / 速读）
 //  - 分页（Pagination domain component）
 //  - 标题在列表内打开文章概览；独立详情页仍支持直达和新标签页阅读
 
@@ -114,9 +114,8 @@ const SOURCE_TYPE_OPTIONS = [
 ];
 
 const QUALITY_OPTIONS = [
-  { value: 'collection', label: '核心材料' },
-  { value: 'deep_read', label: '推荐精读' },
-  { value: 'skim', label: '速览' },
+  { value: 'deep_read', label: '精读' },
+  { value: 'skim', label: '速读' },
 ];
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 'all'] as const;
@@ -149,7 +148,7 @@ function radarUrlParams(state: RadarUrlState): URLSearchParams {
 }
 // Keep the default stream focused on readable material; skim remains opt-in
 // for users who want to browse browser-reading candidates.
-const DEFAULT_QUALITY: QualityValue[] = ['collection', 'deep_read'];
+const DEFAULT_QUALITY: QualityValue[] = ['deep_read'];
 
 const DATE_OPTIONS = [
   { value: 'all', label: '全部时间' },
@@ -294,7 +293,7 @@ export default function RadarPage() {
     return value ? value.split(',').filter(Boolean) : [];
   });
   const [quality, setQuality] = useState<QualityValue[]>(() => {
-    const values = (searchParams.get('quality') ?? '').split(',').filter(
+    const values = (searchParams.get('quality') ?? '').split(',').map((value) => value === 'collection' ? 'deep_read' : value).filter(
       (value): value is QualityValue => QUALITY_OPTIONS.some((option) => option.value === value),
     );
     return values.length > 0 ? values : DEFAULT_QUALITY;
@@ -317,7 +316,7 @@ export default function RadarPage() {
   // URL is the committed state for a radar view. This keeps a filtered list
   // shareable and makes a refresh reproduce the same result set.
   useEffect(() => {
-    const nextQuality = (searchParams.get('quality') ?? '').split(',').filter(
+    const nextQuality = (searchParams.get('quality') ?? '').split(',').map((value) => value === 'collection' ? 'deep_read' : value).filter(
       (value): value is QualityValue => QUALITY_OPTIONS.some((option) => option.value === value),
     );
     const nextDate = searchParams.get('date');

@@ -710,13 +710,8 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     'canonicalUrl': current['canonicalUrl'], 'sourceId': str(row.get('sourceId') or ''),
                     'publicationIdentity': publication_identity(current['title'], current.get('publishedAt'))})
                 # Remove only this insertion's diagnostics; same URL/different run remains independent.
-                if deletion_policy == SOURCE_DISPOSAL_POLICY:
-                    if diagnostics:
-                        await _retain_source_diagnostics(conn, actor, run, current, archive, digest, diagnostics)
-                else:
-                    await conn.execute('DELETE FROM radar_sync_diagnostics WHERE "runId"=%s AND "canonicalUrl"=%s AND '
-                                       + OWN_DIAGNOSTICS,
-                                       (row.get('syncRunId'), row['canonicalUrl']))
+                if diagnostics:
+                    await _retain_source_diagnostics(conn, actor, run, current, archive, digest, diagnostics)
                 await conn.execute('DELETE FROM summaries WHERE id=%s', (row['id'],))
                 return 'deleted'
             if changes:
@@ -800,7 +795,7 @@ async def restore_deleted(pool: Any, actor: str, directory: Path, archive: Path)
             if existing:
                 raise RepairFailure('RESTORE_CONFLICT', '已有同ID或URL内容，恢复不得覆盖后续修改', retryable=False)
             retained: dict[str, str] = {}
-            if proof['action'] == SOURCE_DISPOSAL_ACTION:
+            if payload['diagnostics']:
                 history = await (await conn.execute(
                     "SELECT metadata FROM admin_actions WHERE action='radar_source_diagnostics_preserve' "
                     'AND "targetId"=%s AND metadata->>\'archive\'=%s AND metadata->>\'archiveSha256\'=%s',

@@ -90,6 +90,8 @@ def effective_tier(
 ) -> str | None:
     """Map a scored tier to the tier supported by its configured reading path."""
     target = str(target_tier or "") or None
+    if target == "collection":
+        target = "deep_read"
     if target is None:
         return None
     if is_enrichment_tier(target) and not enrichment_ready and not external_reading:
