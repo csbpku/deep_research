@@ -223,6 +223,9 @@ Version 5.1 preserves the numerical rubric of 5.0. An explicit Admin migration
 can upgrade 5.0 by changing the version and tier taxonomy while retaining every
 dimension and numeric score. Older versions require source-backed evaluation;
 changing their version string alone does not establish current validity.
+Minimal 5.0 noise-disposition receipts remain usable under 5.1 so this label
+change cannot trigger repeat model charges. Older content scores are still
+reevaluated rather than accepted as current noise.
 Continuous repair still preserves valid scores. Only the explicitly scoped
 `scripts.unify_radar` operation replaces valid legacy scores.
 
