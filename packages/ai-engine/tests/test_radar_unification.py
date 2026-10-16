@@ -161,3 +161,27 @@ async def test_retained_legacy_reading_migration_never_calls_model(tmp_path, mon
     assert 'external_reading' in changes['tags']
     model.assert_not_awaited()
     assert json.loads((tmp_path / 'state.json').read_text())['modelCalls'] == 0
+
+
+@pytest.mark.parametrize('selected,unknown', [(False, False), (True, True)])
+async def test_legacy_noise_needs_explicit_scope_and_no_unknown_prior_call(tmp_path, monkeypatch, selected, unknown):
+    source_row = {**row('4.7', 'noise'), 'fingerprint': 'same'}
+    state = {'policy': u.POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()), 'actor': 'admin',
+             'modelCalls': 0, 'maxModelCalls': 2, 'quotaStopped': False, 'items': {},
+             'noiseReviewIds': [source_row['id']] if selected else [],
+             'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': [],
+                          'priorCalls': 1 if unknown else 0, 'priorUnknown': unknown}]}
+    u.g.save(tmp_path / 'state.json', state)
+    monkeypatch.setattr(u.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(u, 'fetch_row', AsyncMock(return_value=source_row))
+    monkeypatch.setattr(u, 'apply', AsyncMock(return_value='unchanged'))
+    source, model = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(u, 'live_evidence', source)
+    monkeypatch.setattr(u, 'generate_text', model)
+    await u.run(Pool(), 'admin', tmp_path, limit=1)
+    source.assert_not_awaited()
+    model.assert_not_awaited()
+    saved = json.loads((tmp_path / 'state.json').read_text())
+    assert saved['modelCalls'] == 0
+    if unknown:
+        assert saved['items'][source_row['id']]['error'] == 'MODEL_RESULT_UNKNOWN'

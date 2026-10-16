@@ -107,7 +107,8 @@ async def snapshot(pool: Any, actor: str, directory: Path, *, review_legacy_nois
                                   for sid in noise_ids),
              'beforeCounts': dict(Counter((x.get('distilledScore') or {}).get('version') for x in rows)),
              'targets': [{**g.serial(x), 'protectedBy': protections.get(str(x['id']), []),
-                          'priorCalls': prior_items.get(str(x['id']), {}).get('calls', 0)} for x in rows],
+                          'priorCalls': prior_items.get(str(x['id']), {}).get('calls', 0),
+                          'priorUnknown': bool(prior_items.get(str(x['id']), {}).get('inflight'))} for x in rows],
              'items': {}}
     g.save(path, state)
     return state
@@ -242,9 +243,12 @@ async def rollback(pool: Any, actor: str, audit_id: str, *, scores_only: bool = 
                 tier = 'deep_read' if original['tier'] == 'collection' else original['tier']
                 restore['distilledScore'] = {**original, 'tier': tier}
                 restore['distilledTargetTier'] = tier
+                if 'status' in meta['before']:
+                    restore['status'] = meta['before']['status']
                 if 'external_reading' in (row.get('tags') or []):
                     restore['distilledTier'] = tier
-                restore['tags'] = [t for t in row.get('tags') or [] if not t.startswith('tier_')] + ['tier_' + tier]
+                restore['tags'] = [t for t in row.get('tags') or []
+                                   if not t.startswith('tier_') and t != 'reference_only_noise'] + ['tier_' + tier]
             fields = list(restore)
             values = [Jsonb(restore[k]) if k in JSON_FIELDS and restore[k] is not None
                       else restore[k] for k in fields]
@@ -305,6 +309,10 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
             changes = version_changes(row)
             legacy = (row.get('distilledScore') or {}).get('version') not in ('5.0', DISTILLED_VERSION)
             rescore = legacy and sid in state.get('noiseReviewIds', [])
+            if rescore and target.get('priorUnknown'):
+                item.update(status='unresolved', error='MODEL_RESULT_UNKNOWN')
+                g.save(path, state)
+                continue
             cache_invalid = cache_anomaly(row)
             # Reading migration never opts a retained legacy score into paid
             # review. Only explicitly selected legacy noise may be rescored.
