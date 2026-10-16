@@ -269,7 +269,8 @@ def _safe_error_code(exc: BaseException) -> str:
     if isinstance(exc, SafeFetchError):
         return exc.code
     explicit_code = getattr(exc, "error_code", None)
-    if isinstance(explicit_code, str) and explicit_code in ERROR_CODES:
+    if isinstance(explicit_code, str) and (explicit_code in ERROR_CODES
+                                         or explicit_code == "REPAIR_SUMMARY_UNAVAILABLE"):
         return explicit_code
     if isinstance(exc, socket.gaierror):
         return "URL_FETCH_DNS"

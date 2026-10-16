@@ -7,7 +7,7 @@ import pytest
 
 from ai_engine.radar import repair
 from ai_engine.radar.brief_quality import is_unavailable_brief
-from ai_engine.radar.sync_runner import _generate_brief_with_retry
+from ai_engine.radar.sync_runner import _generate_brief_with_retry, _safe_error_code
 
 
 @pytest.mark.parametrize('text', [
@@ -83,4 +83,5 @@ async def test_sync_records_a_specific_failure_without_repeating_the_model_reque
         await _generate_brief_with_retry(generate, None, {'title': 'Source'},
                                          'https://example.org/article', timeout_seconds=10)
     assert error.value.error_code == 'REPAIR_SUMMARY_UNAVAILABLE'
+    assert _safe_error_code(error.value) == 'REPAIR_SUMMARY_UNAVAILABLE'
     generate.assert_awaited_once()
