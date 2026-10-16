@@ -78,3 +78,33 @@ async def test_score_rejection_has_a_specific_reason_and_never_fabricates_scores
         assert not failure.value.retryable
     assert '以下仅为来源片段' in call.call_args.kwargs['user_prompt']
     call.assert_awaited_once()
+
+
+async def test_robot_challenge_never_reaches_model_evidence(monkeypatch):
+    html = '<title>Security Check</title><main><h1>Checking that you are not a robot</h1><p>' + 'Verification text ' * 40 + '</p></main>'
+    doc = SimpleNamespace(status=200, url=row()['canonicalUrl'], headers={}, content=html.encode())
+    monkeypatch.setattr(r, 'safe_fetch', AsyncMock(return_value=doc))
+    with pytest.raises(r.RepairFailure) as error:
+        await r.acquire_evidence(row())
+    assert error.value.code == 'SOURCE_INSUFFICIENT' and '机器人验证页' in error.value.detail
+
+
+async def test_unverified_cache_cannot_mask_a_live_source_failure(monkeypatch):
+    cached = 'An old page excerpt that looks plausible but lacks verified identity. ' * 20
+    fetch = AsyncMock(return_value=SimpleNamespace(status=403, url=row()['canonicalUrl'], headers={}))
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    with pytest.raises(r.RepairFailure, match='SOURCE_HTTP_403'):
+        await r.acquire_evidence({**row(), 'originalMarkdown': cached, 'readerQualityStatus': 'failed'})
+    fetch.assert_awaited_once()
+
+
+async def test_verified_cache_is_reused_without_refetching(monkeypatch):
+    import hashlib
+
+    cached = 'Verified source documents a concrete engineering implementation and its limitations. ' * 20
+    fetch = AsyncMock()
+    monkeypatch.setattr(r, 'safe_fetch', fetch)
+    evidence = await r.acquire_evidence({**row(), 'originalMarkdown': cached, 'readerQualityStatus': 'ready',
+        'originalBytes': len(cached.encode()), 'originalSha256': hashlib.sha256(cached.encode()).hexdigest()})
+    assert evidence.complete and evidence.kind == 'cached_original' and evidence.text == cached
+    fetch.assert_not_awaited()

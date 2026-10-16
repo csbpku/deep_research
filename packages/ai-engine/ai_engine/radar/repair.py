@@ -316,11 +316,11 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
     if parts.hostname == 'dev.to':
         return await devto_article_evidence(row)
     cached = str(row.get('originalMarkdown') or '')
-    if _usable_content(cached, source_type=source_type, url=url):
-        return Evidence(cached[:18000], 'cached_original',
-                        row.get('readerQualityStatus') == 'ready' and len(cached) <= 18000
-                        and row.get('originalBytes') == len(cached.encode())
-                        and row.get('originalSha256') == hashlib.sha256(cached.encode()).hexdigest())
+    verified_cache = (row.get('readerQualityStatus') == 'ready'
+                      and row.get('originalBytes') == len(cached.encode())
+                      and row.get('originalSha256') == hashlib.sha256(cached.encode()).hexdigest())
+    if verified_cache and _usable_content(cached, source_type=source_type, url=url):
+        return Evidence(cached[:18000], 'cached_original', len(cached) <= 18000)
     host = parts.hostname
     allowed = (host, host[4:] if host.startswith('www.') else 'www.' + host)
     if parts.path.lower().endswith('.pdf'):
@@ -366,6 +366,13 @@ async def acquire_evidence(row: dict[str, Any]) -> Evidence:
         if urlsplit(doc.url).hostname not in allowed:
             raise RepairFailure('SOURCE_IDENTITY_MISMATCH', '跳转后来源身份不匹配', retryable=False)
         html = doc.content.decode('utf-8', errors='replace')
+        if re.search(r'<title[^>]*>\s*Security Check\s*</title>', html, re.I):
+            envelope = BeautifulSoup(html, 'html.parser')
+            heading = envelope.find('h1')
+            heading_text = heading.get_text(' ', strip=True).casefold() if heading else ''
+            if re.search(r'checking.*(?:not a robot|human)', heading_text):
+                raise RepairFailure('SOURCE_INSUFFICIENT', '来源返回机器人验证页，未取得文章正文')
+            del envelope
         if host == 'arxiv.org' and parts.path.startswith('/abs/'):
             result = _arxiv_abstract_input(html, doc.url)
             if result is None:
