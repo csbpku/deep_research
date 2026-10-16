@@ -32,6 +32,7 @@ from ai_engine.fetcher.safe_fetch import SafeFetchError, UpstreamHttpError, safe
 from ai_engine.fetcher.pdf_text import MAX_PDF_BYTES, PdfReadError, read_pdf
 from ai_engine.llm.client import generate_text, is_quota_error
 from ai_engine.radar import governance as g
+from ai_engine.radar.brief_quality import is_unavailable_brief
 from ai_engine.radar.diagnostic_policy import close_scored_pending, publication_identity, retire_duplicate_pending
 from ai_engine.radar.distilled_scorer import (
     DIM_NAMES, DISTILLED_VERSION, SYSTEM_PROMPT, _normalize_dim_key, _parse_llm_response,
@@ -80,7 +81,13 @@ def has_score(row: dict[str, Any]) -> bool:
 def needs_body_summary(row: dict[str, Any]) -> bool:
     body = str(row.get('body') or '').strip()
     return (len(body) < 80 or body == str(row.get('title') or '').strip()
-            or bool(re.search(r'^(待生成|暂无摘要|抓取失败|内容加载中|summary unavailable)', body, re.I)))
+            or bool(re.search(r'^(待生成|暂无摘要|抓取失败|内容加载中|summary unavailable)', body, re.I))
+            or is_unavailable_brief(body))
+
+
+def needs_judgement(row: dict[str, Any]) -> bool:
+    text = str(row.get('interpretation') or '').strip()
+    return len(text) < 30 or is_unavailable_brief(text)
 
 
 def needs_summary(row: dict[str, Any]) -> bool:
@@ -88,7 +95,7 @@ def needs_summary(row: dict[str, Any]) -> bool:
     # paid brief completion. Deletion still checks score validity and references.
     if has_score(row) and row['distilledScore'].get('tier') == 'noise':
         return False
-    return len(str(row.get('interpretation') or '').strip()) < 30 or needs_body_summary(row)
+    return needs_judgement(row) or needs_body_summary(row)
 
 
 def noise_grounded(row: dict[str, Any], evidence: Evidence) -> bool:
@@ -499,11 +506,15 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
             raise RepairFailure('MODEL_SUMMARY_INVALID', '摘要JSON结构不可解析') from None
         invalid = []
         missing_body = needs_body_summary(row)
-        missing_judgement = len(str(row.get('interpretation') or '').strip()) < 30
+        missing_judgement = needs_judgement(row)
         if missing_body and not 80 <= len(summary) <= 1200:
             invalid.append(f'摘要字符数{len(summary)}，要求80–1200')
         if missing_judgement and not 30 <= len(judgement) <= 500:
             invalid.append(f'判断字符数{len(judgement)}，要求30–500')
+        if missing_body and is_unavailable_brief(summary):
+            invalid.append('摘要仍是无法读取来源的说明，未形成实质摘要')
+        if missing_judgement and is_unavailable_brief(judgement):
+            invalid.append('判断仍是无法读取来源的说明，未形成实质判断')
         # Models may collapse layout whitespace in an otherwise verbatim quote.
         # Keep every non-whitespace character; never accept paraphrased evidence.
         normalized_quote = re.sub(r'\s+', ' ', quote)

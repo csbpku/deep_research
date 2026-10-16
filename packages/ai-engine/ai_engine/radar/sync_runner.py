@@ -29,6 +29,7 @@ from ai_engine.radar.diagnostic_policy import (
     record_noise_disposition, skipped_noise_publication,
 )
 from ai_engine.radar.noise_policy import confirmed_noise
+from ai_engine.radar.brief_quality import is_unavailable_brief
 from ai_engine.adapters.base import CostMetrics, ResearchEngineAdapter, build_adapter
 from ai_engine.contracts.errors import ERROR_CODES
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -1450,6 +1451,12 @@ async def _generate_brief_with_retry(
                 timeout_seconds=timeout_seconds,
                 context_max_chars=context_max_chars,
             )
+            if (brief.status == AI_JOB_STATUS["SUCCEEDED"] and brief.output_text
+                    and is_unavailable_brief(_strip_reasoning_markup(brief.output_text))):
+                raise _BriefGenerationError(
+                    "REPAIR_SUMMARY_UNAVAILABLE",
+                    "摘要模型只返回了来源不可用或仅凭标题推断的说明，未生成有效摘要",
+                )
             if brief.status == AI_JOB_STATUS["FAILED"] and _is_retryable_brief_failure(brief=brief):
                 last = brief
                 if delay <= 0:
@@ -2010,6 +2017,14 @@ async def _run_source(
                             fallback_count += 1
                             brief = None
                             interpretation = ""
+                            if _safe_error_code(brief_exc) == "REPAIR_SUMMARY_UNAVAILABLE":
+                                await _record_sync_diagnostic(
+                                    pool, source=source, run_id=run_id, candidate=raw_candidate,
+                                    canonical_url=persisted_candidate_url, kind="filtered",
+                                    reason_code="REPAIR_SUMMARY_UNAVAILABLE",
+                                    reason_message="摘要模型仅返回来源不可用或标题推断说明；保留来源证据待补齐",
+                                    body=markdown or normalized.snippet, markdown=markdown,
+                                )
                             logger.info(
                                 "ai-engine.radar.snippet_brief_fallback",
                                 extra={
