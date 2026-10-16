@@ -50,6 +50,31 @@ def test_legacy_reason_field_is_evidence_and_not_a_missing_reason() -> None:
     assert result['checks']['score_evidence']['evidence']['reasonField'] == 'scoreReason'
 
 
+@pytest.mark.parametrize('field', ['relevanceEvidence', 'scopeEvidence'])
+def test_current_reason_fields_are_present_but_not_semantically_verified(field: str) -> None:
+    r = row()
+    r['distilledScore']['weakPoint'] = ''
+    r['distilledScore'][field] = 'Explicit source-specific scoring rationale'
+    result = audit(r)
+    assert result['checks']['score_evidence']['state'] == 'unverified'
+    assert result['checks']['score_evidence']['evidence']['reasonField'] == field
+    r['distilledScore'][field] = {'unexpected': 'object'}
+    assert audit(r)['checks']['score_evidence']['state'] == 'missing'
+
+
+@pytest.mark.parametrize('title', ['Skip to main content', '  SKIP\u00a0TO CONTENT '])
+def test_navigation_labels_are_incomplete_identity_not_deletion_evidence(title: str) -> None:
+    r = row()
+    r['title'] = title
+    result = audit(r)
+    assert not result['basicComplete']
+    assert result['checks']['identity']['state'] == 'invalid'
+    assert result['checks']['score']['state'] == 'passed'
+    assert result['checks']['semantic_quality']['state'] == 'unverified'
+    r['title'] = 'Why skip to main content links matter'
+    assert audit(r)['checks']['identity']['state'] == 'passed'
+
+
 @pytest.mark.parametrize('change', ['default', 'zero', 'unknown_dimensions', 'nan'])
 def test_invalid_score_cannot_count_as_complete(change: str) -> None:
     r = row()

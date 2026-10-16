@@ -35,6 +35,10 @@
 
 ## 只读逐条执行
 
+身份检查拒绝仅为 `Skip to main content` 或 `Skip to content` 的导航标签；正常文章标题中提及这些词仍有效。厂商新闻的标题提取和文本回退使用同一规则，旧记录须按原文核实后纠正，不据此删除或重新评分。
+
+评分理由可来自 `weakPoint`、`relevanceEvidence`、`scopeEvidence` 或旧 `scoreReason` 的非空文本。存在理由只记为待核验，不表示引文、原文可达性或评分语义已验证。
+
 在 AI-engine 包目录（生产 `/app`）运行：
 
 ```sh

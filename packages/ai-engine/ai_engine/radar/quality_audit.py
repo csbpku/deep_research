@@ -18,6 +18,7 @@ from ai_engine.radar import repair
 from ai_engine.radar.distilled_scorer import SERIAL_KEYS
 from ai_engine.radar.enrichment_contract import is_enrichment_ready
 from ai_engine.radar.score_validity import has_public_radar_score
+from ai_engine.radar.title_quality import is_navigation_title
 
 TIERS = {'collection', 'deep_read', 'skim', 'noise'}
 CHECKS = {
@@ -100,6 +101,7 @@ def audit_row(row: dict[str, Any], *, now: datetime, protections: list[str],
     except ValueError:
         uuid_ok = False
     identity = {'uuid': uuid_ok, 'titlePresent': bool(str(row.get('title') or '').strip()),
+                'titleNotNavigation': not is_navigation_title(str(row.get('title') or '')),
                 'urlShape': _url(row.get('url')), 'canonicalUrlShape': _url(row.get('canonicalUrl'))}
     check('identity', 'passed' if all(identity.values()) else 'invalid', identity,
           '' if all(identity.values()) else '核实标题、UUID和原文地址；禁止据此公开或删除')
@@ -149,8 +151,10 @@ def audit_row(row: dict[str, Any], *, now: datetime, protections: list[str],
     meta = meta if isinstance(meta, dict) else {}
     proof = meta.get('radarRepair')
     proof = proof if isinstance(proof, dict) else {}
-    reason_field = 'weakPoint' if str(score.get('weakPoint') or '').strip() else (
-        'scoreReason' if str(row.get('scoreReason') or '').strip() else None)
+    reason_field = next((key for key in ('weakPoint', 'relevanceEvidence', 'scopeEvidence')
+                         if isinstance(score.get(key), str) and score[key].strip()), None)
+    if not reason_field and isinstance(row.get('scoreReason'), str) and row['scoreReason'].strip():
+        reason_field = 'scoreReason'
     check('score_evidence', 'not_applicable' if not scored else 'missing' if not reason_field
           else 'unverified',
           {'reasonPresent': bool(reason_field), 'reasonField': reason_field,

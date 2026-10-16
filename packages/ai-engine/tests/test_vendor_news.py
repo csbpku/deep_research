@@ -11,6 +11,7 @@ from ai_engine.radar.vendor_news_fetcher import (
     _coerce_utc,
     _clean_vendor_title,
     _extract_article_title,
+    _infer_title,
     _load_vendor_configs,
     _vendor_source_url,
     check_and_fetch_vendor_news,
@@ -152,6 +153,21 @@ def test_article_title_removes_hidden_selector_artifact() -> None:
 
     assert _extract_article_title(html) == (
         "Your Agent Aced the Task. Will It Do It Again?"
+    )
+
+
+def test_article_title_and_fallback_skip_exact_navigation_labels() -> None:
+    html = '<h1>Skip to main content</h1><h1>Many-shot jailbreaking</h1>'
+    assert _extract_article_title(html) == 'Many-shot jailbreaking'
+    assert _extract_article_title('<h1>Skip to content</h1>') is None
+    assert _infer_title('Skip to main content\nMany-shot jailbreaking', 'https://example.org/a') == (
+        'Many-shot jailbreaking'
+    )
+    assert _infer_title('SKIP TO CONTENT', 'https://example.org/many-shot-jailbreaking') == (
+        'Many Shot Jailbreaking'
+    )
+    assert _extract_article_title('<h1>Why skip to main content links matter</h1>') == (
+        'Why skip to main content links matter'
     )
 
 
