@@ -52,6 +52,15 @@ class _RateLimitError(RuntimeError):
     status_code = 429
 
 
+@pytest.mark.parametrize('key', ['relevance_evidence', 'relevanceEvidence'])
+def test_relevance_evidence_limit_counts_unicode_code_points(key: str) -> None:
+    evidence = 'a' * 239 + '𝓜'
+    assert len(evidence) == 240
+    assert len(evidence.encode('utf-16-le')) // 2 == 241
+    assert distilled_scorer._normalize_relevance_evidence({key: evidence}) == evidence
+    assert distilled_scorer._normalize_relevance_evidence({key: evidence + 'extra'}) == evidence
+
+
 @pytest.mark.asyncio
 async def test_maintenance_propagates_quota_without_default_or_retry():
     calls = 0

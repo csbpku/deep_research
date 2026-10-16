@@ -14,6 +14,14 @@ export const DistilledDimensionScoresSchema = z.object({
   expressionQuality: z.number().int().min(0).max(3),
   audienceFit: z.number().int().min(0).max(3),
 }).strict();
+
+// Python scorers truncate these fields by Unicode code point, not UTF-16 unit.
+// Validate the same limit when reading scores without truncating their evidence.
+const scoreText = (maximum: number) => z.string().refine(
+  (value) => Array.from(value).length <= maximum,
+  { message: `String must contain at most ${maximum} Unicode code points` },
+);
+
 export const DistilledScoreSchema = z.object({
   total: z.number().min(0).max(100),
   effectiveTotal: z.number().min(0).max(100).optional(),
@@ -24,8 +32,8 @@ export const DistilledScoreSchema = z.object({
   sourceBonus: z.number().min(0).max(20).optional(),
   tier: DistilledTierSchema,
   dimensions: DistilledDimensionScoresSchema,
-  weakPoint: z.string().max(100),
-  weakPointEvidence: z.string().max(120).optional(),
+  weakPoint: scoreText(100),
+  weakPointEvidence: scoreText(120).optional(),
   veto: z.enum(['unsafe_content', 'title_content_mismatch']).nullable(),
   riskFlags: z.array(z.enum(['security_review_required', 'suspected_repost'])),
   profile: DistilledProfileSchema,
@@ -33,7 +41,7 @@ export const DistilledScoreSchema = z.object({
   isDefault: z.boolean(),
   version: z.string().min(1).max(16),
   directRelevance: z.number().int().min(0).max(3).optional(),
-  relevanceEvidence: z.string().max(240).optional(),
+  relevanceEvidence: scoreText(240).optional(),
 }).strict();
 export type DistilledScore = z.infer<typeof DistilledScoreSchema>;
 
