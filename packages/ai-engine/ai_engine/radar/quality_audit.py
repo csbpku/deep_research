@@ -110,7 +110,7 @@ def audit_row(row: dict[str, Any], *, now: datetime, protections: list[str],
           '' if lineage_ok else '核对真实入库来源，补足可核验来源关系')
     for key, missing, evidence in (
         ('summary', repair.needs_body_summary(row), {'bodyChars': len(str(row.get('body') or '').strip())}),
-        ('judgement', len(str(row.get('interpretation') or '').strip()) < 30,
+        ('judgement', repair.needs_judgement(row),
          {'judgementChars': len(str(row.get('interpretation') or '').strip())}),
     ):
         check(key, 'missing' if missing else 'passed', evidence,

@@ -32,6 +32,7 @@ from ai_engine.fetcher.safe_fetch import SafeFetchError, UpstreamHttpError, safe
 from ai_engine.fetcher.pdf_text import MAX_PDF_BYTES, PdfReadError, read_pdf
 from ai_engine.llm.client import generate_text, is_quota_error
 from ai_engine.radar import governance as g
+from ai_engine.radar.brief_quality import is_unavailable_brief
 from ai_engine.radar.diagnostic_policy import close_scored_pending, publication_identity, retire_duplicate_pending
 from ai_engine.radar.distilled_scorer import (
     DIM_NAMES, DISTILLED_VERSION, SYSTEM_PROMPT, _normalize_dim_key, _parse_llm_response,
@@ -39,6 +40,7 @@ from ai_engine.radar.distilled_scorer import (
 )
 from ai_engine.radar.enrichment_contract import effective_tier, is_enrichment_ready
 from ai_engine.radar.noise_policy import NOISE_POLICY, confirmed_noise
+from ai_engine.radar.reviewed_noise import REVIEWED_ZERO_NOISE_POLICY, reviewed_zero_noise
 from ai_engine.radar.source_disposal import (
     SOURCE_DISPOSAL_ACTION, SOURCE_DISPOSAL_POLICY, source_disposal_eligible,
 )
@@ -80,7 +82,13 @@ def has_score(row: dict[str, Any]) -> bool:
 def needs_body_summary(row: dict[str, Any]) -> bool:
     body = str(row.get('body') or '').strip()
     return (len(body) < 80 or body == str(row.get('title') or '').strip()
-            or bool(re.search(r'^(待生成|暂无摘要|抓取失败|内容加载中|summary unavailable)', body, re.I)))
+            or bool(re.search(r'^(待生成|暂无摘要|抓取失败|内容加载中|summary unavailable)', body, re.I))
+            or is_unavailable_brief(body))
+
+
+def needs_judgement(row: dict[str, Any]) -> bool:
+    text = str(row.get('interpretation') or '').strip()
+    return len(text) < 30 or is_unavailable_brief(text)
 
 
 def needs_summary(row: dict[str, Any]) -> bool:
@@ -88,7 +96,7 @@ def needs_summary(row: dict[str, Any]) -> bool:
     # paid brief completion. Deletion still checks score validity and references.
     if has_score(row) and row['distilledScore'].get('tier') == 'noise':
         return False
-    return len(str(row.get('interpretation') or '').strip()) < 30 or needs_body_summary(row)
+    return needs_judgement(row) or needs_body_summary(row)
 
 
 def noise_grounded(row: dict[str, Any], evidence: Evidence) -> bool:
@@ -499,11 +507,15 @@ async def derive(row: dict[str, Any], evidence: Evidence, call: Any, *, fields: 
             raise RepairFailure('MODEL_SUMMARY_INVALID', '摘要JSON结构不可解析') from None
         invalid = []
         missing_body = needs_body_summary(row)
-        missing_judgement = len(str(row.get('interpretation') or '').strip()) < 30
+        missing_judgement = needs_judgement(row)
         if missing_body and not 80 <= len(summary) <= 1200:
             invalid.append(f'摘要字符数{len(summary)}，要求80–1200')
         if missing_judgement and not 30 <= len(judgement) <= 500:
             invalid.append(f'判断字符数{len(judgement)}，要求30–500')
+        if missing_body and is_unavailable_brief(summary):
+            invalid.append('摘要仍是无法读取来源的说明，未形成实质摘要')
+        if missing_judgement and is_unavailable_brief(judgement):
+            invalid.append('判断仍是无法读取来源的说明，未形成实质判断')
         # Models may collapse layout whitespace in an otherwise verbatim quote.
         # Keep every non-whitespace character; never accept paraphrased evidence.
         normalized_quote = re.sub(r'\s+', ' ', quote)
@@ -627,7 +639,8 @@ async def deletion_batch(pool: Any, rows: list[dict[str, Any]]) -> AsyncIterator
 async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: dict[str, Any],
                  evidence: Evidence | None, *, delete: bool, directory: Path,
                  deletion_policy: str = 'complete_grounded_noise',
-                 source_failure: dict[str, Any] | None = None) -> str:
+                 source_failure: dict[str, Any] | None = None,
+                 noise_review: dict[str, Any] | None = None) -> str:
     async with pool.connection() as conn:
         async with conn.transaction():
             actor = await g.verify_admin(conn, actor)
@@ -649,7 +662,7 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
             if delete:
                 action = SOURCE_DISPOSAL_ACTION if deletion_policy == SOURCE_DISPOSAL_POLICY else 'radar_noise_delete'
                 fingerprint = None
-                if deletion_policy == SOURCE_DISPOSAL_POLICY:
+                if deletion_policy in {SOURCE_DISPOSAL_POLICY, REVIEWED_ZERO_NOISE_POLICY}:
                     token = await (await conn.execute(
                         'SELECT md5(to_jsonb(s)::text) AS fingerprint FROM summaries s WHERE id=%s',
                         (row['id'],))).fetchone()
@@ -658,8 +671,18 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                             incomplete=not has_score(current) or needs_summary(current))
                             if deletion_policy == SOURCE_DISPOSAL_POLICY else
                             confirmed_noise(current.get('distilledScore')) if deletion_policy == NOISE_POLICY
+                            else reviewed_zero_noise({**current, 'fingerprint': fingerprint}, evidence, noise_review, actor)
+                            if deletion_policy == REVIEWED_ZERO_NOISE_POLICY
                             else deletion_policy == 'complete_grounded_noise' and evidence is not None
                             and noise_grounded(current, evidence))
+                if eligible and deletion_policy == REVIEWED_ZERO_NOISE_POLICY:
+                    assert noise_review is not None
+                    usage = await (await conn.execute(
+                        'SELECT 1 FROM llm_usage_events WHERE id::text=%s AND "requestId"=%s '
+                        "AND status='succeeded' AND operation='radar.repair_score'",
+                        (noise_review['providerUsageEventId'], noise_review['providerRequestId']),
+                    )).fetchone()
+                    eligible = usage is not None
                 if not eligible or current.get('source') != 'daily':
                     raise RepairFailure('SOURCE_DISPOSAL_NOT_CONFIRMED' if deletion_policy == SOURCE_DISPOSAL_POLICY
                                         else 'NOISE_NOT_CONFIRMED',
@@ -673,7 +696,8 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     + OWN_DIAGNOSTICS + ' FOR UPDATE',
                     (row.get('syncRunId'), row['canonicalUrl']))).fetchall()]
                 g.save(archive, {'format': 1, 'summary': current, 'diagnostics': diagnostics,
-                                 'sourceFailure': source_failure if deletion_policy == SOURCE_DISPOSAL_POLICY else None})
+                                 'sourceFailure': source_failure if deletion_policy == SOURCE_DISPOSAL_POLICY else None,
+                                 'noiseReview': noise_review if deletion_policy == REVIEWED_ZERO_NOISE_POLICY else None})
                 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
                 await audit(conn, actor, run, row, action, {
                     'reason': deletion_policy, 'deletionPolicy': deletion_policy,
@@ -682,6 +706,7 @@ async def mutate(pool: Any, actor: str, run: str, row: dict[str, Any], changes: 
                     'sourceVerificationRequired': deletion_policy != NOISE_POLICY,
                     'scoreVersion': (current.get('distilledScore') or {}).get('version'),
                     'sourceFailure': source_failure if deletion_policy == SOURCE_DISPOSAL_POLICY else None,
+                    'noiseReview': noise_review if deletion_policy == REVIEWED_ZERO_NOISE_POLICY else None,
                     'canonicalUrl': current['canonicalUrl'], 'sourceId': str(row.get('sourceId') or ''),
                     'publicationIdentity': publication_identity(current['title'], current.get('publishedAt'))})
                 # Remove only this insertion's diagnostics; same URL/different run remains independent.
