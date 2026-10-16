@@ -41,6 +41,8 @@
 
 评分理由可来自 `weakPoint`、`relevanceEvidence`、`scopeEvidence` 或旧 `scoreReason` 的非空文本。存在理由只记为待核验，不表示引文、原文可达性或评分语义已验证。
 
+评分文本的长度按 Unicode 码点计算，与 Python 评分器一致：`weakPoint` 最多 100、`weakPointEvidence` 最多 120、`relevanceEvidence` 最多 240。Web 读取历史评分时保留原文本，数学字符等补充平面字符不因占用两个 UTF-16 单元而使整个评分失效；超过码点上限的文本仍拒绝，不截断库中证据，不修改原分或版本。
+
 在 AI-engine 包目录（生产 `/app`）运行：
 
 ```sh

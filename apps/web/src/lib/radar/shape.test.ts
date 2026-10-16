@@ -182,6 +182,28 @@ describe('emptyFeedbackCounts', () => {
 });
 
 describe('parseDistilledScore', () => {
+  it.each(['current', 'legacy'] as const)('preserves %s scoring evidence containing supplementary Unicode', (format) => {
+    const relevanceEvidence = 'a'.repeat(239) + '𝓜';
+    const input = {
+      total: 60, tierScore: 60, tier: 'deep_read',
+      dimensions: format === 'current' ? {
+        informationGain: 2, analysisDepth: 2, actionability: 1,
+        factualReliability: 2, currentApplicability: 2, expressionQuality: 2, audienceFit: 2,
+      } : {
+        info_increment: 2, analysis_depth: 2, actionability: 1,
+        fact_credibility: 2, timeliness: 2, expression_quality: 2, audience_fit: 2,
+      },
+      weakPoint: 'Limited replication evidence', veto: null, riskFlags: [],
+      profile: 'paper', isDefault: false, version: '5.0', relevanceEvidence,
+    };
+    const original = structuredClone(input);
+    const score = parseDistilledScore(input);
+    expect(score).toMatchObject({ total: 60, tierScore: 60, tier: 'deep_read', version: '5.0', relevanceEvidence });
+    expect(score?.dimensions.actionability).toBe(1);
+    expect(input).toEqual(original);
+    expect(parseDistilledScore({ ...input, relevanceEvidence: relevanceEvidence + 'a' })).toBeNull();
+  });
+
   it('normalizes legacy snake_case v2 payloads', () => {
     const score = parseDistilledScore({
       total: 90,
