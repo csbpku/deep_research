@@ -466,7 +466,7 @@ jobs:
               timeout --signal=TERM --kill-after=30s 10m \
                 "${compose[@]}" pull web ai-engine || true
               timeout --signal=TERM --kill-after=30s 5m \
-                "${compose[@]}" up -d --no-build --remove-orphans || true
+                "${compose[@]}" up -d --no-build || true
               "${compose[@]}" exec -T nginx nginx -s reload </dev/null || true
             else
               echo "[deploy] no valid previous registry SHA; skipping image rollback" >&2
@@ -541,7 +541,9 @@ jobs:
             rollback 1
           fi
           echo "[deploy] starting services; web entrypoint will apply migrations"
-          "${compose[@]}" up -d --no-build --remove-orphans
+          # Retain independent/one-off verification containers. Cleanup is
+          # explicit maintenance, just like database backup retention.
+          "${compose[@]}" up -d --no-build
           # Nginx resolves Compose service names at startup. Re-resolve them
           # after image replacement changes the web/AI container addresses.
           "${compose[@]}" exec -T nginx nginx -t </dev/null
