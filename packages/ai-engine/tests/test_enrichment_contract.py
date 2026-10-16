@@ -89,7 +89,7 @@ def test_external_reading_preserves_scored_tier_without_server_enrichment() -> N
         "collection",
         enrichment_ready=False,
         external_reading=True,
-    ) == "collection"
+    ) == "deep_read"
     assert effective_tier(
         "skim",
         enrichment_ready=False,

@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states';
 
-export const DistilledTierSchema = z.enum(['collection', 'deep_read', 'skim', 'noise']);
+// Accept historical payloads while returning the current three-tier taxonomy.
+export const DistilledTierSchema = z.enum(['collection', 'deep_read', 'skim', 'noise'])
+  .transform((tier) => tier === 'collection' ? 'deep_read' as const : tier);
 export const DistilledProfileSchema = z.enum(['paper', 'engineering', 'news']);
 export const DistilledDimensionScoresSchema = z.object({
   informationGain: z.number().int().min(0).max(3),

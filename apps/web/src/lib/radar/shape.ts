@@ -174,7 +174,7 @@ export function shapeCandidate(input: {
     excerpt,
     excerptDisplay: classifyExcerptDisplay(excerpt),
     body: input.includeBody === false || externalReading ? null : s.body,
-    tier: s.distilledTier ?? distilledScore?.tier ?? null,
+    tier: s.distilledTier === 'collection' ? 'deep_read' : s.distilledTier ?? distilledScore?.tier ?? null,
     url: s.url,
     sourceType: s.syncRun?.source?.sourceType ?? (s.source === 'user' ? 'web_share' : null),
     sourceName: s.syncRun?.source?.name ?? (s.source === 'user' ? '用户分享' : null),

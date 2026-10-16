@@ -45,8 +45,7 @@ from ai_engine.scoring.scoring_profiles import profile_for_source_url
 _TARGET = {
     "noise": 60.0,
     "skim": 30.0,
-    "deep_read": 8.0,
-    "collection": 2.0,
+    "deep_read": 10.0,
 }
 _TOLERANCE_PP = 10.0
 
@@ -173,23 +172,14 @@ def _distribution(buckets: list[str]) -> dict[str, float]:
 
 
 def _assert_within_target(label: str, buckets: list[str]) -> None:
+    assert set(buckets) <= {'noise', 'skim', 'deep_read'}
     dist = _distribution(buckets)
     for tier, target in _TARGET.items():
         actual = dist[tier]
-        if tier == "collection":
-            # Collection has a wider tolerance because the LLM rarely
-            # assigns direct_relevance=3 — the synthetic distribution
-            # emits fewer such items, and real data depends on the LLM
-            # score distribution shifting over time.
-            assert 0.5 <= actual <= 5.0, (
-                f"{label}: tier {tier!r} = {actual:.1f}% (target 0.5-5.0%); "
-                f"distribution = {dist!r}"
-            )
-        else:
-            assert abs(actual - target) <= _TOLERANCE_PP, (
-                f"{label}: tier {tier!r} = {actual:.1f}% (target {target}%, "
-                f"tolerance ±{_TOLERANCE_PP}pp); distribution = {dist!r}"
-            )
+        assert abs(actual - target) <= _TOLERANCE_PP, (
+            f"{label}: tier {tier!r} = {actual:.1f}% (target {target}%, "
+            f"tolerance ±{_TOLERANCE_PP}pp); distribution = {dist!r}"
+        )
 
 
 def test_engineering_profile_distribution() -> None:

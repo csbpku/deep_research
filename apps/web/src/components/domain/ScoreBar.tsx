@@ -4,12 +4,12 @@ import { cn } from '@/lib/utils';
 
 /**
  * Distilled score 的 tier 视觉映射 —— 单一事实来源。
- * tier 枚举来自 packages/ai-engine/ai_engine/scoring（deep_read / skim / collection / noise）。
+ * 当前等级为 deep_read / skim / noise；collection 只兼容历史数据。
  */
 export const TIER_LABELS: Record<string, string> = {
-  deep_read: '推荐精读',
-  skim: '速览',
-  collection: '核心材料',
+  deep_read: '精读',
+  skim: '速读',
+  collection: '精读',
   noise: '不推荐',
 };
 
@@ -30,7 +30,7 @@ export const TIER_CLASSES: Record<string, { text: string; border: string; fill: 
 };
 
 export function tierClasses(tier: string) {
-  return TIER_CLASSES[tier] ?? TIER_CLASSES.collection;
+  return TIER_CLASSES[tier === 'collection' ? 'deep_read' : tier] ?? TIER_CLASSES.deep_read;
 }
 
 /**
@@ -41,7 +41,7 @@ export function ScoreBar({
   label,
   value,
   max = 3,
-  tier = 'collection',
+  tier = 'deep_read',
   className,
 }: {
   label: string;

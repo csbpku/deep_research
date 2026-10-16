@@ -88,6 +88,22 @@ class _Connection:
     async def transaction(self):  # type: ignore[no-untyped-def]
         yield
 
+    @asynccontextmanager
+    async def cursor(self, **kwargs: Any):
+        connection = self
+
+        class StreamCursor:
+            itersize = 20
+
+            async def execute(self, statement: Any) -> None:
+                self.result = await connection.execute(statement)
+
+            async def __aiter__(self):  # type: ignore[no-untyped-def]
+                for row in self.result.rows:
+                    yield row
+
+        yield StreamCursor()
+
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
         if not isinstance(sql, str):
             sql = sql.as_string()

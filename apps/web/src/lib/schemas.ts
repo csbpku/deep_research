@@ -157,7 +157,7 @@ export const RadarListQuery = z.object({
     z.array(z.enum(RADAR_QUALITY_VALUES)).min(1),
   // Default excludes skim so the member-facing radar defaults to items
   // worth deep-reading; the dropdown still lets users widen to skim.
-  ]).default(['collection', 'deep_read']),
+  ]).default(['deep_read']),
   /** 入库时间下限；用于技术雷达的“今天/近 N 天”筛选。 */
   dateFrom: z.coerce.date().optional(),
   page: z.coerce.number().int().min(1).default(1),

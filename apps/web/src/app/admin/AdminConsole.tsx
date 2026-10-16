@@ -1171,9 +1171,8 @@ function RadarMonitorPanel({
             <RadarMonitorSection title="阅读等级分布" hint={`${levelTotal} 条今日写入内容`}>
               <div className="space-y-2">
                 {([
-                  ['核心材料', monitor.readingLevels.collection, 'bg-tier-collection'],
-                  ['推荐精读', monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
-                  ['速览', monitor.readingLevels.skim, 'bg-tier-skim'],
+                  ['精读', monitor.readingLevels.collection + monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
+                  ['速读', monitor.readingLevels.skim, 'bg-tier-skim'],
                   ['不推荐', monitor.readingLevels.noise, 'bg-tier-noise'],
                   ['待评分', monitor.readingLevels.pending, 'bg-muted-foreground'],
                 ] as const).map(([label, count, color]) => (
@@ -1268,7 +1267,7 @@ function RadarScoringRules() {
       </summary>
       <div className="border-t border-border px-4 py-3">
         <p className="text-xs leading-5 text-muted-foreground">
-          总分为 7 个维度的加权分数（0–100）。阅读等级按来源 profile 使用下表阈值；核心材料还需要满足相关性和工程证据完整度，不是只看总分。
+          总分为 7 个维度的加权分数（0–100）。等级按经相关性、适用范围和证据校准后的等级分判断。原收藏级已并入精读；所有内容统一在原站阅读。
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -1276,33 +1275,29 @@ function RadarScoringRules() {
           <thead className="border-b border-border bg-muted/20 text-muted-foreground">
             <tr>
               <th className="px-4 py-2 font-medium">评分 profile</th>
-              <th className="px-3 py-2 font-medium">核心材料</th>
-              <th className="px-3 py-2 font-medium">推荐精读</th>
-              <th className="px-3 py-2 font-medium">速览</th>
+              <th className="px-3 py-2 font-medium">精读</th>
+              <th className="px-3 py-2 font-medium">速读</th>
               <th className="px-3 py-2 font-medium">不推荐</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             <tr>
               <td className="px-4 py-2.5 font-medium">工程内容 / GitHub</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 90</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">70–89.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">50–69.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 50</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 55</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">38–54.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 38</td>
             </tr>
             <tr>
               <td className="px-4 py-2.5 font-medium">研究论文 / arXiv</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 88</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">76–87.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">55–75.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 55</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 60</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">42–59.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 42</td>
             </tr>
             <tr>
               <td className="px-4 py-2.5 font-medium">行业新闻 / 产品动态</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 82</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">68–81.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">50–67.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 50</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 52</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">38–51.99</td>
+              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 38</td>
             </tr>
           </tbody>
         </table>

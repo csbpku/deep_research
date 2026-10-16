@@ -73,23 +73,30 @@ async def protected_ids(conn: Any, rows: list[dict[str, Any]]) -> dict[str, list
     protected: dict[str, set[str]] = defaultdict(set)
     for table in REFERENCE_TABLES:
         # Reference-bearing tables only; never enumerate users or credentials.
-        records = await (await conn.execute(sql.SQL('SELECT to_jsonb(t) AS record FROM {} t').format(sql.Identifier(table)))).fetchall()
-        for record in records:
-            payload = dict(record)['record']
-            # A bookmark to a research with a coincident ID is not a radar bookmark.
-            if table == 'user_bookmarks' and payload.get('targetType') not in ('summary', 'radar_candidate'):
-                continue
-            if table == 'radar_tracked_repos':
-                if payload.get('status') != 'pinned':
-                    continue
-                payload['url'] = 'https://github.com/' + str(payload['ownerRepo']).casefold()
-            # A record's own id is not an outgoing reference.
-            payload.pop('id', None)
-            for token in reference_tokens(payload):
-                if token in lookup:
-                    for sid in lookup[token]:
-                        protected[sid].add(table)
+        async with conn.cursor(name='governance_refs_' + table) as cursor:
+            cursor.itersize = 20
+            await cursor.execute(sql.SQL('SELECT to_jsonb(t) AS record FROM {} t').format(sql.Identifier(table)))
+            records = cursor
+            async for record in records:
+                _protect_record(dict(record)['record'], table, lookup, protected)
     return {key: sorted(value) for key, value in protected.items()}
+
+
+def _protect_record(payload: dict[str, Any], table: str, lookup: dict[str, set[str]],
+                    protected: dict[str, set[str]]) -> None:
+    # A bookmark to a research with a coincident ID is not a radar bookmark.
+    if table == 'user_bookmarks' and payload.get('targetType') not in ('summary', 'radar_candidate'):
+        return
+    if table == 'radar_tracked_repos':
+        if payload.get('status') != 'pinned':
+            return
+        payload['url'] = 'https://github.com/' + str(payload['ownerRepo']).casefold()
+    # A record's own id is not an outgoing reference.
+    payload.pop('id', None)
+    for token in reference_tokens(payload):
+        if token in lookup:
+            for sid in lookup[token]:
+                protected[sid].add(table)
 
 
 async def verify_admin(conn: Any, actor: str) -> str:

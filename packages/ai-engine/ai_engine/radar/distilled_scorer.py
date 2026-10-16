@@ -69,7 +69,9 @@ _SCORING_RUN_METRICS: ContextVar[dict[str, int] | None] = ContextVar(
     default=None,
 )
 
-DISTILLED_VERSION = "5.0"
+# 5.1 keeps the 5.0 numerical rubric and merges collection into deep_read.
+# Older dimensions may be replayed only with their source and decision inputs.
+DISTILLED_VERSION = "5.1"
 
 SCORING_CHUNK_TOKEN_BUDGET = max(
     512, int(os.environ.get("RADAR_SCORING_CHUNK_TOKENS", "6000"))
@@ -1307,8 +1309,6 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
 
 
 def _tier_for_score(total: float, profile: ScoringProfile) -> str:
-    if total >= profile.tier_collection:
-        return TIER_COLLECTION
     if total >= profile.tier_deep_read:
         return TIER_DEEP_READ
     if total >= profile.tier_skim:

@@ -210,3 +210,42 @@ formal deploys update the worker to the same immutable image. Its restart policy
 and checkpoint survive host/container replacement; main `--remove-orphans` cannot
 remove the independent project. Inspect each unresolved item and public/referenced
 paths before claiming that the backlog is cleared.
+
+
+# Unified external reading and scoring (5.1)
+
+Current reading tiers are `deep_read`（精读）、`skim`（速读）and `noise`.
+The former `collection` tier is included in `deep_read`; personal bookmarks are
+independent and remain unchanged. Readers accept the legacy tier and filters
+as aliases during migration. New scoring never emits `collection`.
+
+Version 5.1 preserves the numerical rubric of 5.0. An explicit Admin migration
+can upgrade 5.0 by changing the version and tier taxonomy while retaining every
+dimension and numeric score. Older versions require source-backed evaluation;
+changing their version string alone does not establish current validity.
+Continuous repair still preserves valid scores. Only the explicitly scoped
+`scripts.unify_radar` operation replaces valid legacy scores.
+
+```sh
+python -m scripts.unify_radar --actor <real-admin> --state-dir <private-persistent-dir> --preview
+python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --limit 10
+python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --limit 100
+python -m scripts.unify_radar --actor <real-admin> --state-dir <same-dir> --rollback-audit <audit-id>
+```
+
+The immutable preview captures row fingerprints and references. Execution needs
+the verified independent backup receipt, a real Admin, row-version comparison
+and same-transaction audit. It uses one source/model operation at a time and at
+most two reserved model calls per legacy item, including format retries and
+brief completion. Reservations and responses persist before applying changes;
+reruns reuse recorded responses, uncertain calls remain unresolved, and quota
+errors stop further model work. Budgets from other repair scopes are untouched.
+
+Legacy server reading changes to external reading only after a safe live read
+matches the publication identity. Cached originals and review outcomes remain
+historical evidence. Cache replacement retains the old value in backup/audit.
+Current noise without references uses the standing deletion policy; referenced
+noise is archived with `reference_only_noise`, preserving direct citations.
+Deletion retains historical diagnostics, and restore checks their later versions.
+Unverified sources or model failures remain explicit unresolved items; the
+migration does not grant a review pass or manufacture a score.
