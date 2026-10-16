@@ -303,6 +303,7 @@ describe('shapeCandidate', () => {
         summaryDate: new Date('2026-08-26T00:00:00Z'),
         publishedAt: null,
         createdAt: new Date('2026-08-26T00:00:00Z'),
+        updatedAt: new Date('2026-10-16T07:54:00Z'),
         interpretation: null,
         scoreReason: null,
         scoreVersion: null,
@@ -316,6 +317,7 @@ describe('shapeCandidate', () => {
       },
     });
 
+    expect(shaped.crawledAt).toBe('2026-08-26T00:00:00.000Z');
     expect(shaped.title).toBe("Claude Preview's capabilities");
   });
 
