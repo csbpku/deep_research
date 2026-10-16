@@ -11,6 +11,7 @@ import hashlib
 import json
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -343,7 +344,8 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
                     # and backup. Replace it with identified source text; never
                     # assert the old mismatched hash was correct.
                     changes.update(originalMarkdown=evidence.text, originalBytes=len(evidence.text.encode()),
-                        originalSha256=evidence.sha256, contentSha256=evidence.sha256)
+                        originalSha256=evidence.sha256, contentSha256=evidence.sha256,
+                        originalFetchedAt=datetime.now(timezone.utc))
                     changes['originalMeta'] = {**(changes.get('originalMeta') or row.get('originalMeta') or {}),
                         'cacheReplacement': {'evidenceKind': evidence.kind, 'complete': evidence.complete,
                             'sha256': evidence.sha256, 'historicalReviewSourceSha256': row.get('originalSha256'),
