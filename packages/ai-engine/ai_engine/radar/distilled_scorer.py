@@ -551,6 +551,7 @@ def build_user_prompt(
     current_date: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
     content_is_chunk_evidence: bool = False,
+    content_is_source_excerpt: bool = False,
     review_instruction: str | None = None,
     verified_arxiv_title: bool = False,
 ) -> str:
@@ -572,7 +573,7 @@ def build_user_prompt(
     )
     content_for_scoring = (
         content
-        if content_is_chunk_evidence
+        if content_is_chunk_evidence or content_is_source_excerpt
         else _prepare_scoring_content(
             title,
             content,
@@ -581,6 +582,9 @@ def build_user_prompt(
         )
     )
     body_label = (
+        "以下仅为来源片段，未覆盖全文；只依据已呈现的事实评分，"
+        "未提供部分保持不确定，不得断言片段中未提及的内容不存在"
+        if content_is_source_excerpt else
         "以下是逐块覆盖全文后整理的证据；分数必须综合所有章节，不按区块平均"
         if content_is_chunk_evidence
         else "以下是本次评分输入的完整正文"
