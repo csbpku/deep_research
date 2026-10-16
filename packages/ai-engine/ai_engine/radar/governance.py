@@ -57,10 +57,23 @@ def valid_score(row: dict[str, Any], *, current: bool = False) -> bool:
 
 
 def reference_tokens(value: Any) -> set[str]:
+    from ai_engine.ingestion.pipeline import canonicalize_url
+
     text = json.dumps(value, default=str, ensure_ascii=False)
-    return {x.lower() for x in UUID_RE.findall(text)} | {
+    urls = {
         x.rstrip('.,;').rstrip('/') for x in URL_RE.findall(text)
     }
+    normalized = set()
+    for url in urls:
+        try:
+            canonical = canonicalize_url(url).rstrip('/')
+        except ValueError:
+            continue
+        if canonical:
+            normalized.add(canonical)
+            if canonical.startswith('https://github.com/'):
+                normalized.add(canonical.casefold())
+    return {x.lower() for x in UUID_RE.findall(text)} | urls | normalized
 
 
 async def protected_ids(conn: Any, rows: list[dict[str, Any]]) -> dict[str, list[str]]:

@@ -113,3 +113,25 @@ async def test_unknown_reserved_call_is_not_repeated(tmp_path, monkeypatch):
     assert saved['modelCalls'] == 1
     assert saved['items'][source_row['id']]['error'] == 'MODEL_RESULT_UNKNOWN'
     model.assert_not_awaited()
+
+
+async def test_paid_response_cannot_be_reused_for_changed_source(tmp_path, monkeypatch):
+    source_row = {**row('4.7'), 'fingerprint': 'same'}
+    state = {'policy': u.POLICY, 'version': DISTILLED_VERSION, 'batch': str(uuid4()), 'actor': 'admin',
+             'modelCalls': 1, 'maxModelCalls': 2, 'quotaStopped': False,
+             'targets': [{'id': source_row['id'], 'fingerprint': 'same', 'protectedBy': []}],
+             'items': {source_row['id']: {'status': 'running', 'calls': 1, 'responses': ['old response'],
+                                         'sourceEvidence': {'sha256': 'old', 'kind': 'fixture', 'complete': True}}}}
+    u.g.save(tmp_path / 'state.json', state)
+    monkeypatch.setattr(u.g, 'verify_backup', lambda: None)
+    monkeypatch.setattr(u, 'fetch_row', AsyncMock(return_value=source_row))
+    monkeypatch.setattr(u, 'live_evidence', AsyncMock(return_value=u.r.Evidence('Changed source', 'fixture', True)))
+    monkeypatch.setattr(u.g, 'verify_admin', AsyncMock(return_value='admin'))
+    monkeypatch.setattr(u.r, 'audit', AsyncMock())
+    model = AsyncMock()
+    monkeypatch.setattr(u, 'generate_text', model)
+    await u.run(Pool(), 'admin', tmp_path, limit=1)
+    saved = json.loads((tmp_path / 'state.json').read_text())
+    assert saved['modelCalls'] == 1
+    assert saved['items'][source_row['id']]['error'] == 'SOURCE_CHANGED_AFTER_MODEL'
+    model.assert_not_awaited()

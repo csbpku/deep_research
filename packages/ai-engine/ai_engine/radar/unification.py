@@ -281,6 +281,13 @@ async def run(pool: Any, actor: str, directory: Path, *, limit: int = 100) -> di
                 if legacy or needs_live:
                     evidence = await asyncio.wait_for(live_evidence(row), timeout=65)
                 if legacy:
+                    assert evidence is not None
+                    proof = {'sha256': evidence.sha256, 'kind': evidence.kind, 'complete': evidence.complete}
+                    if item.get('responses') and item.get('sourceEvidence') != proof:
+                        raise r.RepairFailure('SOURCE_CHANGED_AFTER_MODEL',
+                            '已付费响应的来源证据不匹配，禁止套用到新来源或重置预算', retryable=False)
+                    item['sourceEvidence'] = proof
+                    g.save(path, state)
                     response_index = 0
                     async def call(**kwargs: Any) -> Any:
                         nonlocal response_index

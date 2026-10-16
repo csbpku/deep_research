@@ -47,6 +47,12 @@ def test_reference_tokens_json_urls_and_ids() -> None:
     assert g.reference_tokens({'nested': [sid, 'https://github.com/a/b/']}) == {sid, 'https://github.com/a/b'}
 
 
+def test_reference_anchors_and_tracking_protect_the_same_publication() -> None:
+    assert 'https://example.org/article' in g.reference_tokens({'source': 'https://example.org/article?utm_source=test#section'})
+    assert 'https://github.com/owner/repo' in g.reference_tokens({'source': 'https://github.com/OWNER/Repo#readme'})
+    assert 'https://example.org/article' not in g.reference_tokens({'source': 'https://example.org/another'})
+
+
 def test_backup_requires_actual_checksum(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(g, 'root_dir', lambda: tmp_path)
     dump = tmp_path / 'backup.dump'
