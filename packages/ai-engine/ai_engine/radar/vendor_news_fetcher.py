@@ -25,6 +25,7 @@ import yaml  # type: ignore[import-untyped]  # types-PyYAML not in pyproject; OS
 from ai_engine.radar.huggingface import rewrite_huggingface_url
 from ai_engine.radar.ai_keyword_filter import is_ai_related
 from ai_engine.radar.models import RadarCandidate
+from ai_engine.radar.title_quality import is_navigation_title
 
 logger = logging.getLogger("vendor_news_fetcher")
 
@@ -326,7 +327,7 @@ def _infer_title(text: str, url: str) -> str:
     lines = text.strip().split("\n")
     for line in lines:
         line = _html.unescape(line).strip()
-        if line and 5 < len(line) < 200:
+        if line and 5 < len(line) < 200 and not is_navigation_title(line):
             return line[:200]
     path = url.rstrip("/").split("/")[-1]
     return path.replace("-", " ").replace("_", " ").title()[:200]
@@ -334,23 +335,24 @@ def _infer_title(text: str, url: str) -> str:
 
 def _extract_article_title(html: str) -> str | None:
     """Prefer the semantic article heading over a site-wide HTML title."""
-    match = _re.search(
+    matches = _re.finditer(
         r"<h1\b[^>]*>(.*?)</h1>",
         html,
         flags=_re.DOTALL | _re.IGNORECASE,
     )
-    if not match:
-        return None
-    value = _re.sub(r"<[^>]+>", " ", match.group(1))
-    value = _html.unescape(value)
-    value = _re.sub(
-        r"^[^>\n]{0,160}(?:hidden|sr-only|visually-hidden)[^>\n]*>\s*",
-        "",
-        value,
-        flags=_re.IGNORECASE,
-    )
-    value = _re.sub(r"\s+", " ", value).strip()
-    return value[:200] if len(value) > 5 else None
+    for match in matches:
+        value = _re.sub(r"<[^>]+>", " ", match.group(1))
+        value = _html.unescape(value)
+        value = _re.sub(
+            r"^[^>\n]{0,160}(?:hidden|sr-only|visually-hidden)[^>\n]*>\s*",
+            "",
+            value,
+            flags=_re.IGNORECASE,
+        )
+        value = _re.sub(r"\s+", " ", value).strip()
+        if len(value) > 5 and not is_navigation_title(value):
+            return value[:200]
+    return None
 
 
 def _clean_vendor_title(value: str, vendor: str) -> str:
