@@ -11,6 +11,7 @@
 | 测试用户功能 | [`FUNCTIONAL_CHECKLIST.md`](./FUNCTIONAL_CHECKLIST.md) | 短冒烟路径、功能矩阵、失败恢复和验收记录模板 |
 | 理解当前系统 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | 当前产品范围、架构、权限、安全和数据边界 |
 | 构建与验证 | 根目录 [`README.md`](../README.md) | 启动、类型检查、测试和构建命令 |
+| 开发分支、跨电脑协作与 PR 发布 | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | `main` 稳定基线、短期任务分支、CI、合并授权和部署状态 |
 | 修改 API、状态、错误或环境变量 | [`contracts/README.md`](./contracts/README.md) | 跨 runtime 的共享契约入口 |
 | 部署与回滚 | [`infra/README.md`](../infra/README.md) | 生产拓扑、镜像、健康检查和备份边界 |
 

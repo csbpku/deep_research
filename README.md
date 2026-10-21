@@ -273,6 +273,8 @@ curl -fsS https://research.example.com/ai-healthz
 
 这是一个个人项目仓库，目前不接受外部 PR。新克隆按 `scripts/setup.sh` 即可起，按 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 约定的架构与数据模型工作。
 
+获授权的开发者与 Bot 统一遵循 [`CONTRIBUTING.md`](./CONTRIBUTING.md)：从最新 `origin/main` 新建短期 `codex/功能名` 分支，推送分支、创建 PR，经 CI 和合并授权后合回 `main`。两台电脑通过 GitHub 同步；`main` 合并会触发生产部署。
+
 ## License
 
 UNLICENSED. Personal project.

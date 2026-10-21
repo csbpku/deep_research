@@ -33,6 +33,16 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - Web 与 Reader 共用 `packages/design-system` 的 MUI/Emotion 主题与生成 CSS；基础 token 修改后运行生成器及 `--check`，不维护第二套色值。Web 使用 Next 15 MUI SSR cache，生产 `/mui-demo` 返回 404。
 - Preserve unrelated working-tree changes. Do not delete branches, worktrees, reports, caches, or temporary artifacts without post-report user confirmation.
 
+## Branch And Release Workflow
+
+- Stable baseline is GitHub `origin/main`. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before development, merging or publishing.
+- Start each task with `git fetch origin`, then create a short-lived `codex/<task>` branch from `origin/main`; do not reuse a historical task branch or develop directly on `main`.
+- Different computers use separate clones and synchronize through GitHub branches/PRs. Same-machine parallel tasks use separate worktrees; do not switch another agent's working checkout.
+- Commit only task changes, push the task branch and open a PR targeting `main`. CI must pass before merging; preserve unrelated changes and report authentication or CI failures explicitly.
+- Merging `main` triggers automatic production deployment. Obtain explicit authorization for merge/release; creating a PR or passing CI does not authorize deployment. Once authorized, follow CI → merge → Actions deploy → production verification without asking again.
+- Normal releases use GitHub Actions and immutable commit-SHA images. Direct VPS/source-snapshot releases require explicit exceptional authorization and must be reconciled back into a PR; report pushed, merged, deployed and live-verified states separately.
+- Delete task branches/worktrees only after reporting the result and receiving cleanup confirmation.
+
 ## Production VPS Access
 
 - Production VPS `159.223.50.187`: use `deploy` with `~/.ssh/deep-research-actions` for deployment operations; this key is also the one installed in `/home/deploy/.ssh/authorized_keys` and the account can run Docker.
