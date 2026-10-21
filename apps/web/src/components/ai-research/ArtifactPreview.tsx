@@ -3,6 +3,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, List, Maximize2, Presentation } from 'lucide-react';
 import MarkdownContent from '@/components/MarkdownContent';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
+import IconButton from '@mui/material/IconButton';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+import Typography from '@mui/material/Typography';
 
 function splitSlides(content: string): string[] {
   const normalized = content.replace(/\r\n?/gu, '\n').trim();
@@ -109,9 +118,9 @@ export function ArtifactPreview({ content }: { content: string }) {
   const slides = splitSlides(content);
   if (slides.length === 0) {
     return (
-      <section className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground" aria-label="Slides 提纲预览">
+      <Paper component="section" variant="outlined" aria-label="Slides 提纲预览" sx={{ borderStyle: 'dashed', px: 2, py: 4, textAlign: 'center', color: 'text.secondary', typography: 'body2' }}>
         暂无可预览的演示提纲。
-      </section>
+      </Paper>
     );
   }
 
@@ -161,25 +170,26 @@ export function ArtifactPreview({ content }: { content: string }) {
   }, [mode, slides.length]);
 
   return (
-    <section className="space-y-4" aria-label="Slides 提纲预览">
-      <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-primary/20 bg-primary/[0.035] px-4 py-3.5">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground"><Presentation className="size-4 text-primary" />Slides 提纲预览</p>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+    <Stack component="section" spacing={2} aria-label="Slides 提纲预览">
+      <Paper variant="outlined" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, borderColor: 'primary.main', bgcolor: 'action.selected', px: 2, py: 2 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="fieldTitle" component="p" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.primary' }}><Presentation size={16} color="currentColor" />Slides 提纲预览</Typography>
+          <Typography variant="metadata" color="text.secondary" sx={{ mt: 0.5 }}>
             演示模式适合讲解或录屏；列表模式适合核对每页内容。它仍是按页组织的研究提纲，不是可下载的 .pptx 文件。
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <div className="flex rounded-lg border border-border bg-background p-0.5" role="group" aria-label="Slides 预览模式">
-            <button type="button" aria-pressed={mode === 'stage'} onClick={() => setMode('stage')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${mode === 'stage' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}><Maximize2 className="size-3" />演示</button>
-            <button type="button" aria-pressed={mode === 'outline'} onClick={() => setMode('outline')} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${mode === 'outline' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}><List className="size-3" />列表</button>
-          </div>
-          <span className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs tabular-nums text-muted-foreground">{slides.length} 页</span>
-        </div>
-      </div>
+          </Typography>
+        </Box>
+        <Stack direction="row" spacing={1} sx={{ flexShrink: 0, alignItems: 'center' }}>
+          <ToggleButtonGroup value={mode} exclusive size="small" aria-label="Slides 预览模式" onChange={(_event, value: 'stage' | 'outline' | null) => { if (value) setMode(value); }}>
+            <ToggleButton value="stage"><Maximize2 size={14} />演示</ToggleButton>
+            <ToggleButton value="outline"><List size={14} />列表</ToggleButton>
+          </ToggleButtonGroup>
+          <Chip size="small" variant="outlined" label={`${slides.length} 页`} />
+        </Stack>
+      </Paper>
       {mode === 'stage' ? (
-        <div className="space-y-3">
-          <div
+        <Stack spacing={1.5}>
+          <Paper
+            component="div"
             role="button"
             tabIndex={0}
             aria-label={`演示第 ${current + 1} 页：${slideTitle(currentSlide, current)}`}
@@ -195,73 +205,73 @@ export function ArtifactPreview({ content }: { content: string }) {
               }
             }}
             data-slide-stage="true"
-            className="group relative block aspect-video w-full overflow-hidden rounded-[1.25rem] border border-foreground/30 bg-foreground text-left text-background shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 dark:bg-card dark:text-foreground"
+            sx={{ position: 'relative', display: 'block', aspectRatio: '16 / 9', width: '100%', overflow: 'hidden', border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-large)', bgcolor: 'var(--dr-color-inverse-surface)', color: 'var(--dr-color-inverse-text)', textAlign: 'left', boxShadow: 'var(--dr-elevation-2)', cursor: 'pointer', '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2 } }}
           >
-            <span className="absolute -right-12 -top-16 size-52 rounded-full border border-tier-skim/20 transition-transform duration-700 motion-reduce:transition-none group-hover:scale-110" aria-hidden />
-            <span className="absolute bottom-[-24%] left-[38%] h-[120%] w-px rotate-[28deg] bg-tier-skim/15" aria-hidden />
-            <div className="relative grid h-full grid-rows-[auto_1fr_auto] p-5 sm:p-9 lg:p-12">
-              <div className="flex items-center justify-between gap-3 text-xs font-medium uppercase tracking-[0.18em] text-background/65 dark:text-muted-foreground">
-                <span>Research / visual briefing</span>
-                <span className="font-mono text-tier-skim">{String(current + 1).padStart(2, '0')} / {String(slides.length).padStart(2, '0')}</span>
-              </div>
-              <div className="flex min-h-0 max-w-4xl flex-col justify-center py-5 sm:py-8">
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-tier-skim">{slideKicker(currentSlide, current)}</p>
-                <h2 className="mt-3 max-w-3xl font-serif text-2xl font-medium leading-tight tracking-[-0.03em] sm:text-4xl lg:text-6xl">{slideTitle(currentSlide, current)}</h2>
-                <div data-slide-scroll className="mt-5 max-h-[42%] overflow-y-auto pr-2 text-sm leading-6 text-background/75 sm:max-w-3xl sm:text-base sm:leading-7 lg:text-lg dark:text-muted-foreground">
+            <Box component="span" aria-hidden="true" sx={{ position: 'absolute', right: -48, top: -64, width: 208, height: 208, borderRadius: '50%', border: '1px solid color-mix(in srgb, var(--dr-color-tier-skim) 20%, transparent)', transition: 'transform var(--dr-motion-standard)', '&:hover': { transform: 'scale(1.04)' }, '@media (prefers-reduced-motion: reduce)': { transition: 'none' } }} />
+            <Box component="span" aria-hidden="true" sx={{ position: 'absolute', bottom: '-24%', left: '38%', width: '1px', height: '120%', transform: 'rotate(28deg)', bgcolor: 'color-mix(in srgb, var(--dr-color-tier-skim) 15%, transparent)' }} />
+            <Box sx={{ position: 'relative', zIndex: 1, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', height: '100%', p: { xs: 2.5, sm: 4.5, lg: 6 } }}>
+              <Stack direction="row" spacing={1.5} sx={{ color: 'var(--dr-color-inverse-text)', opacity: 0.76, alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography variant="metadata" sx={{ fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Research / visual briefing</Typography>
+                <Typography variant="metadata" sx={{ fontFamily: 'monospace', color: 'var(--dr-color-tier-skim)', fontVariantNumeric: 'tabular-nums' }}>{String(current + 1).padStart(2, '0')} / {String(slides.length).padStart(2, '0')}</Typography>
+              </Stack>
+              <Stack spacing={1.5} sx={{ minHeight: 0, maxWidth: 900, justifyContent: 'center', py: { xs: 2.5, sm: 4 } }}>
+                <Typography variant="metadata" sx={{ fontFamily: 'monospace', letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--dr-color-tier-skim)' }}>{slideKicker(currentSlide, current)}</Typography>
+                <Typography component="h2" variant="h2" sx={{ mt: 1.5, maxWidth: 768, color: 'inherit', overflowWrap: 'anywhere' }}>{slideTitle(currentSlide, current)}</Typography>
+                <Box data-slide-scroll sx={{ mt: 1, maxHeight: '42%', maxWidth: 800, overflowY: 'auto', pr: 1.5, typography: 'reading', color: 'var(--dr-color-inverse-text)', opacity: 0.82, fontSize: { xs: 'var(--dr-type-body)', sm: 'var(--dr-type-title-small)', lg: 'var(--dr-type-title-compact)' } }}>
                   {stageContent.lead ? <MarkdownContent content={stageContent.lead} compact className="[&_p]:my-0 [&_strong]:text-tier-skim" /> : null}
                   {stageContent.bullets.length > 0 ? (
-                    <ul className="mt-3 space-y-2.5">
+                    <Stack component="ul" spacing={1.25} sx={{ mt: 1.5, mb: 0, pl: 0, listStyle: 'none' }}>
                       {stageContent.bullets.map((bullet, index) => (
-                        <li key={`${index}-${bullet.slice(0, 32)}`} className="flex gap-2.5">
-                          <span className="mt-[0.65em] size-1.5 shrink-0 rounded-full bg-tier-skim" aria-hidden />
-                          <MarkdownContent content={bullet} compact className="min-w-0 [&_p]:my-0 [&_strong]:text-tier-skim" />
-                        </li>
+                        <Stack component="li" key={`${index}-${bullet.slice(0, 32)}`} direction="row" spacing={1.25} sx={{ alignItems: 'baseline' }}>
+                          <Box component="span" aria-hidden sx={{ width: 6, height: 6, mt: '0.65em', flexShrink: 0, borderRadius: '50%', bgcolor: 'var(--dr-color-tier-skim)' }} />
+                          <Box sx={{ minWidth: 0 }}><MarkdownContent content={bullet} compact className="[&_p]:my-0 [&_strong]:text-tier-skim" /></Box>
+                        </Stack>
                       ))}
-                    </ul>
+                    </Stack>
                   ) : null}
                   {stageContent.hiddenCount > 0 || stageContent.truncated ? (
-                    <p className="mt-3 text-xs text-background/55 dark:text-muted-foreground/70">
+                    <Typography variant="metadata" sx={{ display: 'block', mt: 1.5, color: 'var(--dr-color-inverse-text)', opacity: 0.66 }}>
                       舞台显示短摘录；切换到“列表”查看完整提纲。
-                    </p>
+                    </Typography>
                   ) : null}
                   {!stageContent.lead && stageContent.bullets.length === 0 ? (
                     <MarkdownContent content={slideBody(currentSlide)} compact className="[&_h1]:hidden [&_h2]:hidden [&_h3]:hidden [&_p]:my-1 [&_ul]:my-2 [&_li]:my-1 [&_strong]:text-tier-skim" />
                   ) : null}
-                </div>
-              </div>
-              <div className="flex items-end justify-between gap-3 border-t border-background/15 pt-3 text-xs text-background/60 sm:pt-5 dark:border-foreground/15 dark:text-muted-foreground">
-                <span>点击舞台或使用 ← → / 空格推进 · 列表模式核对完整提纲</span>
-                <span className="hidden sm:inline">证据优先 · 结论可核验</span>
-              </div>
-            </div>
-          </div>
-          <ol className="sr-only" aria-label="所有 Slides 内容">
+                </Box>
+              </Stack>
+              <Stack direction="row" spacing={1.5} sx={{ borderTop: '1px solid color-mix(in srgb, var(--dr-color-inverse-text) 16%, transparent)', pt: { xs: 1.5, sm: 2.5 }, color: 'var(--dr-color-inverse-text)', opacity: 0.72, alignItems: 'flex-end', justifyContent: 'space-between' }}>
+                <Typography variant="metadata">点击舞台或使用 ← → / 空格推进 · 列表模式核对完整提纲</Typography>
+                <Typography variant="metadata" sx={{ display: { xs: 'none', sm: 'block' }, whiteSpace: 'nowrap' }}>证据优先 · 结论可核验</Typography>
+              </Stack>
+            </Box>
+          </Paper>
+          <Box component="ol" aria-label="所有 Slides 内容" sx={{ position: 'absolute', width: 1, height: 1, p: 0, m: -1, overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0 }}>
             {slides.map((slide, index) => <li key={`accessible-${index}`}>Slide {String(index + 1).padStart(2, '0')} · 第 {index + 1} 页：{slideTitle(slide, index)} · {slide}</li>)}
-          </ol>
-          <div className="flex items-center justify-between gap-3" data-no-advance="true">
-            <button type="button" onClick={() => setCurrent((value) => Math.max(0, value - 1))} disabled={current === 0} className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"><ChevronLeft className="size-3.5" />上一页</button>
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5" aria-label="Slides 页码">
-              {slides.map((slide, index) => <button type="button" key={`${index}-${slide.slice(0, 24)}`} aria-label={`跳到第 ${index + 1} 页`} aria-current={current === index ? 'page' : undefined} onClick={() => setCurrent(index)} className={`h-1.5 rounded-full transition-all ${current === index ? 'w-8 bg-primary' : 'w-1.5 bg-border hover:bg-primary/50'}`} />)}
-            </div>
-            <button type="button" onClick={() => setCurrent((value) => Math.min(slides.length - 1, value + 1))} disabled={current === slides.length - 1} className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40">下一页<ChevronRight className="size-3.5" /></button>
-          </div>
-        </div>
+          </Box>
+          <Stack direction="row" spacing={1.5} data-no-advance="true" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+            <Button type="button" variant="outlined" size="small" onClick={() => setCurrent((value) => Math.max(0, value - 1))} disabled={current === 0} startIcon={<ChevronLeft size={16} />}>上一页</Button>
+            <Stack direction="row" spacing={0.25} aria-label="Slides 页码" sx={{ minWidth: 0, flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              {slides.map((slide, index) => <IconButton key={`${index}-${slide.slice(0, 24)}`} type="button" aria-label={`跳到第 ${index + 1} 页`} aria-current={current === index ? 'page' : undefined} onClick={() => setCurrent(index)} sx={{ width: 24, height: 24 }}><Box component="span" sx={{ width: current === index ? 20 : 6, height: 6, borderRadius: 'var(--dr-radius-pill)', bgcolor: current === index ? 'primary.main' : 'divider', transition: 'width var(--dr-motion-fast)' }} /></IconButton>)}
+            </Stack>
+            <Button type="button" variant="outlined" size="small" onClick={() => setCurrent((value) => Math.min(slides.length - 1, value + 1))} disabled={current === slides.length - 1} endIcon={<ChevronRight size={16} />}>下一页</Button>
+          </Stack>
+        </Stack>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' } }}>
           {slides.map((slide, index) => (
-            <article key={`${index}-${slide.slice(0, 24)}`} aria-label={`第 ${index + 1} 页：${slideTitle(slide, index)}`} className="min-w-0 rounded-xl border border-border bg-card p-5 shadow-sm sm:p-6">
-              <div className="flex items-start justify-between gap-3 border-b border-border/70 pb-3">
-                <p className="font-mono text-xs uppercase tracking-[0.14em] text-muted-foreground">Slide {String(index + 1).padStart(2, '0')}</p>
-                <p className="min-w-0 truncate text-right text-xs font-medium text-foreground" title={slideTitle(slide, index)}>{slideTitle(slide, index)}</p>
-              </div>
-              <div className="pt-4">
-                <h3 className="text-base font-semibold leading-6 text-foreground">{slideTitle(slide, index)}</h3>
-                <MarkdownContent content={slideBody(slide)} compact className="mt-3 text-sm" />
-              </div>
-            </article>
+            <Paper component="article" variant="outlined" key={`${index}-${slide.slice(0, 24)}`} aria-label={`第 ${index + 1} 页：${slideTitle(slide, index)}`} sx={{ minWidth: 0, p: { xs: 2.5, sm: 3 }, boxShadow: 'var(--dr-elevation-1)' }}>
+              <Stack direction="row" spacing={1.5} sx={{ pb: 1.5, borderBottom: 1, borderColor: 'divider', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                <Typography variant="metadata" color="text.secondary" sx={{ fontFamily: 'monospace', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Slide {String(index + 1).padStart(2, '0')}</Typography>
+                <Typography variant="metadata" title={slideTitle(slide, index)} sx={{ minWidth: 0, textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{slideTitle(slide, index)}</Typography>
+              </Stack>
+              <Box sx={{ pt: 2 }}>
+                <Typography variant="listTitle" component="h3">{slideTitle(slide, index)}</Typography>
+                <Box sx={{ mt: 1.5, typography: 'body2' }}><MarkdownContent content={slideBody(slide)} compact /></Box>
+              </Box>
+            </Paper>
           ))}
-        </div>
+        </Box>
       )}
-    </section>
+    </Stack>
   );
 }

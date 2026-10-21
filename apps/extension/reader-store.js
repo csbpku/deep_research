@@ -143,6 +143,43 @@ function sessionKey(url, version = null) {
   return `${normalized}::${version || 'latest'}`;
 }
 
+// Knowledge matching is broader than session/anchor identity. Do not migrate
+// session keys or reuse this key to decide whether an old anchor can be drawn.
+function knowledgePageKey(value) {
+  if (!validPageUrl(value)) return '';
+  const url = new URL(value);
+  if (url.username || url.password) return '';
+  url.hash = '';
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^utm_/iu.test(key) || /^(fbclid|gclid|deep-research-(anchor|source|summary|platform))$/iu.test(key)) {
+      url.searchParams.delete(key);
+    }
+  }
+  url.searchParams.sort();
+  return url.toString();
+}
+
+function normalizeRadarSummaryId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value.trim())
+    ? value.trim().toLowerCase() : '';
+}
+
+function platformOrigin(value) {
+  if (!validPageUrl(value)) return '';
+  const url = new URL(value);
+  return url.username || url.password ? '' : url.origin;
+}
+
+function captureInsightSource(source, context = {}) {
+  const url = source?.url || source?.document?.url;
+  // An explicit (even empty) source wins over the currently open radar.
+  const radarSummaryId = Object.hasOwn(source || {}, 'radarSummaryId')
+    ? normalizeRadarSummaryId(source.radarSummaryId)
+    : knowledgePageKey(url) && knowledgePageKey(url) === knowledgePageKey(context.url)
+      ? normalizeRadarSummaryId(context.radarSummaryId) : '';
+  return { ...source, radarSummaryId: radarSummaryId || undefined };
+}
+
 function createUuidV4() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   if (globalThis.crypto?.getRandomValues) {
@@ -218,6 +255,9 @@ function normalizeAnnotation(value, fallbackId = createUuidV4()) {
 
 export const readerStore = {
   pageKey,
+  knowledgePageKey,
+  normalizeRadarSummaryId,
+  captureInsightSource,
   async getClientId() {
     const existing = await get('settings', 'clientId');
     if (typeof existing?.value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(existing.value)) {
@@ -238,6 +278,29 @@ export const readerStore = {
     const normalized = pageKey(url);
     const matches = (await all('sessions')).filter((session) => pageKey(session.url) === normalized);
     return matches.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt) || '') || String(b.id).localeCompare(String(a.id)))[0] || null;
+  },
+  async getReadingSession(url, version = null) {
+    const matches = (await all('sessions'))
+      .filter(session => pageKey(session.url) === pageKey(url))
+      .sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt)));
+    if (!matches.length) return null;
+    const conversational = matches.filter(session => session.discussion?.length || session.answer);
+    const latest = conversational.at(-1) || matches.find(session => session.version === version) || matches.at(-1);
+    let discussion = [];
+    const equal = (a, b) => a?.id && b?.id ? a.id === b.id : a?.role === b?.role && a?.content === b?.content;
+    for (const session of conversational) {
+      const incoming = session.discussion || [];
+      // Sessions from older releases are snapshots. Find their shared prefix
+      // or overlap before appending so refreshing a page does not duplicate turns.
+      let prefix = 0;
+      while (prefix < discussion.length && prefix < incoming.length && equal(discussion[prefix], incoming[prefix])) prefix += 1;
+      if (prefix === incoming.length) continue;
+      if (prefix) { discussion.push(...incoming.slice(prefix)); continue; }
+      let overlap = Math.min(discussion.length, incoming.length);
+      while (overlap && !incoming.slice(0, overlap).every((item, index) => equal(discussion[discussion.length - overlap + index], item))) overlap -= 1;
+      discussion.push(...incoming.slice(overlap));
+    }
+    return { ...latest, discussion, stale: Boolean(version && latest.version && version !== latest.version) };
   },
   async saveSession(session) {
     const id = session.id || sessionKey(session.url, session.version);
@@ -308,10 +371,71 @@ export const readerStore = {
     return syncKey;
   },
   async saveInsight(insight) {
-    return put('insights', { ...insight, tags: Array.isArray(insight.tags) ? insight.tags.slice(0, 10) : [], id: insight.id || crypto.randomUUID(), createdAt: insight.createdAt || new Date().toISOString() });
+    return put('insights', {
+      ...insight,
+      radarSummaryId: normalizeRadarSummaryId(insight.radarSummaryId) || undefined,
+      tags: Array.isArray(insight.tags) ? insight.tags.slice(0, 10) : [],
+      id: insight.id || createUuidV4(),
+      createdAt: insight.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  },
+  async linkInsightToPlatform(id, researchId, origin) {
+    const normalizedId = normalizeRadarSummaryId(researchId);
+    const normalizedOrigin = platformOrigin(origin);
+    if (!normalizedId || !normalizedOrigin) return null;
+    // Read and patch in one transaction so an in-flight response cannot undo
+    // a concurrent edit or resurrect a deleted insight.
+    return withStore('insights', 'readwrite', async objectStore => {
+      const insight = objectStore ? await requestToPromise(objectStore.get(id)) : fallbackGet('insights', id);
+      if (!insight) return null;
+      const linked = { ...insight, platformResearchId: normalizedId, platformOrigin: normalizedOrigin };
+      if (objectStore) await requestToPromise(objectStore.put(linked));
+      else fallbackSet('insights', linked);
+      return linked;
+    });
+  },
+  async listPageKnowledge(url, { version = null, platformItems = [], origin = '', limit = 3 } = {}) {
+    const key = knowledgePageKey(url);
+    if (!key) return [];
+    const [insights, annotations] = await Promise.all([all('insights'), all('annotations')]);
+    const connectedOrigin = platformOrigin(origin);
+    const local = [
+      ...insights.map(item => ({ ...item, kind: 'insight' })),
+      ...annotations.map(item => ({ ...item, kind: 'annotation', url: item.document?.url })),
+    ].filter(item => knowledgePageKey(item.url || item.document?.url) === key)
+      .map(item => ({
+        ...item,
+        stale: Boolean(version && item.document?.version && version !== item.document.version),
+        platformResearchId: connectedOrigin && platformOrigin(item.platformOrigin) === connectedOrigin
+          ? normalizeRadarSummaryId(item.platformResearchId) || undefined : undefined,
+      }));
+    const linked = new Set(local.map(item => item.platformResearchId).filter(Boolean));
+    const remote = connectedOrigin && Array.isArray(platformItems) ? platformItems
+      .filter(item => item && normalizeRadarSummaryId(item.id) && item.status !== 'archived'
+        && knowledgePageKey(item.url) === key && !linked.has(normalizeRadarSummaryId(item.id)))
+      .map(item => ({
+        id: item.id, kind: 'platform', title: String(item.title || ''),
+        url: item.url, note: typeof item.conclusion === 'string' ? item.conclusion : '',
+        updatedAt: item.updatedAt, platformResearchId: normalizeRadarSummaryId(item.id), platformOrigin: connectedOrigin,
+      })) : [];
+    const seen = new Set();
+    return [...local, ...remote]
+      .filter(item => [item.note, item.aiAnswer, item.quote, item.anchor?.quote].some(text => typeof text === 'string' && text.trim()))
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
+      .filter(item => {
+        const identity = item.platformResearchId ? `platform:${item.platformResearchId}` : `${item.kind}:${item.id}`;
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      })
+      .slice(0, Math.max(1, Math.min(3, limit)));
   },
   async listInsights() {
     return (await all('insights')).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  },
+  async getInsight(id) {
+    return get('insights', id);
   },
   async deleteInsight(id) {
     return remove('insights', id);

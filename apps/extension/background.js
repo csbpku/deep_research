@@ -1,8 +1,10 @@
+import { t, initializeLocale } from './i18n.js';
 import './answer-worker.js';
-import { boundTaskContext, loadProvider, makeDocument, mergeProcessedIds, mergeTranslationFailures, providerReady, translateBlocks, translateImage } from './reader-core.js';
+import { applyTextTranslations, boundTaskContext, loadProvider, makeDocument, mergeProcessedIds, mergeTranslationFailures, providerReady, translateBlocks, translateImage } from './reader-core.js';
 import { readerStore } from './reader-store.js';
 import { activationReason } from './activation.js';
 import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js';
+import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
 
 const CONTENT_SCRIPT = 'content.js';
 const RESUME_ALARM = 'deep-research-reader-resume';
@@ -132,13 +134,14 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
     documentUrl: boundedContext.url,
     contentHash: boundedContext.contentHash || boundedContext.version || null,
     kind: 'text',
+    targetLanguage: boundedContext.targetLanguage,
     status: 'queued',
     textDone: Number.isFinite(Number(persisted?.textDone)) ? Number(persisted.textDone) : 0,
     textTotal: Math.max(Number(persisted?.textTotal) || 0, Array.isArray(boundedContext.blocks) ? boundedContext.blocks.length : 0),
     imageDone: Number.isFinite(Number(persisted?.imageDone)) ? Number(persisted.imageDone) : 0,
     imageTotal: Math.max(Number(persisted?.imageTotal) || 0, Array.isArray(boundedContext.images) ? boundedContext.images.length : 0),
-    failedItems: Array.isArray(persisted?.failedItems) ? persisted.failedItems : [],
-    processedTextIds: Array.isArray(persisted?.processedTextIds) ? persisted.processedTextIds : [],
+    failedItems: mergeTranslationFailures(persisted?.failedItems, [], [], boundedContext),
+    processedTextIds: (Array.isArray(persisted?.processedTextIds) ? persisted.processedTextIds : []).filter(id => !boundedContext.full || boundedContext.blocks?.some(block => block.id === id)),
     processedImageIds: Array.isArray(persisted?.processedImageIds) ? persisted.processedImageIds : [],
     workerManaged: true,
     inputReady: false,
@@ -175,31 +178,42 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
     const images = Array.isArray(boundedContext.images) ? boundedContext.images : [];
     const translatableBlocks = blocks.filter((block) => block.kind !== 'code');
     const skippedCodeBlocks = blocks.length - translatableBlocks.length;
+    const appliedTextIds = new Set();
     const blockIds = blocks.map((block) => block.id).filter(Boolean);
     const imageIds = images.map((image) => image.id).filter(Boolean);
     patchJob(job, {
       status: 'running',
+      appliedTextIds: [],
+      skippedTextIds: blocks.filter((block) => block.kind === 'code').map((block) => block.id),
       textDone: Math.max(Number(job.textDone) || 0, job.processedTextIds.length),
-      textTotal: Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
+      textTotal: boundedContext.full ? blocks.length : Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
       imageDone: Math.max(Number(job.imageDone) || 0, job.processedImageIds.length),
       imageTotal: Math.max(Number(job.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size),
       reapply,
     });
     emit('deep-research:translation-progress', { progress: { ...job } });
 
-    const translations = await translateBlocks(readingProvider, document, translatableBlocks, {
+    const applyTranslations = async (items) => {
+      const results = await applyTextTranslations(items.map(item => ({ ...item, targetLanguage: boundedContext.targetLanguage })), payload => sendToTab(tabId, { ...payload, documentUrl: boundedContext.url }));
+      for (const item of results) {
+        if (item.text) appliedTextIds.add(item.id); else appliedTextIds.delete(item.id);
+      }
+      patchJob(job, { appliedTextIds: [...appliedTextIds] });
+      return results;
+    };
+    let translations = await translateBlocks(readingProvider, document, translatableBlocks, {
       signal: controller.signal,
       // The content script can paint a paragraph as soon as its model call
       // completes. The final aggregate below remains as a recovery pass for
       // a page that changed while the job was running.
       onResult: (item) => {
         if (!item?.text) return;
-        return sendToTab(tabId, { type: 'deep-research:apply-translations', translations: [item] });
+        return applyTranslations([item]);
       },
       onProgress: (done) => {
         patchJob(job, {
           textDone: Math.max(Number(job.textDone) || 0, done + skippedCodeBlocks),
-          textTotal: Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
+          textTotal: boundedContext.full ? blocks.length : Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
         });
         emit('deep-research:translation-progress', { progress: { ...job } });
       },
@@ -209,7 +223,8 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
     ]);
     const usableTranslations = translations.filter((item) => item.text);
-    if (usableTranslations.length) await sendToTab(tabId, { type: 'deep-research:apply-translations', translations: usableTranslations });
+    const renderedById = new Map((await applyTranslations(usableTranslations)).map((item) => [item.id, item]));
+    translations = translations.map((item) => renderedById.get(item.id) || item);
 
     const imageTranslations = [];
     for (const image of images) {
@@ -243,7 +258,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
     patchJob(job, {
       status: failures.length ? 'completed_with_errors' : 'completed',
       textDone: Math.max(Number(job.textDone) || 0, job.processedTextIds.length),
-      textTotal: Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
+      textTotal: boundedContext.full ? blocks.length : Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
       imageDone: Math.max(Number(job.imageDone) || 0, job.processedImageIds.length),
       imageTotal: Math.max(Number(job.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size),
       failedItems: failures,
@@ -453,9 +468,11 @@ async function makePkce() {
   return { verifier, challenge: base64Url(new Uint8Array(digest)), state: base64Url(crypto.getRandomValues(new Uint8Array(16))) };
 }
 
-function createReaderMenus() {
+async function createReaderMenus() {
+  await initializeLocale();
   chrome.contextMenus?.removeAll(() => {
     for (const [id, title, contexts] of [
+      ['image', '图示 · 解读与提问', ['image']],
       ['ask', '对话 · 针对选段提问', ['selection']],
       ['explain', '解释 · 理解选段', ['selection']],
       ['translate', '翻译 · 选段', ['selection']],
@@ -463,12 +480,13 @@ function createReaderMenus() {
       ['chat', '对话 · 打开阅读助手', ['page']],
       ['summary', '总结 · 整篇文章', ['page']],
       ['translate-page', '翻译 · 整篇文章', ['page']],
-    ]) chrome.contextMenus.create({ id: `reader:${id}`, title, contexts });
-    chrome.contextMenus.create({ id: 'reader:toggle-paragraph', title: '查看这一段原文 / 译文', contexts: ['page', 'selection'], visible: false });
+    ]) chrome.contextMenus.create({ id: `reader:${id}`, title: t(title), contexts });
+    chrome.contextMenus.create({ id: 'reader:toggle-paragraph', title: t('查看这一段原文 / 译文'), contexts: ['page', 'selection'], visible: false });
   });
 }
 chrome.runtime.onInstalled.addListener(createReaderMenus);
 chrome.runtime.onStartup.addListener(createReaderMenus);
+chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.readerUiLanguage) void createReaderMenus(); });
 chrome.contextMenus?.onClicked.addListener((info, tab) => {
   if (!String(info.menuItemId).startsWith('reader:') || !Number.isInteger(tab?.id)) return;
   if (info.menuItemId === 'reader:toggle-paragraph') {
@@ -476,6 +494,10 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
     return;
   }
   void chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  if (info.menuItemId === 'reader:image') {
+    if (!info.frameId && typeof info.srcUrl === 'string') void activateTabForReading(tab, { engageWindow: true }).then(() => sendToTab(tab.id, { type: 'deep-research:select-image', src: info.srcUrl }));
+    return;
+  }
   const action = String(info.menuItemId).slice(7).replace('translate-page', 'translate');
   void activateTabForReading(tab, { engageWindow: true }).then(() => sendToTab(tab.id, { type: 'deep-research:context-action', action }));
 });
@@ -536,6 +558,39 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'deep-research:open-reader-source') {
+    const platformOrigin = getTrustedReaderPlatformOrigin(sender);
+    const sourceTab = sender.tab;
+    const sourceUrl = validateRadarSourceUrl(message.url, platformOrigin);
+    if (!platformOrigin || sender.frameId !== 0 || !Number.isInteger(sourceTab?.id)
+      || !Number.isInteger(sourceTab?.windowId) || !sourceUrl) {
+      sendResponse?.({ ok: false, reason: 'invalid-request' });
+      return false;
+    }
+
+    // This message is sent synchronously from the platform bridge's trusted
+    // click listener. Open the native panel before any async work consumes
+    // Chrome's user gesture, then navigate the same window to the article.
+    let panelOpening;
+    try {
+      panelOpening = chrome.sidePanel.open({ windowId: sourceTab.windowId });
+    } catch {
+      sendResponse?.({ ok: false, reason: 'panel-unavailable' });
+      return false;
+    }
+    void Promise.resolve(panelOpening).then(async () => {
+      await markReadingWindow(sourceTab.windowId);
+      const articleTab = await chrome.tabs.create({
+        url: sourceUrl,
+        windowId: sourceTab.windowId,
+        active: true,
+      });
+      sendResponse?.({ ok: true, tabId: articleTab.id });
+    }).catch(() => {
+      sendResponse?.({ ok: false, reason: 'launch-failed' });
+    });
+    return true;
+  }
   if (message?.type === 'deep-research:open-panel') {
     const tab = sender.tab;
     if (!tab || !Number.isInteger(tab.id) || !Number.isInteger(tab.windowId)) {
@@ -642,7 +697,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Hiding an unavailable action must retain its last direction. Use the
         // sender's tab snapshot so updates keep message order before Chrome
         // snapshots the native menu; an async tabs.get can reorder hover events.
-        if (pagePayload.available) properties.title = pagePayload.showingTranslation ? '查看这一段原文' : '查看这一段译文';
+        if (pagePayload.available) properties.title = t(pagePayload.showingTranslation ? '查看这一段原文' : '查看这一段译文');
         chrome.contextMenus?.update('reader:toggle-paragraph', properties, () => void chrome.runtime.lastError);
       }
       return false;
@@ -708,12 +763,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
   if (message?.type === 'deep-research:to-page') {
+    const respond = (result) => sendResponse?.(result || { ok: false });
+    const deliver = (tabId) => chrome.tabs.sendMessage(tabId, message.payload)
+      .then(respond).catch(() => respond({ ok: false }));
     if (Number.isInteger(message.tabId) && sender.url?.startsWith(chrome.runtime.getURL('sidepanel.html'))) {
-      chrome.tabs.sendMessage(message.tabId, message.payload).catch(() => {});
-      return;
+      void deliver(message.tabId);
+      return true;
     }
     chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => {
-      if (tab?.id) chrome.tabs.sendMessage(tab.id, message.payload).catch(() => {});
-    }).catch(() => {});
+      if (tab?.id) return deliver(tab.id);
+      respond({ ok: false });
+    }).catch(() => respond({ ok: false }));
+    return true;
   }
 });

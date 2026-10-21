@@ -17,13 +17,12 @@
 // 当已发布条目超过 ~500 条时，应迁移到 server-side：API 加 ?q= ?sort= 参数，
 // 这一层的 filter/sort 逻辑迁移到 Prisma orderBy/where。
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDownNarrowWide,
-  ArrowUpDown,
   ChevronDown,
   FilePlus2,
   Rocket,
@@ -39,34 +38,29 @@ import { TagChip, TagList } from '@/components/domain/TagChip';
 import { FilterBar } from '@/components/domain/FilterBar';
 import { EmptyState } from '@/components/EmptyState';
 import { ErrorState, LoadingState } from '@/components/StateMessage';
-import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent } from '@/components/ui/card';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppTextField as Input } from '@/components/material/AppTextField';
+import Skeleton from '@mui/material/Skeleton';
+import Alert from '@mui/material/Alert';
+import Select from '@mui/material/Select';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import Tabs from '@mui/material/Tabs';
+import Tab from '@mui/material/Tab';
+import Paper from '@mui/material/Paper';
 import { DraftActionsMenu } from '@/components/research/DraftActionsMenu';
 import { ResearchStatusActionButton } from '@/components/research/ResearchStatusActionButton';
-import { cn } from '@/lib/utils';
+import styles from './researches.module.css';
 import { cleanResearchText } from '@/lib/research-markdown-cleanup';
+import { ApiHttpError, toApiHttpError } from '@/lib/errors/api-error';
+import { retryOnceAi } from '@/lib/errors/friendly';
 import {
   parseResearchTab,
   researchTypeForTab,
   researchTabHref,
   researchViewForTab,
-  type ResearchTab,
   type ResearchView,
 } from '@/lib/research-tabs';
 
@@ -119,10 +113,10 @@ export default function ResearchesPage() {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-shell space-y-3">
-          <Skeleton className="h-8 w-40" />
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-24 w-full" />
+        <div className={styles.screen}>
+          <Skeleton variant="text" height={32} width={160} />
+          <Skeleton variant="rounded" height={36} />
+          <Skeleton variant="rounded" height={96} sx={{ mt: 2 }} />
         </div>
       }
     >
@@ -146,6 +140,7 @@ function ResearchesContent() {
     hasExplicitTab ? researchTypeForTab(tab) : 'all'
   ));
   const [loadingElapsed, setLoadingElapsed] = useState(0);
+  const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
 
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery<ListResponse>({
     queryKey: ['researches', view, type, page],
@@ -160,7 +155,7 @@ function ResearchesContent() {
       if (type !== 'all') params.set('type', type);
       try {
         const res = await fetch(`/api/researches?${params}`, { signal: controller.signal });
-        if (!res.ok) throw new Error('研究库暂时无法读取。');
+        if (!res.ok) throw await toApiHttpError(res, '研究库暂时无法读取。');
         return res.json();
       } catch (cause) {
         if (cause instanceof DOMException && cause.name === 'AbortError') {
@@ -171,7 +166,13 @@ function ResearchesContent() {
         window.clearTimeout(timeout);
       }
     },
+    retry: (count, cause) => !(cause instanceof ApiHttpError && cause.status === 401) && retryOnceAi(count, cause),
+    refetchOnMount: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
+    refetchOnWindowFocus: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
+    refetchOnReconnect: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
   });
+  const loginRequired = isError && error instanceof ApiHttpError && error.status === 401;
+  const callbackUrl = `/researches${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
 
   useEffect(() => {
     if (!isLoading) {
@@ -221,115 +222,100 @@ function ResearchesContent() {
   const filteredOut = !!data && visible.length === 0 && data.items.length > 0;
 
   return (
-    <div className="mx-auto w-full max-w-shell">
+    <div className={`material-surface ${styles.screen}`}>
       <PageHeader
         title="研究库"
         description="集中管理研究成果、个人草稿和已发布内容。"
         actions={
           <>
-            <Button asChild size="sm">
-              <Link href="/ai-research">
-                <Rocket />
-                开始 AI 调研
-              </Link>
+            <Button component={Link} href="/ai-research" variant="contained">
+              <Rocket aria-hidden />
+              开始 AI 调研
             </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm">
-                  添加内容
-                  <ChevronDown />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem asChild>
-                  <Link href="/researches/new?mode=blank">
-                    <FilePlus2 />
-                    空白草稿
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/researches/import">
-                    <Upload />
-                    导入文件
-                  </Link>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Button id="research-add-trigger" variant="outlined" aria-haspopup="menu"
+              aria-controls={addMenuAnchor ? 'research-add-menu' : undefined}
+              aria-expanded={Boolean(addMenuAnchor)} onClick={event => setAddMenuAnchor(event.currentTarget)}>
+              添加内容 <ChevronDown aria-hidden />
+            </Button>
+            <Menu id="research-add-menu" anchorEl={addMenuAnchor} open={Boolean(addMenuAnchor)}
+              onClose={() => setAddMenuAnchor(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              slotProps={{ list: { 'aria-labelledby': 'research-add-trigger' }, paper: { className: 'material-surface' } }}>
+              <MenuItem component={Link} href="/researches/new?mode=blank" onClick={() => setAddMenuAnchor(null)}>
+                <FilePlus2 size={16} aria-hidden className={styles.menuIcon} />空白草稿
+              </MenuItem>
+              <MenuItem component={Link} href="/researches/import" onClick={() => setAddMenuAnchor(null)}>
+                <Upload size={16} aria-hidden className={styles.menuIcon} />导入文件
+              </MenuItem>
+            </Menu>
           </>
         }
       />
 
-      <Tabs
-        value={view}
-        onValueChange={(v) => {
+      <div className={styles.content}>
+      <Tabs aria-label="研究库状态" variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile
+        value={view} selectionFollowsFocus
+        onChange={(_event, v: ResearchView) => {
           router.replace(researchTabHref(v as ResearchView), { scroll: false });
           setPage(1);
           setQ('');
           setType('all');
         }}
-        className="w-full max-w-6xl"
       >
-        <TabsList className="w-full justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TABS.map((t) => (
-            <TabsTrigger key={t.value} value={t.value}>
-              {t.label}
-            </TabsTrigger>
+            <Tab key={t.value} value={t.value} label={t.label} id={`research-view-${t.value}`} aria-controls="research-library-panel" />
           ))}
-        </TabsList>
-
-        <TabsContent value={view} className="mt-3 space-y-3 focus-visible:outline-none">
+      </Tabs>
+      <div id="research-library-panel" role="tabpanel" tabIndex={0}
+        aria-labelledby={`research-view-${view}`} aria-busy={isFetching} className={styles.panel}>
 
       <FilterBar
         onSubmit={(e) => e.preventDefault()}
         trailing={
           q || sort !== 'newest' || type !== 'all' ? (
-            <span>
-              <ArrowDownNarrowWide className="mr-1 inline size-3 align-text-bottom" />
+            <span className={styles.filteredCount}>
+              <ArrowDownNarrowWide size={12} aria-hidden />
               {visible.length} / {data?.items.length ?? 0}
             </span>
           ) : null
         }
       >
-          <div className="relative min-w-[200px] flex-1 sm:max-w-md">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <div className={styles.search}>
+            <SearchIcon aria-hidden />
             <Input
+              type="search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="搜索标题或标签…"
               aria-label="搜索研究库"
-              className="pl-9"
+              sx={{ '& input': { paddingLeft: '36px' } }}
             />
           </div>
-          <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-            <SelectTrigger className="w-36" aria-label="排序方式">
-              <ArrowUpDown className="size-3" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
+          <FormControl size="small" className={styles.select}>
+            <InputLabel id="research-sort-label">排序方式</InputLabel>
+            <Select value={sort} labelId="research-sort-label" label="排序方式" onChange={event => setSort(event.target.value as SortKey)}>
               {SORTS.map((s) => (
-                <SelectItem key={s.key} value={s.key}>
+                <MenuItem key={s.key} value={s.key}>
                   {s.label}
-                </SelectItem>
+                </MenuItem>
               ))}
-            </SelectContent>
-          </Select>
-          <Select value={type} onValueChange={(v) => setType(v as ResearchTypeFilter)}>
-            <SelectTrigger className="w-36" aria-label="内容类型">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
+            </Select>
+          </FormControl>
+          <FormControl size="small" className={styles.select}>
+            <InputLabel id="research-type-label">内容类型</InputLabel>
+            <Select value={type} labelId="research-type-label" label="内容类型" onChange={event => setType(event.target.value as ResearchTypeFilter)}>
               {TYPE_FILTERS.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
+                <MenuItem key={item.value} value={item.value}>
                   {item.label}
-                </SelectItem>
+                </MenuItem>
               ))}
-            </SelectContent>
-          </Select>
+            </Select>
+          </FormControl>
       </FilterBar>
 
-      <div className="mt-4">
+      <div className={styles.results}>
         {isLoading && (
-          <div className="space-y-3" aria-busy="true">
+          <div className={styles.loading} aria-busy="true">
             <LoadingState
               label={
                 loadingElapsed >= 5
@@ -337,19 +323,19 @@ function ResearchesContent() {
                   : '正在加载研究库…'
               }
             />
-            <div className="grid gap-3">
+            <div className={styles.list}>
             {[0, 1, 2].map((i) => (
-              <div key={i} className={cn('space-y-2 rounded-md border border-border bg-card p-4', i === 2 && 'hidden sm:block')}>
-                <Skeleton className="h-3 w-20" />
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-3 w-full" />
-              </div>
+              <Paper key={i} variant="outlined" className={styles.card} aria-hidden>
+                <Skeleton variant="text" height={16} width={80} />
+                <Skeleton variant="text" height={24} width="50%" />
+                <Skeleton variant="text" height={20} />
+              </Paper>
             ))}
             </div>
             {loadingElapsed >= 8 ? (
-              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <div className={styles.slowLoading}>
                 <span>等待时间较长，可以重新读取。</span>
-                <Button type="button" size="xs" variant="outline" onClick={() => void refetch()}>
+                <Button type="button" variant="outlined" onClick={() => void refetch()}>
                   重新读取
                 </Button>
               </div>
@@ -357,19 +343,27 @@ function ResearchesContent() {
           </div>
         )}
 
-        {isError && (
+        {loginRequired ? (
+          <Alert severity="info" action={
+            <Button component={Link} href={`/signin?${new URLSearchParams({ callbackUrl })}`} variant="outlined">
+              登录
+            </Button>
+          }>
+            登录后查看研究库。
+          </Alert>
+        ) : isError ? (
           <ErrorState
             title="研究库暂时无法加载"
             description={isError ? errorMessage(error) : '请稍后重试；如果问题持续，请刷新页面。'}
             action={
-              <Button type="button" size="xs" variant="outline" onClick={() => void refetch()}>
+              <Button type="button" variant="outlined" onClick={() => void refetch()}>
                 重试
               </Button>
             }
           />
-        )}
+        ) : null}
 
-        {data && data.items.length === 0 && (
+        {!loginRequired && data && data.items.length === 0 && (
           <EmptyState
             title={
               view === 'draft'
@@ -389,36 +383,32 @@ function ResearchesContent() {
             }
             action={
               view === 'draft' ? (
-                <Button asChild size="sm">
-                  <Link href="/ai-research">
-                    <Rocket />
-                    开始 AI 调研
-                  </Link>
+                <Button component={Link} href="/ai-research" variant="contained">
+                  <Rocket aria-hidden />开始 AI 调研
                 </Button>
               ) : undefined
             }
           />
         )}
 
-        {filteredOut && (
+        {!loginRequired && filteredOut && (
           <EmptyState
             title="没有匹配项"
             description={q ? `没有标题或标签包含「${q}」的调研。试试别的关键词，或清空搜索。` : '当前排序下没有内容。'}
           />
         )}
 
-        <div className={cn('grid gap-3', filteredOut && 'hidden')}>
-          {visible.map((item) => (
-            <Card
+        <div className={styles.list} hidden={filteredOut}>
+          {!loginRequired && visible.map((item) => (
+            <Paper component="article" variant="outlined"
               key={item.id}
-              className="group transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:shadow-sm"
+              className={styles.card}
             >
-              <CardContent className="p-4">
-                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                <div className={styles.cardHeader}>
+                  <div className={styles.badges}>
                     <StatusBadge kind="method" value={item.creationMethod} />
                     {item.status === 'draft' && <StatusBadge kind="research" value="draft" />}
-                    {item.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star />} />}
+                    {item.featuredAt && <StatusBadge kind="featured" value="true" icon={<Star aria-hidden />} />}
                   </div>
                     {view === 'draft' ? (
                     <DraftActionsMenu
@@ -432,7 +422,7 @@ function ResearchesContent() {
                       title={item.title}
                       status={item.status === 'archived' ? 'archived' : 'published'}
                       compact
-                      className="ml-auto shrink-0"
+                      className={styles.statusAction}
                       onChanged={() => queryClient.invalidateQueries({ queryKey: ['researches'] })}
                     />
                   ) : null}
@@ -440,47 +430,46 @@ function ResearchesContent() {
 
                 <Link
                   href={`/researches/${item.id}`}
-                  className="block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className={styles.cardLink}
                 >
-                  <h2 className="line-clamp-2 break-words text-base font-semibold leading-snug tracking-normal">
+                  <h2 className={styles.title}>
                     {item.title}
                   </h2>
 
-                  <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                  <p className={styles.excerpt}>
                     {excerpt(item.body, 200)}
                   </p>
 
                   {item.tags.length > 0 && (
-                    <TagList className="mt-2.5">
+                    <TagList className={styles.tags}>
                       {item.tags.map((t) => (
                         <TagChip key={t}>{t}</TagChip>
                       ))}
                     </TagList>
                   )}
 
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                  <div className={styles.metadata}>
                     <span>{item.author.name}</span>
-                    <span className="font-mono tabular-nums">
+                    <span>
                       {view === 'draft'
                         ? `更新 ${new Date(item.updatedAt).toLocaleDateString('zh-CN')}`
                         : `发布 ${new Date(item.publishedAt ?? item.createdAt).toLocaleDateString('zh-CN')}`}
                     </span>
                   </div>
                 </Link>
-              </CardContent>
-            </Card>
+            </Paper>
           ))}
         </div>
 
-        <Pagination
+        {!loginRequired && <Pagination
           page={page}
           totalPages={data?.totalPages ?? 1}
           onPageChange={setPage}
           disabled={isFetching}
-        />
+        />}
       </div>
-        </TabsContent>
-      </Tabs>
+      </div>
+      </div>
     </div>
   );
 }

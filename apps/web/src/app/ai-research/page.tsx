@@ -10,8 +10,9 @@ import { useSearchParams } from 'next/navigation';
 
 import { AiResearchConversation } from '@/components/ai-research/AiResearchConversation';
 import { AiResearchWorkspaceSidebar } from '@/components/ai-research/AiResearchWorkspaceSidebar';
+import Box from '@mui/material/Box';
+import Skeleton from '@mui/material/Skeleton';
 import { PageHeader } from '@/components/domain/PageHeader';
-import { Skeleton } from '@/components/ui/skeleton';
 
 function AiResearchPageClient() {
   const searchParams = useSearchParams();
@@ -19,24 +20,24 @@ function AiResearchPageClient() {
   const historyOpen = searchParams.get('history') === '1';
 
   return (
-    <div className="mx-auto max-w-shell">
+    <Box className="material-surface" sx={{ width: '100%', maxWidth: 'var(--dr-width-shell)', mx: 'auto' }}>
       <PageHeader
         variant="workbench"
         title="AI 调研"
         description="把一个需要判断的问题交给 AI。先确认问题和资料，再观察证据，最后得到可继续追问的研究结果。"
       />
-      <div className="grid items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="order-1 min-w-0 lg:order-2">
+      <Box sx={{ display: 'grid', alignItems: 'start', gap: 3, gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '280px minmax(0, 1fr)' } }}>
+        <Box sx={{ order: { xs: 1, lg: 2 }, minWidth: 0 }}>
           <AiResearchConversation conversationId={conversationId} />
-        </div>
-        <div className="order-2 lg:order-1">
+        </Box>
+        <Box sx={{ order: { xs: 2, lg: 1 }, minWidth: 0 }}>
           <AiResearchWorkspaceSidebar
             activeConversationId={conversationId}
             openTaskHistoryOnLoad={historyOpen}
           />
-        </div>
-      </div>
-    </div>
+        </Box>
+      </Box>
+    </Box>
   );
 }
 
@@ -44,10 +45,10 @@ export default function AiResearchPage() {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-shell space-y-2">
-          <Skeleton className="h-8 w-40" />
-          <Skeleton className="h-32 w-full max-w-2xl" />
-        </div>
+        <Box className="material-surface" sx={{ width: '100%', maxWidth: 'var(--dr-width-shell)', mx: 'auto', display: 'grid', gap: 1 }}>
+          <Skeleton variant="text" width={160} height={36} />
+          <Skeleton variant="rounded" width="100%" sx={{ maxWidth: 672, height: 128 }} />
+        </Box>
       }
     >
       <AiResearchPageClient />

@@ -9,6 +9,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 import { RadarFeedbackBar } from './RadarFeedbackBar';
 import type { RadarFeedbackCounts } from './RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
@@ -16,9 +20,10 @@ import type { DistilledScore } from '@deep-research/shared/schemas';
 import { ArrowUpRight, BookOpenCheck, MessageSquare, Sparkles } from 'lucide-react';
 import { CommentSection } from '@/components/CommentSection';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
-import { formatSourceType, isHackerNewsSourceName } from '@/lib/radar/source-labels';
-import { cn } from '@/lib/utils';
+import { readingTierColor } from '@/components/domain/ScoreBar';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppTagLink } from '@/components/material/AppTagLink';
+import { RadarSourceChip } from './RadarSourceChip';
 
 interface RadarCandidate {
   id: string;
@@ -77,27 +82,6 @@ function formatDate(iso: string): string {
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(ts));
 }
 
-function SourcePill({
-  sourceType,
-  sourceName,
-}: {
-  sourceType: string | null;
-  sourceName?: string | null;
-}) {
-  const label = isHackerNewsSourceName(sourceName)
-    ? formatSourceType('hackernews')
-    : formatSourceType(sourceType);
-  return (
-    <span
-      className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground"
-      aria-label={label.full}
-      title={label.full}
-    >
-      {label.short}
-    </span>
-  );
-}
-
 export function RadarCandidateCard({
   candidate,
   detailHref,
@@ -150,14 +134,6 @@ export function RadarCandidateCard({
           : tier === 'noise'
             ? '不推荐'
             : null;
-  const tierClass = cn(
-    'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium',
-    tier === 'deep_read' && 'border-tier-deep-read/40 text-tier-deep-read',
-    tier === 'skim' && 'border-tier-skim/40 text-tier-skim',
-    tier === 'collection' && 'border-tier-collection/40 text-tier-collection',
-    tier === 'noise' && 'border-tier-noise/40 text-tier-noise',
-    !tier && 'hidden',
-  );
   const prefetchDetail = () => {
     if (prefetchStartedRef.current) return;
     prefetchStartedRef.current = true;
@@ -191,157 +167,133 @@ export function RadarCandidateCard({
   };
 
   return (
-    <article className={cn(
-      'flex min-w-0 max-w-full flex-col gap-2 transition-colors',
-      compact
-        ? cn(
-          'border-b border-border px-4 py-4 last:border-b-0 hover:bg-accent/30',
-          selected && 'bg-accent/45 shadow-[inset_3px_0_0_hsl(var(--primary))]',
-        )
-        : 'rounded-md border border-border bg-card p-4 hover:border-primary/30',
-    )}>
-      <header className="flex flex-wrap items-center gap-2">
-        <SourcePill sourceType={candidate.sourceType} sourceName={candidate.sourceName} />
+    <Box component="article" className="material-surface" sx={{
+      display: 'flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%', gap: space.sm, padding: space.lg,
+      border: compact ? 0 : 1, borderBottom: 1, borderColor: 'divider', borderRadius: compact ? 0 : tokens['radius-medium'],
+      backgroundColor: selected ? 'action.selected' : 'background.paper',
+      boxShadow: selected ? 'inset 3px 0 0 var(--dr-color-primary)' : 'none',
+      '&:last-child': compact ? { borderBottom: 0 } : {}, '&:hover': { backgroundColor: selected ? 'action.selected' : 'action.hover' },
+    }}>
+      <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
+        <RadarSourceChip sourceType={candidate.sourceType} sourceName={candidate.sourceName} />
         {isAdminQueue ? <StatusBadge kind="radar" value={candidate.status} /> : null}
         {showPipelinePending ? (
-          <span className="inline-flex items-center rounded-full border border-warning-border/70 bg-warning-bg px-2 py-0.5 text-xs font-medium text-warning-fg">
-            内容管线待处理
-          </span>
+          <Chip size="small" label="内容管线待处理" sx={{ color: 'warning.main', bgcolor: 'var(--dr-color-warning-container)' }} />
         ) : null}
         {isAdminQueue && candidate.sortOrder !== null ? (
-          <span className="font-mono text-xs text-muted-foreground">#{candidate.sortOrder}</span>
+          <Typography variant="metadata" color="text.secondary">#{candidate.sortOrder}</Typography>
         ) : null}
-        <span className="ml-auto text-xs text-muted-foreground" title={`入库于 ${candidate.crawledAt}`}>
+        <Typography component="span" variant="metadata" color="text.secondary" sx={{ marginLeft: 'auto' }} title={`入库于 ${candidate.crawledAt}`}>
           入库 {formatDate(candidate.crawledAt)}
-        </span>
-      </header>
+        </Typography>
+      </Box>
 
-      <Link
+      <Typography component={Link} variant="listTitle"
         href={readingHref}
         prefetch={false}
         onMouseEnter={prefetchDetail}
         onFocus={prefetchDetail}
         onClick={handlePreviewClick}
         aria-current={selected ? 'page' : undefined}
-        className="text-base font-semibold leading-snug tracking-normal hover:text-primary hover:underline"
+        sx={{ color: 'text.primary', overflowWrap: 'anywhere', textDecoration: 'none', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}
       >
         {candidate.title}
-      </Link>
+      </Typography>
 
       {candidate.topics.length > 0 || candidate.issues.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-1.5 pt-1" aria-label="关联专题与议题">
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm, paddingTop: space.xs }} aria-label="关联专题与议题">
           {candidate.topics.slice(0, 2).map((t) => (
-            <Link
+            <AppTagLink
               key={`topic-${t.id}`}
               href={`/topics/${t.slug}`}
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
-            >
-              <BookOpenCheck className="size-3" />
-              {t.name}
-            </Link>
+              icon={<BookOpenCheck aria-hidden />} label={t.name}
+            />
           ))}
           {candidate.issues.slice(0, 2).map((iss) => (
-            <Link
+            <AppTagLink
               key={`issue-${iss.id}`}
               href={`/topics/${iss.topic.slug}`}
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs',
-                iss.kind === 'event'
-                  ? 'border border-status-running-border bg-status-running-bg text-status-running-fg'
-                  : 'border border-status-failed-border bg-status-failed-bg text-status-failed-fg',
-              )}
-            >
-              <Sparkles className="size-3" />
-              {iss.title.slice(0, 30)}
-            </Link>
+              icon={<Sparkles aria-hidden />} label={iss.title} title={iss.title}
+              tone={iss.kind === 'event' ? 'info' : 'error'}
+            />
           ))}
-        </div>
+        </Box>
       ) : null}
 
       {compact && selected ? null : compact ? (
         compactTeaser ? (
-          <p className="line-clamp-2 whitespace-pre-line text-base leading-6 text-muted-foreground sm:text-sm sm:leading-5">
+          <Typography component="p" variant="body1" color="text.secondary" sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-line' }}>
             {compactTeaser}
-          </p>
+          </Typography>
         ) : null
       ) : candidate.interpretation ? (
-        <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-          <span className="mr-1.5 text-xs text-foreground/70">AI 摘要：</span>
+        <Typography component="p" variant="body1" color="text.secondary" sx={{ whiteSpace: 'pre-line' }}>
+          <Typography component="span" variant="metadata" color="text.secondary" sx={{ marginRight: space.sm }}>AI 摘要：</Typography>
           {candidate.interpretation}
-        </p>
+        </Typography>
       ) : showExcerpt ? (
         // arxiv abstracts / 长文导言（avg_len >= 200 或 ≤3 段）→ 完整显示；
         // 对话 / 流水账 web_share 内容（多数短段落）→ clamp-5 抑制对话墙。
         // 服务端 shape.ts 的 classifyExcerptDisplay 已经按 excerpt 段落结构分类。
-        <p className={cn(
-          'whitespace-pre-line text-sm leading-relaxed text-muted-foreground',
-          candidate.excerptDisplay !== 'full' && 'line-clamp-5',
-        )}>
+        <Typography component="p" variant="body1" color="text.secondary" sx={{ whiteSpace: 'pre-line', ...(candidate.excerptDisplay !== 'full' ? { display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' } : {}) }}>
           {candidate.excerpt}
-        </p>
+        </Typography>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, borderTop: 1, borderColor: 'divider', paddingTop: space.sm }}>
         {tierLabel ? (
-          <span className={tierClass} title={tierLabel ?? undefined}>
-            {tierLabel}
-            {isAdminQueue && tierScore !== null ? (
-              <span className="font-mono tabular-nums">· {tierScore}</span>
-            ) : null}
-          </span>
+          <Chip variant="outlined" size="small" label={isAdminQueue && tierScore !== null ? `${tierLabel} · ${tierScore}` : tierLabel} sx={{ color: readingTierColor(tier), borderColor: 'currentColor', fontVariantNumeric: 'tabular-nums' }} />
         ) : null}
         <RadarFeedbackBar
           summaryId={candidate.id}
           initialCounts={candidate.feedbackCounts}
           initialMine={candidate.myFeedbacks}
           types={['favorite']}
-          className="shrink-0 gap-1 py-0"
         />
         {candidate.commentCount > 0 ? (
           <Button
             type="button"
-            variant={discussionOpen ? 'default' : 'outline'}
-            size="xs"
-            className="shrink-0"
+            variant={discussionOpen ? 'contained' : 'outlined'}
+            size="small"
+            sx={{ flexShrink: 0 }}
             aria-expanded={discussionOpen}
             aria-controls={`discussion-${candidate.id}`}
             onClick={() => setDiscussionOpen((open) => !open)}
           >
-            <MessageSquare className="size-3.5" />
+            <MessageSquare size={16} aria-hidden />
             {candidate.commentCount} 条讨论
           </Button>
         ) : null}
         {!compact && currentUserId ? (
-          <Link
+          <Button component={Link}
             href={`/ai-research?seed=${encodeURIComponent(candidate.id)}`}
             prefetch={false}
-            className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
           >
             深入调研
-            <Sparkles className="size-3.5" />
-          </Link>
+            <Sparkles size={16} aria-hidden />
+          </Button>
         ) : null}
         {!onOpenPreview ? (
-          <Link
+          <Button component={Link}
             href={readingHref}
             prefetch={false}
             onMouseEnter={prefetchDetail}
             onFocus={prefetchDetail}
             onClick={handlePreviewClick}
-            className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+            sx={{ marginLeft: 'auto' }}
           >
             {externalReading ? '阅读原文' : '打开详情'}
-            <ArrowUpRight className="size-3.5" />
-          </Link>
+            <ArrowUpRight size={16} aria-hidden />
+          </Button>
         ) : null}
-      </div>
+      </Box>
 
       {adminActions ? (
-        <div className="flex flex-wrap gap-1.5 border-t border-border pt-2">{adminActions}</div>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, borderTop: 1, borderColor: 'divider', paddingTop: space.sm }}>{adminActions}</Box>
       ) : null}
 
       {discussionOpen ? (
-        <div id={`discussion-${candidate.id}`} className="min-w-0">
+        <Box id={`discussion-${candidate.id}`} sx={{ minWidth: 0 }}>
           <CommentSection
             targetType="summary"
             targetId={candidate.id}
@@ -349,8 +301,8 @@ export function RadarCandidateCard({
             currentUserRole={currentUserRole}
             compact
           />
-        </div>
+        </Box>
       ) : null}
-    </article>
+    </Box>
   );
 }

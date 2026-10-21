@@ -15,6 +15,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from ai_engine.llm.config import (
     LlmPurpose,
     fallback_spec as configured_fallback_spec,
+    minimax_reasoning_effort,
     parse_spec,
     resolve_route,
 )
@@ -603,6 +604,9 @@ async def _generate_vision_once(
         }
         if system_prompt:
             kwargs["system"] = system_prompt
+        effort = minimax_reasoning_effort(model)
+        if effort:
+            kwargs["extra_body"] = {"output_config": {"effort": effort}}
         async with _llm_semaphore():
             response = await client.messages.create(**kwargs)
         text = "".join(
@@ -648,8 +652,8 @@ async def _generate_vision_once(
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=max_tokens,
             timeout=timeout,
+            **_openai_generation_options(provider, model, max_tokens),
         )
     choice = response.choices[0] if response.choices else None
     content = choice.message.content if choice is not None else ""
@@ -837,6 +841,21 @@ async def _circuit_success(endpoint: str) -> None:
         _circuit_failures.pop(endpoint, None)
 
 
+def _openai_generation_options(
+    provider: str, model: str, max_tokens: int, *,
+    tier: LlmTier = "light", disable_thinking: bool = False,
+) -> dict[str, Any]:
+    effort = minimax_reasoning_effort(model, tier=tier, disable_thinking=disable_thinking)
+    if effort:
+        return {"max_completion_tokens": max_tokens, "reasoning_effort": effort}
+    if provider == "minimax" and model.casefold() == "minimax-m3":
+        options: dict[str, Any] = {"max_completion_tokens": max_tokens}
+        if disable_thinking:
+            options["extra_body"] = {"thinking": {"type": "disabled"}}
+        return options
+    return {"max_tokens": max_tokens}
+
+
 async def _generate_text_once(
     *,
     llm_spec: str,
@@ -874,7 +893,10 @@ async def _generate_text_once(
         }
         if system_prompt:
             kwargs["system"] = system_prompt
-        if disable_thinking:
+        effort = minimax_reasoning_effort(model, tier=tier, disable_thinking=disable_thinking)
+        if effort:
+            kwargs["extra_body"] = {"output_config": {"effort": effort}}
+        elif disable_thinking:
             kwargs["thinking"] = {"type": "disabled"}
         async with _llm_semaphore():
             message = await anthropic_client.messages.create(**kwargs)
@@ -912,14 +934,9 @@ async def _generate_text_once(
         "messages": messages,
         "timeout": timeout,
     }
-    if provider == "minimax" and model.casefold() == "minimax-m3":
-        # MiniMax documents max_completion_tokens for new OpenAI-compatible
-        # integrations; its thinking tokens otherwise consume max_tokens.
-        completion_kwargs["max_completion_tokens"] = max_tokens
-        if disable_thinking:
-            completion_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-    else:
-        completion_kwargs["max_tokens"] = max_tokens
+    completion_kwargs.update(_openai_generation_options(
+        provider, model, max_tokens, tier=tier, disable_thinking=disable_thinking,
+    ))
     async with _llm_semaphore():
         response = await openai_client.chat.completions.create(**completion_kwargs)
     choice = response.choices[0] if response.choices else None
@@ -994,7 +1011,10 @@ async def _stream_text_once(
         }
         if system_prompt:
             kwargs["system"] = system_prompt
-        if disable_thinking:
+        effort = minimax_reasoning_effort(model, tier=tier, disable_thinking=disable_thinking)
+        if effort:
+            kwargs["extra_body"] = {"output_config": {"effort": effort}}
+        elif disable_thinking:
             kwargs["thinking"] = {"type": "disabled"}
         async with _llm_semaphore():
             async with client.messages.stream(**kwargs) as stream:
@@ -1032,7 +1052,9 @@ async def _stream_text_once(
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
-                max_tokens=max_tokens,
+                **_openai_generation_options(
+                    provider, model, max_tokens, tier=tier, disable_thinking=disable_thinking,
+                ),
                 timeout=timeout,
                 stream=True,
                 **stream_kwargs,

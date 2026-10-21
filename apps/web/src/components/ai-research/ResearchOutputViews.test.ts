@@ -83,7 +83,7 @@ describe('ResearchOutputViews', () => {
       sources: [],
     }));
 
-    expect(html).toContain('独立网页阅读版');
+    expect(html).toContain('aria-label="网页简报"');
     expect(html).toContain('一页判断');
     expect(html).toContain('详细报告');
     expect(html).not.toContain('Slides 提纲预览');

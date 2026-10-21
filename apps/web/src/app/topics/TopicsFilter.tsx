@@ -7,9 +7,10 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { Compass, Flame, Sparkles, Star, TrendingUp } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
-import { type TopicFilterKey } from './topic-filter-options';
+import { AppButton } from '@/components/material/AppButton';
+import { LinkPendingIcon } from '@/components/material/LinkPendingIcon';
+import { parseTopicFilter, type TopicFilterKey } from './topic-filter-options';
+import styles from './topics.module.css';
 
 export const TOPICS_FILTERS = [
   { key: 'all', label: '全部专题', Icon: Compass },
@@ -26,36 +27,31 @@ interface Props {
 export function TopicsFilter({ unreadByFilter }: Props) {
   const pathname = usePathname();
   const params = useSearchParams();
-  const current = (params.get('filter') ?? 'all') as TopicFilterKey;
+  const current = parseTopicFilter(params.get('filter'));
 
   return (
-    <nav className="mb-3 flex flex-wrap items-center gap-2" aria-label="专题筛选">
+    <nav className={styles.filters} aria-label="专题筛选">
       {TOPICS_FILTERS.map(({ key, label, Icon }) => {
         const active = current === key;
         const unread = key === 'followed' ? unreadByFilter[key] : undefined;
         const href = key === 'all' ? pathname : `${pathname}?filter=${key}`;
         return (
-          <Link
+          <AppButton component={Link}
             key={key}
             href={href}
             aria-current={active ? 'page' : undefined}
-            className={cn(
-              // 移动端使用 44px 触控目标，桌面端收紧到 36px。
-              'inline-flex h-11 min-h-11 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors sm:h-9 sm:min-h-9',
-              active
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border bg-card text-foreground/80 hover:text-foreground hover:border-foreground/30',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-            )}
+            variant="outlined"
+            className={styles.filter}
+            startIcon={<LinkPendingIcon label={label}><Icon aria-hidden /></LinkPendingIcon>}
+            sx={{ color: active ? 'primary.main' : 'text.secondary', bgcolor: active ? 'action.selected' : 'background.paper', borderColor: active ? 'primary.main' : 'divider' }}
           >
-            <Icon className="size-3.5" />
             {label}
             {unread && unread > 0 ? (
-              <Badge className="bg-primary/20 text-primary">
+              <span className={styles.unreadCount} aria-label={`${unread} 个新议题`}>
                 {unread}
-              </Badge>
+              </span>
             ) : null}
-          </Link>
+          </AppButton>
         );
       })}
     </nav>

@@ -16,22 +16,20 @@
 //
 // 来源：docs/archive/2026-09-08-agent-prompts/week4-engineer-a.md §任务 1
 //
-// UI 重设计后：弹窗改用 shadcn Dialog（Radix），焦点陷阱 / ESC / 滚动锁
-// 由 Radix 提供，不再手写 overlay + stopPropagation。
+// UI 使用共享 AppDialog / MUI Dialog，焦点陷阱、ESC 与滚动锁由 MUI 提供。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, UploadCloud } from 'lucide-react';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import LinearProgress from '@mui/material/LinearProgress';
+import Typography from '@mui/material/Typography';
 
 import { MarkdownPreview } from './MarkdownPreview';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
 
 type Phase = 'idle' | 'uploading' | 'polling' | 'succeeded' | 'failed';
 
@@ -208,15 +206,25 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   }, [job, router]);
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>从文件导入</DialogTitle>
-        </DialogHeader>
-
+    <AppDialog
+      open
+      onClose={onClose}
+      title="从文件导入"
+      actions={phase === 'succeeded' ? (
+        <>
+          <Button type="button" variant="outlined" onClick={onClose}>关闭</Button>
+          {job?.outputResearchId ? <Button type="button" onClick={handleViewDraft}>查看个人草稿</Button> : null}
+        </>
+      ) : phase === 'failed' ? (
+        <>
+          <Button type="button" variant="outlined" onClick={onClose}>关闭</Button>
+          <Button type="button" onClick={handleRetry}>重试</Button>
+        </>
+      ) : null}
+    >
         {/* 拖拽区 —— 键盘可达(Enter/Space 触发文件选择),role="button" + tabIndex */}
         {phase === 'idle' && (
-          <div
+          <Box
             role="button"
             tabIndex={0}
             aria-label="选择要导入的文件（也可拖入）"
@@ -233,141 +241,121 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
                 inputRef.current?.click();
               }
             }}
-            className={cn(
-              'cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-              dragOver ? 'border-primary bg-accent/40' : 'border-border bg-card hover:bg-muted/40',
-            )}
+            sx={{
+              cursor: 'pointer',
+              border: '2px dashed',
+              borderColor: dragOver ? 'primary.main' : 'divider',
+              borderRadius: 'var(--dr-radius-medium)',
+              bgcolor: dragOver ? 'action.selected' : 'background.paper',
+              px: 3,
+              py: 5,
+              textAlign: 'center',
+              transition: 'border-color var(--dr-motion-fast), background-color var(--dr-motion-fast)',
+              '&:hover': { bgcolor: 'action.hover', borderColor: 'primary.main' },
+              '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 },
+            }}
           >
             <input
               ref={inputRef}
               type="file"
               accept=".md,.txt,.html"
               onChange={handleInputChange}
-              className="hidden"
+              style={{ display: 'none' }}
             />
-            <UploadCloud className="mx-auto size-6 text-muted-foreground" />
-            <p className="mt-2 text-sm text-muted-foreground">
+            <Box aria-hidden="true" sx={{ display: 'flex', justifyContent: 'center', color: 'primary.main', '& svg': { width: 24, height: 24 } }}>
+              <UploadCloud />
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
               拖拽 .md / .txt / .html 文件到此处
               <br />
               或点击选择文件
-            </p>
-            <p className="mt-2 text-xs text-muted-foreground">单文件 ≤ 5MB</p>
-          </div>
+            </Typography>
+            <Typography variant="metadata" color="text.secondary" component="p" sx={{ mt: 1 }}>单文件 ≤ 5MB</Typography>
+          </Box>
         )}
 
         {/* 上传中 / 轮询中 */}
-        {(phase === 'uploading' || phase === 'polling') && job && (
-          <div>
-            <div className="mb-3 flex items-center gap-3">
-              <Loader2 className="size-4 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">
+        {(phase === 'uploading' || phase === 'polling') && (
+          <Box role="status" aria-live="polite">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+              <CircularProgress size={18} aria-label={phase === 'uploading' ? '上传中' : '转换中'} />
+              <Typography variant="control" color="text.secondary">
                 {phase === 'uploading'
                   ? '上传中…'
-                  : `转换中… (${job.status}) · 已等待 ${Math.max(1, Math.round((now - pollingStartedAt) / 1000))} 秒`}
-              </span>
-            </div>
+                  : `转换中…${job ? ` (${job.status})` : ''} · 已等待 ${Math.max(1, Math.round((now - pollingStartedAt) / 1000))} 秒`}
+              </Typography>
+            </Box>
             <ProgressBar />
             {phase === 'polling' && now - pollingStartedAt > 30_000 ? (
-              <p className="mt-2 rounded border border-warning-border bg-warning-bg px-2 py-1 text-xs text-warning-fg">
+              <Alert severity="warning" sx={{ mt: 1.5, py: 0.25 }}>
                 已等待超过 30 秒,通常是文档较大或外部 LLM 排队;任务仍在后台,可关闭对话框稍后回来。
-              </p>
+              </Alert>
             ) : null}
-            {job.filename && (
-              <p className="mt-2 font-mono text-xs text-muted-foreground">{job.filename}</p>
+            {job?.filename && (
+              <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1.5, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{job.filename}</Typography>
             )}
-          </div>
+          </Box>
         )}
 
         {/* 成功 */}
         {phase === 'succeeded' && job && (
-          <div>
-            <div className="mb-3 flex items-center gap-2 rounded-md bg-status-succeeded-bg p-3 text-sm text-status-succeeded-fg">
-              <CheckCircle2 className="size-4 shrink-0" />
+          <Box>
+            <Alert severity="success" icon={<CheckCircle2 size={18} />} sx={{ mb: 1.5 }}>
               转换成功！{job.outputResearchId ? '已生成个人草稿。' : ''}
-            </div>
+            </Alert>
 
             {Array.isArray(job.warnings) && job.warnings.length > 0 ? (
-              <div className="mb-3 rounded-md bg-status-partial-bg p-3 text-status-partial-fg">
-                <h3 className="flex items-center gap-1.5 text-sm font-medium">
-                  <AlertTriangle className="size-3.5" />
+              <Alert severity="warning" sx={{ mb: 1.5 }}>
+                <Typography variant="control" component="h3" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 600 }}>
+                  <AlertTriangle size={16} aria-hidden="true" />
                   转换告警 ({job.warnings.length})
-                </h3>
-                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
+                </Typography>
+                <Box component="ul" sx={{ mt: 0.5, mb: 0, pl: 2.5, typography: 'metadata', '& li + li': { mt: 0.5 } }}>
                   {(job.warnings as unknown[]).map((w, i) => (
                     <li key={i}>{String(w)}</li>
                   ))}
-                </ul>
-              </div>
+                </Box>
+              </Alert>
             ) : (
-              <p className="mb-3 text-xs text-muted-foreground">无警告</p>
+              <Typography variant="metadata" component="p" color="text.secondary" sx={{ mb: 1.5 }}>无警告</Typography>
             )}
 
             {draftBody !== null && (
-              <div className="mb-3">
-                <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <Box sx={{ mb: 1.5 }}>
+                <Typography variant="metadata" component="h3" color="text.secondary" sx={{ mb: 0.5, fontWeight: 600 }}>
                   Markdown 预览
-                </h3>
+                </Typography>
                 <MarkdownPreview source={draftBody} />
-              </div>
+              </Box>
             )}
-
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={onClose}>
-                关闭
-              </Button>
-              {job.outputResearchId && (
-                <Button type="button" onClick={handleViewDraft}>
-                  查看个人草稿
-                </Button>
-              )}
-            </div>
-          </div>
+          </Box>
         )}
 
         {/* 失败 */}
         {phase === 'failed' && (
-          <div>
-            <div
-              role="alert"
-              className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-            >
+          <Box>
+            <Alert severity="error" role="alert" sx={{ mb: 1.5 }}>
               {error ?? job?.errorMessage ?? '导入失败'}
-            </div>
+            </Alert>
             {job?.errorCode && (
-              <p className="mb-3 font-mono text-xs text-muted-foreground">
+              <Typography variant="metadata" component="p" color="text.secondary" sx={{ mb: 1.5, fontFamily: 'monospace' }}>
                 错误码: {job.errorCode}
-              </p>
+              </Typography>
             )}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={onClose}>
-                关闭
-              </Button>
-              <Button type="button" onClick={handleRetry}>
-                重试
-              </Button>
-            </div>
-          </div>
+          </Box>
         )}
 
         {/* idle 状态下显示错误 */}
         {phase === 'idle' && error && (
-          <div
-            role="alert"
-            className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-          >
+          <Alert role="alert" severity="error" sx={{ mt: 1.5 }}>
             {error}
-          </div>
+          </Alert>
         )}
-      </DialogContent>
-    </Dialog>
+    </AppDialog>
   );
 }
 
 /** 不定长进度条 —— 转换耗时未知，只表达「在动」。 */
 function ProgressBar() {
-  return (
-    <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-      <div className="h-full w-1/4 animate-indeterminate-bar rounded-full bg-primary" />
-    </div>
-  );
+  return <LinearProgress variant="indeterminate" aria-label="文件转换进度" sx={{ height: 4, borderRadius: 'var(--dr-radius-pill)' }} />;
 }

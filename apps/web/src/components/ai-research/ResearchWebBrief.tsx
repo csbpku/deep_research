@@ -26,7 +26,14 @@ import { extractResearchTitle, cleanEvidenceSnippet } from '@/lib/research-repor
 import { compactResearchCitations } from '@/lib/research-citations';
 import { researchUserStatus } from '@/lib/research-user-status';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
-import { cn } from '@/lib/utils';
+import { domainAppearance } from '@/components/domain/appearance';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Divider from '@mui/material/Divider';
+import Link from '@mui/material/Link';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
 
 export interface ResearchWebBriefProps {
   content: string;
@@ -77,174 +84,160 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
   const requiresAttention = showQualityStatus && userStatus.code !== 'ready';
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-border bg-background text-foreground shadow-xl print:rounded-none print:shadow-none" aria-label="网页简报">
-      <header className="relative overflow-hidden border-b border-border bg-foreground px-5 py-8 text-background sm:px-9 sm:py-11">
-        <div className="absolute -right-16 -top-20 size-56 rounded-full border border-tier-skim/20" aria-hidden />
-        <div className="absolute -right-4 -top-8 size-32 rounded-full border border-tier-skim/15" aria-hidden />
-        <div className="relative max-w-3xl">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium uppercase tracking-[0.18em] text-tier-skim">
-            <span>Research brief</span>
-            <span className="text-background/60">/</span>
-            <span>独立网页阅读版</span>
-          </div>
-          <h1 className="mt-4 max-w-3xl font-serif text-3xl font-medium leading-tight tracking-[-0.03em] sm:text-5xl">{displayTitle}</h1>
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-background/80 sm:text-base">
-            一页看懂判断、证据、限制和下一步。这个页面直接来自原始研究稿，不经过 Slides 转换。
-          </p>
-          <div className="mt-7 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.7fr)] sm:items-end">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-background/80">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-background/20 px-2.5 py-1"><BookOpen className="size-3.5" />约 {readingMinutes} 分钟阅读</span>
-              {showQualityStatus ? <span className="inline-flex items-center gap-1.5 rounded-full border border-background/20 px-2.5 py-1"><ShieldCheck className="size-3.5" />{userStatus.label}</span> : null}
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-background/20 px-2.5 py-1">{sources.length > 0 ? `${inspectableSources}/${sources.length} 条来源有可核对正文` : '本轮未保存来源'}</span>
-            </div>
-            <div className="border-l border-background/15 pl-3 text-xs leading-5 text-background/70 sm:justify-self-end sm:max-w-[260px]">
-              <p className="font-medium text-tier-skim">阅读路径</p>
-              <p className="mt-0.5">先看判断，再看发现，最后回到证据和原文。</p>
-            </div>
-          </div>
-        </div>
-      </header>
+    <Paper component="article" variant="outlined" aria-label="网页简报" sx={{ overflow: 'hidden', color: 'text.primary', '@media print': { border: 0, borderRadius: 0, boxShadow: 'none' } }}>
+      <Box component="header" sx={{ borderTop: 3, borderColor: 'primary.main', borderBottom: 1, bgcolor: 'background.default', px: { xs: 2, sm: 3 }, py: 2.5 }}>
+        <Stack spacing={1.5} sx={{ maxWidth: 960 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 600 }}>AI 调研</Typography>
+            <Typography variant="metadata" color="text.disabled" aria-hidden="true">/</Typography>
+            <Typography variant="metadata" color="text.secondary">网页简报</Typography>
+          </Stack>
+          <Typography component="h1" variant="panelTitle" sx={{ overflowWrap: 'anywhere' }}>{displayTitle}</Typography>
+          <Typography variant="body2" color="text.secondary">
+            一页查看判断、证据、限制和下一步；内容直接整理自原始研究稿，不经过 Slides 转换。
+          </Typography>
+          <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+            <Chip size="small" icon={<BookOpen size={14} />} label={`约 ${readingMinutes} 分钟阅读`} />
+            {showQualityStatus ? <Chip size="small" icon={<ShieldCheck size={14} />} color={requiresAttention ? 'warning' : 'success'} variant="outlined" label={userStatus.label} /> : null}
+            <Chip size="small" variant="outlined" label={sources.length > 0 ? `${inspectableSources}/${sources.length} 条来源有可核对正文` : '本轮未保存来源'} />
+            <Typography variant="metadata" color="text.secondary" sx={{ flexBasis: { xs: '100%', sm: 'auto' }, ml: { sm: 1 } }}>先看判断，再看发现，最后回到证据和原文。</Typography>
+          </Stack>
+        </Stack>
+      </Box>
 
-      <nav className="sticky top-0 z-10 flex gap-1 overflow-x-auto border-b border-border bg-background/95 px-5 py-2.5 text-xs backdrop-blur print:hidden sm:px-9" aria-label="网页简报目录">
-        <a className="shrink-0 rounded-full px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" href="#web-brief-summary">判断</a>
-        <a className="shrink-0 rounded-full px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" href="#web-brief-findings">发现</a>
-        <a className="shrink-0 rounded-full px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" href="#web-brief-report">详细报告</a>
-        <a className="shrink-0 rounded-full px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" href="#web-brief-evidence">证据</a>
-      </nav>
+      <Box component="nav" aria-label="网页简报目录" sx={{ position: 'sticky', top: 0, zIndex: 1, overflowX: 'auto', bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 1, '@media print': { display: 'none' } }}>
+        <Stack direction="row" spacing={0.5} sx={{ minWidth: 'max-content' }}>
+          {[
+            ['web-brief-summary', '判断'],
+            ['web-brief-findings', '发现'],
+            ['web-brief-report', '详细报告'],
+            ['web-brief-evidence', '证据'],
+          ].map(([href, label]) => <Link key={href} component="a" href={`#${href}`} underline="none" color="text.secondary" sx={{ borderRadius: 1, px: 1, py: 1, typography: 'metadata', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 } }}>{label}</Link>)}
+        </Stack>
+      </Box>
 
-      <div className="grid gap-8 px-5 py-7 sm:px-9 sm:py-9 lg:grid-cols-[minmax(0,1fr)_240px]">
-        <div className="min-w-0 space-y-9">
-          <section id="web-brief-summary" className="scroll-mt-6" aria-labelledby="web-brief-summary-title">
-            <div className="flex items-center gap-2 text-primary"><CheckCircle2 className="size-4" /><h2 id="web-brief-summary-title" className="text-xs font-semibold uppercase tracking-[0.14em]">一页判断</h2></div>
-            <div className="mt-3 border-l-2 border-tier-skim bg-accent px-4 py-4 sm:px-5">
-              <div className="prose max-w-none text-[15px] leading-7 text-foreground [&_p]:my-0 [&_ul]:my-2">
-                {summaryText ? <MarkdownContent content={summaryText} compact /> : <p>报告没有明确的摘要或结论章节，请继续阅读详细报告。</p>}
-              </div>
-            </div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+      <Box sx={{ display: 'grid', gridTemplateColumns: { lg: 'minmax(0, 1fr) 220px' }, gap: { xs: 3, sm: 4 }, px: { xs: 2, sm: 3 }, py: { xs: 2.5, sm: 3 } }}>
+        <Stack spacing={4} sx={{ minWidth: 0 }}>
+          <Box component="section" id="web-brief-summary" aria-labelledby="web-brief-summary-title" sx={{ scrollMarginTop: 3 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}><CheckCircle2 size={18} /><Typography id="web-brief-summary-title" component="h2" variant="fieldTitle">一页判断</Typography></Stack>
+            <Paper variant="outlined" sx={{ mt: 1.5, p: { xs: 1.5, sm: 2 }, borderLeft: 3, borderLeftColor: 'primary.main', bgcolor: 'action.selected' }}>
+              {summaryText ? <MarkdownContent content={summaryText} compact className="max-w-none [&_p]:my-0 [&_ul]:my-2" /> : <Typography variant="body1">报告没有明确的摘要或结论章节，请继续阅读详细报告。</Typography>}
+            </Paper>
+            <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
               {summary.explicit ? '这是报告中明确写出的摘要/结论；详细依据和限定条件见下方。' : '这是报告开头的有限摘录，不代表完整结论。'}
-            </p>
-          </section>
+            </Typography>
+          </Box>
 
           {requiresAttention ? (
-            <div className="flex gap-3 border border-warning-border bg-warning-bg px-4 py-3 text-xs leading-5 text-warning-fg" role="status">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <p>{userStatus.description} 来源链接和原文摘录保留在“证据”部分，可以按需回查。</p>
-            </div>
+            <Paper role="status" variant="outlined" sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', p: 1.5, ...domainAppearance('warning') }}>
+              <AlertTriangle size={18} aria-hidden="true" />
+              <Typography variant="body2">{userStatus.description} 来源链接和原文摘录保留在“证据”部分，可以按需回查。</Typography>
+            </Paper>
           ) : null}
 
-          <section id="web-brief-findings" className="scroll-mt-6" aria-labelledby="web-brief-findings-title">
-            <div className="flex items-center gap-2 text-primary"><ListChecks className="size-4" /><h2 id="web-brief-findings-title" className="text-xs font-semibold uppercase tracking-[0.14em]">关键发现</h2></div>
+          <Box component="section" id="web-brief-findings" aria-labelledby="web-brief-findings-title" sx={{ scrollMarginTop: 3 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}><ListChecks size={18} /><Typography id="web-brief-findings-title" component="h2" variant="fieldTitle">关键发现</Typography></Stack>
             {findings.length > 0 ? (
-              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <Box sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
                 {findings.map((section, index) => {
                   const citationCount = evidenceMap.find((row) => row.section === section.heading)?.citations.length ?? 0;
                   return (
-                    <article key={`${section.heading}-${index}`} className="border border-border bg-card px-4 py-4 transition-colors hover:border-primary/35">
-                      <span className="font-mono text-xs text-tier-skim">0{index + 1}</span>
-                      <h3 className="mt-3 line-clamp-3 text-sm font-semibold leading-5">{section.heading}</h3>
-                      <p className="mt-3 line-clamp-5 text-xs leading-5 text-muted-foreground">{sectionLead(section.body)}</p>
-                      <p className="mt-4 text-xs uppercase tracking-[0.12em] text-muted-foreground">
-                        {citationCount > 0 ? `可回链证据 · ${citationCount}` : '正文未建立回链'}
-                      </p>
-                    </article>
+                    <Paper component="article" variant="outlined" key={`${section.heading}-${index}`} sx={{ p: 1.5, transition: 'border-color 120ms ease-out', '&:hover': { borderColor: 'primary.main' } }}>
+                      <Typography variant="metadata" color="primary.main" sx={{ fontVariantNumeric: 'tabular-nums' }}>0{index + 1}</Typography>
+                      <Typography variant="listTitle" component="h3" sx={{ mt: 1.5, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{section.heading}</Typography>
+                      <Typography variant="metadata" color="text.secondary" sx={{ mt: 1.5, display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{sectionLead(section.body)}</Typography>
+                      <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 2 }}>{citationCount > 0 ? `可回链证据 · ${citationCount}` : '正文未建立回链'}</Typography>
+                    </Paper>
                   );
                 })}
-              </div>
-            ) : <p className="mt-3 text-sm text-muted-foreground">报告没有可识别的章节结构。</p>}
-          </section>
+              </Box>
+            ) : <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>报告没有可识别的章节结构。</Typography>}
+          </Box>
 
           {(risks.length > 0 || actions.length > 0) ? (
-            <section className="grid gap-4 sm:grid-cols-2" aria-label="风险与行动">
-              {risks.length > 0 ? <ListBlock title="风险与限制" icon={<AlertTriangle className="size-4" />} items={risks} tone="risk" /> : null}
-              {actions.length > 0 ? <ListBlock title="下一步行动" icon={<Waypoints className="size-4" />} items={actions} tone="action" /> : null}
-            </section>
+            <Box component="section" aria-label="风险与行动" sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
+              {risks.length > 0 ? <ListBlock title="风险与限制" icon={<AlertTriangle size={18} />} items={risks} tone="risk" /> : null}
+              {actions.length > 0 ? <ListBlock title="下一步行动" icon={<Waypoints size={18} />} items={actions} tone="action" /> : null}
+            </Box>
           ) : null}
 
-          <section id="web-brief-report" className="scroll-mt-6" aria-labelledby="web-brief-report-title">
-            <div className="flex items-center gap-2 text-primary"><BookOpen className="size-4" /><h2 id="web-brief-report-title" className="text-xs font-semibold uppercase tracking-[0.14em]">详细报告</h2></div>
-            <div className="mt-3 space-y-7">
+          <Box component="section" id="web-brief-report" aria-labelledby="web-brief-report-title" sx={{ scrollMarginTop: 3 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}><BookOpen size={18} /><Typography id="web-brief-report-title" component="h2" variant="fieldTitle">详细报告</Typography></Stack>
+            <Stack spacing={3} sx={{ mt: 1.5 }}>
               {articleSections.length > 0 ? articleSections.map((section, index) => (
-                <section key={`${section.heading}-${index}`} id={`web-brief-section-${index}`} className={cn('scroll-mt-6', section.level === 1 && index > 0 && 'border-t border-border pt-6')}>
-                  {section.level === 1 ? <h2 className="font-serif text-2xl font-medium tracking-[-0.02em]">{section.heading}</h2> : <h3 className="text-lg font-semibold tracking-[-0.01em]">{section.heading}</h3>}
-                  <div className="prose mt-3 max-w-none text-[14px] leading-7 text-foreground/80 [&_a]:text-primary [&_blockquote]:border-tier-skim [&_blockquote]:bg-warning-bg/50 [&_blockquote]:px-4 [&_table]:text-xs">
-                    <MarkdownContent content={section.body.join('\n').trim() || '本节暂无正文。'} compact />
-                  </div>
-                </section>
+                <Box component="section" key={`${section.heading}-${index}`} id={`web-brief-section-${index}`} sx={{ scrollMarginTop: 3, ...(section.level === 1 && index > 0 ? { borderTop: 1, borderColor: 'divider', pt: 3 } : {}) }}>
+                  <Typography component={section.level === 1 ? 'h2' : 'h3'} variant={section.level === 1 ? 'panelTitle' : 'listTitle'}>{section.heading}</Typography>
+                  <MarkdownContent content={section.body.join('\n').trim() || '本节暂无正文。'} compact className="mt-3 max-w-none [&_a]:text-primary [&_blockquote]:px-4 [&_table]:text-xs" />
+                </Box>
               )) : (
-                <div className="border border-dashed border-border px-4 py-4 text-sm leading-6 text-muted-foreground">
-                  摘要、风险和下一步已经在上方整理；本报告没有可单独展开的分析正文。需要逐字核对时，请回到研究稿或下方证据。
-                </div>
+                <Paper variant="outlined" sx={{ p: 2, borderStyle: 'dashed' }}>
+                  <Typography variant="body2" color="text.secondary">摘要、风险和下一步已经在上方整理；本报告没有可单独展开的分析正文。需要逐字核对时，请回到研究稿或下方证据。</Typography>
+                </Paper>
               )}
-            </div>
-          </section>
+            </Stack>
+          </Box>
 
-          <section id="web-brief-evidence" className="scroll-mt-6 border-t border-border pt-7" aria-labelledby="web-brief-evidence-title">
-            <div className="flex items-center gap-2 text-primary"><Quote className="size-4" /><h2 id="web-brief-evidence-title" className="text-xs font-semibold uppercase tracking-[0.14em]">证据与来源</h2></div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">只展示本轮实际保存的来源；正文中的引用关系和原文摘录需要一起核对。</p>
+          <Box component="section" id="web-brief-evidence" aria-labelledby="web-brief-evidence-title" sx={{ scrollMarginTop: 3 }}>
+            <Divider sx={{ mb: 2.5 }} />
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}><Quote size={18} /><Typography id="web-brief-evidence-title" component="h2" variant="fieldTitle">证据与来源</Typography></Stack>
+            <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 1 }}>只展示本轮实际保存的来源；正文中的引用关系和原文摘录需要一起核对。</Typography>
             {evidenceMap.length > 0 ? (
-              <div className="mt-4 space-y-3">
-                {evidenceMap.map((row) => <div key={row.section} className="border border-border bg-card px-4 py-3"><p className="text-xs font-semibold">{row.section}</p><div className="mt-2 flex flex-wrap gap-2">{row.citations.map((citation) => <a key={citation.href} href={citation.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-center gap-1 rounded-full bg-accent px-2.5 py-1 text-xs text-primary hover:underline"><span className="max-w-[260px] truncate">{citation.title}</span><ExternalLink className="size-3 shrink-0" /></a>)}</div></div>)}
-              </div>
-            ) : <p className="mt-4 border border-dashed border-border px-4 py-4 text-sm text-muted-foreground">正文没有识别到可回链引用，不能仅凭来源数量判断结论已被支持。</p>}
+              <Stack spacing={1.5} sx={{ mt: 2 }}>
+                {evidenceMap.map((row) => <Paper key={row.section} variant="outlined" sx={{ p: 1.5 }}><Typography variant="metadata" sx={{ fontWeight: 600 }}>{row.section}</Typography><Stack direction="row" useFlexGap sx={{ mt: 1, flexWrap: 'wrap', gap: 1 }}>{row.citations.map((citation) => <Chip key={citation.href} component="a" href={citation.href} target="_blank" rel="noreferrer noopener" clickable size="small" color="primary" variant="outlined" label={citation.title} icon={<ExternalLink size={14} />} />)}</Stack></Paper>)}
+              </Stack>
+            ) : <Paper variant="outlined" sx={{ mt: 2, p: 2, borderStyle: 'dashed' }}><Typography variant="body2" color="text.secondary">正文没有识别到可回链引用，不能仅凭来源数量判断结论已被支持。</Typography></Paper>}
             {sources.length > 0 ? (
               <>
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <Box sx={{ mt: 2.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
                   {sources.slice(0, 8).map((source, index) => {
                     const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
                     const externalInstruction = hasExternalInstructionSignal(sourceText);
                     return (
-                      <article key={source.id} className="border border-border bg-card px-4 py-3">
-                        <div className="flex items-start gap-2">
-                          <span className="font-mono text-[10px] text-tier-skim">{String(index + 1).padStart(2, '0')}</span>
-                          <div className="min-w-0 flex-1">
-                            {externalInstruction ? (
-                              <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
-                                <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-                                <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</span>
-                              </p>
-                            ) : null}
-                            {source.href ? <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-primary hover:underline"><span className="line-clamp-2">{source.title}</span><ArrowUpRight className="mt-0.5 size-3 shrink-0" /></a> : <p className="text-xs font-medium">{source.title}</p>}
-                            {source.snippet ? <p className="mt-2 line-clamp-4 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 360)}</p> : null}
-                            <p className="mt-2 text-xs text-muted-foreground">{source.capturedAt ? `抓取于 ${formatDate(source.capturedAt)}` : '抓取时间未知'}</p>
-                          </div>
-                        </div>
-                      </article>
+                      <Paper component="article" variant="outlined" key={source.id} sx={{ p: 1.5, minWidth: 0 }}>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+                          <Typography variant="metadata" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>{String(index + 1).padStart(2, '0')}</Typography>
+                          <Stack spacing={1} sx={{ minWidth: 0, flex: 1 }}>
+                            {externalInstruction ? <Paper role="note" variant="outlined" sx={{ display: 'flex', gap: 1, p: 1, ...domainAppearance('warning') }}><AlertTriangle size={16} aria-hidden="true" /><Typography variant="metadata">{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</Typography></Paper> : null}
+                            {source.href ? <Link component="a" href={source.href} target="_blank" rel="noreferrer noopener" underline="hover" sx={{ display: 'inline-flex', alignItems: 'flex-start', gap: 0.5, typography: 'metadata', fontWeight: 500, overflowWrap: 'anywhere' }}>{source.title}<ArrowUpRight size={14} /></Link> : <Typography variant="metadata" sx={{ fontWeight: 500 }}>{source.title}</Typography>}
+                            {source.snippet ? <Typography variant="metadata" color="text.secondary" sx={{ display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{cleanEvidenceSnippet(source.snippet, 360)}</Typography> : null}
+                            <Typography variant="metadata" color="text.secondary">{source.capturedAt ? `抓取于 ${formatDate(source.capturedAt)}` : '抓取时间未知'}</Typography>
+                          </Stack>
+                        </Stack>
+                      </Paper>
                     );
                   })}
-                </div>
-                {sources.length > 8 ? <p className="mt-3 text-center text-xs text-muted-foreground">已展示前 8 条来源；其余 {sources.length - 8} 条资料仍保留在研究过程的资料账本中。</p> : null}
+                </Box>
+                {sources.length > 8 ? <Typography variant="metadata" color="text.secondary" align="center" sx={{ display: 'block', mt: 1.5 }}>已展示前 8 条来源；其余 {sources.length - 8} 条资料仍保留在研究过程的资料账本中。</Typography> : null}
               </>
-            ) : <p className="mt-4 text-sm text-muted-foreground">本轮没有保存可核对来源。</p>}
+            ) : <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>本轮没有保存可核对来源。</Typography>}
             {bibliography ? (
-              <div className="mt-6 border-t border-border pt-5">
-                <h3 className="text-sm font-semibold">参考文献</h3>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">正文中的编号引用可回到这里；来源标题链接会在新标签页打开原始页面。</p>
-                <div className="mt-3 prose max-w-none text-sm [&_ul]:my-0 [&_li]:my-1">
-                  <MarkdownContent content={bibliography.body.join('\n').trim()} compact />
-                </div>
-              </div>
+              <Box sx={{ mt: 3, pt: 2.5, borderTop: 1, borderColor: 'divider' }}>
+                <Typography variant="listTitle" component="h3">参考文献</Typography>
+                <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>正文中的编号引用可回到这里；来源标题链接会在新标签页打开原始页面。</Typography>
+                <MarkdownContent content={bibliography.body.join('\n').trim()} compact className="prose mt-3 max-w-none [&_ul]:my-0 [&_li]:my-1" />
+              </Box>
             ) : null}
-          </section>
-        </div>
+          </Box>
+        </Stack>
 
-        <aside className="hidden lg:block" aria-label="网页简报侧栏">
-          <div className="sticky top-5 space-y-5 border-l border-border pl-5 print:hidden">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">On this page</p>
-            <ol className="space-y-3 text-xs leading-5 text-muted-foreground">
-              <li><a href="#web-brief-summary" className="hover:text-primary">01 · 一页判断</a></li>
-              <li><a href="#web-brief-findings" className="hover:text-primary">02 · 关键发现</a></li>
-              <li><a href="#web-brief-report" className="hover:text-primary">03 · 详细报告</a></li>
-              <li><a href="#web-brief-evidence" className="hover:text-primary">04 · 证据与来源</a></li>
-            </ol>
-            <div className="border-t border-border pt-4 text-xs leading-5 text-muted-foreground">
-              <p className="font-medium text-foreground">阅读原则</p>
-              <p className="mt-1">结论、证据和不确定性放在同一条阅读路径里，先看判断，再回到原文。</p>
-            </div>
-          </div>
-        </aside>
-      </div>
-    </article>
+        <Box component="aside" aria-label="网页简报侧栏" sx={{ display: { xs: 'none', lg: 'block' }, '@media print': { display: 'none' } }}>
+          <Stack spacing={2.5} sx={{ position: 'sticky', top: 2.5, pl: 2, borderLeft: 1, borderColor: 'divider' }}>
+            <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 600 }}>本页内容</Typography>
+            <Stack component="ol" spacing={1.5} sx={{ m: 0, pl: 2.5, color: 'text.secondary', typography: 'metadata' }}>
+              <li><Link component="a" href="#web-brief-summary" underline="hover" color="inherit">一页判断</Link></li>
+              <li><Link component="a" href="#web-brief-findings" underline="hover" color="inherit">关键发现</Link></li>
+              <li><Link component="a" href="#web-brief-report" underline="hover" color="inherit">详细报告</Link></li>
+              <li><Link component="a" href="#web-brief-evidence" underline="hover" color="inherit">证据与来源</Link></li>
+            </Stack>
+            <Divider />
+            <Box>
+              <Typography variant="metadata" sx={{ fontWeight: 600 }}>阅读原则</Typography>
+              <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>结论、证据和不确定性放在同一条阅读路径里，先看判断，再回到原文。</Typography>
+            </Box>
+          </Stack>
+        </Box>
+      </Box>
+    </Paper>
   );
 }
 
@@ -287,11 +280,14 @@ function sectionLead(lines: string[]): string {
 }
 
 function ListBlock({ title, icon, items, tone }: { title: string; icon: ReactNode; items: string[]; tone: 'risk' | 'action' }) {
+  const palette = tone === 'risk' ? 'warning' : 'success';
   return (
-    <section className={cn('border px-4 py-4', tone === 'risk' ? 'border-warning-border bg-warning-bg' : 'border-status-succeeded-border bg-status-succeeded-bg')}>
-      <div className="flex items-center gap-2 text-sm font-semibold">{icon}{title}</div>
-      <ul className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">{items.slice(0, 6).map((item) => <li key={item} className="flex gap-2"><span className={cn('mt-2 size-1.5 shrink-0 rounded-full', tone === 'risk' ? 'bg-tier-skim' : 'bg-primary')} />{item}</li>)}</ul>
-    </section>
+    <Paper component="section" variant="outlined" aria-label={title} sx={{ p: 2, ...domainAppearance(palette) }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><Box sx={{ display: 'flex' }}>{icon}</Box><Typography variant="fieldTitle">{title}</Typography></Stack>
+      <Stack component="ul" spacing={1} sx={{ mt: 1.5, mb: 0, pl: 2.5, typography: 'metadata', color: 'text.secondary' }}>
+        {items.slice(0, 6).map((item) => <Box component="li" key={item} sx={{ pl: 0.5 }}>{item}</Box>)}
+      </Stack>
+    </Paper>
   );
 }
 

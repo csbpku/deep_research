@@ -19,9 +19,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearchStatus';
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
+import { AppTextField as Input } from '@/components/material/AppTextField';
+import Box from '@mui/material/Box';
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
 import {
   advanceResearchConversation,
   isStartResearchIntent,
@@ -104,16 +106,16 @@ const STEP_LABELS = ['明确问题', '确认设置', '启动研究', '进行中'
 
 function StepStepper({ step }: { step: number }) {
   return (
-    <ol className="flex flex-wrap items-center gap-1.5 text-xs" aria-label="调研进度">
+    <ol className="flex flex-wrap items-center gap-2 text-xs" aria-label="调研进度">
       {STEP_LABELS.map((label, index) => {
         const state = index < step ? 'done' : index === step ? 'active' : 'todo';
         return (
-          <li key={label} className="flex items-center gap-1.5">
-            {index > 0 ? <span className="mx-0.5 h-px w-3 bg-border" aria-hidden /> : null}
+          <li key={label} className="flex items-center gap-2">
+            {index > 0 ? <span className="mx-1 h-px w-3 bg-border" aria-hidden /> : null}
             <span
               className={cn(
-                'flex size-5 items-center justify-center rounded-full text-[10px] font-medium leading-none',
-                state === 'done' && 'bg-status-succeeded-bg text-status-succeeded-fg',
+                'flex size-5 items-center justify-center rounded-full text-xs font-medium leading-none',
+                state === 'done' && 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]',
                 state === 'active' && 'bg-primary text-primary-foreground',
                 state === 'todo' && 'bg-muted text-muted-foreground',
               )}
@@ -162,32 +164,32 @@ function ResearchRunReceipt({
   const selectedCount = sourceCount + selectedContextCount;
 
   return (
-    <section className="rounded-lg border border-primary/20 bg-primary/[0.035] px-3.5 py-3" aria-label="本次研究收据">
+    <section className="rounded-lg border border-primary/20 bg-primary/[0.035] px-4 py-3" aria-label="本次研究收据">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+          <div className="flex items-center gap-2 text-xs font-semibold text-primary">
             <Sparkles className="size-3.5" />
             本次研究已提交
           </div>
           <h3 className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-foreground">{topic}</h3>
         </div>
-          <span className="shrink-0 rounded-full border border-primary/20 bg-background/70 px-2 py-0.5 text-xs text-primary">
+          <span className="shrink-0 rounded-full border border-primary/20 bg-background/70 px-2 py-1 text-xs text-primary">
           {isDeep ? '多轮研究' : '单轮研究'}
         </span>
       </div>
-      <dl className="mt-3 grid grid-cols-1 gap-1.5 text-xs sm:grid-cols-3">
-        <div className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2">
+      <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-lg border border-border/70 bg-background/60 px-3 py-2">
           <dt className="text-muted-foreground">研究深度</dt>
-          <dd className="mt-0.5 font-medium text-foreground">{isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</dd>
+          <dd className="mt-1 font-medium text-foreground">{isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</dd>
         </div>
-        <div className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2">
+        <div className="rounded-lg border border-border/70 bg-background/60 px-3 py-2">
           <dt className="text-muted-foreground">资料来源</dt>
-          <dd className="mt-0.5 font-medium text-foreground">{sourceLabel}</dd>
-          {selectedCount > 0 ? <div className="mt-0.5 text-xs text-muted-foreground">已指定 {selectedCount} 条</div> : null}
+          <dd className="mt-1 font-medium text-foreground">{sourceLabel}</dd>
+          {selectedCount > 0 ? <div className="mt-1 text-xs text-muted-foreground">已指定 {selectedCount} 条</div> : null}
         </div>
-        <div className="rounded-md border border-border/70 bg-background/60 px-2.5 py-2">
+        <div className="rounded-lg border border-border/70 bg-background/60 px-3 py-2">
           <dt className="text-muted-foreground">交付形式</dt>
-          <dd className="mt-0.5 font-medium text-foreground">{outputLabel}</dd>
+          <dd className="mt-1 font-medium text-foreground">{outputLabel}</dd>
         </div>
       </dl>
       <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -581,19 +583,19 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   }, [messages.length, submitting, hydrating]);
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-card" aria-label="AI 调研对话">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
-        <div className="flex items-center gap-2.5">
-          <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-method-ai/10 text-method-ai">
+    <Paper component="section" variant="outlined" sx={{ overflow: 'hidden' }} aria-label="AI 调研对话">
+      <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 2, borderBottom: 1, borderColor: 'divider', px: { xs: 2, sm: 2.5 }, py: 2 }}>
+        <div className="flex items-center gap-3">
+          <Box component="span" sx={{ display: 'grid', width: 32, height: 32, flexShrink: 0, placeItems: 'center', borderRadius: 1, color: 'primary.main', bgcolor: 'primary.light' }}>
             <Sparkles className="size-4" />
-          </span>
+          </Box>
           <div>
-            <h2 className="text-base font-semibold">调研对话</h2>
-            <p className="text-xs text-muted-foreground">对话会自动保存，刷新后仍可继续。</p>
+            <Typography variant="listTitle" component="h2">调研对话</Typography>
+            <Typography variant="metadata" color="text.secondary">对话会自动保存，刷新后仍可继续。</Typography>
           </div>
         </div>
         <StepStepper step={stepIndex} />
-      </header>
+      </Box>
 
       <div className="flex min-h-0 flex-col">
         <div
@@ -611,18 +613,18 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               {messages.map((message) => (
                 <div key={message.id} className={cn('flex items-start gap-3', message.role === 'user' && 'flex-row-reverse')}>
                   <span className={cn(
-                    'mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg',
-                    message.role === 'assistant' ? 'bg-method-ai/10 text-method-ai' : 'bg-muted text-muted-foreground',
+                    'mt-1 grid size-7 shrink-0 place-items-center rounded-lg',
+                    message.role === 'assistant' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
                   )}>
                     {message.role === 'assistant' ? <Bot className="size-3.5" /> : <UserRound className="size-3.5" />}
                   </span>
                   <div className={cn('min-w-0 max-w-[86%] flex-1', message.role === 'user' && 'flex-none text-right')}>
-                    <span className={cn('mb-1 block text-xs font-semibold uppercase tracking-wide', message.role === 'assistant' ? 'text-method-ai' : 'text-muted-foreground')}>
+                    <span className={cn('mb-1 block text-xs font-semibold uppercase tracking-wide', message.role === 'assistant' ? 'text-primary' : 'text-muted-foreground')}>
                       {message.role === 'assistant' ? 'AI 调研助手' : '你'}
                     </span>
-                    <p className="whitespace-pre-wrap text-sm leading-7 text-foreground">
+                    <Typography component="p" variant="reading" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                       {message.content}
-                    </p>
+                    </Typography>
                   </div>
                 </div>
               ))}
@@ -635,7 +637,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                         key={example}
                         type="button"
                         onClick={() => processUserMessage(example)}
-                        className="touch-target rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-method-ai/50 hover:bg-method-ai/5 hover:text-foreground"
+                        className="touch-target rounded-full border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
                       >
                         {example}
                       </button>
@@ -735,8 +737,8 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           </div>
         ) : null}
 
-        <form data-ai-research-form onSubmit={handleMessageSubmit} className="border-t border-border bg-card p-4">
-    <div className="rounded-md border border-input bg-background transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+        <Box component="form" data-ai-research-form onSubmit={handleMessageSubmit} sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper', p: 2 }}>
+    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', transition: 'border-color 120ms ease-out, box-shadow 120ms ease-out', '&:focus-within': { borderColor: 'primary.main', boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}22` } }}>
             <Textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -752,7 +754,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               maxLength={2_000}
               aria-label="AI 调研对话输入"
               disabled={submitting || hydrating || !!activeJobId}
-              className="min-h-[92px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+              sx={{ '& .MuiOutlinedInput-root': { minHeight: 92, bgcolor: 'transparent', boxShadow: 'none', '& fieldset': { border: 0 } }, '& textarea': { resize: 'none' } }}
             />
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <span className="text-xs text-muted-foreground">
@@ -763,10 +765,10 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                 发送
               </Button>
             </div>
-          </div>
-        </form>
+          </Box>
+        </Box>
       </div>
-    </section>
+    </Paper>
   );
 }
 
@@ -828,7 +830,7 @@ function ResearchConfirmationControls({
                 size="sm"
                 aria-pressed={selected}
                 onClick={() => onReportTypeChange(option.value)}
-                className="h-auto min-h-12 justify-start whitespace-normal px-2.5 py-2 text-left"
+                className="h-auto min-h-12 justify-start whitespace-normal px-3 py-2 text-left"
               >
                 <Icon className="size-3.5 shrink-0" />
                 <span className="flex flex-col items-start text-left">
@@ -843,7 +845,7 @@ function ResearchConfirmationControls({
           const Icon = quickJudgmentOption.icon;
           const selected = reportType === quickJudgmentOption.value;
           return (
-            <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2.5">
+            <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">只想先看方向？</p>
               <Button
                 type="button"
@@ -851,7 +853,7 @@ function ResearchConfirmationControls({
                 size="sm"
                 aria-pressed={selected}
                 onClick={() => onReportTypeChange(quickJudgmentOption.value)}
-                className="mt-1 h-auto w-full justify-start whitespace-normal px-2 py-1.5 text-left"
+                className="mt-1 h-auto w-full justify-start whitespace-normal px-2 py-2 text-left"
               >
                 <Icon className="size-3.5 shrink-0" />
                 <span className="flex flex-col items-start text-left">
@@ -935,7 +937,7 @@ function ResearchConfirmationControls({
           {sourceRefs.length > 0 ? `${sourceRefs.length} 条${seed ? '（含当前雷达内容）' : ''}` : '尚未添加'}
           {selectedContextCount > 0 ? ` · ${selectedContextCount} 条已有资料` : ''}
         </div>
-        <label htmlFor="conversation-source-url" className="block space-y-1.5">
+        <label htmlFor="conversation-source-url" className="block space-y-2">
           <span className="text-xs text-muted-foreground">添加网页资料（可选）</span>
           <div className="flex gap-2">
             <Input
@@ -964,7 +966,7 @@ function ResearchConfirmationControls({
                 key={url}
                 type="button"
                 onClick={() => onRemoveSource(url)}
-                className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                className="inline-flex max-w-full items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
                 title={`移除资料 ${url}`}
               >
                 <span className="max-w-[220px] truncate">{url}</span>
@@ -976,14 +978,14 @@ function ResearchConfirmationControls({
       </fieldset>
 
       {scopeIncomplete ? (
-        <p role="alert" className="rounded-md border border-warning-border/50 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg">
+        <p role="alert" className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
           “优先资料时间”选择了自定义，请同时填写开始和结束日期后再启动。
         </p>
       ) : null}
 
       <div className="border-t border-border/70 pt-3">
         {sourceSelectionIncomplete ? (
-          <p role="alert" className="rounded-md border border-warning-border/60 bg-warning-bg/35 px-2.5 py-2 text-xs leading-5 text-warning-fg">
+          <p role="alert" className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
             仅使用已选资料时，请先添加至少一条雷达内容、网页资料或已有资料。
           </p>
         ) : null}

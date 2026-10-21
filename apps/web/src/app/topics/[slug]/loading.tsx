@@ -1,32 +1,55 @@
-import { LoadingState } from '@/components/StateMessage';
-import { Skeleton } from '@/components/ui/skeleton';
+import Box from '@mui/material/Box';
+import Paper from '@mui/material/Paper';
+import Skeleton from '@mui/material/Skeleton';
+import { space } from '@deep-research/design-system';
 
 export default function Loading() {
   return (
-    <div className="mx-auto w-full max-w-shell space-y-4" aria-busy="true">
-      <div className="space-y-2">
-        <Skeleton className="h-4 w-20" />
-        <Skeleton className="h-8 w-56 max-w-full" />
-        <Skeleton className="h-4 w-full max-w-2xl" />
-      </div>
-      <LoadingState label="正在加载专题、热点议题和时间线…" />
-      <div className="overflow-hidden rounded-md border border-border bg-card">
-        <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
+    <Box
+      role="status"
+      aria-label="正在加载专题、热点议题和时间线"
+      aria-busy="true"
+      sx={{
+        width: '100%',
+        maxWidth: 'var(--dr-width-shell)',
+        marginInline: 'auto',
+        display: 'grid',
+        gap: space.lg,
+      }}
+    >
+      <Box sx={{ display: 'grid', justifyItems: 'start', gap: space.sm }}>
+        <Skeleton variant="rounded" width={88} height={18} />
+        <Skeleton variant="rounded" width="min(100%, 360px)" height={32} />
+        <Skeleton variant="rounded" width="min(100%, 560px)" height={36} />
+      </Box>
+
+      <Paper variant="outlined" sx={{ minWidth: 0, overflow: 'hidden' }}>
+        <Box sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
+          gap: '1px',
+          bgcolor: 'divider',
+        }}>
           {[0, 1, 2, 3].map((item) => (
-            <Skeleton key={item} className="h-11 rounded-none bg-card" />
+            <Skeleton key={item} variant="rectangular" height={44} sx={{ borderRadius: 0 }} />
           ))}
-        </div>
-      </div>
-      <div className="grid gap-4 md:grid-cols-2">
+        </Box>
+      </Paper>
+
+      <Box sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' },
+        gap: space.lg,
+      }}>
         {[0, 1].map((item) => (
-          <div key={item} className="space-y-3 rounded-md border border-border bg-card p-4">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-4/5" />
-            <Skeleton className="h-20 w-full" />
-          </div>
+          <Paper key={item} variant="outlined" sx={{ display: 'grid', gap: space.md, p: space.lg }}>
+            <Skeleton variant="rounded" width={112} height={20} />
+            <Skeleton variant="rounded" width="100%" height={16} />
+            <Skeleton variant="rounded" width="82%" height={16} />
+            <Skeleton variant="rounded" width="100%" height={72} />
+          </Paper>
         ))}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }

@@ -7,6 +7,7 @@ import path from 'node:path';
 // 详见 docs/decisions/2026-07-17-no-double-proxy.md。
 const config: NextConfig = {
   reactStrictMode: true,
+  transpilePackages: ['@deep-research/design-system'],
   // Production containers only need the traced server bundle instead of the
   // full workspace node_modules tree.
   output: 'standalone',

@@ -32,8 +32,18 @@ vi.mock('@/lib/db', () => ({
 
 import { GET } from '../context/route';
 
-function request(query = 'GraphRAG') {
-  return new Request(`http://localhost/api/ai-research/context?q=${encodeURIComponent(query)}`) as never;
+function request(query = 'GraphRAG', params: Record<string, string> = {}) {
+  return new Request(`http://localhost/api/ai-research/context?${new URLSearchParams({ q: query, ...params })}`) as never;
+}
+
+function research(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '22222222-2222-4222-8222-222222222222', title: 'GraphRAG 内部评估',
+    type: 'research', status: 'draft', body: 'GraphRAG 索引成本。',
+    background: null, conclusion: '先做小规模验证。', authorId: USER_ID,
+    knowledgeIndexText: null, researchTopics: [], updatedAt: new Date('2026-10-19T00:00:00Z'),
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -56,7 +66,7 @@ describe('GET /api/ai-research/context', () => {
 
   it('searches personal research by content and returns a usable research ref', async () => {
     mocks.researchFindMany
-      .mockResolvedValueOnce([{
+      .mockResolvedValueOnce([research({
         id: '22222222-2222-4222-8222-222222222222',
         title: 'GraphRAG 内部评估',
         status: 'draft',
@@ -65,7 +75,7 @@ describe('GET /api/ai-research/context', () => {
         conclusion: '先做小规模验证。',
         authorId: USER_ID,
         publishedAt: null,
-      }])
+      })])
       .mockResolvedValueOnce([]);
 
     const response = await GET(request('索引成本'));
@@ -85,14 +95,13 @@ describe('GET /api/ai-research/context', () => {
     ]));
 
     const where = mocks.researchFindMany.mock.calls[0][0].where;
-    expect(where.AND[0].OR).toEqual(expect.arrayContaining([
+    expect(where.OR).toEqual(expect.arrayContaining([
       expect.objectContaining({ body: expect.any(Object) }),
       expect.objectContaining({ conclusion: expect.any(Object) }),
     ]));
-    expect(where.OR).toEqual([
-      { status: 'published' },
-      { authorId: USER_ID, status: 'draft' },
-    ]);
+    expect(where.authorId).toBe(USER_ID);
+    expect(where.status).toEqual({ in: ['draft', 'published'] });
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
   });
 
   it('uses semantic results as IDs, then rechecks current owner and draft status in Postgres', async () => {
@@ -106,10 +115,11 @@ describe('GET /api/ai-research/context', () => {
         title: '我确认过的检索结论',
         body: '数据库中的真实草稿正文。',
         conclusion: '数据库中的判断。',
+        knowledgeIndexText: '数据库中的判断。',
         updatedAt: new Date('2026-09-24T00:00:00Z'),
       }]);
 
-    const response = await GET(request('向量检索成本'));
+    const response = await GET(request('向量检索成本', { semantic: '1' }));
     const body = await response.json();
     expect(body.items[0]).toMatchObject({
       kind: 'knowledge',
@@ -138,18 +148,20 @@ describe('GET /api/ai-research/context', () => {
     mocks.fetchAiEngine.mockRejectedValueOnce(new Error('synthetic timeout'));
     mocks.researchFindMany
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
+      .mockResolvedValueOnce([research({
         id: privateId,
         title: '索引故障时仍可关键词回退',
+        type: 'knowledge',
+        knowledgeIndexText: '搜索降级不能阻断调研。',
         status: 'draft',
         body: '保留数据库关键词搜索作为降级路径。',
         background: null,
         conclusion: '搜索降级不能阻断调研。',
         authorId: USER_ID,
         publishedAt: null,
-      }]);
+      })]);
 
-    const response = await GET(request('关键词回退'));
+    const response = await GET(request('关键词回退', { semantic: '1' }));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -175,7 +187,7 @@ describe('GET /api/ai-research/context', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
-    const response = await GET(request('跨账号向量结果'));
+    const response = await GET(request('跨账号向量结果', { semantic: '1' }));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -193,25 +205,28 @@ describe('GET /api/ai-research/context', () => {
     mocks.fetchAiEngine.mockResolvedValueOnce({ ok: true, status: 200, body: { ids: [privateId] } });
     mocks.researchFindMany
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
+      .mockResolvedValueOnce([research({
         id: privateId,
         title: '相同的私人知识',
+        type: 'knowledge',
+        knowledgeIndexText: '已确认的判断。',
         status: 'draft',
         body: '关键词匹配的正文。',
         background: null,
         conclusion: '已确认的判断。',
         authorId: USER_ID,
         publishedAt: null,
-      }])
+      })])
       .mockResolvedValueOnce([{
         id: privateId,
         title: '相同的私人知识',
         body: '关键词匹配的正文。',
         conclusion: '已确认的判断。',
+        knowledgeIndexText: '已确认的判断。',
         updatedAt: new Date('2026-09-24T00:00:00Z'),
       }]);
 
-    const response = await GET(request('已确认的判断'));
+    const response = await GET(request('已确认的判断', { semantic: '1' }));
     const body = await response.json();
     const matches = body.items.filter((item: { id: string }) => item.id === privateId);
 
@@ -255,13 +270,13 @@ describe('GET /api/ai-research/context', () => {
     mocks.researchFindMany
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
+      .mockResolvedValueOnce([research({
         id: '88888888-8888-4888-8888-888888888888',
         title: 'GraphRAG 评估记录',
         body: '索引成本与召回率的内部评估。',
         background: null,
         conclusion: '先做小规模验证。',
-      }]);
+      })]);
 
     const response = await GET(request('评估记录'));
     const body = await response.json();
@@ -283,5 +298,46 @@ describe('GET /api/ai-research/context', () => {
         { authorId: USER_ID, status: 'draft' },
       ],
     });
+  });
+
+  it('propagates topic hints into bounded local matching without semantic search', async () => {
+    const topicHint = '66666666-6666-4666-8666-666666666666';
+    mocks.researchFindMany.mockResolvedValueOnce([research({
+      type: 'knowledge', title: '以前确认的架构取舍', body: '',
+      knowledgeIndexText: '先保留现有方案。', researchTopics: [{ topicId: topicHint }],
+    })]);
+    const response = await GET(request('接下来如何验证新方案', { topicHint }));
+    const body = await response.json();
+    expect(body.items[0]).toMatchObject({
+      kind: 'knowledge', confirmedKnowledge: true, topicMatch: true,
+      snippet: '先保留现有方案。', status: 'draft', updatedAt: '2026-10-19T00:00:00.000Z',
+    });
+    expect(mocks.researchFindMany.mock.calls[0][0].where.OR).toContainEqual({
+      researchTopics: { some: { topicId: { in: [topicHint] } } },
+    });
+    expect(mocks.fetchAiEngine).not.toHaveBeenCalled();
+  });
+
+  it('keeps public published research discoverable in explicit manual search', async () => {
+    mocks.researchFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      research({ status: 'published', authorId: 'another-user' }),
+      research({ id: 'other-private', authorId: 'another-user' }),
+      research({ id: 'archived', status: 'archived' }),
+    ]);
+    const response = await GET(request('GraphRAG', { manual: '1' }));
+    const body = await response.json();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({ private: false, status: 'published' });
+    expect(mocks.researchFindMany.mock.calls[1][0].where.AND[0].OR).toContainEqual({ status: 'published' });
+  });
+
+  it('does not run unbounded discovery for boilerplate or oversized questions', async () => {
+    const response = await GET(request('如何？'));
+    expect((await response.json()).items).toEqual([]);
+    expect(mocks.researchFindMany).not.toHaveBeenCalled();
+    await GET(request(`${'GraphRAG '.repeat(500)} sentinel`));
+    const firstQuery = JSON.stringify(mocks.researchFindMany.mock.calls[0][0]);
+    expect(firstQuery).not.toContain('sentinel');
+    expect(mocks.researchFindMany.mock.calls[0][0].take).toBe(24);
   });
 });

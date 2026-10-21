@@ -247,6 +247,14 @@ export const ReadingImageTranslateInputSchema = z.object({
 }).strict();
 export type ReadingImageTranslateInput = z.infer<typeof ReadingImageTranslateInputSchema>;
 
+export const ReadingImageAnswerInputSchema = ReadingImageTranslateInputSchema.omit({ retry: true }).extend({
+  language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
+  body: z.string().max(24000).default(''),
+  prompt: z.string().min(1).max(4000),
+  history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(8000) }).strict()).max(12).default([]),
+}).strict();
+export type ReadingImageAnswerInput = z.infer<typeof ReadingImageAnswerInputSchema>;
+
 export const ReadingCitationSchema = z.object({
   quote: z.string().min(1).max(12_000),
   url: ReadingUrlSchema,
@@ -286,6 +294,7 @@ export const ReadingResultSchema = z.object({
 export type ReadingResult = z.infer<typeof ReadingResultSchema>;
 
 export const ReadingSaveInputSchema = z.object({
+  radarSummaryId: z.string().uuid().optional(),
   url: ReadingUrlSchema,
   title: z.string().trim().min(1).max(300),
   quote: z.string().trim().min(1).max(12_000),

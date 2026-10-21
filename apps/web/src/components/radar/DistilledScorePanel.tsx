@@ -1,18 +1,30 @@
 'use client';
 
 import type { DistilledScore } from '@deep-research/shared/schemas';
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
+import Chip from '@mui/material/Chip';
+import Collapse from '@mui/material/Collapse';
+import Paper from '@mui/material/Paper';
+import Tooltip from '@mui/material/Tooltip';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { TIER_LABELS, tierClasses } from '@/components/domain/ScoreBar';
+import { TIER_LABELS, readingTierColor } from '@/components/domain/ScoreBar';
 
-const DIMENSION_LABELS: Record<string, string> = {
+const DIMENSION_ORDER = [
+  'informationGain',
+  'analysisDepth',
+  'actionability',
+  'factualReliability',
+  'currentApplicability',
+  'expressionQuality',
+  'audienceFit',
+] as const satisfies readonly (keyof DistilledScore['dimensions'])[];
+
+const DIMENSION_LABELS: Record<(typeof DIMENSION_ORDER)[number], string> = {
   informationGain: '信息增量',
   analysisDepth: '分析深度',
   actionability: '可操作性',
@@ -38,7 +50,7 @@ interface Props {
 
 export function DistilledScorePanel({ score, compact = false, embedded = false, effectiveTier }: Props) {
   const displayTier = effectiveTier || score.tier;
-  const tierVisual = tierClasses(displayTier);
+  const tierColor = readingTierColor(displayTier);
   const tierLabel = TIER_LABELS[displayTier] ?? displayTier;
   const targetTierLabel = effectiveTier && effectiveTier !== score.tier
     ? TIER_LABELS[score.tier] ?? score.tier
@@ -49,7 +61,7 @@ export function DistilledScorePanel({ score, compact = false, embedded = false, 
     return (
       <ScoreDetails
         score={score}
-        tierVisual={tierVisual}
+        tierColor={tierColor}
         tierLabel={tierLabel}
         targetTierLabel={targetTierLabel}
       />
@@ -58,164 +70,222 @@ export function DistilledScorePanel({ score, compact = false, embedded = false, 
 
   if (compact) {
     return (
-      <TooltipProvider delayDuration={120}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tierVisual.border} ${tierVisual.text}`}
-              aria-label={`Distilled 评分 ${displayScore}，当前层级 ${tierLabel}，悬停查看详情`}
-            >
-              <span className="font-sans text-xs font-medium">Distilled</span>
-              {formatScore(displayScore)}<span className="font-sans text-xs font-normal">/100</span>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="start" className="w-72 max-w-[calc(100vw-2rem)] p-3">
+      <Tooltip
+        placement="bottom-start"
+        title={(
+          <Box sx={{ width: '288px', maxWidth: 'calc(100vw - 32px)', padding: space.md }}>
             <ScoreDetails
               score={score}
-              tierVisual={tierVisual}
+              tierColor={tierColor}
               tierLabel={tierLabel}
               targetTierLabel={targetTierLabel}
             />
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+          </Box>
+        )}
+      >
+        <Chip
+          role="note"
+          tabIndex={0}
+          size="small"
+          variant="outlined"
+          label={<ScorePillLabel score={displayScore} />}
+          aria-label={`Distilled 评分 ${displayScore}，当前层级 ${tierLabel}，聚焦或悬停查看详情`}
+          data-score-display="compact"
+          sx={scorePillSx(tierColor)}
+        />
+      </Tooltip>
     );
   }
 
   return (
     <ExpandedScorePanel
       score={score}
-      tierVisual={tierVisual}
+      tierColor={tierColor}
       tierLabel={tierLabel}
       targetTierLabel={targetTierLabel}
     />
   );
 }
 
+function ScorePillLabel({ score }: { score: number }) {
+  return (
+    <Box component="span" sx={{ display: 'inline-flex', alignItems: 'baseline', gap: space.xs, whiteSpace: 'nowrap' }}>
+      <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>Distilled</Typography>
+      <Typography component="span" variant="control" sx={{ fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>{formatScore(score)}</Typography>
+      <Typography component="span" variant="metadata">/100</Typography>
+    </Box>
+  );
+}
+
+function scorePillSx(tierColor: string) {
+  return {
+    maxWidth: '100%',
+    minHeight: '28px',
+    height: 'auto',
+    color: tierColor,
+    borderColor: 'currentColor',
+    bgcolor: 'background.paper',
+    fontVariantNumeric: 'tabular-nums',
+    '& .MuiChip-label': { display: 'inline-flex', minWidth: 0, paddingInline: space.sm, whiteSpace: 'nowrap' },
+  } as const;
+}
+
 function ExpandedScorePanel({
   score,
-  tierVisual,
+  tierColor,
   tierLabel,
   targetTierLabel,
 }: {
   score: DistilledScore;
-  tierVisual: ReturnType<typeof tierClasses>;
+  tierColor: string;
   tierLabel: string;
   targetTierLabel: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const detailsId = useId();
   const displayScore = score.tierScore ?? score.total;
 
   return (
-    <div className="rounded-lg bg-muted/30 px-4">
-      <button
+    <Paper variant="outlined" data-score-display="expanded" sx={{ overflow: 'hidden', bgcolor: 'action.hover', borderRadius: tokens['radius-small'] }}>
+      <ButtonBase
+        component="button"
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 bg-transparent py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        aria-controls={detailsId}
+        sx={{
+          display: 'flex', width: '100%', minWidth: 0, minHeight: 'var(--dr-control-height)',
+          flexWrap: 'wrap', alignItems: 'center', gap: space.sm, padding: space.sm,
+          textAlign: 'left', justifyContent: 'flex-start',
+          '@media (pointer: coarse)': { minHeight: 'var(--dr-touch-target)' },
+        }}
       >
-        <span
-          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded border bg-card px-2 font-mono text-xs font-semibold tabular-nums ${tierVisual.border} ${tierVisual.text}`}
-        >
-          <span className="font-sans text-xs font-medium">Distilled</span>
-          {formatScore(displayScore)}<span className="font-sans text-xs font-normal">/100</span>
-        </span>
-        <span className="text-xs text-muted-foreground">查看评分详情</span>
-        <span className={`text-xs font-medium ${tierVisual.text}`}>{tierLabel}</span>
+        <Chip size="small" variant="outlined" label={<ScorePillLabel score={displayScore} />} sx={scorePillSx(tierColor)} />
+        <Typography component="span" variant="metadata" color="text.secondary">
+          {open ? '收起评分详情' : '查看评分详情'}
+        </Typography>
+        <Typography component="span" variant="metadata" sx={{ color: tierColor, fontWeight: 500 }}>{tierLabel}</Typography>
         {targetTierLabel ? (
-          <span className="text-xs text-muted-foreground">目标：{targetTierLabel}</span>
+          <Typography component="span" variant="metadata" color="text.secondary">目标：{targetTierLabel}</Typography>
         ) : null}
-        <ChevronDown className={`ml-auto size-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
+        <ChevronDown
+          aria-hidden="true"
+          size={16}
+          style={{ marginLeft: 'auto', flexShrink: 0, color: 'var(--dr-color-text-secondary)', transform: open ? 'rotate(180deg)' : undefined, transition: 'transform var(--dr-motion-fast)' }}
+        />
+      </ButtonBase>
 
-      {open && (
-        <div className="border-t border-border py-3">
+      <Collapse in={open} timeout="auto">
+        <Box id={detailsId} role="region" aria-label="评分依据" sx={{ borderTop: 1, borderColor: 'divider', padding: space.md }}>
           <ScoreDetails
             score={score}
-            tierVisual={tierVisual}
+            tierColor={tierColor}
             tierLabel={tierLabel}
             targetTierLabel={targetTierLabel}
           />
-        </div>
-      )}
-    </div>
+        </Box>
+      </Collapse>
+    </Paper>
   );
 }
 
 function ScoreDetails({
   score,
-  tierVisual,
+  tierColor,
   tierLabel,
   targetTierLabel,
 }: {
   score: DistilledScore;
-  tierVisual: ReturnType<typeof tierClasses>;
+  tierColor: string;
   tierLabel: string;
   targetTierLabel: string | null;
 }) {
-  const minDimension = Math.min(...Object.values(score.dimensions));
+  const dimensions = DIMENSION_ORDER.map((key) => [key, score.dimensions[key]] as const);
+  const minDimension = Math.min(...dimensions.map(([, value]) => value));
   const showWeakPoint = Boolean(
     score.weakPoint
       && (minDimension < 2 || score.veto || score.riskFlags.length > 0),
   );
 
   return (
-    <div className="space-y-2 text-xs">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-border pb-2">
-        <span className={`font-medium ${tierVisual.text}`}>
+    <Box component="section" data-score-details sx={{ display: 'grid', gap: space.sm, minWidth: 0 }}>
+      <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', columnGap: space.md, rowGap: space.xs, borderBottom: 1, borderColor: 'divider', paddingBottom: space.sm }}>
+        <Typography component="span" variant="control" sx={{ color: tierColor, fontWeight: 500 }}>
           {tierLabel}
-          {targetTierLabel ? <span className="ml-2 font-normal text-muted-foreground">目标：{targetTierLabel}</span> : null}
-        </span>
-        <span className="text-xs text-muted-foreground">{score.profile}{score.isDefault ? ' · 默认评分' : ''}</span>
-      </div>
+          {targetTierLabel ? <Typography component="span" variant="metadata" color="text.secondary" sx={{ marginLeft: space.sm }}>目标：{targetTierLabel}</Typography> : null}
+        </Typography>
+        <Typography component="span" variant="metadata" color="text.secondary">
+          {score.profile}{score.isDefault ? ' · 默认评分' : ''}
+        </Typography>
+      </Box>
+
       {score.tierScore !== undefined || score.rankingScore !== undefined ? (
-        <div className="grid grid-cols-3 gap-1.5 border-b border-border pb-2 text-center">
-          <div className="min-w-0">
-            <div className="font-mono text-[13px] font-semibold tabular-nums">{formatScore(score.tierScore ?? score.total)}<span className="text-xs font-normal text-muted-foreground">/100</span></div>
-            <div className="whitespace-nowrap text-xs text-muted-foreground">分层分</div>
-          </div>
-          <div className="min-w-0">
-            <div className="font-mono text-[13px] font-semibold tabular-nums">{score.rankingScore === undefined ? '-' : formatScore(score.rankingScore)}{score.rankingScore === undefined ? null : <span className="text-xs font-normal text-muted-foreground">/100</span>}</div>
-            <div className="whitespace-nowrap text-xs text-muted-foreground">排序分</div>
-          </div>
-          <div className="min-w-0">
-            <div className="font-mono text-[13px] font-semibold tabular-nums">{formatScore(score.qualityScore ?? score.total)}<span className="text-xs font-normal text-muted-foreground">/100</span></div>
-            <div className="whitespace-nowrap text-xs text-muted-foreground">内容质量</div>
-          </div>
-        </div>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: space.xs, borderBottom: 1, borderColor: 'divider', paddingBottom: space.sm, textAlign: 'center' }}>
+          <ScoreMetric label="分层分" value={score.tierScore ?? score.total} />
+          <ScoreMetric label="排序分" value={score.rankingScore} />
+          <ScoreMetric label="内容质量" value={score.qualityScore ?? score.total} />
+        </Box>
       ) : null}
-      <div className="grid grid-cols-1 gap-y-2">
-        {Object.entries(score.dimensions).map(([key, val]) => (
-          <div key={key} className="grid min-w-0 grid-cols-[minmax(0,4.75rem)_minmax(3.75rem,1fr)_auto] items-center gap-2">
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
+
+      <Box sx={{ display: 'grid', gap: space.sm }}>
+        {dimensions.map(([key, value]) => (
+          <Box key={key} sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 5fr) minmax(0, 7fr) auto', alignItems: 'center', gap: space.sm, minWidth: 0 }}>
+            <Typography component="span" variant="metadata" color="text.secondary" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {DIMENSION_LABELS[key] ?? key}
-            </span>
-            <span className="flex min-w-0 gap-0.5" aria-hidden>
+            </Typography>
+            <Box
+              role="meter"
+              aria-label={DIMENSION_LABELS[key] ?? key}
+              aria-valuenow={value}
+              aria-valuemin={0}
+              aria-valuemax={3}
+              aria-valuetext={DIMENSION_LEVELS[value] ?? '未知'}
+              sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '2px', minWidth: 0 }}
+            >
               {[0, 1, 2].map((segment) => (
-                <span
+                <Box
                   key={segment}
-                  className={`h-1.5 flex-1 rounded-sm ${segment < val ? tierVisual.fill : 'bg-muted'}`}
+                  component="span"
+                  aria-hidden="true"
+                  sx={{ height: '5px', borderRadius: '2px', bgcolor: segment < value ? tierColor : 'var(--dr-color-tier-track)' }}
                 />
               ))}
-            </span>
-            <span className="w-7 shrink-0 text-right text-xs font-medium text-muted-foreground">
-              {DIMENSION_LEVELS[val] ?? '未知'}
-            </span>
-          </div>
+            </Box>
+            <Typography component="span" variant="metadata" color="text.secondary" sx={{ minWidth: '40px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+              {DIMENSION_LEVELS[value] ?? '未知'}
+            </Typography>
+          </Box>
         ))}
-      </div>
+      </Box>
+
       {showWeakPoint ? (
-        <div className="border-t border-border pt-2 text-muted-foreground">
-          <p><span className="font-medium text-foreground">弱点：</span>{score.weakPoint}</p>
+        <Box sx={{ borderTop: 1, borderColor: 'divider', paddingTop: space.sm, color: 'text.secondary' }}>
+          <Typography component="p" variant="metadata" sx={{ margin: 0 }}>
+            <Box component="span" sx={{ color: 'text.primary', fontWeight: 500 }}>弱点：</Box>{score.weakPoint}
+          </Typography>
           {score.weakPointEvidence ? (
-            <p className="mt-1 break-words border-l-2 border-border pl-2 text-xs leading-relaxed">
+            <Typography component="p" variant="metadata" color="text.secondary" sx={{ margin: `${space.xs} 0 0`, borderLeft: 2, borderColor: 'divider', paddingLeft: space.sm, overflowWrap: 'anywhere' }}>
               原文依据：{score.weakPointEvidence}
-            </p>
+            </Typography>
           ) : null}
-        </div>
+        </Box>
       ) : null}
-      {score.veto ? <p className="text-destructive"><span className="font-medium">否决项：</span>{score.veto}</p> : null}
-    </div>
+      {score.veto ? (
+        <Typography component="p" variant="metadata" color="error.main" sx={{ margin: 0 }}>
+          <Box component="span" sx={{ fontWeight: 500 }}>否决项：</Box>{score.veto}
+        </Typography>
+      ) : null}
+    </Box>
+  );
+}
+
+function ScoreMetric({ label, value }: { label: string; value?: number }) {
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Typography component="div" variant="control" sx={{ fontFamily: 'monospace', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+        {value === undefined ? '-' : <>{formatScore(value)}<Typography component="span" variant="metadata" color="text.secondary" sx={{ fontFamily: 'inherit', fontWeight: 400 }}>/100</Typography></>}
+      </Typography>
+      <Typography component="div" variant="metadata" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{label}</Typography>
+    </Box>
   );
 }

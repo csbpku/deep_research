@@ -2,8 +2,8 @@
 
 import { ArrowLeft, Home, RotateCw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-
-import { Button } from '@/components/ui/button';
+import { Alert, Box, Button, Stack, Typography } from '@mui/material';
+import { space, tokens } from '@deep-research/design-system';
 
 export function RouteErrorState({
   title = '页面暂时无法打开',
@@ -17,29 +17,51 @@ export function RouteErrorState({
   const router = useRouter();
 
   return (
-    <main className="mx-auto flex min-h-[60vh] w-full max-w-measure items-center justify-center px-4 py-10">
-      <section
+    <Box
+      component="div"
+      sx={{
+        display: 'flex',
+        minHeight: '60vh',
+        width: '100%',
+        maxWidth: tokens['width-reading'],
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginInline: 'auto',
+        paddingInline: { xs: space.md, sm: space.lg },
+        paddingBlock: { xs: space.section, sm: space.wide },
+      }}
+    >
+      <Alert
+        component="section"
+        severity="error"
+        icon={false}
         role="alert"
         aria-live="assertive"
-        className="w-full rounded-md border border-destructive/35 bg-destructive/5 p-5 sm:p-6"
+        sx={{
+          width: '100%',
+          borderRadius: tokens['radius-small'],
+          padding: { xs: space.lg, sm: space.xl },
+          '& .MuiAlert-message': { width: '100%', minWidth: 0, padding: 0 },
+        }}
       >
-        <p className="text-sm font-semibold text-destructive">{title}</p>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <Button type="button" onClick={reset}>
-            <RotateCw />
+        <Typography component="p" variant="subtitle2" color="error.main" sx={{ margin: 0 }}>
+          {title}
+        </Typography>
+        <Typography component="p" variant="body2" color="text.secondary" sx={{ margin: 0, marginTop: space.sm }}>
+          {description}
+        </Typography>
+        <Stack direction="row" useFlexGap sx={{ marginTop: space.lg, flexWrap: 'wrap', gap: space.sm }}>
+          <Button type="button" variant="contained" startIcon={<RotateCw />} onClick={reset}>
             重试
           </Button>
-          <Button type="button" variant="outline" onClick={() => router.back()}>
-            <ArrowLeft />
+          <Button type="button" variant="outlined" startIcon={<ArrowLeft />} onClick={() => router.back()}>
             返回上一页
           </Button>
-          <Button type="button" variant="ghost" onClick={() => router.push('/')}>
-            <Home />
+          <Button type="button" variant="text" startIcon={<Home />} onClick={() => router.push('/')}>
             回到工作台
           </Button>
-        </div>
-      </section>
-    </main>
+        </Stack>
+      </Alert>
+    </Box>
   );
 }

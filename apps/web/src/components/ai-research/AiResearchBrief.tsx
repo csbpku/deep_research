@@ -9,7 +9,7 @@
 
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import React, { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
   BookOpenCheck,
@@ -18,7 +18,11 @@ import {
   Tag,
 } from 'lucide-react';
 
-import { Badge } from '@/components/ui/badge';
+import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
+import Checkbox from '@mui/material/Checkbox';
+import Paper from '@mui/material/Paper';
+import TextField from '@mui/material/TextField';
 import { cn } from '@/lib/utils';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import type { ResearchScope, ResearchTimeRange } from '@deep-research/shared/schemas';
@@ -67,6 +71,11 @@ interface PersonalContextItem {
   snippet: string;
   private?: boolean;
   semanticMatch?: boolean;
+  confirmedKnowledge?: boolean;
+  isExcerpt?: boolean;
+  topicMatch?: boolean;
+  status?: string;
+  updatedAt?: string | null;
   sourceRefs?: ContextSourceRef[];
 }
 
@@ -112,7 +121,7 @@ interface FetchState {
 const IGNORE_PREFIX = '上下文暂忽略：';
 export function AiResearchBrief({ question, context, topicHint, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
   const trimmed = question.trim();
-  const isShort = trimmed.length < 8;
+  const isShort = trimmed.length < 2;
   const [state, setState] = useState<FetchState>({ status: 'idle' });
   const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>([]);
   const [selectedContextItems, setSelectedContextItems] = useState<PersonalContextItem[]>([]);
@@ -127,7 +136,11 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
   const [contextSearchItems, setContextSearchItems] = useState<PersonalContextItem[]>([]);
   const [contextSearchLoading, setContextSearchLoading] = useState(false);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
+  const selectionRef = useRef<PersonalContextItem[]>([]);
+  const callbacksRef = useRef({ onBriefReady, onPlanningChange });
+  callbacksRef.current = { onBriefReady, onPlanningChange };
   const contextSearchQuery = getPersonalContextSearchQuery(contextPanelOpen, contextSearch, trimmed);
+  const manualContextSearch = contextPanelOpen && contextSearch.trim().length >= 2;
 
   useEffect(() => {
     const query = contextSearchQuery;
@@ -137,9 +150,11 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
+    setContextSearchItems([]);
     setContextSearchLoading(true);
     const timer = setTimeout(() => {
-      void fetch(`/api/ai-research/context?q=${encodeURIComponent(query)}`, { cache: 'no-store' })
+      void fetch(buildPersonalContextUrl(query, topicHint, manualContextSearch), { cache: 'no-store', signal: controller.signal })
         .then(async (response) => {
           if (!response.ok) throw new Error(`context search failed: ${response.status}`);
           return await response.json() as { items?: Array<PersonalContextItem & { kind?: string }> };
@@ -161,25 +176,29 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         .finally(() => {
           if (!cancelled) setContextSearchLoading(false);
         });
-    }, 280);
+    }, 300);
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      controller.abort();
     };
-  }, [contextSearchQuery]);
+  }, [contextSearchQuery, topicHint, manualContextSearch]);
 
   useEffect(() => {
     if (isShort) {
       setState({ status: 'idle' });
+      callbacksRef.current.onPlanningChange?.(false);
       return;
     }
     let cancelled = false;
-    setState({ status: 'loading' });
-    onPlanningChange?.(true);
-    void fetch('/api/ai-research/plan', {
+    const controller = new AbortController();
+    setState((previous) => ({ ...previous, status: 'loading' }));
+    callbacksRef.current.onPlanningChange?.(true);
+    const timer = setTimeout(() => { void fetch('/api/ai-research/plan', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question: trimmed, ...(context.trim() ? { constraints: [context.trim()] } : {}) }),
+      signal: controller.signal,
+      body: JSON.stringify(buildResearchPlanInput(trimmed, context, topicHint)),
     })
       .then(async (response) => {
         if (!response.ok) {
@@ -192,7 +211,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             ),
             authRequired: response.status === 401,
           });
-          onPlanningChange?.(false);
+          callbacksRef.current.onPlanningChange?.(false);
           return;
         }
         const data = (await response.json()) as PlanResponse;
@@ -208,13 +227,13 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         // 新 UI 的自然语言提示，避免让用户误以为所有研究都需要这类
         // 并不普适的过滤条件。
         setRetrievalNotes(data.brief.scope?.retrievalNotes ?? '');
-        onPlanningChange?.(false);
-        setAcceptedContextIds([]);
-        setSelectedContextItems([]);
-        onBriefReady?.({
+        callbacksRef.current.onPlanningChange?.(false);
+        const selected = selectionRef.current;
+        const selectedIds = selected.map((item) => item.id);
+        callbacksRef.current.onBriefReady?.({
           objective: data.brief.objective,
           primaryTopicId: data.brief.primaryTopicId ?? topicHint,
-          suggestedContextIds: [],
+          suggestedContextIds: selectedIds,
           assistantMessage: data.assistantMessage,
           scopeValid: true,
           brief: {
@@ -229,7 +248,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             scope: data.brief.scope ?? emptyScope(),
             primaryTopicId: data.brief.primaryTopicId ?? topicHint,
             outputType: data.brief.outputType ?? 'markdown',
-            contextRefs: [],
+            contextRefs: idsToContextRefs(selectedIds, [], selected),
           },
         });
       })
@@ -239,12 +258,18 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
           status: 'error',
           error: friendlyMessage(err, '规划请求失败，稍后重试。'),
         });
-        onPlanningChange?.(false);
+        callbacksRef.current.onPlanningChange?.(false);
       });
-    return () => { cancelled = true; onPlanningChange?.(false); };
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+      callbacksRef.current.onPlanningChange?.(false);
+    };
   // 重新规划应当由用户主动触发，不在 context 变化时触发
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trimmed]);
+  }, [trimmed, topicHint]);
 
   const availableContext = useMemo(() => {
     return mergePersonalContextItems(
@@ -253,6 +278,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       selectedContextItems,
     );
   }, [contextSearchItems, selectedContextItems, state.plan]);
+  const plan = state.plan;
 
   if (isShort) {
     return (
@@ -263,7 +289,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     );
   }
 
-  if (state.status === 'loading') {
+  if ((state.status === 'loading' || state.status === 'idle') && !state.plan) {
     return (
       <PlanningFallback
         loading
@@ -271,6 +297,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         startAction={startAction}
       >
         {children}
+        <PersonalContextSuggestions items={availableContext} selectedIds={acceptedContextIds} loading={contextSearchLoading} onToggle={toggleContext} />
       </PlanningFallback>
     );
   }
@@ -284,11 +311,11 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         startAction={startAction}
       >
         {children}
+        <PersonalContextSuggestions items={availableContext} selectedIds={acceptedContextIds} loading={contextSearchLoading} onToggle={toggleContext} />
       </PlanningFallback>
     );
   }
 
-  const plan = state.plan;
   if (!plan) return null;
   const resolvedPlan = plan;
 
@@ -311,6 +338,20 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     nextRetrievalNotes?: string;
     selectedIds?: string[];
   } = {}) {
+    if (!plan) {
+      onBriefReady?.({
+        objective, primaryTopicId: topicHint, suggestedContextIds: selectedIds,
+        assistantMessage: '', scopeValid: true,
+        brief: {
+          objective, primaryTopicId: topicHint, question: trimmed,
+          constraints: context.trim() ? [context.trim()] : [], questionsToAnswer: [],
+          comparisonOptions: [], decisionDimensions: [], successCriteria: [],
+          sourcePolicy: 'prefer_user_sources', outputType: 'markdown', scope: emptyScope(),
+          contextRefs: idsToContextRefs(selectedIds, [], availableContext),
+        },
+      });
+      return;
+    }
     const ids: string[] = [];
     if (state.plan) {
       for (const item of availableContext) {
@@ -369,15 +410,17 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     const set = new Set(acceptedContextIds);
     if (set.has(id)) {
       set.delete(id);
-      setSelectedContextItems((items) => items.filter((item) => item.id !== id));
+      selectionRef.current = selectionRef.current.filter((item) => item.id !== id);
     } else {
+      if (set.size >= 10) return;
       set.add(id);
       const selectedItem = availableContext.find((item) => item.id === id);
       if (selectedItem) {
-        setSelectedContextItems((items) => mergePersonalContextItems(items, [selectedItem]));
+        selectionRef.current = mergePersonalContextItems(selectionRef.current, [selectedItem]);
       }
     }
     const next = Array.from(set);
+    setSelectedContextItems(selectionRef.current);
     setAcceptedContextIds(next);
     publishPlan({ selectedIds: next });
   }
@@ -400,18 +443,16 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     : '研究方案已准备好，可以直接开始。';
 
   return (
-    <div className="overflow-hidden rounded-md border border-primary/25 bg-card text-xs">
+    <Paper component="div" variant="outlined" sx={{ overflow: 'hidden', borderColor: 'primary.main', fontSize: 'var(--dr-type-caption)' }}>
       <header className="flex items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
         <div>
-          <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
+          <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-primary">
             <BookOpenCheck className="size-3.5" /> 研究方案
           </span>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">确认要回答什么、参考哪些资料和需要什么产出；启动后设置会锁定。</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="secondary" className="text-xs">
-            {OBJECTIVE_LABELS[objective]}
-          </Badge>
+          <Chip size="small" color="primary" variant="outlined" label={OBJECTIVE_LABELS[objective]} />
           {startAction}
         </div>
       </header>
@@ -422,44 +463,41 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
           <span className="text-xs text-muted-foreground">AI 已根据问题整理，可调整</span>
         </div>
 
-        <fieldset className="space-y-1.5">
+        <fieldset className="space-y-2">
         <legend className="font-medium text-foreground">研究目标</legend>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map((value) => (
-            <button
+            <Button
               key={value}
               type="button"
               aria-pressed={objective === value}
+              size="small"
+              variant={objective === value ? 'contained' : 'outlined'}
               onClick={() => {
                 setObjective(value);
                 publishPlan({ nextObjective: value });
               }}
-              className={cn(
-                'rounded-full border px-2.5 py-1 text-xs transition-colors',
-                objective === value
-                  ? 'border-primary bg-primary/10 font-medium text-primary'
-                  : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground',
-              )}
+              sx={{ minHeight: 32, borderRadius: 'var(--dr-radius-pill)', px: 1.5 }}
             >
               {OBJECTIVE_LABELS[value]}
-            </button>
+            </Button>
           ))}
         </div>
         </fieldset>
 
-      <p className="text-[12px] leading-5 text-muted-foreground">
+      <p className="text-xs leading-5 text-muted-foreground">
         {objectiveChanged
           ? `已调整为「${OBJECTIVE_LABELS[objective]}」；提交时以当前目标、重点问题和对比对象为准。`
           : planStatusText}
       </p>
 
       {resolvedPlan.plan || resolvedPlan.brief.successCriteria?.length ? (
-        <details className="rounded-md border border-border/70 bg-muted/35">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 font-medium text-foreground [&::-webkit-details-marker]:hidden">
+        <details className="rounded-lg border border-border/70 bg-muted/35">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 font-medium text-foreground [&::-webkit-details-marker]:hidden">
             <span>AI 会怎样完成这次研究？</span>
             <span className="text-xs font-normal text-muted-foreground">研究路径与完成标准</span>
           </summary>
-          <div className="space-y-2 border-t border-border/70 px-2.5 py-2.5">
+          <div className="space-y-2 border-t border-border/70 px-3 py-2">
             {resolvedPlan.plan ? (
               <div>
                 <p className="font-medium text-foreground">
@@ -469,7 +507,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
                       : `按「${OBJECTIVE_LABELS[objective]}」目标组织证据并生成结论。`
                     : resolvedPlan.plan.summary}
                 </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
+                <p className="mt-1 text-xs text-muted-foreground">
                   预计需要几分钟到十几分钟；可以离开页面，完成后再回来查看。
                 </p>
                 {resolvedPlan.plan.steps?.length ? (
@@ -482,9 +520,9 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             {resolvedPlan.brief.successCriteria?.length ? (
               <div className="border-t border-border/70 pt-2">
                 <p className="font-medium text-foreground">完成标准</p>
-                <ul className="mt-1 space-y-1 text-xs leading-4 text-muted-foreground">
+                <ul className="mt-1 space-y-1 text-xs leading-5 text-muted-foreground">
                   {resolvedPlan.brief.successCriteria.slice(0, 4).map((criterion) => (
-                    <li key={criterion} className="flex gap-1.5">
+                    <li key={criterion} className="flex gap-2">
                       <span className="text-primary" aria-hidden="true">✓</span>
                       <span>{criterion}</span>
                     </li>
@@ -497,9 +535,11 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       ) : null}
 
       <div className={cn('grid gap-3', objective === 'decide' && 'md:grid-cols-2')}>
-        <label className="block space-y-1.5">
+        <label className="block space-y-2">
           <span className="font-medium text-foreground">重点回答</span>
-          <textarea
+          <TextField
+            fullWidth
+            multiline
             value={focusText}
             onChange={(event) => {
               const next = event.target.value;
@@ -508,15 +548,17 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             }}
             rows={2}
             placeholder="例如：上线成本\n团队维护复杂度\n适合什么时候采用"
-            className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 text-xs leading-5 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-              aria-label="研究重点回答"
+            aria-label="研究重点回答"
+            sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
           />
         </label>
 
         {objective === 'decide' ? (
-          <label className="block space-y-1.5">
+          <label className="block space-y-2">
               <span className="font-medium text-foreground">对比对象</span>
-            <textarea
+            <TextField
+              fullWidth
+              multiline
               value={comparisonText}
               onChange={(event) => {
                 const next = event.target.value;
@@ -525,8 +567,8 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
               }}
               rows={2}
               placeholder="例如：Claude Research\nGemini Deep Research\nChatGPT Deep Research"
-              className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 text-xs leading-5 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               aria-label="研究对比对象"
+              sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
             />
           </label>
         ) : null}
@@ -539,40 +581,44 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       ) : null}
       </section>
 
+      <PersonalContextSuggestions
+        items={availableContext}
+        selectedIds={acceptedContextIds}
+        loading={contextSearchLoading}
+        onToggle={toggleContext}
+      />
+
       <section className="border-t border-border/70 px-4 py-3" aria-label="更多设置">
         <div className="mb-2">
           <h3 className="font-medium text-foreground">更多设置</h3>
-          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">默认由 AI 安排；只有有明确偏好时再调整。</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">默认由 AI 安排；只有有明确偏好时再调整。</p>
         </div>
         <div className="space-y-2" aria-label="更多检索设置">
-      <details className="rounded-md border border-border/70 bg-background/60">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 font-medium text-foreground">
+      <details className="rounded-lg border border-border/70 bg-background/60">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 font-medium text-foreground">
           <span>检索偏好（可选）</span>
           <span className="text-xs font-normal text-muted-foreground">{hasSearchPreferences ? '已设置' : '只在需要时展开'}</span>
         </summary>
-        <div className="space-y-2 border-t border-border/70 px-2.5 py-2.5">
+        <div className="space-y-2 border-t border-border/70 px-3 py-2">
           <p className="text-xs leading-5 text-muted-foreground">告诉 AI 先看什么、重点关注什么；不填写表示由 AI 自行安排。</p>
           <fieldset className="space-y-1">
             <legend className="font-medium text-foreground">优先参考时间</legend>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2">
               {TIME_RANGE_OPTIONS.map((option) => (
-                <button
+                <Button
                   key={option.value}
                   type="button"
                   aria-pressed={timeRange === option.value}
+                  size="small"
+                  variant={timeRange === option.value ? 'contained' : 'outlined'}
                   onClick={() => {
                     setTimeRange(option.value);
                     publishPlan({ nextTimeRange: option.value });
                   }}
-                  className={cn(
-                    'rounded-full border px-2.5 py-1 text-xs transition-colors',
-                    timeRange === option.value
-                      ? 'border-primary bg-primary/10 font-medium text-primary'
-                      : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground',
-                  )}
+                  sx={{ minHeight: 32, borderRadius: 'var(--dr-radius-pill)', px: 1.5 }}
                 >
                   {option.label}
-                </button>
+                </Button>
               ))}
             </div>
           </fieldset>
@@ -580,41 +626,45 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="space-y-1">
             <span className="text-xs text-muted-foreground">起始日期</span>
-                <input
+                <TextField
+                  fullWidth
                   type="date"
                   value={scopeFrom}
-                  max={scopeTo || undefined}
                   aria-invalid={scopeIncomplete && (!scopeFrom || scopeFrom > scopeTo) ? true : undefined}
                   onChange={(event) => {
                     const next = event.target.value;
                     setScopeFrom(next);
                     publishPlan({ nextScopeFrom: next });
                   }}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                   aria-label="优先参考起始日期"
+                  slotProps={{ htmlInput: { max: scopeTo || undefined } }}
+                  sx={{ minWidth: 0 }}
                 />
               </label>
               <label className="space-y-1">
                 <span className="text-xs text-muted-foreground">结束日期</span>
-                <input
+                <TextField
+                  fullWidth
                   type="date"
                   value={scopeTo}
-                  min={scopeFrom || undefined}
                   aria-invalid={scopeIncomplete && (!scopeTo || scopeFrom > scopeTo) ? true : undefined}
                   onChange={(event) => {
                     const next = event.target.value;
                     setScopeTo(next);
                     publishPlan({ nextScopeTo: next });
                   }}
-                  className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                   aria-label="优先参考结束日期"
+                  slotProps={{ htmlInput: { min: scopeFrom || undefined } }}
+                  sx={{ minWidth: 0 }}
                 />
               </label>
             </div>
           ) : null}
           <label className="block space-y-1">
             <span className="text-xs text-muted-foreground">关注点或偏好</span>
-            <textarea
+            <TextField
+              fullWidth
+              multiline
               value={retrievalNotes}
               onChange={(event) => {
                 const next = event.target.value;
@@ -622,14 +672,14 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
                 publishPlan({ nextRetrievalNotes: next });
               }}
               rows={2}
-              maxLength={400}
               placeholder="例如：优先官方文档；关注迁移和兼容性"
               aria-label="检索关注点或偏好"
-              className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-1.5 text-xs leading-5 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              slotProps={{ htmlInput: { maxLength: 400 } }}
+              sx={{ '& .MuiOutlinedInput-root': { alignItems: 'flex-start' }, '& textarea': { resize: 'vertical' } }}
             />
           </label>
           {scopeIncomplete ? (
-            <p role="alert" className="rounded-md border border-warning-border/50 bg-warning-bg/40 px-2 py-1.5 text-xs leading-5 text-warning-fg">
+            <p role="alert" className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
               请同时填写开始和结束日期；结束日期不能早于开始日期。补全后才能启动研究。
             </p>
           ) : null}
@@ -638,7 +688,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       </details>
 
       <details
-        className="rounded-md border border-border/70 bg-background/60"
+        className="rounded-lg border border-border/70 bg-background/60"
         onToggle={(event) => setContextPanelOpen(event.currentTarget.open)}
       >
         <summary
@@ -647,49 +697,24 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             setContextPanelOpen(!details.open);
           }}
           aria-expanded={contextPanelOpen}
-          className="flex cursor-pointer list-none items-center justify-between gap-2 px-2.5 py-2 font-medium text-foreground"
+          className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 font-medium text-foreground"
         >
-          <span className="flex items-center gap-1.5"><Tag className="size-3" />已有资料（可选）</span>
+          <span className="flex items-center gap-2"><Tag className="size-3" />已有资料（可选）</span>
           <span className="text-xs font-normal text-muted-foreground">历史研究、知识库、收藏、专题议题</span>
         </summary>
-        <div className="space-y-2 border-t border-border/70 px-2.5 py-2.5">
+        <div className="space-y-2 border-t border-border/70 px-3 py-2">
           <p className="text-xs leading-5 text-muted-foreground">只会把你选中的资料带入本次研究；不选择也可以直接搜索网页。</p>
-          <div className="flex flex-wrap gap-1.5">
-            {availableContext.slice(0, 8).map((item) => {
-              const accepted = acceptedContextIds.includes(item.id);
-              return (
-                <button
-                  type="button"
-                  key={`${item.kind}-${item.id}`}
-                  onClick={() => toggleContext(item.id)}
-                  aria-pressed={accepted}
-                  className={cn(
-                    'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-left text-xs transition-colors',
-                    accepted
-                      ? 'border-primary bg-primary/8 text-foreground'
-                      : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground',
-                  )}
-                  title={item.snippet}
-                >
-                  <span className="max-w-[160px] truncate font-medium">{item.title}</span>
-                  <span className="rounded-full bg-muted px-1.5 text-xs tracking-wide text-muted-foreground">{contextKindLabel(item.kind)}</span>
-                  {item.semanticMatch ? <span className="text-xs text-method-ai">语义匹配</span> : null}
-                  {item.private ? <span className="text-xs text-primary">仅本人</span> : null}
-                </button>
-              );
-            })}
-          </div>
           <label className="block space-y-1">
           <span className="text-xs text-muted-foreground">搜索可用资料（历史研究、知识库、收藏与专题议题）</span>
-            <input
+            <TextField
+              fullWidth
               value={contextSearch}
               onChange={(event) => setContextSearch(event.target.value)}
               placeholder="按标题或正文关键词搜索"
               aria-label="搜索个人资料"
-              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              sx={{ minWidth: 0 }}
             />
           </label>
-          {contextSearchLoading ? <p className="text-xs text-muted-foreground">正在搜索可用个人资料…</p> : null}
           <p className="text-xs leading-5 text-muted-foreground">只显示你有权限使用的资料；选中后会随本次研究保存为来源。</p>
         </div>
       </details>
@@ -697,11 +722,11 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       </section>
 
       {missingFields.length > 0 ? (
-        <p className="border-t border-warning-border/40 bg-warning-bg/40 px-4 py-2 text-xs text-warning-fg">
+        <p className="border-t border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-4 py-2 text-xs text-[var(--dr-color-warning)]">
           建议补充：{missingFields.map((field) => translateMissing(field)).join('、')}
         </p>
       ) : null}
-    </div>
+    </Paper>
   );
 }
 
@@ -721,10 +746,10 @@ function PlanningFallback({
   children?: ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-md border border-primary/25 bg-card text-xs">
+    <div className="overflow-hidden rounded-lg border border-primary/25 bg-card text-xs">
       <header className="flex items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
         <div>
-          <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
+          <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-primary">
             <BookOpenCheck className="size-3.5" /> 研究方案
           </span>
           <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
@@ -732,7 +757,7 @@ function PlanningFallback({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Badge variant="secondary" className="text-xs">{loading ? '计划生成中' : '可直接开始'}</Badge>
+          <Chip size="small" color={loading ? 'default' : 'primary'} variant="outlined" label={loading ? '计划生成中' : '可直接开始'} />
           {startAction}
         </div>
       </header>
@@ -742,12 +767,12 @@ function PlanningFallback({
             <span className="text-xs text-muted-foreground">{loading ? '正在整理研究角度' : '当前问题仍可执行'}</span>
           </div>
           {loading ? (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-3 text-xs text-muted-foreground" role="status">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-3 text-xs text-muted-foreground" role="status">
               <Loader2 className="size-3.5 animate-spin" />
               正在为「{question.slice(0, 32)}{question.length > 32 ? '…' : ''}」整理研究角度和已有资料…
             </div>
           ) : (
-            <div role="alert" className="rounded-md border border-warning-border/50 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg">
+            <div role="alert" className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
               <p>{error}</p>
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <span>计划不影响启动；你可以先按当前问题研究。</span>
@@ -840,9 +865,70 @@ export function getPersonalContextSearchQuery(
   searchText: string,
   researchQuestion: string,
 ): string | null {
-  if (!panelOpen) return null;
-  const query = searchText.trim() || researchQuestion.trim();
+  const query = (panelOpen && searchText.trim() ? searchText.trim() : researchQuestion.trim()).slice(0, 2000);
   return query.length >= 2 ? query : null;
+}
+
+export function buildPersonalContextUrl(query: string, topicHint?: string, manual = false): string {
+  const params = new URLSearchParams({ q: query.slice(0, 2000) });
+  if (topicHint) params.set('topicHint', topicHint);
+  if (manual) {
+    params.set('manual', '1');
+    params.set('semantic', '1');
+  }
+  return `/api/ai-research/context?${params.toString()}`;
+}
+
+export function buildResearchPlanInput(question: string, context: string, topicHint?: string) {
+  return {
+    question: question.slice(0, 2000),
+    ...(context.trim() ? { constraints: [context.trim().slice(0, 240)] } : {}),
+    ...(topicHint ? { topicHint } : {}),
+  };
+}
+
+export function PersonalContextSuggestions({
+  items, selectedIds, loading, onToggle,
+}: {
+  items: PersonalContextItem[];
+  selectedIds: string[];
+  loading: boolean;
+  onToggle: (id: string) => void;
+}) {
+  const selected = items.filter((item) => selectedIds.includes(item.id));
+  const visible = mergePersonalContextItems(selected, items.slice(0, 12));
+  return (
+    <section className="space-y-2 border-t border-border/70 px-4 py-3" aria-label="相关历史判断与资料" aria-busy={loading}>
+      <h3 className="font-medium text-foreground">相关历史判断与资料</h3>
+      <p className="text-xs leading-5 text-muted-foreground">仅选中的资料用于本次研究；历史判断不代表本次结论。</p>
+      {visible.map((item) => (
+        <label key={`${item.kind}:${item.id}`} className="flex cursor-pointer items-start gap-2 border-b border-border/50 py-2 last:border-b-0">
+          <Checkbox
+            size="small"
+            checked={selectedIds.includes(item.id)}
+            disabled={selectedIds.length >= 10 && !selectedIds.includes(item.id)}
+            onChange={() => onToggle(item.id)}
+            slotProps={{ input: { 'aria-label': `使用资料：${item.title}` } }}
+            sx={{ flexShrink: 0 }}
+          />
+          <span className="min-w-0 flex-1 space-y-1">
+            <span className="block break-words font-medium text-foreground">{item.title}</span>
+            <span className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+              <Chip size="small" variant="outlined" label={item.isExcerpt ? '未确认摘录' : item.confirmedKnowledge ? '已确认知识' : contextKindLabel(item.kind)} />
+              {item.private ? <Chip size="small" color="primary" variant="outlined" label="仅本人" /> : null}
+              {item.topicMatch ? <Chip size="small" variant="outlined" label="同专题" /> : null}
+              {item.semanticMatch ? <Chip size="small" variant="outlined" label="语义匹配" /> : null}
+              {item.status ? <span>{item.status === 'published' ? '已发布' : item.status === 'draft' ? '草稿' : item.status === 'active' ? '跟踪中' : item.status}</span> : null}
+              {item.updatedAt ? <time dateTime={item.updatedAt}>{item.updatedAt.slice(0, 10)}</time> : null}
+            </span>
+            <span className="block break-words text-xs leading-5 text-muted-foreground">{item.snippet}</span>
+          </span>
+        </label>
+      ))}
+      {loading ? <p role="status" className="text-xs text-muted-foreground">正在查找相关资料…</p> : null}
+      {!loading && !visible.length ? <p className="text-xs text-muted-foreground">暂无相关资料，可在「已有资料」中按关键词搜索。</p> : null}
+    </section>
+  );
 }
 
 function _IGNORE_FUNCTION_REFERENCES_FOR_TSC() {

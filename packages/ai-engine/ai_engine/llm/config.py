@@ -15,8 +15,8 @@ LlmPurpose = Literal["research", "utility"]
 LlmTier = Literal["light", "heavy"]
 
 _DEFAULT_MODELS = {
-    "research": "minimax:MiniMax-M3",
-    "utility": "minimax:MiniMax-M3",
+    "research": "minimax:MiniMax-M3.1-Flash",
+    "utility": "minimax:MiniMax-M3.1-Flash",
 }
 _DEFAULT_FALLBACK = "deepseek:deepseek-v4-flash"
 _DEFAULT_BASE_URLS = {
@@ -76,6 +76,15 @@ def _purpose_spec(purpose: LlmPurpose) -> str:
 
 def fallback_spec() -> str:
     return _env("FALLBACK_LLM", "LLM_FALLBACK_LLM") or _DEFAULT_FALLBACK
+
+
+def minimax_reasoning_effort(
+    model: str, *, tier: LlmTier = "light", disable_thinking: bool = False,
+) -> str | None:
+    """M3.1 requires thinking; bound its default-max effort by task purpose."""
+    if not model.casefold().startswith("minimax-m3.1"):
+        return None
+    return "low" if disable_thinking or tier == "light" else "high"
 
 
 def _profile(vendor: str, model: str) -> str:

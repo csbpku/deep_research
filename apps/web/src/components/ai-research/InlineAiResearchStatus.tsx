@@ -8,10 +8,10 @@ import Link from 'next/link';
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
 import { ResearchWebBrief } from '@/components/ai-research/ResearchWebBrief';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
-import { Progress } from '@/components/ui/progress';
+import LinearProgress from '@mui/material/LinearProgress';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
+import { AiResearchButton as Button } from '@/components/ai-research/AiResearchMaterial';
+import Skeleton from '@mui/material/Skeleton';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi, friendlyMessage } from '@/lib/errors/friendly';
 import { progressPct } from '@/lib/ai-progress';
@@ -53,10 +53,12 @@ interface InlineJob {
     stepCaptured?: string | null;
     capturedAt?: string;
   }>;
-  review?: { status?: string | null; error?: string | null; error_code?: string | null } | null;
+  review?: { status?: string | null; phase?: string | null; error?: string | null; error_code?: string | null } | null;
+  reviewRun?: { executionStatus?: string | null } | null;
 }
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
+const REVIEW_IN_PROGRESS = new Set(['queued', 'reviewing']);
 const STEP_ORDER = ['plan', 'search', 'compress', 'analyze', 'write'] as const;
 const STEP_LABELS: Record<string, string> = {
   plan: '规划问题',
@@ -66,20 +68,27 @@ const STEP_LABELS: Record<string, string> = {
   write: '生成产物',
 };
 
+export function shouldPollInlineResearch(job: Pick<InlineJob, 'status' | 'finalStatus' | 'review' | 'reviewRun'> | undefined): boolean {
+  if (!job) return true;
+  const status = job.finalStatus ?? job.status;
+  const reviewStatus = job.reviewRun?.executionStatus ?? job.review?.status ?? job.review?.phase;
+  return !status || !TERMINAL.has(status) || REVIEW_IN_PROGRESS.has(reviewStatus ?? '');
+}
+
 /** 横向阶段 stepper：plan → search → compress → analyze → write。 */
 function StepStepper({ currentStep, succeeded }: { currentStep: string | null; succeeded: boolean }) {
   const activeIndex = currentStep ? STEP_ORDER.indexOf(currentStep as (typeof STEP_ORDER)[number]) : -1;
   return (
-    <ol className="flex flex-wrap items-center gap-1.5" aria-label="调研步骤">
+    <ol className="flex flex-wrap items-center gap-2" aria-label="调研步骤">
       {STEP_ORDER.map((key, index) => {
         const state = succeeded || (activeIndex >= 0 && index < activeIndex) ? 'done' : index === activeIndex ? 'active' : 'todo';
         return (
-          <li key={key} className="flex items-center gap-1.5">
-            {index > 0 ? <span className="mx-0.5 h-px w-3 bg-border" aria-hidden /> : null}
+          <li key={key} className="flex items-center gap-2">
+            {index > 0 ? <span className="mx-1 h-px w-3 bg-border" aria-hidden /> : null}
             <span
               className={cn(
-                'flex size-5 items-center justify-center rounded-full text-[10px] font-medium leading-none',
-                state === 'done' && 'bg-status-succeeded-bg text-status-succeeded-fg',
+                'flex size-5 items-center justify-center rounded-full text-xs font-medium leading-none',
+                state === 'done' && 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]',
                 state === 'active' && 'bg-primary text-primary-foreground',
                 state === 'todo' && 'bg-muted text-muted-foreground/70',
               )}
@@ -106,14 +115,11 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
       return (await response.json()) as InlineJob;
     },
     retry: retryOnceAi,
-    refetchInterval: (data) => {
-      const status = data.state.data?.finalStatus ?? data.state.data?.status;
-      return status && TERMINAL.has(status) ? false : 5_000;
-    },
+    refetchInterval: (data) => shouldPollInlineResearch(data.state.data) ? 5_000 : false,
   });
 
   const liveStatus = query.data?.finalStatus ?? query.data?.status;
-  const liveTerminal = !!liveStatus && TERMINAL.has(liveStatus);
+  const liveTerminal = !!liveStatus && TERMINAL.has(liveStatus) && !shouldPollInlineResearch(query.data);
 
   useEffect(() => {
     if (liveTerminal) return;
@@ -164,7 +170,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
 
   if (query.isLoading) {
     return (
-      <section className="rounded-md border border-border bg-background p-4" aria-label="调研状态">
+      <section className="rounded-lg border border-border bg-background p-4" aria-label="调研状态">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="mt-3 h-2 w-full" />
         <Skeleton className="mt-4 h-12 w-full" />
@@ -174,7 +180,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
 
   if (query.isError || !query.data) {
     return (
-      <section className="rounded-md border border-destructive/25 bg-destructive/5 p-4" role="alert">
+      <section className="rounded-lg border border-destructive/25 bg-destructive/5 p-4" role="alert">
         <div className="flex items-center gap-2 text-sm font-medium text-destructive">
           <AlertTriangle className="size-4" />
           调研状态暂时不可读
@@ -224,16 +230,16 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
           : '研究稿';
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-background" aria-label="调研状态">
+    <section className="overflow-hidden rounded-lg border border-border bg-background" aria-label="调研状态">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             {userStatus.code === 'failed' || userStatus.code === 'needs_revision'
-              ? <AlertTriangle className="size-4 text-warning-fg" />
+              ? <AlertTriangle className="size-4 text-[var(--dr-color-warning)]" />
               : userStatus.code === 'ready'
-                ? <CheckCircle2 className="size-4 text-status-succeeded-fg" />
+                ? <CheckCircle2 className="size-4 text-[var(--dr-color-success)]" />
                 : terminal
-                  ? <AlertTriangle className="size-4 text-warning-fg" />
+                  ? <AlertTriangle className="size-4 text-[var(--dr-color-warning)]" />
                   : <Clock3 className="size-4 text-primary" />}
             <span className="text-sm font-semibold">
               {terminal ? userStatus.label : '正在研究'}
@@ -252,32 +258,32 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} />
 
         {reviewUnavailable ? (
-          <div className="rounded-lg border border-warning-border/60 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg" role="status">
+          <div className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]" role="status">
             <strong className="font-medium">{userStatus.description}</strong>
-            <span className="ml-1.5">可以打开完整任务查看依据，或稍后重新检查。</span>
+            <span className="ml-2">可以打开完整任务查看依据，或稍后重新检查。</span>
           </div>
         ) : null}
 
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Progress value={pct} className="h-1.5 w-32 sm:w-48" />
+          <LinearProgress variant="determinate" value={pct} sx={{ width: { xs: 128, sm: 192 }, height: 6, borderRadius: 'var(--dr-radius-pill)' }} />
           <span className="font-mono tabular-nums">{pct}%</span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-1 text-xs text-muted-foreground">
             已抓取正文 <span className="ml-1 font-mono tabular-nums text-foreground">{evidenceCount}</span>
           </span>
           {terminal && status === 'partial' && job.partialSourcesCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs text-warning-fg">
+            <span className="inline-flex items-center rounded-full border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-1 text-xs text-[var(--dr-color-warning)]">
               部分 <span className="ml-1 font-mono tabular-nums">{job.partialSourcesCount}</span>
             </span>
           ) : null}
           {job.failedSourcesCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-destructive/25 bg-destructive/5 px-2 py-0.5 text-xs text-destructive">
+            <span className="inline-flex items-center rounded-full border border-destructive/25 bg-destructive/5 px-2 py-1 text-xs text-destructive">
               失败 <span className="ml-1 font-mono tabular-nums">{job.failedSourcesCount}</span>
             </span>
           ) : null}
-          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground">
+          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-1 text-xs text-muted-foreground">
             {deliverableLabel}
           </span>
         </div>
@@ -296,7 +302,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
           <div className={cn(
             'rounded-lg border p-3 text-sm',
             status === 'partial'
-              ? 'border-warning-border/60 bg-warning-bg/40 text-warning-fg'
+              ? 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]'
               : 'border-destructive/25 bg-destructive/5 text-destructive',
           )} role="alert">
             <strong className="font-medium">
@@ -307,9 +313,9 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
             <span className="ml-2">
               {job.errorCode ? friendlyMessage({ code: job.errorCode }, '调研未能继续') : '请打开完整任务查看详情。'}
             </span>
-            {job.errorMessage ? <p className="mt-1.5 text-xs opacity-90">{job.errorMessage}</p> : null}
+            {job.errorMessage ? <p className="mt-2 text-xs opacity-90">{job.errorMessage}</p> : null}
             {status === 'partial' ? (
-              <p className="mt-1.5 text-xs opacity-80">
+              <p className="mt-2 text-xs opacity-80">
                 {evidenceOnly
                   ? '已抓取的正文仍可在完整任务中核对；重新运行会重新生成研究稿，不会把这次资料摘要当成结论。'
                   : '已抓取的正文仍可核对；重新运行会创建一条新的调研任务。'}

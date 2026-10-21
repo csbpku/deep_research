@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "Deep Research Reader"
+  },
+  "extensionDescription": {
+    "message": "开发者 AI 阅读助手：在 Chrome 侧栏翻译文章、追问原文证据并保存笔记。"
+  },
+  "actionOpenReader": {
+    "message": "打开 Deep Research Reader"
+  }
+}

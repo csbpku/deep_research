@@ -4,6 +4,17 @@ import { describe, expect, it } from 'vitest';
 
 import { DistilledScorePanel } from './DistilledScorePanel';
 
+function visibleText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gu, ' ')
+    .replace(/<[^>]*>/gu, ' ')
+    .replace(/&nbsp;/gu, ' ')
+    .replace(/&amp;/gu, '&')
+    .replace(/&lt;/gu, '<')
+    .replace(/&gt;/gu, '>')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
 
 describe('DistilledScorePanel', () => {
   it('shows the tier decision score as the primary score', () => {
@@ -30,10 +41,12 @@ describe('DistilledScorePanel', () => {
         version: '4.8',
       },
     }));
+    const text = visibleText(html);
 
-    expect(html).toContain('Distilled</span>35<span');
-    expect(html).toContain('/100');
-    expect(html).not.toContain('Distilled</span>52');
+    expect(text).toMatch(/Distilled\s*35\s*\/100/u);
+    expect(text).not.toMatch(/Distilled\s*52/u);
+    expect(html).toContain('data-score-display="expanded"');
+    expect(html).toContain('aria-expanded="false"');
   });
 
   it('presents dimensions as rubric levels instead of a three-point exam score', () => {
@@ -60,13 +73,16 @@ describe('DistilledScorePanel', () => {
         version: '4.8',
       },
     }));
+    const text = visibleText(html);
 
-    expect(html).toContain('分层分');
-    expect(html).toContain('77<span');
-    expect(html).toContain('突出');
-    expect(html).toContain('扎实');
-    expect(html).toContain('有限');
-    expect(html).not.toContain('/3');
+    expect(text).toContain('分层分');
+    expect(text).toMatch(/77\s*\/100/);
+    expect(text).toContain('突出');
+    expect(text).toContain('扎实');
+    expect(text).toContain('有限');
+    expect(text).not.toContain('/3');
+    expect(html).toContain('role="meter"');
+    expect(html).toContain('aria-valuemax="3"');
   });
 
   it('shows the effective tier separately from a deferred score target', () => {
@@ -93,13 +109,15 @@ describe('DistilledScorePanel', () => {
         version: '4.8',
       },
     }));
+    const text = visibleText(html);
 
-    expect(html).toContain('速读');
-    expect(html).toContain('目标：精读');
+    expect(text).toContain('速读');
+    expect(text).toContain('目标：精读');
   });
 
   it('does not present a normal 2/3 score as a user-facing weakness', () => {
     const html = renderToStaticMarkup(createElement(DistilledScorePanel, {
+      embedded: true,
       score: {
         total: 66.67,
         tier: 'skim',
@@ -121,8 +139,9 @@ describe('DistilledScorePanel', () => {
       },
     }));
 
-    expect(html).not.toContain('弱点：');
-    expect(html).not.toContain('README极长');
+    const text = visibleText(html);
+    expect(text).not.toContain('弱点：');
+    expect(text).not.toContain('README极长');
   });
 
   it('shows the source excerpt that grounds a weak-point note', () => {
@@ -149,8 +168,42 @@ describe('DistilledScorePanel', () => {
         version: '4.9',
       },
     }));
+    const text = visibleText(html);
 
-    expect(html).toContain('可行动性不足');
-    expect(html).toContain('原文依据：文章没有可执行步骤');
+    expect(text).toContain('可行动性不足');
+    expect(text).toContain('原文依据：文章没有可执行步骤');
+  });
+
+  it('exposes compact score context through a focusable neutral badge', () => {
+    const html = renderToStaticMarkup(createElement(DistilledScorePanel, {
+      compact: true,
+      score: {
+        total: 68,
+        tierScore: 68,
+        tier: 'skim',
+        dimensions: {
+          informationGain: 2,
+          analysisDepth: 2,
+          actionability: 2,
+          factualReliability: 2,
+          currentApplicability: 2,
+          expressionQuality: 2,
+          audienceFit: 2,
+        },
+        weakPoint: '',
+        veto: null,
+        riskFlags: [],
+        profile: 'engineering',
+        isDefault: true,
+        version: '5.1',
+      },
+    }));
+    const text = visibleText(html);
+
+    expect(text).toMatch(/Distilled\s*68\s*\/100/u);
+    expect(html).toContain('data-score-display="compact"');
+    expect(html).toContain('role="note"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('aria-label="Distilled 评分 68，当前层级 速读，聚焦或悬停查看详情"');
   });
 });

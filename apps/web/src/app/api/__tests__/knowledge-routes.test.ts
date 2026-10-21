@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
@@ -10,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   researchAuditCreate: vi.fn(),
   indexTaskUpsert: vi.fn(),
   transaction: vi.fn(),
+  topicFindFirst: vi.fn(),
+  researchTopicUpsert: vi.fn(),
+  researchFindFirst: vi.fn(),
 }));
 
 vi.mock('@/lib/api-handler', async (importOriginal) => ({
@@ -22,6 +26,7 @@ vi.mock('@/lib/db', () => ({
     aiResearchConversationMessage: { findUnique: mocks.researchMessageFindUnique },
     aiChatMessage: { findUnique: mocks.chatMessageFindUnique },
     $transaction: mocks.transaction,
+    research: { findFirst: mocks.researchFindFirst },
   },
 }));
 vi.mock('@/lib/env', () => ({
@@ -94,10 +99,50 @@ beforeEach(() => {
     researchSource: { create: mocks.researchSourceCreate },
     researchAudit: { create: mocks.researchAuditCreate },
     personalKnowledgeIndexTask: { upsert: mocks.indexTaskUpsert },
+    topic: { findFirst: mocks.topicFindFirst },
+    researchTopic: { upsert: mocks.researchTopicUpsert },
   }));
 });
 
 describe('explicit knowledge-card flow', () => {
+  it('returns the committed card on a confirmation retry without re-indexing', async () => {
+    const key = '55555555-5555-4555-8555-555555555555';
+    mocks.transaction.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('duplicate save', { code: 'P2002', clientVersion: '5.22.0' }));
+    mocks.researchFindFirst.mockResolvedValue({ id: 'saved-card', title: 'RAG 判断', status: 'draft', publishedAt: null });
+    const response = await savePost(new Request('http://localhost/api/knowledge', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceKind: 'research_chat', messageId: MESSAGE_ID, selectedText: '可以复用的判断。',
+        title: 'RAG 判断', body: '我的判断是先核对范围。', conclusion: '先核对范围。', tags: [], idempotencyKey: key,
+      }),
+    }) as never);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deduplicated: true, knowledge: { id: 'saved-card' } });
+    expect(mocks.researchFindFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { authorId: USER.id, readingSaveKey: key, type: 'knowledge' } }));
+    expect(mocks.indexTaskUpsert).not.toHaveBeenCalled();
+  });
+  it('inherits the owned research task topic when its judgment is saved privately', async () => {
+    const message = researchMessage();
+    mocks.researchMessageFindUnique.mockResolvedValue({
+      ...message,
+      conversation: { ...message.conversation, job: { ...message.conversation.job, primaryTopicId: 'task-topic' } },
+    });
+    mocks.topicFindFirst.mockResolvedValue({ id: 'task-topic' });
+    const response = await savePost(new Request('http://localhost/api/knowledge', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceKind: 'research_chat', messageId: MESSAGE_ID, selectedText: '可以复用的判断。',
+        title: 'RAG 判断', body: '我的判断是先核对范围。', conclusion: '先核对范围。', tags: [],
+      }),
+    }) as never);
+    expect(response.status).toBe(201);
+    expect(mocks.researchTopicUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ topicId: 'task-topic', relationType: 'auto' }),
+    }));
+    expect(mocks.researchCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'draft', authorId: USER.id }),
+    }));
+  });
   it('derives a preview from an owned assistant message and server-side sources', async () => {
     const response = await derivePost(new Request('http://localhost/api/knowledge/derive', {
       method: 'POST',

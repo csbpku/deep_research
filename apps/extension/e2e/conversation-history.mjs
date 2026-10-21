@@ -84,13 +84,12 @@ try {
     await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
   });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom');
+  await panel.locator('#provider-kind').selectOption('custom', { force: true });
   await panel.locator('#provider-url').fill('http://127.0.0.1:8799/v1');
   await panel.locator('#provider-model').fill('fake-reader');
   await panel.locator('#provider-key').fill('test-key');
-  await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
-  await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('连接成功'), null, { timeout: 10_000 });
+  await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('已保存'), null, { timeout: 10_000 });
   await panel.locator('#close-settings').click();
   if (await panel.locator('#discussion-section').isVisible()) {
     throw new Error('页面初始状态不应展示空聊天窗口');

@@ -1,0 +1,22 @@
+.state { --state-color: var(--dr-color-text-muted); --state-bg: var(--dr-color-surface); color: var(--dr-color-text); border: 1px solid var(--dr-color-outline); border-radius: var(--dr-radius-medium); background: var(--state-bg); font-family: var(--dr-font-family); }
+.state[data-tone='info'] { --state-color: var(--dr-color-primary); --state-bg: var(--dr-color-primary-container); }
+.state[data-tone='danger'] { --state-color: var(--dr-color-danger); --state-bg: var(--dr-color-danger-container); }
+.empty { display: flex; flex-direction: column; align-items: center; padding: var(--dr-space-8) var(--dr-space-6); text-align: center; }
+.empty[data-compact='true'] { padding: var(--dr-space-6) var(--dr-space-4); }
+.empty[data-tone='neutral'] { border-style: dashed; }
+.icon { display: grid; place-items: center; width: 36px; height: 36px; margin-bottom: var(--dr-space-3); border-radius: var(--dr-radius-small); background: var(--dr-color-surface-container); color: var(--state-color); }
+.icon svg { width: 16px; height: 16px; }
+.empty h2 { margin: 0; font-size: var(--dr-type-title-small); font-weight: var(--dr-weight-semibold); line-height: var(--dr-line-height-heading); }
+.description { max-width: var(--dr-width-reading); margin: var(--dr-space-2) 0 0; color: var(--dr-color-text-secondary); font-size: var(--dr-type-body); line-height: var(--dr-line-height-body); overflow-wrap: anywhere; }
+.action { margin-top: var(--dr-space-4); }
+.loading, .error { display: flex; align-items: flex-start; gap: var(--dr-space-2); padding: var(--dr-space-3); font-size: var(--dr-type-body); line-height: var(--dr-line-height-body); }
+.loading { align-items: center; font-size: var(--dr-type-caption); color: var(--dr-color-text-secondary); }
+.loading svg, .error > svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--state-color); }
+.loading svg { color: var(--dr-color-primary); animation: state-spin 1s linear infinite; }
+.error > svg { margin-top: var(--dr-space-1); }
+.errorBody { min-width: 0; }
+.errorTitle { margin: 0; color: var(--state-color); font-weight: var(--dr-weight-semibold); }
+.error .description { font-size: var(--dr-type-caption); }
+.error .action { margin-top: var(--dr-space-2); }
+@keyframes state-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading svg { animation: none; } }

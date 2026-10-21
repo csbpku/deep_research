@@ -12,6 +12,8 @@ const MOCK_USER = {
 const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   topicFindMany: vi.fn(),
+  topicFindUnique: vi.fn(),
+  researchFindMany: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/session', () => ({
@@ -20,8 +22,8 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 vi.mock('@/lib/db', () => ({
   prisma: {
-    topic: { findMany: mocks.topicFindMany, findUnique: vi.fn(async () => null) },
-    research: { findMany: vi.fn(async () => []) },
+    topic: { findMany: mocks.topicFindMany, findUnique: mocks.topicFindUnique },
+    research: { findMany: mocks.researchFindMany },
   },
 }));
 
@@ -37,8 +39,11 @@ function buildReq(body: unknown): Request {
 }
 
 beforeEach(() => {
+  vi.resetAllMocks();
   mocks.requireUser.mockResolvedValue(MOCK_USER);
   mocks.topicFindMany.mockResolvedValue([]);
+  mocks.topicFindUnique.mockResolvedValue(null);
+  mocks.researchFindMany.mockResolvedValue([]);
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -132,6 +137,68 @@ describe('POST /api/ai-research/plan', () => {
     }) as never, ctx());
     const body = await res.json();
     expect(body.brief.primaryTopicId).toBe('22222222-2222-4222-8222-222222222222');
+  });
+
+  it('uses topicHint to discover past judgments without adopting their sources', async () => {
+    const topicId = '22222222-2222-4222-8222-222222222222';
+    mocks.topicFindUnique.mockResolvedValueOnce({ id: topicId, slug: 'retrieval', name: '检索', enabled: true });
+    mocks.researchFindMany.mockResolvedValueOnce([{
+      id: '33333333-3333-4333-8333-333333333333', type: 'knowledge',
+      title: '此前确认的工程取舍', body: 'Reader 原文不是用户确认的判断',
+      knowledgeIndexText: '先保留已有架构。', conclusion: null, background: null,
+      authorId: MOCK_USER.id, status: 'draft', researchTopics: [{ topicId }],
+      updatedAt: new Date('2026-10-19T00:00:00Z'),
+    }]);
+    const res = await planPost(buildReq({ question: '接下来怎么验证新方案', topicHint: topicId }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.primaryTopicId).toBe(topicId);
+    expect(body.suggestedContext[0]).toMatchObject({
+      kind: 'knowledge', confirmedKnowledge: true, private: true, topicMatch: true,
+      status: 'draft', snippet: '先保留已有架构。', updatedAt: '2026-10-19T00:00:00.000Z',
+      sourceRefs: [{ type: 'research', value: '33333333-3333-4333-8333-333333333333', required: false }],
+    });
+    expect(body.brief.contextRefs).toEqual([]);
+    expect(JSON.stringify(body.suggestedContext)).not.toContain('Reader 原文');
+    expect(mocks.researchFindMany.mock.calls[0][0].where).toMatchObject({
+      authorId: MOCK_USER.id, status: { in: ['draft', 'published'] }, knowledgeIndexText: { not: null },
+    });
+  });
+
+  it('uses bounded Chinese keywords, and excludes archived/other private suggestions', async () => {
+    mocks.researchFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'archived', title: '向量检索成本', body: '', type: 'research', authorId: MOCK_USER.id,
+        status: 'archived', knowledgeIndexText: null, researchTopics: [], updatedAt: new Date(),
+      },
+      {
+        id: 'other-private', title: '向量检索成本', body: '', type: 'research', authorId: 'another-user',
+        status: 'draft', knowledgeIndexText: null, researchTopics: [], updatedAt: new Date(),
+      },
+    ]);
+    const question = '我们是否应该重新评估向量检索成本？';
+    const res = await planPost(buildReq({ question }) as never, ctx());
+    const body = await res.json();
+    expect(body.suggestedContext).toEqual([]);
+    const researchQuery = mocks.researchFindMany.mock.calls[1][0];
+    expect(researchQuery.take).toBe(24);
+    expect(JSON.stringify(researchQuery.where)).not.toContain(question);
+    expect(JSON.stringify(researchQuery.where)).toContain('检索');
+    expect(JSON.stringify(mocks.topicFindMany.mock.calls[0][0])).toContain('检索');
+  });
+
+  it('an explicit primaryTopicId takes precedence over topicHint and inferred topics', async () => {
+    mocks.topicFindMany.mockResolvedValueOnce([{
+      id: 'inferred-topic', slug: 'rag', name: 'RAG', candidateCount: 30, keywords: ['rag'],
+    }]);
+    const primaryTopicId = '22222222-2222-4222-8222-222222222222';
+    const res = await planPost(buildReq({
+      question: 'RAG 检索增强生成',
+      primaryTopicId,
+      topicHint: '44444444-4444-4444-8444-444444444444',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.primaryTopicId).toBe(primaryTopicId);
+    expect(mocks.topicFindUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: primaryTopicId } }));
   });
 
   it('对缺少用户自定义问题的学习类请求提供可编辑的默认问题', async () => {

@@ -84,15 +84,14 @@ try {
   if (!pageDockPresent) throw new Error('网页右侧 Reader 入口未注入');
 
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom');
+  await panel.locator('#provider-kind').selectOption('custom', { force: true });
   await panel.locator('#provider-url').fill(providerUrl);
   await panel.locator('#provider-model').fill(providerModel);
   await panel.locator('#provider-key').fill(providerKey);
-  if (!liveMode || process.env.READER_LIVE_REQUEST_ORIGIN === '0') await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   const settingsNotice = await panel.locator('#settings-notice').innerText();
-  if (!settingsNotice.includes('连接成功')) throw new Error(`模型配置失败：${settingsNotice}`);
+  if (!settingsNotice.includes('已保存')) throw new Error(`模型配置失败：${settingsNotice}`);
   await panel.locator('#close-settings').click();
 
   // Verify the local selection/evidence loop before starting the long task:

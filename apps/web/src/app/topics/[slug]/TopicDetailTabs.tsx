@@ -21,16 +21,20 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import Tabs from '@mui/material/Tabs';
+import Tab from '@mui/material/Tab';
+import Paper from '@mui/material/Paper';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
+import { StatCard } from '@/components/domain/StatCard';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TopicFollowButton } from '@/components/topics/TopicFollowButton';
+import { PreviousJudgments } from '@/components/radar/RadarKnowledgeActions';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import type { TopicCandidateTrendPoint } from '@/lib/topics';
 import type { ReactNode } from 'react';
+import styles from './topic-detail.module.css';
 
 interface TopicPayload {
   id: string;
@@ -122,6 +126,43 @@ function parseTab(value: string | null): TabKey {
   return TAB_KEYS.includes(value as TabKey) ? (value as TabKey) : 'overview';
 }
 
+function RetrySynthesisForm({ slug }: { slug: string }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  return (
+    <>
+      <form ref={formRef} action={`/api/topics/${slug}/synthesis/retry`} method="post">
+        <Button type="button" size="small" variant="outlined" onClick={() => setConfirmOpen(true)}>
+          重试综述
+        </Button>
+      </form>
+      <AppDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="确认重新生成 AI 综述？"
+        description="重新生成 AI 综述会消耗模型调用额度,确认继续?"
+        actions={(
+          <>
+            <Button type="button" variant="outlined" onClick={() => setConfirmOpen(false)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setConfirmOpen(false);
+                formRef.current?.requestSubmit();
+              }}
+            >
+              确认继续
+            </Button>
+          </>
+        )}
+      />
+    </>
+  );
+}
+
 export function TopicDetailTabs({
   topic,
   issues,
@@ -206,17 +247,17 @@ export function TopicDetailTabs({
   }
 
   return (
-    <div ref={rootRef} className="mx-auto w-full min-w-0 max-w-shell">
-      <Link href="/topics" className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-3" />
+    <div ref={rootRef} className={styles.screen} data-topic-detail>
+      <Link href="/topics" className={styles.backLink}>
+        <ArrowLeft aria-hidden className={styles.smallIcon} />
         返回专题列表
       </Link>
       <PageHeader
         title={topic.name}
         description={
           <>
-            {topic.summary ? <span className="block">{topic.summary}</span> : null}
-            <span className="mt-1 block text-xs text-muted-foreground">
+            {topic.summary ? <span className={styles.block}>{topic.summary}</span> : null}
+            <span className={styles.headerMetadata}>
               相关内容 {topic.candidateCount} · 采集渠道 {topic.sourceCount} · 上次同步{' '}
               {topic.lastSyncedAt
                 ? new Date(topic.lastSyncedAt).toLocaleDateString('zh-CN')
@@ -225,19 +266,16 @@ export function TopicDetailTabs({
           </>
         }
         actions={
-          <div className="flex items-center gap-2">
+          <div className={styles.actions}>
             <StatusBadge kind="topicTier" value={topic.tier} />
-            <Button asChild size="sm" className="min-h-11 sm:min-h-9">
-              <Link
+            <Button component={Link} size="small" variant="contained" startIcon={<Sparkles aria-hidden />}
                 href={
                   isAuthenticated
                     ? `/ai-research?topic=${encodeURIComponent(topic.name)}&topicId=${encodeURIComponent(topic.id)}`
                     : `/signin?callbackUrl=${encodeURIComponent(`/ai-research?topic=${topic.name}&topicId=${topic.id}`)}`
                 }
               >
-                <Sparkles className="size-3.5" />
                 {isAuthenticated ? '开始 AI 调研' : '登录后开始 AI 调研'}
-              </Link>
             </Button>
             <TopicFollowButton
               slug={topic.slug}
@@ -250,31 +288,20 @@ export function TopicDetailTabs({
       />
 
       {/* 顶部 sticky tabs：移动端只让此容器横向滚动，不让整页被撑宽。 */}
-      <Tabs
-        value={tab}
-        onValueChange={handleTabChange}
-        className="mt-2 min-w-0"
-      >
-        <div className="sticky top-[-1.5rem] z-10 -mx-4 w-[calc(100%+2rem)] min-w-0 max-w-none border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <TabsList className="grid w-full min-w-0 grid-cols-2 gap-0 border-b-0 sm:inline-flex sm:w-auto sm:min-w-max">
-            <TabsTrigger value="overview" className="min-h-11 whitespace-nowrap sm:min-h-0">
-              <Sparkles className="size-3.5" /> 概览
-            </TabsTrigger>
-            <TabsTrigger value="issues" className="min-h-11 whitespace-nowrap sm:min-h-0">
-              {/* icon 颜色跟随 trigger 状态(active 由 tabs.tsx 的 data-[state=active] 控制),
-                  不再 inline 强制 text-primary —— 修复 v7 review 提到的颜色打架 */}
-              <Sparkles className="size-3.5" /> 热点议题（{issueTotalCount}）
-            </TabsTrigger>
-            <TabsTrigger value="research" className="min-h-11 whitespace-nowrap sm:min-h-0">
-              <FileText className="size-3.5" /> 相关研究（{researchTopics.length}）
-            </TabsTrigger>
-            <TabsTrigger value="sources" className="min-h-11 whitespace-nowrap sm:min-h-0">
-              <ListTree className="size-3.5" /> 相关内容（{topic.candidateCount}）
-            </TabsTrigger>
-          </TabsList>
+      <div className={styles.tabsRoot}>
+        <div className={styles.stickyTabs}>
+          <Tabs value={tab} onChange={(_, value: TabKey) => handleTabChange(value)} selectionFollowsFocus aria-label="专题详情" className={styles.tabs}>
+            {([
+              ['overview', '概览', <Sparkles key="overview" aria-hidden />],
+              ['issues', `热点议题（${issueTotalCount}）`, <Sparkles key="issues" aria-hidden />],
+              ['research', `相关研究（${researchTopics.length}）`, <FileText key="research" aria-hidden />],
+              ['sources', `相关内容（${topic.candidateCount}）`, <ListTree key="sources" aria-hidden />],
+            ] as const).map(([value, label, icon]) => <Tab key={value} value={value} label={label} icon={icon} iconPosition="start" className={styles.tab} id={`topic-${topic.id}-${value}-tab`} aria-controls={`topic-${topic.id}-${value}-panel`} />)}
+          </Tabs>
         </div>
 
-        <TabsContent value="overview" className="mt-4">
+        <TopicPane topicId={topic.id} value="overview" active={tab}>
+          <PreviousJudgments topicId={topic.id} enabled={isAuthenticated} />
           <OverviewPane
             topic={topic}
             issues={issues}
@@ -282,8 +309,8 @@ export function TopicDetailTabs({
             candidates={candidates}
             isAdmin={isAdmin}
           />
-        </TabsContent>
-        <TabsContent value="issues" className="mt-4">
+        </TopicPane>
+        <TopicPane topicId={topic.id} value="issues" active={tab}>
           <IssuesPane
             slug={topic.slug}
             issues={issues}
@@ -296,25 +323,41 @@ export function TopicDetailTabs({
             viewError={viewError}
             onMarkViewed={() => void markIssuesViewed()}
           />
-        </TabsContent>
-        <TabsContent value="research" className="mt-4">
+        </TopicPane>
+        <TopicPane topicId={topic.id} value="research" active={tab}>
           <ResearchPane
             topicName={topic.name}
             topicId={topic.id}
             researchTopics={researchTopics}
             isAuthenticated={isAuthenticated}
           />
-        </TabsContent>
-        <TabsContent value="sources" className="mt-4">
+        </TopicPane>
+        <TopicPane topicId={topic.id} value="sources" active={tab}>
           <SourcesPane
             candidates={candidates}
             candidateTotalCount={topic.candidateCount}
             sourceCount={topic.sourceCount}
             sourceIssues={sourceIssues}
           />
-        </TabsContent>
+        </TopicPane>
 
-      </Tabs>
+      </div>
+    </div>
+  );
+}
+
+function TopicPane({ topicId, value, active, children }: { topicId: string; value: TabKey; active: TabKey; children: ReactNode }) {
+  const selected = active === value;
+  return (
+    <div
+      role="tabpanel"
+      id={`topic-${topicId}-${value}-panel`}
+      aria-labelledby={`topic-${topicId}-${value}-tab`}
+      tabIndex={selected ? 0 : -1}
+      hidden={!selected}
+      className={styles.panel}
+    >
+      {selected ? children : null}
     </div>
   );
 }
@@ -340,47 +383,35 @@ function OverviewPane({
   const hasKeyChanges = keyChanges.length > 0;
   if (topic.synthesisErrorCode && !synthesis) {
     return (
-      <Card>
-        <CardContent className="space-y-2 p-4">
+      <Paper variant="outlined" className={styles.paper}>
+        <div className={styles.paddedStack}>
           {isAdmin ? (
-            <p className="text-sm text-destructive">
+            <p className={styles.error}>
               综述生成失败（{topic.synthesisErrorCode}）：{topic.synthesisErrorMessage}
             </p>
           ) : (
-            <p className="text-sm text-muted-foreground">AI 综述暂时不可用,请稍后再试。</p>
+            <p className={styles.bodySecondary}>AI 综述暂时不可用,请稍后再试。</p>
           )}
           {topic.lastSynthesisSuccessAt ? (
-            <p className="text-xs text-muted-foreground">
+            <p className={styles.caption}>
               上次成功更新：{new Date(topic.lastSynthesisSuccessAt).toLocaleString('zh-CN')}
             </p>
           ) : null}
           {isAdmin ? (
-            <form
-              action={`/api/topics/${topic.slug}/synthesis/retry`}
-              method="post"
-              onSubmit={(e) => {
-                if (!window.confirm('重新生成 AI 综述会消耗模型调用额度,确认继续?')) {
-                  e.preventDefault();
-                }
-              }}
-            >
-              <Button type="submit" size="sm" variant="outline">
-                重试综述
-              </Button>
-            </form>
+            <RetrySynthesisForm slug={topic.slug} />
           ) : null}
-        </CardContent>
-      </Card>
+        </div>
+      </Paper>
     );
   }
   if (!synthesis || !synthesis.tldr) {
     return (
-      <div className="space-y-5">
-        <section className="rounded-md border border-primary/20 bg-primary/[0.035] p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-                <Sparkles className="size-4 text-primary" /> AI 综述暂未就绪
+      <div className={styles.overview}>
+        <section className={styles.pendingSection}>
+          <div className={styles.between}>
+            <div className={styles.shrink}>
+              <h2 className={styles.sectionTitle}>
+                <Sparkles aria-hidden className={styles.primaryIcon} /> AI 综述暂未就绪
               </h2>
               <SynthesisPendingNotice
                 hasError={Boolean(topic.synthesisErrorMessage)}
@@ -388,72 +419,51 @@ function OverviewPane({
               />
             </div>
             {isAdmin ? (
-              <form
-                action={`/api/topics/${topic.slug}/synthesis/retry`}
-                method="post"
-                onSubmit={(e) => {
-                  if (!window.confirm('重新生成 AI 综述会消耗模型调用额度，确认继续？')) {
-                    e.preventDefault();
-                  }
-                }}
-              >
-                <Button type="submit" size="sm" variant="outline">
-                  重试综述
-                </Button>
-              </form>
+              <RetrySynthesisForm slug={topic.slug} />
             ) : null}
           </div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
-            <div className="rounded-md border border-border/70 bg-card/70 p-3">
-              <p className="text-xs text-muted-foreground">相关内容</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">{topic.candidateCount}</p>
-            </div>
-            <div className="rounded-md border border-border/70 bg-card/70 p-3">
-              <p className="text-xs text-muted-foreground">活跃议题</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">{issueTotalCount}</p>
-            </div>
-            <div className="rounded-md border border-border/70 bg-card/70 p-3">
-              <p className="text-xs text-muted-foreground">采集渠道</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">{topic.sourceCount}</p>
-            </div>
+          <div className={styles.stats}>
+            <StatCard label="相关内容" value={topic.candidateCount} density="compact" />
+            <StatCard label="活跃议题" value={issueTotalCount} density="compact" />
+            <StatCard label="采集渠道" value={topic.sourceCount} density="compact" />
           </div>
         </section>
 
         <RecentIssuesPreview topic={topic} issues={issues} issueTotalCount={issueTotalCount} />
-        <div className="grid items-start gap-4 md:grid-cols-2">
+        <div className={styles.twoColumns}>
           <TrendPane topic={topic} />
-          <Card>
-            <CardContent className="p-4">
-              <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-                <ListTree className="size-4 text-muted-foreground" />
+          <Paper variant="outlined" className={styles.paper}>
+            <div className={styles.padded}>
+              <h2 className={styles.panelTitle}>
+                <ListTree aria-hidden className={styles.icon} />
                 时间线
               </h2>
               <TimelinePane candidates={candidates} />
-            </CardContent>
-          </Card>
+            </div>
+          </Paper>
         </div>
       </div>
     );
   }
   /* 综述改成长文块 + 嵌入式 section divider,只在「事实审核」保留 Card */
   return (
-    <div className="space-y-5 text-sm">
+    <div className={styles.overview}>
       <section>
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <Sparkles className="size-4 text-muted-foreground" aria-hidden /> 一句话概要
+        <h2 className={styles.sectionTitle}>
+          <Sparkles className={styles.icon} aria-hidden /> 一句话概要
         </h2>
-        <p className="mt-2 max-w-4xl text-base font-medium leading-relaxed">{synthesis.tldr}</p>
+        <p className={styles.tldr}>{synthesis.tldr}</p>
         {topic.lastSynthesisSuccessAt ? (
-          <p className="mt-1.5 text-xs text-muted-foreground">
+          <p className={styles.updated}>
             最近更新：{new Date(topic.lastSynthesisSuccessAt).toLocaleString('zh-CN')}
           </p>
         ) : null}
         {referenceCount > 0 ? (
           <Link
             href="#topic-evidence"
-            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+            className={styles.evidenceJump}
           >
-            <FileText className="size-3.5" />
+            <FileText aria-hidden className={styles.smallIcon} />
             查看综述依据（{referenceCount}）
           </Link>
         ) : null}
@@ -465,34 +475,34 @@ function OverviewPane({
         issueTotalCount={issueTotalCount}
       />
 
-      <div className="grid items-start gap-4 md:grid-cols-2">
+      <div className={styles.twoColumns}>
         <TrendPane topic={topic} />
-        <Card>
-          <CardContent className="p-4">
-            <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-              <ListTree className="size-4 text-muted-foreground" />
+        <Paper variant="outlined" className={styles.paper}>
+          <div className={styles.padded}>
+            <h2 className={styles.panelTitle}>
+              <ListTree aria-hidden className={styles.icon} />
               时间线
             </h2>
             <TimelinePane candidates={candidates} />
-          </CardContent>
-        </Card>
+          </div>
+        </Paper>
       </div>
 
       {hasKeyChanges ? (
-        <section id="topic-evidence" className="scroll-mt-28">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-sm font-semibold">为什么重要</h2>
+        <section id="topic-evidence" className={styles.evidenceSection}>
+          <div className={styles.headingRow}>
+            <h2 className={styles.sectionTitle}>为什么重要</h2>
             {referenceCount > 0 ? (
-              <span className="text-xs text-muted-foreground">
+              <span className={styles.caption}>
                 {referenceCount} 条可回溯来源
               </span>
             ) : null}
           </div>
-          <ul className="mt-2 grid list-none gap-2 p-0">
+          <ul className={styles.spacedList}>
             {keyChanges.map((kc, i) => (
-              <li key={i} className="rounded-md border border-border bg-card/60 p-3">
-                <p className="font-medium">{kc.title}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{kc.whyItMatters}</p>
+              <li key={i} className={styles.itemCard}>
+                <p className={styles.fieldTitle}>{kc.title}</p>
+                <p className={styles.secondaryParagraph}>{kc.whyItMatters}</p>
                 <EvidenceDisclosure
                   summaryIds={kc.summaryIds}
                   candidates={candidates}
@@ -509,18 +519,18 @@ function OverviewPane({
       ) : null}
 
       {synthesis.subtopics && synthesis.subtopics.length > 0 ? (
-        <details className="group">
-          <summary className="cursor-pointer list-none text-sm font-semibold [&::-webkit-details-marker]:hidden">
-            <span className="inline-flex items-center gap-1.5">
-              <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+        <details className={styles.disclosure}>
+          <summary className={styles.disclosureSummary}>
+            <span className={styles.inline}>
+              <ChevronRight aria-hidden className={styles.chevron} />
               子方向
             </span>
           </summary>
-          <ul className="mt-2 grid list-none gap-2 border-l-2 border-border pl-3">
+          <ul className={styles.detailList}>
             {synthesis.subtopics.map((st, i) => (
-              <li key={i} className="border-b border-border pb-2 last:border-0">
-                <p className="font-medium">{st.title}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{st.summary}</p>
+              <li key={i} className={styles.dividedItem}>
+                <p className={styles.fieldTitle}>{st.title}</p>
+                <p className={styles.secondaryParagraph}>{st.summary}</p>
               </li>
             ))}
           </ul>
@@ -528,14 +538,14 @@ function OverviewPane({
       ) : null}
 
       {synthesis.openQuestions && synthesis.openQuestions.length > 0 ? (
-        <details className="group">
-          <summary className="cursor-pointer list-none text-sm font-semibold [&::-webkit-details-marker]:hidden">
-            <span className="inline-flex items-center gap-1.5">
-              <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+        <details className={styles.disclosure}>
+          <summary className={styles.disclosureSummary}>
+            <span className={styles.inline}>
+              <ChevronRight aria-hidden className={styles.chevron} />
               仍然开放的问题
             </span>
           </summary>
-          <ul className="mt-2 list-disc space-y-1 border-l-2 border-border pl-7 text-xs text-muted-foreground">
+          <ul className={styles.questions}>
             {synthesis.openQuestions.map((q, i) => (
               <li key={i}>{q}</li>
             ))}
@@ -544,18 +554,18 @@ function OverviewPane({
       ) : null}
 
       {synthesis.sections && synthesis.sections.length > 0 ? (
-        <details className="group">
-          <summary className="cursor-pointer list-none text-sm font-semibold [&::-webkit-details-marker]:hidden">
-            <span className="inline-flex items-center gap-1.5">
-              <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" />
+        <details className={styles.disclosure}>
+          <summary className={styles.disclosureSummary}>
+            <span className={styles.inline}>
+              <ChevronRight aria-hidden className={styles.chevron} />
               深度阅读
             </span>
           </summary>
-          <div className="mt-2 space-y-3 border-l-2 border-primary/30 pl-3">
+          <div className={styles.readingSections}>
             {synthesis.sections.map((s, i) => (
-              <section key={i} className="border-b border-border pb-3 last:border-0">
-                <h3 className="mb-1 text-sm font-semibold">{s.title}</h3>
-                <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">{s.content}</p>
+              <section key={i} className={styles.readingSection}>
+                <h3 className={styles.readingTitle}>{s.title}</h3>
+                <p className={styles.reading}>{s.content}</p>
                 <EvidenceDisclosure
                   summaryIds={s.summaryIds ?? []}
                   candidates={candidates}
@@ -568,11 +578,11 @@ function OverviewPane({
       ) : null}
 
       {issues.length === 0 ? (
-        <Card>
-          <CardContent className="p-4 text-xs text-muted-foreground">
+        <Paper variant="outlined" className={styles.paper}>
+          <div className={styles.paddedQuiet}>
             {NO_ACTIVE_ISSUE_COPY(topic.candidateCount)}
-          </CardContent>
-        </Card>
+          </div>
+        </Paper>
       ) : null}
     </div>
   );
@@ -598,8 +608,8 @@ function SynthesisPendingNotice({
 
   const slow = elapsed >= 8;
   return (
-    <div className="mt-1.5 max-w-2xl space-y-1.5">
-      <p className="text-xs leading-relaxed text-muted-foreground">
+    <div className={styles.notice}>
+      <p className={styles.bodySecondary}>
         {hasError
           ? '最近一次生成没有成功。你仍然可以先阅读热点议题和原始内容。'
           : slow
@@ -607,15 +617,15 @@ function SynthesisPendingNotice({
             : '综述正在准备中。先从下方的热点议题和时间线开始，不必等待整篇综述。'}
       </p>
       {lastSuccessAt ? (
-        <p className="text-xs text-muted-foreground">
+        <p className={styles.caption}>
           最近成功更新：{new Date(lastSuccessAt).toLocaleString('zh-CN')}
         </p>
       ) : null}
       {slow ? (
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
+        <div className={styles.refreshRow}>
           <span>等待超过 8 秒</span>
-          <Button type="button" size="xs" variant="outline" onClick={() => router.refresh()}>
-            <RefreshCw />
+          <Button type="button" size="small" variant="outlined" onClick={() => router.refresh()}>
+            <RefreshCw aria-hidden />
             刷新专题
           </Button>
         </div>
@@ -636,30 +646,30 @@ function RecentIssuesPreview({
   if (issues.length === 0) return null;
   return (
     <section aria-labelledby="featured-topic-issues">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <div className={styles.headingRow}>
         <div>
-          <h2 id="featured-topic-issues" className="text-sm font-semibold">
+          <h2 id="featured-topic-issues" className={styles.sectionTitle}>
             重点议题
           </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">按重要度展示</p>
+          <p className={styles.previewHint}>按重要度展示</p>
         </div>
         <Link
           href={`/topics/${encodeURIComponent(topic.slug)}?tab=issues`}
-          className="text-xs font-medium text-primary hover:underline"
+          className={styles.textLink}
         >
           查看全部 {issueTotalCount} 个议题
         </Link>
       </div>
-      <ul className="mt-2 grid list-none gap-2 p-0">
+      <ul className={styles.spacedList}>
         {issues.slice(0, 3).map((issue) => (
-          <li key={issue.id} className="border-b border-border pb-2 last:border-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <li key={issue.id} className={styles.dividedItem}>
+            <div className={styles.metadata}>
               <span>{issue.kind === 'event' ? '事件' : '问题'}</span>
               <span>最近更新 {new Date(issue.lastSeenAt).toLocaleDateString('zh-CN')}</span>
               <span>{issue.candidateIds.length} 条关联内容</span>
             </div>
-            <h3 className="mt-1 line-clamp-2 text-sm font-medium">{issue.title}</h3>
-            <p className="mt-0.5 max-w-4xl line-clamp-2 text-xs text-muted-foreground">{issue.proposition}</p>
+            <h3 className={styles.previewTitle}>{issue.title}</h3>
+            <p className={styles.previewSummary}>{issue.proposition}</p>
           </li>
         ))}
       </ul>
@@ -693,14 +703,14 @@ function EvidenceDisclosure({
     .filter((row): row is { summaryId: string; title: string } => row !== null);
   if (rows.length === 0) return null;
   return (
-    <details className="mt-2 text-xs">
-      <summary className="cursor-pointer list-none font-medium text-primary [&::-webkit-details-marker]:hidden">
+    <details className={styles.evidenceDisclosure}>
+      <summary className={styles.evidenceSummary}>
         依据 {rows.length} 条来源
       </summary>
-      <ul className="mt-2 space-y-1 border-l-2 border-primary/20 pl-3">
+      <ul className={styles.evidenceList}>
         {rows.map((row) => (
           <li key={row.summaryId}>
-            <Link href={`/radar/${row.summaryId}`} className="hover:underline">
+            <Link href={`/radar/${row.summaryId}`} className={styles.textLink}>
               {row.title}
             </Link>
           </li>
@@ -723,17 +733,17 @@ function EvidenceListSection({
   });
   if (rows.length === 0) return null;
   return (
-    <section id="topic-evidence" className="scroll-mt-28">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">综述依据</h2>
-        <span className="text-xs text-muted-foreground">
+    <section id="topic-evidence" className={styles.evidenceSection}>
+      <div className={styles.headingRow}>
+        <h2 className={styles.sectionTitle}>综述依据</h2>
+        <span className={styles.caption}>
           {rows.length} 条可回溯来源
         </span>
       </div>
-      <ul className="mt-2 space-y-1 border-l-2 border-primary/20 pl-3 text-xs">
+      <ul className={styles.evidenceList}>
         {rows.map((reference) => (
           <li key={reference.summaryId}>
-            <Link href={`/radar/${reference.summaryId}`} className="hover:underline">
+            <Link href={`/radar/${reference.summaryId}`} className={styles.textLink}>
               {reference.title || `来源 ${reference.summaryId.slice(0, 8)}`}
             </Link>
           </li>
@@ -817,58 +827,50 @@ function IssuesPane({
   }
 
   return (
-    <section className="space-y-3 text-sm">
-      <div className="space-y-1.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold">活跃热点议题</h2>
+    <section className={styles.stack}>
+      <div className={styles.stack8}>
+        <div className={styles.headingRow}>
+          <h2 className={styles.sectionTitle}>活跃热点议题</h2>
           {followed && issueUnreadCount > 0 && !viewedAt ? (
             <Button
               type="button"
-              variant="outline"
-              size="sm"
-              className="min-h-11 sm:min-h-9"
+              variant="outlined"
+              size="small"
+              className={styles.control}
               onClick={onMarkViewed}
               disabled={markingViewed}
             >
-              {markingViewed ? <Loader2 className="animate-spin" /> : <CheckCheck />}
+              {markingViewed ? <Loader2 aria-hidden className={styles.spin} /> : <CheckCheck aria-hidden />}
               {markingViewed ? '标记中…' : '标记全部已读'}
             </Button>
           ) : null}
           {viewedAt ? (
-            <span className="text-xs text-muted-foreground">
+            <span className={styles.caption}>
               已标记为已读 {new Date(viewedAt).toLocaleString('zh-CN')}
             </span>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <div className={styles.metadata}>
           <span>已显示 {rows.length} 条，共 {issueTotalCount} 条</span>
           <span>按重要度排序</span>
-          {unreadCount > 0 ? <span className="text-primary">{unreadCount} 个议题在上次查看后有更新</span> : null}
+          {unreadCount > 0 ? <span className={styles.primary}>{unreadCount} 个议题在上次查看后有更新</span> : null}
         </div>
       </div>
-      {viewError ? <p className="text-xs text-destructive">{viewError}</p> : null}
+      {viewError ? <p className={styles.error}>{viewError}</p> : null}
       {rows.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border bg-muted/20 p-4 text-xs text-muted-foreground">
+        <p className={styles.empty}>
           {NO_ACTIVE_ISSUE_COPY(candidateCount)}
         </p>
       ) : (
-        <ul className="grid list-none gap-2 p-0">
+        <ul className={styles.list}>
           {rows.map((issue) => (
-            <li key={issue.id} className="rounded-md border border-border bg-card p-3">
-              <div className="flex min-w-0 flex-wrap items-start gap-1.5">
-                <Badge
-                  className={
-                    issue.kind === 'event'
-                      ? 'bg-status-running-bg text-status-running-fg'
-                      : 'bg-status-failed-bg text-status-failed-fg'
-                  }
-                >
-                  {issue.kind === 'event' ? '事件' : '问题'}
-                </Badge>
-                <h3 className="min-w-0 flex-1 text-sm font-medium">{issue.title}</h3>
+            <li key={issue.id} className={styles.itemCard}>
+              <div className={styles.issueHeader}>
+                <StatusBadge kind="issue" value={issue.kind === 'event' ? 'info' : 'error'} label={issue.kind === 'event' ? '事件' : '问题'} />
+                <h3 className={styles.issueTitle}>{issue.title}</h3>
               </div>
-              <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{issue.proposition}</p>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <p className={styles.issueProposition}>{issue.proposition}</p>
+              <div className={styles.itemMetadata}>
                 <span>首发 {new Date(issue.firstSeenAt).toLocaleDateString('zh-CN')}</span>
                 <span>·</span>
                 <span>最近更新 {new Date(issue.lastSeenAt).toLocaleDateString('zh-CN')}</span>
@@ -883,10 +885,10 @@ function IssuesPane({
           ))}
         </ul>
       )}
-      {loadError ? <p className="text-xs text-destructive">{loadError}</p> : null}
+      {loadError ? <p className={styles.error}>{loadError}</p> : null}
       {hasMore ? (
-        <Button type="button" variant="outline" size="sm" className="min-h-11 sm:min-h-9" onClick={() => void loadMore()} disabled={loadingMore}>
-          {loadingMore ? <Loader2 className="animate-spin" /> : null}
+        <Button type="button" variant="outlined" size="small" className={styles.control} onClick={() => void loadMore()} disabled={loadingMore}>
+          {loadingMore ? <Loader2 aria-hidden className={styles.spin} /> : null}
           {loadingMore ? '加载中…' : `加载更多议题（还剩 ${issueTotalCount - rows.length}）`}
         </Button>
       ) : null}
@@ -907,43 +909,36 @@ function ResearchPane({
 }): ReactNode {
   const researchHref = `/ai-research?topic=${encodeURIComponent(topicName)}&topicId=${encodeURIComponent(topicId)}`;
   return (
-    <section className="space-y-3 text-sm">
-      <h2 className="text-sm font-semibold">相关研究（{researchTopics.length}）</h2>
+    <section className={styles.stack}>
+      <h2 className={styles.sectionTitle}>相关研究（{researchTopics.length}）</h2>
       {researchTopics.length === 0 ? (
-        <div className="space-y-3 rounded-md border border-dashed border-border bg-muted/20 p-4">
-          <p className="text-xs text-muted-foreground">
-            还没有关于本专题的已发布研究；从专题发起 AI 调研时会在发布时自动回流。
+        <div className={styles.emptyStack}>
+          <p className={styles.caption}>
+            暂无相关研究或你已保存的判断。
           </p>
-          <Button asChild size="sm" className="min-h-11 sm:min-h-9">
-            <Link
+          <Button component={Link} size="small" variant="contained" startIcon={<Sparkles aria-hidden />}
               href={
                 isAuthenticated
                   ? researchHref
                   : `/signin?callbackUrl=${encodeURIComponent(researchHref)}`
               }
             >
-              <Sparkles className="size-3.5" />
               {isAuthenticated ? '从本专题开始调研' : '登录后开始调研'}
-            </Link>
           </Button>
         </div>
       ) : (
-        <ul className="grid list-none gap-2 p-0">
+        <ul className={styles.list}>
           {researchTopics.map((row) => (
-            <li key={row.researchId} className="rounded-md border border-border bg-card p-3">
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <li key={row.researchId} className={styles.itemCard}>
+              <div className={styles.rowHeader}>
                 <Link
                   href={`/researches/${row.researchId}`}
-                  className="min-w-0 flex-1 text-sm font-medium hover:text-primary hover:underline"
+                  className={styles.researchLink}
                 >
                   {row.researchTitle}
                 </Link>
-                {row.researchStatus === 'published' ? (
-                  <Badge className="bg-status-succeeded-bg text-status-succeeded-fg">已发布</Badge>
-                ) : (
-                  <Badge className="bg-muted text-muted-foreground">{row.researchStatus}</Badge>
-                )}
-                <span className="text-xs text-muted-foreground">
+                <StatusBadge kind="research" value={row.researchStatus} label={row.researchStatus === 'published' ? undefined : '仅本人'} />
+                <span className={styles.caption}>
                   {new Date(row.createdAt).toLocaleDateString('zh-CN')}
                 </span>
               </div>
@@ -983,8 +978,8 @@ function SourcesPane({
   }, [candidates]);
 
   return (
-    <div className="space-y-4">
-      <p className="text-xs text-muted-foreground">
+    <div className={styles.stack16}>
+      <p className={styles.caption}>
         共 {candidateTotalCount} 条可查看内容，来自 {sourceCount} 个采集渠道
         {candidates.length < candidateTotalCount ? `；当前已加载最近 ${candidates.length} 条` : '；已全部加载'}。
       </p>
@@ -992,9 +987,9 @@ function SourcesPane({
         const list = byIssue.map.get(issue.id) ?? [];
         if (list.length === 0) return null;
         return (
-          <section key={issue.id} className="space-y-3">
-            <h3 className="text-sm font-semibold">{issue.title}</h3>
-            <ul className="grid list-none gap-2 p-0">
+          <section key={issue.id} className={styles.stack}>
+            <h3 className={styles.sectionTitle}>{issue.title}</h3>
+            <ul className={styles.list}>
               {list.map((c) => (
                 <SourceRow key={c.summaryId} candidate={c} />
               ))}
@@ -1003,16 +998,16 @@ function SourcesPane({
         );
       })}
 
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold">
+      <section className={styles.stack}>
+        <h3 className={styles.sectionTitle}>
           未归入议题的{candidates.length < candidateTotalCount ? '已加载' : ''}近期信号（{byIssue.orphan.length}）
         </h3>
         {byIssue.orphan.length === 0 ? (
-          <p className="rounded-md border border-dashed border-border bg-muted/20 p-4 text-xs text-muted-foreground">
+          <p className={styles.empty}>
             所有相关内容都已关联到热点议题；新增内容会在窗口期归类。
           </p>
         ) : (
-          <ul className="grid list-none gap-2 p-0">
+          <ul className={styles.list}>
             {byIssue.orphan.map((c) => (
               <SourceRow key={c.summaryId} candidate={c} />
             ))}
@@ -1028,16 +1023,16 @@ function SourceRow({ candidate }: { candidate: CandidateRow }): ReactNode {
     <li>
       <Link
         href={`/radar/${candidate.summaryId}`}
-        className="block rounded-md border border-border p-2.5 transition-colors hover:border-primary/40"
+        className={styles.sourceLink}
       >
-        <p className="text-sm font-medium hover:text-primary">{candidate.title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
+        <p className={styles.sourceTitle}>{candidate.title}</p>
+        <p className={styles.previewHint}>
           {formatSourceType(candidate.originalKind).short} ·{' '}
           {candidate.publishedAt ? new Date(candidate.publishedAt).toLocaleDateString('zh-CN') : '—'}
           {candidate.tags.length > 0 ? ` · ${candidate.tags.slice(0, 3).join(', ')}` : ''}
         </p>
         {candidate.interpretation ? (
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{candidate.interpretation}</p>
+          <p className={styles.previewSummary}>{candidate.interpretation}</p>
         ) : null}
       </Link>
     </li>
@@ -1052,29 +1047,29 @@ function TrendPane({ topic }: { topic: TopicPayload }): ReactNode {
     return best;
   }, null);
   return (
-    <Card>
-      <CardContent className="space-y-3 p-4 text-sm">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <CalendarRange className="size-4 text-muted-foreground" /> 趋势
+    <Paper variant="outlined" className={styles.paper}>
+      <div className={styles.paddedStack}>
+        <h2 className={styles.sectionTitle}>
+          <CalendarRange aria-hidden className={styles.icon} /> 趋势
         </h2>
-        <p className="text-xs text-muted-foreground">
+        <p className={styles.caption}>
           聚合窗口：
           {new Date(topic.aggregationWindowStart).toLocaleDateString('zh-CN')} ~{' '}
           {new Date(topic.aggregationWindowEnd).toLocaleDateString('zh-CN')}
         </p>
         <TrendSparkline points={trend} />
-        <p className="text-xs text-muted-foreground">
+        <p className={styles.caption}>
           过去 {trend.length} 天新增 {totalInWindow} 条相关内容
           {peak && peak.count > 0 ? `，单日峰值 ${peak.count} 条（${peak.date}）` : ''}
         </p>
-      </CardContent>
-    </Card>
+      </div>
+    </Paper>
   );
 }
 
 function TrendSparkline({ points }: { points: TopicCandidateTrendPoint[] }): ReactNode {
   if (points.length === 0) {
-    return <p className="text-xs text-muted-foreground">暂无趋势数据。</p>;
+    return <p className={styles.caption}>暂无趋势数据。</p>;
   }
   const width = 280;
   const height = 48;
@@ -1094,13 +1089,13 @@ function TrendSparkline({ points }: { points: TopicCandidateTrendPoint[] }): Rea
   const lastDate = points[points.length - 1]?.date;
   const formatDate = (value: string | undefined) => value ? value.slice(5).replace('-', '/') : '—';
   return (
-    <div className="space-y-1">
+    <div className={styles.stack4}>
       <svg
         role="img"
         aria-label={`过去 ${points.length} 天相关内容趋势`}
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
-        className="h-12 w-full text-primary/80"
+        className={styles.sparkline}
       >
         <path d={linePath} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
         <circle
@@ -1112,7 +1107,7 @@ function TrendSparkline({ points }: { points: TopicCandidateTrendPoint[] }): Rea
           <title>{`${lastDate ?? ''} · ${last.count} 条相关内容`}</title>
         </circle>
       </svg>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <div className={styles.chartDates}>
         <span>起 {formatDate(firstDate)}</span>
         <span>止 {formatDate(lastDate)}</span>
       </div>
@@ -1122,7 +1117,7 @@ function TrendSparkline({ points }: { points: TopicCandidateTrendPoint[] }): Rea
 
 function TimelinePane({ candidates }: { candidates: CandidateRow[] }): ReactNode {
   if (candidates.length === 0) {
-    return <p className="text-xs text-muted-foreground">暂无相关内容。</p>;
+    return <p className={styles.caption}>暂无相关内容。</p>;
   }
   /* 服务端已按 addedAt desc 排序;客户端仅按 publishedAt desc 排序,
      null 的候选(尚未发布) 排到末尾,而不是最前 */
@@ -1132,19 +1127,19 @@ function TimelinePane({ candidates }: { candidates: CandidateRow[] }): ReactNode
     return bt - at;
   });
   return (
-    <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">
+    <div className={styles.stack8}>
+      <p className={styles.caption}>
         最近显示 {Math.min(sorted.length, 12)} 条，共 {sorted.length} 条已加载内容。
       </p>
-      <ol aria-label="按发布时间排序的近期相关内容" className="grid list-none gap-1.5 p-0 text-xs">
+      <ol aria-label="按发布时间排序的近期相关内容" className={styles.timeline}>
           {sorted.slice(0, 12).map((c) => (
-            <li key={c.summaryId} className="flex items-start gap-2">
-              <span className="mt-1 inline-block size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
-              <div className="min-w-0 flex-1">
-                <p className="font-mono text-xs text-muted-foreground">
+            <li key={c.summaryId} className={styles.timelineRow}>
+              <span className={styles.timelineDot} aria-hidden />
+              <div className={styles.grow}>
+                <p className={styles.timelineDate}>
                   <time>{c.publishedAt ? new Date(c.publishedAt).toLocaleDateString('zh-CN') : '待发布'}</time>
                 </p>
-                <Link href={`/radar/${c.summaryId}`} className="line-clamp-2 hover:text-primary hover:underline">
+                <Link href={`/radar/${c.summaryId}`} className={styles.timelineLink}>
                   {c.title}
                 </Link>
               </div>

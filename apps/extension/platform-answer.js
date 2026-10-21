@@ -1,4 +1,4 @@
-import { parseReadingAnswer, readingAnswerText } from './reader-core.js';
+import { parseReadingAnswer, readingAnswerText, responseLanguageInstruction } from './reader-core.js';
 export async function requestPlatformAnswer(sourceContext, question, scope, options = {}) {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
@@ -13,7 +13,7 @@ export async function requestPlatformAnswer(sourceContext, question, scope, opti
     body: JSON.stringify({
       action,
       context: { url: sourceContext.url, title: sourceContext.title.slice(0, 300), body: sourceContext.body, language: options.language || 'zh-CN', scope, ...(sourceContext.section ? { section: sourceContext.section } : {}), ...(scope === 'selection' && sourceContext.selection ? { selection: sourceContext.selection } : {}) },
-      ...(question ? { prompt: question } : {}),
+      ...(question ? { prompt: `${responseLanguageInstruction(options.replyLanguage || 'auto')}\n\nUser question:\n${question}` } : {}),
       history: (options.history || []).slice(-20).map((item) => ({
         role: item.role === 'assistant' ? 'assistant' : 'user',
         content: String(item.content || '').slice(0, 8_000),
@@ -93,9 +93,11 @@ export function platformAnswerErrorMessage(payload = {}, status = 0) {
   const detail = [payload.code, payload.message, payload.error?.message]
     .filter((value) => typeof value === 'string')
     .join(' ');
-  const requestId = typeof payload.request_id === 'string' ? payload.request_id : '';
+  const requestId = typeof payload.request_id === 'string' ? payload.request_id : typeof payload.requestId === 'string' ? payload.requestId : '';
   let message = '平台 AI 暂时无法完成此请求，请稍后重试；如持续发生，请联系平台管理员。';
-  if (status === 402 || /insufficient[_ ]balance|insufficient[_ ]quota|credit balance|AI_QUOTA_EXCEEDED/iu.test(detail)) {
+  if (/AI_RESPONSE_TRUNCATED|truncated_response|finish_reason=length|输出达到长度上限|输出不完整/iu.test(detail)) {
+    message = '回答达到模型输出上限，本次未保存不完整结果。请重新生成，或缩小问题范围后重试。';
+  } else if (status === 402 || /insufficient[_ ]balance|insufficient[_ ]quota|credit balance|AI_QUOTA_EXCEEDED/iu.test(detail)) {
     message = '平台模型额度不足，本次请求未完成。请联系平台管理员检查模型服务额度后重试。';
   } else if (status === 429 || /rate[_ ]limit|too many requests/iu.test(detail)) {
     message = '平台模型请求过于频繁，请稍后重试。';
@@ -107,3 +109,26 @@ export function platformAnswerErrorMessage(payload = {}, status = 0) {
   return requestId ? `${message}（请求编号：${requestId}）` : message;
 }
 
+
+// end
+
+// Image bytes are supplied by the browser; the platform never fetches image URLs.
+export async function requestPlatformImageAnswer(context, image, question, options = {}) {
+  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  if (!readerToken) throw new Error('平台连接已失效，请重新连接');
+  const response = await fetch(`${options.platformUrl}/api/reading/answer-image`, {
+    method: 'POST', signal: options.signal,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
+    body: JSON.stringify({ imageDataUrl: image.dataUrl, alt: String(image.alt || '').slice(0, 500),
+      title: String(context.title || '').slice(0, 300), body: String(context.body || '').slice(0, 24000),
+      prompt: `${responseLanguageInstruction(options.replyLanguage || 'auto')}\n\nUser question:\n${String(question || 'Explain the selected diagram.').slice(0, 3500)}`, language: options.replyLanguage || 'auto',
+      history: (options.history || []).slice(-12).map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '').slice(0, 8000) })) }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(platformAnswerErrorMessage(payload, response.status));
+  if (payload.truncated) throw new Error(platformAnswerErrorMessage({ code: 'AI_RESPONSE_TRUNCATED', requestId: payload.requestId }));
+  const result = parseReadingAnswer(payload.suggestion || '', { ...context, selection: undefined });
+  if (!result.answer?.trim()) throw new Error('平台 AI 没有返回可读取的内容');
+  result.warnings.push('图示分析基于视觉输入；可定位的网页文字证据可能为空。');
+  return result;
+}

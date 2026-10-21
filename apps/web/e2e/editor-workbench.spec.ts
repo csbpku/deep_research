@@ -66,4 +66,31 @@ test.describe('Research editor workbench', () => {
       await page.request.delete(`/api/researches/${id}`).catch(() => undefined);
     }
   });
+
+  test('selection shortcuts and dirty feedback remain available in the themed editor', async ({ page }) => {
+    const id = await createDraft(page);
+    try {
+      await page.goto(`/researches/${id}/edit`);
+      const body = page.getByLabel('正文 Markdown');
+      await expect(body).toBeVisible({ timeout: 15_000 });
+
+      await body.fill('原始段落');
+      // Treat the two Chinese characters as one committed IME composition, so
+      // the native undo assertion matches a user's single composition commit.
+      await page.keyboard.insertText('补写');
+      await body.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`);
+      await expect(body).toHaveValue('原始段落');
+
+      await body.fill('选区仍然有效');
+      await body.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(0, 2));
+      await body.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+b`);
+
+      await expect(body).toHaveValue('**选区**仍然有效');
+      await expect(body).toHaveJSProperty('selectionStart', 2);
+      await expect(body).toHaveJSProperty('selectionEnd', 4);
+      await expect(page.getByText('未保存', { exact: true }).first()).toBeVisible();
+    } finally {
+      await page.request.delete(`/api/researches/${id}`).catch(() => undefined);
+    }
+  });
 });

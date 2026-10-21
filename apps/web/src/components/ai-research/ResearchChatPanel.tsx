@@ -1,17 +1,26 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Check, Clipboard, Loader2, Send, Sparkles, UserRound, X } from 'lucide-react';
+import { Bot, Check, Clipboard, Send, Sparkles, UserRound, X } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
+import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
 import MarkdownContent from '@/components/MarkdownContent';
-import { Textarea } from '@/components/ui/textarea';
 import { KnowledgeCardComposer } from '@/components/KnowledgeCardComposer';
 import type { AiResearchChatMessage, AiResearchConversationDetail, FollowUpIntent } from '@/lib/ai-research-chat';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
-import { cn } from '@/lib/utils';
 import { formatResearchActionItems, parseResearchActionItems } from '@/lib/research-action-items';
+import { domainAppearance } from '@/components/domain/appearance';
+import Alert from '@mui/material/Alert';
+import Avatar from '@mui/material/Avatar';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import CircularProgress from '@mui/material/CircularProgress';
+import Divider from '@mui/material/Divider';
+import IconButton from '@mui/material/IconButton';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
 
 const TYPEWRITER_INTERVAL_MS = 16;
 const TYPEWRITER_CHARS_PER_TICK = 4;
@@ -283,142 +292,127 @@ export function ResearchChatPanel({
   }
 
   return (
-    <section id="research-chat" className="mt-5 overflow-hidden rounded-md border border-border bg-muted/20" aria-label="研究对话">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Sparkles className="size-4 text-method-ai" />
-          <h3 className="text-sm font-semibold">继续追问</h3>
-        </div>
+    <Paper component="section" id="research-chat" variant="outlined" sx={{ mt: 3, overflow: 'hidden', bgcolor: 'background.default' }} aria-label="研究对话">
+      <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}>
+          <Sparkles size={16} />
+          <Typography variant="fieldTitle" component="h3">继续追问</Typography>
+        </Stack>
         {canAsk ? (
-          <span className="text-xs text-muted-foreground">{note ?? '回答基于本次调研报告，会自动保存到对话。'}</span>
+          <Typography variant="metadata" color="text.secondary">{note ?? '回答基于本次调研报告，会自动保存到对话。'}</Typography>
         ) : (
-          <span className="text-xs text-muted-foreground">{note ?? '研究完成后可以在这里继续追问。'}</span>
+          <Typography variant="metadata" color="text.secondary">{note ?? '研究完成后可以在这里继续追问。'}</Typography>
         )}
-      </header>
+      </Box>
 
-      <div
+      <Box
         ref={scrollRef}
-        className="min-h-[180px] space-y-4 overflow-visible px-4 py-4 lg:max-h-[420px] lg:overflow-y-auto"
+        sx={{ minHeight: 180, maxHeight: { lg: 420 }, overflowY: { xs: 'visible', lg: 'auto' }, px: 2, py: 2, display: 'flex', flexDirection: 'column', gap: 2 }}
         aria-live="polite"
       >
         {conversation === null ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            正在恢复对话…
-          </div>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CircularProgress size={16} aria-label="正在恢复对话" /><Typography variant="body2">正在恢复对话…</Typography></Stack>
         ) : messages.length === 0 ? (
-          <p className="text-sm text-muted-foreground">还没有对话内容。研究完成后，可以从报告结论继续深入提问。</p>
+          <Typography variant="body2" color="text.secondary">还没有对话内容。研究完成后，可以从报告结论继续深入提问。</Typography>
         ) : (
           messages.map((message, index) => (
-            <div key={message.id} className={cn('flex items-start gap-2.5', message.role === 'user' && 'flex-row-reverse')}>
-              <span className={cn(
-                'grid size-6 shrink-0 place-items-center rounded-full',
-                message.role === 'assistant' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
-              )}>
-                {message.role === 'assistant' ? <Bot className="size-3.5" /> : <UserRound className="size-3.5" />}
-              </span>
-              <div
-                className="min-w-0 max-w-[86%]"
+            <Stack key={message.id} direction="row" spacing={1.25} sx={{ alignItems: 'flex-start', flexDirection: message.role === 'user' ? 'row-reverse' : 'row' }}>
+              <Avatar sx={{ width: 28, height: 28, flexShrink: 0, bgcolor: message.role === 'assistant' ? 'action.selected' : 'action.hover', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
+                {message.role === 'assistant' ? <Bot size={16} /> : <UserRound size={16} />}
+              </Avatar>
+              <Box
+                sx={{ minWidth: 0, maxWidth: '86%' }}
                 data-knowledge-source-message={message.role === 'assistant' ? message.id : undefined}
               >
-                <p className="text-xs font-medium text-muted-foreground">
+                <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 500 }}>
                   {message.role === 'assistant' ? 'AI 调研助手' : '你'}
                   {message.id.startsWith('streaming-') ? ' · 生成中' : ''}
-                </p>
+                </Typography>
                 {message.role === 'assistant' && message.content ? (
                   message.intent === 'action'
                     ? <ActionItemsView content={message.content} />
-                    : <MarkdownContent content={message.content} compact className="mt-0.5 text-sm leading-6" />
+                    : <Box sx={{ mt: 0.5, typography: 'reading', overflowWrap: 'anywhere' }}><MarkdownContent content={message.content} compact /></Box>
                 ) : (
-                  <p className="mt-0.5 whitespace-pre-wrap text-sm leading-6">
+                  <Typography variant="reading" component="p" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                     {message.content}
                     {message.id.startsWith('streaming-') && message.content === '' && sending ? (
-                      <span className="ml-1 inline-flex gap-0.5">
-                        <span className="size-1 animate-bounce rounded-full bg-muted-foreground" />
-                        <span className="size-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:120ms]" />
-                        <span className="size-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:240ms]" />
-                      </span>
+                      <CircularProgress size={12} sx={{ ml: 1, verticalAlign: 'middle' }} aria-label="正在生成回答" />
                     ) : null}
-                  </p>
+                  </Typography>
                 )}
                 {reportId && reportContent && message.intent === 'revise' && message.role === 'assistant' && message.content && index === messages.length - 1 ? (
-                  <div className="mt-2">
+                  <Box sx={{ mt: 1 }}>
                     {appliedRevisionIds.has(message.id) ? (
-                      <p className="text-xs text-status-success-fg">已生成新版本 · 可在编辑器的版本历史中恢复</p>
+                      <Typography variant="metadata" color="success.main">已生成新版本 · 可在编辑器的版本历史中恢复</Typography>
                     ) : revisionMessageId === message.id ? (
-                      <div className="rounded-lg border border-primary/30 bg-primary/[0.04] p-3 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-medium text-foreground">应用为报告新版本？</p>
-                          <button type="button" className="rounded p-1 text-muted-foreground hover:bg-muted" onClick={() => setRevisionMessageId(null)} aria-label="关闭修订预览">
-                            <X className="size-3.5" />
-                          </button>
-                        </div>
-                        <p className="mt-1 text-muted-foreground">这会把本次追问整理为报告末尾的“追问补充”，原版本仍可在版本历史中恢复。</p>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                          <div className="rounded border border-border bg-background p-2">
-                            <p className="mb-1 font-medium text-muted-foreground">原报告末尾</p>
-                            <p className="line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{reportContent.trim().slice(-420)}</p>
-                          </div>
-                          <div className="rounded border border-primary/20 bg-primary/[0.04] p-2">
-                            <p className="mb-1 font-medium text-primary">将新增</p>
-                            <p className="line-clamp-5 whitespace-pre-wrap text-xs leading-5 text-foreground">## 追问补充{`\n\n`}{message.content}</p>
-                          </div>
-                        </div>
-                        {revisionError ? <p role="alert" className="mt-2 text-destructive">{revisionError}</p> : null}
-                        <div className="mt-3 flex justify-end gap-2">
+                      <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover', borderColor: 'primary.main' }}>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Typography variant="fieldTitle">应用为报告新版本？</Typography>
+                          <IconButton size="small" onClick={() => setRevisionMessageId(null)} aria-label="关闭修订预览"><X size={16} /></IconButton>
+                        </Stack>
+                        <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>这会把本次追问整理为报告末尾的“追问补充”，原版本仍可在版本历史中恢复。</Typography>
+                        <Box sx={{ mt: 1.5, display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' } }}>
+                          <Paper variant="outlined" sx={{ p: 1.5, minWidth: 0 }}>
+                            <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 500 }}>原报告末尾</Typography>
+                            <Typography variant="metadata" color="text.secondary" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{reportContent.trim().slice(-420)}</Typography>
+                          </Paper>
+                          <Paper variant="outlined" sx={{ p: 1.5, minWidth: 0, borderColor: 'primary.main', bgcolor: 'action.selected' }}>
+                            <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 500 }}>将新增</Typography>
+                            <Typography variant="metadata" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>## 追问补充{`\n\n`}{message.content}</Typography>
+                          </Paper>
+                        </Box>
+                        {revisionError ? <Alert severity="error" role="alert" sx={{ mt: 1.5 }}>{revisionError}</Alert> : null}
+                        <Stack direction="row" spacing={1} sx={{ mt: 1.5, justifyContent: 'flex-end' }}>
                           <Button type="button" variant="ghost" size="xs" onClick={() => setRevisionMessageId(null)} disabled={revisionSaving}>取消</Button>
                           <Button type="button" size="xs" onClick={() => void applyRevision(message)} disabled={revisionSaving}>
-                            <Check className="size-3.5" />{revisionSaving ? '保存中…' : '确认生成新版本'}
+                            <Check size={14} />{revisionSaving ? '保存中…' : '确认生成新版本'}
                           </Button>
-                        </div>
-                      </div>
+                        </Stack>
+                      </Paper>
                     ) : (
-                      <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={() => { setRevisionError(null); setRevisionMessageId(message.id); }}>
+                      <Button type="button" variant="link" size="xs" onClick={() => { setRevisionError(null); setRevisionMessageId(message.id); }}>
                         应用到报告 · 先预览变更
-                      </button>
+                      </Button>
                     )}
-                  </div>
+                  </Box>
                 ) : null}
                 {message.role === 'assistant' && message.content && !message.id.startsWith('streaming-') ? (
                   <KnowledgeCardComposer sourceKind="research_chat" messageId={message.id} />
                 ) : null}
-              </div>
-            </div>
+              </Box>
+            </Stack>
           ))
         )}
         {sending && slow ? (
-          <p className="text-xs text-muted-foreground">模型仍在思考，可能还需要一点时间…</p>
+          <Typography variant="metadata" color="text.secondary" role="status">模型仍在思考，可能还需要一点时间…</Typography>
         ) : null}
-      </div>
+      </Box>
 
       {canAsk && !sending && messages.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 border-t border-border/60 px-4 py-2.5">
-          <span className="mr-1 self-center text-xs text-muted-foreground">研究动作：</span>
+        <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: 'wrap', alignItems: 'center', borderTop: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
+          <Typography variant="metadata" color="text.secondary" sx={{ mr: 0.5 }}>研究动作：</Typography>
           {FOLLOW_UP_INTENTS.map((item) => (
-            <button
+            <Button
               key={item.value}
               type="button"
               aria-pressed={intent === item.value}
+              size="xs"
+              variant={intent === item.value ? 'secondary' : 'outline'}
               onClick={() => { setIntent(item.value); setInput(item.prompt); }}
-              className={cn(
-                'touch-target rounded-full border px-2.5 py-1 text-xs transition-colors',
-                intent === item.value ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground',
-              )}
+              sx={{ minHeight: 'var(--dr-control-height)', px: 1.5 }}
             >
               {item.label}
-            </button>
+            </Button>
           ))}
-        </div>
+        </Stack>
       ) : null}
 
       {err ? (
-        <div role="alert" className="mx-4 mb-3 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {err}
-        </div>
+        <Alert severity="error" role="alert" sx={{ mx: 2, mb: 1.5 }}>{err}</Alert>
       ) : null}
 
-      <div className="border-t border-border p-3">
-        <div className="rounded-md border border-input bg-background transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+      <Box sx={{ borderTop: 1, borderColor: 'divider', p: 1.5 }}>
+        <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', '&:focus-within': { borderColor: 'primary.main', boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}22` } }}>
           <Textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -433,18 +427,18 @@ export function ResearchChatPanel({
             maxLength={32000}
             aria-label="研究对话输入"
             disabled={!canAsk || sending}
-            className="min-h-[64px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+            sx={{ '& .MuiOutlinedInput-root': { minHeight: 64, bgcolor: 'transparent', boxShadow: 'none', '& fieldset': { border: 0 } }, '& textarea': { resize: 'none' } }}
           />
-          <div className="flex items-center justify-between gap-3 px-3 pb-2.5">
-            <span className="text-xs text-muted-foreground">{FOLLOW_UP_INTENTS.find((item) => item.value === intent)?.label} · ⌘/Ctrl + Enter 发送</span>
+          <Stack direction="row" spacing={1.5} sx={{ px: 1.5, pb: 1.5, justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="metadata" color="text.secondary">{FOLLOW_UP_INTENTS.find((item) => item.value === intent)?.label} · ⌘/Ctrl + Enter 发送</Typography>
             <Button type="button" size="sm" onClick={() => void sendMessage()} disabled={!input.trim() || !canAsk || sending} aria-label="发送追问">
-              {sending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              {sending ? <CircularProgress size={14} color="inherit" /> : <Send size={14} />}
               发送
             </Button>
-          </div>
-        </div>
-      </div>
-    </section>
+          </Stack>
+        </Box>
+      </Box>
+    </Paper>
   );
 }
 
@@ -467,56 +461,57 @@ function ActionItemsView({ content }: { content: string }) {
 
   if (items.length === 0) {
     return (
-      <div className="mt-1 rounded-lg border border-warning-border/60 bg-warning-bg/20 p-3">
-        <p className="text-xs font-medium text-foreground">行动项未按约定格式返回</p>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">原始回答仍已保存；请重试生成行动项，避免把缺失的负责人或完成条件猜出来。</p>
-        <details className="mt-2">
-          <summary className="cursor-pointer text-xs font-medium text-primary">查看原始回答</summary>
-          <MarkdownContent content={content} compact className="mt-2 text-sm leading-6" />
-        </details>
-      </div>
+      <Paper variant="outlined" sx={{ mt: 1, p: 1.5, ...domainAppearance('warning') }}>
+        <Typography variant="metadata" sx={{ fontWeight: 600 }}>行动项未按约定格式返回</Typography>
+        <Typography variant="metadata" sx={{ display: 'block', mt: 0.5 }}>原始回答仍已保存；请重试生成行动项，避免把缺失的负责人或完成条件猜出来。</Typography>
+        <Box component="details" sx={{ mt: 1, '& summary': { cursor: 'pointer', color: 'primary.main', typography: 'metadata', fontWeight: 500 } }}>
+          <summary>查看原始回答</summary>
+          <Box sx={{ mt: 1, typography: 'reading' }}><MarkdownContent content={content} compact /></Box>
+        </Box>
+      </Paper>
     );
   }
 
   return (
-    <section className="mt-1 rounded-lg border border-primary/20 bg-primary/[0.035] p-3" aria-label="结构化行动项">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-xs font-semibold text-foreground">行动项</p>
-          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">独立于研究稿保存，不会自动写入报告。</p>
-        </div>
+    <Paper component="section" variant="outlined" sx={{ mt: 1, p: 1.5, bgcolor: 'action.selected', borderColor: 'primary.main' }} aria-label="结构化行动项">
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <Box>
+          <Typography variant="fieldTitle">行动项</Typography>
+          <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>独立于研究稿保存，不会自动写入报告。</Typography>
+        </Box>
         <Button type="button" variant="outline" size="xs" onClick={() => void copyItems()} aria-label="复制行动项">
-          {copied ? <Check className="size-3.5" /> : <Clipboard className="size-3.5" />}
+          {copied ? <Check size={14} /> : <Clipboard size={14} />}
           {copied ? '已复制' : '复制'}
         </Button>
-      </div>
-      <div className="mt-3 space-y-2">
+      </Stack>
+      <Divider sx={{ my: 1.5 }} />
+      <Stack spacing={1.25}>
         {items.map((item, index) => (
-          <article key={`${item.title}-${index}`} className="rounded-md border border-border bg-background p-2.5">
-            <div className="flex items-start gap-2">
-              <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
-              <h4 className="min-w-0 flex-1 text-xs font-semibold leading-5 text-foreground">{item.title}</h4>
-              <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-xs text-muted-foreground">{item.priority ?? '待判断'}</span>
-            </div>
-            <dl className="mt-2 grid gap-1.5 text-xs leading-5 sm:grid-cols-2">
+          <Paper component="article" variant="outlined" key={`${item.title}-${index}`} sx={{ p: 1.5 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+              <Typography variant="metadata" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>{String(index + 1).padStart(2, '0')}</Typography>
+              <Typography variant="fieldTitle" component="h4" sx={{ minWidth: 0, flex: 1, overflowWrap: 'anywhere' }}>{item.title}</Typography>
+              <Chip size="small" variant="outlined" label={item.priority ?? '待判断'} />
+            </Stack>
+            <Box component="dl" sx={{ mt: 1.5, mb: 0, display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' } }}>
               <ActionField label="负责人" value={item.owner} />
               <ActionField label="待验证假设" value={item.hypothesis} />
               <ActionField label="完成条件" value={item.completionCriteria} />
               <ActionField label="依据" value={item.basis} />
-            </dl>
-          </article>
+            </Box>
+          </Paper>
         ))}
-      </div>
-      {copyError ? <p role="alert" className="mt-2 text-xs text-destructive">复制失败，请手动选择行动项文本。</p> : null}
-    </section>
+      </Stack>
+      {copyError ? <Alert severity="error" role="alert" sx={{ mt: 1.5 }}>复制失败，请手动选择行动项文本。</Alert> : null}
+    </Paper>
   );
 }
 
 function ActionField({ label, value }: { label: string; value: string | null }) {
   return (
-    <div className="min-w-0 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 break-words text-foreground">{value ?? '未明确'}</dd>
-    </div>
+    <Box component="div" sx={{ minWidth: 0, p: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default' }}>
+      <Typography variant="metadata" component="dt" color="text.secondary">{label}</Typography>
+      <Typography variant="metadata" component="dd" sx={{ mt: 0.5, ml: 0, color: 'text.primary', overflowWrap: 'anywhere' }}>{value ?? '未明确'}</Typography>
+    </Box>
   );
 }

@@ -58,7 +58,7 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis, showTldr = 
   return (
     <section data-testid="arxiv-paper-card" className="my-5 rounded-lg bg-muted/30 px-4 py-4">
       <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+        <h2 className="flex items-center gap-1 text-sm font-semibold">
           <FileText className="size-4 text-muted-foreground" aria-hidden />
           论文解读
         </h2>
@@ -88,12 +88,12 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis, showTldr = 
 
       {/* TL;DR */}
       {showTldr && (tldr || (analysis && analysis.tldr)) && (
-        <div className="mb-3 border-l-2 border-primary bg-muted/40 px-3 py-2.5">
+        <div className="mb-3 border-l-2 border-primary bg-muted/40 px-3 py-2">
           <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-primary">
             <Sparkles className="size-3" />
             TL;DR
           </div>
-          <p className="text-sm leading-relaxed">{analysis?.tldr || tldr}</p>
+          <p className="text-sm leading-[var(--dr-line-height-body)]">{analysis?.tldr || tldr}</p>
         </div>
       )}
 
@@ -108,7 +108,7 @@ export function RadarArxivPaperCard({ meta, authors, tldr, analysis, showTldr = 
                   <Icon className="size-3" />
                   {block.label}
                 </div>
-                <p className="text-sm leading-6">{block.text}</p>
+                <p className="text-sm leading-[var(--dr-line-height-body)]">{block.text}</p>
               </div>
             );
           })}

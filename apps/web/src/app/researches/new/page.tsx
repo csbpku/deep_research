@@ -1,24 +1,27 @@
 'use client';
 
 // /researches/new — 新建调研入口（属于「研究库」的子页面）。
-//
-// 标题用「新建调研」而不是「新建调研库」——
-// 用户来这里是要写一篇研究，不是要建一座图书馆。
-//
-// 提供两个入口卡片：
-//   1. "从空白创建" → 表单（标题 + 正文 + 结构化字段 + 标签）
-//   2. "从文件导入" → /researches/import（弹窗 + 转换 + Markdown 预览）
 
 import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { FilePlus2, Upload } from 'lucide-react';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Breadcrumbs from '@mui/material/Breadcrumbs';
+import Button from '@mui/material/Button';
+import ButtonBase from '@mui/material/ButtonBase';
+import FormLabel from '@mui/material/FormLabel';
+import MaterialLink from '@mui/material/Link';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
 
 import { TagChip, TagList } from '@/components/domain/TagChip';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { AppDialog } from '@/components/material/AppDialog';
+import { AppTextField } from '@/components/material/AppTextField';
 
 export default function NewResearchPage() {
   const router = useRouter();
@@ -33,6 +36,7 @@ export default function NewResearchPage() {
   const [tagsInput, setTagsInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
 
   useEffect(() => {
     // 读 ?mode=blank 而非 hash —— hash 会污染浏览器历史且无法 SSR 友好。
@@ -43,7 +47,7 @@ export default function NewResearchPage() {
 
   const tags = tagsInput
     .split(',')
-    .map((t) => t.trim())
+    .map((tag) => tag.trim())
     .filter(Boolean);
 
   const handleSave = useCallback(async () => {
@@ -82,166 +86,176 @@ export default function NewResearchPage() {
     }
   }, [title, body, background, conclusion, risks, tags, router, queryClient]);
 
+  const pageWidth = mode === 'pick' ? 'var(--dr-width-shell)' : 'var(--dr-width-reading)';
+
   if (mode === 'pick') {
     return (
-      <div className="mx-auto max-w-shell">
-        <nav className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Link href="/researches" className="hover:text-foreground hover:underline">
+      <Box sx={{ width: '100%', maxWidth: pageWidth, mx: 'auto' }}>
+        <Breadcrumbs aria-label="面包屑" sx={{ mb: 1 }}>
+          <MaterialLink component={Link} href="/researches" underline="hover" color="text.secondary" variant="metadata">
             研究库
-          </Link>
-          <span>/</span>
-          <span>新建</span>
-        </nav>
-        <div className="mb-6 flex items-end justify-between gap-4">
-          <div>
-              <h1 className="text-3xl font-semibold tracking-normal">新建调研</h1>
-            <p className="mt-1 text-sm text-muted-foreground">从一个空白问题开始，或导入已有资料后再整理成团队可复用的研究。</p>
-          </div>
-          <div className="hidden text-right font-mono text-xs text-muted-foreground sm:block">预计 2–5 分钟<br />可随时保存草稿</div>
-        </div>
+          </MaterialLink>
+          <Typography color="text.primary" variant="metadata">新建</Typography>
+        </Breadcrumbs>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {/* 两张选择卡样式对齐:同高度、同渐变、同焦点环;区别只在 hover 着色 */}
-          <button
+        <Stack sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'flex-end' }, justifyContent: 'space-between', gap: 2, mb: 3 }}>
+          <Box>
+            <Typography variant="pageTitle" component="h1">新建调研</Typography>
+            <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+              从一个空白问题开始，或导入已有资料后再整理成团队可复用的研究。
+            </Typography>
+          </Box>
+          <Typography variant="metadata" color="text.secondary" sx={{ flexShrink: 0, textAlign: { xs: 'left', sm: 'right' } }}>
+            预计 2–5 分钟<br />可随时保存草稿
+          </Typography>
+        </Stack>
+
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
+          <ButtonBase
+            component="button"
             type="button"
             onClick={() => setMode('create')}
-            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-md border border-border bg-card p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            sx={{ display: 'block', width: '100%', borderRadius: 1.5, textAlign: 'left', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 } }}
           >
-            <div className="flex items-center gap-2">
-              <FilePlus2 className="size-4 text-primary" />
-              <span className="text-lg font-semibold tracking-normal">从空白创建</span>
-            </div>
-            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-              直接写标题 + 正文 + 背景 / 结论 / 风险 / 标签
-            </p>
-          </button>
+            <Paper variant="outlined" sx={{ display: 'flex', minHeight: 176, width: '100%', flexDirection: 'column', justifyContent: 'space-between', p: 3, textAlign: 'left', transition: 'border-color var(--dr-motion-fast), background-color var(--dr-motion-fast)', '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' } }}>
+              <Stack sx={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 1 }}>
+                <FilePlus2 size={18} aria-hidden="true" color="var(--dr-color-primary)" />
+                <Typography variant="listTitle" component="span">从空白创建</Typography>
+              </Stack>
+              <Typography color="text.secondary" sx={{ mt: 2, maxWidth: 440 }}>
+                直接写标题、正文和背景 / 结论 / 风险 / 标签。
+              </Typography>
+            </Paper>
+          </ButtonBase>
 
-          <Link
+          <ButtonBase
+            component={Link}
             href="/researches/import"
-            className="group flex min-h-56 cursor-pointer flex-col justify-between rounded-md border border-border bg-card p-6 text-left transition-colors duration-200 hover:border-primary/40 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            sx={{ display: 'block', width: '100%', borderRadius: 1.5, color: 'inherit', textAlign: 'left', textDecoration: 'none', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 } }}
           >
-            <div className="flex items-center gap-2">
-              <Upload className="size-4 text-primary" />
-              <span className="text-lg font-semibold tracking-normal">从文件导入</span>
-            </div>
-            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-              拖拽 .md / .txt / .html（≤ 5MB）→ 自动转 Markdown → 个人草稿
-            </p>
-          </Link>
-        </div>
-      </div>
+            <Paper variant="outlined" sx={{ display: 'flex', minHeight: 176, width: '100%', flexDirection: 'column', justifyContent: 'space-between', p: 3, textAlign: 'left', transition: 'border-color var(--dr-motion-fast), background-color var(--dr-motion-fast)', '&:hover': { borderColor: 'primary.main', bgcolor: 'action.hover' } }}>
+              <Stack sx={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 1 }}>
+                <Upload size={18} aria-hidden="true" color="var(--dr-color-primary)" />
+                <Typography variant="listTitle" component="span">从文件导入</Typography>
+              </Stack>
+              <Typography color="text.secondary" sx={{ mt: 2, maxWidth: 440 }}>
+                拖入 .md / .txt / .html（单文件 ≤ 5MB），转换后保存为个人草稿。
+              </Typography>
+            </Paper>
+          </ButtonBase>
+        </Box>
+      </Box>
     );
   }
 
   return (
-    <div className="mx-auto max-w-measure">
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold tracking-normal">新建调研 · 编写正文</h1>
-        <Button type="button" variant="outline" size="sm" onClick={() => setMode('pick')}>
+    <Box sx={{ width: '100%', maxWidth: pageWidth, mx: 'auto' }}>
+      <Stack sx={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 2, mb: 2 }}>
+        <Typography variant="panelTitle" component="h1">新建调研 · 编写正文</Typography>
+        <Button type="button" variant="outlined" onClick={() => setMode('pick')}>
           取消选择
         </Button>
-      </div>
+      </Stack>
 
-      {error && (
-        <div
+      {error ? (
+        <Alert
+          severity={error === '请输入标题' ? 'warning' : 'error'}
           role="alert"
           aria-live="assertive"
-          className="mb-3 flex items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-        >
-          <span>{error}</span>
-          {error !== '请输入标题' ? (
-            <Button type="button" size="xs" variant="outline" onClick={() => void handleSave()} disabled={saving}>
+          action={error !== '请输入标题' ? (
+            <Button color="inherit" size="small" onClick={() => void handleSave()} disabled={saving}>
               重试
             </Button>
-          ) : null}
-        </div>
-      )}
+          ) : undefined}
+          sx={{ mb: 2 }}
+        >
+          {error}
+        </Alert>
+      ) : null}
 
-      <div className="space-y-3">
-        <div className="grid gap-1.5">
-          <label htmlFor="new-title" className="text-sm font-medium">
-            标题
-          </label>
-          <Input
+      <Stack sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Box>
+          <FormLabel htmlFor="new-title">标题</FormLabel>
+          <AppTextField
             id="new-title"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(event) => setTitle(event.target.value)}
             placeholder="输入标题…"
+            sx={{ mt: 0.75 }}
           />
-        </div>
+        </Box>
 
-        <div className="grid gap-1.5">
-          <label htmlFor="new-body" className="text-sm font-medium">
-            正文 (Markdown)
-          </label>
-          <Textarea
+        <Box>
+          <FormLabel htmlFor="new-body">正文（Markdown）</FormLabel>
+          <TextField
             id="new-body"
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={(event) => setBody(event.target.value)}
             placeholder="使用 Markdown 编写…"
-            rows={20}
-            className="resize-y font-mono text-sm leading-relaxed"
+            multiline
+            minRows={20}
+            fullWidth
+            sx={{ mt: 0.75, '& textarea': { resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: 'var(--dr-line-height-reading)' } }}
           />
-        </div>
+        </Box>
 
-        <details className="rounded-lg border border-border bg-card p-3">
-          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+        <Paper component="details" variant="outlined" sx={{ p: 2 }}>
+          <Box component="summary" sx={{ cursor: 'pointer', color: 'text.secondary', typography: 'control' }}>
             结构化字段（可选）
-          </summary>
-          <div className="mt-3 space-y-2.5">
+          </Box>
+          <Stack sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 2 }}>
             {(
               [
-                { id: 'bg', label: '背景', value: background, set: setBackground, ph: '调研背景…' },
-                { id: 'cc', label: '结论', value: conclusion, set: setConclusion, ph: '调研结论…' },
-                { id: 'rk', label: '风险', value: risks, set: setRisks, ph: '风险与待验证项…' },
+                { id: 'bg', label: '背景', value: background, set: setBackground, placeholder: '调研背景…' },
+                { id: 'cc', label: '结论', value: conclusion, set: setConclusion, placeholder: '调研结论…' },
+                { id: 'rk', label: '风险', value: risks, set: setRisks, placeholder: '风险与待验证项…' },
               ] as const
-            ).map((f) => (
-              <div key={f.id} className="grid gap-1">
-                <label htmlFor={`new-${f.id}`} className="text-xs text-muted-foreground">
-                  {f.label}
-                </label>
-                <Textarea
-                  id={`new-${f.id}`}
-                  value={f.value}
-                  onChange={(e) => f.set(e.target.value)}
-                  rows={3}
-                  placeholder={f.ph}
-                  className="resize-y text-[13px]"
+            ).map((field) => (
+              <Box key={field.id}>
+                <FormLabel htmlFor={`new-${field.id}`}>{field.label}</FormLabel>
+                <TextField
+                  id={`new-${field.id}`}
+                  value={field.value}
+                  onChange={(event) => field.set(event.target.value)}
+                  multiline
+                  minRows={3}
+                  fullWidth
+                  placeholder={field.placeholder}
+                  sx={{ mt: 0.75, '& textarea': { resize: 'vertical' } }}
                 />
-              </div>
+              </Box>
             ))}
-          </div>
-        </details>
+          </Stack>
+        </Paper>
 
-        <div className="grid gap-1.5">
-          <label htmlFor="new-tags" className="text-sm font-medium">
-            标签（逗号分隔）
-          </label>
-          <Input
+        <Box>
+          <FormLabel htmlFor="new-tags">标签（逗号分隔）</FormLabel>
+          <AppTextField
             id="new-tags"
             value={tagsInput}
-            onChange={(e) => setTagsInput(e.target.value)}
+            onChange={(event) => setTagsInput(event.target.value)}
             placeholder="例如: React, TypeScript, 架构"
+            sx={{ mt: 0.75 }}
           />
-          {tags.length > 0 && (
-            <TagList className="mt-1">
-              {tags.map((t) => (
-                <TagChip key={t}>{t}</TagChip>
-              ))}
+          {tags.length > 0 ? (
+            <TagList style={{ marginTop: 'var(--dr-space-2)' }}>
+              {tags.map((tag) => <TagChip key={tag}>{tag}</TagChip>)}
             </TagList>
-          )}
-        </div>
-      </div>
+          ) : null}
+        </Box>
+      </Stack>
 
-      <div className="mt-5 flex justify-end gap-2 border-t border-border pt-4">
+      <Stack sx={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-end', gap: 1, mt: 3, pt: 2, borderTop: 1, borderColor: 'divider' }}>
         <Button
           type="button"
-          variant="outline"
+          variant="outlined"
           onClick={() => {
             // dirty 时确认,避免未保存内容丢失
             const dirty = title.trim() || body.trim() || background || conclusion || risks;
-            if (!dirty || window.confirm('取消后未保存的内容会丢失,确认离开?')) {
+            if (!dirty) {
               router.push('/researches');
+            } else {
+              setLeaveConfirmOpen(true);
             }
           }}
         >
@@ -250,7 +264,29 @@ export default function NewResearchPage() {
         <Button type="button" onClick={handleSave} disabled={saving}>
           {saving ? '保存中…' : '保存草稿'}
         </Button>
-      </div>
-    </div>
+      </Stack>
+      <AppDialog
+        open={leaveConfirmOpen}
+        onClose={() => setLeaveConfirmOpen(false)}
+        title="确认离开？"
+        description="取消后未保存的内容会丢失,确认离开?"
+        actions={(
+          <>
+            <Button type="button" variant="outlined" onClick={() => setLeaveConfirmOpen(false)}>
+              继续编辑
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setLeaveConfirmOpen(false);
+                router.push('/researches');
+              }}
+            >
+              确认离开
+            </Button>
+          </>
+        )}
+      />
+    </Box>
   );
 }

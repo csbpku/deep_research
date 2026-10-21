@@ -1,48 +1,34 @@
-import { Skeleton } from '../../../components/ui/skeleton';
+import Box from '@mui/material/Box';
+import Skeleton from '@mui/material/Skeleton';
 
 export default function Loading() {
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--ink-page)]" role="status" aria-label="正在加载雷达详情">
-      <span className="sr-only">正在加载雷达详情</span>
-      <div className="flex min-h-14 items-center justify-between border-b border-[var(--ink-rule)] px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-4 w-16" />
-        </div>
-        <div className="flex gap-2">
-          <Skeleton className="h-10 w-16" />
-          <Skeleton className="h-10 w-24" />
-        </div>
-      </div>
-      <div className="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8 sm:py-10 lg:py-14">
-        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_19rem] lg:gap-14">
-          <div>
-            <div className="flex gap-3">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-3 w-20" />
-              <Skeleton className="h-3 w-16" />
-            </div>
-            <Skeleton className="mt-5 h-14 w-full max-w-4xl" />
-            <Skeleton className="mt-7 h-28 w-full max-w-4xl" />
-            <div className="mt-6 flex gap-2">
-              <Skeleton className="h-7 w-24" />
-              <Skeleton className="h-7 w-32" />
-              <Skeleton className="h-7 w-20" />
-            </div>
-          </div>
-          <div className="border-y border-[var(--ink-rule)] py-5 lg:border-y-0 lg:border-l lg:pl-6">
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="mt-3 h-3 w-36" />
-            <Skeleton className="mt-6 h-9 w-20" />
-            <Skeleton className="mt-5 h-12 w-full" />
-          </div>
-        </div>
-        <div className="mt-12 border-y border-[var(--ink-rule)] py-8">
-          <Skeleton className="h-3 w-20" />
-          <Skeleton className="mt-3 h-6 w-72 max-w-full" />
-          <Skeleton className="mt-5 h-16 w-full max-w-3xl" />
-        </div>
-      </div>
-    </div>
+    <Box sx={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', overflowY: 'auto', bgcolor: 'background.default' }} role="status" aria-label="正在加载雷达详情">
+      <Box component="header" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 56, px: { xs: 2, sm: 3 }, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ display: 'flex', gap: 1.5 }}><Skeleton variant="text" width={96} /><Skeleton variant="text" width={64} /></Box>
+        <Box sx={{ display: 'flex', gap: 1 }}><Skeleton variant="rounded" width={64} height={36} /><Skeleton variant="rounded" width={96} height={36} /></Box>
+      </Box>
+      <Box sx={{ mx: 'auto', width: '100%', maxWidth: 1280, px: { xs: 2, sm: 3, md: 4 }, py: { xs: 4, sm: 5 } }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 304px' }, gap: { xs: 3, lg: 5 } }}>
+          <Box>
+            <Box sx={{ display: 'flex', gap: 1.5 }}><Skeleton variant="text" width={96} /><Skeleton variant="text" width={80} /><Skeleton variant="text" width={64} /></Box>
+            <Skeleton variant="text" sx={{ mt: 2, height: 40, maxWidth: 720 }} />
+            <Skeleton variant="rounded" sx={{ mt: 3, height: 128, maxWidth: 720 }} />
+            <Box sx={{ display: 'flex', gap: 1, mt: 2.5 }}><Skeleton variant="rounded" width={80} height={24} /><Skeleton variant="rounded" width={112} height={24} /><Skeleton variant="rounded" width={72} height={24} /></Box>
+          </Box>
+          <Box sx={{ borderBlock: { xs: 1, lg: 0 }, borderLeft: { lg: 1 }, borderColor: 'divider', py: 2, pl: { lg: 3 } }}>
+            <Skeleton variant="text" width={80} />
+            <Skeleton variant="text" width={144} sx={{ mt: 1 }} />
+            <Skeleton variant="rounded" width={80} height={32} sx={{ mt: 3 }} />
+            <Skeleton variant="text" width="100%" sx={{ mt: 2 }} />
+          </Box>
+        </Box>
+        <Box sx={{ mt: 6, borderTop: 1, borderColor: 'divider', pt: 3 }}>
+          <Skeleton variant="text" width={80} />
+          <Skeleton variant="text" width={288} sx={{ mt: 1 }} />
+          <Skeleton variant="rounded" width="100%" height={64} sx={{ mt: 2, maxWidth: 720 }} />
+        </Box>
+      </Box>
+    </Box>
   );
 }

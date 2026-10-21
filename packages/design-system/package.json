@@ -1,0 +1,29 @@
+{
+  "name": "@deep-research/design-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/tokens.ts",
+    "./tokens.json": "./src/tokens.json",
+    "./tokens.css": "./generated/tokens.css",
+    "./legacy-bridge.css": "./generated/legacy-bridge.css",
+    "./theme": "./src/theme.ts"
+  },
+  "scripts": {
+    "build": "node scripts/generate.mjs --check",
+    "generate": "node scripts/generate.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "9.5.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.6.0"
+  }
+}

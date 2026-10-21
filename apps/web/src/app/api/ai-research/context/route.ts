@@ -1,6 +1,7 @@
 // BFF handler: GET /api/ai-research/context — 自动上下文（ADR 0010）。
 //
-// 输入：?q=...&topic=...
+// 输入：?q=...&topicHint=...（兼容 topicId）；manual=1 允许搜索公开研究，
+// semantic=1 可额外使用个人语义索引，自动建议不依赖该服务。
 // 输出：建议的历史研究、匹配议题、关联 Topic、用户收藏。
 // 权限：仅返回公开 Research / Knowledge + 当前用户自己的私有草稿与收藏。
 
@@ -13,8 +14,12 @@ import { requireUser } from '@/lib/auth/session';
 import { fetchAiEngine } from '@/lib/ai-bff/fetch-ai-engine';
 import { getWebEnv } from '@/lib/env';
 import { withRequestId } from '@/lib/log';
-
-const MAX_RESULTS = 12;
+import {
+  extractPersonalContextKeywords,
+  findPersonalContext,
+  PERSONAL_CONTEXT_LIMITS,
+  personalContextTextScore,
+} from '@/lib/personal-context-relevance';
 
 interface RowBase {
   id: string;
@@ -37,67 +42,33 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   if (u instanceof NextResponse) return u;
 
   const url = new URL(req.url);
-  const query = (url.searchParams.get('q') ?? '').trim();
+  const query = (url.searchParams.get('q') ?? '').slice(0, PERSONAL_CONTEXT_LIMITS.query).trim();
   if (query.length < 2) {
     return NextResponse.json({ items: [], topics: [] });
   }
-  const topicParam = url.searchParams.get('topicId');
-  const semanticPromise = findSemanticKnowledge(query, u.id, withRequestId(req.headers));
+  const rawTopic = url.searchParams.get('topicHint') ?? url.searchParams.get('topicId');
+  const topicParam = rawTopic && /^[0-9a-f-]{36}$/iu.test(rawTopic) ? rawTopic : undefined;
+  const keywords = extractPersonalContextKeywords(query);
+  if (!keywords.length && !topicParam) return NextResponse.json({ items: [], topics: [] });
+  // Automatic suggestions are local-only. The optional personal index is never
+  // a prerequisite for discovering a saved judgment.
+  const semanticPromise = url.searchParams.get('semantic') === '1'
+    ? findSemanticKnowledge(query, u.id, withRequestId(req.headers))
+    : Promise.resolve([]);
+  const manualSearch = url.searchParams.get('manual') === '1';
 
-  const contentFilter = {
-    OR: [
-      { title: { contains: query, mode: 'insensitive' as const } },
-      { body: { contains: query, mode: 'insensitive' as const } },
-      { background: { contains: query, mode: 'insensitive' as const } },
-      { conclusion: { contains: query, mode: 'insensitive' as const } },
-    ],
-  };
-
-  const [researches, knowledge, issues, bookmarks] = await Promise.all([
-    prisma.research.findMany({
-      where: {
-        type: 'research',
-        AND: [contentFilter],
-        OR: [{ status: 'published' }, { authorId: u.id, status: 'draft' }],
-      },
-      orderBy: { publishedAt: 'desc' },
-      take: MAX_RESULTS,
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        body: true,
-        background: true,
-        conclusion: true,
-        authorId: true,
-        publishedAt: true,
-      },
-    }),
-    prisma.research.findMany({
-      where: {
-        type: 'knowledge',
-        AND: [contentFilter],
-        OR: [{ status: 'published' }, { authorId: u.id, status: 'draft' }],
-      },
-      orderBy: { publishedAt: 'desc' },
-      take: 4,
-      select: {
-        id: true,
-        title: true,
-        status: true,
-        body: true,
-        background: true,
-        conclusion: true,
-        authorId: true,
-        publishedAt: true,
-      },
-    }),
+  const [personalItems, issues, bookmarks] = await Promise.all([
+    findPersonalContext(u.id, query, topicParam ? [topicParam] : [], manualSearch),
     prisma.topicIssue.findMany({
       where: {
         status: 'active',
+        topic: { enabled: true },
         OR: [
-          { title: { contains: query, mode: 'insensitive' } },
-          { proposition: { contains: query, mode: 'insensitive' } },
+          ...keywords.flatMap((keyword) => [
+            { title: { contains: keyword, mode: 'insensitive' as const } },
+            { proposition: { contains: keyword, mode: 'insensitive' as const } },
+          ]),
+          ...(topicParam ? [{ topicId: topicParam }] : []),
         ],
       },
       orderBy: { importanceScore: 'desc' },
@@ -106,10 +77,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         id: true,
         title: true,
         proposition: true,
+        lastSeenAt: true,
         importanceScore: true,
         topicId: true,
         topic: { select: { id: true, slug: true, name: true } },
         candidates: {
+          where: { summary: { status: { in: ['candidate', 'pending_review', 'published'] } } },
           orderBy: { relevanceScore: 'desc' },
           take: 5,
           select: { summaryId: true },
@@ -135,7 +108,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const [bookmarkedSummaries, bookmarkedResearches] = await Promise.all([
     bookmarkedSummaryIds.length > 0
       ? prisma.summary.findMany({
-          where: { id: { in: bookmarkedSummaryIds } },
+          where: { id: { in: bookmarkedSummaryIds }, status: { in: ['candidate', 'pending_review', 'published'] } },
           select: { id: true, title: true, body: true, interpretation: true, url: true },
         })
       : [],
@@ -144,44 +117,38 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
           where: {
             id: { in: bookmarkedResearchIds },
             OR: [{ status: 'published' }, { authorId: u.id, status: 'draft' }],
+            ...(manualSearch ? {} : { AND: [{ OR: [
+              { type: 'research' as const },
+              { type: 'knowledge' as const, knowledgeIndexText: { not: null } },
+            ] }] }),
           },
-          select: { id: true, title: true, body: true, background: true, conclusion: true },
+          select: { id: true, title: true, type: true, knowledgeIndexText: true, body: true, background: true, conclusion: true, authorId: true, status: true, updatedAt: true },
         })
       : [],
   ]);
 
   const semanticItems = await semanticPromise;
+  const localItems = personalItems.map((item) => ({
+    ...item,
+    ...(semanticItems.some((semantic) => semantic.id === item.id) ? { semanticMatch: true } : {}),
+  }));
   const items: Array<RowBase & { kind: string }> = [
+    ...localItems.filter((item) => item.confirmedKnowledge),
     ...semanticItems,
-    ...researches.slice(0, 6).map((r) => ({
-      kind: 'research' as const,
-      id: r.id,
-      title: r.title,
-      snippet: (r.background ?? r.conclusion ?? r.body ?? '').slice(0, 240),
-      private: r.authorId === u.id && r.status !== 'published',
-      sourceRefs: [{ type: 'research' as const, value: r.id, required: false as const }],
-      updatedAt: r.publishedAt?.toISOString() ?? null,
-    })),
-    ...knowledge.map((r) => ({
-      kind: 'knowledge' as const,
-      id: r.id,
-      title: r.title,
-      snippet: (r.body ?? '').slice(0, 240),
-      private: r.authorId === u.id && r.status !== 'published',
-      sourceRefs: [{ type: 'research' as const, value: r.id, required: false as const }],
-      updatedAt: r.publishedAt?.toISOString() ?? null,
-    })),
+    ...localItems.filter((item) => !item.confirmedKnowledge),
     ...issues.map((issue) => ({
       kind: 'issue' as const,
       id: issue.id,
       title: issue.title,
-      snippet: issue.proposition,
+      snippet: issue.proposition.slice(0, 240),
       sourceRefs: issue.candidates.map((candidate) => ({
         type: 'summary' as const,
         value: candidate.summaryId,
         required: false as const,
       })),
-      updatedAt: null,
+      updatedAt: issue.lastSeenAt?.toISOString() ?? null,
+      status: 'active',
+      topicMatch: issue.topicId === topicParam,
     })),
     ...bookmarks.flatMap((bookmark) => {
       const isSummary = bookmark.targetType === 'radar_candidate' || bookmark.targetType === 'summary';
@@ -198,36 +165,35 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         : ((target as (typeof bookmarkedResearches)[number]).background
           ?? (target as (typeof bookmarkedResearches)[number]).conclusion
           ?? target.body) || '';
-      const haystack = `${bookmark.note ?? ''} ${targetTitle} ${targetSnippet}`.toLocaleLowerCase();
-      if (!haystack.includes(query.toLocaleLowerCase())) return [];
+      if (!personalContextTextScore(keywords, { title: targetTitle, body: `${bookmark.note ?? ''} ${targetSnippet}` })) return [];
+      const researchTarget = isSummary ? undefined : target as (typeof bookmarkedResearches)[number];
       return [{
         kind: 'bookmark' as const,
         id: bookmark.id,
         title: targetTitle,
-        snippet: bookmark.note?.trim() || targetSnippet.slice(0, 240),
+        snippet: (bookmark.note?.trim() || targetSnippet).slice(0, 240),
+        private: researchTarget ? researchTarget.status !== 'published' : false,
+        isExcerpt: researchTarget?.type === 'knowledge' && researchTarget.knowledgeIndexText === null,
+        status: researchTarget?.status,
         sourceRefs: [{
           type: isSummary ? 'summary' as const : 'research' as const,
           value: target.id,
           required: false as const,
         }],
-        updatedAt: bookmark.createdAt.toISOString(),
+        updatedAt: researchTarget?.updatedAt.toISOString() ?? bookmark.createdAt.toISOString(),
       }];
     }),
   ];
 
   const topics = Array.from(
     new Map(
-      issues
-        .map((issue) => [issue.topic.id, issue.topic] as const)
-        .concat(topicParam
-          ? []
-          : []),
+      issues.map((issue) => [issue.topic.id, issue.topic] as const),
     ).values(),
   ).slice(0, 5);
 
   const seenItemKeys = new Set<string>();
   const uniqueItems = items.filter((item) => {
-    const key = `${item.kind}:${item.id}`;
+    const key = `${item.kind === 'knowledge' ? 'research' : item.kind}:${item.id}`;
     if (seenItemKeys.has(key)) return false;
     seenItemKeys.add(key);
     return true;
@@ -236,12 +202,12 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   if (topicParam && topics.length === 0) {
     const topic = await prisma.topic.findUnique({
       where: { id: topicParam },
-      select: { id: true, slug: true, name: true },
+      select: { id: true, slug: true, name: true, enabled: true },
     });
-    if (topic) topics.push(topic);
+    if (topic?.enabled) topics.push({ id: topic.id, slug: topic.slug, name: topic.name });
   }
 
-  return NextResponse.json({ items: uniqueItems, topics });
+  return NextResponse.json({ items: uniqueItems.slice(0, PERSONAL_CONTEXT_LIMITS.results), topics });
 });
 
 async function findSemanticKnowledge(
@@ -276,7 +242,7 @@ async function findSemanticKnowledge(
         status: 'draft',
         knowledgeIndexText: { not: null },
       },
-      select: { id: true, title: true, body: true, conclusion: true, updatedAt: true },
+      select: { id: true, title: true, knowledgeIndexText: true, updatedAt: true },
     });
     const byId = new Map(rows.map((row) => [row.id, row]));
     return ids.flatMap((id) => {
@@ -286,9 +252,11 @@ async function findSemanticKnowledge(
         kind: 'knowledge' as const,
         id: row.id,
         title: row.title,
-        snippet: (row.conclusion ?? row.body).slice(0, 240),
+        snippet: (row.knowledgeIndexText ?? '').slice(0, 240),
         private: true as const,
         semanticMatch: true as const,
+        confirmedKnowledge: true,
+        status: 'draft',
         sourceRefs: [{ type: 'research' as const, value: row.id, required: false as const }],
         updatedAt: row.updatedAt.toISOString(),
       }];

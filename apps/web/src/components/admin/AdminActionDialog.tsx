@@ -24,24 +24,19 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Eye, FileText, Pencil, X } from 'lucide-react';
+import Box from '@mui/material/Box';
+import Skeleton from '@mui/material/Skeleton';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import { Eye, Pencil, X } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { cn } from '@/lib/utils';
+import { AppButton as Button, AppIconButton } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
+import { AppTextField } from '@/components/material/AppTextField';
 
 const MarkdownContent = dynamic(() => import('@/components/MarkdownContent'), {
   ssr: false,
-  loading: () => <div className="min-h-[220px] animate-pulse rounded-md bg-muted/40" />,
+  loading: () => <Skeleton variant="rounded" height={220} />,
 });
 
 export type AdminActionField =
@@ -105,6 +100,7 @@ function MarkdownEditor({
   placeholder,
   maxLength,
   rows,
+  focusRef,
 }: {
   id: string;
   value: string;
@@ -112,26 +108,38 @@ function MarkdownEditor({
   placeholder?: string;
   maxLength?: number;
   rows: number;
+  focusRef?: (element: HTMLElement | null) => void;
 }) {
   const [mode, setMode] = useState<'write' | 'preview'>('write');
   return (
-    <div className="overflow-hidden rounded-md border border-border">
-      <div className="flex items-center justify-end border-b border-border bg-muted/30 p-1">
-        <div className="inline-flex rounded border border-border bg-card p-0.5" role="group" aria-label="正文视图">
-          <Button type="button" size="xs" variant={mode === 'write' ? 'secondary' : 'ghost'} onClick={() => setMode('write')}>
-            <Pencil /> 编辑
+    <Box sx={{ overflow: 'hidden', border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', borderBottom: 1, borderColor: 'divider', bgcolor: 'action.hover', p: 0.5 }}>
+        <Box sx={{ display: 'inline-flex', border: 1, borderColor: 'divider', bgcolor: 'background.paper', borderRadius: 'var(--dr-radius-small)', p: 0.5 }} role="group" aria-label="正文视图">
+          <Button type="button" variant="text" sx={{ bgcolor: mode === 'write' ? 'action.selected' : 'transparent', color: 'text.primary' }} onClick={() => setMode('write')} startIcon={<Pencil aria-hidden="true" />}>
+            编辑
           </Button>
-          <Button type="button" size="xs" variant={mode === 'preview' ? 'secondary' : 'ghost'} onClick={() => setMode('preview')}>
-            <Eye /> 预览
+          <Button type="button" variant="text" sx={{ bgcolor: mode === 'preview' ? 'action.selected' : 'transparent', color: 'text.primary' }} onClick={() => setMode('preview')} startIcon={<Eye aria-hidden="true" />}>
+            预览
           </Button>
-        </div>
-      </div>
+        </Box>
+      </Box>
       {mode === 'write' ? (
-        <Textarea id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} maxLength={maxLength} rows={rows} className="resize-y rounded-none border-0 shadow-none focus-visible:ring-0" />
+        <TextField
+          id={id}
+          inputRef={focusRef}
+          fullWidth
+          multiline
+          rows={rows}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          slotProps={{ htmlInput: { maxLength } }}
+          sx={{ '& .MuiInputBase-root': { borderRadius: 0 }, '& .MuiInputBase-inputMultiline': { resize: 'vertical' } }}
+        />
       ) : (
-        <div className="min-h-[220px] overflow-auto px-3 py-2"><MarkdownContent content={value || '_（暂无内容）_'} compact /></div>
+        <Box sx={{ minHeight: 220, overflow: 'auto', px: 1.5, py: 1 }}><MarkdownContent content={value || '_（暂无内容）_'} compact /></Box>
       )}
-    </div>
+    </Box>
   );
 }
 
@@ -142,6 +150,7 @@ function TagsInput({
   placeholder,
   maxTagLength = 40,
   maxTags = 10,
+  focusRef,
 }: {
   id: string;
   value: string[];
@@ -149,6 +158,7 @@ function TagsInput({
   placeholder?: string;
   maxTagLength?: number;
   maxTags?: number;
+  focusRef?: (element: HTMLElement | null) => void;
 }) {
   const [pending, setPending] = useState('');
   const commit = () => {
@@ -157,14 +167,38 @@ function TagsInput({
     onChange([...value, tag]); setPending('');
   };
   return (
-    <div className="grid gap-2">
-      <div className="flex flex-wrap gap-1.5">
-        {value.map((tag) => <span key={tag} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-xs">{tag}<button type="button" onClick={() => onChange(value.filter((v) => v !== tag))} aria-label={`移除标签 ${tag}`}><X className="size-3" /></button></span>)}
-      </div>
-      <Input id={id} value={pending} placeholder={placeholder ?? '输入标签后按 Enter'} onChange={(e) => { const next = e.target.value; if (next.endsWith(',')) { setPending(next.slice(0, -1)); requestAnimationFrame(commit); } else setPending(next); }} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); } }} disabled={value.length >= maxTags} />
+    <Box sx={{ display: 'grid', gap: 1 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+        {value.map((tag) => (
+          <Box key={tag} component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-pill)', bgcolor: 'action.hover', pl: 1, pr: 0.5, py: 0.25 }}>
+            <Typography component="span" variant="metadata">{tag}</Typography>
+            <AppIconButton
+              type="button"
+              size="small"
+              onClick={() => onChange(value.filter((v) => v !== tag))}
+              aria-label={`移除标签 ${tag}`}
+              sx={{
+                width: 24, minWidth: 24, height: 24, minHeight: 24, p: 0.25,
+                '@media (pointer: coarse)': { width: 'var(--dr-touch-target)', minWidth: 'var(--dr-touch-target)', height: 'var(--dr-touch-target)', minHeight: 'var(--dr-touch-target)' },
+              }}
+            >
+              <X size={14} aria-hidden="true" />
+            </AppIconButton>
+          </Box>
+        ))}
+      </Box>
+      <AppTextField
+        ref={focusRef}
+        id={id}
+        value={pending}
+        placeholder={placeholder ?? '输入标签后按 Enter'}
+        onChange={(e) => { const next = e.target.value; if (next.endsWith(',')) { setPending(next.slice(0, -1)); requestAnimationFrame(commit); } else setPending(next); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(); } }}
+        disabled={value.length >= maxTags}
+      />
       <input type="hidden" value={value.join(',')} readOnly />
-      <p className="text-xs text-muted-foreground">最多 {maxTags} 个，每个不超过 {maxTagLength} 字</p>
-    </div>
+      <Typography variant="metadata" color="text.secondary">最多 {maxTags} 个，每个不超过 {maxTagLength} 字</Typography>
+    </Box>
   );
 }
 
@@ -192,6 +226,14 @@ export function AdminActionDialog({
   onSubmit: (values: AdminActionValues) => void | Promise<void>;
 }) {
   const [values, setValues] = useState<AdminActionValues>({});
+  const initialFocusRef = useRef<HTMLElement | null>(null);
+  const firstFocusableFieldId = fields.find((field) => (
+    field.kind !== 'static'
+    && !(field.kind === 'tags' && (field.defaultValue ?? []).length >= (field.maxTags ?? 10))
+  ))?.id;
+  const captureInitialFocus = (element: HTMLElement | null) => {
+    initialFocusRef.current = element;
+  };
 
   // open 切换：重置或填入默认值
   useEffect(() => {
@@ -222,45 +264,68 @@ export function AdminActionDialog({
   }, [fields, values]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          {description ? <DialogDescription>{description}</DialogDescription> : null}
-        </DialogHeader>
-        <div className="grid gap-3">
+    <AppDialog
+      open={open}
+      onClose={() => onOpenChange(false)}
+      title={title}
+      description={description}
+      initialFocusRef={initialFocusRef}
+      actions={(
+        <>
+          <Button ref={firstFocusableFieldId ? undefined : (element) => captureInitialFocus(element)} type="button" variant="outlined" onClick={() => onOpenChange(false)} disabled={pending}>
+            {cancelLabel}
+          </Button>
+          <Button
+            type="button"
+            variant="contained"
+            color={destructive ? 'error' : 'primary'}
+            disabled={!valid || pending}
+            onClick={() => void onSubmit(values)}
+          >
+            {pending ? '提交中…' : confirmLabel}
+          </Button>
+        </>
+      )}
+    >
+      <Box sx={{ display: 'grid', gap: 1.5 }}>
           {fields.map((f) => {
+            const focusRef = f.id === firstFocusableFieldId ? captureInitialFocus : undefined;
             if (f.kind === 'static') {
               return (
-                <div key={f.id} className="grid gap-1">
-                  <p className="text-xs font-medium text-muted-foreground">{f.label}</p>
-                  <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm leading-relaxed text-foreground">
+                <Box key={f.id} sx={{ display: 'grid', gap: 0.5 }}>
+                  <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 500 }}>{f.label}</Typography>
+                  <Typography component="p" variant="body2" sx={{ border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'action.hover', px: 1.5, py: 1, color: 'text.primary' }}>
                     {f.value}
-                  </p>
-                </div>
+                  </Typography>
+                </Box>
               );
             }
             const value = values[f.id] ?? '';
             return (
-              <div key={f.id} className="grid gap-1">
-                <label htmlFor={`admin-action-${f.id}`} className={cn('text-sm font-medium', 'required' in f && f.required && "after:ml-0.5 after:text-destructive after:content-['*']")}>
+              <Box key={f.id} sx={{ display: 'grid', gap: 0.5 }}>
+                <Typography component="label" htmlFor={`admin-action-${f.id}`} variant="fieldTitle" sx={{ fontWeight: 500, '&::after': 'required' in f && f.required ? { content: '" *"', color: 'error.main' } : undefined }}>
                   {f.label}
-                </label>
+                </Typography>
                 {f.kind === 'markdown' ? (
-                  <MarkdownEditor id={`admin-action-${f.id}`} value={String(value)} onChange={(next) => setValues((v) => ({ ...v, [f.id]: next }))} placeholder={f.placeholder} maxLength={f.maxLength} rows={f.rows ?? 10} />
+                  <MarkdownEditor id={`admin-action-${f.id}`} value={String(value)} onChange={(next) => setValues((v) => ({ ...v, [f.id]: next }))} placeholder={f.placeholder} maxLength={f.maxLength} rows={f.rows ?? 10} focusRef={focusRef} />
                 ) : f.kind === 'tags' ? (
-                  <TagsInput id={`admin-action-${f.id}`} value={Array.isArray(value) ? value : []} onChange={(next) => setValues((v) => ({ ...v, [f.id]: next }))} placeholder={f.placeholder} maxTagLength={f.maxTagLength} maxTags={f.maxTags} />
+                  <TagsInput id={`admin-action-${f.id}`} value={Array.isArray(value) ? value : []} onChange={(next) => setValues((v) => ({ ...v, [f.id]: next }))} placeholder={f.placeholder} maxTagLength={f.maxTagLength} maxTags={f.maxTags} focusRef={focusRef} />
                 ) : f.kind === 'textarea' ? (
-                  <Textarea
+                  <TextField
                     id={`admin-action-${f.id}`}
+                    inputRef={focusRef}
+                    fullWidth
+                    multiline
+                    rows={f.rows ?? 3}
                     value={value}
                     onChange={(e) => setValues((v) => ({ ...v, [f.id]: e.target.value }))}
                     placeholder={f.placeholder}
-                    maxLength={f.maxLength}
-                    rows={f.rows ?? 3}
+                    slotProps={{ htmlInput: { maxLength: f.maxLength } }}
+                    sx={{ '& .MuiInputBase-inputMultiline': { resize: 'vertical' } }}
                   />
                 ) : (
-                  <Input
+                  <AppTextField
+                    ref={focusRef}
                     id={`admin-action-${f.id}`}
                     type="text"
                     value={value}
@@ -269,24 +334,10 @@ export function AdminActionDialog({
                     maxLength={f.maxLength}
                   />
                 )}
-              </div>
+              </Box>
             );
           })}
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-            {cancelLabel}
-          </Button>
-          <Button
-            type="button"
-            variant={destructive ? 'destructive' : 'default'}
-            disabled={!valid || pending}
-            onClick={() => void onSubmit(values)}
-          >
-            {pending ? '提交中…' : confirmLabel}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </Box>
+    </AppDialog>
   );
 }

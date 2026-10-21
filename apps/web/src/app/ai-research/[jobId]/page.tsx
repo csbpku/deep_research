@@ -32,18 +32,16 @@ import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi } from '@/lib/errors/friendly';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { PageHeader } from '@/components/domain/PageHeader';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
+import { AppDialog } from '@/components/material/AppDialog';
+import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
+import MaterialLink from '@mui/material/Link';
+import Paper from '@mui/material/Paper';
+import Skeleton from '@mui/material/Skeleton';
+import Typography from '@mui/material/Typography';
 import { cn } from '@/lib/utils';
+import { space } from '@deep-research/design-system';
 import { cleanEvidenceSnippet } from '@/lib/research-report';
 import {
   claimDisplayStatus,
@@ -82,6 +80,45 @@ import {
 import { classifySourceProvenance } from '@/lib/source-provenance';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 import type { ResearchBrief, ResearchScope } from '@deep-research/shared/schemas';
+
+const textSx = {
+  caption: { fontSize: 'var(--dr-type-caption)', lineHeight: 'var(--dr-line-height-body)' },
+  label: { fontSize: 'var(--dr-type-label)', lineHeight: 'var(--dr-line-height-body)' },
+  body: { fontSize: 'var(--dr-type-body)', lineHeight: 'var(--dr-line-height-body)' },
+  titleSmall: { fontSize: 'var(--dr-type-title-small)', lineHeight: 'var(--dr-line-height-heading)', fontWeight: 'var(--dr-weight-semibold)' },
+  titleCompact: { fontSize: 'var(--dr-type-title-compact)', lineHeight: 'var(--dr-line-height-heading)', fontWeight: 'var(--dr-weight-semibold)' },
+  titleMedium: { fontSize: 'var(--dr-type-title-medium)', lineHeight: 'var(--dr-line-height-heading)', fontWeight: 'var(--dr-weight-semibold)' },
+  medium: { fontWeight: 'var(--dr-weight-medium)' },
+  semibold: { fontWeight: 'var(--dr-weight-semibold)' },
+  muted: { color: 'text.secondary' },
+  primary: { color: 'primary.main' },
+  warning: { color: 'warning.main' },
+  danger: { color: 'error.main' },
+  success: { color: 'success.main' },
+} as const;
+
+const surfaceSx = {
+  border: '1px solid',
+  borderColor: 'divider',
+  borderRadius: 'var(--dr-radius-small)',
+  bgcolor: 'background.paper',
+} as const;
+
+const statusToneSx = {
+  warning: { borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' },
+  danger: { borderColor: 'error.main', bgcolor: 'var(--dr-color-danger-container)', color: 'error.main' },
+  success: { borderColor: 'success.main', bgcolor: 'var(--dr-color-success-container)', color: 'success.main' },
+} as const;
+
+const pillSx = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  borderRadius: 'var(--dr-radius-pill)',
+  px: space.sm,
+  py: space.xs,
+  ...textSx.caption,
+  ...textSx.medium,
+} as const;
 
 interface AiJobStatus {
   jobId: string;
@@ -208,19 +245,24 @@ function ReviewGateChip({
                 ? '资料范围有缺口'
                 : '需要确认';
   const tone = running || researchCoverageUnassessed || gate.status === 'unavailable' || gate.status === 'coverage_insufficient' || gate.status === 'research_insufficient'
-    ? 'border-warning-border/70 bg-warning-bg/40 text-warning-fg'
+    ? statusToneSx.warning
     : gate.status === 'blocked'
-      ? 'border-status-failed-border/70 bg-status-failed-bg/40 text-status-failed-fg'
+      ? statusToneSx.danger
       : gate.status === 'clear'
-        ? 'border-status-succeeded-border/70 bg-status-succeeded-bg/40 text-status-succeeded-fg'
-        : 'border-warning-border/70 bg-warning-bg/40 text-warning-fg';
+        ? statusToneSx.success
+        : statusToneSx.warning;
   return (
-    <span
-      className={cn('rounded-full border px-2 py-0.5 text-xs font-medium', tone)}
+    <Box
+      component="span"
+      sx={{
+        display: 'inline-flex', alignItems: 'center',
+        border: '1px solid', borderRadius: 'var(--dr-radius-pill)',
+        px: space.sm, py: space.xs, ...textSx.caption, ...textSx.medium, ...tone,
+      }}
       aria-label={`结果状态：${label}`}
     >
       {label}
-    </span>
+    </Box>
   );
 }
 
@@ -431,7 +473,7 @@ export default function AiJobStatusPage() {
   }, [params.jobId, q.data?.finalStatus, q.data?.status, queryClient]);
 
   return (
-    <div className="mx-auto max-w-shell">
+    <Box className="material-surface" sx={{ width: '100%', maxWidth: 'var(--dr-width-shell)', mx: 'auto' }}>
       <PageHeader
         variant="workbench"
         title={
@@ -470,8 +512,8 @@ export default function AiJobStatusPage() {
         className="mb-5"
       />
 
-      <div className="mt-4 grid items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="order-1 min-w-0 lg:order-2">
+      <Box sx={{ mt: 2, display: 'grid', alignItems: 'start', gap: 3, gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '280px minmax(0, 1fr)' } }}>
+        <Box sx={{ order: { xs: 1, lg: 2 }, minWidth: 0 }}>
           {q.isLoading && !q.data ? (
             <JobStatusSkeleton />
           ) : q.isError && !q.data ? (
@@ -488,28 +530,30 @@ export default function AiJobStatusPage() {
             <StatusBody s={q.data} />
           ) : null}
           {q.isError && q.data ? (
-            <div
+            <Box
+              component="div"
               role="status"
               aria-live="polite"
-              className="mt-3 rounded-md border border-warning-border/70 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg"
+              className="mt-3 px-3 py-2"
+              sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-small)', ...textSx.caption }}
             >
               状态同步暂时失败，已保留上次成功状态；任务可能仍在后台运行，系统会继续重试。
-            </div>
+            </Box>
           ) : null}
-        </div>
-        <div className="order-2 lg:order-1">
+        </Box>
+        <Box sx={{ order: { xs: 2, lg: 1 }, minWidth: 0 }}>
           {/* 结果页的主任务是读懂本轮研究；完整任务历史在新建工作台中统一管理。 */}
           <AiResearchWorkspaceSidebar showTaskHistory={false} showRecentArtifacts={false} />
-        </div>
-      </div>
-    </div>
+        </Box>
+      </Box>
+    </Box>
   );
 }
 
 /** 步骤形加载骨架 —— 与实际页面布局对齐,避免单一大方块。 */
 function JobStatusSkeleton() {
   return (
-    <div className="rounded-md border border-border bg-card p-4">
+    <Paper variant="outlined" sx={{ ...surfaceSx, borderRadius: 'var(--dr-radius-medium)', p: 2 }}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
           <Skeleton className="h-3 w-16" />
@@ -526,12 +570,12 @@ function JobStatusSkeleton() {
         <Skeleton className="h-3 w-32" />
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full rounded-md" />
+            <Skeleton key={i} className="h-20 w-full" sx={{ borderRadius: 'var(--dr-radius-medium)' }} />
           ))}
         </div>
         <Skeleton className="h-8 w-full" />
       </div>
-    </div>
+    </Paper>
   );
 }
 
@@ -733,8 +777,8 @@ function StatusBody({ s }: { s: AiJobStatus }) {
   }, [conversationQuery.data, conversationEnsureTried, s.conversation, s.jobId, s.topic]);
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-card">
-      <div className="border-b border-border px-5 py-5">
+    <Paper component="section" variant="outlined" className="material-surface" sx={{ overflow: 'hidden' }}>
+      <Box component="div" className="px-5 py-5" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -742,16 +786,16 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               {finalStatus === 'succeeded' && !evidenceFreeBrief ? (
                 <ReviewGateChip gate={publicationGate} executionStatus={reviewExecutionStatus} researchSufficiency={researchSufficiency} />
               ) : null}
-              <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground tabular-nums" aria-label={`研究耗时 ${elapsed}`}>
+              <Box component="span" className="flex flex-wrap gap-x-2 tabular-nums" sx={{ ...textSx.caption, ...textSx.muted }} aria-label={`研究耗时 ${elapsed}`}>
                 <span>研究耗时 {elapsed}</span>
-              </span>
+              </Box>
             </div>
-            <h2 className="mt-3 text-xl font-semibold tracking-tight">
+            <Typography component="h2" variant="h2" className="mt-3" sx={{ letterSpacing: '-0.025em' }}>
               {isTerminal
                 ? evidenceOnly ? '资料已保留' : evidenceFreeBrief ? `${outputLabel}已生成，但未找到资料` : finalStatus === 'succeeded' ? reportNeedsReview ? `${outputLabel}已生成` : '研究完成' : '研究已结束'
                 : hasReaderReport ? `${outputLabel}已生成` : '正在建立证据链'}
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground" aria-live="polite" aria-atomic="true">
+            </Typography>
+            <Typography component="p" variant="body2" className="mt-1" sx={textSx.muted} aria-live="polite" aria-atomic="true">
               {evidenceFreeBrief
                 ? '本轮没有保存可核对资料；下面的内容只是模型摘录，不能作为已验证的研究结论。'
                 : reviewInProgress
@@ -771,21 +815,21 @@ function StatusBody({ s }: { s: AiJobStatus }) {
                       : s.reportLength === 'deep' && s.researchProgress?.mode === 'deep'
                       ? deepResearchActivityLabel(s)
                       : `${activeIdx >= 0 ? STEPS[activeIdx].label : '准备研究'} · ${capturedSources} 条可核对正文`}
-            </p>
+            </Typography>
           </div>
           {showTerminalOutcome ? (
             <div className="shrink-0 text-right">
-              <div className="font-mono text-lg font-semibold text-muted-foreground">{terminalProgressLabel}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
+              <Box component="div" sx={{ ...textSx.titleCompact, ...textSx.muted, fontFamily: 'monospace' }}>{terminalProgressLabel}</Box>
+              <Box component="div" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
                 {terminalProgressCaption}
-              </div>
+              </Box>
             </div>
           ) : null}
         </div>
         {showTerminalOutcome ? (
-          <p className="mt-4 text-xs text-muted-foreground" role="status">
+          <Typography component="p" className="mt-4" sx={{ ...textSx.caption, ...textSx.muted }} role="status">
             {terminalProgressLabel} · {terminalProgressCaption}
-          </p>
+          </Typography>
         ) : null}
         {s.reportLength === 'deep' ? (
           <DeepResearchProgressCard
@@ -799,36 +843,36 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             compact={isTerminal}
           />
         ) : null}
-      </div>
+      </Box>
 
       {/* 完成态首先呈现用户来这里要读懂的结果；过程和来源仍保留在下方供核查。 */}
       {(isTerminal || hasReaderReport) && s.artifact?.content && (hasReaderReport || hasEvidenceSnapshot) ? (
-          <section className="border-t border-border bg-background/40 px-5 py-6" aria-label={evidenceOnly ? '本轮资料快照' : !isTerminal ? `${outputLabel}（依据整理中）` : `${outputLabel}结果`}>
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
+          <Box component="section" className="px-5 py-6" sx={{ borderTop: '1px solid', borderColor: 'divider', bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 40%, transparent)' }} aria-label={evidenceOnly ? '本轮资料快照' : !isTerminal ? `${outputLabel}（依据整理中）` : `${outputLabel}结果`}>
+          <Box component="div" className="mb-5 flex flex-wrap items-start justify-between gap-3 pb-4" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
             <div>
-              <p className={cn('text-xs font-semibold uppercase tracking-wide', evidenceOnly || finalStatus === 'partial' ? 'text-status-partial-fg' : 'text-primary')}>
+              <Typography component="p" sx={{ ...textSx.caption, ...textSx.semibold, color: evidenceOnly || finalStatus === 'partial' ? 'warning.main' : 'primary.main', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {evidenceOnly ? '资料摘要' : !isTerminal ? `${outputLabel} · 依据整理中` : finalStatus === 'partial' ? `阶段性${outputLabel}` : '研究产物'}
-              </p>
-              <h3 className="mt-1 text-lg font-semibold">{s.artifact.title}</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
+              </Typography>
+              <Typography component="h3" className="mt-1" sx={textSx.titleCompact}>{s.artifact.title}</Typography>
+              <Typography component="p" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
                 {s.sources.length > 0
                 ? `${s.sources.length < s.savedSourcesCount ? `已保存 ${s.savedSourcesCount} 条，当前展示最近 ${s.sources.length} 条` : `${s.savedSourcesCount} 条资料`} · ${capturedSources} 条有可核对正文 · 第 ${s.artifact.version} 版 · 可打开来源并核对原文`
                   : s.sourcesCount > 0
                     ? `运行时发现 ${s.sourcesCount} 条候选网页，但没有保存可核对正文 · 第 ${s.artifact.version} 版`
                     : `本轮未保存可核对资料 · 第 ${s.artifact.version} 版`}
-              </p>
+              </Typography>
                 {!isTerminal && hasReaderReport ? (
-                  <p className="mt-2 max-w-2xl text-xs leading-5 text-muted-foreground">
+                  <Typography component="p" className="mt-2 max-w-2xl" sx={{ ...textSx.caption, ...textSx.muted }}>
                     这份研究稿已基于本轮实际抓取的证据生成，可以先阅读；关键结论确认完成后，页面会补充最终状态。
-                  </p>
+                  </Typography>
                 ) : evidenceOnly ? (
-                  <p className="mt-2 max-w-2xl text-xs leading-5 text-status-partial-fg">
+                  <Typography component="p" className="mt-2 max-w-2xl" sx={{ ...textSx.caption, ...textSx.warning }}>
                     本轮只保存了实际抓取的来源摘录，没有生成可交付的研究结论。请把它当作下一轮研究输入，不要当成已验证报告。
-                  </p>
+                  </Typography>
                 ) : finalStatus === 'partial' ? (
-                <p className="mt-2 max-w-2xl text-xs leading-5 text-status-partial-fg">
+                <Typography component="p" className="mt-2 max-w-2xl" sx={{ ...textSx.caption, ...textSx.warning }}>
                   研究稿已在关键结论确认完成前保存。它可以阅读和追问，但关键判断请先核对下方来源，或重新运行以完成确认。
-                </p>
+                </Typography>
               ) : null}
             </div>
             {finalStatus === 'succeeded' && !isBrief && s.draftResearchId ? (
@@ -852,7 +896,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
                 查看研究库
               </Link>
             </Button>
-          </div>
+          </Box>
           <div
             className="mx-auto max-w-4xl"
             data-knowledge-source-message={s.draftResearchId ?? undefined}
@@ -870,11 +914,11 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               <KnowledgeCardComposer sourceKind="research_report" messageId={s.draftResearchId} />
             ) : null}
           </div>
-        </section>
+        </Box>
       ) : null}
 
       {isTerminal && !!s.artifact?.content && (hasReaderReport || hasEvidenceSnapshot) ? (
-        <div className="border-t border-border px-5 pb-5">
+        <Box component="div" className="px-5 pb-5" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
           <ResearchChatPanel
             conversation={conversationQuery.data ?? null}
             canAsk={hasReaderReport || hasEvidenceSnapshot}
@@ -884,7 +928,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             reportId={s.draftResearchId}
             reportContent={s.artifact?.content ?? null}
           />
-        </div>
+        </Box>
       ) : null}
 
       <div className="p-5">
@@ -893,18 +937,18 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             <ReviewPanel review={s.review} reviewRun={s.reviewRun} researchSufficiency={researchSufficiency} draftResearchId={s.draftResearchId} />
           </section>
         ) : null}
-        <details className="rounded-md border border-border/80 bg-muted/[0.12]">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+        <Box component="details" sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'action.selected' }}>
+          <Box component="summary" className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden" sx={{ ...textSx.label, ...textSx.medium, color: 'text.primary' }}>
             <span>查看研究详情</span>
-            <span className="text-xs font-normal text-muted-foreground">
+            <Box component="span" sx={{ ...textSx.caption, ...textSx.muted, fontWeight: 'var(--dr-weight-regular)' }}>
               <span className="hidden sm:inline">研究过程 · 资料 · 证据缺口</span>
               <span className="sm:hidden">过程与资料</span>
-            </span>
-          </summary>
-          <div className="border-t border-border/70 px-4 pb-4 pt-4">
+            </Box>
+          </Box>
+          <Box component="div" className="px-4 pb-4 pt-4" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <p className="text-xs text-muted-foreground">按时间顺序记录研究如何得出结论。</p>
+                <Typography component="p" sx={{ ...textSx.caption, ...textSx.muted }}>按时间顺序记录研究如何得出结论。</Typography>
               </div>
               {!isTerminal ? (
                 <div className="flex items-center gap-2">
@@ -915,8 +959,8 @@ function StatusBody({ s }: { s: AiJobStatus }) {
                 </div>
               ) : null}
             </div>
-            {cancelError ? <p role="alert" className="mt-2 text-xs text-destructive">{cancelError}</p> : null}
-            <div className="relative ml-1 border-l border-border pl-6">
+            {cancelError ? <Typography component="p" role="alert" className="mt-2" sx={{ ...textSx.caption, ...textSx.danger }}>{cancelError}</Typography> : null}
+            <Box component="div" className="relative ml-1 pl-6" sx={{ borderLeft: '1px solid', borderColor: 'divider' }}>
               {STEPS.map((step, idx) => {
                 const state = stepState(s, idx);
                 const displayStep = isBrief && step.key === 'write'
@@ -926,7 +970,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
                   <TimelineStep key={step.key} step={displayStep} state={state} count={countForStep(s, step.key, state)} />
                 );
               })}
-            </div>
+            </Box>
             <EvidencePanel
               sources={s.sources ?? []}
               discoveredTotal={s.sourcesCount}
@@ -943,8 +987,8 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               cancelling={cancelling}
               reportContent={hasReaderReport ? (s.artifact?.content ?? s.outputText) : null}
             />
-          </div>
-        </details>
+          </Box>
+        </Box>
         {!isBrief && !evidenceOnly && isTerminal && !['queued', 'reviewing'].includes(s.reviewRun?.executionStatus ?? s.review?.status ?? s.review?.phase ?? '') && !(s.reviewRun?.claims?.length || s.review?.claims?.length) ? <EvidenceLedger review={s.review} sources={s.sources} /> : null}
       </div>
 
@@ -952,67 +996,71 @@ function StatusBody({ s }: { s: AiJobStatus }) {
       <JobStatusDisclosure s={s} elapsed={elapsed} />
 
       {finalStatus === 'partial' ? (
-        <div
+        <Box
+          component="div"
           role="alert"
-          className="border-t border-border bg-status-partial-bg p-4 text-sm text-status-partial-fg"
+          className="p-4"
+          sx={{ borderTop: '1px solid', borderColor: 'divider', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main', ...textSx.body }}
         >
-            <strong className="font-medium">{hasReaderReport ? '阶段性研究稿可用' : '已保留研究资料'}</strong>
-          {s.errorCode ? <span className="ml-2">{friendlyMessage({ code: s.errorCode }, '调研在生成结果前中断')}</span> : null}
-          <p className="mt-1.5 text-xs opacity-90">
+            <Box component="strong" sx={textSx.medium}>{hasReaderReport ? '阶段性研究稿可用' : '已保留研究资料'}</Box>
+          {s.errorCode ? <Box component="span" className="ml-2">{friendlyMessage({ code: s.errorCode }, '调研在生成结果前中断')}</Box> : null}
+          <Typography component="p" className="mt-2" sx={{ ...textSx.caption, opacity: 0.9 }}>
             {hasReaderReport
               ? '任务在结果确认完成前达到时间上限；阶段性研究稿和已抓取资料已保留，可继续阅读、追问或重新运行。'
               : '任务在生成研究结论前结束；已生成资料快照，可先核对原文或基于这批资料追问。本轮没有可编辑研究稿。'}
-          </p>
-          {s.errorCode ? <p className="mt-1 text-xs opacity-75">错误码：{s.errorCode}</p> : null}
-        </div>
+          </Typography>
+          {s.errorCode ? <Typography component="p" className="mt-1" sx={{ ...textSx.caption, opacity: 0.75 }}>错误码：{s.errorCode}</Typography> : null}
+        </Box>
       ) : s.errorCode ? (
-        <div
+        <Box
+          component="div"
           role="alert"
-          className="border-t border-border bg-status-failed-bg p-4 text-sm text-status-failed-fg"
+          className="p-4"
+          sx={{ borderTop: '1px solid', borderColor: 'divider', bgcolor: 'var(--dr-color-danger-container)', color: 'error.main', ...textSx.body }}
         >
-          <strong className="font-medium">{friendlyMessage({ code: s.errorCode }, '调研失败')}</strong>
-          <span className="ml-2 text-xs opacity-80">错误码：{s.errorCode}</span>
-          {s.errorMessage ? <p className="mt-1.5 text-xs opacity-90">{s.errorMessage}</p> : null}
+          <Box component="strong" sx={textSx.medium}>{friendlyMessage({ code: s.errorCode }, '调研失败')}</Box>
+          <Box component="span" className="ml-2" sx={{ ...textSx.caption, opacity: 0.8 }}>错误码：{s.errorCode}</Box>
+          {s.errorMessage ? <Typography component="p" className="mt-2" sx={{ ...textSx.caption, opacity: 0.9 }}>{s.errorMessage}</Typography> : null}
           {s.errorDetails ? (
-            <details className="mt-2 rounded border border-border/70 bg-muted/40 p-2 text-xs text-muted-foreground">
-              <summary className="cursor-pointer font-medium text-foreground">查看错误详情</summary>
-              <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono">{JSON.stringify(s.errorDetails, null, 2)}</pre>
-            </details>
+            <Box component="details" className="mt-2 p-2" sx={{ ...surfaceSx, bgcolor: 'action.selected', ...textSx.caption, ...textSx.muted }}>
+              <Box component="summary" className="cursor-pointer" sx={{ ...textSx.medium, color: 'text.primary' }}>查看错误详情</Box>
+              <Box component="pre" className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words" sx={{ fontFamily: 'monospace' }}>{JSON.stringify(s.errorDetails, null, 2)}</Box>
+            </Box>
           ) : null}
-        </div>
+        </Box>
       ) : null}
 
       {isTerminal ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-4">
-          <div className="text-sm">
+        <Box component="div" className="flex flex-wrap items-center justify-between gap-3 p-4" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+          <Typography component="div" variant="body2">
             {evidenceOnly ? (
-              <span className="text-status-partial-fg">已保留可核对资料快照；尚未生成研究结论。</span>
+              <Box component="span" sx={textSx.warning}>已保留可核对资料快照；尚未生成研究结论。</Box>
             ) : finalStatus === 'succeeded' ? (
-              <span className="text-status-succeeded-fg">
+              <Box component="span" sx={textSx.success}>
                 {evidenceFreeBrief
                   ? '快速判断已生成，但本轮没有找到可核对资料；未创建调研草稿。'
                   : isBrief ? '快速判断已生成，未创建调研草稿。' : s.reportType === 'slides' ? 'Slides 提纲已生成，可继续编辑或追问。' : s.reportType === 'web_brief' ? '网页简报已生成，可直接阅读、分享或继续追问。' : '研究稿已完成，私有草稿仅你本人可见。'}
-              </span>
+              </Box>
             ) : finalStatus === 'partial' ? (
-              <span className="text-status-partial-fg">
+              <Box component="span" sx={textSx.warning}>
                 {hasReaderReport
                   ? '阶段性研究稿已保存，关键结论确认未完成。'
                   : '任务已部分完成，已保留抓取资料但未生成可交付结论。'}
-              </span>
+              </Box>
             ) : finalStatus === 'failed' ? (
-              <span className="text-status-failed-fg">任务失败，可以回到提交页重新发起。</span>
+              <Box component="span" sx={textSx.danger}>任务失败，可以回到提交页重新发起。</Box>
             ) : (
-              <span className="text-muted-foreground">任务已撤回。</span>
+              <Box component="span" sx={textSx.muted}>任务已撤回。</Box>
             )}
-          </div>
+          </Typography>
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
               <Link href="/ai-research">重新调研</Link>
             </Button>
           </div>
-        </div>
+        </Box>
       ) : null}
-    </div>
+    </Paper>
   );
 }
 
@@ -1046,33 +1094,34 @@ function EvidencePanel({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <section className="mt-5 overflow-hidden rounded-md border border-border bg-muted/20" aria-label="资料与证据">
-      <button
+    <Paper component="section" variant="outlined" sx={{ mt: 3, overflow: 'hidden', bgcolor: 'action.selected' }} aria-label="资料与证据">
+      <ButtonBase
+        component="button"
         type="button"
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-muted/40"
+        sx={{ display: 'flex', width: '100%', justifyContent: 'space-between', gap: 2, px: 2, py: 1.5, textAlign: 'left', '&:hover': { bgcolor: 'action.hover' } }}
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
       >
-          <span className="flex min-w-0 items-center gap-2">
-            <Radar className="size-4 text-primary" />
-            <span className="text-sm font-semibold">资料与证据</span>
-          </span>
-          <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <Box component="span" className="flex min-w-0 items-center gap-2">
+            <Box component={Radar} className="size-4" sx={{ color: 'primary.main' }} />
+            <Typography component="span" sx={{ ...textSx.label, ...textSx.semibold }}>资料与证据</Typography>
+          </Box>
+          <Box component="span" className="flex min-w-0 items-center gap-2" sx={{ ...textSx.caption, ...textSx.muted }}>
           <span className="truncate">
             检索线索 {discoveredTotal} · 可引用证据 {capturedTotal}
             {capturedTotal > 0 ? ` · 独立域名 ${independentSourceCount}` : ''}
             {failed > 0 ? ` · ${failed} 条未取到正文` : ''}
           </span>
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-        </span>
-      </button>
+          </Box>
+      </ButtonBase>
       {expanded ? (
-        <div className="border-t border-border px-3 py-3">
-          <p className="mb-3 px-1 text-xs leading-5 text-muted-foreground">
+        <Box component="div" className="px-3 py-3" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+          <Typography component="p" className="mb-3 px-1" sx={{ ...textSx.caption, ...textSx.muted }}>
             来源等级按域名、页面路径和来源类型推断；同一域名的页面只计为一个独立来源，不等同于结论已被证明。
-          </p>
+          </Typography>
           {sources.length === 0 ? (
-            <p className="px-1 py-3 text-xs text-muted-foreground">
+            <Typography component="p" className="px-1 py-3" sx={{ ...textSx.caption, ...textSx.muted }}>
               {running
                 ? reportLength === 'deep'
                   ? '正在并行展开多个研究分支；检索线索会先出现，只有取得可核对正文后才会计入可引用证据。'
@@ -1080,11 +1129,11 @@ function EvidencePanel({
                 : discoveredTotal > 0
                   ? `发现 ${discoveredTotal} 条检索线索，但该任务没有保存可引用正文。`
                   : '本次任务没有保存可展示的来源。'}
-            </p>
+            </Typography>
           ) : (
             <ul className="grid gap-2 md:grid-cols-2">
               {sources.map((source) => (
-                <li key={source.id} className="min-w-0 rounded-lg border border-border bg-background px-3 py-2.5">
+                <Box component="li" key={source.id} className="min-w-0 px-3 py-2" sx={{ ...surfaceSx, borderRadius: 'var(--dr-radius-medium)' }}>
                   {(() => {
                     const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
                     const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
@@ -1093,27 +1142,29 @@ function EvidencePanel({
                       <>
                   <div className="flex items-start justify-between gap-2">
                     {source.href ? (
-                      <a
+                      <MaterialLink
+                        component={Link}
                         href={source.href}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="min-w-0 font-medium text-foreground hover:text-primary hover:underline"
+                        className="min-w-0"
+                        sx={{ minWidth: 0, color: 'text.primary', fontWeight: 'var(--dr-weight-medium)', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}
                       >
                         <span className="line-clamp-2">{source.title}</span>
-                      </a>
+                      </MaterialLink>
                     ) : (
-                      <span className="line-clamp-2 min-w-0 font-medium text-foreground">{source.title}</span>
+                      <Box component="span" className="line-clamp-2 min-w-0" sx={{ ...textSx.medium, color: 'text.primary' }}>{source.title}</Box>
                     )}
-                    {source.href ? <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" /> : null}
+                    {source.href ? <Box component={ExternalLink} className="mt-1 size-3 shrink-0" sx={{ color: 'text.secondary' }} /> : null}
                   </div>
                   {externalInstruction ? (
-                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
-                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                    <Box component="p" role="note" className="mt-2 flex items-start gap-2 px-2 py-2" sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-xs)', ...textSx.caption }}>
+                      <Box component={AlertTriangle} className="mt-1 size-3 shrink-0" sx={{ color: 'warning.main' }} aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
-                    </p>
+                    </Box>
                   ) : null}
-                  {source.snippet ? <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet, 320)}</p> : null}
-                  <div className="mt-2 flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                  {source.snippet ? <Typography component="p" className="mt-2 line-clamp-2" sx={{ ...textSx.caption, ...textSx.muted }}>{cleanEvidenceSnippet(source.snippet, 320)}</Typography> : null}
+                  <Box component="div" className="mt-2 flex items-center gap-2" sx={{ ...textSx.caption, ...textSx.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
                     <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
@@ -1121,17 +1172,17 @@ function EvidencePanel({
                     <span>{stepLabel(source.stepCaptured)}</span>
                     <span aria-hidden>·</span>
                     <span title={source.capturedAt}>抓取 {formatCapturedAt(source.capturedAt)}</span>
-                  </div>
+                  </Box>
                       </>
                     );
                   })()}
-                </li>
+                </Box>
               ))}
             </ul>
           )}
-        </div>
+        </Box>
       ) : null}
-    </section>
+    </Paper>
   );
 }
 
@@ -1156,44 +1207,44 @@ function ResearchCheckpoint({
   const gaps = checkpointGaps(s, isTerminal);
   const canRestart = s.finalStatus === 'failed' || s.finalStatus === 'partial' || s.finalStatus === 'cancelled';
   return (
-    <section className="mt-4 rounded-md border border-primary/25 bg-primary/[0.035] px-4 py-4" aria-label="证据检查点">
+    <Box component="section" className="mt-4 px-4 py-4" sx={{ border: '1px solid color-mix(in srgb, var(--dr-color-primary) 25%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-primary) 3.5%, var(--dr-color-surface))' }} aria-label="证据检查点">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold">证据检查点</h3>
-            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{isTerminal ? '本轮已结束' : '可随时纠偏'}</span>
+            <Typography component="h3" sx={{ ...textSx.label, ...textSx.semibold }}>证据检查点</Typography>
+            <Box component="span" sx={{ ...pillSx, bgcolor: 'var(--dr-color-primary-container)', color: 'primary.main' }}>{isTerminal ? '本轮已结束' : '可随时纠偏'}</Box>
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          <Typography component="p" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
             {isTerminal
               ? '下面把本轮已经收集的证据和仍缺的内容集中呈现，帮助你决定是否需要追问、修订或重新研究。'
               : s.reportLength === 'deep'
                 ? `任务会继续按启动时的范围执行；当前已保存 ${sourceCount} 条来源${failed > 0 ? `，其中 ${failed} 条获取失败` : ''}。深度研究会先展开多个角度，再补查证据缺口。`
                 : `任务会继续按启动时的范围执行；当前已记录 ${sourceCount} 条来源${failed > 0 ? `，其中 ${failed} 条获取失败` : ''}。你可以继续等待，也可以现在收敛范围。`}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
+          </Typography>
+          <Typography component="p" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
             原始检索设置：{scopeSummary(s.brief?.scope)} · {s.sourcePolicy === 'only_user_sources' ? '仅使用已选资料' : '网页搜索 + 已选资料'} · {sourceProvenanceSummary(s)}
             {targetedEvidenceCount > 0 ? ` · 后续声明补证新增 ${targetedEvidenceCount} 条` : ''}
-          </p>
+          </Typography>
         </div>
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
-        <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-            <h4 className="text-xs font-semibold text-foreground">已抓到的证据</h4>
-          <ul className="mt-2 space-y-1.5 text-xs leading-5 text-muted-foreground">
-            {findings.map((finding) => <li key={finding} className="flex gap-2"><span className="mt-2 size-1 shrink-0 rounded-full bg-primary" />{finding}</li>)}
-          </ul>
-        </div>
-        <div className="rounded-lg border border-warning-border/40 bg-warning-bg/20 p-3">
-          <h4 className="text-xs font-semibold text-foreground">还缺什么证据</h4>
-          <ul className="mt-2 space-y-1.5 text-xs leading-5 text-muted-foreground">
-            {gaps.map((gap) => <li key={gap} className="flex gap-2"><span className="mt-2 size-1 shrink-0 rounded-full bg-warning-fg" />{gap}</li>)}
-          </ul>
-        </div>
+        <Box component="div" className="p-3" sx={{ ...surfaceSx, borderColor: 'color-mix(in srgb, var(--dr-color-outline) 70%, transparent)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 70%, transparent)', borderRadius: 'var(--dr-radius-medium)' }}>
+            <Typography component="h4" sx={{ ...textSx.caption, ...textSx.semibold, color: 'text.primary' }}>已抓到的证据</Typography>
+          <Box component="ul" className="mt-2 space-y-2" sx={{ ...textSx.caption, ...textSx.muted }}>
+            {findings.map((finding) => <li key={finding} className="flex gap-2"><Box component="span" className="mt-2 size-1 shrink-0" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'primary.main' }} />{finding}</li>)}
+          </Box>
+        </Box>
+        <Box component="div" className="p-3" sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-medium)' }}>
+          <Typography component="h4" sx={{ ...textSx.caption, ...textSx.semibold, color: 'text.primary' }}>还缺什么证据</Typography>
+          <Box component="ul" className="mt-2 space-y-2" sx={{ ...textSx.caption, ...textSx.muted }}>
+            {gaps.map((gap) => <li key={gap} className="flex gap-2"><Box component="span" className="mt-2 size-1 shrink-0" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'warning.main' }} />{gap}</li>)}
+          </Box>
+        </Box>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {!isTerminal ? (
           <>
-            <span className="text-xs text-muted-foreground">任务会按启动时的设置继续运行；离开页面不会停止。</span>
+            <Typography component="span" sx={{ ...textSx.caption, ...textSx.muted }}>任务会按启动时的设置继续运行；离开页面不会停止。</Typography>
             <Button type="button" size="xs" variant="outline" onClick={async () => { const cancelled = await onCancel(); if (cancelled) router.push('/ai-research'); }} disabled={cancelling}>
               {cancelling ? '结束中…' : '结束并调整设置'}
             </Button>
@@ -1203,7 +1254,7 @@ function ResearchCheckpoint({
           </>
           ) : s.deliverableStatus === 'evidence_only' ? (
           <>
-            <Link href="#research-chat" className="text-xs font-medium text-primary hover:underline">基于这批资料继续追问</Link>
+            <MaterialLink component={Link} href="#research-chat" sx={{ ...textSx.caption, ...textSx.medium, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>基于这批资料继续追问</MaterialLink>
             <Button type="button" size="xs" variant="outline" onClick={() => router.push('/ai-research')}>
               重新研究并调整设置
             </Button>
@@ -1213,10 +1264,10 @@ function ResearchCheckpoint({
             重新开始并调整设置
           </Button>
         ) : (
-          <Link href="#research-chat" className="text-xs font-medium text-primary hover:underline">继续追问这份研究</Link>
+          <MaterialLink component={Link} href="#research-chat" sx={{ ...textSx.caption, ...textSx.medium, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>继续追问这份研究</MaterialLink>
         )}
       </div>
-    </section>
+    </Box>
   );
 }
 
@@ -1636,29 +1687,29 @@ function ReviewPanel({
         <DecisionCoverageMatrixView matrix={researchSufficiency.matrix} recommendation={researchSufficiency.recommendation} />
       ) : null}
       {researchSufficiency?.status === 'insufficient' ? (
-        <div className="mb-3 rounded-md border border-warning-border/70 bg-warning-bg/[0.22] px-3 py-2.5 text-xs leading-5 text-warning-fg">
+        <div className="mb-3 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
           <p className="font-medium">资料范围还有缺口</p>
-          <p className="mt-0.5">
+          <p className="mt-1">
             {sufficiencyGapSummary?.cellCount
               ? `当前还有 ${sufficiencyGapSummary.cellCount} 个方案 × 决策维度覆盖单元格待补证。`
               : '当前结果还有待补证的资料范围。'}
             {' '}如果要做完整比较，请补充这些资料。
           </p>
           {sufficiencyGapSummary && sufficiencyGapSummary.groups.length > 0 ? (
-            <details className="mt-2 rounded border border-warning-border/50 bg-background/35 px-2.5 py-2">
+            <details className="mt-2 rounded border border-[var(--dr-color-warning)] bg-background/35 px-3 py-2">
               <summary className="cursor-pointer font-medium">按方案查看待补维度</summary>
-              <div className="mt-2 space-y-1.5 text-xs leading-5">
+              <div className="mt-2 space-y-2 text-xs leading-5">
                 {sufficiencyGapSummary.groups.map((group) => (
                   <p key={group.option}>
                     <span className="font-medium">{group.option}</span>
-                    <span className="ml-1.5">{group.dimensions.join('、')}</span>
+                    <span className="ml-2">{group.dimensions.join('、')}</span>
                   </p>
                 ))}
               </div>
             </details>
           ) : null}
           {sufficiencyGapSummary && sufficiencyGapSummary.otherGaps.length > 0 ? (
-            <details className="mt-2 rounded border border-warning-border/50 bg-background/35 px-2.5 py-2">
+            <details className="mt-2 rounded border border-[var(--dr-color-warning)] bg-background/35 px-3 py-2">
               <summary className="cursor-pointer font-medium">查看其他缺口</summary>
               <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5">
                 {sufficiencyGapSummary.otherGaps.map((gap) => <li key={gap}>{gap}</li>)}
@@ -1691,20 +1742,20 @@ function ReviewPanel({
         </div>
       </div>
       {reviewStale ? (
-        <div className="mt-2 rounded-md border border-warning-border/60 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg">
+        <div className="mt-2 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
           <p className="font-medium">研究内容已经变更，需要重新整理依据。</p>
-          <p className="mt-0.5">上一轮依据仍保留在历史记录中，但不能用于当前版本。</p>
+          <p className="mt-1">上一轮依据仍保留在历史记录中，但不能用于当前版本。</p>
         </div>
       ) : review ? (
         reviewQueued || reviewRunning ? (
-          <div className="mt-2 rounded-md border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs leading-5 text-muted-foreground">
+          <div className="mt-2 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs leading-5 text-muted-foreground">
             <p className="font-medium text-foreground">结果正在整理</p>
-            <p className="mt-0.5">你可以继续阅读或追问；完成后这里会自动更新。</p>
+            <p className="mt-1">你可以继续阅读或追问；完成后这里会自动更新。</p>
           </div>
         ) : reviewUnavailable ? (
-          <div className="mt-2 rounded-md border border-warning-border/60 bg-warning-bg/40 px-3 py-2 text-xs leading-5 text-warning-fg">
+          <div className="mt-2 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
             <p className="font-medium">暂时无法确认</p>
-            <p className="mt-0.5">这不代表结论错误；当前版本只是还没有得到完整的依据确认。</p>
+            <p className="mt-1">这不代表结论错误；当前版本只是还没有得到完整的依据确认。</p>
           </div>
         ) : null
       ) : (
@@ -1712,12 +1763,12 @@ function ReviewPanel({
       )}
       {!reviewQueued && !reviewRunning && !reviewUnavailable && !reviewStale && reviewRun?.executionStatus === 'completed' ? (
         <div className={cn(
-          'mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-xs',
+          'mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs',
           publicationGate.status === 'blocked'
-            ? 'border-status-failed-border/50 bg-status-failed-bg/30'
+            ? 'border-[var(--dr-color-danger)]/50 bg-[var(--dr-color-danger-container)]/30'
             : pendingClaims.length > 0 || publicationGate.status !== 'clear'
-              ? 'border-warning-border/50 bg-warning-bg/30'
-              : 'border-status-succeeded-border/50 bg-status-succeeded-bg/30',
+              ? 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)]'
+              : 'border-[var(--dr-color-success)]/50 bg-[var(--dr-color-success-container)]/30',
         )} aria-label="结果摘要">
           <div>
             <span className="font-medium text-foreground">{displayLabel}</span>
@@ -1773,31 +1824,29 @@ function ReviewPanel({
           ) : null}
         </div>
       </details>
-      <Dialog
+      <AppDialog
         open={Boolean(decisionRequest)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDecisionRequest(null);
-            setDecisionReason('');
-          }
-        }}
+        onClose={() => { setDecisionRequest(null); setDecisionReason(''); }}
+        title={decisionRequest?.action === 'challenge_support' ? '质疑这条证据关系' : '确认保留这条待验证项'}
+        description={decisionRequest?.action === 'challenge_support'
+          ? '系统会用当前已保存资料重新核对，正文不会改变。完成后会更新依据状态。'
+          : '这不会修改正文。确认后可以发布，但读者会看到这条结论仍保留为待确认项；后续修改正文后，这个决定会随版本一起失效。'}
+        actions={(
+          <>
+            <Button type="button" variant="outline" onClick={() => { setDecisionRequest(null); setDecisionReason(''); }}>
+              取消
+            </Button>
+            <Button type="button" onClick={() => void confirmDecision()} disabled={!decisionReason.trim() || decisionBusy !== null}>
+              {decisionBusy ? '处理中…' : decisionRequest?.action === 'challenge_support' ? '重新核对证据' : '保存处理决定'}
+            </Button>
+          </>
+        )}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {decisionRequest?.action === 'challenge_support' ? '质疑这条证据关系' : '确认保留这条待验证项'}
-            </DialogTitle>
-            <DialogDescription>
-              {decisionRequest?.action === 'challenge_support'
-                ? '系统会用当前已保存资料重新核对，正文不会改变。完成后会更新依据状态。'
-                : '这不会修改正文。确认后可以发布，但读者会看到这条结论仍保留为待确认项；后续修改正文后，这个决定会随版本一起失效。'}
-            </DialogDescription>
-          </DialogHeader>
           <div className="space-y-3">
-            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-foreground">
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-foreground">
               {decisionRequest?.claim.claim}
             </div>
-            <label className="grid gap-1.5 text-xs font-medium" htmlFor="review-decision-reason">
+            <label className="grid gap-2 text-xs font-medium" htmlFor="review-decision-reason">
               处理依据 <span className="font-normal text-muted-foreground">（必填）</span>
               <Textarea
                 id="review-decision-reason"
@@ -1807,20 +1856,11 @@ function ReviewPanel({
                   ? '例如：摘录描述的是背景，不足以支持这条结论。'
                   : '例如：这是低风险开放问题，当前没有足够资料，但我会在风险项中保留说明。'}
                 rows={4}
-                className="resize-y text-sm font-normal"
+                sx={{ '& textarea': { resize: 'vertical' } }}
               />
             </label>
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => { setDecisionRequest(null); setDecisionReason(''); }}>
-              取消
-            </Button>
-            <Button type="button" onClick={() => void confirmDecision()} disabled={!decisionReason.trim() || decisionBusy !== null}>
-              {decisionBusy ? '处理中…' : decisionRequest?.action === 'challenge_support' ? '重新核对证据' : '保存处理决定'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </AppDialog>
     </section>
   );
 }
@@ -1836,19 +1876,19 @@ function DecisionCoverageMatrixView({
   const cellMap = new Map(matrix.cells.map((cell) => [`${cell.option}:${cell.dimension}`, cell]));
   const stateLabel = { evidence: '有证据', not_found: '未找到', needs_test: '待实测' } as const;
   const stateClass = {
-    evidence: 'border-status-succeeded-border/50 bg-status-succeeded-bg/35 text-status-succeeded-fg',
+    evidence: 'border-[var(--dr-color-success)]/50 bg-[var(--dr-color-success-container)]/35 text-[var(--dr-color-success)]',
     not_found: 'border-border bg-muted/35 text-muted-foreground',
-    needs_test: 'border-warning-border/60 bg-warning-bg/35 text-warning-fg',
+    needs_test: 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]',
   } as const;
   return (
-    <details open={!matrix.complete} className="mb-3 rounded-md border border-border/80 bg-background">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs [&::-webkit-details-marker]:hidden">
+    <details open={!matrix.complete} className="mb-3 rounded-lg border border-border/80 bg-background">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs [&::-webkit-details-marker]:hidden">
         <span className="font-medium">问题覆盖矩阵</span>
-        <span className={cn('text-xs', matrix.complete ? 'text-status-succeeded-fg' : 'text-warning-fg')}>
+        <span className={cn('text-xs', matrix.complete ? 'text-[var(--dr-color-success)]' : 'text-[var(--dr-color-warning)]')}>
           {evidenceCells}/{matrix.cells.length} 格有证据
         </span>
       </summary>
-      <div className="border-t border-border/70 px-3 pb-3 pt-2.5">
+      <div className="border-t border-border/70 px-3 pb-3 pt-2">
         <p className="mb-2 text-xs leading-5 text-muted-foreground">
           这是研究完成门禁：每个方案 × 决策维度必须逐格处理；“待实测”不等于“没有问题”。
         </p>
@@ -1867,12 +1907,12 @@ function DecisionCoverageMatrixView({
                     return (
                       <td key={dimension} className="border-b border-border/50 px-2 py-2">
                         <span
-                          className={cn('inline-flex rounded border px-1.5 py-0.5', stateClass[state])}
+                          className={cn('inline-flex rounded border px-2 py-1', stateClass[state])}
                           title={cell?.evidenceGap ?? undefined}
                         >
                           {stateLabel[state]}{cell?.evidenceCount ? ` · ${cell.evidenceCount}` : ''}
                         </span>
-                        {cell?.evidenceGap ? <p className="mt-1 max-w-40 text-xs leading-5 text-warning-fg">{cell.evidenceGap}</p> : null}
+                        {cell?.evidenceGap ? <p className="mt-1 max-w-40 text-xs leading-5 text-[var(--dr-color-warning)]">{cell.evidenceGap}</p> : null}
                       </td>
                     );
                   })}
@@ -1881,7 +1921,7 @@ function DecisionCoverageMatrixView({
             </tbody>
           </table>
         </div>
-        {recommendation.status === 'incomplete' ? <p className="mt-2 text-xs text-warning-fg">结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</p> : null}
+        {recommendation.status === 'incomplete' ? <p className="mt-2 text-xs text-[var(--dr-color-warning)]">结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</p> : null}
       </div>
     </details>
   );
@@ -1937,10 +1977,10 @@ function ReviewClaimCard({
         ? '有资料可对照'
         : '还缺直接依据';
   const statusClass = status === '有直接依据' || status === '已建立引用'
-    ? 'bg-status-succeeded-bg text-status-succeeded-fg'
+    ? 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]'
     : status === '来源不一致'
-      ? 'bg-status-failed-bg text-status-failed-fg'
-      : 'bg-warning-bg text-warning-fg';
+      ? 'bg-[var(--dr-color-danger-container)] text-[var(--dr-color-danger)]'
+      : 'bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]';
   const needsAction = claimIsFactual(claim) && !reviewUnavailable && (judgmentStatus !== 'settled' || status !== '有直接依据');
   // The action is derived from this claim's own evidence relation. A global
   // "there are sources" flag is not enough: unrelated sources should not
@@ -1966,17 +2006,17 @@ function ReviewClaimCard({
     <article className="px-3 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <h5 className="min-w-0 flex-1 text-xs font-semibold leading-5 text-foreground">{claimText || '未命名声明'}</h5>
-        <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', statusClass)}>{status}</span>
+        <span className={cn('shrink-0 rounded-full px-2 py-1 text-xs font-medium', statusClass)}>{status}</span>
       </div>
-      {claim.reason ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，但本轮没有完成确认。' : claim.evidence?.resolver === 'captured-source-reconciler' ? '找到可对照资料，但还不能确认它支持这句话。' : claim.reason.includes('审核结果没有提供') ? '当前没有能直接对照的资料。' : claim.reason}</p> : null}
+      {claim.reason ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，但本轮没有完成确认。' : claim.evidence?.resolver === 'captured-source-reconciler' ? '找到可对照资料，但还不能确认它支持这句话。' : claim.reason.includes('审核结果没有提供') ? '当前没有能直接对照的资料。' : claim.reason}</p> : null}
       {judgmentStatus !== 'settled' ? (
-        <p className="mt-1.5 text-xs leading-5 text-warning-fg">
+        <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">
           {judgmentStatus === 'disputed'
             ? '两次独立核对给出了不同判断，系统不会替你判定真伪。'
             : '这条声明已经被识别，但还没有形成可用的最终判断。'}
         </p>
       ) : null}
-      <div className="mt-2 rounded border border-border/70 bg-background/70 px-2.5 py-2 text-xs leading-5">
+      <div className="mt-2 rounded border border-border/70 bg-background/70 px-3 py-2 text-xs leading-5">
         <span className="font-medium text-foreground">可对照的原文：</span>
         <span className="text-muted-foreground">{claim.evidence?.excerpt || '没有保存可核对摘录'}</span>
       </div>
@@ -1995,9 +2035,9 @@ function ReviewClaimCard({
         {claim.evidence?.published_at ? <span className="text-muted-foreground">发布时间：{claim.evidence.published_at}</span> : null}
         {claim.evidence?.evidence_strength && claim.evidence.evidence_strength !== 'unknown' ? <span className="text-muted-foreground">证据强度：{claim.evidence.evidence_strength}</span> : null}
       </div>
-      {claim.evidence?.counterexamples?.length ? <p className="mt-1.5 text-xs leading-5 text-warning-fg">反例/限制：{claim.evidence.counterexamples.join('；')}</p> : null}
+      {claim.evidence?.counterexamples?.length ? <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">反例/限制：{claim.evidence.counterexamples.join('；')}</p> : null}
       {needsAction ? (
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {nextAction === 'reverify_current_sources' && canRequestVerification ? (
             <Button type="button" size="xs" variant="outline" onClick={() => onDecision?.(claim, 'request_verification')} disabled={decisionBusy}>
               {decisionBusy ? '排队中…' : '重新核对'}
@@ -2024,18 +2064,18 @@ function ReviewClaimCard({
             </Button>
           ) : null}
           {nextAction === 'edit_claim' ? (
-            <span className="text-xs text-status-failed-fg">来源不一致；请修改表述或删除后重新检查</span>
+            <span className="text-xs text-[var(--dr-color-danger)]">来源不一致；请修改表述或删除后重新检查</span>
           ) : risk === 'high' ? (
-            <span className="text-xs text-status-failed-fg">高风险项必须修改或补足证据</span>
+            <span className="text-xs text-[var(--dr-color-danger)]">高风险项必须修改或补足证据</span>
           ) : status === '来源不一致' ? (
-            <span className="text-xs text-status-failed-fg">来源不一致，不能直接接受；请修改表述或删除</span>
+            <span className="text-xs text-[var(--dr-color-danger)]">来源不一致，不能直接接受；请修改表述或删除</span>
           ) : (
             <span className="text-xs text-muted-foreground">修改正文后需要重新确认</span>
           )}
         </div>
       ) : null}
       {status === '有直接依据' && !reviewUnavailable && onChallenge ? (
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             type="button"
             size="xs"
@@ -2079,12 +2119,12 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
     ? reviewUnavailable ? '报告引用关系' : '结论与证据账本'
     : '按来源核查';
   return (
-    <section className="mt-5 overflow-hidden rounded-md border border-primary/20 bg-primary/[0.025]" aria-label={ledgerTitle}>
+    <section className="mt-5 overflow-hidden rounded-lg border border-primary/20 bg-primary/[0.025]" aria-label={ledgerTitle}>
       <div className="border-b border-primary/10 px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-sm font-semibold">{ledgerTitle}</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
               {claims.length > 0 && reviewUnavailable
                 ? '这里记录报告与来源的对应关系；本轮确认未完成，因此不把任何一条标记为已支持或存在冲突。'
                 : claims.length > 0
@@ -2094,7 +2134,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
           </div>
           {claims.length > 0 ? (
             reviewUnavailable ? (
-              <span className="rounded-full border border-warning-border/70 bg-warning-bg/60 px-2 py-1 text-xs text-warning-fg">
+              <span className="rounded-full border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-1 text-xs text-[var(--dr-color-warning)]">
                 {citationPending > 0
                   ? `已保留 ${citationPending} 条引用关系`
                   : factualClaimCount > 0
@@ -2103,9 +2143,9 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
               </span>
             ) : (
               <div className="flex gap-2 text-xs tabular-nums">
-                <span className="rounded-full bg-status-succeeded-bg px-2 py-1 text-status-succeeded-fg">已支持 {counts.supported}</span>
-                <span className="rounded-full bg-warning-bg px-2 py-1 text-warning-fg">需要确认 {counts.unverified}</span>
-                <span className="rounded-full bg-status-failed-bg px-2 py-1 text-status-failed-fg">冲突 {counts.contradicted}</span>
+                <span className="rounded-full bg-[var(--dr-color-success-container)] px-2 py-1 text-[var(--dr-color-success)]">已支持 {counts.supported}</span>
+                <span className="rounded-full bg-[var(--dr-color-warning-container)] px-2 py-1 text-[var(--dr-color-warning)]">需要确认 {counts.unverified}</span>
+                <span className="rounded-full bg-[var(--dr-color-danger-container)] px-2 py-1 text-[var(--dr-color-danger)]">冲突 {counts.contradicted}</span>
               </div>
             )
           ) : null}
@@ -2119,7 +2159,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
           {inspectableSources.length > 0 ? (
             <ul className="mt-3 grid gap-2 md:grid-cols-2" aria-label="可人工核查的来源">
               {inspectableSources.map((source) => (
-                <li key={source.id} className="min-w-0 rounded-md border border-border/70 bg-background/70 px-3 py-2.5">
+                <li key={source.id} className="min-w-0 rounded-lg border border-border/70 bg-background/70 px-3 py-2">
                   {(() => {
                     const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
                     const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
@@ -2134,12 +2174,12 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
                     ) : (
                       <span className="line-clamp-2 min-w-0 text-xs font-medium text-foreground">{source.title}</span>
                     )}
-                    {source.href ? <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
+                    {source.href ? <ExternalLink className="mt-1 size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
                   </div>
-                  <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet ?? '', 240)}</p>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet ?? '', 240)}</p>
                   {externalInstruction ? (
-                    <p role="note" className="mt-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
-                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                    <p role="note" className="mt-2 flex items-start gap-2 rounded border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+                      <AlertTriangle className="mt-1 size-3 shrink-0" aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
                     </p>
                   ) : null}
@@ -2162,7 +2202,7 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
               ))}
             </ul>
           ) : (
-            <p className="mt-3 rounded-md border border-warning-border/50 bg-warning-bg/20 px-3 py-2 text-xs leading-5 text-warning-fg">
+            <p className="mt-3 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
               本轮没有保存可核对的原文摘录，只能把报告视为需要确认的草稿。
             </p>
           )}
@@ -2194,29 +2234,29 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
             ? '已支持'
             : claimDisplayStatus(claim) === 'contradicted' ? '存在冲突' : '需要确认';
           const statusClass = status === '已支持' || status === '已建立引用'
-            ? 'bg-status-succeeded-bg text-status-succeeded-fg'
-            : status === '存在冲突' ? 'bg-status-failed-bg text-status-failed-fg'
+            ? 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]'
+            : status === '存在冲突' ? 'bg-[var(--dr-color-danger-container)] text-[var(--dr-color-danger)]'
               : status === '非结论内容' ? 'bg-muted text-muted-foreground'
-              : 'bg-warning-bg text-warning-fg';
+              : 'bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]';
           return (
             <article key={`${claim.claim ?? 'claim'}-${index}`} className="px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <h4 className="min-w-0 flex-1 text-sm font-medium">{claim.claim || '未命名声明'}</h4>
-                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', statusClass)}>{status}</span>
+                <span className={cn('shrink-0 rounded-full px-2 py-1 text-xs font-medium', statusClass)}>{status}</span>
               </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="rounded-full border border-border px-2 py-0.5">{claimKindLabel(claim)}</span>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="rounded-full border border-border px-2 py-1">{claimKindLabel(claim)}</span>
                 <span>{claimKindDescription(claim)}</span>
               </div>
-              {claim.reason ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，尚未完成语义支持判断。' : claim.reason}</p> : null}
-              <div className="mt-2 rounded-md border border-border/70 bg-background/70 px-3 py-2 text-xs leading-5">
+              {claim.reason ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，尚未完成语义支持判断。' : claim.reason}</p> : null}
+              <div className="mt-2 rounded-lg border border-border/70 bg-background/70 px-3 py-2 text-xs leading-5">
                 <span className="font-medium text-foreground">来源摘录：</span>
                 <span className="text-muted-foreground">{claim.evidence?.excerpt || '没有保存原文摘录，因此不能把这条声明称为已支持。'}</span>
               </div>
               {(() => {
                 const matchedSource = findEvidenceSource(claim, sources);
                 return matchedSource ? (
-                  <div className="mt-2 rounded-md border border-primary/15 bg-primary/[0.03] px-3 py-2 text-xs leading-5">
+                  <div className="mt-2 rounded-lg border border-primary/15 bg-primary/[0.03] px-3 py-2 text-xs leading-5">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="font-medium text-foreground">来源：{matchedSource.title}</span>
                       <span className="text-muted-foreground">{SOURCE_TYPE_LABELS[matchedSource.type] ?? matchedSource.type}</span>
@@ -2392,10 +2432,10 @@ function TimelineStep({
 }) {
   const Icon = step.icon;
   const dotClass = {
-    done: 'border-status-succeeded-fg bg-status-succeeded-fg text-white',
+    done: 'border-[var(--dr-color-success)] bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]',
     current: 'border-primary bg-primary text-primary-foreground shadow-[0_0_0_4px_hsl(var(--primary)/.12)]',
-    attention: 'border-warning-fg bg-warning-fg text-white',
-    error: 'border-status-failed-fg bg-status-failed-fg text-white',
+    attention: 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]',
+    error: 'border-[var(--dr-color-danger)] bg-[var(--dr-color-danger-container)] text-[var(--dr-color-danger)]',
     waiting: 'border-border bg-card text-muted-foreground',
   }[state];
   /* 三态 label 让屏幕阅读器读出当前步骤的状态(色弱/单视觉用户也能感知) */
@@ -2411,7 +2451,7 @@ function TimelineStep({
       </span>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className={cn('text-sm font-medium', state === 'waiting' && 'text-muted-foreground')}>{step.label}</span>
-        <span className={cn('text-xs', state === 'current' ? 'text-primary' : state === 'attention' ? 'text-warning-fg' : state === 'error' ? 'text-status-failed-fg' : 'text-muted-foreground')}>
+        <span className={cn('text-xs', state === 'current' ? 'text-primary' : state === 'attention' ? 'text-[var(--dr-color-warning)]' : state === 'error' ? 'text-[var(--dr-color-danger)]' : 'text-muted-foreground')}>
           {STEP_LABELS[state]}
         </span>
         {count ? <span className="truncate text-xs text-muted-foreground" title={count}>{count}</span> : null}
@@ -2425,7 +2465,7 @@ function TimelineStep({
 
 function DetailRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex min-w-0 gap-1.5">
+    <div className="flex min-w-0 gap-2">
       <span className="shrink-0 text-muted-foreground">{label}:</span>
       <span className={cn('truncate', mono && 'font-mono tabular-nums')}>{value}</span>
     </div>
@@ -2475,7 +2515,7 @@ function JobStatusDisclosure({
         aria-controls="job-status-details"
         className="flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2 text-left transition-colors duration-150 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs font-medium text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-xs font-medium text-muted-foreground">
           {open ? (
             <ChevronDown className="size-3.5" aria-hidden />
           ) : (

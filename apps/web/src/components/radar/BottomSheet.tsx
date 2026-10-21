@@ -229,31 +229,31 @@ export function BottomSheet({
       aria-modal={false}
       className={cn(
         'fixed bottom-0 right-0 z-[9990] flex flex-col',
-        'w-[42%] bg-[var(--ink-paper)] shadow-[0_-8px_24px_rgba(0,0,0,0.15)]',
-        'rounded-tl-[16px]',
+        'w-[42%] bg-[color:var(--dr-color-surface-container)] shadow-[var(--dr-elevation-2)] font-[family-name:var(--dr-font-family)]',
+        'rounded-tl-[var(--dr-radius-large)]',
         'animate-[sheet-slide-up_0.3s_ease-out]',
         snappedTop && 'top-[50px] bottom-auto h-[calc(100vh-50px)]',
         minimized && 'w-10',
         className,
       )}
-      style={{ height: DEFAULT_HEIGHT, borderRadius: '16px 0 0 0' }}
+      style={{ height: DEFAULT_HEIGHT, borderRadius: 'var(--dr-radius-large) 0 0 0' }}
       data-minimized={minimized || undefined}
       data-dragging={undefined}
     >
       {/* 缩放手柄 */}
       <div
         data-resize="top"
-        className="absolute top-[-7px] left-4 right-4 z-10 flex h-4 cursor-ns-resize items-start justify-center before:mt-1 before:h-1 before:w-12 before:rounded-full before:bg-[var(--ink-faint)]/60 hover:before:bg-[var(--ink-accent)]"
+        className="absolute top-[-7px] left-4 right-4 z-10 flex h-4 cursor-ns-resize items-start justify-center before:mt-1 before:h-1 before:w-12 before:rounded-full before:bg-[color:var(--dr-color-outline-strong)] hover:before:bg-[color:var(--dr-color-primary)]"
         title="拖动调整高度"
       />
       <div
         data-resize="left"
-        className="absolute left-[-7px] top-4 bottom-4 z-10 w-4 cursor-ew-resize before:absolute before:left-1/2 before:top-1/2 before:h-12 before:w-1 before:-translate-x-1/2 before:-translate-y-1/2 before:rounded-full before:bg-[var(--ink-faint)]/60 hover:before:bg-[var(--ink-accent)]"
+        className="absolute left-[-7px] top-4 bottom-4 z-10 w-4 cursor-ew-resize before:absolute before:left-1/2 before:top-1/2 before:h-12 before:w-1 before:-translate-x-1/2 before:-translate-y-1/2 before:rounded-full before:bg-[color:var(--dr-color-outline-strong)] hover:before:bg-[color:var(--dr-color-primary)]"
         title="拖动调整宽度"
       />
       <div
         data-resize="corner"
-        className="absolute top-[-7px] left-[-7px] z-10 size-6 cursor-nwse-resize before:absolute before:left-1/2 before:top-1/2 before:size-2 before:-translate-x-1/2 before:-translate-y-1/2 before:rounded-full before:bg-[var(--ink-faint)]/70 hover:before:bg-[var(--ink-accent)]"
+        className="absolute top-[-7px] left-[-7px] z-10 size-6 cursor-nwse-resize before:absolute before:left-1/2 before:top-1/2 before:size-2 before:-translate-x-1/2 before:-translate-y-1/2 before:rounded-full before:bg-[color:var(--dr-color-outline-strong)] hover:before:bg-[color:var(--dr-color-primary)]"
         title="拖动调整宽高"
       />
 
@@ -261,7 +261,7 @@ export function BottomSheet({
         <button
           type="button"
           onClick={restore}
-          className="flex flex-1 flex-col items-center justify-center gap-3 font-sans text-xs font-semibold text-[var(--ink-accent)]"
+          className="flex flex-1 flex-col items-center justify-center gap-3 text-xs font-semibold text-[color:var(--dr-color-primary)]"
         >
           <span className="[writing-mode:vertical-rl] tracking-[0.08em]">{title}</span>
         </button>
@@ -269,17 +269,17 @@ export function BottomSheet({
         <>
           <header
             data-sheet-header
-            className="flex cursor-grab select-none items-center gap-2.5 rounded-tl-[16px] border-b border-[var(--ink-rule)] bg-[var(--ink-page)] px-5 py-3.5"
+            className="flex cursor-grab select-none items-center gap-2 rounded-tl-[var(--dr-radius-large)] border-b border-[color:var(--dr-color-outline)] bg-[color:var(--dr-color-surface)] px-5 py-3"
           >
-            <GripVertical className="size-4 shrink-0 cursor-grab select-none text-[var(--ink-faint)]" aria-hidden />
-            <h2 className="flex-1 font-sans text-[15px] font-semibold">{title}</h2>
+            <GripVertical className="size-4 shrink-0 cursor-grab select-none text-[color:var(--dr-color-text-muted)]" aria-hidden />
+            <h2 className="flex-1 text-[length:var(--dr-type-reading)] font-semibold">{title}</h2>
             {subtitle ? (
-              <span className="hidden max-w-[28%] truncate font-sans text-xs text-[var(--ink-muted)] sm:inline">{subtitle}</span>
+              <span className="hidden max-w-[28%] truncate text-xs text-[color:var(--dr-color-text-secondary)] sm:inline">{subtitle}</span>
             ) : null}
             <button
               type="button"
               onClick={minimize}
-              className="rounded-md p-1.5 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] hover:text-[var(--ink-text)]"
+              className="rounded-md p-2 text-[color:var(--dr-color-text-secondary)] hover:bg-[color:var(--dr-color-surface-container)] hover:text-[color:var(--dr-color-text)]"
               aria-label="最小化"
             >
               <Minus className="size-4" />
@@ -287,7 +287,7 @@ export function BottomSheet({
             <button
               type="button"
               onClick={close}
-              className="rounded-md p-1.5 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] hover:text-[var(--ink-text)]"
+              className="rounded-md p-2 text-[color:var(--dr-color-text-secondary)] hover:bg-[color:var(--dr-color-surface-container)] hover:text-[color:var(--dr-color-text)]"
               aria-label="关闭"
             >
               <X className="size-4" />
@@ -297,7 +297,7 @@ export function BottomSheet({
           <div className="flex min-h-0 flex-1 overflow-hidden">{children}</div>
 
           {footer ? (
-            <div className="flex flex-shrink-0 gap-2 border-t border-[var(--ink-rule)] bg-[var(--ink-page)] px-6 py-3">
+            <div className="flex flex-shrink-0 gap-2 border-t border-[color:var(--dr-color-outline)] bg-[color:var(--dr-color-surface)] px-6 py-3">
               {footer}
             </div>
           ) : null}

@@ -4,25 +4,22 @@
 // 仅展示已真正接入 AI 调研表单的偏好；未生效的配置不暴露给用户。
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { CheckCircle2 } from 'lucide-react';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
+import Skeleton from '@mui/material/Skeleton';
+import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
 
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
+import { AppButton as Button } from '@/components/material/AppButton';
+import type { UserPreferences } from '@/lib/me/preferences-schema';
 
-interface Preferences {
-  defaultReportType?: 'research_report' | 'summary_brief' | 'slides' | 'web_brief';
-  defaultSourcePolicy?: 'prefer_user_sources' | 'only_user_sources' | 'web_only';
-  timezone?: string;
-  notifyPrefs?: { commentReply?: boolean; shareApproved?: boolean; topicDigest?: boolean };
-}
+type Preferences = UserPreferences;
 
 const ALL = '__all__';
 
@@ -62,95 +59,78 @@ export function PreferencesForm({ userEmail }: { userEmail: string }) {
     },
   });
 
-  if (q.isLoading) return <Skeleton className="h-40 w-full" />;
-  if (q.isError) return <p className="text-sm text-destructive">{(q.error as Error).message}</p>;
+  if (q.isLoading) return <Skeleton variant="rounded" height={184} />;
+  if (q.isError) return <Alert severity="error">{(q.error as Error).message}</Alert>;
 
   return (
-    <div className="grid gap-3">
-      <Card>
-        <CardContent className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
-          <div>
-            <p className="text-sm font-medium">账号</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{userEmail}</p>
-          </div>
+    <Box sx={{ display: 'grid', gap: space.md, minWidth: 0 }}>
+      <Card variant="outlined">
+        <CardContent sx={{ display: 'grid', gap: space.xs, p: space.lg, '&:last-child': { pb: space.lg } }}>
+          <Typography component="h2" variant="fieldTitle">账号</Typography>
+          <Typography component="p" variant="metadata" color="text.secondary" sx={{ m: 0, overflowWrap: 'anywhere' }}>{userEmail}</Typography>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
-          <div>
-            <p className="text-sm font-medium">默认报告类型</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">新建 AI 调研时默认的报告格式。</p>
-          </div>
-          <Select
-            value={prefs.defaultReportType ?? ALL}
-            onValueChange={(v) =>
-              setPrefs((p) => ({
+      <Card variant="outlined">
+        <CardContent sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(220px, 280px)' }, alignItems: 'center', gap: space.md, p: space.lg, '&:last-child': { pb: space.lg } }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography component="h2" variant="fieldTitle">默认报告类型</Typography>
+            <Typography component="p" variant="metadata" color="text.secondary" sx={{ mt: space.xs, mb: 0 }}>新建 AI 调研时默认的报告格式。</Typography>
+          </Box>
+          <FormControl fullWidth size="small">
+            <InputLabel id="me-default-report-type-label">默认报告类型</InputLabel>
+            <Select<string>
+              labelId="me-default-report-type-label"
+              label="默认报告类型"
+              value={prefs.defaultReportType ?? ALL}
+              onChange={(event) => setPrefs((p) => ({
                 ...p,
-                defaultReportType: v === ALL ? undefined : (v as Preferences['defaultReportType']),
-              }))
-            }
-          >
-            <SelectTrigger className="w-40" aria-label="默认报告类型">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>未设置</SelectItem>
-              <SelectItem value="research_report">完整调研报告</SelectItem>
-              <SelectItem value="summary_brief">快速判断</SelectItem>
-              <SelectItem value="slides">Slides 提纲</SelectItem>
-              <SelectItem value="web_brief">网页简报</SelectItem>
-            </SelectContent>
-          </Select>
+                defaultReportType: event.target.value === ALL ? undefined : event.target.value as Preferences['defaultReportType'],
+              }))}
+            >
+              <MenuItem value={ALL}>未设置</MenuItem>
+              <MenuItem value="research_report">完整调研报告</MenuItem>
+              <MenuItem value="summary_brief">快速判断</MenuItem>
+              <MenuItem value="slides">Slides 提纲</MenuItem>
+              <MenuItem value="web_brief">网页简报</MenuItem>
+            </Select>
+          </FormControl>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-center">
-          <div>
-            <p className="text-sm font-medium">默认来源策略</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">影响 AI 调研抓取来源的范围。</p>
-          </div>
-          <Select
-            value={prefs.defaultSourcePolicy ?? ALL}
-            onValueChange={(v) =>
-              setPrefs((p) => ({
+      <Card variant="outlined">
+        <CardContent sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(220px, 280px)' }, alignItems: 'center', gap: space.md, p: space.lg, '&:last-child': { pb: space.lg } }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography component="h2" variant="fieldTitle">默认来源策略</Typography>
+            <Typography component="p" variant="metadata" color="text.secondary" sx={{ mt: space.xs, mb: 0 }}>影响 AI 调研抓取来源的范围。</Typography>
+          </Box>
+          <FormControl fullWidth size="small">
+            <InputLabel id="me-default-source-policy-label">默认来源策略</InputLabel>
+            <Select<string>
+              labelId="me-default-source-policy-label"
+              label="默认来源策略"
+              value={prefs.defaultSourcePolicy ?? ALL}
+              onChange={(event) => setPrefs((p) => ({
                 ...p,
-                defaultSourcePolicy: v === ALL ? undefined : (v as Preferences['defaultSourcePolicy']),
-              }))
-            }
-          >
-            <SelectTrigger className="w-40" aria-label="默认来源策略">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>未设置</SelectItem>
-              <SelectItem value="prefer_user_sources">优先指定资料，可补充搜索</SelectItem>
-              <SelectItem value="only_user_sources">仅使用指定资料</SelectItem>
-            </SelectContent>
-          </Select>
+                defaultSourcePolicy: event.target.value === ALL ? undefined : event.target.value as Preferences['defaultSourcePolicy'],
+              }))}
+            >
+              <MenuItem value={ALL}>未设置</MenuItem>
+              <MenuItem value="prefer_user_sources">优先指定资料，可补充搜索</MenuItem>
+              <MenuItem value="only_user_sources">仅使用指定资料</MenuItem>
+              <MenuItem value="web_only">仅使用网页搜索</MenuItem>
+            </Select>
+          </FormControl>
         </CardContent>
       </Card>
 
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          disabled={saveMut.isPending}
-          onClick={() => saveMut.mutate(prefs)}
-        >
+      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: space.sm }}>
+        <Button type="button" disabled={saveMut.isPending} aria-busy={saveMut.isPending} onClick={() => saveMut.mutate(prefs)}>
           {saveMut.isPending ? '保存中…' : '保存设置'}
         </Button>
-        {savedAt ? (
-          <p className="flex items-center gap-1 text-xs text-status-succeeded-fg">
-            <CheckCircle2 className="size-3" />
-            {savedAt} 已保存
-          </p>
-        ) : null}
-        {saveMut.error ? (
-          <p className="text-xs text-destructive">{(saveMut.error as Error).message}</p>
-        ) : null}
-      </div>
-    </div>
+        {savedAt ? <Alert severity="success" role="status" sx={{ py: 0, '& .MuiAlert-message': { py: space.xs } }}>{savedAt} 已保存</Alert> : null}
+        {saveMut.error ? <Alert severity="error">{(saveMut.error as Error).message}</Alert> : null}
+      </Box>
+    </Box>
   );
 }

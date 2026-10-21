@@ -11,6 +11,14 @@
 # tagged with the Git commit SHA. Runtime secrets remain in the host .env file.
 
 services:
+  anythingllm:
+    # Provision this private file from AnythingLLM's system settings on the
+    # VPS. API/UI updates write inside the container, so refresh this snapshot
+    # after changing providers to preserve the selection across recreation.
+    env_file:
+      - path: ./anythingllm/.env
+        required: false
+
   nginx:
     # Preserve the host's explicit TLS choice during registry-image deploys;
     # otherwise every release would silently put nginx back on HTTP-only.

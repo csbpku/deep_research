@@ -46,14 +46,13 @@ try {
   await panel.locator('#page-view').waitFor({ state: 'visible' });
   assert.equal(await panel.locator('#nav-tools').count(), 0);
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('local-proxy');
+  await panel.locator('#provider-kind').selectOption('local-proxy', { force: true });
   await panel.locator('#provider-url').fill('http://127.0.0.1:8879/v1');
   await panel.locator('#provider-model-list option[value="local-test-chat"]').waitFor({ state: 'attached' });
   await panel.locator('#provider-model-list').selectOption('local-test-chat');
-  await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
-  await panel.locator('#settings-notice').filter({ hasText: '连接成功' }).waitFor();
-  assert.equal(requests.filter(r => r.messages).length, 1, 'quick validation sends one text call, no image probe');
+  await panel.locator('#settings-notice').filter({ hasText: '已保存' }).waitFor();
+  assert.equal(requests.filter(r => r.messages).length, 0, 'saving configuration does not run model inference');
   await panel.locator('#close-settings').click();
   await panel.locator('#question-input').fill('Why does the queue have a bound?');
   await panel.locator('#send-question').click();
@@ -69,8 +68,8 @@ try {
   await fixture.evaluate(() => { const p = document.querySelectorAll('p')[1]; const range = document.createRange(); range.selectNodeContents(p); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); p.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); });
   await panel.locator('#scope-selection').waitFor({ state: 'visible' });
   assert.ok(await panel.locator('#stop-answer').isVisible());
-  await panel.locator('#chat-tools-menu > summary').first().click();
-  await panel.locator('#translate-all').click();
+  await panel.locator('#scope-page').click();
+  await panel.locator('#chat-translate').click();
   await fixture.locator('[data-deep-research-translation-for]').first().waitFor();
   await panel.close();
   await new Promise(resolve => setTimeout(resolve, 2500));
@@ -140,7 +139,6 @@ try {
   await fixture.locator(`[data-deep-research-block="${blockId}"]`).hover(); await fixture.keyboard.press('Alt+Shift+KeyO');
   await translated.waitFor({ state: 'visible' });
   // A selection action survives a panel that has not mounted yet.
-  await panel.locator('#chat-tools-menu > summary').first().click();
   await panel.locator('#restore-page').click();
   await fixture.locator('[data-deep-research-translation-for]').first().waitFor({ state: 'hidden' });
   await panel.close();
@@ -210,18 +208,17 @@ try {
   const measurements = [];
   for (const viewport of [{width:320,height:560},{width:380,height:860},{width:520,height:720},{width:736,height:740}]) {
     await panel.setViewportSize(viewport);
+    await panel.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     if (await panel.locator('#dismiss-notice').isVisible()) await panel.locator('#dismiss-notice').click();
     const measured = await layout();
     assert.equal(measured.overflow, false, JSON.stringify(measured));
-    assert.ok(measured.transcript.height >= viewport.height * .48, JSON.stringify(measured));
+    // The source preview and its actions need space in selection mode.
+    assert.ok(measured.transcript.height >= viewport.height * .4, JSON.stringify(measured));
     assert.ok(measured.composer.bottom <= viewport.height, JSON.stringify(measured));
     assert.equal(measured.header.height, 48);
     measurements.push(measured);
-    await panel.locator('#chat-tools-menu > summary').click();
-    const popover = await panel.locator('.chat-tools-popover').boundingBox();
-    assert.ok(popover.x >= 0 && popover.y >= 0 && popover.x + popover.width <= viewport.width, JSON.stringify(popover));
-    await panel.keyboard.press('Escape');
-    assert.equal(await panel.locator('#chat-tools-menu').getAttribute('open'), null);
+    assert.equal(await panel.locator('#chat-tools-menu').count(), 0);
+    assert.deepEqual(await panel.locator('.composer-tools > button').allTextContents(), ['总结', '翻译']);
     await panel.screenshot({path: root+`/chat-${viewport.width}.png`});
   }
   await panel.setViewportSize({width:380,height:860});
@@ -281,5 +278,5 @@ try {
   await panel.screenshot({path:root+'/chat-structure.png'});
   await panel.locator('#answer-more > summary').click();
   await panel.screenshot({path:root+'/chat-structure-expanded.png'});
-  console.log(JSON.stringify({ pass: true, quickValidationCalls: 1, answerCallsAfterSelectionTranslationAndPanelReopen: answerRequests.length, paragraphToggle: true, deferredSelectionAction: true, explicitStop: true, artifact: root+'/chat.png' }));
-} catch (error) { for (const page of context.pages()) if (page.url().includes('sidepanel')) { await page.screenshot({ path: root+'/failure.png' }); console.error('Screenshot:', root+'/failure.png'); console.error((await page.locator('#notice').textContent()) || ''); } throw error; } finally { await context.close(); server.close(); }
+  console.log(JSON.stringify({ pass: true, inferenceCallsOnSave: 0, answerCallsAfterSelectionTranslationAndPanelReopen: answerRequests.length, paragraphToggle: true, deferredSelectionAction: true, explicitStop: true, artifact: root+'/chat.png' }));
+} catch (error) { for (const page of context.pages()) if (page.url().includes('sidepanel')) { await page.screenshot({ path: root+'/failure.png' }); console.error('Screenshot:', root+'/failure.png'); console.error(error); if (await page.locator('#notice').count()) console.error((await page.locator('#notice').textContent()) || ''); } throw error; } finally { await context.close(); server.close(); }

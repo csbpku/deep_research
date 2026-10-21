@@ -1,6 +1,6 @@
 import { readerStore } from './reader-store.js';
 import { loadProvider, explainSelection, explainImage } from './reader-core.js';
-import { requestPlatformAnswer } from './platform-answer.js';
+import { requestPlatformAnswer, requestPlatformImageAnswer } from './platform-answer.js';
 
 const tasks = new Map();
 const key = id => `readerAnswer:${id}`;
@@ -26,19 +26,21 @@ async function execute(input, task, controller) {
   try {
     const options = {
       signal: controller.signal, maxTokens: input.maxTokens,
-      history: input.history, action: input.action, platformUrl: input.platformUrl, language: input.language,
+      history: input.history, action: input.action, platformUrl: input.platformUrl, language: input.language, replyLanguage: input.replyLanguage,
       onDelta: delta => { task.streamed += delta; publish(); },
       onProgress: (...progress) => { task.progress = progress; publish(true); },
     };
-    const provider = input.mode === 'standalone' ? await loadProvider() : null;
+    const provider = input.mode === 'standalone' ? { ...await loadProvider(), language: input.language } : null;
     const result = input.mode === 'platform'
-      ? await requestPlatformAnswer(input.context, input.question, input.scope, options)
+      ? input.scope === 'image'
+        ? await requestPlatformImageAnswer(input.context, input.image, input.question, options)
+        : await requestPlatformAnswer(input.context, input.question, input.scope, options)
       : input.scope === 'image'
         ? await explainImage(provider, input.context, input.image, input.question, input.history, options)
         : await explainSelection(provider, { ...input.context, scope: input.scope }, input.question, input.history, options);
     if (controller.signal.aborted) throw new DOMException('回答已停止', 'AbortError');
     const session = await readerStore.getSession(input.context.url, input.context.contentHash || null);
-    const discussion = [...input.history, { role: 'user', content: input.userMessage }, { role: 'assistant', content: result.answer || '' }].slice(-20);
+    const discussion = [...input.history, { id: `${input.id}:user`, role: 'user', content: input.userMessage }, { id: `${input.id}:assistant`, role: 'assistant', content: result.answer || '' }];
     await readerStore.saveSession({ ...session, url: input.context.url, title: session?.title || input.context.title, version: input.context.contentHash || null, selection: input.context.selection || null, discussion, discussionScope: input.scope, discussionIntent: input.intent, answer: result.answer || '', answerStructured: result });
     task.result = result; task.status = 'completed';
   } catch (error) {
@@ -59,7 +61,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const active = [...tasks.values()].find(value => value.task.url === input.context.url);
     if (active) { sendResponse({ ok: false, error: '当前文章已有回答进行中，请等待或停止' }); return false; }
     const controller = new AbortController();
-    const task = { id: input.id, url: input.context.url, contentHash: input.context.contentHash, scope: input.scope, question: input.userMessage, prompt: input.question, status: 'running', streamed: '', startedAt: Date.now() };
+    const task = { id: input.id, url: input.context.url, contentHash: input.context.contentHash, scope: input.scope,
+      userMessage: input.userMessage, question: input.userMessage, intent: input.intent,
+      draft: input.intent === 'ask' ? input.userMessage : '',
+      status: 'running', streamed: '', startedAt: Date.now() };
     tasks.set(input.id, { controller, task });
     chrome.storage.session.set({ [key(input.id)]: task }).then(() => { sendResponse({ ok: true }); void execute(input, task, controller); }).catch(error => { tasks.delete(input.id); sendResponse({ ok: false, error: error.message }); });
     return true;

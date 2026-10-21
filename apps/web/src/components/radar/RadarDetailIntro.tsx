@@ -53,16 +53,16 @@ export function RadarDetailIntro({
         ) : null}
       </div>
 
-      <h1 className="break-words font-serif text-2xl font-semibold leading-tight tracking-normal [overflow-wrap:anywhere] sm:text-3xl">
+      <h1 className="break-words text-[length:var(--dr-type-page-title-mobile)] font-semibold leading-[1.4] tracking-normal [overflow-wrap:anywhere] sm:text-[length:var(--dr-type-page-title)]">
         {title}
       </h1>
 
       {summary ? (
-        <div className="mt-4 max-w-4xl border-l-2 border-[var(--ink-accent)] bg-[var(--ink-accent)]/[0.06] px-3 py-2.5 sm:mt-5 sm:px-4 sm:py-3">
+        <div className="mt-4 max-w-4xl border-l-2 border-[var(--ink-accent)] bg-[var(--ink-accent)]/[0.06] px-3 py-3 sm:mt-5 sm:px-4">
           <p className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">快速判断</p>
           <p
             id="radar-detail-summary"
-            className={summaryExpanded ? 'font-serif text-base leading-6 text-[var(--ink-text)] sm:text-[15px] sm:leading-7' : 'line-clamp-4 font-serif text-base leading-6 text-[var(--ink-text)] sm:line-clamp-none sm:text-[15px] sm:leading-7'}
+            className={summaryExpanded ? 'text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)]' : 'line-clamp-4 text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)] sm:line-clamp-none'}
           >
             {summary}
           </p>

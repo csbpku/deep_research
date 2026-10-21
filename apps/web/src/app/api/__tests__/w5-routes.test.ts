@@ -779,6 +779,8 @@ describe('GET /api/radar/[id]', () => {
 
     expect(response.status).toBe(200);
     expect(body.title).toBe('Summary surface');
+    expect(body.isAuthenticated).toBe(true);
+    expect(body.canManage).toBe(false);
     expect(body.body).toBeNull();
     expect(body.originalMarkdown).toBeNull();
     expect(body.originalMeta).toBeNull();

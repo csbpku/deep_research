@@ -1,0 +1,216 @@
+.adminRoot {
+  color: var(--dr-color-text);
+  font-family: var(--dr-font-family);
+  line-height: var(--dr-line-height-body, 1.6);
+}
+
+.adminRoot :global(:is(button, a, input, textarea, select, [tabindex]):focus-visible) {
+  outline: 2px solid var(--dr-color-primary);
+  outline-offset: 2px;
+}
+
+.adminRoot :global([class~="text-xs"]) {
+  font-size: var(--dr-type-caption) !important;
+}
+
+.adminRoot :global([class~="text-sm"]) {
+  font-size: var(--dr-type-body) !important;
+}
+
+.adminRoot :global([class~="text-base"]) {
+  font-size: var(--dr-type-title-small) !important;
+}
+
+.adminRoot :global([class~="text-lg"]) {
+  font-size: var(--dr-type-title-compact) !important;
+}
+
+.adminRoot :global([class~="text-xl"]) {
+  font-size: var(--dr-type-title-medium) !important;
+}
+
+.adminRoot :global([class~="leading-relaxed"]) {
+  line-height: var(--dr-line-height-body) !important;
+}
+
+.adminRoot :global([class~="leading-snug"]) {
+  line-height: var(--dr-line-height-heading) !important;
+}
+
+.adminRoot :global([class~="text-foreground"]) {
+  color: var(--dr-color-text) !important;
+}
+
+.adminRoot :global([class~="text-muted-foreground"]) {
+  color: var(--dr-color-text-secondary) !important;
+}
+
+.adminRoot :global([class~="text-primary"]) {
+  color: var(--dr-color-primary) !important;
+}
+
+.adminRoot :global([class~="text-destructive"]) {
+  color: var(--dr-color-danger) !important;
+}
+
+.adminRoot :global([class~="bg-background"]),
+.adminRoot :global([class~="bg-card"]) {
+  background-color: var(--dr-color-surface) !important;
+}
+
+.adminRoot :global([class~="bg-card/50"]) {
+  background-color: color-mix(in srgb, var(--dr-color-surface) 50%, var(--dr-color-surface-container)) !important;
+}
+
+.adminRoot :global([class~="bg-muted"]),
+.adminRoot :global([class~="bg-muted/50"]) {
+  background-color: var(--dr-color-surface-container) !important;
+}
+
+.adminRoot :global([class~="bg-muted/10"]) {
+  background-color: color-mix(in srgb, var(--dr-color-surface-container) 10%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="bg-muted/20"]) {
+  background-color: color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="bg-muted/30"]) {
+  background-color: color-mix(in srgb, var(--dr-color-surface-container) 30%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="bg-muted/40"]) {
+  background-color: color-mix(in srgb, var(--dr-color-surface-container) 40%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="bg-primary"]),
+.adminRoot :global([class~="bg-primary/10"]) {
+  background-color: var(--dr-color-primary-container) !important;
+}
+
+.adminRoot :global([class~="bg-primary/[0.035]"]) {
+  background-color: color-mix(in srgb, var(--dr-color-primary) 4%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="bg-destructive/10"]) {
+  background-color: var(--dr-color-danger-container) !important;
+}
+
+.adminRoot :global([class~="bg-destructive/[0.025]"]) {
+  background-color: color-mix(in srgb, var(--dr-color-danger) 3%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="bg-destructive/[0.035]"]) {
+  background-color: color-mix(in srgb, var(--dr-color-danger) 4%, var(--dr-color-surface)) !important;
+}
+
+.adminRoot :global([class~="border-border"]) {
+  border-color: var(--dr-color-outline) !important;
+}
+
+.adminRoot :global([class~="border-border/80"]),
+.adminRoot :global([class~="border-border/70"]) {
+  border-color: var(--dr-color-outline) !important;
+}
+
+.adminRoot :global([class~="border-input"]) {
+  border-color: var(--dr-color-outline-strong) !important;
+}
+
+.adminRoot :global([class~="border-primary/20"]) {
+  border-color: color-mix(in srgb, var(--dr-color-primary) 20%, var(--dr-color-outline)) !important;
+}
+
+.adminRoot :global([class~="border-primary/40"]) {
+  border-color: color-mix(in srgb, var(--dr-color-primary) 40%, var(--dr-color-outline)) !important;
+}
+
+.adminRoot :global([class~="border-destructive/20"]) {
+  border-color: color-mix(in srgb, var(--dr-color-danger) 20%, var(--dr-color-outline)) !important;
+}
+
+.adminRoot :global([class~="bg-status-running-bg"]) {
+  background-color: var(--dr-color-primary-container) !important;
+}
+
+.adminRoot :global([class~="text-status-running-fg"]) {
+  color: var(--dr-color-primary) !important;
+}
+.adminRoot :global([class~="bg-status-running-fg"]) {
+  background-color: var(--dr-color-primary) !important;
+}
+
+.adminRoot :global([class~="bg-status-succeeded-bg"]) {
+  background-color: var(--dr-color-success-container) !important;
+}
+
+.adminRoot :global([class~="text-status-succeeded-fg"]) {
+  color: var(--dr-color-success) !important;
+}
+.adminRoot :global([class~="bg-status-succeeded-fg"]) {
+  background-color: var(--dr-color-success) !important;
+}
+
+.adminRoot :global([class~="bg-status-failed-bg"]) {
+  background-color: var(--dr-color-danger-container) !important;
+}
+
+.adminRoot :global([class~="text-status-failed-fg"]) {
+  color: var(--dr-color-danger) !important;
+}
+.adminRoot :global([class~="bg-status-failed-fg"]) {
+  background-color: var(--dr-color-danger) !important;
+}
+
+.adminRoot :global([class~="bg-status-partial-bg"]) {
+  background-color: var(--dr-color-warning-container) !important;
+}
+
+.adminRoot :global([class~="text-status-partial-fg"]) {
+  color: var(--dr-color-warning) !important;
+}
+.adminRoot :global([class~="bg-status-partial-fg"]) {
+  background-color: var(--dr-color-warning) !important;
+}
+
+.adminRoot :global([class~="bg-tier-deep-read"]) { background-color: var(--dr-color-tier-deep-read) !important; }
+.adminRoot :global([class~="bg-tier-skim"]) { background-color: var(--dr-color-tier-skim) !important; }
+.adminRoot :global([class~="bg-tier-noise"]) { background-color: var(--dr-color-tier-noise) !important; }
+
+.adminRoot :global([class~="hover:bg-muted"]:hover),
+.adminRoot :global([class~="hover:bg-muted/20"]:hover) {
+  background-color: var(--dr-color-surface-container) !important;
+}
+
+.adminRoot :global([class~="hover:border-border"]:hover) {
+  border-color: var(--dr-color-outline) !important;
+}
+
+.adminRoot :global([class~="focus:ring-ring"]:focus),
+.adminRoot :global([class~="focus-visible:ring-ring"]:focus-visible) {
+  --tw-ring-color: var(--dr-color-primary) !important;
+}
+
+.adminRoot :global(th) {
+  color: var(--dr-color-text-secondary);
+  font-size: var(--dr-type-caption);
+  font-weight: var(--dr-weight-semibold);
+}
+
+.warningText {
+  color: var(--dr-color-warning) !important;
+}
+
+.successText {
+  color: var(--dr-color-success) !important;
+}
+
+.warningSurface {
+  background-color: color-mix(in srgb, var(--dr-color-warning-container) 35%, var(--dr-color-surface)) !important;
+}
+
+.warningBadge {
+  border-color: var(--dr-color-warning) !important;
+  background-color: var(--dr-color-warning-container) !important;
+  color: var(--dr-color-warning) !important;
+}

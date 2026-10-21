@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "Deep Research Reader"
+  },
+  "extensionDescription": {
+    "message": "AI reading companion for articles: translate text, ask questions with source evidence, and save notes in your Chrome sidebar."
+  },
+  "actionOpenReader": {
+    "message": "Open Deep Research Reader"
+  }
+}

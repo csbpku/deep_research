@@ -125,14 +125,13 @@ try {
   });
   await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom');
+  await panel.locator('#provider-kind').selectOption('custom', { force: true });
   await panel.locator('#provider-url').fill(`http://127.0.0.1:${providerPort}/v1`);
   await panel.locator('#provider-model').fill('controls-reader');
   await panel.locator('#provider-key').fill('local-test-key');
   if (!await panel.getByText('卸载扩展前请先导出需要保留的阅读成果').isVisible()) {
     throw new Error('设置页没有显示卸载前导出提示');
   }
-  await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#close-settings').click();

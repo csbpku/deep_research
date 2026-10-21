@@ -7,9 +7,12 @@
 
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Sparkles } from 'lucide-react';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import Typography from '@mui/material/Typography';
+import { Sparkles } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
+import { AppButton as Button } from '@/components/material/AppButton';
 
 interface SynthesizeResp {
   processed: number;
@@ -50,34 +53,29 @@ export function AdminTopicActions() {
   const busy = synthesizeMut.isPending;
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex gap-2">
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
+      <Box sx={{ display: 'flex', gap: 1 }}>
         <Button
           type="button"
-          size="sm"
-          variant="outline"
+          variant="outlined"
           disabled={busy}
           onClick={() => synthesizeMut.mutate()}
           aria-label="生成 AI 综述"
+          startIcon={synthesizeMut.isPending ? <CircularProgress size={16} color="inherit" aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
         >
-          {synthesizeMut.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Sparkles className="size-4" />
-          )}
           生成 AI 综述
         </Button>
-      </div>
+      </Box>
       {message ? (
-        <p className="text-xs text-status-succeeded-fg" role="status">
+        <Typography variant="metadata" color="success.main" role="status">
           {message}
-        </p>
+        </Typography>
       ) : null}
       {error ? (
-        <p className="text-xs text-destructive" role="alert">
+        <Typography variant="metadata" color="error.main" role="alert">
           {error}
-        </p>
+        </Typography>
       ) : null}
-    </div>
+    </Box>
   );
 }

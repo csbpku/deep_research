@@ -4,10 +4,12 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { ContextualShellBanner } from './ContextualShellBanner';
 import { UnreadIssuesBanner } from './UnreadIssuesBanner';
 import { Topbar } from './Topbar';
+import { LoadingState } from '@/components/StateMessage';
 // ⚠️ 必须从 server-safe 模块拿常量：从 './SidebarNav'（'use client'）拿会被 RSC
 // 按 ID 序列化（而不是按值），导致 `[...PRIMARY_NAV]` 在服务端拿到字符串，
 // 触发 "X is not iterable"。
 import { ADMIN_NAV, PRIMARY_NAV, type NavItem } from './sidebar-nav-config';
+import styles from './shell.module.css';
 
 /**
  * AppShell —— 全站外壳（RSC）。
@@ -33,14 +35,19 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
     : null;
 
   return (
-    <div className="flex h-dvh flex-col">
+    <div className={styles.shell}>
+      <a href="#main-content" className={styles.skipLink}>跳到主要内容</a>
       <Topbar navItems={navItems} user={navUser} />
       <ContextualShellBanner>
         <Suspense fallback={null}>
           <UnreadIssuesBanner user={user} />
         </Suspense>
       </ContextualShellBanner>
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-y-contain px-4 py-6 sm:px-6">{children}</main>
+      <main id="main-content" tabIndex={-1} className={styles.main}>
+        {/* The RSC route slot may still be streaming when the client shell hydrates.
+            Keep an explicit boundary around it, not only the nested loading.tsx. */}
+        <Suspense fallback={<LoadingState label="正在加载页面…" />}>{children}</Suspense>
+      </main>
     </div>
   );
 }

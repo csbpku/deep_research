@@ -1,3 +1,5 @@
+import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecords } from './components/material-runtime.tsx';
+import { t, localizedMarkup, getUiLanguage } from './i18n.js';
 import { readerStore } from './reader-store.js';
 import { renderMarkdown } from './markdown-renderer.js';
 import { readingAnswerText } from './reader-core.js';
@@ -27,7 +29,7 @@ function pageLabel(url) {
     const parsed = new URL(url);
     return `${parsed.hostname}${parsed.pathname === '/' ? '' : parsed.pathname}`;
   } catch {
-    return text(url, '未知来源');
+    return text(url, t("未知来源"));
   }
 }
 
@@ -64,13 +66,13 @@ async function loadCloudSessions() {
 
 function formatTime(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '时间未知' : date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return Number.isNaN(date.getTime()) ? t("时间未知") : date.toLocaleString(getUiLanguage(), { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function recentQuestion(session) {
   const messages = Array.isArray(session?.discussion) ? session.discussion : [];
   const question = [...messages].reverse().find((item) => item?.role === 'user' && typeof item.content === 'string' && item.content.trim());
-  return text(question?.content, '还没有提问；下次打开原文可以继续。');
+  return text(question?.content, t("还没有提问；下次打开原文可以继续。"));
 }
 
 function messageCount(session) {
@@ -79,15 +81,15 @@ function messageCount(session) {
 
 function scopeLabel(session) {
   const scope = session?.discussionScope;
-  if (scope === 'page') return '整页正文';
-  if (scope === 'image') return '当前图示';
-  return '当前选段';
+  if (scope === 'page') return t("整页正文");
+  if (scope === 'image') return t("当前图示");
+  return t("当前选段");
 }
 
 function intentLabel(session) {
-  if (session?.discussionIntent === 'summary') return '全文总结';
-  if (session?.discussionIntent === 'ask') return '提问';
-  return '解读';
+  if (session?.discussionIntent === 'summary') return t("全文总结");
+  if (session?.discussionIntent === 'ask') return t("提问");
+  return t("解读");
 }
 
 function sessionIsOld(session) {
@@ -138,31 +140,7 @@ async function exportRecords(kind, records) {
     data.annotations = [];
   }
   downloadJson(data, `deep-research-${kind}-${new Date().toISOString().slice(0, 10)}.json`);
-  showToast(`已导出 ${records.length} 条${kind === 'sessions' ? '聊天会话' : '知识结论'}。`);
-}
-
-function makeAction(label, handler, danger = false) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = `history-card-action${danger ? ' danger' : ''}`;
-  button.textContent = label;
-  button.addEventListener('click', () => void handler());
-  return button;
-}
-
-function consolidateActions(actions, visibleCount) {
-  const secondary = [...actions.children].slice(visibleCount);
-  if (!secondary.length) return;
-  const disclosure = document.createElement('details');
-  const summary = document.createElement('summary');
-  summary.textContent = '更多⌄';
-  summary.setAttribute('aria-label', '更多记录操作');
-  const menu = document.createElement('div');
-  menu.className = 'history-card-menu';
-  menu.append(...secondary);
-  menu.addEventListener('click', event => { if (event.target.closest('button')) disclosure.open = false; });
-  disclosure.append(summary, menu);
-  actions.append(disclosure);
+  showToast(t("已导出 {0} 条{1}。", records.length, kind === 'sessions' ? t('聊天会话') : t('知识结论')));
 }
 
 async function ensurePagePermission(url) {
@@ -180,7 +158,7 @@ async function ensurePagePermission(url) {
 async function openSession(session, { anchor = null } = {}) {
   try {
     if (!(await ensurePagePermission(session.url))) {
-      showToast('没有获得原文站点权限；请允许访问后再继续聊天。');
+      showToast(t("没有获得原文站点权限；请允许访问后再继续聊天。"));
       return;
     }
     await chrome.storage.session?.set?.({
@@ -210,10 +188,10 @@ async function openSession(session, { anchor = null } = {}) {
       await chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
     }
     showToast(sessionIsOld(session)
-      ? '原文已打开；这是旧版本，已恢复会话但原文证据需要重新核对。'
-      : '原文已打开；Reader 正在恢复这次聊天，可以继续提问。');
+      ? t("原文已打开；这是旧版本，已恢复会话但原文证据需要重新核对。")
+      : t("原文已打开；Reader 正在恢复这次聊天，可以继续提问。"));
   } catch {
-    showToast('无法打开原文，请复制来源地址后重试。');
+    showToast(t("无法打开原文，请复制来源地址后重试。"));
   }
 }
 
@@ -227,7 +205,7 @@ function renderHistoryDetail(session) {
   $('history-detail-title').textContent = text(session.title, pageLabel(session.url));
   $('history-detail-source').textContent = session.url || pageLabel(session.url);
   $('history-detail-scope').textContent = `${scopeLabel(session)} · ${intentLabel(session)}`;
-  $('history-detail-time').textContent = `更新于 ${formatTime(session.updatedAt)}`;
+  $('history-detail-time').textContent = t("更新于 {0}", formatTime(session.updatedAt));
 
   const selection = $('history-detail-selection');
   selection.textContent = '';
@@ -235,7 +213,7 @@ function renderHistoryDetail(session) {
     selection.classList.remove('hidden');
     const label = document.createElement('div');
     label.className = 'history-detail-label';
-    label.textContent = '当时选中的原文';
+    label.textContent = t("当时选中的原文");
     const quote = document.createElement('div');
     quote.className = 'history-detail-quote';
     quote.textContent = session.selection.quote;
@@ -245,61 +223,16 @@ function renderHistoryDetail(session) {
   }
 
   const messages = $('history-detail-messages');
-  messages.textContent = '';
-  const discussion = Array.isArray(session.discussion) ? session.discussion : [];
-  if (!discussion.length) {
-    const empty = document.createElement('div');
-    empty.className = 'history-detail-empty';
-    empty.textContent = '这条会话还没有完成的问答。';
-    messages.appendChild(empty);
-  } else {
-    discussion.forEach((item) => {
-      if (!item || !['user', 'assistant'].includes(item.role) || !String(item.content || '').trim()) return;
-      const message = document.createElement('article');
-      message.className = `history-detail-message ${item.role === 'user' ? 'user' : 'assistant'}`;
-      const header = document.createElement('div');
-      header.className = 'history-detail-message-header';
-      header.textContent = item.role === 'user' ? '你' : 'Reader';
-      const body = document.createElement('div');
-      body.className = 'history-detail-message-body';
-      if (item.role === 'assistant') renderMarkdown(body, readingAnswerText(item.content));
-      else body.textContent = item.content;
-      message.append(header, body);
-      messages.appendChild(message);
-    });
-  }
-
+  const discussion = (Array.isArray(session.discussion) ? session.discussion : []).filter(item => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  renderMaterialConversation(messages, discussion);
   const structured = $('history-detail-structured');
   const answer = session.answerStructured && typeof session.answerStructured === 'object' ? session.answerStructured : null;
   const evidence = $('history-detail-evidence');
-  evidence.textContent = '';
+  renderMaterialEvidence(evidence, []);
   if (answer) {
     const evidenceItems = Array.isArray(answer.evidence) ? answer.evidence : [];
     $('history-detail-evidence-section').classList.toggle('hidden', !evidenceItems.length);
-    evidenceItems.forEach((item, index) => {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'history-detail-evidence-item';
-      row.title = item.anchor?.quote ? '打开原文并跳转到这条证据' : '这条证据没有可用的原文定位';
-      const number = document.createElement('span');
-      number.className = 'history-detail-evidence-index';
-      number.textContent = `[${index + 1}]`;
-      const content = document.createElement('span');
-      content.className = 'history-detail-evidence-content';
-      const quote = document.createElement('span');
-      quote.className = 'history-detail-quote';
-      quote.textContent = `“${item.quote || ''}”`;
-      content.appendChild(quote);
-      if (item.claim) {
-        const claim = document.createElement('span');
-        claim.className = 'history-detail-claim';
-        claim.textContent = item.claim;
-        content.appendChild(claim);
-      }
-      row.append(number, content);
-      row.addEventListener('click', () => void openSession(session, { anchor: item.anchor }));
-      evidence.appendChild(row);
-    });
+    renderMaterialEvidence(evidence, evidenceItems.map(item => ({ claim: item.claim, quote: item.quote, url: session.url, anchored: Boolean(item.anchor?.quote), onLocate: () => void openSession(session, { anchor: item.anchor }) })));
     const background = $('history-detail-background');
     renderMarkdown(background.querySelector('span'), answer.background || '');
     background.classList.toggle('hidden', !answer.background);
@@ -309,7 +242,7 @@ function renderHistoryDetail(session) {
     const limitations = $('history-detail-limitations');
     renderMarkdown(limitations.querySelector('span'), Array.isArray(answer.limitations) ? answer.limitations.join('\n') : '');
     limitations.classList.toggle('hidden', !answer.limitations?.length);
-    const moreParts = [answer.background && '背景', answer.inference && '推断', answer.limitations?.length && '未知项'].filter(Boolean);
+    const moreParts = [answer.background && t("背景"), answer.inference && t("推断"), answer.limitations?.length && t("未知项")].filter(Boolean);
     $('history-detail-more-summary').textContent = moreParts.join(' · ');
     $('history-detail-more').classList.toggle('hidden', !moreParts.length);
     $('history-detail-more').open = false;
@@ -329,140 +262,64 @@ function closeHistoryDetail({ restoreFocus = true } = {}) {
 }
 
 async function renameSession(session) {
-  const next = window.prompt('重命名聊天会话', session.title || pageLabel(session.url));
+  const next = window.prompt(t("重命名聊天会话"), session.title || pageLabel(session.url));
   if (next === null) return;
   const title = next.trim().slice(0, 500);
-  if (!title) return showToast('名称不能为空。');
+  if (!title) return showToast(t("名称不能为空。"));
   await readerStore.saveSession({ ...session, title, titleEdited: true });
   await loadData();
-  showToast('会话名称已更新。');
+  showToast(t("会话名称已更新。"));
 }
 
 async function deleteSession(session) {
-  if (!window.confirm(`删除“${session.title || pageLabel(session.url)}”的本地聊天会话？`)) return;
+  if (!window.confirm(t("删除“{0}”的本地聊天会话？", session.title || pageLabel(session.url)))) return;
   await readerStore.deleteSession(session.url, session.version || null);
   await loadData();
-  showToast('聊天会话已删除。');
+  showToast(t("聊天会话已删除。"));
 }
 
 async function renameInsight(insight) {
-  const next = window.prompt('重命名知识结论', insight.title || text(insight.quote, '未命名结论').slice(0, 80));
+  const next = window.prompt(t("重命名知识结论"), insight.title || text(insight.quote, t("未命名结论")).slice(0, 80));
   if (next === null) return;
   const title = next.trim().slice(0, 500);
-  if (!title) return showToast('名称不能为空。');
+  if (!title) return showToast(t("名称不能为空。"));
   await readerStore.saveInsight({ ...insight, title, updatedAt: new Date().toISOString() });
   await loadData();
-  showToast('知识结论名称已更新。');
+  showToast(t("知识结论名称已更新。"));
 }
 
 async function deleteInsight(insight) {
-  if (!window.confirm(`删除“${insight.title || '这条知识结论'}”？`)) return;
+  if (!window.confirm(t("删除“{0}”？", insight.title || '这条知识结论'))) return;
   await readerStore.deleteInsight(insight.id);
   await loadData();
-  showToast('知识结论已删除。');
+  showToast(t("知识结论已删除。"));
 }
 
 function renderEmpty(title, detail) {
-  const list = $('history-list');
-  list.textContent = '';
-  const empty = document.createElement('div');
-  empty.className = 'history-empty';
-  const heading = document.createElement('strong');
-  heading.textContent = title;
-  const copy = document.createElement('span');
-  copy.textContent = detail;
-  empty.append(heading, copy);
-  list.appendChild(empty);
+  renderMaterialRecords($('history-list'), [], `${title}。${detail}`);
 }
-
-function renderSessionCard(session) {
-  const card = document.createElement('article');
-  card.className = 'history-card';
-  const top = document.createElement('div');
-  top.className = 'history-card-top';
-  const heading = document.createElement('div');
-  heading.className = 'history-card-title';
-  heading.textContent = text(session.title, pageLabel(session.url));
-  const status = document.createElement('span');
-  status.className = 'history-status';
-  status.textContent = session.remote ? '平台同步' : sessionIsOld(session) ? '旧版本' : '当前版本';
-  status.style.background = sessionIsOld(session) ? '' : '#edf5ee';
-  status.style.color = sessionIsOld(session) ? '' : '#347253';
-  top.append(heading, status);
-  const source = document.createElement('div');
-  source.className = 'history-card-source';
-  source.textContent = session.url;
-  const question = document.createElement('div');
-  question.className = 'history-question';
-  const questionLabel = document.createElement('span');
-  questionLabel.className = 'history-question-label';
-  questionLabel.textContent = '最近问题';
-  const questionText = document.createElement('span');
-  questionText.textContent = recentQuestion(session);
-  question.append(questionLabel, questionText);
-  const meta = document.createElement('div');
-  meta.className = 'history-card-meta';
-  meta.innerHTML = '<span data-meta="source"></span><span data-meta="scope"></span><span data-meta="time"></span><span data-meta="messages"></span>';
-  meta.querySelector('[data-meta="source"]').textContent = pageLabel(session.url);
-  meta.querySelector('[data-meta="scope"]').textContent = `${scopeLabel(session)} · ${intentLabel(session)}`;
-  meta.querySelector('[data-meta="time"]').textContent = `更新于 ${formatTime(session.updatedAt)}`;
-  meta.querySelector('[data-meta="messages"]').textContent = `${messageCount(session)} 条消息`;
-  const actions = document.createElement('div');
-  actions.className = 'history-card-actions';
-  actions.append(makeAction('继续聊天', () => openSession(session)), makeAction('查看对话', () => renderHistoryDetail(session)));
-  if (!session.remote) {
-    actions.append(
-      makeAction('重命名', () => renameSession(session)),
-      makeAction('导出', () => exportRecords('sessions', [session])),
-      makeAction('删除', () => deleteSession(session), true),
-    );
-  }
-  consolidateActions(actions, 2);
-  card.append(top, source, question, meta, actions);
-  return card;
+function sessionCard(session) {
+  return { key: session.id, title: text(session.title, pageLabel(session.url)), source: session.url,
+    status: session.remote ? t("平台同步") : sessionIsOld(session) ? t("旧版本") : t("当前版本"), warning: sessionIsOld(session),
+    detail: recentQuestion(session), meta: `${t("更新于 {0}", formatTime(session.updatedAt))} · ${t("{0} 条消息", messageCount(session))}`,
+    visibleActions: 2, actions: [
+      { label: t("继续聊天"), run: () => void openSession(session) },
+      { label: t("查看对话"), run: () => renderHistoryDetail(session) },
+      ...(!session.remote ? [
+        { label: t("重命名"), run: () => void renameSession(session) },
+        { label: t("导出"), run: () => void exportRecords('sessions', [session]) },
+        { label: t("删除"), danger: true, run: () => void deleteSession(session) },
+      ] : []),
+    ] };
 }
-
-function renderInsightCard(insight) {
-  const card = document.createElement('article');
-  card.className = 'history-card';
-  const top = document.createElement('div');
-  top.className = 'history-card-top';
-  const heading = document.createElement('div');
-  heading.className = 'history-card-title';
-  heading.textContent = text(insight.title, text(insight.quote, '未命名结论').slice(0, 80));
-  top.appendChild(heading);
-  const source = document.createElement('div');
-  source.className = 'history-card-source';
-  source.textContent = insight.url || '本地知识结论';
-  const quote = document.createElement('div');
-  quote.className = 'history-insight-quote';
-  quote.textContent = text(insight.quote, '没有保存原文摘录。');
-  card.append(top, source, quote);
-  if (insight.aiAnswer) {
-    const answer = document.createElement('div');
-    answer.className = 'history-insight-answer';
-    renderMarkdown(answer, readingAnswerText(insight.aiAnswer));
-    card.appendChild(answer);
-  }
-  if (Array.isArray(insight.tags) && insight.tags.length) {
-    const tags = document.createElement('div');
-    tags.className = 'history-tags';
-    insight.tags.forEach((tag) => { const node = document.createElement('span'); node.className = 'history-tag'; node.textContent = tag; tags.appendChild(node); });
-    card.appendChild(tags);
-  }
-  const meta = document.createElement('div');
-  meta.className = 'history-card-meta';
-  meta.textContent = `收藏于 ${formatTime(insight.updatedAt || insight.createdAt)}`;
-  const actions = document.createElement('div');
-  actions.className = 'history-card-actions';
-  actions.append(
-    makeAction('重命名', () => renameInsight(insight)),
-    makeAction('导出', () => exportRecords('insights', [insight])),
-    makeAction('删除', () => deleteInsight(insight), true),
-  );
-  consolidateActions(actions, 1);
-  card.append(meta, actions);
-  return card;
+function insightCard(insight) {
+  return { key: insight.id, title: text(insight.title, text(insight.quote, t("未命名结论")).slice(0, 80)), source: insight.url || t("本地知识结论"),
+    detail: text(insight.quote, t("没有保存原文摘录。")), answer: insight.aiAnswer, tags: insight.tags,
+    meta: t("收藏于 {0}", formatTime(insight.updatedAt || insight.createdAt)), visibleActions: 1, actions: [
+      { label: t("重命名"), run: () => void renameInsight(insight) },
+      { label: t("导出"), run: () => void exportRecords('insights', [insight]) },
+      { label: t("删除"), danger: true, run: () => void deleteInsight(insight) },
+    ] };
 }
 
 function render() {
@@ -475,17 +332,16 @@ function render() {
   const filtered = source.filter(activeTab === 'sessions' ? sessionMatches : insightMatches);
   $('session-count').textContent = String(sessions.length);
   $('insight-count').textContent = String(insights.length);
-  $('history-section-kicker').textContent = activeTab === 'sessions' ? '聊天会话' : '知识结论';
-  $('history-section-title').textContent = activeTab === 'sessions' ? '聊天会话' : '知识结论';
-  $('history-summary-text').textContent = `${filtered.length} 条${activeTab === 'sessions' ? '会话' : '结论'}`;
-  $('history-filter-text').textContent = query ? `匹配“${query}”` : '';
+  $('history-section-kicker').textContent = activeTab === 'sessions' ? t("聊天会话") : t("知识结论");
+  $('history-section-title').textContent = activeTab === 'sessions' ? t("聊天会话") : t("知识结论");
+  $('history-summary-text').textContent = t("{0} 条{1}", filtered.length, activeTab === 'sessions' ? t('会话') : t('结论'));
+  $('history-filter-text').textContent = query ? t("匹配“{0}”", query) : '';
   const list = $('history-list');
-  list.textContent = '';
   if (!filtered.length) {
-    renderEmpty(query ? '没有匹配项' : (activeTab === 'sessions' ? '还没有聊天会话' : '还没有知识结论'), query ? '换个关键词搜索页面标题、来源或历史问题。' : (activeTab === 'sessions' ? '在原网页中选择一段内容并开始讨论，记录会自动出现在这里。' : '在侧栏确认保存 AI 结论，它会独立出现在这里。'));
+    renderEmpty(query ? t("没有匹配项") : (activeTab === 'sessions' ? t("还没有聊天会话") : t("还没有知识结论")), query ? t("换个关键词搜索页面标题、来源或历史问题。") : (activeTab === 'sessions' ? t("在原网页中选择一段内容并开始讨论，记录会自动出现在这里。") : t("在侧栏确认保存 AI 结论，它会独立出现在这里。")));
     return;
   }
-  filtered.forEach((item) => list.appendChild(activeTab === 'sessions' ? renderSessionCard(item) : renderInsightCard(item)));
+  renderMaterialRecords(list, filtered.map(activeTab === 'sessions' ? sessionCard : insightCard));
 }
 
 async function loadData() {

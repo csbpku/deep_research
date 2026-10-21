@@ -1,6 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
+import { AppButton } from '@/components/material/AppButton';
 
 export default function ReadingConnectPage() {
   const [message, setMessage] = useState('正在连接 Deep Research…');
@@ -31,5 +38,19 @@ export default function ReadingConnectPage() {
       })
       .catch((error) => setMessage(error instanceof Error ? error.message : '连接失败，请先登录 Deep Research。'));
   }, []);
-  return <main className="mx-auto max-w-lg px-6 py-20 text-center"><h1 className="text-xl font-semibold">Deep Research Reader</h1><p className="mt-3 text-sm text-muted-foreground">{message}</p><a className="mt-6 inline-block rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground" href={signInHref}>登录后重试</a></main>;
+  return (
+    <Box component="div" sx={{ width: '100%', maxWidth: '480px', marginInline: 'auto', paddingInline: { xs: space.md, sm: space.lg }, paddingBlock: { xs: space.lg, sm: space.wide } }}>
+      <Paper variant="outlined" sx={{ padding: { xs: space.lg, sm: space.section }, borderRadius: 'var(--dr-radius-large)', boxShadow: 'var(--dr-elevation-1)' }}>
+        <Stack sx={{ alignItems: 'center', gap: space.md, textAlign: 'center' }}>
+          <Typography component="p" variant="metadata" color="primary.main" sx={{ fontWeight: 600, letterSpacing: '0.04em' }}>Deep Research Reader</Typography>
+          <Typography component="h1" variant="panelTitle">连接平台账号</Typography>
+          <Box role="status" aria-live="polite" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: space.sm, width: '100%', minHeight: 'var(--dr-control-height)', padding: space.md, border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'background.default', color: 'text.secondary' }}>
+            {message === '正在连接 Deep Research…' ? <CircularProgress size={16} aria-label="正在连接" /> : null}
+            <Typography component="p" variant="body1" color="text.secondary" sx={{ overflowWrap: 'anywhere', textAlign: 'left' }}>{message}</Typography>
+          </Box>
+          <AppButton component="a" href={signInHref} variant="contained" fullWidth sx={{ borderRadius: 'var(--dr-radius-small)' }}>登录后重试</AppButton>
+        </Stack>
+      </Paper>
+    </Box>
+  );
 }

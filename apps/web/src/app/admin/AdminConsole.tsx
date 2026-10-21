@@ -6,6 +6,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Alert, Box, Checkbox, Paper, Typography } from '@mui/material';
 import {
   Activity,
   AlertTriangle,
@@ -47,32 +48,38 @@ import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
+  Button,
+  Input,
+  Skeleton,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Card,
+  CardContent,
+  Badge,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './AdminMaterial';
 import { AdminActionDialog, type AdminActionValues } from '@/components/admin/AdminActionDialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { AppButton } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
 import { cn } from '@/lib/utils';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { cleanResearchText } from '@/lib/research-markdown-cleanup';
 import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
 import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 import LlmUsageConsole from './llm-usage/LlmUsageConsole';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { summarizeAdminBulkResults } from './admin-bulk-results';
+import styles from './admin.module.css';
 
 export const ADMIN_TAB_KEYS = [
   'dashboard',
@@ -330,64 +337,45 @@ interface AdminResearchListResponse {
 export default function AdminConsole() {
   const [tab, setTab] = useState<Tab>('dashboard');
   return (
-    <div className="mx-auto w-full max-w-shell">
-      <header className="mb-4">
-        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-normal">
-          <ShieldCheck className="size-5 text-destructive" />
+    <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 1280 }}>
+      <Box component="header" sx={{ mb: 2.5 }}>
+        <Typography variant="h1" component="h1" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ShieldCheck size={20} aria-hidden="true" />
           Admin 控制台
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           管理内容质量、监控平台健康度。仅 admin 角色可见。
-        </p>
-      </header>
+        </Typography>
+      </Box>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <div className="mb-3 sm:hidden">
-          <Select value={tab} onValueChange={(v) => setTab(v as Tab)}>
-            <SelectTrigger aria-label="Admin 模块">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TABS.map((item) => (
-                <SelectItem key={item.key} value={item.key}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <TabsList className="hidden w-full justify-start overflow-x-auto sm:flex">
+        <TabsList className="w-full">
           {TABS.map((t) => {
             const Icon = t.icon;
             return (
-              <TabsTrigger key={t.key} value={t.key} className="shrink-0 whitespace-nowrap">
-                <Icon className="size-4" />
+              <TabsTrigger key={t.key} value={t.key} icon={<Icon size={16} aria-hidden="true" />} className="shrink-0 whitespace-nowrap">
                 {t.label}
               </TabsTrigger>
             );
           })}
         </TabsList>
-        {/* Radix Tabs trigger 自动 aria-controls 指向面板 id;
-          单 TabsContent(value=当前 tab)即可让所有 trigger 找到对应面板,
-          避免 axe aria-valid-attr-value 违规。
-          实际内容用 tab 客户端条件渲染,避免重复 DOM。 */}
         <TabsContent value={tab} className="mt-3 space-y-3 focus-visible:outline-none">
 
-      <div className="mt-4">
+      <Box sx={{ mt: 2 }}>
         {tab === 'dashboard' && <DashboardTab />}
         {tab === 'radar' && <RadarGovernanceTab />}
         {tab === 'researches' && <ResearchesTab />}
         {tab === 'topics' && (
           <div className="space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border bg-card p-4">
+            <Paper variant="outlined" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, p: 2 }}>
               <div>
-                <h2 className="text-sm font-semibold">主题运营</h2>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                <Typography variant="subtitle2">主题运营</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
                   主题提议在下方审核队列生成并审核；这里仅负责对已发布主题生成 AI 综述。
-                </p>
+                </Typography>
               </div>
               <AdminTopicActions />
-            </div>
+            </Paper>
             <TopicProposalsTab />
           </div>
         )}
@@ -395,10 +383,10 @@ export default function AdminConsole() {
         {tab === 'comments' && <CommentsTab />}
         {tab === 'llm_usage' && <LlmUsageConsole />}
         {tab === 'users' && <UsersTab />}
-      </div>
+      </Box>
         </TabsContent>
       </Tabs>
-    </div>
+    </Box>
   );
 }
 
@@ -600,11 +588,11 @@ function DashboardTab() {
 
   return (
     <div>
-      <section className="mb-4 overflow-hidden rounded-md border border-border bg-card">
+      <section className="mb-4 overflow-hidden rounded-lg border border-border bg-card">
         <div className="border-b border-border px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <h2 className="flex items-center gap-2 text-base font-semibold">
                 <CircleAlert className="size-4 text-primary" />
                 异常优先
               </h2>
@@ -632,7 +620,7 @@ function DashboardTab() {
           }
           hint={`雷达失败 ${d.radar.monitor.latest.failed + d.radar.monitor.latest.partial} · AI 失败 ${d.jobs.failedLast24h}`}
           tone="primary"
-          className="rounded-none border-0 p-3"
+          variant="grid" density="compact"
         />
         <StatCard
           label={
@@ -648,7 +636,7 @@ function DashboardTab() {
             </span>
           }
           tone={d.pendingReviews.total > 0 ? 'primary' : 'default'}
-          className="rounded-none border-0 p-3"
+          variant="grid" density="compact"
         />
         <StatCard
           label={
@@ -660,7 +648,7 @@ function DashboardTab() {
           value={d.radar.monitor.failedUniqueItems}
           hint={`待评分 ${d.radar.monitor.readingLevels.pending} · 待补全 ${d.radar.monitor.pendingEnrichment}`}
           tone={d.radar.monitor.failedUniqueItems > 0 ? 'primary' : 'default'}
-          className="rounded-none border-0 p-3"
+          variant="grid" density="compact"
         />
         <StatCard
           label={
@@ -672,7 +660,7 @@ function DashboardTab() {
           value={d.jobs.failedLast24h + d.jobs.failedImportJobs}
           hint={`过去 24h 提交 ${d.jobs.submittedLast24h}`}
           tone={d.jobs.failedLast24h + d.jobs.failedImportJobs > 0 ? 'primary' : 'default'}
-          className="rounded-none border-0 p-3"
+          variant="grid" density="compact"
         />
         <StatCard
           label={
@@ -683,14 +671,14 @@ function DashboardTab() {
           }
           value={`$${d.cost.monthUsd}`}
           hint="用于观察成本异常，趋势见用量页"
-          className="col-span-2 rounded-none border-0 p-3 xl:col-span-1"
+          variant="grid" density="compact" className="col-span-2 xl:col-span-1"
         />
       </div>
       </section>
 
-      <details className="group mb-4 rounded-md border border-border bg-card/50">
+      <details className="group mb-4 rounded-lg border border-border bg-card/50">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-1.5"><Sparkles className="size-4 text-primary" />认知闭环 V2 · 近 7 天</span>
+          <span className="flex items-center gap-2"><Sparkles className="size-4 text-primary" />认知闭环 V2 · 近 7 天</span>
           <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
         </summary>
         <div className="border-t border-border p-3">
@@ -700,20 +688,20 @@ function DashboardTab() {
             value={d.cognitionLoop.topicFollowed}
             hint={`取消 ${d.cognitionLoop.topicUnfollowed}`}
             tone="primary"
-            className="p-2"
+            density="dense"
           />
           <StatCard
             label={<span>专题深度查看</span>}
             value={d.cognitionLoop.topicViewedWithUnread}
             hint="含未读议题时"
             tone={d.cognitionLoop.topicViewedWithUnread > 0 ? 'primary' : 'default'}
-            className="p-2"
+            density="dense"
           />
           <StatCard
             label={<span>专题发起调研</span>}
             value={d.cognitionLoop.topicResearchStarted}
             tone="primary"
-            className="p-2"
+            density="dense"
           />
           <StatCard
             label={<span>确认研究计划</span>}
@@ -727,22 +715,22 @@ function DashboardTab() {
                   )}% 转化`
                 : '尚无样本'
             }
-            className="p-2"
+            density="dense"
           />
           <StatCard
             label={<span>复用上下文</span>}
             value={d.cognitionLoop.researchContextReused}
             hint="研究复用了历史上下文的次数"
             tone={d.cognitionLoop.researchContextReused > 0 ? 'primary' : 'default'}
-            className="p-2"
+            density="dense"
           />
         </div>
       </div>
       </details>
 
-      <details className="group mb-4 overflow-hidden rounded-md border border-border bg-card">
+      <details className="group mb-4 overflow-hidden rounded-lg border border-border bg-card">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-1.5"><RadarIcon className="size-4 text-muted-foreground" />雷达运行明细</span>
+          <span className="flex items-center gap-2"><RadarIcon className="size-4 text-muted-foreground" />雷达运行明细</span>
           <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
             异常 {attentionCount} · 进入后查看逐源状态
             <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
@@ -752,11 +740,11 @@ function DashboardTab() {
       <RadarMonitorPanel monitor={d.radar.monitor} generatedAt={d.generatedAt} />
       <RadarScoringRules />
 
-      <section className="overflow-hidden rounded-md border border-border bg-card">
+      <section className="overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+              <h2 className="flex items-center gap-2 text-base font-semibold">
                 <RadarIcon className="size-4 text-muted-foreground" />
                 雷达同步
               </h2>
@@ -834,7 +822,7 @@ function DashboardTab() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
-              <div className="inline-flex overflow-hidden rounded-md border border-border bg-background">
+              <div className="inline-flex overflow-hidden rounded-lg border border-border bg-background">
                 {([
                   ['all', `全部 ${latestRuns.length}`],
                   ['attention', `异常 ${attentionCount}`],
@@ -845,7 +833,7 @@ function DashboardTab() {
                     type="button"
                     aria-pressed={runFilter === key}
                     className={cn(
-                      'h-7 border-r border-border px-2.5 text-xs transition-colors last:border-r-0',
+                      'h-7 border-r border-border px-3 text-xs transition-colors last:border-r-0',
                       runFilter === key
                         ? 'bg-foreground font-medium text-background'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -881,21 +869,21 @@ function DashboardTab() {
                         className={cn(
                           'align-middle transition-colors hover:bg-muted/20',
                           run.status === 'failed' && 'bg-destructive/[0.035]',
-                          run.status === 'partial' && 'bg-amber-500/[0.035]',
+                          run.status === 'partial' && styles.warningSurface,
                         )}
                       >
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-3">
                         <div className="font-medium text-foreground">{run.sourceName}</div>
-                        <div className="mt-0.5 flex items-center gap-1.5 text-muted-foreground">
+                        <div className="mt-1 flex items-center gap-2 text-muted-foreground">
                           <span>{formatSourceType(run.sourceType).short}</span>
                           <span aria-hidden="true">·</span>
                           <span>{run.triggeredBy === 'cron' ? '定时' : '手动'}</span>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-3">
                         <SyncStatusBadge status={run.status} />
                         {run.recovered ? (
-                          <div className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                          <div className={cn('mt-1 text-xs font-medium', styles.successText)}>
                             已恢复 · 历史失败 {run.historicalFailureCount} 次
                           </div>
                         ) : run.attemptCount > 1 ? (
@@ -907,11 +895,11 @@ function DashboardTab() {
                           {formatRunTime(run.completedAt ?? run.createdAt)}
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-3">
                         <div className="font-mono tabular-nums text-foreground">
                           {run.totalFetched}
                           <span className="ml-1 font-sans text-muted-foreground">抓取</span>
-                          <span className="ml-2 text-emerald-700 dark:text-emerald-300">+{run.totalNew}</span>
+                          <span className={cn('ml-2', styles.successText)}>+{run.totalNew}</span>
                         </div>
                         {run.totalFailed > 0 ? (
                           <div className="mt-1 text-destructive">失败 {run.totalFailed}</div>
@@ -919,7 +907,7 @@ function DashboardTab() {
                           <div className="mt-1 text-muted-foreground">跳过 {run.totalSkipped}</div>
                         )}
                       </td>
-                      <td className="w-[210px] px-3 py-2.5">
+                      <td className="w-[210px] px-3 py-3">
                         <PipelineMetric
                           label="评分"
                           completed={run.scoredCount}
@@ -933,16 +921,16 @@ function DashboardTab() {
                           pending={run.pendingEnrichmentCount}
                         />
                       </td>
-                      <td className="max-w-[240px] px-4 py-2.5 text-muted-foreground">
+                      <td className="max-w-[240px] px-4 py-3 text-muted-foreground">
                         <div className="font-mono tabular-nums">{formatElapsed(run.elapsedMs)}</div>
                         {run.errorCode ? (
                           <div className="mt-1 whitespace-normal break-words text-xs text-destructive">
                             <code>{run.errorCode}</code>
-                            {run.errorMessage ? <div className="mt-0.5 font-sans">{run.errorMessage}</div> : null}
+                            {run.errorMessage ? <div className="mt-1 font-sans">{run.errorMessage}</div> : null}
                           </div>
                         ) : null}
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-3">
                         <div className="flex items-center gap-1">
                           <Button
                             type="button"
@@ -991,20 +979,20 @@ function DashboardTab() {
                   className={cn(
                     'px-4 py-3',
                     run.status === 'failed' && 'bg-destructive/[0.035]',
-                    run.status === 'partial' && 'bg-amber-500/[0.035]',
+                    run.status === 'partial' && styles.warningSurface,
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-foreground">{run.sourceName}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">
+                      <div className="mt-1 text-xs text-muted-foreground">
                         {formatSourceType(run.sourceType).short} · {run.triggeredBy === 'cron' ? '定时' : '手动'} · {formatRunTime(run.completedAt ?? run.createdAt)}
                       </div>
                     </div>
                     <div className="text-right">
                       <SyncStatusBadge status={run.status} />
                       {run.recovered ? (
-                        <div className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                        <div className={cn('mt-1 text-xs font-medium', styles.successText)}>
                           已恢复 · 失败 {run.historicalFailureCount} 次
                         </div>
                       ) : null}
@@ -1013,23 +1001,23 @@ function DashboardTab() {
                   <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
                     <div>
                       <div className="text-muted-foreground">同步</div>
-                      <div className="mt-0.5 font-mono tabular-nums">
-                        {run.totalFetched} / <span className="text-emerald-700 dark:text-emerald-300">+{run.totalNew}</span>
+                      <div className="mt-1 font-mono tabular-nums">
+                        {run.totalFetched} / <span className={styles.successText}>+{run.totalNew}</span>
                       </div>
                     </div>
                     <div>
                       <div className="text-muted-foreground">评分</div>
-                      <div className="mt-0.5 font-mono tabular-nums">{stageCount(run.scoredCount, run.candidateCount)}</div>
+                      <div className="mt-1 font-mono tabular-nums">{stageCount(run.scoredCount, run.candidateCount)}</div>
                     </div>
                     <div>
                       <div className="text-muted-foreground">补全</div>
-                      <div className="mt-0.5 font-mono tabular-nums">{stageCount(run.enrichedCount, run.candidateCount)}</div>
+                      <div className="mt-1 font-mono tabular-nums">{stageCount(run.enrichedCount, run.candidateCount)}</div>
                     </div>
                   </div>
                   {run.errorCode ? (
                     <div className="mt-2 break-words text-xs text-destructive">
                       <code>{run.errorCode}</code>
-                      {run.errorMessage ? <div className="mt-0.5 text-xs">{run.errorMessage}</div> : null}
+                      {run.errorMessage ? <div className="mt-1 text-xs">{run.errorMessage}</div> : null}
                     </div>
                   ) : null}
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1089,17 +1077,17 @@ function RadarMonitorPanel({
   const maxScore = Math.max(1, ...monitor.scoreDistribution.map((bucket) => bucket.count));
 
   return (
-    <section className="mb-4 overflow-hidden rounded-md border border-border bg-card">
+    <section className="mb-4 overflow-hidden rounded-lg border border-border bg-card">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="flex items-center gap-1.5 text-sm font-semibold">
+            <h2 className="flex items-center gap-2 text-base font-semibold">
               <Activity className="size-4 text-muted-foreground" />
               雷达实时监控
             </h2>
             <span
               className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
+                'inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium',
                 monitor.active
                   ? 'bg-status-running-bg text-status-running-fg'
                   : 'bg-status-succeeded-bg text-status-succeeded-fg',
@@ -1114,7 +1102,7 @@ function RadarMonitorPanel({
           </p>
         </div>
         {monitor.activeSources.length > 0 ? (
-          <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5 text-xs text-muted-foreground">
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
             <span>正在处理：</span>
             {monitor.activeSources.slice(0, 4).map((source) => (
               <Badge key={`${source.name}-${source.startedAt}`} variant="secondary">{source.name}</Badge>
@@ -1144,7 +1132,7 @@ function RadarMonitorPanel({
             {completedRuns}/{monitor.latest.total} 个来源已结束 · {monitor.runs.total} 次运行
           </span>
         </div>
-        <div className="h-2 overflow-hidden rounded-sm bg-muted">
+        <div className="h-2 overflow-hidden rounded bg-muted">
           <div
             className={cn('h-full bg-status-succeeded-fg transition-all', monitor.active && 'bg-status-running-fg')}
             style={{ width: `${runProgress}%` }}
@@ -1178,7 +1166,7 @@ function RadarMonitorPanel({
                 ] as const).map(([label, count, color]) => (
                   <div key={label} className="grid grid-cols-[68px_1fr_30px] items-center gap-2 text-xs">
                     <span className="text-muted-foreground">{label}</span>
-                    <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+                    <div className="h-1.5 overflow-hidden rounded bg-muted">
                       <div className={cn('h-full', color)} style={{ width: `${(count / maxLevel) * 100}%` }} />
                     </div>
                     <span className="text-right font-mono tabular-nums">{count}</span>
@@ -1192,8 +1180,8 @@ function RadarMonitorPanel({
                 {monitor.scoreDistribution.map((bucket) => (
                   <div key={bucket.label} className="grid grid-cols-[52px_1fr_30px] items-center gap-2 text-xs">
                     <span className="text-muted-foreground">{bucket.label}</span>
-                    <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
-                      <div className="h-full bg-primary" style={{ width: `${(bucket.count / maxScore) * 100}%` }} />
+                    <div className="h-1.5 overflow-hidden rounded bg-muted">
+                      <div className="h-full bg-[var(--dr-color-primary)]" style={{ width: `${(bucket.count / maxScore) * 100}%` }} />
                     </div>
                     <span className="text-right font-mono tabular-nums">{bucket.count}</span>
                   </div>
@@ -1247,7 +1235,7 @@ function RadarMonitorSection({
   return (
     <div className="min-w-0 px-4 py-3">
       <div className="mb-3 flex items-baseline justify-between gap-2">
-        <h3 className="text-xs font-semibold">{title}</h3>
+        <h3 className="text-sm font-semibold">{title}</h3>
         {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
       </div>
       {children}
@@ -1257,10 +1245,10 @@ function RadarMonitorSection({
 
 function RadarScoringRules() {
   return (
-    <details className="group mb-4 overflow-hidden rounded-md border border-border bg-card">
+    <details className="group mb-4 overflow-hidden rounded-lg border border-border bg-card">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
         <div>
-          <h2 className="text-sm font-semibold">评分与阅读等级规则</h2>
+          <h2 className="text-base font-semibold">评分与阅读等级规则</h2>
           <p className="mt-1 text-xs text-muted-foreground">7 个评分维度 · 3 个来源 profile</p>
         </div>
         <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
@@ -1282,22 +1270,22 @@ function RadarScoringRules() {
           </thead>
           <tbody className="divide-y divide-border">
             <tr>
-              <td className="px-4 py-2.5 font-medium">工程内容 / GitHub</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 55</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">38–54.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 38</td>
+              <td className="px-4 py-3 font-medium">工程内容 / GitHub</td>
+              <td className="px-3 py-3 font-mono tabular-nums">≥ 55</td>
+              <td className="px-3 py-3 font-mono tabular-nums">38–54.99</td>
+              <td className="px-3 py-3 font-mono tabular-nums">&lt; 38</td>
             </tr>
             <tr>
-              <td className="px-4 py-2.5 font-medium">研究论文 / arXiv</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 60</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">42–59.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 42</td>
+              <td className="px-4 py-3 font-medium">研究论文 / arXiv</td>
+              <td className="px-3 py-3 font-mono tabular-nums">≥ 60</td>
+              <td className="px-3 py-3 font-mono tabular-nums">42–59.99</td>
+              <td className="px-3 py-3 font-mono tabular-nums">&lt; 42</td>
             </tr>
             <tr>
-              <td className="px-4 py-2.5 font-medium">行业新闻 / 产品动态</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">≥ 52</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">38–51.99</td>
-              <td className="px-3 py-2.5 font-mono tabular-nums">&lt; 38</td>
+              <td className="px-4 py-3 font-medium">行业新闻 / 产品动态</td>
+              <td className="px-3 py-3 font-mono tabular-nums">≥ 52</td>
+              <td className="px-3 py-3 font-mono tabular-nums">38–51.99</td>
+              <td className="px-3 py-3 font-mono tabular-nums">&lt; 38</td>
             </tr>
           </tbody>
         </table>
@@ -1331,7 +1319,7 @@ function RunFailureDetails({ runId, sourceName }: { runId: string; sourceName: s
       {q.isError ? <p className="text-xs text-destructive">{(q.error as Error).message}</p> : null}
       <div className="grid gap-2">
         {(q.data?.items ?? []).map((item) => (
-          <div key={item.id} className="flex items-start justify-between gap-3 rounded border border-destructive/20 bg-background p-2.5 text-xs">
+          <div key={item.id} className="flex items-start justify-between gap-3 rounded border border-destructive/20 bg-background p-3 text-xs">
             <div className="min-w-0">
               <div className="font-medium">{item.title}</div>
               <div className="mt-1 text-muted-foreground">
@@ -1369,7 +1357,9 @@ function RadarGovernanceTab() {
     return `${parts.find((part) => part.type === 'year')?.value}-${parts.find((part) => part.type === 'month')?.value}-${parts.find((part) => part.type === 'day')?.value}`;
   });
   const [actionMessage, setActionMessage] = useState('');
+  const [actionTone, setActionTone] = useState<'success' | 'warning' | 'error'>('success');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [confirmingBulkDismiss, setConfirmingBulkDismiss] = useState(false);
   const q = useQuery<RadarDiagnosticListResponse>({
     queryKey: ['admin-radar-diagnostics', kind, status, date, query, sourceType, reasonCode, sort, page, perPage],
     queryFn: async () => {
@@ -1430,33 +1420,47 @@ function RadarGovernanceTab() {
     },
     onSuccess: () => {
       setActionMessage('操作已完成');
+      setActionTone('success');
       queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostics'] });
       queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostic-counts'] });
       queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
     },
-    onError: (error) => setActionMessage((error as Error).message),
+    onError: (error) => {
+      setActionMessage((error as Error).message);
+      setActionTone('error');
+    },
   });
   const bulkActionMut = useMutation({
     mutationFn: async (action: 'promote' | 'dismiss') => {
-      const responses: Response[] = [];
+      const results: Array<{ id: string; ok: boolean; message?: string }> = [];
       for (const id of selectedIds) {
-        responses.push(await fetch(`/api/admin/radar/diagnostics/${id}/${action}`, { method: 'POST' }));
+        try {
+          const response = await fetch(`/api/admin/radar/diagnostics/${id}/${action}`, { method: 'POST' });
+          if (response.ok) {
+            results.push({ id, ok: true });
+          } else {
+            const body = await response.json().catch(() => ({ message: '请求失败' }));
+            results.push({ id, ok: false, message: (body as { message?: string }).message ?? `HTTP ${response.status}` });
+          }
+        } catch (error) {
+          results.push({ id, ok: false, message: error instanceof Error ? error.message : '网络请求失败' });
+        }
       }
-      const failed = responses.find((response) => !response.ok);
-      if (failed) {
-        const body = await failed.json().catch(() => ({ message: '批量操作失败' }));
-        throw new Error((body as { message?: string }).message ?? '批量操作失败');
-      }
-      return selectedIds.length;
+      return results;
     },
-    onSuccess: (count, action) => {
-      setSelectedIds([]);
-      setActionMessage(`${count} 条内容已${action === 'promote' ? '提升到雷达' : '忽略'}`);
+    onSuccess: (results, action) => {
+      const summary = summarizeAdminBulkResults(results, action === 'promote' ? '提升到雷达' : '忽略');
+      setSelectedIds(summary.failedIds);
+      setActionMessage(summary.message);
+      setActionTone(summary.failedIds.length ? 'warning' : 'success');
       queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostics'] });
       queryClient.invalidateQueries({ queryKey: ['admin-radar-diagnostic-counts'] });
       queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
     },
-    onError: (error) => setActionMessage((error as Error).message),
+    onError: (error) => {
+      setActionMessage((error as Error).message);
+      setActionTone('error');
+    },
   });
   useEffect(() => {
     setSelectedIds([]);
@@ -1534,7 +1538,7 @@ function RadarGovernanceTab() {
         </p>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-primary/[0.035] px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/[0.035] px-3 py-3">
         <span className="mr-1 text-xs font-semibold">优先队列</span>
         <Button
           type="button"
@@ -1568,38 +1572,35 @@ function RadarGovernanceTab() {
         </span>
       </div>
 
-      <section className="overflow-hidden rounded-md border border-border bg-card">
+      <section className="overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div className="inline-flex rounded-md border border-border bg-muted/30 p-0.5">
+          <div className="inline-flex rounded-lg border border-border bg-muted/30 p-1">
             {([
               ['filtered', '待治理内容', counts?.filteredPending ?? 0],
               ['failed', '失败条目', counts?.failedPending ?? 0],
             ] as const).map(([nextKind, label, count]) => (
-              <button
+              <Button
                 key={nextKind}
                 type="button"
                 aria-pressed={kind === nextKind}
-                className={cn(
-                  'inline-flex h-8 items-center gap-2 rounded px-3 text-xs font-medium transition-colors',
-                  kind === nextKind
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
+                variant={kind === nextKind ? 'secondary' : 'ghost'}
+                size="xs"
                 onClick={() => {
                   setKind(nextKind);
                   setStatus('pending');
                   setPage(1);
                   setActionMessage('');
+                  setActionTone('success');
                 }}
               >
                 {label}
                 <span className={cn(
-                  'rounded-full px-1.5 py-0.5 font-mono text-[10px]',
+                  'rounded-full px-2 py-1 font-mono text-xs',
                   kind === nextKind ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
                 )}>
                   {count}
                 </span>
-              </button>
+              </Button>
             ))}
           </div>
           <div className="flex items-center gap-2">
@@ -1703,19 +1704,18 @@ function RadarGovernanceTab() {
           <span className="text-xs text-muted-foreground">筛选结果按 canonicalUrl 去重</span>
         </div>
         {actionMessage ? (
-          <div className="border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
+          <Alert severity={actionTone} role={actionTone === 'error' ? 'alert' : 'status'} sx={{ borderRadius: 0 }}>
             {actionMessage}
-          </div>
+          </Alert>
         ) : null}
         {kind === 'filtered' && status === 'pending' && visiblePendingIds.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/10 px-4 py-2 text-xs">
             <label className="inline-flex cursor-pointer items-center gap-2 font-medium">
-              <input
-                type="checkbox"
+              <Checkbox
+                size="small"
                 checked={allVisibleSelected}
                 onChange={(event) => setSelectedIds(event.target.checked ? visiblePendingIds : [])}
                 aria-label="全选当前页待治理内容"
-                className="size-3.5 accent-primary"
               />
               全选当前页
             </label>
@@ -1736,11 +1736,7 @@ function RadarGovernanceTab() {
                   variant="outline"
                   size="xs"
                   disabled={bulkActionMut.isPending}
-                  onClick={() => {
-                    if (window.confirm(`确定忽略选中的 ${selectedIds.length} 条内容吗？`)) {
-                      bulkActionMut.mutate('dismiss');
-                    }
-                  }}
+                  onClick={() => setConfirmingBulkDismiss(true)}
                 >
                   <EyeOff />
                   批量忽略
@@ -1755,20 +1751,20 @@ function RadarGovernanceTab() {
       {q.isError ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : null}
       <div className="divide-y divide-border">
         {(q.data?.items ?? []).map((item) => (
-          <div key={item.id} className="group px-4 py-3.5 transition-colors hover:bg-muted/20">
+          <div key={item.id} className="group px-4 py-4 transition-colors hover:bg-muted/20">
             <div className="flex items-start gap-3">
               {kind === 'filtered' && item.status === 'pending' ? (
-                <input
-                  type="checkbox"
+                <Checkbox
+                  size="small"
                   checked={selectedIds.includes(item.id)}
                   onChange={(event) => toggleSelected(item.id, event.target.checked)}
                   aria-label={`选择治理条目：${item.title}`}
-                  className="mt-1 size-3.5 shrink-0 accent-primary"
+                  sx={{ mt: -0.5 }}
                 />
               ) : null}
               <span
                 className={cn(
-                  'mt-1.5 size-2 shrink-0 rounded-full',
+                  'mt-2 size-2 shrink-0 rounded-full',
                   item.kind === 'failed' ? 'bg-status-failed-fg' : 'bg-tier-noise',
                 )}
                 aria-hidden="true"
@@ -1782,14 +1778,14 @@ function RadarGovernanceTab() {
                     {item.distilledTier ? <Badge variant="secondary">{readingTierLabel(item.distilledTier)}</Badge> : null}
                     {item.resolved ? <Badge variant="secondary">已恢复</Badge> : null}
                   </div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                     <code className={cn(item.kind === 'failed' && 'text-destructive')}>{item.reasonCode}</code>
                     <span aria-hidden="true">·</span>
                     <span>{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <a href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" className="rounded p-1.5 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100">
+                  <a href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" className="rounded p-2 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100">
                     <ExternalLink className="size-4" />
                   </a>
                   {kind === 'filtered' && item.status === 'pending' ? (
@@ -1870,6 +1866,30 @@ function RadarGovernanceTab() {
         <Pagination page={q.data.page} totalPages={q.data.totalPages} onPageChange={setPage} disabled={q.isFetching} />
       ) : null}
       </section>
+      <AppDialog
+        open={confirmingBulkDismiss}
+        onClose={() => setConfirmingBulkDismiss(false)}
+        title="忽略选中内容？"
+        description={`确定忽略选中的 ${selectedIds.length} 条内容吗？`}
+        actions={(
+          <>
+            <AppButton type="button" variant="outlined" onClick={() => setConfirmingBulkDismiss(false)}>
+              取消
+            </AppButton>
+            <AppButton
+              type="button"
+              variant="contained"
+              color="error"
+              onClick={() => {
+                setConfirmingBulkDismiss(false);
+                bulkActionMut.mutate('dismiss');
+              }}
+            >
+              确认忽略
+            </AppButton>
+          </>
+        )}
+      />
     </div>
   );
 }
@@ -1903,12 +1923,18 @@ function GovernanceMetric({
     muted: 'text-muted-foreground bg-muted',
   }[tone];
   return (
-    <div className="rounded-md border border-border bg-card p-3">
+    <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>{label}</span>
         <span className={cn('inline-flex size-6 items-center justify-center rounded', color)}>{icon}</span>
       </div>
-      <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">{value}</div>
+      <Typography
+        component="div"
+        variant="h2"
+        sx={{ mt: 1, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}
+      >
+        {value}
+      </Typography>
     </div>
   );
 }
@@ -1955,7 +1981,7 @@ function RadarHealthBadge({
 }) {
   if (running > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-running-bg px-2 py-0.5 text-xs font-medium text-status-running-fg">
+      <span className="inline-flex items-center gap-1 rounded-full bg-status-running-bg px-2 py-1 text-xs font-medium text-status-running-fg">
         <Activity className="size-3" />
         同步中
       </span>
@@ -1963,7 +1989,7 @@ function RadarHealthBadge({
   }
   if (failed > 0 || partial > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-failed-bg px-2 py-0.5 text-xs font-medium text-status-failed-fg">
+      <span className="inline-flex items-center gap-1 rounded-full bg-status-failed-bg px-2 py-1 text-xs font-medium text-status-failed-fg">
         <AlertTriangle className="size-3" />
         有异常
       </span>
@@ -1971,14 +1997,14 @@ function RadarHealthBadge({
   }
   if (pending > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-0.5 text-xs font-medium text-status-partial-fg">
+      <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-1 text-xs font-medium text-status-partial-fg">
         <Activity className="size-3" />
         后处理中
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-status-succeeded-bg px-2 py-0.5 text-xs font-medium text-status-succeeded-fg">
+    <span className="inline-flex items-center gap-1 rounded-full bg-status-succeeded-bg px-2 py-1 text-xs font-medium text-status-succeeded-fg">
       <CheckCircle2 className="size-3" />
       已完成
     </span>
@@ -1999,10 +2025,10 @@ function RadarMetric({
       <div className="text-xs text-muted-foreground">{label}</div>
       <div
         className={cn(
-          'mt-0.5 font-mono text-lg font-semibold tabular-nums',
+          'mt-1 font-mono text-lg font-semibold tabular-nums',
           tone === 'default' && 'text-foreground',
-          tone === 'success' && 'text-emerald-700 dark:text-emerald-300',
-          tone === 'warning' && 'text-amber-700 dark:text-amber-300',
+          tone === 'success' && styles.successText,
+          tone === 'warning' && styles.warningText,
           tone === 'danger' && 'text-destructive',
         )}
       >
@@ -2025,13 +2051,13 @@ function PipelineMetric({
 }) {
   const complete = total > 0 && pending === 0;
   return (
-    <div className="flex items-center justify-start gap-2 py-0.5">
+    <div className="flex items-center justify-start gap-2 py-1">
       <span className="text-muted-foreground">{label}</span>
       <span
         className={cn(
           'font-mono tabular-nums',
-          complete && 'text-emerald-700 dark:text-emerald-300',
-          pending > 0 && 'text-amber-700 dark:text-amber-300',
+          complete && styles.successText,
+          pending > 0 && styles.warningText,
         )}
       >
         {stageCount(completed, total)}
@@ -2056,7 +2082,7 @@ export function shanghaiDateValue(value: Date = new Date()): string {
 function SyncStatusBadge({ status }: { status: string }) {
   const s = syncStatusStyle(status);
   return (
-    <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', s.className)}>
+    <span className={cn('rounded-full px-2 py-1 text-xs font-medium', s.className)}>
       {s.label}
     </span>
   );
@@ -2136,14 +2162,14 @@ function SharesTab() {
       {q.isLoading && <QueueSkeleton />}
       {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
 
-      <ul className="grid list-none gap-2.5 p-0">
+      <ul className="grid list-none gap-3 p-0">
         {(q.data?.items ?? []).map((it) => (
           <li key={it.id}>
             <Card className="transition-colors duration-200 hover:border-primary/40">
-              <CardContent className="p-3.5">
+              <CardContent className="p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold">
+                <h3 className="text-base font-semibold">
                   <a
                     href={it.url}
                     target="_blank"
@@ -2158,13 +2184,13 @@ function SharesTab() {
                   {new Date(it.createdAt).toLocaleString('zh-CN')}
                 </p>
                 {it.userNote && (
-                  <p className="mt-1.5 flex items-start gap-1.5 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
-                    <MessageSquare className="mt-0.5 size-3 shrink-0" />
+                  <p className="mt-2 flex items-start gap-2 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    <MessageSquare className="mt-1 size-3 shrink-0" />
                     {it.userNote}
                   </p>
                 )}
                 {it.summaryText && (
-                  <details className="mt-1.5">
+                  <details className="mt-2">
                     <summary className="cursor-pointer text-xs text-primary">查看 AI 摘要</summary>
                     <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
                       {it.summaryText.slice(0, 500)}
@@ -2180,7 +2206,7 @@ function SharesTab() {
                 )}
               </div>
               {status === 'pending' && (
-                <div className="flex shrink-0 flex-col gap-1.5">
+                <div className="flex shrink-0 flex-col gap-2">
                   <Button
                     type="button"
                     size="xs"
@@ -2314,15 +2340,15 @@ function CommentsTab() {
       {q.isLoading && <QueueSkeleton />}
       {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
 
-      <ul className="grid list-none gap-2.5 p-0">
+      <ul className="grid list-none gap-3 p-0">
         {(q.data?.items ?? []).map((it) => (
           <li key={it.id}>
             <Card className="transition-colors duration-200 hover:border-primary/40">
-              <CardContent className="p-3.5">
-                <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+              <CardContent className="p-4">
+                <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
               <strong className="font-medium text-foreground">{it.author.name}</strong>（
               {it.author.email}） · {new Date(it.createdAt).toLocaleString('zh-CN')} ·
-              <span className="inline-flex items-center gap-0.5">
+              <span className="inline-flex items-center gap-1">
                 <Sparkles className="size-3" />
                 {it.starCount}
               </span>
@@ -2527,7 +2553,7 @@ function ResearchesTab() {
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <form
-          className="flex min-w-[220px] flex-1 gap-1.5 sm:max-w-md"
+          className="flex min-w-[220px] flex-1 gap-2 sm:max-w-md"
           onSubmit={(e) => {
             e.preventDefault();
             setAppliedQuery(searchText.trim());
@@ -2584,21 +2610,21 @@ function ResearchesTab() {
         />
       )}
 
-      <ul className="grid list-none gap-2.5 p-0">
+      <ul className="grid list-none gap-3 p-0">
         {(q.data?.items ?? []).map((item) => (
           <li key={item.id}>
             <Card className="transition-colors duration-200 hover:border-primary/40">
-              <CardContent className="p-3.5">
+              <CardContent className="p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
                       <StatusBadge kind="method" value={item.creationMethod} />
                       <StatusBadge kind="research" value={item.status} />
                       <span className="text-xs text-muted-foreground">
                         {item.type === 'research' ? '研究报告' : '知识卡片'}
                       </span>
                       {item.featuredAt && (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                        <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium', styles.warningBadge)}>
                           <Star className="size-3" />
                           精华
                         </span>
@@ -2607,7 +2633,7 @@ function ResearchesTab() {
 
                     <Link
                       href={`/researches/${item.id}`}
-                      className="rounded-sm text-sm font-semibold leading-snug tracking-normal hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="rounded text-sm font-semibold leading-snug tracking-normal hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {item.title}
                     </Link>
@@ -2624,8 +2650,8 @@ function ResearchesTab() {
                     </p>
                   </div>
 
-                  <div className="flex shrink-0 flex-col items-end gap-1.5">
-                    <div className="flex gap-1.5">
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    <div className="flex gap-2">
                       <Button asChild size="xs" variant="outline" aria-label="查看">
                         <Link href={`/researches/${item.id}`}>
                           <Eye />
@@ -2843,7 +2869,7 @@ function UsersTab() {
       >
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">Beta 注册白名单</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">添加后，该邮箱可通过密码注册或 OAuth 首次登录。</p>
+          <p className="mt-1 text-xs text-muted-foreground">添加后，该邮箱可通过密码注册或 OAuth 首次登录。</p>
           <Input
             className="mt-2 max-w-md"
             type="email"
@@ -2871,12 +2897,12 @@ function UsersTab() {
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-4 py-2.5 font-medium">姓名</th>
-                <th className="px-4 py-2.5 font-medium">邮箱</th>
-                <th className="px-4 py-2.5 font-medium">角色</th>
-                <th className="px-4 py-2.5 font-medium">状态</th>
-                <th className="px-4 py-2.5 font-medium">加入时间</th>
-                <th className="px-4 py-2.5 font-medium text-right">操作</th>
+                <th className="px-4 py-3 font-medium">姓名</th>
+                <th className="px-4 py-3 font-medium">邮箱</th>
+                <th className="px-4 py-3 font-medium">角色</th>
+                <th className="px-4 py-3 font-medium">状态</th>
+                <th className="px-4 py-3 font-medium">加入时间</th>
+                <th className="px-4 py-3 font-medium text-right">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -2885,13 +2911,13 @@ function UsersTab() {
                 const isDisabled = !!u.disabledAt;
                 return (
                   <tr key={u.id} className="border-t border-border transition-colors hover:bg-muted/30">
-                    <td className="px-4 py-2.5">{u.name || '—'}</td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{u.email}</td>
-                    <td className="px-4 py-2.5"><Badge variant={isAdmin ? 'destructive' : 'secondary'}>{isAdmin ? '管理员' : '成员'}</Badge></td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{isDisabled ? '已禁用' : '正常'}</td>
-                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString('zh-CN')}</td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex justify-end gap-1.5">
+                    <td className="px-4 py-3">{u.name || '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{u.email}</td>
+                    <td className="px-4 py-3"><Badge variant={isAdmin ? 'destructive' : 'secondary'}>{isAdmin ? '管理员' : '成员'}</Badge></td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">{isDisabled ? '已禁用' : '正常'}</td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString('zh-CN')}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
                         <Button
                           type="button"
                           size="xs"

@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react';
+import { AppRouterCacheProvider } from '@mui/material-nextjs/v15-appRouter';
 
 import { Providers } from './providers';
 import { AppShell } from '@/components/shell/AppShell';
 import './globals.css';
+import '@deep-research/design-system/tokens.css';
+import '@deep-research/design-system/legacy-bridge.css';
 
 export const metadata = {
   title: 'AI技术调研平台',
@@ -36,10 +39,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="font-sans">
-        <Providers>
-          <AppShell>{children}</AppShell>
-        </Providers>
+      <body>
+        <AppRouterCacheProvider options={{ key: 'dr-mui' }}>
+          <Providers>
+            <AppShell>{children}</AppShell>
+          </Providers>
+        </AppRouterCacheProvider>
       </body>
     </html>
   );

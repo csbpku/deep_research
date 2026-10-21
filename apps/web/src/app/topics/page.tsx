@@ -1,17 +1,19 @@
 // /topics — 技术专题列表 (ADR 0010: 含变化摘要、未读议题、相关研究 + 筛选芯片)
+import * as React from 'react';
 import Link from 'next/link';
 import { Sparkles, TrendingUp, Compass, BookOpenCheck, Bell } from 'lucide-react';
+import Paper from '@mui/material/Paper';
+import Chip from '@mui/material/Chip';
 
 import { prisma } from '@/lib/db';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
 import { getCurrentUser } from '@/lib/auth/session';
 import { collapseTopicIssues } from '@/lib/topics';
 import { TopicsFilter } from './TopicsFilter';
 import { parseTopicFilter, type TopicFilterKey } from './topic-filter-options';
+import styles from './topics.module.css';
 
 type IconComponent = React.ComponentType<{ className?: string }>;
 
@@ -115,12 +117,12 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
 
   if (topics.length === 0) {
     return (
-      <div className="mx-auto max-w-shell">
+      <div className={styles.screen} data-topics-screen>
         <PageHeader
           title="技术专题"
           description="把分散的雷达信号聚成可持续追踪的研究脉络；先看正在升温的专题，再进入综述、热点议题和团队研究。"
           actions={
-            <Link href="/me/topics" className="text-sm text-primary hover:underline">
+            <Link href="/me/topics" className={styles.overviewLink}>
               {user ? '我的专题总览' : '登录后查看我的专题'}
             </Link>
           }
@@ -137,7 +139,7 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
           description={
             filter === 'followed'
               ? user
-                ? '到下方「全部专题」点开一个再关注；专题内的热点议题会自动聚合并按未读顺序展示。'
+                ? '切换到「全部专题」，点开一个再关注；专题内的热点议题会自动聚合并按未读顺序展示。'
                 : '登录后即可查看自己关注的专题和未读热点议题。'
               : '下一轮雷达同步将自动建组。'
           }
@@ -168,7 +170,7 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
       },
     }),
     prisma.researchTopic.findMany({
-      where: { topicId: { in: topicIds } },
+      where: { topicId: { in: topicIds }, research: { status: 'published' } },
       orderBy: { createdAt: 'desc' },
       distinct: ['topicId'],
       select: {
@@ -221,18 +223,18 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
   }
 
   return (
-    <div className="mx-auto max-w-shell">
+    <div className={styles.screen} data-topics-screen>
       <PageHeader
         title="技术专题"
         description="把分散的雷达信号聚成可持续追踪的研究脉络；先看正在升温的专题，再进入综述、热点议题和团队研究。"
         actions={
-          <Link href="/me/topics" className="text-sm text-primary hover:underline">
+          <Link href="/me/topics" className={styles.overviewLink}>
             {user ? '我的专题总览' : '登录后查看我的专题'}
           </Link>
         }
       />
       <TopicsFilter unreadByFilter={unreadByFilter} />
-      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <ul className={styles.grid} aria-label="专题列表">
         {topics.map((t) => {
           const TierIcon = TIER_ICONS[t.tier] ?? Compass;
           const isFollowed = followedMap.has(t.id);
@@ -246,44 +248,36 @@ export default async function TopicsPage({ searchParams }: { searchParams: Promi
           const research = researchByTopic.get(t.id) ?? null;
           return (
             <li key={t.id}>
-              <Link href={`/topics/${t.slug}`} className="block">
-                <Card className="h-full transition-colors hover:border-primary/40 hover:shadow-sm">
-                  <CardContent className="space-y-2 p-4">
-                    <header className="flex flex-wrap items-center gap-1.5">
-                      <TierIcon className="size-3.5 text-muted-foreground" />
-                      <StatusBadge kind="topicTier" value={t.tier} />
-                      <h2 className="text-sm font-semibold">{t.name}</h2>
+              <Link href={`/topics/${t.slug}`} className={styles.cardLink} aria-labelledby={`topic-${t.id}`}>
+                <Paper component="article" variant="outlined" className={`${styles.card} material-surface`}>
+                    <header className={styles.cardHeader}>
+                      <StatusBadge kind="topicTier" value={t.tier} icon={<TierIcon aria-hidden />} />
                       {isFollowed ? (
-                        <Badge className="bg-secondary text-secondary-foreground">
-                          已关注
-                        </Badge>
+                        <Chip size="small" label="已关注" className={styles.followed} />
                       ) : null}
                       {unreadCount > 0 ? (
-                        <Badge className="bg-primary/15 text-primary">
-                          <Bell className="mr-1 size-3" />
-                          {unreadCount} 个新议题
-                        </Badge>
+                        <Chip size="small" label={`${unreadCount} 个新议题`} icon={<Bell aria-hidden />} className={styles.unread} />
                       ) : null}
                     </header>
+                    <h2 id={`topic-${t.id}`} className={styles.title}>{t.name}</h2>
                     {t.summary ? (
-                      <p className="line-clamp-3 text-xs text-muted-foreground">{t.summary}</p>
+                      <p className={styles.summary}>{t.summary}</p>
                     ) : null}
                     {research ? (
-                      <p className="flex items-center gap-1.5 text-xs text-primary">
-                        <BookOpenCheck className="size-3" />
-                        已有团队研究：{research.title.slice(0, 32)}
+                      <p className={styles.research}>
+                        <BookOpenCheck aria-hidden />
+                        <span>已有团队研究：{research.title.slice(0, 32)}</span>
                       </p>
                     ) : null}
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <div className={styles.metadata}>
                       <span>{t.candidateCount} 条相关内容</span>
                       <span>{activeIssueDatesByTopic.get(t.id)?.length ?? 0} 个活跃议题</span>
                       <span>{t.sourceCount} 个采集渠道</span>
-                      <span className="ml-auto shrink-0">
-                        {t.lastSyncedAt ? new Date(t.lastSyncedAt).toLocaleDateString('zh-CN') : '待同步'}
-                      </span>
+                      {t.lastSyncedAt
+                        ? <time dateTime={t.lastSyncedAt.toISOString()}>{t.lastSyncedAt.toLocaleDateString('zh-CN')}</time>
+                        : <span className={styles.syncStatus}>待同步</span>}
                     </div>
-                  </CardContent>
-                </Card>
+                </Paper>
               </Link>
             </li>
           );

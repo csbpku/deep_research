@@ -216,6 +216,11 @@ test.describe('AI Research parent (UI polish)', () => {
 
   test('slides artifact is rendered once as a bounded outline', async ({ page }) => {
     const jobId = '22222222-2222-4222-8222-222222222222';
+    await page.route('**/api/ai-research/conversations', (route) => (
+      route.request().method() === 'POST'
+        ? route.fulfill({ status: 401, json: { code: 'AUTH_NOT_AUTHENTICATED', message: 'fixture' } })
+        : route.continue()
+    ));
     await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -665,6 +670,11 @@ test.describe('AI Research parent (UI polish)', () => {
 
   test('brief without captured evidence is not presented as verified research', async ({ page }) => {
     const jobId = '44444444-4444-4444-8444-444444444444';
+    await page.route('**/api/ai-research/conversations', (route) => (
+      route.request().method() === 'POST'
+        ? route.fulfill({ status: 401, json: { code: 'AUTH_NOT_AUTHENTICATED', message: 'fixture' } })
+        : route.continue()
+    ));
     await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
       status: 200,
       contentType: 'application/json',

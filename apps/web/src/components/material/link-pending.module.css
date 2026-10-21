@@ -1,0 +1,6 @@
+.slot, .pending { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0; line-height: 0; }
+.slot > svg { width: 16px; height: 16px; }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .pending :global(.MuiCircularProgress-root), .pending :global(.MuiCircularProgress-circle) { animation: none; }
+}

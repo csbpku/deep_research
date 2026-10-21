@@ -121,8 +121,7 @@ function transformMarkdownUrl(value: string, key: string): string {
 /**
  * MarkdownContent —— 已发布正文的渲染器（调研库详情、雷达详情等）。
  *
- * 排版交给 @tailwindcss/typography 的 `prose`，颜色由 globals.css 里的
- * `--tw-prose-*` token 覆盖（深浅色自动切换）。
+ * 排版使用共享阅读 token 和全局语义选择器；不维护独立的文章调色板。
  * 这里只保留 prose 默认观感不合适的几个元素覆盖：
  *   - a：强制新窗口打开 + noreferrer（安全要求，不只是样式）
  *   - pre / code：代码块要更紧凑、可折行
@@ -157,7 +156,7 @@ const components: Components = {
       ? <div className="whitespace-pre-line">{children}</div>
       : <p className="whitespace-pre-line">{children}</p>
   ),
-  hr: () => <hr className="my-8 border-[var(--ink-rule)]" />,
+  hr: () => <hr className="my-8 border-[color:var(--dr-color-outline)]" />,
   img: ({ src, alt, title }) => {
     // react-markdown parses `[![alt](img)](url)` so the img component is invoked
     // while rendering the children of an outer link. Without this check the
@@ -168,7 +167,7 @@ const components: Components = {
     if (!imageSrc || !isSafeImageSource(imageSrc)) return null;
     const isSvg = imageSrc.startsWith('data:image/svg+xml');
     return (
-      <figure className="my-7 overflow-hidden rounded-xl border border-[var(--ink-rule)] bg-[var(--ink-page)]">
+      <figure className="my-7 overflow-hidden rounded-xl border border-[color:var(--dr-color-outline)] bg-[color:var(--dr-color-surface)]">
         <div className={cn(isSvg && 'overflow-x-auto')}>
           {insideLink ? (
             <img
@@ -203,14 +202,14 @@ const components: Components = {
                   isSvg ? 'max-w-none lg:max-w-full' : 'max-w-full',
                 )}
               />
-              <span className="pointer-events-none absolute right-2 top-2 grid size-8 place-items-center rounded-md bg-black/55 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              <span className="pointer-events-none absolute right-2 top-2 grid size-8 place-items-center rounded-md bg-[var(--dr-color-scrim)] text-[var(--dr-color-inverse-text)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
                 <ZoomIn className="size-4" aria-hidden="true" />
                 <span className="sr-only">在新标签页查看原图</span>
               </span>
             </a>
           )}
         </div>
-        {alt ? <figcaption className="border-t border-[var(--ink-rule)] px-4 py-2 text-center text-xs leading-5 text-muted-foreground">{alt}</figcaption> : null}
+        {alt ? <figcaption className="border-t border-[color:var(--dr-color-outline)] px-4 py-2 text-center text-xs leading-5 text-muted-foreground">{alt}</figcaption> : null}
       </figure>
     );
   },

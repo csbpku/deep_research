@@ -259,8 +259,8 @@ configure_llm_provider() {
         prompt_secret_keep "MiniMax API key" "$MINIMAX_KEY" MINIMAX_KEY
         prompt "DeepSeek base URL" "$DEEPSEEK_BASE_URL_VAL" DEEPSEEK_BASE_URL_VAL
         prompt_secret_keep "DeepSeek API key" "$DEEPSEEK_KEY" DEEPSEEK_KEY
-        RESEARCH_LLM_VAL="minimax:MiniMax-M3"
-        UTILITY_LLM_VAL="minimax:MiniMax-M3"
+        RESEARCH_LLM_VAL="minimax:MiniMax-M3.1-Flash"
+        UTILITY_LLM_VAL="minimax:MiniMax-M3.1-Flash"
         FALLBACK_LLM_VAL="deepseek:deepseek-v4-flash"
         SMART_LLM_VAL="$RESEARCH_LLM_VAL"
         FAST_LLM_VAL="$RESEARCH_LLM_VAL"

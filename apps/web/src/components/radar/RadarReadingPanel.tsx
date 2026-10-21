@@ -209,7 +209,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
               {activeTransform.error}
             </div>
           ) : leftContent ? (
-            <MarkdownContent content={leftContent} className="reading-workbench-markdown text-base leading-8 text-[var(--ink-text)]" />
+            <MarkdownContent content={leftContent} className="reading-workbench-markdown text-[var(--ink-text)]" />
           ) : (
             <div className="rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-5 text-sm text-[var(--ink-muted)]">暂无可展示内容。</div>
           )}
@@ -224,7 +224,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
             <span className="rounded-full bg-[var(--ink-page)] px-2 py-1 text-xs font-medium text-[var(--ink-muted)]">双栏</span>
           </div>
 
-          <div className="mt-4 grid gap-1 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-1.5">
+          <div className="mt-4 grid gap-1 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-surface-raised)] p-2">
             {MODES.map((item) => (
               <Button
                 key={item.value}
@@ -232,7 +232,7 @@ export function RadarReadingPanel({ summaryId, title, originalContent, highlight
                 variant="ghost"
                 size="sm"
                 className={cn(
-                  'h-auto justify-start rounded-md px-3 py-2.5 text-left text-[var(--ink-muted)] hover:bg-[var(--ink-page)]',
+                  'h-auto justify-start rounded-md px-3 py-3 text-left text-[var(--ink-muted)] hover:bg-[var(--ink-page)]',
                   mode === item.value && 'bg-[var(--ink-page)] text-[var(--ink-text)] shadow-sm',
                 )}
                 onClick={() => selectMode(item.value)}

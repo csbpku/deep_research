@@ -450,6 +450,14 @@ jobs:
             -f infra/docker-compose.yml
             -f infra/docker-compose.registry.yml)
           previous_tag="$(cat .deployed-image-tag 2>/dev/null || true)"
+          # A verified workspace release can replace the registry images without
+          # changing that marker. Roll back to what was actually running.
+          previous_web_image="$(docker inspect --format '{{.Config.Image}}' deep-research-web-1 2>/dev/null || true)"
+          previous_ai_image="$(docker inspect --format '{{.Config.Image}}' deep-research-ai-engine-1 2>/dev/null || true)"
+          if [ -z "$previous_web_image" ] && [ -z "$previous_ai_image" ] && [[ "$previous_tag" =~ ^[0-9a-f]{40}$ ]]; then
+            previous_web_image="ghcr.io/csbpku/deep-research/web:$previous_tag"
+            previous_ai_image="ghcr.io/csbpku/deep-research/ai-engine:$previous_tag"
+          fi
 
           # rollback [exit_status]: also called explicitly where `exit 1` would
           # otherwise bypass the ERR trap (exit never fires ERR).
@@ -460,16 +468,19 @@ jobs:
             set +e
             echo "[deploy] release failed; restoring previous Beta config and attempting image rollback" >&2
             if [ "$beta_env_updated" -eq 1 ]; then restore_beta_env || true; fi
-            if [[ "$previous_tag" =~ ^[0-9a-f]{40}$ ]]; then
-              export WEB_IMAGE="ghcr.io/csbpku/deep-research/web:$previous_tag"
-              export AI_ENGINE_IMAGE="ghcr.io/csbpku/deep-research/ai-engine:$previous_tag"
-              timeout --signal=TERM --kill-after=30s 10m \
-                "${compose[@]}" pull web ai-engine || true
+            if [ -n "$previous_web_image" ] && [ -n "$previous_ai_image" ]; then
+              export WEB_IMAGE="$previous_web_image"
+              export AI_ENGINE_IMAGE="$previous_ai_image"
+              for image in "$WEB_IMAGE" "$AI_ENGINE_IMAGE"; do
+                if ! docker image inspect "$image" >/dev/null 2>&1; then
+                  timeout --signal=TERM --kill-after=30s 10m docker pull "$image" || true
+                fi
+              done
               timeout --signal=TERM --kill-after=30s 5m \
-                "${compose[@]}" up -d --no-build || true
+                "${compose[@]}" up -d --no-build --pull never || true
               "${compose[@]}" exec -T nginx nginx -s reload </dev/null || true
             else
-              echo "[deploy] no valid previous registry SHA; skipping image rollback" >&2
+              echo "[deploy] no complete previous image pair; skipping image rollback" >&2
             fi
             "${compose[@]}" ps || true
             echo "[deploy] retained configuration backup: $beta_env_backup"
@@ -554,7 +565,7 @@ jobs:
             local url="$2"
             local attempt
             for attempt in $(seq 1 40); do
-              if curl --fail --silent --show-error --max-time 10 \
+              if curl --noproxy '*' --http1.1 --fail --silent --show-error --max-time 10 \
                 --resolve techradar.top:443:127.0.0.1 "$url" >/dev/null; then
                 echo "[deploy] $label is healthy (attempt $attempt/40)"
                 return 0
@@ -569,7 +580,7 @@ jobs:
           wait_for_endpoint web-ready https://techradar.top/readyz
           wait_for_endpoint ai https://techradar.top/ai-healthz
           for path in /ai/docs /ai/openapi.json /ai/api/ai/jobs; do
-            status="$(curl --silent --show-error --max-time 10 \
+            status="$(curl --noproxy '*' --http1.1 --silent --show-error --max-time 10 \
               --resolve techradar.top:443:127.0.0.1 \
               -o /dev/null -w '%{http_code}' "https://techradar.top$path")"
             test "$status" = 404 || {

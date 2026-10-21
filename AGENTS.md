@@ -28,8 +28,9 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - `apps/web/prisma/`: shared database contract; schema or migration changes require explicit review
 - `docs/contracts/`: API, state, error, metric, and environment contracts
 - `docs/TECHNICAL_OVERVIEW.md`: 当前技术方案、运行拓扑和本地/生产服务边界
-- `docs/PROJECT_STATUS.md`: 带日期的测试、部署、线上事实和 follow-up；不承载技术方案摘要
-- `docs/weekly/`: historical delivery evidence; current behavior belongs in README/contracts, not duplicated here
+- `docs/PROJECT_STATUS.md`: 本地维护记录；按 `.gitignore` 忽略。若已被 Git 跟踪，需先解除索引跟踪才不会随提交发布
+- `docs/weekly/`: 本地历史交付证据；按 `.gitignore` 忽略。若已被 Git 跟踪，需先解除索引跟踪才不会随提交发布
+- Web 与 Reader 共用 `packages/design-system` 的 MUI/Emotion 主题与生成 CSS；基础 token 修改后运行生成器及 `--check`，不维护第二套色值。Web 使用 Next 15 MUI SSR cache，生产 `/mui-demo` 返回 404。
 - Preserve unrelated working-tree changes. Do not delete branches, worktrees, reports, caches, or temporary artifacts without post-report user confirmation.
 
 ## Production VPS Access
@@ -40,15 +41,15 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 
 ## Current State
 
-- **入口文档**：[`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md) — 当前技术方案；日期化证据见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)，文档分层见 [`docs/README.md`](./docs/README.md)。
-- `main` 已包含 Hugging Face 可配置请求源、Zread 限流恢复、enrichment 限流隔离、可选 browser-review profile 和 HTTP UUID 兼容；当前实现以 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md) 与代码为准，发布与线上事实以带日期的 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md) 条目为准。
+- **入口文档**：[`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md) — 当前技术方案；本地维护记录见 `docs/PROJECT_STATUS.md`（忽略、不发布），文档分层见 [`docs/README.md`](./docs/README.md)。
+- `main` 已包含 Hugging Face 可配置请求源、Zread 限流恢复、enrichment 限流隔离、可选 browser-review profile 和 HTTP UUID 兼容；当前实现以 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md) 与代码为准，发布与线上事实以经核验的当前运行证据为准；内部证据留在本地维护记录。
 - AI engine: `GptResearcherAdapter` is primary (ADR 0004 复评通过), `FakeAdapter` is the test/CI fallback. Canonical LLM slots 是 `<provider>:<model>` 形式的 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM`（fallback 兼容读取旧名 `LLM_FALLBACK_LLM`；`SMART_LLM` 等旧槽位仅作 gpt-researcher 兼容镜像，派生逻辑见 `ai_engine/llm/config.py`）；`scripts/setup.sh` discovers `/models` and writes the selected model to the canonical slots, while `--quick`/fake uses `anthropic:deepseek-v4-flash`. Heavy calls prefer `*_HEAVY` credentials and fall back to the light pair. 只有 `RETRIEVER=tavily` 时才需要 `TAVILY_API_KEY`。
-- 历史交付按日期保留在 `docs/weekly/`，不得当作当前行为说明。
-- 现有能力包括研究文章三栏工作台、雷达讨论与治理、Confluence 导入框架（OAuth 仍需外部凭据验收）、AI 事实核验与结论审查、知识卡片显式提炼、研究库状态/类型筛选、AI 调研四种产物（研究稿、快速判断、Slides 提纲、网页简报）和独立审核边界；日报生成链路已删除。
-- 雷达详情当前为“摘要先行 + 原文阅读动作栏”：文章地图只允许严格正文 block 回链，选中文本支持解释/翻译/问 AI/批注/复制引用；HTML 正文图片会保留为安全 HTTPS 图片并懒加载。高价值 enrichment 还会经过内容呈现审核和真实浏览器渲染审核，二者与 AI 研究事实审核分开。
+- 历史交付可按日期保留在本地 `docs/weekly/`；该目录按规则忽略，已跟踪文件需先解除索引跟踪，也不得当作当前行为说明。
+- 现有能力包括研究文章三栏工作台、雷达评论/反馈与治理、Confluence 导入框架（OAuth 仍需外部凭据验收）、AI 事实核验与结论审查、知识卡片显式提炼、研究库状态/类型筛选、AI 调研四种产物（研究稿、快速判断、Slides 提纲、网页简报）和独立审核边界；日报生成链路已删除。雷达 AI 聊天面板当前工作区未挂载；旧 API 和历史会话仍存在，不能当作现役 UI，内部核验记录留在本地维护文件。
+- 雷达默认站外阅读，摘要/判断先行；等级统一为精读/速读/噪声，个人收藏独立。已有有效评分及版本保留，阅读迁移默认不调用模型，仅显式选定的旧噪声可按当前标准复核。旧站内正文及审核保留作历史证据，现役门槛与治理入口见 `docs/contracts/radar-governance.md`、`docs/contracts/radar-quality-checklist.md`。
 - 部署脚手架 `infra/` 已就绪，Docker Compose 镜像构建及备份恢复演练已完成。
 - 默认生产 Compose 包含 PostgreSQL、Web、AI engine、内网 AnythingLLM 和 nginx；真实 Chromium 页面审核属于可选 `browser-review` profile，不进入默认 GHCR 发布。个人 AnythingLLM 索引独立于共享讨论 workspace，默认关闭；生产配置与凭据只留在 VPS `.env`。
 - 本地运行：`launchd` 模板（`infra/launchd/`）支持常驻 AI engine（uvicorn 直接运行，无 `--reload`）和 Next.js 服务。
-- **收口门禁**：以本次实际验证写入 `docs/PROJECT_STATUS.md` 的日期条目为准；不要把历史周报或未在本次重跑的数量写成新基线。
+- **收口门禁**：以本次实际验证为准；内部证据写入本地忽略的 `docs/PROJECT_STATUS.md`，不要把历史记录或未重跑的数量写成新基线。
 - **已移除/废弃**：`apps/web/src/app/api/admin/radar/[id]/select/route.ts`（逐条选入日报接口已移除；当前雷达由自动排序与 Admin 负向治理处理）。
 - **Next 构建目录**：开发环境默认使用 `apps/web/.next-dev`，production/隔离构建默认使用 `.next`；`NEXT_DIST_DIR` 仍可覆盖输出目录。`.next-*` 是本地构建残留，未经确认不要删除。

@@ -64,11 +64,10 @@ try {
   }, activation.tabId);
   await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom');
+  await panel.locator('#provider-kind').selectOption('custom', { force: true });
   await panel.locator('#provider-url').fill('http://127.0.0.1:8800/v1');
   await panel.locator('#provider-model').fill('fake-reader');
   await panel.locator('#provider-key').fill('test-key');
-  await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#close-settings').click();

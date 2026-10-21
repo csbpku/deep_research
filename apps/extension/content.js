@@ -5,24 +5,90 @@
   }
   window.__deepResearchReaderLoaded = true;
 
+  // Filled from design-system/tokens.json by scripts/sync-static.mjs. Keeping
+  // the token values on each shadow host isolates them from website CSS while
+  // preserving one palette, font stack, radius scale, and elevation system.
+  const READER_DESIGN_TOKENS = {};
+  const READER_EN_MESSAGES = {};
+  const readerUiRoots = new Set();
+  const readerUiMessages = new WeakMap();
+  let readerLocale = /^zh(?:-|$)/iu.test(navigator.language) ? 'zh-CN' : 'en';
+  function updateReaderLocale(value) {
+    const language = value === 'system' || !value ? navigator.language : value;
+    readerLocale = /^zh(?:-|$)/iu.test(language) ? 'zh-CN' : 'en';
+    const sourceKey = text => Object.keys(READER_EN_MESSAGES).find(key => READER_EN_MESSAGES[key] === text) || text;
+    for (const shadow of readerUiRoots) {
+      if (!shadow.host.isConnected) { readerUiRoots.delete(shadow); continue; }
+      // Only extension controls are translated. Article and model text are
+      // outside these button/label nodes and retain their original language.
+      const walker = document.createTreeWalker(shadow, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!node.parentElement?.closest('button,.state')) continue;
+        const current = node.textContent;
+        const message = readerUiMessages.get(node);
+        const key = message && (current === message || current === READER_EN_MESSAGES[message]) ? message : sourceKey(current);
+        readerUiMessages.set(node, key);
+        node.textContent = t(key);
+      }
+      shadow.querySelectorAll('[title],[aria-label]').forEach(element => {
+        for (const attribute of ['title', 'aria-label']) {
+          if (element.hasAttribute(attribute)) element.setAttribute(attribute, t(sourceKey(element.getAttribute(attribute))));
+        }
+      });
+    }
+  }
+  function readerShadow(host, options) {
+    const shadow = host.attachShadow(options);
+    readerUiRoots.add(shadow);
+    return shadow;
+  }
+  chrome.storage.local.get('readerUiLanguage').then(stored => {
+    updateReaderLocale(stored.readerUiLanguage);
+  }).catch(() => {});
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.readerUiLanguage) {
+      updateReaderLocale(changes.readerUiLanguage.newValue);
+      syncParagraphControl(focusedTranslationId);
+    }
+  });
+  function t(message, ...values) {
+    return (readerLocale === 'en' ? READER_EN_MESSAGES[message] || message : message).replace(/\{(\d+)\}/gu, (_, index) => String(values[Number(index)] ?? ''));
+  }
+  function localizedMarkup(markup) {
+    return markup.replace(/>([^<>]*[\u3400-\u9fff][^<>]*)</gu, (_, text) => `>${t(text)}<`)
+      .replace(/(aria-label|title|placeholder)="([^"]*)"/gu, (_, attribute, text) => `${attribute}="${t(text)}"`);
+  }
+  function applyReaderDesignTokens(element) {
+    Object.entries(READER_DESIGN_TOKENS).forEach(([name, value]) => {
+      element.style.setProperty(`--reader-${name}`, value);
+    });
+  }
+  const readerToken = (name, fallback) => READER_DESIGN_TOKENS[name] || fallback;
+
   // An extension update can leave closed-shadow hosts in the page after the
   // previous isolated world is invalidated. Remove only transient controls;
   // translations and user annotations are intentionally preserved.
-  document.querySelectorAll('[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]')
+  document.querySelectorAll('[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]')
     .forEach((node) => node.remove());
 
   const MIN_INLINE_IMAGE_CONFIDENCE = 0.75;
-  const READING_BLOCK_SELECTOR = 'h1,h2,h3,h4,p,li,blockquote,pre,td,th,dt,dd,figcaption,caption,.sd-k,.sd-kv';
+  const READING_BLOCK_SELECTOR = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,td,th,dt,dd,figcaption,caption,.sd-k,.sd-kv';
   const ignored = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'BUTTON', 'INPUT', 'TEXTAREA', 'NAV', 'HEADER', 'FOOTER', 'ASIDE']);
   function findRoot() {
     const hostname = location.hostname.toLowerCase();
     if (hostname === 'github.com' || hostname.endsWith('.github.com') || hostname === 'github.localhost') {
-      return document.querySelector('#readme, [data-testid="readme-container"], .markdown-body, article, main') || document.body;
+      // A comma-separated selector returns document order, not preference:
+      // GitHub's outer main otherwise wins over the README and includes live
+      // commit dates, file lists and controls in the article hash.
+      return document.querySelector('#readme') || document.querySelector('[data-testid="readme-container"]')
+        || document.querySelector('.markdown-body') || document.querySelector('article')
+        || document.querySelector('main') || document.body;
     }
     if (hostname === 'zread.ai' || hostname.endsWith('.zread.ai') || hostname === 'zread.localhost') {
-      return document.querySelector('article, [role="main"], main') || document.body;
+      return document.querySelector('article') || document.querySelector('[role="main"]') || document.querySelector('main') || document.body;
     }
-    return document.querySelector('article, main, [role="main"]') || document.body;
+    return document.querySelector('article') || document.querySelector('main') || document.querySelector('[role="main"]') || document.body;
   }
   let root = findRoot();
   let lastSelectionContext = null;
@@ -162,12 +228,19 @@
   }
 
   function extractBlocks() {
-    const nodes = Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR))
+    // Publishers sometimes use unadorned divs for article paragraphs.
+    // Only add leaf containers outside semantic blocks, preserving structure.
+    const leafContainers = Array.from(root.querySelectorAll('div,section'))
+      .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
+      .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
+      .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
+    const nodes = [...Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR)), ...leafContainers]
+      .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
       .filter((node) => !node.closest('[data-deep-research-translation]'))
       // Never treat a form or an editable control as article text. This is a
       // privacy boundary for pages that mix documentation with a comment,
       // search, or password form.
-      .filter((node) => !node.closest('form, [contenteditable="true"]'))
+      .filter((node) => !node.closest('form, [contenteditable="true"],button,nav,[role="navigation"],script,style,[aria-hidden="true"]'))
       .filter((node) => !ignored.has(node.tagName))
       // Prefer the inner paragraph/list item when a table cell contains a
       // structured block. This keeps one source passage from entering the
@@ -266,7 +339,7 @@
         const rect = node.getBoundingClientRect();
         return rect.width >= 80 && rect.height >= 40 && (node.viewBox?.baseVal?.width || rect.width) >= 80;
       }),
-    ];
+    ].filter((node) => !node.closest('nav,header,footer,aside,[role="navigation"],[role="contentinfo"],.article-footer'));
     const candidates = imageNodes.length;
     const images = imageNodes.slice(0, 40)
       .filter((node) => !node.closest('[data-deep-research-image-wrap],[data-deep-research-translation]'))
@@ -330,8 +403,8 @@
             ? 'pending'
             : width > 20 && height > 20 ? 'ready' : 'unsupported',
           inputWarning: animated
-            ? '动画图片只处理明确标记的静态帧；当前图片未自动覆盖。'
-            : sourceAvailable ? '' : '图片没有可读取的数据或公开 URL；请允许图片访问后重试。',
+            ? t("动画图片只处理明确标记的静态帧；当前图片未自动覆盖。")
+            : sourceAvailable ? '' : t("图片没有可读取的数据或公开 URL；请允许图片访问后重试。"),
         };
       })
       // Keep animated candidates so the side panel can report the explicit
@@ -372,10 +445,10 @@
     const warnings = [];
     const readingRoot = document.querySelector('article, main, [role="main"]');
     if (!readingRoot && blocks.length < 2) {
-      warnings.push('当前页面没有识别到稳定的正文容器；全文范围可能不完整，建议直接选择原文段落操作。');
+      warnings.push(t("当前页面没有识别到稳定的正文容器；全文范围可能不完整，建议直接选择原文段落操作。"));
     }
     if (!blocks.length && String(body || '').trim()) {
-      warnings.push('当前页面正文尚未形成可处理的文本块；请等待页面加载或改用选段操作。');
+      warnings.push(t("当前页面正文尚未形成可处理的文本块；请等待页面加载或改用选段操作。"));
     }
     const crossOriginFrames = Array.from(document.querySelectorAll('iframe')).filter((frame) => {
       try {
@@ -386,7 +459,7 @@
       }
     });
     if (crossOriginFrames.length > 0) {
-      warnings.push(`当前页面包含 ${crossOriginFrames.length} 个跨域 iframe；扩展只处理当前页面 DOM，iframe 内容需在其页面单独启用。`);
+      warnings.push(t("当前页面包含 {0} 个跨域 iframe；扩展只处理当前页面 DOM，iframe 内容需在其页面单独启用。", crossOriginFrames.length));
     }
     return warnings;
   }
@@ -409,7 +482,7 @@
     let fallback = '';
     if (!body) {
       const clone = root.cloneNode(true);
-      clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside,[data-deep-research-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]').forEach((node) => node.remove());
+      clone.querySelectorAll('script,style,noscript,form,[contenteditable="true"],nav,header,footer,aside,[data-deep-research-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status]').forEach((node) => node.remove());
       fallback = clean(clone.innerText || clone.textContent || '');
     }
     const entry = entryContext();
@@ -437,6 +510,10 @@
       scrollY: Math.round(window.scrollY || window.pageYOffset || 0),
       scrollHeight: Math.round(document.documentElement.scrollHeight || 0),
       translatedBlockIds,
+      displayedTranslationLanguage: (() => {
+        const languages = new Set(Array.from(document.querySelectorAll('[data-deep-research-translation]')).map(node => node.dataset.deepResearchTargetLanguage || ''));
+        return languages.size === 1 ? [...languages][0] : null;
+      })(),
       translatedImageIds,
       translationDetected: hasExternalTranslation(),
       entrySource: entry.source,
@@ -615,6 +692,10 @@
   let focusedTranslationId = null;
   let contextParagraphId = null;
   let paragraphControl = null;
+  let paragraphHighlight = null;
+  let selectedParagraphId = null;
+  let paragraphHideTimer = 0;
+  let lastParagraphPointer = { x: 0, y: 0 };
   let paragraphMenuState = '';
   let paragraphMenuLocked = false;
   function syncParagraphControl(id, forceMenu = false) {
@@ -622,35 +703,73 @@
     const translated = id && document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
     const available = Boolean(original && translated && translatedOriginalDisplays.has(original));
     const showingTranslation = available && translated.style.display !== 'none';
-    const title = showingTranslation ? '查看这一段原文' : '查看这一段译文';
+    const title = showingTranslation ? t("查看这一段原文") : t("查看这一段译文");
     const menuState = `${available ? id : ''}:${showingTranslation}`;
     if ((forceMenu || !paragraphMenuLocked) && (forceMenu || menuState !== paragraphMenuState)) {
       paragraphMenuState = menuState;
       send({ type: 'deep-research:paragraph-menu', available, showingTranslation });
     }
-    if (!available) { if (paragraphControl) paragraphControl.style.display = 'none'; return; }
+    if (!available) { if (paragraphControl) paragraphControl.style.display = 'none'; if (paragraphHighlight) paragraphHighlight.style.display = 'none'; return; }
+    if (!paragraphHighlight) {
+      paragraphHighlight = document.createElement('div');
+      paragraphHighlight.setAttribute('data-deep-research-paragraph-highlight', 'true');
+      paragraphHighlight.style.cssText = 'all:initial;position:fixed;pointer-events:none;z-index:2147482999;box-sizing:border-box;border-radius:6px;';
+      applyReaderDesignTokens(paragraphHighlight);
+      document.body.appendChild(paragraphHighlight);
+    }
     if (!paragraphControl) {
       paragraphControl = document.createElement('div');
       paragraphControl.setAttribute('data-deep-research-paragraph-control', 'true');
-      paragraphControl.style.cssText = 'position:fixed;z-index:2147483000;';
-      const shadow = paragraphControl.attachShadow({ mode: 'open' });
-      shadow.innerHTML = '<style>button{font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;min-height:32px;padding:6px 10px;border:1px solid #cdd3de;border-radius:8px;background:#fff;color:#3159c9;box-shadow:0 2px 8px #20273518;cursor:pointer}button:hover{background:#eef2fc}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}</style><button type="button"></button>';
+      paragraphControl.style.cssText = 'all:initial;position:fixed;z-index:2147483000;padding-top:4px;';
+      applyReaderDesignTokens(paragraphControl);
+      const shadow = readerShadow(paragraphControl, { mode: 'open' });
+      shadow.innerHTML = '<style>:host{all:initial}.controls{display:flex;align-items:center;gap:8px;padding:4px 6px 4px 10px;border:1px solid var(--reader-color-outline-strong);border-radius:var(--reader-radius-small);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-1);font:400 var(--reader-type-caption)/1.5 var(--reader-font-family);color:var(--reader-color-text-secondary)}button{font:500 var(--reader-type-label)/1.4 var(--reader-font-family);min-height:32px;padding:6px 10px;border:0;border-radius:var(--reader-radius-small);background:transparent;color:var(--reader-color-primary);cursor:pointer}button:hover{background:var(--reader-color-primary-container)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}</style><div class="controls"><span class="state"></span><button type="button"></button></div>';
       shadow.querySelector('button').addEventListener('click', () => { toggleOriginalParagraph(focusedTranslationId); });
       document.body.appendChild(paragraphControl);
     }
     const button = paragraphControl.shadowRoot.querySelector('button');
     button.textContent = title;
     button.setAttribute('aria-label', title);
-    button.title = `${title}（Alt+Shift+O）；保留翻译，可随时切回`;
+    button.title = t("{0}（Alt+Shift+O）；保留翻译，可随时切回", title);
+    paragraphControl.shadowRoot.querySelector('.state').textContent = showingTranslation ? t("当前：译文") : t("当前：原文");
     paragraphControl.style.display = '';
     const box = (showingTranslation ? translated : original).getBoundingClientRect();
+    paragraphHighlight.dataset.paragraphId = id;
+    paragraphHighlight.dataset.selected = String(selectedParagraphId === id);
+    paragraphHighlight.style.display = '';
+    paragraphHighlight.style.left = `${box.left - 4}px`;
+    paragraphHighlight.style.top = `${box.top - 4}px`;
+    paragraphHighlight.style.width = `${box.width + 8}px`;
+    paragraphHighlight.style.height = `${box.height + 8}px`;
+    paragraphHighlight.style.border = `${selectedParagraphId === id ? 2 : 1}px solid var(--reader-color-primary)`;
+    paragraphHighlight.style.background = 'color-mix(in srgb, var(--reader-color-primary) 7%, transparent)';
     const controlWidth = paragraphControl.getBoundingClientRect().width;
     paragraphControl.style.left = `${Math.max(8, Math.min(innerWidth - controlWidth - 8, box.right - controlWidth))}px`;
-    paragraphControl.style.top = `${Math.max(8, Math.min(innerHeight - 40, box.bottom + 2))}px`;
+    paragraphControl.style.top = `${Math.max(8, Math.min(innerHeight - 44, box.bottom - 4))}px`;
+  }
+  function scheduleParagraphControlHide() {
+    window.clearTimeout(paragraphHideTimer);
+    paragraphHideTimer = window.setTimeout(() => {
+      const target = document.elementFromPoint(lastParagraphPointer.x, lastParagraphPointer.y);
+      if (target instanceof Element && target.closest('[data-deep-research-paragraph-control]')) return;
+      if (translationIdForTarget(target) === focusedTranslationId) return;
+      focusedTranslationId = selectedParagraphId;
+      syncParagraphControl(selectedParagraphId);
+    }, 280);
   }
   function updateFocusedParagraph(event) {
-    if (event.target instanceof Element && event.target.closest('[data-deep-research-paragraph-control]')) return;
-    focusedTranslationId = translationIdForTarget(event.target);
+    if (event.type === 'pointerover') lastParagraphPointer = { x: event.clientX, y: event.clientY };
+    if (event.target instanceof Element && event.target.closest('[data-deep-research-paragraph-control]')) {
+      window.clearTimeout(paragraphHideTimer);
+      return;
+    }
+    const nextId = translationIdForTarget(event.target);
+    if (!nextId && event.type === 'pointerover' && focusedTranslationId) {
+      scheduleParagraphControlHide();
+      return;
+    }
+    window.clearTimeout(paragraphHideTimer);
+    focusedTranslationId = nextId || selectedParagraphId;
     if (focusedTranslationId && event.type === 'pointerover') paragraphMenuLocked = false;
     syncParagraphControl(focusedTranslationId);
   }
@@ -676,10 +795,11 @@
     original.style.display = showOriginal ? translatedOriginalDisplays.get(original) || '' : 'none';
     translated.style.display = showOriginal ? 'none' : translated.dataset.deepResearchDisplay || '';
     if (!translatedOriginalAttributes.has(original)) translatedOriginalAttributes.set(original, { title: original.getAttribute('title'), tabindex: original.getAttribute('tabindex') });
-    original.title = '右键或段落按钮可切回译文；Alt+Shift+O / Alt+单击也可切换';
+    original.title = t("右键或段落按钮可切回译文；Alt+Shift+O / Alt+单击也可切换");
     if (document.activeElement === translated && showOriginal) { original.tabIndex = 0; original.focus({ preventScroll: true }); }
     else if (document.activeElement === original && !showOriginal) translated.focus({ preventScroll: true });
     focusedTranslationId = id;
+    selectedParagraphId = id;
     syncParagraphControl(id);
     return true;
   }
@@ -694,20 +814,29 @@
   document.addEventListener('focusin', updateFocusedParagraph, true);
   document.addEventListener('pointerdown', event => {
     paragraphMenuLocked = false;
+    if (event.button === 0 && !translationIdForTarget(event.target) && !event.composedPath().includes(paragraphControl)) {
+      selectedParagraphId = null;
+      focusedTranslationId = null;
+      syncParagraphControl(null);
+    }
     if (event.button !== 2) return;
     contextParagraphId = contextTranslationId(event);
     syncParagraphControl(contextParagraphId, true);
   }, true);
   document.addEventListener('contextmenu', event => {
     contextParagraphId = contextTranslationId(event);
+    selectedParagraphId = contextParagraphId;
     // Native menu opening can emit a pointerover on a page-side overlay. Keep
     // the clicked paragraph's menu until another deliberate page interaction.
     paragraphMenuLocked = true;
     syncParagraphControl(contextParagraphId, true);
   }, true);
   window.addEventListener('focus', () => {
-    if (!paragraphMenuLocked) syncParagraphControl(translationIdForTarget(document.activeElement), true);
+    if (!paragraphMenuLocked) syncParagraphControl(translationIdForTarget(document.activeElement) || selectedParagraphId, true);
   });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { selectedParagraphId = null; focusedTranslationId = null; syncParagraphControl(null); }
+  }, true);
   window.addEventListener('scroll', () => { if (paragraphControl?.style.display !== 'none') syncParagraphControl(focusedTranslationId); }, { passive: true });
   window.addEventListener('resize', () => syncParagraphControl(focusedTranslationId));
   document.addEventListener('click', event => {
@@ -746,12 +875,13 @@
     toolbarHost = document.createElement('div');
     toolbarHost.dataset.deepResearchToolbar = 'true';
     toolbarHost.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(window.innerWidth - 330, rect.left))}px;top:${Math.max(8, rect.top - 46)}px;`;
-    const shadow = toolbarHost.attachShadow({ mode: 'closed' });
-    shadow.innerHTML = `
-      <style>:host{all:initial}div{display:flex;gap:4px;max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:5px;border:1px solid #d9ddd5;border-radius:9px;background:#fff;box-shadow:0 5px 18px #20211f2e;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button{min-height:32px;border:0;border-radius:5px;background:#fff;color:#30332f;padding:5px 7px;cursor:pointer;white-space:nowrap}button[data-action="translate"]{background:#eef7f2;color:#256246}button[data-action="explain"],button[data-action="ask"]{background:#eef2ff;color:#3159c9}button[data-action="save"]{border-left:1px solid #ddd}button:hover{background:#eff4ff;color:#315fe8}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}</style>
+    applyReaderDesignTokens(toolbarHost);
+    const shadow = readerShadow(toolbarHost, { mode: 'closed' });
+    shadow.innerHTML = localizedMarkup(`
+      <style>:host{all:initial}div{display:flex;gap:var(--reader-space-1);max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:6px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-medium);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);font:var(--reader-type-label)/1.4 var(--reader-font-family)}button{min-height:36px;border:0;border-radius:var(--reader-radius-small);background:transparent;color:var(--reader-color-text-secondary);padding:6px 10px;font:inherit;cursor:pointer;white-space:nowrap;transition:background-color var(--reader-motion-fast),color var(--reader-motion-fast)}button:hover{background:var(--reader-color-primary-container);color:var(--reader-color-primary)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}</style>
       <div role="toolbar" aria-label="Deep Research 阅读操作">
         <button data-action="explain" aria-keyshortcuts="Alt+Shift+E" title="Alt+Shift+E">解释这段</button><button data-action="translate" aria-keyshortcuts="Alt+Shift+T" title="Alt+Shift+T">翻译这段</button><button data-action="ask" aria-keyshortcuts="Alt+Shift+Q" title="Alt+Shift+Q">问这段</button><button data-action="save" aria-keyshortcuts="Alt+Shift+K" title="Alt+Shift+K">摘录</button>
-      </div>`;
+      </div>`);
     shadow.querySelectorAll('button').forEach((button) => {
       button.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); });
       button.addEventListener('click', () => {
@@ -769,30 +899,31 @@
     readerDockHost = document.createElement('div');
     readerDockHost.dataset.deepResearchDock = 'true';
     readerDockHost.style.cssText = 'position:fixed;z-index:2147483645;right:10px;top:55%;transform:translateY(-50%);';
-    const shadow = readerDockHost.attachShadow({ mode: 'closed' });
-    shadow.innerHTML = `
+    applyReaderDesignTokens(readerDockHost);
+    const shadow = readerShadow(readerDockHost, { mode: 'closed' });
+    shadow.innerHTML = localizedMarkup(`
       <style>
         :host{all:initial}
-        .dock{display:grid;gap:5px;padding:4px;border:1px solid rgba(49,89,201,.22);border-radius:10px 3px 3px 10px;background:#fff;box-shadow:0 5px 18px rgba(23,34,53,.16)}
-        button{position:relative;display:grid;width:44px;height:36px;place-items:center;border:0;border-radius:7px;background:#fff;color:#2445a8;cursor:pointer;font:800 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:transform .16s ease,background .16s ease,border-color .16s ease}
-        button[data-action="open"]{height:40px;border-top:1px solid #e2e7f0;border-radius:7px 3px 3px 7px}
-        button:hover{transform:translateX(-2px);border-color:#6f8ee0;background:#eff4ff}
-        button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}
-        button::after{content:attr(data-tooltip);position:absolute;right:calc(100% + 8px);top:50%;z-index:1;transform:translateY(-50%) translateX(4px);padding:5px 7px;border:1px solid #d9e0f1;border-radius:5px;background:#172235;color:#fff;box-shadow:0 4px 12px rgba(23,34,53,.18);font:700 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s ease,transform .12s ease}
+        .dock{display:grid;gap:var(--reader-space-1);padding:var(--reader-space-1);border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-large) var(--reader-radius-xs) var(--reader-radius-xs) var(--reader-radius-large);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2)}
+        button{position:relative;display:grid;width:44px;height:38px;place-items:center;border:0;border-radius:var(--reader-radius-small);background:transparent;color:var(--reader-color-primary);cursor:pointer;font:600 var(--reader-type-caption) var(--reader-font-family);transition:background-color var(--reader-motion-fast),color var(--reader-motion-fast)}
+        button[data-action="open"]{height:40px;border-top:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small) var(--reader-radius-xs) var(--reader-radius-xs) var(--reader-radius-small)}
+        button:hover{background:var(--reader-color-primary-container)}
+        button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}
+        button::after{content:attr(data-tooltip);position:absolute;right:calc(100% + 8px);top:50%;z-index:1;transform:translateY(-50%) translateX(4px);padding:6px 9px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-text);color:var(--reader-color-inverse-text);box-shadow:var(--reader-elevation-2);font:500 var(--reader-type-caption) var(--reader-font-family);white-space:nowrap;opacity:0;pointer-events:none;transition:opacity var(--reader-motion-fast),transform var(--reader-motion-fast)}
         button:hover::after,button:focus-visible::after{opacity:1;transform:translateY(-50%) translateX(0)}
-        .glyph{display:grid;width:24px;height:24px;place-items:center;border-radius:6px 6px 6px 2px;background:#172235;color:#fff;letter-spacing:0}
-        .quick{color:#3159c9}.quick svg{display:block;width:19px;height:19px}
+        .glyph{display:grid;width:24px;height:24px;place-items:center;border-radius:var(--reader-radius-small);background:var(--reader-color-primary);color:var(--reader-color-inverse-text);letter-spacing:0}
+        .quick{color:var(--reader-color-primary)}.quick svg{display:block;width:19px;height:19px}
         @media(prefers-reduced-motion:reduce){button{transition:none}}
       </style>
       <div class="dock" role="toolbar" aria-label="技术文章快捷入口">
         <button type="button" class="quick" data-action="summary" data-tooltip="总结本页" aria-label="总结本页" title="总结本页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg></button>
         <button type="button" class="quick" data-action="translate" data-tooltip="翻译本页" aria-label="翻译本页" title="翻译本页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 11"/><path d="m4 14 6-6 6 6"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg></button>
         <button type="button" data-action="open" data-tooltip="打开聊天" aria-label="打开聊天" title="打开 Deep Research Reader 聊天侧栏"><span class="glyph">R</span></button>
-      </div>`;
+      </div>`);
     shadow.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
-      if (button.dataset.action === 'summary') setReaderStatus('正在读取正文并生成全文总结…', 'loading');
-      if (button.dataset.action === 'translate') setReaderStatus('正在读取正文，准备全文翻译…', 'loading');
-      if (button.dataset.action === 'open') setReaderStatus('正在打开聊天侧栏…', 'loading');
+      if (button.dataset.action === 'summary') setReaderStatus(t("正在读取正文并生成全文总结…"), 'loading');
+      if (button.dataset.action === 'translate') setReaderStatus(t("正在读取正文，准备全文翻译…"), 'loading');
+      if (button.dataset.action === 'open') setReaderStatus(t("正在打开聊天侧栏…"), 'loading');
       chrome.runtime.sendMessage({
         type: button.dataset.action === 'open' ? 'deep-research:open-panel' : 'deep-research:page-action',
         ...(button.dataset.action === 'open' ? {} : { action: button.dataset.action }),
@@ -806,15 +937,16 @@
       readerStatusHost = document.createElement('div');
       readerStatusHost.dataset.deepResearchStatus = 'true';
       readerStatusHost.style.cssText = 'position:fixed;z-index:2147483646;right:64px;top:55%;transform:translateY(-50%);pointer-events:none;';
-      const shadow = readerStatusHost.attachShadow({ mode: 'closed' });
+      applyReaderDesignTokens(readerStatusHost);
+      const shadow = readerShadow(readerStatusHost, { mode: 'closed' });
       shadow.innerHTML = `
         <style>
           :host{all:initial}
-          .status{max-width:min(310px,calc(100vw - 96px));padding:8px 10px;border:1px solid #d9e0f1;border-radius:7px;background:#172235;color:#fff;box-shadow:0 5px 18px rgba(23,34,53,.2);font:700 11px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0;transform:translateX(5px);transition:opacity .16s ease,transform .16s ease}
+          .status{max-width:min(310px,calc(100vw - 96px));padding:var(--reader-space-2) 10px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-text);color:var(--reader-color-inverse-text);box-shadow:var(--reader-elevation-2);font:700 var(--reader-type-caption)/1.4 var(--reader-font-family);opacity:0;transform:translateX(5px);transition:opacity var(--reader-motion-standard),transform var(--reader-motion-standard)}
           .status.visible{opacity:1;transform:translateX(0)}
-          .status.ready{background:#246546;border-color:#a9c2b4}
-          .status.error{background:#8b3a2d;border-color:#e0b7b0}
-          .detail{display:block;margin-top:2px;color:rgba(255,255,255,.78);font-weight:500;font-size:10px}
+          .status.ready{background:var(--reader-color-success);border-color:var(--reader-color-success-container)}
+          .status.error{background:var(--reader-color-danger);border-color:var(--reader-color-danger-container)}
+          .detail{display:block;margin-top:2px;color:rgba(255,255,255,.78);font-weight:500;font-size:var(--reader-type-caption)}
           @media(prefers-reduced-motion:reduce){.status{transition:none}}
         </style>
         <div class="status" role="status"><span class="label"></span><span class="detail"></span></div>`;
@@ -876,18 +1008,19 @@
     popup.dataset.deepResearchSelectionTranslation = 'true';
     popup.dataset.deepResearchTranslation = 'true';
     popup.setAttribute('role', 'region');
-    popup.setAttribute('aria-label', '选段翻译');
-    const shadow = popup.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `<style>
+    popup.setAttribute('aria-label', t("选段翻译"));
+    applyReaderDesignTokens(popup);
+    const shadow = readerShadow(popup, { mode: 'open' });
+    shadow.innerHTML = localizedMarkup(`<style>
       :host{all:initial;color-scheme:light}
       *{box-sizing:border-box}
-      .panel{display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden;border:1px solid #b8c7f4;border-left:3px solid #315fe8;border-radius:8px;background:#f7f9ff;color:#172235;box-shadow:0 4px 16px #17223529;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-      header{display:flex;align-items:center;flex:none;gap:4px;padding:6px 8px;border-bottom:1px solid #d9e0f1;font-size:12px}
+      .panel{display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-large);background:var(--reader-color-surface-raised);color:var(--reader-color-text);box-shadow:var(--reader-elevation-2);font:var(--reader-type-body)/var(--reader-line-height-body) var(--reader-font-family)}
+      header{display:flex;align-items:center;flex:none;gap:var(--reader-space-1);padding:6px 8px;border-bottom:1px solid var(--reader-color-outline);font-size:var(--reader-type-label)}
       strong{margin-right:auto;white-space:nowrap}
-      button{min-height:32px;border:1px solid #c7d3f2;border-radius:5px;padding:4px 8px;background:#fff;color:#3159c9;font:inherit;cursor:pointer;white-space:nowrap}
-      button[data-action="translate"]{background:#eef7f2;color:#256246}button[data-action="explain"],button[data-action="ask"]{background:#eef2ff;color:#3159c9}button[data-action="save"]{border-left:1px solid #ddd}button:hover{background:#eaf0ff}button:focus-visible{outline:2px solid #3159c9;outline-offset:2px}
+      button{min-height:36px;border:0;border-radius:var(--reader-radius-small);padding:6px 10px;background:transparent;color:var(--reader-color-text-secondary);font:inherit;cursor:pointer;white-space:nowrap;transition:background-color var(--reader-motion-fast),color var(--reader-motion-fast)}
+      button:hover{background:var(--reader-color-primary-container);color:var(--reader-color-primary)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}
       .text{min-height:0;flex:1;overflow:auto;overscroll-behavior:contain;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}
-    </style><div class="panel"><header><strong>选段翻译</strong><button type="button" class="copy">复制</button><button type="button" class="expand" aria-pressed="false">放大</button><button type="button" class="close" aria-label="关闭选段翻译">关闭</button></header><div class="text" tabindex="0" aria-label="译文"></div></div>`;
+    </style><div class="panel"><header><strong>选段翻译</strong><button type="button" class="copy">复制</button><button type="button" class="expand" aria-pressed="false">放大</button><button type="button" class="close" aria-label="关闭选段翻译">关闭</button></header><div class="text" tabindex="0" aria-label="译文"></div></div>`);
     shadow.querySelector('.text').textContent = text.trim();
     const width = Math.min(440, window.innerWidth - 16);
     const anchor = rect.width || rect.height ? rect : fallbackRect;
@@ -905,16 +1038,17 @@
       popup.style.cssText = expanded
         ? 'position:fixed;z-index:2147483647;inset:5vh 5vw;width:90vw;height:90vh;overflow:hidden;pointer-events:auto;'
         : initialStyle;
-      expand.textContent = expanded ? '恢复' : '放大';
+      applyReaderDesignTokens(popup);
+      expand.textContent = expanded ? t("恢复") : t("放大");
       expand.setAttribute('aria-pressed', String(expanded));
     });
     shadow.querySelector('.copy').addEventListener('click', async (event) => {
       const button = event.currentTarget;
       try {
         await navigator.clipboard.writeText(text.trim());
-        button.textContent = '已复制';
+        button.textContent = t("已复制");
       } catch {
-        button.textContent = '请选中复制';
+        button.textContent = t("请选中复制");
       }
     });
     shadow.querySelector('.close').addEventListener('click', () => popup.remove());
@@ -1005,13 +1139,20 @@
   async function resolveAnchorRange(anchor) {
     window.__deepResearchReaderRefresh();
     const quote = clean(anchor?.quote || '');
-    if (!quote) return { error: '原文摘录为空，无法定位' };
+    if (!quote) return { error: t("原文摘录为空，无法定位") };
     if (anchor.contentHash) {
       const currentBody = pageContext().body;
       const currentHash = await contentHash(currentBody);
-      if (!currentHash || currentHash !== anchor.contentHash) return { error: '原文已变化，无法准确定位' };
+      if (!currentHash || currentHash !== anchor.contentHash) return { error: t("原文已变化，无法准确定位") };
     }
-    const nodes = Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR))
+    // Publishers sometimes use unadorned divs for article paragraphs.
+    // Only add leaf containers outside semantic blocks, preserving structure.
+    const leafContainers = Array.from(root.querySelectorAll('div,section'))
+      .filter((node) => !node.closest(READING_BLOCK_SELECTOR))
+      .filter((node) => !node.querySelector(`${READING_BLOCK_SELECTOR},div,section,script,style,form,button,input,textarea,select`))
+      .filter((node) => /[\p{L}]{2}/u.test(sourceBlockText(node)));
+    const nodes = [...Array.from(root.querySelectorAll(READING_BLOCK_SELECTOR)), ...leafContainers]
+      .sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
       .filter((node) => !node.closest('[data-deep-research-translation]'))
       .filter((node) => !node.closest('form, [contenteditable="true"]'))
       .filter((node) => !node.matches('td,th,dt,dd') || !node.querySelector('h1,h2,h3,h4,p,li,blockquote,pre'));
@@ -1034,10 +1175,10 @@
       if (narrowed.length > 0) candidates = narrowed;
     }
     if (candidates.length !== 1) {
-      return { error: candidates.length === 0 ? '原文已变化，无法准确定位' : '原文存在多个可能位置，无法安全定位' };
+      return { error: candidates.length === 0 ? t("原文已变化，无法准确定位") : t("原文存在多个可能位置，无法安全定位") };
     }
     const range = rangeForQuoteInElement(candidates[0], quote);
-    if (!range) return { error: '原文存在多个可能位置，无法安全定位' };
+    if (!range) return { error: t("原文存在多个可能位置，无法安全定位") };
     return { target: candidates[0], range };
   }
 
@@ -1048,13 +1189,15 @@
       return;
     }
     const translated = resolved.target.nextElementSibling;
-    const target = getComputedStyle(resolved.target).display === 'none'
-      && translated?.hasAttribute('data-deep-research-translation')
-      ? translated : resolved.target;
+    if (getComputedStyle(resolved.target).display === 'none'
+      && translated?.hasAttribute('data-deep-research-translation')) {
+      toggleOriginalParagraph(translated.getAttribute('data-deep-research-translation-for'));
+    }
+    const target = resolved.target;
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const previousOutline = target.style.outline;
     const previousOffset = target.style.outlineOffset;
-    target.style.outline = '2px solid #315fe8';
+    target.style.outline = `2px solid ${READER_DESIGN_TOKENS['color-primary'] || '#405c9d'}`;
     target.style.outlineOffset = '3px';
     window.setTimeout(() => {
       target.style.outline = previousOutline;
@@ -1127,16 +1270,17 @@
     const host = document.createElement('div');
     host.dataset.deepResearchImageZoom = 'true';
     host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;';
-    const shadow = host.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `
+    applyReaderDesignTokens(host);
+    const shadow = readerShadow(host, { mode: 'open' });
+    shadow.innerHTML = localizedMarkup(`
       <style>
-        :host{all:initial} .backdrop{position:fixed;inset:0;display:grid;place-items:center;padding:28px;background:rgba(12,18,29,.84);cursor:zoom-out;font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-        .frame{position:relative;display:flex;max-width:min(94vw,1400px);max-height:92vh;align-items:center;justify-content:center;padding:10px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:#111923;box-shadow:0 20px 70px rgba(0,0,0,.4);cursor:default}
+        :host{all:initial} .backdrop{position:fixed;inset:0;display:grid;place-items:center;padding:var(--reader-space-6);background:var(--reader-color-scrim);cursor:zoom-out;font:var(--reader-type-body)/var(--reader-line-height-body) var(--reader-font-family)}
+        .frame{position:relative;display:flex;max-width:min(94vw,1400px);max-height:92vh;align-items:center;justify-content:center;padding:var(--reader-space-3);border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-medium);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);cursor:default}
         .frame img,.frame svg{display:block;max-width:88vw;max-height:86vh;width:auto;height:auto;object-fit:contain}
-        .close{position:absolute;right:8px;top:8px;width:28px;height:28px;border:1px solid rgba(255,255,255,.35);border-radius:50%;background:rgba(0,0,0,.5);color:#fff;font-size:18px;line-height:1;cursor:pointer}
-        .hint{position:absolute;left:12px;bottom:8px;color:rgba(255,255,255,.7);font-size:11px}
+        .close{position:absolute;right:8px;top:8px;width:40px;height:40px;border:1px solid var(--reader-color-outline-strong);border-radius:var(--reader-radius-small);background:var(--reader-color-surface-raised);color:var(--reader-color-text);font-size:var(--reader-type-title-compact);line-height:1;cursor:pointer}
+        .hint{position:absolute;left:12px;bottom:8px;color:rgba(255,255,255,.7);font-size:var(--reader-type-caption)}
       </style>
-      <div class="backdrop" role="dialog" aria-label="放大查看原图"><div class="frame"><button class="close" type="button" aria-label="关闭">×</button><span class="hint">点击背景或按 Esc 关闭</span></div></div>`;
+      <div class="backdrop" role="dialog" aria-label="放大查看原图"><div class="frame"><button class="close" type="button" aria-label="关闭">×</button><span class="hint">点击背景或按 Esc 关闭</span></div></div>`);
     const frame = shadow.querySelector('.frame');
     const clone = image.cloneNode(true);
     clone.removeAttribute('data-deep-research-image');
@@ -1152,38 +1296,7 @@
     document.documentElement.appendChild(host);
   }
 
-  function addImageControls(wrapper, image, layer, fallback, sideLayer = null) {
-    const control = document.createElement('span');
-    control.dataset.deepResearchImageControl = 'true';
-    control.style.cssText = 'position:absolute;top:6px;right:6px;z-index:3;line-height:normal;';
-    const shadow = control.attachShadow({ mode: 'open' });
-    const animated = isLikelyAnimatedImage(image);
-    shadow.innerHTML = `
-      <style>
-        :host{all:initial} .controls{display:flex;gap:4px;padding:3px;border:1px solid rgba(255,255,255,.55);border-radius:6px;background:rgba(16,24,36,.82);box-shadow:0 2px 8px rgba(0,0,0,.22);font:11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-        button{border:0;border-radius:4px;padding:4px 6px;background:transparent;color:#fff;cursor:pointer;white-space:nowrap}button:hover,button:focus-visible{background:rgba(255,255,255,.18);outline:0}
-      </style><span class="controls" role="toolbar" aria-label="图片阅读操作"><button type="button" data-action="toggle">原图</button><button type="button" data-action="zoom">放大</button>${animated ? '<button type="button" data-action="static-frame">当前帧</button>' : ''}<button type="button" data-action="explain">解读</button></span>`;
-    const toggle = shadow.querySelector('[data-action="toggle"]');
-    let showingOriginal = false;
-    toggle.addEventListener('click', () => {
-      showingOriginal = !showingOriginal;
-      if (layer) layer.style.display = showingOriginal ? 'none' : '';
-      if (sideLayer) sideLayer.style.display = showingOriginal ? 'none' : '';
-      if (fallback) fallback.style.display = showingOriginal ? 'none' : '';
-      toggle.textContent = showingOriginal ? '译文' : '原图';
-      toggle.setAttribute('aria-label', showingOriginal ? '显示译文' : '显示原图');
-    });
-    shadow.querySelector('[data-action="zoom"]').addEventListener('click', () => showImageZoom(image));
-    shadow.querySelector('[data-action="static-frame"]')?.addEventListener('click', (event) => {
-      image.setAttribute('data-deep-research-static-frame', 'true');
-      event.currentTarget.textContent = '已标记';
-      event.currentTarget.setAttribute('aria-label', '已标记当前帧，点击全文翻译后处理');
-      // Re-snapshot the page so a running full-document task can enqueue this
-      // now-explicit static frame.  The original animation remains untouched
-      // until the user asks for the translation.
-      send({ type: 'deep-research:request-page' });
-    });
-    shadow.querySelector('[data-action="explain"]').addEventListener('click', async () => {
+  async function selectReadingImage(image) {
       // Clicking a figure can leave the previous paragraph selected. Clear it
       // before emitting the image scope so the debounced selection observer
       // cannot arrive afterward and replace the image discussion context.
@@ -1191,7 +1304,7 @@
       const isSvg = image.tagName?.toLowerCase() === 'svg';
       const width = Number(image.naturalWidth || image.width || image.getBoundingClientRect().width || 0);
       const height = Number(image.naturalHeight || image.height || image.getBoundingClientRect().height || 0);
-      const rawDataUrl = isSvg ? readSvgDataUrl(image) : readImageDataUrl(image);
+      const rawDataUrl = isSvg ? readSvgDataUrl(image) : isLikelyAnimatedImage(image) ? null : readImageDataUrl(image);
       const dataUrl = isSvg ? await rasterizeSvgDataUrl(rawDataUrl, width, height) : rawDataUrl;
       const modelScale = width && height ? Math.min(1, 2400 / Math.max(width, height)) : 1;
       send({
@@ -1205,10 +1318,40 @@
           height,
           modelWidth: dataUrl ? Math.max(1, Math.round(width * modelScale)) : width,
           modelHeight: dataUrl ? Math.max(1, Math.round(height * modelScale)) : height,
-          status: 'ready',
+          status: isLikelyAnimatedImage(image) ? 'animated' : 'ready',
         },
       });
+  }
+
+  function addImageControls(wrapper, image, layer, fallback, sideLayer = null) {
+    const control = document.createElement('span');
+    control.dataset.deepResearchImageControl = 'true';
+    control.style.cssText = 'position:absolute;top:6px;right:6px;z-index:3;line-height:normal;';
+    applyReaderDesignTokens(control);
+    const shadow = readerShadow(control, { mode: 'open' });
+    const animated = isLikelyAnimatedImage(image);
+    shadow.innerHTML = localizedMarkup(t("\n      <style>\n        :host{all:initial} .controls{display:flex;gap:var(--reader-space-1);padding:var(--reader-space-1);border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-small);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);font:var(--reader-type-caption) var(--reader-font-family)}\n        button{min-height:36px;border:0;border-radius:var(--reader-radius-small);padding:8px 12px;background:transparent;color:var(--reader-color-primary);cursor:pointer;white-space:nowrap;font:500 var(--reader-type-label)/1.5 var(--reader-font-family);transition:background-color var(--reader-motion-fast)}button:hover{background:var(--reader-color-primary-container)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}\n      </style><span class=\"controls\" role=\"toolbar\" aria-label=\"图片阅读操作\"><button type=\"button\" data-action=\"toggle\">原图</button><button type=\"button\" data-action=\"zoom\">放大</button>{0}<button type=\"button\" data-action=\"explain\">解读</button></span>", animated ? '<button type="button" data-action="static-frame">当前帧</button>' : ''));
+    const toggle = shadow.querySelector('[data-action="toggle"]');
+    let showingOriginal = false;
+    toggle.addEventListener('click', () => {
+      showingOriginal = !showingOriginal;
+      if (layer) layer.style.display = showingOriginal ? 'none' : '';
+      if (sideLayer) sideLayer.style.display = showingOriginal ? 'none' : '';
+      if (fallback) fallback.style.display = showingOriginal ? 'none' : '';
+      toggle.textContent = showingOriginal ? t("译文") : t("原图");
+      toggle.setAttribute('aria-label', showingOriginal ? t("显示译文") : t("显示原图"));
     });
+    shadow.querySelector('[data-action="zoom"]').addEventListener('click', () => showImageZoom(image));
+    shadow.querySelector('[data-action="static-frame"]')?.addEventListener('click', (event) => {
+      image.setAttribute('data-deep-research-static-frame', 'true');
+      event.currentTarget.textContent = t("已标记");
+      event.currentTarget.setAttribute('aria-label', t("已标记当前帧，点击全文翻译后处理"));
+      // Re-snapshot the page so a running full-document task can enqueue this
+      // now-explicit static frame.  The original animation remains untouched
+      // until the user asks for the translation.
+      send({ type: 'deep-research:request-page' });
+    });
+    shadow.querySelector('[data-action="explain"]').addEventListener('click', () => void selectReadingImage(image));
     wrapper.appendChild(control);
   }
 
@@ -1297,6 +1440,7 @@
     const wrapper = document.createElement('span');
     wrapper.dataset.deepResearchImageWrap = imageId;
     wrapper.style.cssText = 'position:relative;display:inline-block;max-width:100%;line-height:0;vertical-align:middle;overflow:visible;';
+    applyReaderDesignTokens(wrapper);
     image.parentElement?.insertBefore(wrapper, image);
     wrapper.appendChild(image);
     image.style.maxWidth = '100%';
@@ -1328,7 +1472,7 @@
         // Opaque fill is intentional: a translucent box leaves source glyphs
         // visible underneath and can create a false bilingual reading. The
         // original image remains one click away through the image control.
-        label.style.cssText = `position:absolute;left:${(x / width) * 100}%;top:${(y / height) * 100}%;width:${(regionWidth / width) * 100}%;min-height:${(regionHeight / height) * 100}%;padding:1px 1px;box-sizing:border-box;background:#fff;color:#10141a;font:600 ${fontSize}px/1.12 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:normal;overflow:hidden;word-break:break-word;${verticalLabel ? 'writing-mode:vertical-rl;text-orientation:mixed;' : ''}`;
+        label.style.cssText = `position:absolute;left:${(x / width) * 100}%;top:${(y / height) * 100}%;width:${(regionWidth / width) * 100}%;min-height:${(regionHeight / height) * 100}%;padding:1px 1px;box-sizing:border-box;background:var(--reader-color-surface);color:var(--reader-color-text);font:600 ${fontSize}px/1.12 var(--reader-font-family);white-space:normal;overflow:hidden;word-break:break-word;${verticalLabel ? 'writing-mode:vertical-rl;text-orientation:mixed;' : ''}`;
         layer.appendChild(label);
       });
       if (!layer.childElementCount) layer = null;
@@ -1353,7 +1497,7 @@
       const estimatedLabelHeight = (text, source = '') => {
         const sourceText = String(source || '').trim().replace(/\s+/gu, ' ');
         const sideText = sourceText
-          ? `原文：${sourceText.slice(0, 120)}\n译文：${String(text || '').trim()}`
+          ? t("原文：{0}\n译文：{1}", sourceText.slice(0, 120), String(text || '').trim())
           : String(text || '').trim();
         return Math.min(180, Math.max(42, 28 + (Math.ceil(sideText.length / 24) * 16)));
       };
@@ -1401,17 +1545,17 @@
         label.dataset.deepResearchImageSidePlacement = placement;
         const sourceLine = sourceText ? document.createElement('span') : null;
         if (sourceLine) {
-          sourceLine.textContent = `原文  ${sourceText.slice(0, 120)}`;
-          sourceLine.style.cssText = 'display:block;margin-bottom:3px;color:#806a3d;font:500 10px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+          sourceLine.textContent = t("原文  {0}", sourceText.slice(0, 120));
+          sourceLine.style.cssText = `display:block;margin-bottom:3px;color:${readerToken('color-warning', '#80631f')};font:500 var(--reader-type-caption)/1.35 var(--reader-font-family);`;
           label.appendChild(sourceLine);
         }
         const translationLine = document.createElement('span');
         translationLine.textContent = translatedText;
-        translationLine.style.cssText = 'display:block;color:#3f321c;font:600 12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+        translationLine.style.cssText = `display:block;color:${readerToken('color-image-translation', '#60491d')};font:600 var(--reader-type-caption)/1.4 var(--reader-font-family);`;
         label.appendChild(translationLine);
-        const sideText = sourceText ? `原文 ${sourceText.slice(0, 120)}\n${translatedText}` : translatedText;
+        const sideText = sourceText ? t("原文 {0}\n{1}", sourceText.slice(0, 120), translatedText) : translatedText;
         const sideHeight = Math.min(180, Math.max(42, 28 + (Math.ceil(sideText.length / 24) * 16)));
-        label.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${sideWidth}px;min-height:${sideHeight}px;box-sizing:border-box;padding:6px 8px;border:1px solid #d19a38;border-radius:5px;background:rgba(255,249,226,.98);color:#60491d;white-space:normal;overflow-wrap:anywhere;box-shadow:0 2px 6px rgba(72,48,12,.16);`;
+        label.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${sideWidth}px;min-height:${sideHeight}px;box-sizing:border-box;padding:6px 8px;border:1px solid ${readerToken('color-warning', '#80631f')};border-radius:var(--reader-radius-small);background:${readerToken('color-image-translation-container', '#fff9e2')};color:${readerToken('color-image-translation', '#60491d')};white-space:normal;overflow-wrap:anywhere;box-shadow:var(--reader-elevation-1);`;
         sideLayer.appendChild(label);
       });
       if (belowImageHeight) {
@@ -1432,8 +1576,8 @@
     if (safeFallback) {
       fallback = document.createElement('div');
       fallback.dataset.deepResearchImageFallback = imageId;
-      fallback.textContent = `旁侧译文：${safeFallback}`;
-      fallback.style.cssText = 'position:relative;z-index:2;margin-top:6px;padding:7px 9px;border-left:3px solid #d19a38;background:#fff6df;color:#6b5125;font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:pre-wrap;';
+      fallback.textContent = t("旁侧译文：{0}", safeFallback);
+      fallback.style.cssText = `position:relative;z-index:2;margin-top:var(--reader-space-2);padding:7px 9px;border-left:3px solid ${readerToken('color-warning', '#80631f')};border-radius:var(--reader-radius-xs);background:var(--reader-color-warning-container);color:var(--reader-color-warning);font:var(--reader-type-label)/1.55 var(--reader-font-family);white-space:pre-wrap;`;
       wrapper.appendChild(fallback);
     }
     addImageControls(wrapper, image, layer, fallback, sideLayer);
@@ -1491,10 +1635,11 @@
   const observer = new MutationObserver((records) => {
     const pageChanged = records.some((record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
-      if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
-      if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
+      if (target && root.isConnected && !root.contains(target) && !target.contains(root)) return false;
+      if (target?.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]')) return false;
+      if (record.type === 'childList' && record.removedNodes.length > 0 && Array.from(record.removedNodes).every((node) => node instanceof Element && node.matches('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom],[data-deep-research-annotation-highlight]'))) return false;
       return record.type === 'childList' && (Array.from(record.addedNodes).some((node) => {
-        return !(node instanceof Element && node.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom]'));
+        return !(node instanceof Element && node.closest('[data-deep-research-translation],[data-deep-research-selection-translation],[data-deep-research-paragraph-control],[data-deep-research-paragraph-highlight],[data-deep-research-toolbar],[data-deep-research-dock],[data-deep-research-status],[data-deep-research-image-control],[data-deep-research-image-zoom]'));
       }) || record.removedNodes.length > 0) || record.type === 'characterData';
     });
     if (!pageChanged) return;
@@ -1535,10 +1680,17 @@
     };
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'deep-research:clear-native-selection') {
+      window.getSelection()?.removeAllRanges();
+      lastSelectionContext = null;
+      lastSelectionRange = null;
+      removeSelectionToolbar();
+      return;
+    }
     if (message?.type === 'deep-research:reader-status') {
       const tone = message.state === 'ready' ? 'ready' : message.state === 'error' ? 'error' : 'loading';
-      setReaderStatus(String(message.label || '正在读取正文'), tone, String(message.detail || ''));
+      setReaderStatus(String(message.label || t("正在读取正文")), tone, String(message.detail || ''));
     }
     if (message?.type === 'deep-research:focus-page') {
       root.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1567,6 +1719,10 @@
         sendPageContext();
       }
     }
+    if (message?.type === 'deep-research:select-image' && typeof message.src === 'string') {
+      const image = Array.from(root.querySelectorAll('img')).find(node => (node.currentSrc || node.src) === message.src);
+      if (image && !image.closest('form,[contenteditable="true"]')) void selectReadingImage(image);
+    }
     if (message?.type === 'deep-research:request-full-document') {
       sendFullDocument();
     }
@@ -1590,21 +1746,38 @@
     }
     if (message?.type === 'deep-research:apply-translations') {
       const translations = Array.isArray(message.translations) ? message.translations : [];
+      if (message.documentUrl && message.documentUrl !== sourceUrl()) {
+        sendResponse?.({ ok: false, appliedIds: [] });
+        return;
+      }
       let appliedCount = 0;
-      translations.forEach(({ id, text, sourceText }) => {
+      const appliedIds = [];
+      const failedItems = [];
+      const fail = (id, reason) => failedItems.push({ id, error: reason });
+      translations.forEach(({ id, text, sourceText, targetLanguage }) => {
         if (id === 'selection') {
-          if (applySelectionTranslation(text, sourceText)) appliedCount += 1;
+          if (applySelectionTranslation(text, sourceText)) { appliedCount += 1; appliedIds.push(id); }
+          else fail(id, t("选段已变化，译文未显示；请重新选择后重试。"));
           return;
         }
         const node = id === 'selection' && lastSelectionNode?.isConnected
           ? lastSelectionNode
           : document.querySelector(`[data-deep-research-block="${CSS.escape(id)}"]`);
-        if (!node || !text || document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`)) return;
+        if (!node || !text) { fail(id, t("原文节点已变化，译文未显示；请重新开启全文翻译。")); return; }
         // DOM updates can reorder block ids between the request and the
         // response. Refuse to attach a translation to a different paragraph;
         // the user can retry after the viewport context is refreshed.
-        if (typeof sourceText === 'string' && sourceBlockText(node) !== clean(sourceText)) return;
-        if (getComputedStyle(node).display === 'none') return;
+        if (typeof sourceText === 'string' && sourceBlockText(node) !== clean(sourceText)) {
+          fail(id, t("本段原文已变化，旧译文未显示；请重新开启全文翻译。")); return;
+        }
+        const existing = document.querySelector(`[data-deep-research-translation-for="${CSS.escape(id)}"]`);
+        if (existing) { existing.textContent = text; existing.dataset.deepResearchTargetLanguage = targetLanguage || ''; appliedIds.push(id); return; }
+        if (getComputedStyle(node).display === 'none' && translatedOriginalDisplays.has(node)) {
+          node.style.display = translatedOriginalDisplays.get(node) || '';
+        }
+        if (getComputedStyle(node).display === 'none') {
+          fail(id, t("原文当前不可显示，译文未应用；请展开内容后重试。")); return;
+        }
         const translated = document.createElement(node.tagName.toLowerCase());
         for (const attribute of ['class', 'style', 'dir', 'lang', 'role']) {
           const value = node.getAttribute(attribute);
@@ -1617,22 +1790,26 @@
           }
         }
         translated.dataset.deepResearchTranslation = 'true';
+        translated.dataset.deepResearchTargetLanguage = targetLanguage || '';
         translated.dataset.deepResearchTranslationFor = id;
         translated.textContent = text;
         translated.dataset.deepResearchDisplay = getComputedStyle(node).display;
         translated.tabIndex = 0;
-        translated.title = '右键或段落按钮可查看原文；Alt+Shift+O / Alt+单击也可切换';
+        translated.title = t("右键或段落按钮可查看原文；Alt+Shift+O / Alt+单击也可切换");
         translated.style.setProperty('display', getComputedStyle(node).display);
-        translated.style.setProperty('border-inline-start', '3px solid #3159c9');
-        translated.style.setProperty('padding-inline-start', '0.65em');
+        translated.style.setProperty('border-inline-start', 'none', 'important');
+        translated.style.setProperty('padding-inline-start', '0', 'important');
         translated.dataset.deepResearchOriginalDisplay = node.style.display;
         translated.dataset.deepResearchOriginalAttributes = JSON.stringify({ title: node.getAttribute('title'), tabindex: node.getAttribute('tabindex') });
         translatedOriginalDisplays.set(node, node.style.display);
         node.style.display = 'none';
         node.insertAdjacentElement('afterend', translated);
         appliedCount += 1;
+        appliedIds.push(id);
       });
-      send({ type: 'deep-research:translations-applied', count: appliedCount });
+      const result = { ok: true, appliedIds, failedItems, count: appliedCount };
+      sendResponse?.(result);
+      send({ type: 'deep-research:translations-applied', ...result });
     }
     if (message?.type === 'deep-research:apply-image-translations') {
       const translations = Array.isArray(message.translations) ? message.translations : [];
@@ -1643,6 +1820,9 @@
       send({ type: 'deep-research:image-translations-applied', count: appliedCount });
     }
     if (message?.type === 'deep-research:restore-translations') {
+      selectedParagraphId = null;
+      focusedTranslationId = null;
+      syncParagraphControl(null);
       document.querySelectorAll('[data-deep-research-translation]').forEach((node) => {
         const id = node.getAttribute('data-deep-research-translation-for');
         const original = id
@@ -1665,7 +1845,7 @@
       focusedTranslationId = null; contextParagraphId = null; syncParagraphControl(null, true);
       removeSelectionTranslation();
       restoreImageTranslations();
-      send({ type: 'deep-research:translations-restored' });
+      if (!message.silent) send({ type: 'deep-research:translations-restored' });
     }
   });
 

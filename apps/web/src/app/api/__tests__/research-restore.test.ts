@@ -54,6 +54,21 @@ function request() {
 }
 
 describe('POST research version restore', () => {
+  it('does not erase a confirmed AI card index when restoring a card with a save key', async () => {
+    const indexUpsert = vi.fn().mockResolvedValue({});
+    mocks.researchFindUnique.mockResolvedValueOnce({
+      id: RESEARCH_ID, authorId: USER.id, status: 'draft', type: 'knowledge',
+      creationMethod: 'ai_research', readingSaveKey: '55555555-5555-4555-8555-555555555555',
+    });
+    mocks.transaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      research: { findUnique: mocks.currentFindUnique, update: mocks.researchUpdate },
+      researchAudit: { create: mocks.auditCreate },
+      personalKnowledgeIndexTask: { upsert: indexUpsert },
+    }));
+    expect((await request()).status).toBe(200);
+    expect(mocks.researchUpdate.mock.calls[0][0].data.knowledgeIndexText).toContain('旧结论');
+    expect(indexUpsert.mock.calls[0][0].create.operation).toBe('upsert');
+  });
   it('restores atomically and creates a revert audit', async () => {
     const response = await request();
     expect(response.status).toBe(200);

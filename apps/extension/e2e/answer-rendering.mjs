@@ -95,12 +95,12 @@ try {
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true', null, { timeout: 10_000 });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom');
+  await panel.locator('#provider-kind').selectOption('custom', { force: true });
   await panel.locator('#provider-url').fill(`http://127.0.0.1:${providerServer.address().port}/v1`);
   await panel.locator('#provider-model').fill('answer-rendering-fixture');
   await panel.locator('#provider-key').fill('local-only-test-key');
   await panel.locator('#save-settings').click();
-  await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('模型连接成功'), null, { timeout: 10_000 });
+  await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('模型配置已保存'), null, { timeout: 10_000 });
   await panel.locator('#close-settings').click();
 
   await article.evaluate(() => {

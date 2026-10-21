@@ -3,13 +3,16 @@
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect } from 'react';
-import { Loader2, RotateCw } from 'lucide-react';
+import { RotateCw } from 'lucide-react';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
 import { useQuery } from '@tanstack/react-query';
 
 import { EmptyState } from '../../../components/EmptyState';
 import { RadarExternalReadingLanding } from '../../../components/radar/RadarExternalReadingLanding';
 import { BackToSearchButton } from '../../../components/domain/BackToSearchButton';
-import { Button } from '../../../components/ui/button';
+import { AppButton } from '../../../components/material/AppButton';
+import Skeleton from '@mui/material/Skeleton';
 import type { RadarFeedbackCounts } from '../../../components/radar/RadarFeedbackBar';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import type { DistilledScore } from '@deep-research/shared/schemas';
@@ -90,24 +93,24 @@ export default function RadarDetailPage() {
 
   if (query.isLoading) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--ink-page)]" role="status" aria-live="polite">
-        <div className="flex items-center justify-between border-b border-[var(--ink-rule)] px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-2">
+      <Box sx={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', overflowY: 'auto', bgcolor: 'background.default' }} role="status" aria-live="polite">
+        <Box component="header" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 56, px: { xs: 2, sm: 3 }, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <BackToSearchButton />
-            <Link href={backHref} className="text-sm text-[var(--ink-muted)] hover:text-[var(--ink-accent)]">回到雷达</Link>
-          </div>
-          <div className="h-9 w-24 animate-pulse bg-[var(--ink-surface)]" />
-        </div>
-        <div className="mx-auto w-full max-w-7xl px-5 py-10 sm:px-8 lg:py-14">
-          <Loader2 className="size-5 animate-spin text-[var(--ink-accent)]" aria-hidden />
-          <p className="mt-4 text-sm font-medium text-[var(--ink-text)]">正在准备雷达简报</p>
-          <div className="mt-7 max-w-4xl space-y-3">
-            <div className="h-3 w-32 animate-pulse bg-[var(--ink-surface)]" />
-            <div className="h-12 w-full animate-pulse bg-[var(--ink-surface)]" />
-            <div className="h-24 w-full animate-pulse bg-[var(--ink-surface)]" />
-          </div>
-        </div>
-      </div>
+            <AppButton component={Link} href={backHref} variant="text" color="inherit">回到雷达</AppButton>
+          </Box>
+          <Skeleton variant="rounded" width={96} height={36} />
+        </Box>
+        <Box sx={{ mx: 'auto', width: '100%', maxWidth: 1280, px: { xs: 2, sm: 3, md: 4 }, py: { xs: 4, sm: 5 } }}>
+          <CircularProgress size={20} aria-label="正在准备雷达简报" />
+          <Skeleton variant="text" sx={{ mt: 2, height: 28, width: 176 }} />
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, mt: 3, maxWidth: 720 }}>
+            <Skeleton variant="text" width={128} />
+            <Skeleton variant="text" sx={{ height: 44 }} />
+            <Skeleton variant="rounded" sx={{ height: 96 }} />
+          </Box>
+        </Box>
+      </Box>
     );
   }
 
@@ -115,28 +118,25 @@ export default function RadarDetailPage() {
     const errorMessage = String((query.error as Error).message);
     const needsLogin = errorMessage.includes('登录') || errorMessage.includes('授权');
     return (
-      <div className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8">
-        <div className="flex items-center gap-2">
+      <Box sx={{ mx: 'auto', width: '100%', maxWidth: 768, px: { xs: 2, sm: 3 }, py: 4 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <BackToSearchButton />
-          <Link href={backHref} className="text-sm text-muted-foreground hover:text-primary">返回雷达</Link>
-        </div>
-        <div className="mt-6">
+          <AppButton component={Link} href={backHref} variant="text" color="inherit">返回雷达</AppButton>
+        </Box>
+        <Box sx={{ mt: 3 }}>
           <EmptyState
             title={needsLogin ? '需要登录' : '加载失败'}
             description={needsLogin ? '登录后才能查看雷达详情、评分和讨论。' : errorMessage}
             action={needsLogin ? (
-              <Button asChild size="sm">
-                <Link href="/signin">去登录</Link>
-              </Button>
+              <AppButton component={Link} href="/signin" variant="contained">去登录</AppButton>
             ) : (
-              <Button type="button" size="sm" variant="outline" onClick={() => void query.refetch()}>
-                <RotateCw className="size-3.5" />
+              <AppButton type="button" variant="outlined" onClick={() => void query.refetch()} startIcon={<RotateCw aria-hidden />}>
                 重新加载
-              </Button>
+              </AppButton>
             )}
           />
-        </div>
-      </div>
+        </Box>
+      </Box>
     );
   }
 

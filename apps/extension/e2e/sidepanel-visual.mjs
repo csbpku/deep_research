@@ -197,23 +197,12 @@ try {
   if (!(await panel.locator('#local-provider-settings').isVisible()) || await panel.locator('#platform-settings').isVisible()) {
     throw new Error('独立模式设置应只显示本地模型服务。');
   }
-  const permissionLabel = await panel.locator('#request-provider-origin').evaluate((element) => ({
-    text: [...element.labels].map((label) => label.innerText).join(' ').trim(),
-    height: element.labels[0]?.getBoundingClientRect().height || 0,
-    checked: element.checked,
-  }));
-  if (!permissionLabel.text.includes('保存时请求访问该模型服务域名') || permissionLabel.height < 24) {
-    throw new Error(`模型域名权限复选框没有完整的可点标签：${JSON.stringify(permissionLabel)}`);
-  }
-  await panel.locator('#request-provider-origin').focus();
+  if (!await panel.locator('#provider-url').isVisible()) throw new Error('所有服务都应该直接显示 API 地址。');
+  await panel.locator('#provider-key-toggle').focus();
   await panel.keyboard.press('Space');
-  if (await panel.locator('#request-provider-origin').isChecked() === permissionLabel.checked) {
-    throw new Error('模型域名权限复选框不能通过键盘空格切换。');
-  }
+  if (await panel.locator('#provider-key').getAttribute('type') !== 'text') throw new Error('Key 显示控制不能通过键盘切换。');
   await panel.keyboard.press('Space');
-  if (await panel.locator('#request-provider-origin').isChecked() !== permissionLabel.checked) {
-    throw new Error('恢复权限复选框原值失败。');
-  }
+  if (await panel.locator('#provider-key').getAttribute('type') !== 'password') throw new Error('Key 隐藏控制没有恢复。');
 
   await panel.setViewportSize({ width: 360, height: 820 });
   await panel.locator('#mode-platform').click();
@@ -242,7 +231,7 @@ try {
   }
 
   await panel.locator('#close-settings').click();
-  const sidepanelTextActionHeights = await panel.locator('button.text-button').evaluateAll((buttons) => buttons
+  const sidepanelTextActionHeights = await panel.locator('button.MuiButton-text').evaluateAll((buttons) => buttons
     .filter((button) => button.getBoundingClientRect().width > 0 && button.getBoundingClientRect().height > 0)
     .map((button) => button.getBoundingClientRect().height));
   if (sidepanelTextActionHeights.some((height) => height < 32)) {
@@ -265,12 +254,12 @@ try {
     selection?.addRange(range);
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
-  await panel.waitForFunction(() => Boolean(document.querySelector('#selection-quote')?.textContent), null, { timeout: 10_000 });
+  await panel.waitForFunction(() => Boolean(document.querySelector('#chat-selection-quote')?.textContent), null, { timeout: 10_000 });
   await panel.setViewportSize({ width: 420, height: 820 });
   await panel.screenshot({ path: '/private/tmp/deep-research-reader-article-420.png', fullPage: true });
   const article420 = await layoutReport(panel, 'article-selection-420');
 
-  if (await panel.locator('#ask-page').count() !== 0 || await panel.locator('.selection-action-label').innerText() !== '选段操作') {
+  if (await panel.locator('#ask-page').count() !== 0 || await panel.locator('.selection-action-label').isVisible()) {
     throw new Error('选段工具仍重复展示聊天范围/整页提问入口。');
   }
   await panel.locator('#annotate-selection').click();
@@ -307,7 +296,7 @@ try {
   }
   await panel.locator('#cancel-save').click();
 
-  await panel.locator('#ask-selection').click();
+  await panel.locator('#question-input').click();
   await panel.locator('#discussion-section').waitFor({ state: 'visible', timeout: 5_000 });
   await panel.locator('#question-input').waitFor({ state: 'visible', timeout: 5_000 });
   await panel.screenshot({ path: '/private/tmp/deep-research-reader-chat-420.png', fullPage: true });
@@ -320,6 +309,9 @@ try {
       const surfaceRect = surface?.getBoundingClientRect();
       const pageViewRect = document.querySelector('#page-view')?.getBoundingClientRect();
       const emptyState = section.querySelector('.conversation-empty')?.getBoundingClientRect();
+      const input = section.querySelector('#question-input');
+      const inputRect = input?.getBoundingClientRect();
+      const inputStyle = input ? getComputedStyle(input) : null;
       const transcriptRect = transcript;
       return {
         visible: Boolean(composer && getComputedStyle(composer).display !== 'none' && composerRect?.height),
@@ -328,13 +320,24 @@ try {
         inSession: Boolean(surface && composer && surface.contains(composer)),
         transcriptAboveComposer: Boolean(transcript && composerRect && transcript.bottom <= composerRect.top + 1),
         withinSession: Boolean(surfaceRect && composerRect && composerRect.bottom <= surfaceRect.bottom + 1),
-        pinnedToPanelBottom: Boolean(pageViewRect && composerRect && Math.abs(pageViewRect.bottom - composerRect.bottom) < 2),
+        pinnedToPanelBottom: Boolean(pageViewRect && composerRect
+          && composerRect.bottom <= pageViewRect.bottom + 1
+          && pageViewRect.bottom - composerRect.bottom <= 20),
+        composerHeight: composerRect?.height ?? null,
+        inputHeight: inputRect?.height ?? null,
+        inputCssHeight: inputStyle?.height ?? null,
+        inputInlineHeight: input?.style.height ?? null,
+        inputRows: input?.getAttribute('rows') ?? null,
+        inputValueLength: input?.value.length ?? null,
         emptyStateCentered: Boolean(emptyState && transcriptRect
           && Math.abs((emptyState.top + emptyState.bottom) / 2 - (transcriptRect.top + transcriptRect.bottom) / 2) < 24),
       };
     });
   if (!chatLayout.visible || !chatLayout.inSession || !chatLayout.transcriptAboveComposer || !chatLayout.withinSession || !chatLayout.pinnedToPanelBottom || !chatLayout.emptyStateCentered || chatLayout.position === 'fixed') {
     throw new Error(`chat history and input are not arranged in one session container: ${JSON.stringify(chatLayout)}`);
+  }
+  if (chatLayout.inputValueLength === 0 && chatLayout.inputHeight > 72) {
+    throw new Error(`an empty chat composer should leave the transcript visible instead of reserving multiple blank rows: ${JSON.stringify(chatLayout)}`);
   }
   await panel.locator('#page-overview-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight; });
   const composerAfterOverviewScroll = await panel.locator('#persistent-composer').evaluate((element) => element.getBoundingClientRect().bottom);
@@ -377,11 +380,11 @@ try {
     throw new Error(`history keyboard focus is not visible on the first action: ${JSON.stringify(firstHistoryFocus)}`);
   }
   await panel.keyboard.press('Tab');
-  if (await panel.evaluate(() => document.activeElement?.id) !== 'export-history') {
+  if (await panel.evaluate(() => document.activeElement?.id) !== 'history-library') {
     throw new Error('history header keyboard order does not follow the visual order');
   }
   await panel.locator('#close-history').click();
-  await panel.waitForURL(`chrome-extension://${extensionId}/sidepanel.html`);
+  await panel.waitForURL(url => url.pathname === '/sidepanel.html');
 
   console.log(JSON.stringify({
     ok: true,

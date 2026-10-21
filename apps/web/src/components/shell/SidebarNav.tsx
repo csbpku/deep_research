@@ -1,125 +1,41 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  Flame,
-  LayoutGrid,
-  Library,
-  Radar,
-  Search,
-  Settings,
-  Workflow,
-  type LucideIcon,
-} from 'lucide-react';
+import { Flame, LayoutGrid, Library, Radar, Search, Settings, Workflow, type LucideIcon } from 'lucide-react';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import { space, tokens } from '@deep-research/design-system';
+import { AppButton } from '@/components/material/AppButton';
+import { LinkPendingIcon } from '@/components/material/LinkPendingIcon';
+import { isNavActive, PILL_LABELS, type NavItem, type NavItemIconKey } from './sidebar-nav-config';
 
-import { cn } from '@/lib/utils';
-import {
-  isNavActive,
-  PILL_LABELS,
-  type NavItem,
-  type NavItemIconKey,
-} from './sidebar-nav-config';
-
-// 重导出：保持原有 `import { PRIMARY_NAV, ADMIN_NAV, SidebarNav, type NavItem } from './SidebarNav'`
-// 的调用点仍可用，避免一次性改一片 import。
 export type { NavItem } from './sidebar-nav-config';
-export {
-  PRIMARY_NAV,
-  ADMIN_NAV,
-  PILL_LABELS,
-  PLACEHOLDER_P1,
-} from './sidebar-nav-config';
+export { PRIMARY_NAV, ADMIN_NAV, PILL_LABELS, PLACEHOLDER_P1 } from './sidebar-nav-config';
 
-/**
- * 图标按名字查表，名字类型由 server-safe 模块的 NavItemIconKey 锁定。
- * 这样 server 模块只能引用 NavItemIconKey 里存在的 key，类型系统杜绝 typo。
- */
-const ICONS: Record<NavItemIconKey, LucideIcon> = {
-  home: LayoutGrid,
-  radar: Radar,
-  // 调研库用书架图标：长期归档而非主动创造
-  research: Library,
-  // AI 调研用流程图：5 步流水线（plan → search → compress → analyze → write）
-  aiResearch: Workflow,
-  search: Search,
-  // 专题用 Flame：视觉上比 Radar 更"热度感"，便于和雷达区分
-  topic: Flame,
-  admin: Settings,
-};
+const ICONS: Record<NavItemIconKey, LucideIcon> = { home: LayoutGrid, radar: Radar, research: Library, aiResearch: Workflow, search: Search, topic: Flame, admin: Settings };
 
-/**
- * SidebarNav —— 极薄 client island。
- * 唯一的职责：usePathname() 打 aria-current + 高亮。
- * 角色判断留在 RSC 侧（AppShell），这里只渲染传进来的条目。
- */
-export function SidebarNav({
-  items,
-  onNavigate,
-  collapsed = false,
-  horizontal = false,
-}: {
-  items: NavItem[];
-  /** 移动端 Sheet 里点击后收起 */
-  onNavigate?: () => void;
-  collapsed?: boolean;
-  horizontal?: boolean;
+export function SidebarNav({ items, onNavigate, collapsed = false, horizontal = false }: {
+  items: NavItem[]; onNavigate?: () => void; collapsed?: boolean; horizontal?: boolean;
 }) {
   const pathname = usePathname() ?? '/';
-
-  return (
-    <nav
-      className={cn(
-        'flex gap-0.5',
-        horizontal ? 'flex-row items-center' : 'flex-col',
-      )}
-      aria-label="主导航"
-    >
-      {items.map((item) => {
-        const Icon = ICONS[item.icon];
-        const active = isNavActive(pathname, item.href);
-        const pill = PILL_LABELS[item.href];
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            aria-current={active ? 'page' : undefined}
-            className={cn(
-              'group relative flex items-center rounded-md text-[13px] transition-colors duration-150',
-              horizontal
-                ? 'h-9 shrink-0 gap-2 px-2.5'
-                : 'py-2',
-              !horizontal && (collapsed ? 'justify-center px-2' : 'gap-2.5 pl-3.5 pr-2.5'),
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              horizontal
-                ? 'after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-transparent after:transition-colors after:duration-150'
-                : 'before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-transparent before:transition-colors before:duration-150',
-              active
-                ? horizontal
-                  ? 'bg-accent/70 font-medium text-accent-foreground after:bg-primary'
-                  : 'bg-accent font-medium text-accent-foreground before:bg-primary'
-                : horizontal
-                  ? 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground hover:before:bg-muted-foreground/30',
-            )}
-          >
-            <Icon className="size-4 shrink-0" />
-            {!collapsed && <span className="truncate">{item.label}</span>}
-            {collapsed ? <span className="sr-only">{item.label}</span> : null}
-            {pill && !collapsed && (
-              <span
-                className={cn(
-                  'ml-auto rounded px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-                  pill.className,
-                )}
-              >
-                {pill.label}
-              </span>
-            )}
-          </Link>
-        );
-      })}
-    </nav>
-  );
+  return <Box component="nav" aria-label="主导航" sx={{ display: 'flex', gap: space.xs, flexDirection: horizontal ? 'row' : 'column' }}>
+    {items.map(item => {
+      const Icon = ICONS[item.icon];
+      const active = isNavActive(pathname, item.href);
+      const pill = PILL_LABELS[item.href];
+      return <AppButton key={item.href} component={Link} href={item.href} onClick={onNavigate} aria-current={active ? 'page' : undefined} aria-label={collapsed ? item.label : undefined}
+        title={collapsed ? item.label : undefined} sx={{
+          justifyContent: horizontal || collapsed ? 'center' : 'flex-start', flexShrink: 0,
+          padding: `${space.sm} ${space.md}`, gap: space.sm, borderRadius: tokens['radius-small'],
+          color: active ? 'primary.main' : 'text.secondary', backgroundColor: active ? 'action.selected' : 'transparent',
+          boxShadow: active ? (horizontal ? 'inset 0 -2px 0 var(--dr-color-primary)' : 'inset 2px 0 0 var(--dr-color-primary)') : 'none',
+          '&:hover': { backgroundColor: active ? 'action.selected' : 'action.hover' },
+        }}>
+        <LinkPendingIcon label={item.label}><Icon size={16} aria-hidden /></LinkPendingIcon>{!collapsed ? item.label : null}
+        {pill && !collapsed ? <Chip label={pill.label} size="small" sx={{ marginLeft: 'auto' }} /> : null}
+      </AppButton>;
+    })}
+  </Box>;
 }

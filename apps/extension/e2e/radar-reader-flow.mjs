@@ -72,20 +72,8 @@ try {
   const openSourceButton = radar.getByRole('button', { name: /打开原文|打开 GitHub/u });
   await openSourceButton.waitFor({ state: 'visible', timeout: 20_000 });
 
-  await openSourceButton.click();
-  await radar.getByRole('dialog').waitFor({ state: 'visible', timeout: 5_000 });
-  const promptText = await radar.getByRole('dialog').innerText();
-  if (!promptText.includes('先确认你已安装 Reader')) throw new Error(`安装提示文案不完整: ${promptText}`);
-
-  await radar.getByRole('link', { name: '先安装 Reader' }).click();
-  await radar.waitForURL('**/reading/install', { timeout: 10_000 });
-  const installText = await radar.locator('body').innerText();
-  if (!installText.includes('Beta 安装包')) throw new Error('安装页未打开');
-
-  await radar.goto(radarUrl, { waitUntil: 'domcontentloaded' });
-  await radar.getByRole('button', { name: /打开原文|打开 GitHub/u }).click();
   const sourcePromise = context.waitForEvent('page');
-  await radar.getByRole('dialog').getByRole('button', { name: '我已安装，继续打开' }).click();
+  await openSourceButton.click();
   const source = await sourcePromise;
   await source.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
   if (!source.url().includes('deep-research-source=radar')) {

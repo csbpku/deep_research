@@ -15,6 +15,7 @@ export interface ResolvedKnowledgeSource {
   content: string;
   topic: string;
   sources: KnowledgeCardSource[];
+  topicIds?: string[];
 }
 
 const HTTP_URL_RE = /^https?:\/\/\S+$/iu;
@@ -57,6 +58,8 @@ export async function resolveKnowledgeSource(
         title: true,
         body: true,
         authorId: true,
+        researchTopics: { where: { topic: { enabled: true } }, select: { topicId: true }, take: 20 },
+        sourceAiJob: { select: { primaryTopicId: true } },
         researchSources: {
           orderBy: { createdAt: 'asc' },
           select: { sourceRef: true, canonicalKey: true, title: true, description: true },
@@ -80,6 +83,10 @@ export async function resolveKnowledgeSource(
       content: report.body.slice(0, 256000),
       topic: report.title,
       sources,
+      topicIds: [...new Set([
+        ...(report.researchTopics?.map(row => row.topicId) ?? []),
+        ...(report.sourceAiJob?.primaryTopicId ? [report.sourceAiJob.primaryTopicId] : []),
+      ])],
     };
   }
 
@@ -98,6 +105,7 @@ export async function resolveKnowledgeSource(
             job: {
               select: {
                 topic: true,
+                primaryTopicId: true,
                 aiResearchSources: {
                   orderBy: { createdAt: 'asc' },
                   select: {
@@ -138,6 +146,7 @@ export async function resolveKnowledgeSource(
       content: message.content.slice(0, 256000),
       topic: message.conversation.job?.topic ?? message.conversation.title,
       sources,
+      topicIds: message.conversation.job?.primaryTopicId ? [message.conversation.job.primaryTopicId] : [],
     };
   }
 

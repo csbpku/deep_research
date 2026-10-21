@@ -6,14 +6,14 @@
 //   - 顶部搜索框：保留 query string（刷新不丢）
 //   - 按 type 分组 tab（全部 / 雷达 / 摘要 / 长文 / 精华）
 //   - 每条结果：type 标签 + 标题（链接到详情）+ 高亮 snippet
-//   - 未登录：服务端 redirect 到 signin
+//   - 未登录只搜索公开内容；本人草稿由 API 按服务端身份过滤
 //
 // 设计：
 //   - 客户端发起 GET /api/search?q=&type=&page=&per_page=
 //   - 高亮来自后端 ts_headline（已用 <mark>...</mark> 包裹匹配段）
 //   - 切 tab 时：把 ?type 写到 query string；前端不刷页面，只更新 state
 
-import { useCallback, useEffect, useState, Suspense } from 'react';
+import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Search as SearchIcon } from 'lucide-react';
@@ -22,12 +22,14 @@ import { EmptyState } from '@/components/EmptyState';
 import { ErrorState } from '@/components/StateMessage';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
-import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent } from '@/components/ui/card';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppTextField as Input } from '@/components/material/AppTextField';
+import Skeleton from '@mui/material/Skeleton';
+import Tabs from '@mui/material/Tabs';
+import Tab from '@mui/material/Tab';
+import Paper from '@mui/material/Paper';
+import Chip from '@mui/material/Chip';
+import styles from './search.module.css';
 
 interface SearchRow {
   id: string;
@@ -49,7 +51,7 @@ interface SearchResponse {
   totalPages: number;
 }
 
-// Radix Tabs 的 value 不能是空串，用 all 哨兵；发请求时映射回空。
+// Preserve the existing URL/API contract: all is omitted from requests.
 const ALL = 'all';
 
 const TYPE_TABS: Array<{ key: string; label: string }> = [
@@ -59,15 +61,14 @@ const TYPE_TABS: Array<{ key: string; label: string }> = [
   { key: 'long_research', label: '研究报告' },
   { key: 'knowledge', label: '知识卡片' },
 ];
-// 类型徽章由 StatusBadge kind="searchType" 统一管理，颜色不再散落于此。
 
 export default function SearchPage() {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto max-w-shell space-y-2">
-          <Skeleton className="h-8 w-40" />
-          <Skeleton className="h-9 w-full" />
+        <div className={styles.screen}>
+          <Skeleton variant="text" width={160} height={32} />
+          <Skeleton variant="rounded" height={36} />
         </div>
       }
     >
@@ -185,51 +186,51 @@ function SearchContent() {
 
   const totalPages = data?.totalPages ?? 0;
   const items = data?.items ?? [];
+  const selectedType = TYPE_TABS.some(tab => tab.key === type) ? type : false;
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className={`material-surface ${styles.screen}`}>
       <PageHeader
         title="搜索"
         description="搜索公开资料、雷达，以及仅本人可见的研究草稿。"
       />
 
-      <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
+      <form onSubmit={handleSubmit} className={styles.form} role="search" aria-label="搜索平台内容">
         <Input
+          type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder='例如 "RAG 评估" OR GraphRAG'
           aria-label="搜索关键词"
-          className="min-w-0 flex-1"
+          sx={{ minWidth: 0, width: 'auto', flex: 1 }}
         />
-        <Button type="submit" disabled={loading || !q.trim()} className="shrink-0">
-          <SearchIcon className="sm:mr-1" />
-          <span className="hidden sm:inline">{loading ? '搜索中…' : '搜索'}</span>
+        <Button type="submit" variant="contained" disabled={loading || !q.trim()}
+          aria-label={loading ? '搜索中' : '搜索'} sx={{ flexShrink: 0 }}>
+          <SearchIcon aria-hidden />
+          <span className={styles.submitLabel}>{loading ? '搜索中…' : '搜索'}</span>
         </Button>
       </form>
 
-      <Tabs
-        value={type}
-        onValueChange={(v) => {
+      <Tabs aria-label="搜索结果类型" variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile
+        value={selectedType} selectionFollowsFocus
+        onChange={(_event, v: string) => {
           replaceSearch({ type: v, page: 1 });
         }}
       >
-        <TabsList className="w-full justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {TYPE_TABS.map((tab) => (
-            <TabsTrigger key={tab.key} value={tab.key} className="shrink-0">
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        {TYPE_TABS.map(tab => <Tab key={tab.key} value={tab.key} label={tab.label}
+          id={`search-type-${tab.key}`} aria-controls="search-results-panel" />)}
       </Tabs>
 
-      <div className="mt-4">
+      <div id="search-results-panel" role="tabpanel" className={styles.results} tabIndex={0}
+        aria-labelledby={selectedType ? `search-type-${selectedType}` : undefined}
+        aria-label={selectedType ? undefined : '搜索结果'} aria-busy={loading}>
         {error ? (
           <ErrorState
-            className="mb-3"
+            className={styles.error}
             title="搜索暂时失败"
             description={error}
             action={
-              <Button type="button" size="xs" variant="outline" onClick={() => setRequestKey((value) => value + 1)}>
+              <Button type="button" size="small" variant="outlined" onClick={() => setRequestKey((value) => value + 1)}>
                 重试
               </Button>
             }
@@ -241,12 +242,12 @@ function SearchContent() {
         )}
 
         {loading && (
-          <div className="grid gap-2">
+          <div className={styles.list} role="status" aria-label="正在搜索">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="space-y-2 rounded-md border border-border bg-card p-3.5">
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-3 w-full" />
-              </div>
+              <Paper key={i} variant="outlined" className={styles.card}>
+                <Skeleton variant="text" height={24} width="50%" />
+                <Skeleton variant="text" height={20} />
+              </Paper>
             ))}
           </div>
         )}
@@ -257,43 +258,38 @@ function SearchContent() {
 
         {data && items.length > 0 && (
           <>
-            <p className="mb-2 text-xs tabular-nums text-muted-foreground">
+            <p className={styles.count} role="status">
               共 {data.total} 条结果
             </p>
-            <ul className="grid list-none gap-2.5 p-0">
+            <ul className={styles.list}>
               {items.map((row) => {
-                const searchKind =
-                  row.type === 'long_research' ? 'research' :
-                  row.type === 'radar' ? 'radar' :
-                  row.type === 'knowledge' ? 'knowledge' :
-                  'summary';
+                const typeLabel = TYPE_TABS.find(tab => tab.key === row.type)?.label ?? '摘要';
                 return (
-                  <li key={row.id} className="min-w-0">
-                    <Card className="min-w-0 max-w-full transition-colors duration-200 hover:border-primary/40">
-                      <CardContent className="min-w-0 p-3.5">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge kind="searchType" value={searchKind} />
+                  <li key={row.id} className={styles.item}>
+                    <Paper component="article" variant="outlined" className={styles.card}>
+                        <div className={styles.metadata}>
+                          <Chip size="small" label={typeLabel} />
                           {row.isPrivate ? (
-                            <span className="text-xs font-medium text-muted-foreground">本人草稿</span>
+                            <span>本人草稿</span>
                           ) : null}
+                        </div>
+                        <h2 className={styles.title}>
                           <Link
                             href={detailHref(row)}
-                            className="min-w-0 break-words text-sm font-medium hover:text-primary hover:underline"
                           >
                             {row.title}
                           </Link>
-                        </div>
+                        </h2>
                         {/* highlighted snippet —— 后端用 <mark> 包裹全文匹配段，
                             并在返回前转义来源文本，只保留高亮标签。 */}
                         <p
-                          className="mt-1.5 text-sm leading-relaxed text-muted-foreground [&_mark]:rounded-sm [&_mark]:bg-status-queued-bg [&_mark]:px-0.5 [&_mark]:text-status-queued-fg"
+                          className={styles.snippet}
                           dangerouslySetInnerHTML={{ __html: row.highlighted }}
                         />
-                        <div className="mt-1.5 font-mono text-xs tabular-nums text-muted-foreground">
+                        <time className={styles.date} dateTime={row.publishedAt}>
                           {new Date(row.publishedAt).toLocaleString('zh-CN')}
-                        </div>
-                      </CardContent>
-                    </Card>
+                        </time>
+                    </Paper>
                   </li>
                 );
               })}

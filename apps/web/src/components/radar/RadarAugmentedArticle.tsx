@@ -35,9 +35,9 @@ export function RadarAugmentedArticle({ content, guide, onQuoteClick }: RadarAug
   return (
     <article className="space-y-0">
       {guide?.summary ? (
-        <div className="mb-6 border-l-2 border-[var(--ink-accent)] bg-[var(--ink-accent)]/[0.06] px-3.5 py-3">
+        <div className="mb-6 border-l-2 border-[var(--ink-accent)] bg-[var(--ink-accent)]/[0.06] px-3 py-3">
           <div className="mb-1 font-sans text-xs font-semibold uppercase tracking-[0.1em] text-[var(--ink-accent)]">快速理解</div>
-          <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{guide.summary}</p>
+          <p className="text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)]">{guide.summary}</p>
         </div>
       ) : null}
 
@@ -45,20 +45,20 @@ export function RadarAugmentedArticle({ content, guide, onQuoteClick }: RadarAug
         const annotations = annotationsForBlock(block, guide);
         return (
           <section key={radarBlockId(index)} id={`augmented-${radarBlockId(index)}`} className="scroll-mt-6 border-b border-[var(--ink-rule)]/60 py-5 first:pt-0 last:border-b-0">
-            <MarkdownContent content={block} className="reading-workbench-markdown font-serif text-[16px] leading-[1.85] text-[var(--ink-text)]" />
+            <MarkdownContent content={block} className="reading-workbench-markdown text-[var(--ink-text)]" />
             {annotations.length ? (
               <div className="mt-4 space-y-2 border-l-2 border-[var(--ink-accent)]/50 pl-3">
                 {annotations.map((item, annotationIndex) => (
-                  <div key={`${item.claim ?? 'annotation'}-${annotationIndex}`} className="bg-[var(--ink-accent)]/[0.05] px-3 py-2.5">
+                  <div key={`${item.claim ?? 'annotation'}-${annotationIndex}`} className="bg-[var(--ink-accent)]/[0.05] px-3 py-3">
                     <div className="mb-1 font-sans text-xs font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">AI 注释</div>
-                    {item.claim ? <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{item.claim}</p> : null}
+                    {item.claim ? <p className="text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)]">{item.claim}</p> : null}
                     {item.whyItMatters ? <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">为什么重要：{item.whyItMatters}</p> : null}
                     {item.evidence ? (
                       <button
                         type="button"
                         onClick={() => onQuoteClick?.(item.evidence!)}
                         aria-label="查看 AI 依据（滚动到证据来源）"
-                        className="mt-1.5 inline-flex items-center gap-0.5 text-left text-xs font-medium text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+                        className="mt-2 inline-flex items-center gap-1 text-left text-xs font-medium text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
                       >
                         <ListChecks className="size-3" aria-hidden />
                         查看依据

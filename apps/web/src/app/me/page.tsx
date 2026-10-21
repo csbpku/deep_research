@@ -3,6 +3,8 @@
 // Server Component 入口：未登录 redirect 到 /signin。
 // 五个区块：草稿 / 收藏 / 模板 / 通知 / 设置；设置使用独立子组件承载 client 表单。
 import { redirect } from 'next/navigation';
+import Box from '@mui/material/Box';
+import { tokens } from '@deep-research/design-system';
 
 import { getCurrentUser } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
@@ -37,7 +39,7 @@ export default async function MePage() {
   const bookmarkViews = await hydrateBookmarks(bookmarks);
 
   return (
-    <div className="mx-auto max-w-shell">
+    <Box sx={{ width: '100%', maxWidth: tokens['width-shell'], minWidth: 0, mx: 'auto' }}>
       <PageHeader
         title="我的"
         description="草稿、收藏、调研模板、团队通知与个性化设置。"
@@ -62,6 +64,6 @@ export default async function MePage() {
           })),
         }}
       />
-    </div>
+    </Box>
   );
 }

@@ -24,6 +24,7 @@ const Input = z.object({
   body: z.string().trim().min(1).max(50_000),
   conclusion: z.string().trim().max(2_000).optional().default(''),
   tags: z.array(z.string().trim().min(1).max(40)).max(10).default([]),
+  idempotencyKey: z.string().uuid().optional(),
 }).strict();
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -49,7 +50,10 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const knowledge = await prisma.$transaction(async (tx) => {
+  let knowledge;
+  let deduplicated = false;
+  try {
+    knowledge = await prisma.$transaction(async (tx) => {
     const created = await tx.research.create({
       data: {
         type: 'knowledge',
@@ -62,6 +66,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         authorId: user.id,
         creationMethod: 'ai_research',
         aiAssisted: true,
+        readingSaveKey: input.idempotencyKey,
         originContentSha256: createHash('sha256').update(input.selectedText).digest('hex'),
       },
       select: {
@@ -81,6 +86,13 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
           title: sourceRef.title,
           description: sourceRef.description,
         },
+      });
+    }
+    for (const topicId of source.topicIds ?? []) {
+      const topic = await tx.topic.findFirst({ where: { id: topicId, enabled: true }, select: { id: true } });
+      if (topic) await tx.researchTopic.upsert({
+        where: { researchId_topicId: { researchId: created.id, topicId } },
+        create: { researchId: created.id, topicId, relationType: 'auto' }, update: {},
       });
     }
 
@@ -105,14 +117,24 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     });
     return created;
   });
+  } catch (error) {
+    if (!input.idempotencyKey || !(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+    knowledge = await prisma.research.findFirst({
+      where: { authorId: user.id, readingSaveKey: input.idempotencyKey, type: 'knowledge' },
+      select: { id: true, title: true, status: true, publishedAt: true },
+    });
+    if (!knowledge) throw error;
+    deduplicated = true;
+  }
 
   return NextResponse.json({
     ok: true,
+    deduplicated,
     knowledge: {
       id: knowledge.id,
       title: knowledge.title,
       status: knowledge.status,
       publishedAt: knowledge.publishedAt?.toISOString() ?? null,
     },
-  }, { status: 201 });
+  }, { status: deduplicated ? 200 : 201 });
 });

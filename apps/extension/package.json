@@ -1,15 +1,20 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.15",
+  "version": "0.2.28",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test reader-core.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs ui-regressions.test.mjs",
+    "test": "node --test reader-core.test.mjs reader-store.test.mjs i18n.test.mjs model-connection.test.mjs provider-catalog.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs reader-platform-bridge-utils.test.mjs ui-regressions.test.mjs translation-language.test.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
     "e2e:live-provider": "READER_LIVE=1 node e2e/smoke.mjs",
     "e2e:worker": "node e2e/worker-smoke.mjs",
     "e2e:worker-termination": "node e2e/worker-termination.mjs",
     "e2e:controls": "node e2e/controls.mjs",
+    "e2e:interaction-audit": "node e2e/interaction-audit.mjs",
+    "e2e:live-reading-audit": "READER_LIVE=1 node e2e/live-reading-audit.mjs",
+    "e2e:source-launch": "node e2e/platform-source-launch.mjs",
+    "e2e:model-configuration": "node e2e/model-configuration.mjs",
+    "e2e:live-model-configuration": "READER_LIVE=1 node e2e/live-provider-configuration.mjs",
     "e2e:conversation-history": "node e2e/conversation-history.mjs",
     "e2e:visual": "node e2e/sidepanel-visual.mjs",
     "e2e:answer-rendering": "node e2e/answer-rendering.mjs",
@@ -23,14 +28,16 @@
     "e2e:live-image-benchmark": "node e2e/live-image-benchmark.mjs",
     "e2e:live-image-review": "node e2e/live-image-visual-review.mjs",
     "e2e:pkce": "node e2e/platform-pkce.mjs",
-    "check": "node --check background.js && node --check content.js && node --check reader-store.js && node --check reader-core.js && node --check markdown-renderer.js && node --check sidepanel.js && node --check history.js && node --check scripts/sync-static.mjs",
+    "check": "node --check background.js && node --check content.js && node --check reader-platform-bridge.js && node --check reader-platform-bridge-utils.js && node --check reader-store.js && node --check reader-core.js && node --check model-connection.js && node --check markdown-renderer.js && node --check sidepanel.js && node --check history.js && node --check scripts/sync-static.mjs",
     "wxt:prepare": "wxt prepare",
     "build": "node scripts/sync-static.mjs && wxt build",
     "build:e2e": "READER_E2E=1 node scripts/sync-static.mjs && READER_E2E=1 wxt build",
     "package": "node scripts/sync-static.mjs && wxt zip",
     "package:beta": "node scripts/package-beta.mjs",
     "package:store": "node scripts/sync-static.mjs && wxt build && node scripts/package-store.mjs",
-    "typecheck": "wxt prepare && tsc --noEmit -p tsconfig.json"
+    "typecheck": "wxt prepare && tsc --noEmit -p tsconfig.json",
+    "e2e:platform-image": "node e2e/platform-image-answer.mjs",
+    "e2e:translation-language": "node e2e/translation-language.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
@@ -41,6 +48,10 @@
     "wxt": "^0.21.4"
   },
   "dependencies": {
+    "@deep-research/design-system": "workspace:*",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^9.5.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   }

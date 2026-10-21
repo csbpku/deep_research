@@ -268,7 +268,7 @@ function LazyRepoPage({
           <div className="mb-4 flex items-center justify-end border-b border-[var(--ink-rule)] pb-2">
             <span className="text-xs text-[var(--ink-faint)]">第 {pageIndex + 1} 页</span>
           </div>
-          <h2 className="mb-5 font-serif text-2xl font-semibold leading-tight text-[var(--ink-text)]">
+          <h2 className="mb-5 text-[length:var(--dr-type-page-title)] font-semibold leading-[1.4] text-[var(--ink-text)]">
             {page.title || `项目文档 ${pageIndex + 1}`}
           </h2>
           {page.blocks.map((block) => (
@@ -282,7 +282,7 @@ function LazyRepoPage({
             >
               <MarkdownContent
                 content={resolveRepoReferences(block.content, repositoryUrl, refName)}
-                className="text-[16px] text-[var(--ink-text)]"
+                className="text-[var(--ink-text)]"
                 onLinkClick={onLinkClick}
               />
             </section>
@@ -560,12 +560,12 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--ink-accent)]">{overviewLabel}</p>
               {overview ? (
-                <p className="mt-2 max-w-3xl font-serif text-sm leading-6 text-[var(--ink-muted)]">{overview}</p>
+                <p className="mt-2 max-w-3xl text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-muted)]">{overview}</p>
               ) : null}
               {showBrief && summary ? (
-                <div className="mt-3 max-w-3xl rounded-md border-l-2 border-[var(--ink-accent)] bg-[var(--ink-paper)]/70 px-3 py-2.5">
+                <div className="mt-3 max-w-3xl rounded-md border-l-2 border-[var(--ink-accent)] bg-[var(--ink-paper)]/70 px-3 py-3">
                   <p className="mb-1 text-xs font-medium text-[var(--ink-muted)]">AI 一句话解读</p>
-                  <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{brief}</p>
+                  <p className="text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)]">{brief}</p>
                 </div>
               ) : null}
             </div>
@@ -579,7 +579,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                   type="button"
                   onClick={() => void refreshDocument()}
                   disabled={refreshing}
-                  className="inline-flex items-center gap-1.5 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
+                  className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-3 py-2 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
                 >
                   <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
                   {refreshing ? '刷新中…' : '刷新文档'}
@@ -618,7 +618,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
             type="button"
             onClick={() => void refreshDocument()}
             disabled={refreshing}
-            className="inline-flex items-center gap-1.5 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
+            className="inline-flex items-center gap-1 border border-[var(--ink-rule)] px-3 py-2 text-xs font-medium text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] disabled:cursor-wait disabled:opacity-50"
           >
             <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
             {refreshing ? '刷新中…' : '刷新文档'}
@@ -665,7 +665,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                   <div className="mt-1 space-y-2">
                     {sections.map(([section, sectionPages]) => (
                       <div key={section || 'default'}>
-                        {section ? <p className="px-1 py-0.5 text-xs font-medium uppercase tracking-[0.08em] text-[var(--ink-faint)]">{section}</p> : null}
+                        {section ? <p className="px-1 py-1 text-xs font-medium uppercase tracking-[0.08em] text-[var(--ink-faint)]">{section}</p> : null}
                         <ol className="space-y-0.5">
                           {sectionPages.map((page, index) => (
                             <li key={page.id}>
@@ -695,7 +695,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
           <div className="hidden min-h-[520px] border-x border-[var(--ink-rule)] lg:block" aria-hidden />
           <div className="min-w-0 lg:pl-8">
             <details className="mb-6 rounded-lg border border-[var(--ink-rule)] lg:hidden">
-              <summary className="cursor-pointer px-3 py-2.5 text-xs font-semibold text-[var(--ink-text)]">文档目录</summary>
+              <summary className="cursor-pointer px-3 py-3 text-xs font-semibold text-[var(--ink-text)]">文档目录</summary>
               <div className="space-y-3 border-t border-[var(--ink-rule)] px-3 py-2">
                 {groupedPages.map(({ group, sections }) => (
                   <details key={group} open>
@@ -703,11 +703,11 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                     <div className="mt-1 space-y-2 pl-2">
                       {sections.map(([section, sectionPages]) => (
                         <div key={section || 'default'}>
-                          {section ? <p className="py-0.5 text-xs font-medium uppercase tracking-[0.08em] text-[var(--ink-faint)]">{section}</p> : null}
+                          {section ? <p className="py-1 text-xs font-medium uppercase tracking-[0.08em] text-[var(--ink-faint)]">{section}</p> : null}
                           <ol>
                             {sectionPages.map((page, index) => (
                               <li key={page.id}>
-                                <a href={`#${page.id}`} className="block py-1.5 text-xs text-[var(--ink-muted)] hover:text-[var(--ink-accent)]">
+                                <a href={`#${page.id}`} className="block py-2 text-xs text-[var(--ink-muted)] hover:text-[var(--ink-accent)]">
                                   {page.title || page.path || `文档 ${index + 1}`}
                                 </a>
                               </li>
@@ -721,7 +721,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
               </div>
             </details>
 
-            <div data-zread-article data-radar-reading-body="true" className="reading-workbench-markdown text-[16px] text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20">
+            <div data-zread-article data-radar-reading-body="true" className="reading-workbench-markdown text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20">
               {pages.map((page, pageIndex) => (
                 <LazyRepoPage
                   key={page.id}
@@ -739,7 +739,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
         </div>
       ) : (
         <div className="max-w-2xl border-l-2 border-[var(--ink-rule)] py-2 pl-4 text-sm leading-7 text-[var(--ink-muted)]">
-          <h2 className="font-serif text-lg font-semibold text-[var(--ink-text)]">
+          <h2 className="text-[length:var(--dr-type-title-medium)] font-semibold text-[var(--ink-text)]">
             {status === 'generating' ? '正在抓取项目文档' : '暂时没有项目文档'}
           </h2>
           <p className="mt-1">
@@ -748,7 +748,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
               : '没有找到可用的 Zread 页面或 README，因此这里不展示推测生成的目录。'}
           </p>
           {onRetry ? (
-            <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-3 border border-[var(--ink-rule)] px-3 py-1.5 text-xs font-medium text-[var(--ink-text)] hover:bg-muted disabled:opacity-50">
+            <button type="button" onClick={() => void retryGeneration()} disabled={retrying} className="mt-3 border border-[var(--ink-rule)] px-3 py-2 text-xs font-medium text-[var(--ink-text)] hover:bg-muted disabled:opacity-50">
               {retrying ? '正在重新投递…' : '重新抓取'}
             </button>
           ) : null}
@@ -772,7 +772,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                 type="button"
                 key={`${source.path}:${source.line ?? ''}`}
                 onClick={() => setSourcePreview(source)}
-                className="truncate rounded px-2 py-1.5 text-left font-mono text-xs text-[var(--ink-muted)] hover:bg-muted hover:text-[var(--ink-accent)]"
+                className="truncate rounded px-2 py-2 text-left font-mono text-xs text-[var(--ink-muted)] hover:bg-muted hover:text-[var(--ink-accent)]"
               >
                 {source.path}{source.line ? ` · L${source.line}` : ''}
               </button>
@@ -796,7 +796,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
                 {sourcePreview.line ? ` · 引用行 L${sourcePreview.line}` : ''}
               </p>
             </div>
-            <div className="flex shrink-0 items-center rounded-md border border-border p-0.5" role="group" aria-label="源码查看方式">
+            <div className="flex shrink-0 items-center rounded-md border border-border p-1" role="group" aria-label="源码查看方式">
               <button
                 type="button"
                 aria-pressed={sourceViewMode === 'source'}
@@ -827,7 +827,7 @@ export const RadarZreadDocument = memo(function RadarZreadDocument({
               type="button"
               aria-label="关闭源码预览"
               onClick={() => setSourcePreview(null)}
-              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <X className="size-4" />
             </button>

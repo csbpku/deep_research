@@ -1,6 +1,6 @@
 # Deep Research Reader 隐私政策
 
-最后更新：2026-10-14
+最后更新：2026-10-20
 
 Reader 帮助你在原网页中翻译、理解、讨论和保存阅读成果。独立模式直接使用你选择的模型服务，平台模式可选连接 Deep Research。两种模式都会在你发起 AI 操作时发送完成该操作所需的内容。
 
@@ -20,7 +20,7 @@ API Key 保存在扩展自己的本地 IndexedDB 配置中，仅用于向该模�
 
 ## 平台模式：可选连接 Deep Research
 
-平台模式需登录和授权。问答和翻译会把当前 URL、标题及操作所需的选段、所在小节、有界正文、问题和对话上下文发送给平台服务器，并由平台 AI Engine 请求其配置的模型服务。图片文字翻译按需上传浏览器读取的 PNG、JPEG 或 WebP 图片字节；平台不接收图片 URL 去抓取图片。平台模式暂不支持围绕图片追问。
+平台模式需登录和授权。问答和翻译会把当前 URL、标题及操作所需的选段、所在小节、有界正文、问题和对话上下文发送给平台服务器，并由平台 AI Engine 请求其配置的模型服务。图示问答和图片文字翻译按需上传浏览器读取的 PNG、JPEG 或 WebP 图片字节；平台不接收图片 URL 去抓取图片。图示问答结合图片、正文和最近对话处理追问。
 
 连接后，阅读会话可以同步到平台数据库，包括 URL、标题、页面版本、选区、讨论、回答和滚动位置。仅你确认保存的摘录、笔记、AI 结论、标签和来源会进入平台研究库。阅读同步不保存完整网页全文档案、图片字节、全文翻译缓存或你的模型 API Key。
 
@@ -50,7 +50,7 @@ activeTab 和 scripting：在你开启阅读后向当前网页注入正文提取
 
 contextMenus：在右键菜单提供选段解读、翻译、提问、保存以及单段原文与译文切换。storage：保存扩展状态、平台令牌和会话内的临时启动状态。unlimitedStorage：支持本地阅读成果、临时任务和有界翻译缓存，降低浏览器配额导致的丢失风险，不意味着数据无限增长。alarms：唤醒后台任务并恢复已启动的处理状态，不主动后台抓取网页。
 
-扩展没有固定站点 host_permissions。HTTP(S) 可选权限用于你启用的网页、配置的模型端点、平台和图片来源；只按当前操作的具体来源申请，你可以拒绝或在 Chrome 中撤销。
+扩展仅对 techradar.top 和 www.techradar.top 保留固定站点权限，用于识别你主动点击的“在 Reader 中打开”按钮并打开原文和侧栏，不读取平台登录凭据或无关网页。其他 HTTP(S) 权限均为可选，用于你启用的网页、配置的模型端点和图片来源，只按当前操作的具体来源申请，你可以拒绝或在 Chrome 中撤销。
 
 ## 联系与政策更新
 
@@ -63,3 +63,63 @@ contextMenus：在右键菜单提供选段解读、翻译、提问、保存以�
 支持：https://techradar.top/reading/support
 
 GitHub Issues：https://github.com/csbpku/deep_research/issues
+
+# Privacy policy (English)
+
+Last updated: 2026-10-20
+
+Reader helps you translate, understand, discuss and save material on its original webpage. Standalone mode connects directly to your selected model service; optional platform mode connects to Deep Research. Both send only the content needed for AI actions you initiate.
+
+## Information processed
+
+After you open Reader, the extension processes loaded article text, title, URL, selected passages, article images, your questions, notes and AI answers. In an enabled reading window, new pages are read only within existing site permissions; other sites require your action to enable access.
+
+Reader does not actively read passwords, cookies, form inputs or editable areas, collect unrelated browsing history, follow pagination or crawl entire sites. Page content is untrusted reading material and cannot grant permissions or execute tools.
+
+## Standalone mode: your selected model service
+
+Translation, summaries, questions and diagram explanations send the required article context, selections, images, questions and recent discussion directly from the extension to your configured service. OpenAI-compatible Chat Completions and Anthropic-compatible Messages are supported. Images may be converted to data URLs or base64; image-origin access is requested when necessary.
+
+Your API key stays in the extension’s local IndexedDB configuration and is used only to authenticate with your selected model service. It is not sent to Deep Research, page scripts or data exports. Browser storage is not an operating-system keychain. Only a loopback Local Proxy may omit a key; other services require credentials.
+
+Model providers apply their own retention, training and privacy policies. Reader does not promise zero retention by third parties. For local or self-hosted models, processing location depends on that service’s configuration.
+
+## Optional Deep Research platform mode
+
+Platform mode requires sign-in and authorization. The URL, title, required bounded article text, selections, section, question and discussion context are sent to the platform, whose AI Engine calls its configured model provider. Diagram questions and image translation upload browser-read PNG, JPEG or WebP bytes when requested. The server does not fetch image URLs. Follow-up questions can use the image, article and recent discussion.
+
+Reading sessions may sync URL, title, page version, selection, discussion, answers and scroll position to the platform database. Only excerpts, notes, AI insights, tags and sources you explicitly save enter the research library. Sync does not store full page archives, image bytes, full-page translation caches or your model API key.
+
+The sign-in service processes account information; the extension stores a platform authorization token locally. Disconnecting requests token revocation and removes the local token, but does not automatically delete previously synced records. The platform and its model provider may retain necessary operational, security or billing records; zero retention is not promised.
+
+## Local storage and retention
+
+Sessions, scroll positions, discussions, annotations, saved items and settings remain in extension storage until deleted, cleared or uninstalled. The translation cache keeps up to 500 entries and evicts older entries without a fixed expiry promise. Bounded source and image inputs required by tasks are temporary, cleared when tasks finish or are cancelled, and excluded from reading-data exports.
+
+Exports exclude API keys, temporary task inputs and translation caches. Export anything you need before uninstalling. Installations with different extension IDs do not automatically share local data.
+
+## Your controls and deletion
+
+You can deny or revoke site permissions, change services, stop answers, pause or cancel translation, disconnect the platform, delete local sessions or saved items, and clear the cache or all local data. Settings include import and export.
+
+Clearing local data does not delete synced platform records or requests retained by model providers. Research-library items can be deleted on the platform. Contact project support about cloud sessions, account data or other personal-data requests; contact third-party providers through their own channels.
+
+## Purpose and sharing
+
+Data is used for user-initiated reading, translation, discussion, saving, sync, security and troubleshooting. Reader does not sell user data or use it for advertising, unrelated analytics, credit assessment or lending decisions. The extension has no separate advertising or behavioral-analytics reporting.
+
+Recipients are your selected model service and, when you enable platform mode, the platform and its model provider. Reader complies with the Chrome Web Store User Data Policy, including Limited Use requirements. Third-party services apply their own policies.
+
+## Permissions explained
+
+activeTab and scripting inject article extraction, selection and translation display after you enable reading. tabs identifies the current tab URL, title and window, links evidence to the article, and opens authorization or source pages; it does not scan browsing history. sidePanel provides the native Chrome reading sidebar.
+
+contextMenus provides passage actions and bidirectional original/translation switching. storage stores extension state, platform tokens and temporary task state. unlimitedStorage helps preserve local reading data and bounded caches; it does not imply unlimited growth. alarms wakes tasks you started, without proactively crawling pages.
+
+Fixed host access is limited to techradar.top and www.techradar.top, so a user-initiated “Open in Reader” click can open the source and sidebar. The bridge does not read platform login credentials or unrelated pages. Other HTTP(S) access is optional and requested for the specific article, configured model endpoint or image origin you use. You can deny or revoke access in Chrome.
+
+## Contact and policy changes
+
+Project maintainers provide support through public GitHub Issues. Include the extension version, steps and a public test URL. Never post API keys, platform tokens, passwords or private article content. For personal-data requests, first describe the type of request and ask for a secure contact channel.
+
+This policy covers Deep Research Reader. Material changes are reflected here and in the bundled policy, with user authorization where required. The last updated date appears above.

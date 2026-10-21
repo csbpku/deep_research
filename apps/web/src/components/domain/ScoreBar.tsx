@@ -33,6 +33,15 @@ export function tierClasses(tier: string) {
   return TIER_CLASSES[tier === 'collection' ? 'deep_read' : tier] ?? TIER_CLASSES.deep_read;
 }
 
+/** MUI consumers use domain colors directly, without Tailwind presentation. */
+export function readingTierColor(tier: string | null | undefined): string {
+  const key = tier === 'collection' ? 'deep_read' : tier;
+  const token = key === 'deep_read' ? '--dr-color-tier-deep-read'
+    : key === 'skim' ? '--dr-color-tier-skim'
+      : key === 'noise' ? '--dr-color-tier-noise' : null;
+  return token ? `var(${token})` : 'var(--dr-color-text-secondary)';
+}
+
 /**
  * ScoreBar —— 单个维度的 0–3 分段条。
  * 迁移前 DistilledScorePanel 与 RadarCandidateCard 各写一遍内联 div。
