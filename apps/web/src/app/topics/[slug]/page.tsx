@@ -8,6 +8,7 @@ import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { collapseTopicIssues, findTopicBySlugOrId, loadTopicCandidateTrend } from '@/lib/topics';
 import { TopicDetailTabs, type SynthesisPayloadV2 } from './TopicDetailTabs';
+import { visibleTopicResearch } from '@/lib/knowledge-provenance';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,7 +63,7 @@ export default async function TopicDetailPage({ params }: { params: Promise<{ sl
       },
     }),
     prisma.researchTopic.findMany({
-      where: { topicId: topic.id },
+      where: { topicId: topic.id, research: visibleTopicResearch(user?.id) },
       orderBy: { createdAt: 'desc' },
       take: 12,
       select: {

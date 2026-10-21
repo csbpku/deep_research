@@ -26,7 +26,7 @@ export function RadarGithubItemSummary({ meta }: { meta: RadarGithubItemMeta }) 
   return (
     <section className="my-5 rounded-lg bg-muted/30 px-4 py-4" aria-labelledby="github-item-summary-title">
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 id="github-item-summary-title" className="flex items-center gap-1.5 text-sm font-semibold">
+        <h2 id="github-item-summary-title" className="flex items-center gap-1 text-sm font-semibold">
           <Icon className="size-4 text-muted-foreground" aria-hidden />
           {copy.title}
         </h2>
@@ -47,9 +47,9 @@ export function RadarGithubItemSummary({ meta }: { meta: RadarGithubItemMeta }) 
       </div>
 
       {meta.labels.length > 0 ? (
-        <div className="mb-4 flex flex-wrap gap-1.5">
+        <div className="mb-4 flex flex-wrap gap-1">
           {meta.labels.map((label) => (
-            <span key={label} className="border border-border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+            <span key={label} className="border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground">
               {label}
             </span>
           ))}
@@ -59,7 +59,7 @@ export function RadarGithubItemSummary({ meta }: { meta: RadarGithubItemMeta }) 
       {meta.bodyPreview ? (
         <div className="mb-4 grid gap-1 sm:grid-cols-[6rem_1fr] sm:gap-3">
           <h3 className="text-xs font-medium text-muted-foreground">变更摘要</h3>
-          <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">{meta.bodyPreview}</p>
+          <p className="whitespace-pre-wrap text-sm leading-[var(--dr-line-height-body)] text-foreground/90">{meta.bodyPreview}</p>
         </div>
       ) : null}
 
@@ -68,12 +68,12 @@ export function RadarGithubItemSummary({ meta }: { meta: RadarGithubItemMeta }) 
           <h3 className="mb-2 text-xs font-medium text-muted-foreground">关键讨论</h3>
           <div className="divide-y divide-border">
             {meta.commentPreviews.map((comment, index) => (
-              <div key={`${comment.author ?? 'unknown'}-${index}`} className="grid gap-1 py-2.5 sm:grid-cols-[6rem_1fr] sm:gap-3">
+              <div key={`${comment.author ?? 'unknown'}-${index}`} className="grid gap-1 py-2 sm:grid-cols-[6rem_1fr] sm:gap-3">
                 <div className="text-xs text-muted-foreground">
                   <span className="font-medium text-foreground/80">{comment.author ?? '未知用户'}</span>
                   {formatDate(comment.createdAt) ? <div>{formatDate(comment.createdAt)}</div> : null}
                 </div>
-                <p className="whitespace-pre-wrap text-sm leading-6">{comment.body}</p>
+                <p className="whitespace-pre-wrap text-sm leading-[var(--dr-line-height-body)]">{comment.body}</p>
               </div>
             ))}
           </div>

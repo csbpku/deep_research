@@ -1,35 +1,38 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { type ReactNode, useEffect, useState } from 'react';
+import React, { type ReactNode, useEffect, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   FolderOpen,
-  Loader2,
   RotateCw,
 } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { ErrorState } from '@/components/StateMessage';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { AiResearchButton as Button } from '@/components/ai-research/AiResearchMaterial';
+import { AppDrawer } from '@/components/material/AppDrawer';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import Paper from '@mui/material/Paper';
+import Skeleton from '@mui/material/Skeleton';
+import Stack from '@mui/material/Stack';
+import Table from '@mui/material/Table';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
+import Typography from '@mui/material/Typography';
 import { friendlyMessage, retryOnceAi } from '@/lib/errors/friendly';
-import { toApiHttpError } from '@/lib/errors/api-error';
+import { ApiHttpError, toApiHttpError } from '@/lib/errors/api-error';
 import { rerunResearchTask } from '@/components/ai-research/rerunResearchTask';
 import { taskStatusBadgeValue, taskStatusLabel } from '@/lib/ai-research-task-status';
-import { cn } from '@/lib/utils';
 
 interface HistoryItem {
   jobId: string;
@@ -120,21 +123,21 @@ function relativeTime(iso: string | null): string {
 
 function StatusIcon({ item }: { item: HistoryItem }) {
   if (item.deliverableStatus === 'evidence_only') {
-    return <AlertTriangle className="size-4 shrink-0 text-warning-fg" />;
+    return <AlertTriangle size={16} color="var(--dr-color-warning)" aria-hidden="true" />;
   }
   if (taskStatusBadgeValue(item) === 'partial') {
-    return <AlertTriangle className="size-4 shrink-0 text-warning-fg" />;
+    return <AlertTriangle size={16} color="var(--dr-color-warning)" aria-hidden="true" />;
   }
   const hasReaderReport = item.deliverableStatus === 'report' || (
     item.deliverableStatus === undefined && item.hasReport
   );
   if (item.publishedResearchId || (item.status === 'succeeded' && hasReaderReport)) {
-    return <CheckCircle2 className="size-4 shrink-0 text-status-succeeded-fg" />;
+    return <CheckCircle2 size={16} color="var(--dr-color-success)" aria-hidden="true" />;
   }
   if (item.status === 'failed' || item.status === 'cancelled' || item.status === 'partial') {
-    return <AlertTriangle className="size-4 shrink-0 text-status-failed-fg" />;
+    return <AlertTriangle size={16} color="var(--dr-color-danger)" aria-hidden="true" />;
   }
-  return <Loader2 className="size-4 shrink-0 animate-spin text-status-running-fg" />;
+  return <CircularProgress size={16} color="info" aria-label="进行中" />;
 }
 
 async function fetchJobs(params: URLSearchParams): Promise<{ items: HistoryItem[]; total: number }> {
@@ -151,7 +154,7 @@ function HistoryActions({ item, rerunning, onRerun }: {
   const inFlight = item.status === 'queued' || item.status === 'running';
 
   return (
-    <div className="flex justify-end gap-1">
+    <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
       <Button asChild variant="link" size="xs">
         <Link href={`/ai-research/${item.jobId}`}>打开</Link>
       </Button>
@@ -163,10 +166,10 @@ function HistoryActions({ item, rerunning, onRerun }: {
         onClick={() => onRerun(item)}
         title="沿用原问题、资料和设置重新运行"
       >
-        <RotateCw className={cn(rerunning === item.jobId && 'animate-spin')} />
+        <RotateCw size={16} />
         {rerunning === item.jobId ? '运行中…' : '重新运行'}
       </Button>
-    </div>
+    </Stack>
   );
 }
 
@@ -177,75 +180,75 @@ function HistoryTable({ items, rerunning, onRerun }: {
 }) {
   return (
     <>
-      <div className="space-y-2 sm:hidden">
+      <Stack spacing={1.5} sx={{ display: { xs: 'flex', sm: 'none' } }}>
         {items.map((item) => {
           const inFlight = item.status === 'queued' || item.status === 'running';
           return (
-            <article key={item.jobId} className="rounded-md border border-border bg-card p-3">
-              <div className="flex items-start gap-2">
+            <Paper component="article" variant="outlined" key={item.jobId} sx={{ p: 1.5 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
                 <StatusIcon item={item} />
-                <div className="min-w-0 flex-1">
-                  <p className="line-clamp-2 font-medium">{item.topic}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                  <Typography variant="listTitle" component="h3" sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>{item.topic}</Typography>
+                  <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                     {RESEARCH_MODE_LABEL[item.reportLength ?? 'standard'] ?? '研究深度'}
                     {' · '}
                     {REPORT_TYPE_LABEL[item.reportType] ?? '调研任务'}
                     {item.currentStep ? ` · ${STEP_LABEL[item.currentStep] ?? item.currentStep}` : ''}
-                  </p>
-                </div>
+                  </Typography>
+                </Box>
                 <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
-              </div>
+              </Stack>
               {inFlight && item.currentStep ? (
-                <p className="mt-2 pl-6 text-xs text-muted-foreground">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</p>
+                <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 1, pl: 3.5 }}>当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</Typography>
               ) : null}
-              <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
-                <span className="text-xs text-muted-foreground">{relativeTime(item.createdAt)}</span>
+              <Stack direction="row" spacing={1} sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography variant="metadata" color="text.secondary">{relativeTime(item.createdAt)}</Typography>
                 <HistoryActions item={item} rerunning={rerunning} onRerun={onRerun} />
-              </div>
-            </article>
+              </Stack>
+            </Paper>
           );
         })}
-      </div>
+      </Stack>
 
-      <div className="hidden overflow-x-auto rounded-md border border-border bg-card sm:block">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>主题</TableHead>
-              <TableHead className="w-36">状态</TableHead>
-              <TableHead className="w-28">创建时间</TableHead>
-              <TableHead className="w-36 text-right">操作</TableHead>
+      <TableContainer component={Paper} variant="outlined" sx={{ display: { xs: 'none', sm: 'block' }, overflowX: 'auto' }}>
+        <Table size="small" aria-label="调研历史任务">
+          <TableHead>
+            <TableRow sx={{ '&:hover': { bgcolor: 'transparent' } }}>
+              <TableCell component="th" scope="col">主题</TableCell>
+              <TableCell component="th" scope="col" sx={{ width: 144 }}>状态</TableCell>
+              <TableCell component="th" scope="col" sx={{ width: 112 }}>创建时间</TableCell>
+              <TableCell component="th" scope="col" sx={{ width: 144, textAlign: 'right' }}>操作</TableCell>
             </TableRow>
-          </TableHeader>
+          </TableHead>
           <TableBody>
             {items.map((item) => {
               const inFlight = item.status === 'queued' || item.status === 'running';
               return (
                 <TableRow key={item.jobId}>
-                  <TableCell className="min-w-56">
-                    <div className="flex items-start gap-2">
+                  <TableCell sx={{ minWidth: 224 }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
                       <StatusIcon item={item} />
-                      <div className="min-w-0">
-                        <p className="line-clamp-2 font-medium">{item.topic}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="listTitle" component="h3" sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>{item.topic}</Typography>
+                        <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                           {RESEARCH_MODE_LABEL[item.reportLength ?? 'standard'] ?? '研究深度'}
                           {' · '}
                           {REPORT_TYPE_LABEL[item.reportType] ?? '调研任务'}
                           {item.currentStep ? ` · ${STEP_LABEL[item.currentStep] ?? item.currentStep}` : ''}
-                        </p>
-                      </div>
-                    </div>
+                        </Typography>
+                      </Box>
+                    </Stack>
                   </TableCell>
                   <TableCell>
-                    <div className="space-y-1">
+                    <Stack spacing={0.5}>
                       <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
                       {inFlight && item.currentStep ? (
-                        <p className="text-xs text-muted-foreground">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</p>
+                        <Typography variant="metadata" color="text.secondary">当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</Typography>
                       ) : null}
-                    </div>
+                    </Stack>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{relativeTime(item.createdAt)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell sx={{ whiteSpace: 'nowrap', color: 'text.secondary', typography: 'metadata' }}>{relativeTime(item.createdAt)}</TableCell>
+                  <TableCell sx={{ textAlign: 'right' }}>
                     <HistoryActions item={item} rerunning={rerunning} onRerun={onRerun} />
                   </TableCell>
                 </TableRow>
@@ -253,7 +256,7 @@ function HistoryTable({ items, rerunning, onRerun }: {
             })}
           </TableBody>
         </Table>
-      </div>
+      </TableContainer>
     </>
   );
 }
@@ -266,6 +269,7 @@ export function AiResearchTaskHistory({
   trigger?: (onOpen: () => void) => ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [filter, setFilter] = useState<HistoryFilter>('all');
@@ -285,8 +289,12 @@ export function AiResearchTaskHistory({
       if (status) params.set('status', status);
       return await fetchJobs(params);
     },
-    retry: retryOnceAi,
+    retry: (count, error) => !(error instanceof ApiHttpError && error.status === 401) && retryOnceAi(count, error),
+    refetchOnMount: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
+    refetchOnWindowFocus: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
+    refetchOnReconnect: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
   });
+  const loginRequired = historyQuery.isError && historyQuery.error instanceof ApiHttpError && historyQuery.error.status === 401;
 
   async function rerun(item: HistoryItem) {
     setRerunning(item.jobId);
@@ -317,43 +325,46 @@ export function AiResearchTaskHistory({
           type="button"
           variant="outline"
           size="sm"
-          className="gap-1.5"
           onClick={() => setHistoryOpen(true)}
         >
-          <FolderOpen className="size-3.5" />
+          <FolderOpen size={14} />
           历史任务
         </Button>
       )}
 
-      <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
-        <SheetContent side="left" className="flex w-full max-w-4xl flex-col gap-0 p-0 sm:max-w-4xl">
-          <SheetHeader>
-            <SheetTitle>调研历史</SheetTitle>
-            <SheetDescription>查看过去的研究任务、恢复结果，或用相同范围重新运行。</SheetDescription>
-          </SheetHeader>
-          <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-3">
+      <AppDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} anchor="left" title="调研历史" description="查看过去的研究任务、恢复结果，或用相同范围重新运行。" width="min(100vw, 56rem)">
+        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <Stack direction="row" useFlexGap spacing={0.5} sx={{ flexWrap: 'wrap', alignItems: 'center', borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
             {FILTERS.map((item) => (
               <Button
                 key={item.key}
                 type="button"
                 size="xs"
                 variant={filter === item.key ? 'default' : 'outline'}
-                className="rounded-full"
+                sx={{ minHeight: 'var(--dr-control-height)' }}
                 onClick={() => setFilter(item.key)}
               >
                 {item.label}
               </Button>
             ))}
-            {historyQuery.data ? <span className="ml-auto text-xs text-muted-foreground">共 {historyQuery.data.total} 条</span> : null}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {rerunError ? <div role="alert" className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-sm text-destructive">{rerunError}</div> : null}
+            {!loginRequired && historyQuery.data ? <Typography variant="metadata" color="text.secondary" sx={{ ml: 'auto' }}>共 {historyQuery.data.total} 条</Typography> : null}
+          </Stack>
+          <Box sx={{ minHeight: 0, flex: 1, overflowY: 'auto', p: 2 }}>
+            {rerunError ? <Alert severity="error" role="alert" sx={{ mb: 1.5 }}>{rerunError}</Alert> : null}
             {historyQuery.isLoading ? (
-              <div className="space-y-3">
-                {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-16 w-full rounded-md" />)}
-              </div>
+              <Stack spacing={1.5}>
+                {[0, 1, 2, 3].map((item) => <Skeleton key={item} variant="rounded" height={64} />)}
+              </Stack>
+            ) : loginRequired ? (
+              <Alert severity="info" action={
+                <Button asChild variant="link" size="xs">
+                  <Link href={`/signin?${new URLSearchParams({ callbackUrl: pathname || '/ai-research' })}`}>登录</Link>
+                </Button>
+              }>
+                登录后查看历史任务。
+              </Alert>
             ) : historyQuery.isError ? (
-              <EmptyState
+              <ErrorState
                 title="历史任务加载失败"
                 description={friendlyMessage(historyQuery.error, '请稍后重试')}
                 action={<Button type="button" size="sm" onClick={() => void historyQuery.refetch()}>重试</Button>}
@@ -366,9 +377,9 @@ export function AiResearchTaskHistory({
             ) : (
               <HistoryTable items={historyItems} rerunning={rerunning} onRerun={(item) => void rerun(item)} />
             )}
-          </div>
-        </SheetContent>
-      </Sheet>
+          </Box>
+        </Box>
+      </AppDrawer>
     </>
   );
 }

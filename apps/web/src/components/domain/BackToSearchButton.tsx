@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 
-import { Button } from '@/components/ui/button';
+import { AppButton } from '@/components/material/AppButton';
 
 export function BackToSearchButton() {
   const searchParams = useSearchParams();
@@ -13,11 +13,14 @@ export function BackToSearchButton() {
   if (!returnTo || !returnTo.startsWith('/search')) return null;
 
   return (
-    <Button asChild variant="outline" size="sm">
-      <Link href={returnTo}>
-        <ArrowLeft />
-        返回搜索结果
-      </Link>
-    </Button>
+    <AppButton
+      component={Link}
+      href={returnTo}
+      variant="outlined"
+      size="small"
+      startIcon={<ArrowLeft aria-hidden="true" />}
+    >
+      返回搜索结果
+    </AppButton>
   );
 }

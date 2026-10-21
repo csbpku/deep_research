@@ -32,25 +32,11 @@
     }
   },
   "include": [
-    ".next-dev/types/**/*.ts",
-    ".next-goal-e2e/types/**/*.ts",
-    ".next-qa/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-recovery/types/**/*.ts",
-    ".next-topic-audit-20260902/types/**/*.ts",
-    ".next-verify-20260901-final/types/**/*.ts",
-    ".next-verify-20260901-result-order/types/**/*.ts",
-    ".next-verify-20260902-final/types/**/*.ts",
-    ".next-verify/types/**/*.ts",
-    ".next/types/**/*.ts",
+    ".next-mui-browser-acceptance-final-20261020/types/**/*.ts",
     "next-env.d.ts",
     "src/**/*.ts",
-    "src/**/*.tsx"
+    "src/**/*.tsx",
+    ".next-dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

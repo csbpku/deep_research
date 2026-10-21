@@ -9,9 +9,29 @@
 //   - CommentItem 序列化形态（与 BFF API 契约对齐）
 
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { __testing__ as commentHelpers } from './CommentSection';
+import { CommentSection } from './CommentSection';
 
 const { hashHue, formatRelative, isCommentAnchorStale } = commentHelpers;
+
+function renderCommentSection(items: unknown[], currentUserId: string | null = 'user-1') {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(['comments', 'summary', 'summary-1'], {
+    page: 1, perPage: 20, total: items.length, totalPages: 1, items,
+  });
+  client.setQueryData(['my-stars'], { commentIds: ['comment-1'] });
+  return renderToStaticMarkup(createElement(
+    QueryClientProvider,
+    { client },
+    createElement(CommentSection, {
+      targetType: 'summary', targetId: 'summary-1', currentUserId, currentUserRole: 'admin',
+      content: '前文已修改后文',
+    }),
+  ));
+}
 
 describe('hashHue', () => {
   it('returns 0 for empty string', () => {
@@ -144,5 +164,41 @@ describe('CommentSection data contract', () => {
       childCount: 0,
     };
     expect(item.children).toEqual([]);
+  });
+});
+
+describe('CommentSection MUI presentation contract', () => {
+  it('keeps the named native comment field and existing star test id', () => {
+    const html = renderCommentSection([{
+      id: 'comment-1', body: '重点在 @Bob 的对照结果', parentId: null, starCount: 2,
+      promoteStatus: 'none', createdAt: '2026-10-19T10:00:00.000Z',
+      author: { id: 'user-1', name: 'Alice', avatarUrl: null },
+      mentions: [{ id: 'user-2', name: 'Bob', avatarUrl: null }],
+      children: [{
+        id: 'reply-1', body: '同意 @Alice', starCount: 0, createdAt: '2026-10-19T10:01:00.000Z',
+        author: { id: 'user-2', name: 'Bob', avatarUrl: null },
+        mentions: [{ id: 'user-1', name: 'Alice', avatarUrl: null }],
+      }],
+      childCount: 3,
+      anchor: { quote: '正文片段', startOffset: 2, endOffset: 6, contentHash: 'old-hash' },
+    }]);
+
+    expect(html).toContain('data-testid="comment-section"');
+    expect(html).toContain('MuiPaper-root');
+    expect(html).toContain('aria-label="评论内容，输入 @ 可选择团队成员"');
+    expect(html).toContain('data-testid="star-button-comment-1"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain('引用位置可能已失效，正文已发生变化。');
+    expect(html).toContain('查看全部 3 条回复');
+    expect(html).toContain('提议沉淀');
+    expect(html).toContain('删除');
+  });
+
+  it('keeps unauthenticated comments readable while disabling participation', () => {
+    const html = renderCommentSection([], null);
+
+    expect(html).toContain('请先登录后参与讨论');
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('data-testid="comment-section"');
   });
 });

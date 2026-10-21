@@ -2,7 +2,15 @@
 
 该目录保存当前部署拓扑和运维脚本，是本地 Docker、GHCR 和单 VPS 的操作基线。
 
-## 当前状态（2026-09-28）
+## VPS 镜像定期维护
+
+`image-retention.py` 默认只预览，`--apply` 才删除。仅处理本项目 GHCR Web/AI engine 仓库的 commit SHA 标签；保留每个仓库最新两个不同镜像版本、14 天内镜像、所有容器（含停止容器及后代镜像）的引用。自定义构建、别名、无标签镜像、容器、卷、数据库和备份均不处理；每轮最多检查 20 个旧标签。每次操作重新核对镜像 ID 和引用，使用 `docker image rm --no-prune`，无 force 或全局 prune。通过文件锁防重入，Docker 查询失败即中止，审计结果原子更新为 `latest.json`。
+
+2026-10-21 经用户确认，已在 VPS deploy 用户启用每周实际清理 cron：UTC 周日 20:15（北京时间周一 04:15）。脚本 `/opt/deep_research/infra/image-retention.py`；报告 `/opt/deep_research/maintenance/image-retention/latest.json`，调度日志同目录 `latest.log`。当前带 `--apply`，已按用户确认开启实际删除；首次运行无候选、未删除对象。后续修改必须保留相同保护策略。修改前的 crontab 留在该目录，更新时只替换带 `deep-research-image-retention-apply` 标记的本项目任务，保留其他任务。
+
+Zread 卷不属于镜像保留机制：普通阅读默认 browser 模式，但 AI engine 及独立 repair 仍挂载 `deep-research_zread-work`，repair 使用 `/data/zread/governance` 保存恢复状态。整卷不能按缓存删除；仓库 checkout 和 `.zread` 草稿需另外核验、列清单并确认后清理。
+
+## 部署基线
 
 - `docker-compose.yml`：PostgreSQL、Web、AI engine、内网 AnythingLLM 与 nginx；另提供可选的 `browser-review` Chromium profile。
 - `docker-compose.registry.yml`：默认生产覆盖文件，使用 GHCR 中按 commit SHA 固定的 Web / AI engine 镜像，不在 VPS 上重新构建。
@@ -40,6 +48,20 @@ standalone 镜像仍要求构建阶段使用完整依赖；优化目标是 runne
 缓存或本地开发依赖。根目录 `.dockerignore` 还会排除本地历史 `.next-*` 构建目录，
 避免把工作区残留发送给远程 Docker builder。
 
+复用依赖时同时保留应用局部的 `apps/web/node_modules`：注入的设计系统和 workspace 链接可能位于这里，绑定整个应用目录会遮住它们。编译前在实际构建容器中校验共享包、设计系统和 MUI Next adapter 的模块解析；最终只传输 standalone、静态资源和启动依赖。
+
+## 源码快照部署与回滚
+
+正常发布遵循 [`CONTRIBUTING.md`](../CONTRIBUTING.md)：任务分支推送 GitHub，经 PR、CI 和合并授权进入 `main`，由 Actions 构建不可变 SHA 镜像并通过上述 registry 流程部署。工作区源码快照只作为用户明确授权的例外，不作为常规发布路径。
+
+例外发布尚未合并的工作区时，使用独立发布目录保存排除密钥、依赖和本地证据的源码归档、逐文件 SHA-256 清单、构建日志和镜像 ID；明确记录基线提交与工作区差异，不能把源码快照称为已合并提交。依赖未变化的服务可复用相同依赖层，但运行代码必须来自同一核验快照。发布后必须通过 PR 将例外改动回收至 `main`，避免生产代码长期领先 GitHub。
+
+替换服务前保存旧容器的镜像引用、实际环境配置和数据库备份；配置快照仅在 VPS 私密目录保存。先验证候选镜像，切换后检查 liveness、DB readiness、AI 健康和公开 AI 内部接口的 404 隔离，再检查真实页面。启用独立雷达修复 worker 时，同步核对其镜像。失败时按每个服务保存的镜像引用回滚，不能只依赖 `.deployed-image-tag`：该文件仅表示 registry 发布成功的提交，不一定代表后续快照发布。完整成功后另存包含全部服务镜像和源码指纹的发布凭证。
+
+快照发布成功后，将 `.env` 的 `WEB_IMAGE` / `AI_ENGINE_IMAGE` 选择器同步为已验证镜像，保留其他配置与凭据，使后续普通 Compose 操作继续使用当前版本。修改前保留私密配置副本；这不改变应用实际环境变量。
+
+构建前检查磁盘余量和峰值：依赖层提交会产生临时写入，峰值可能明显超过最终镜像增量；以 `df` 的实际余量为准，镜像大小和共享层不能直接相加。不以自动 prune 腾空间。旧镜像、备份、构建目录和验收资料保留到发布报告完成并获得清理确认；优先按清单移除没有容器引用的旧 registry 镜像，保留运行版本与回滚版本，不把 Zread 恢复资料当作普通缓存。构建、后端部署与 Chrome Web Store 审核是独立状态，后端更新不表示扩展已经通过商店审核。
+
 ## AI engine 镜像体积
 
 AI engine 镜像偏大的原因有两层：
@@ -49,7 +71,7 @@ AI engine 镜像偏大的原因有两层：
 
 当前 `ai-engine.Dockerfile` 已用 `COPY --chown` 在复制时设置属主，只复制运行时需要的 `ai_engine`、`configs` 和 `scripts`；根 `.dockerignore` 也排除了测试、报告和本地缓存。`ai_engine.adapters` 对 gpt-researcher 使用真正的懒加载，纯雷达工具和测试不会在导入阶段提前加载整套研究依赖。这样先消除 Docker layer 重复，再评估是否把深度研究依赖拆成独立 worker 镜像，避免为了体积牺牲现有功能。
 
-生产 registry 覆盖还把连接池和后台并发调到 1.8 GiB VPS 的保守档：DB pool `1/4`、source `2`、candidate `1`、LLM `3`、scoring `2`、enrichment `1`，并将 Node heap 上限设为 `256 MiB`。这会牺牲部分雷达批处理吞吐，但能把并发峰值限制在可控范围；本地开发 Compose 仍使用原来的高吞吐默认值。
+生产 registry 覆盖还把连接池和后台并发调到资源受限 VPS 的保守档：DB pool `1/4`、source `2`、candidate `1`、LLM `3`、scoring `2`、enrichment `1`，并将 Node heap 上限设为 `256 MiB`。这会牺牲部分雷达批处理吞吐，但能把并发峰值限制在可控范围；本地开发 Compose 仍使用原来的高吞吐默认值。
 
 ## 文件
 
@@ -76,9 +98,9 @@ AI engine 镜像偏大的原因有两层：
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。
 2. 推送到 GHCR 对应的两个 `<commit-sha>` 镜像，同时更新 `latest`。
 3. 构建并校验 Reader Beta ZIP。版本号来自扩展 manifest；工作流创建不可覆盖的 `reader-v<version>` GitHub Pre-release，并导出资产 SHA-256。扩展源码变更但未升版本，或已有 release 资产缺失/不匹配时，发布失败，不会覆盖旧资产。
-4. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS；只更新 `.env` 中的 `READING_EXTENSION_BETA_URL`、`READING_EXTENSION_BETA_PATH`、`READING_EXTENSION_BETA_VERSION` 和 `READING_EXTENSION_BETA_SHA256`，并在失败回滚时恢复这四项原值。
+4. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS；更新 `.env` 中的 `READING_EXTENSION_BETA_URL`、`READING_EXTENSION_BETA_PATH`、`READING_EXTENSION_BETA_VERSION` 和 `READING_EXTENSION_BETA_SHA256`。健康检查通过后再持久化 `WEB_IMAGE` / `AI_ENGINE_IMAGE` 为目标 SHA 镜像，防止残留快照选择器让后续 Compose 操作回退；失败回滚时恢复这六项原值，其余配置与凭据保持不变。
 5. VPS 拉取固定 SHA 镜像，使用更新后的 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
-6. 通过 `/healthz` 和 `/ai-healthz` 做发布后检查；失败时恢复 Beta 配置并尝试恢复上一个镜像 SHA。
+6. 通过 `/healthz`、`/readyz` 和 `/ai-healthz` 做发布后检查；失败时恢复 Beta 配置和发布前实际运行的镜像对。仅在没有现有容器时才回退使用上一 registry SHA。
 
 发布脚本会并行拉取两个核心服务镜像，再统一启动 Compose；单个镜像仍保留
 15 分钟超时和 3 次重试，失败时沿用原有回滚流程。这样发布耗时主要取决于最慢的
@@ -134,7 +156,7 @@ docker compose \
 - 导入临时文件 24 小时清理可验证，备份不包含原始导入文件。
 - nginx 反代把 `/healthz` 转发到 web `/api/healthz`，把 `/ai-healthz` 转发到 ai-engine `/healthz`。
 
-GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Environment secrets 配齐并完成一次 Actions 实跑后，才能标记为 CI / live verified。
+首次接入环境时，必须配置 GitHub Environment secrets 并完成 Actions 实跑，之后才能标记为 CI / live verified；日常发布遵循受保护 main 的 PR/CI 流程。
 
 ## 备份与恢复契约
 
@@ -151,7 +173,7 @@ GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Envir
   ```cron
   0 0,12 * * * cd /opt/deep-research && docker compose --env-file .env -f infra/docker-compose.yml exec -T -u root postgres /usr/local/bin/pg-backup.sh /backups >> infra/logs/pg-backup.log 2>&1
   ```
-- 发布前快照：`.github/workflows/deploy.yml` 在启动新版本（web 入口会执行 Prisma migrate）之前，若 postgres 容器在运行，会写入 `infra/backups/pre-deploy-<sha>-<时间>.sql.gz`（保留最近 5 份）；dump 失败会中止发布并回滚 Beta 配置。
+- 发布前快照：`.github/workflows/deploy.yml` 在启动新版本（web 入口会执行 Prisma migrate）之前，若 postgres 容器在运行，会写入 `infra/backups/pre-deploy-<sha>-<时间>.sql.gz`；dump 失败会中止发布并回滚发布配置。工作流不删除旧备份，保留与清理由明确的维护任务处理。
 - 恢复演练脚本：`infra/pg-restore.sh <file> <target_db> --yes`（恢复到生产默认库 `deep_research` 还需 `--confirm-db deep_research`；先用 `--dry-run` 自检）；恢复后自动校验核心表行数。
 
 完成真实构建与恢复演练前，不把以上项目标为已部署或 live verified。

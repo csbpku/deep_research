@@ -1,8 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import Accordion from '@mui/material/Accordion';
+import AccordionDetails from '@mui/material/AccordionDetails';
+import AccordionSummary from '@mui/material/AccordionSummary';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Typography from '@mui/material/Typography';
 import {
   BookOpen,
   BookOpenCheck,
@@ -10,21 +15,22 @@ import {
   ExternalLink,
   Github,
   Sparkles,
-  X,
 } from 'lucide-react';
 
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { BackToSearchButton } from '../domain/BackToSearchButton';
 import { decodeRadarTextEntities } from './radar-reading-blocks';
 import { DistilledScorePanel } from './DistilledScorePanel';
+import { RadarSourceChip } from './RadarSourceChip';
 import {
   formatRadarContentKind,
   formatSourceType,
 } from '../../lib/radar/source-labels';
-import { TIER_LABELS, tierClasses } from '../domain/ScoreBar';
-import { cn } from '../../lib/utils';
-import { bindDialogFocus } from '../../lib/dialog-focus';
+import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
+import { AppButton } from '@/components/material/AppButton';
 import { zreadRepositoryUrl } from './radar-repository';
+import { getReaderInstallHref } from '@/lib/reader-install';
+import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 
 export interface ExternalReadingDetail {
   id: string;
@@ -106,82 +112,6 @@ export function cleanRadarTags(tags: string[] | undefined): string[] {
   }).slice(0, 4);
 }
 
-export function ReaderSourcePrompt({
-  readerUrl,
-  onClose,
-  onOpen,
-}: {
-  readerUrl: string;
-  onClose: () => void;
-  onOpen: () => void;
-}) {
-  const dialogRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    return dialog ? bindDialogFocus(dialog, onClose) : undefined;
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-5"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section
-        className="w-full max-w-md border border-[var(--ink-rule)] bg-[var(--ink-page)] p-5 shadow-2xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reader-source-prompt-title"
-        aria-describedby="reader-source-prompt-description"
-        ref={dialogRef}
-        tabIndex={-1}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
-              Reader
-            </p>
-            <h2 id="reader-source-prompt-title" className="mt-2 text-lg font-semibold text-[var(--ink-text)]">
-              先确认你已安装 Reader
-            </h2>
-          </div>
-          <button
-            type="button"
-            className="inline-flex size-9 shrink-0 items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
-            aria-label="关闭安装提示"
-            onClick={onClose}
-          >
-            <X className="size-4" aria-hidden />
-          </button>
-        </div>
-        <p id="reader-source-prompt-description" className="mt-3 text-sm leading-6 text-[var(--ink-muted)]">
-          原文会在新标签页打开。若还没有安装扩展，先完成安装；回到原文后点击浏览器工具栏里的 Reader，再启用当前站点。
-        </p>
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <Link
-            href="/reading/install"
-            data-initial-focus
-            className="inline-flex min-h-9 items-center justify-center border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/50 focus-visible:ring-offset-2"
-          >
-            先安装 Reader
-          </Link>
-          <button
-            type="button"
-            onClick={onOpen}
-            data-reader-url={readerUrl}
-            className="inline-flex min-h-9 items-center justify-center bg-[var(--ink-accent)] px-3 text-xs font-bold text-white hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/50 focus-visible:ring-offset-2"
-          >
-            我已安装，继续打开
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 export function radarSummaryParts(detail: Pick<ExternalReadingDetail, 'excerpt' | 'interpretation'>) {
   const interpretation = detail.interpretation?.trim() || null;
   const excerpt = detail.excerpt?.trim() || null;
@@ -205,7 +135,6 @@ export function RadarExternalReadingLanding({
   backHref?: string;
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
-  const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
 
   useEffect(() => {
     setPlatformOrigin(window.location.origin);
@@ -221,178 +150,147 @@ export function RadarExternalReadingLanding({
     : null;
   const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
   const tierLabel = tier ? (TIER_LABELS[tier] ?? tier) : '待判断';
-  const tierVisual = tierClasses(tier ?? 'collection');
   const { lead: summaryLead, supportingExcerpt } = radarSummaryParts(detail);
   const selectionReason = detail.selectionReason?.trim() || null;
   const tags = cleanRadarTags(detail.tags);
   const publishedLabel = formatRadarDetailDate(detail.publishedAt);
   const displayTitle = decodeRadarTextEntities(detail.title);
   const openSource = () => {
-    setSourcePromptOpen(false);
-    window.open(readerUrl, '_blank', 'noopener,noreferrer');
+    window.location.assign(readerUrl);
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--ink-page)] font-sans">
-      <header className="sticky top-0 z-20 flex min-h-12 items-center justify-between gap-3 border-b border-[var(--ink-rule)] bg-[var(--ink-page)]/95 px-4 backdrop-blur sm:px-6">
-        <div className="flex min-w-0 items-center gap-2">
+    <Box data-radar-knowledge-id={detail.id} sx={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', overflowY: 'auto', overflowWrap: 'anywhere', bgcolor: 'background.default' }}>
+      <Box component="header" sx={{ display: 'flex', flexWrap: { xs: 'wrap', sm: 'nowrap' }, alignItems: 'center', justifyContent: 'space-between', gap: 1.5, position: 'sticky', top: 0, zIndex: 20, minHeight: 48, py: { xs: 1, sm: 0 }, px: { xs: 2, sm: 3 }, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
           <BackToSearchButton />
-          <Link
-            href={backHref}
-            className="inline-flex min-h-9 items-center gap-2 text-xs font-semibold text-[var(--ink-muted)] transition-colors hover:text-[var(--ink-accent)]"
-          >
-            <span aria-hidden>←</span>
-            <span className="hidden sm:inline">回到雷达</span>
-            <span className="sm:hidden">雷达</span>
-          </Link>
-          <span className="hidden text-xs text-[var(--ink-faint)] sm:inline">/</span>
-          <span className="hidden truncate text-xs text-[var(--ink-faint)] sm:inline">文章概览</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+          <AppButton component={Link} href={backHref} variant="text" color="inherit" aria-label="回到雷达" startIcon={<span aria-hidden>←</span>}>
+            <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>回到雷达</Box>
+            <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>雷达</Box>
+          </AppButton>
+          <Typography variant="metadata" color="text.secondary" sx={{ display: { xs: 'none', sm: 'inline' } }}>文章概览</Typography>
+        </Box>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 1, flexShrink: 0, maxWidth: '100%' }}>
+          <RadarKnowledgeActions key={detail.id} detail={detail} />
           {sourceUrlAvailable ? (
-            <button
-              type="button"
-              data-reader-url={readerUrl}
-              onClick={() => setSourcePromptOpen(true)}
-              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 bg-[var(--ink-accent)] px-3 text-xs font-bold text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+            <AppButton
+              type="button" variant="contained"
+              data-reader-launch-source={readerUrl}
+              onClick={openSource}
+              startIcon={zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}
             >
-              {zreadUrl ? <Github className="size-3.5" aria-hidden /> : <ExternalLink className="size-3.5" aria-hidden />}
               <span>{zreadUrl ? '打开 GitHub' : '打开原文'}</span>
-            </button>
+            </AppButton>
           ) : null}
           {zreadUrl ? (
-            <a
-              href={zreadUrl}
+            <AppButton component="a" href={zreadUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+              variant="outlined" color="inherit" startIcon={<BookOpen aria-hidden />}
             >
-              <BookOpen className="size-3.5" aria-hidden />
               <span>打开 Zread</span>
-            </a>
+            </AppButton>
           ) : null}
-        </div>
-      </header>
+        </Box>
+      </Box>
 
-      {sourcePromptOpen ? (
-        <ReaderSourcePrompt
-          readerUrl={readerUrl}
-          onClose={() => setSourcePromptOpen(false)}
-          onOpen={openSource}
-        />
-      ) : null}
-
-      <main className="mx-auto w-full max-w-7xl px-5 py-6 sm:px-8 sm:py-8 lg:py-10">
-        <section className="max-w-5xl">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-xs font-semibold text-[var(--ink-muted)]">
-            <span>{sourceName}</span>
-            <span aria-hidden className="text-[var(--ink-faint)]">·</span>
-            <span>{contentLabel.short}</span>
+      <Box component="article" data-testid="radar-detail" sx={{ mx: 'auto', width: '100%', maxWidth: 1280, px: { xs: 2, sm: 3, md: 4 }, py: { xs: 3, sm: 4 } }}>
+        <Box component="section" sx={{ maxWidth: 1080 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}>
+            <RadarSourceChip sourceType={detail.sourceType} sourceName={detail.sourceName} label={sourceName} />
+            <Typography aria-hidden variant="metadata" color="text.secondary">·</Typography>
+            <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 600 }}>{contentLabel.short}</Typography>
             {publishedLabel ? (
               <>
-                <span aria-hidden className="text-[var(--ink-faint)]">·</span>
-                <span>发布 {publishedLabel}</span>
+                <Typography aria-hidden variant="metadata" color="text.secondary">·</Typography>
+                <Typography variant="metadata" color="text.secondary">发布 {publishedLabel}</Typography>
               </>
             ) : null}
-          </div>
+          </Box>
 
-          <h1 className="mt-4 max-w-4xl break-words font-serif text-2xl font-semibold leading-[1.12] tracking-normal text-[var(--ink-text)] [overflow-wrap:anywhere] sm:text-3xl lg:text-4xl">
+          <Typography variant="pageTitle" component="h1" sx={{ mt: 2, maxWidth: 960, overflowWrap: 'anywhere' }}>
             {displayTitle}
-          </h1>
+          </Typography>
 
-          <div className="mt-6 grid gap-7 lg:grid-cols-[minmax(0,1fr)_15rem] lg:gap-8">
-            <div className="min-w-0">
-              <div className="border-l-2 border-[var(--ink-accent)] pl-3.5 sm:pl-4">
-                <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
-                  <Sparkles className="size-3" aria-hidden />
-                  AI 摘要
-                </div>
-                <p className="mt-1 text-xs leading-5 text-[var(--ink-faint)]">
+          <Box sx={{ mt: 3, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 240px' }, gap: { xs: 3, lg: 4 } }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Box sx={{ borderLeft: 2, borderColor: 'primary.main', pl: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Sparkles size={14} aria-hidden />
+                  <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                    AI 摘要
+                  </Typography>
+                </Box>
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 0.5 }}>
                   同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
-                </p>
-                <p className="mt-2 whitespace-pre-line font-serif text-base leading-[1.6] text-[var(--ink-text)]">
+                </Typography>
+                <Typography variant="reading" component="p" sx={{ mt: 1, whiteSpace: 'pre-line' }}>
                   {summaryLead}
-                </p>
+                </Typography>
                 {supportingExcerpt ? (
-                  <div className="mt-4 border-t border-[var(--ink-rule)] pt-3">
-                    <p className="text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-muted)]">
+                  <Box sx={{ mt: 2, borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
+                    <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                       原文补充
-                    </p>
-                    <p className="mt-2 whitespace-pre-line font-serif text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.6]">
+                    </Typography>
+                    <Typography variant="body2" component="p" color="text.secondary" sx={{ mt: 1, whiteSpace: 'pre-line' }}>
                       {supportingExcerpt}
-                    </p>
-                  </div>
+                    </Typography>
+                  </Box>
                 ) : null}
-              </div>
-            </div>
+              </Box>
+            </Box>
 
-            <aside className="min-w-0 border-y border-[var(--ink-rule)] py-4 lg:border-y-0 lg:border-l lg:pl-5 lg:pt-0">
+            <Box component="aside" sx={{ minWidth: 0, borderBlock: { xs: 1, lg: 0 }, borderColor: 'divider', py: { xs: 2, lg: 0 }, pl: { lg: 2.5 }, borderLeft: { lg: 1 } }}>
               {selectionReason ? (
                 <>
-                  <p className="text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
+                  <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                     为什么值得看
-                  </p>
-                  <p className="mt-2 text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.55]">{selectionReason}</p>
+                  </Typography>
+                  <Typography variant="body2" component="p" color="text.secondary" sx={{ mt: 1 }}>{selectionReason}</Typography>
                 </>
               ) : null}
 
-              <div className={cn(
-                'flex flex-wrap items-center gap-2',
-                selectionReason
-                  ? 'mt-5 border-t border-[var(--ink-rule)] pt-4'
-                  : '',
-              )}
-              >
-                <span className={cn('inline-flex min-h-6 items-center border px-2 text-xs font-bold', tierVisual.border, tierVisual.text)}>
-                  {tierLabel}
-                </span>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: selectionReason ? 2.5 : 0, pt: selectionReason ? 2 : 0, borderTop: selectionReason ? 1 : 0, borderColor: 'divider' }}>
+                <Chip size="small" variant="outlined" label={tierLabel}
+                  sx={{ color: readingTierColor(tier), borderColor: 'currentColor', fontWeight: 600 }} />
                 {tags.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                  {tags.map((tag) => (
-                    <span key={tag} className="border border-[var(--ink-rule)] px-1.5 py-0.5 text-xs text-[var(--ink-muted)]">
-                      #{tag}
-                    </span>
-                  ))}
-                  </div>
+                  tags.map((tag) => <Chip key={tag} size="small" variant="outlined" label={`#${tag}`} color="default" />)
                 ) : null}
-              </div>
+              </Box>
 
               {detail.distilledScore ? (
-                <details className="group mt-4 border-t border-[var(--ink-rule)] pt-3">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-bold text-[var(--ink-muted)] hover:text-[var(--ink-accent)] [&::-webkit-details-marker]:hidden">
-                    <span>查看评分依据</span>
-                    <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
-                  </summary>
-                  <div className="pt-3">
+                <Accordion disableGutters square slots={{ heading: 'h2' }} sx={{ mt: 2, borderTop: 1, borderColor: 'divider', '&::before': { display: 'none' } }}>
+                  <AccordionSummary expandIcon={<ChevronDown size={16} aria-hidden />}
+                    sx={{ minHeight: 40, px: 0, '& .MuiAccordionSummary-content': { my: 1 }, '&.Mui-expanded': { minHeight: 40 } }}>
+                    <Typography variant="control" color="text.secondary">查看评分依据</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ px: 0, pt: 0 }}>
                     <DistilledScorePanel score={detail.distilledScore} effectiveTier={tier} embedded />
-                  </div>
-                </details>
+                  </AccordionDetails>
+                </Accordion>
               ) : null}
-            </aside>
-          </div>
-        </section>
+            </Box>
+          </Box>
+        </Box>
 
-        <section id="source-reading" className="mt-8 border-t border-[var(--ink-rule)] pt-4">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="max-w-2xl">
-              <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.13em] text-[var(--ink-accent)]">
-                <BookOpenCheck className="size-3.5" aria-hidden />
-                Reader
-              </div>
-              <p className="mt-1.5 text-[12px] leading-[1.55] text-[var(--ink-muted)]">
+        <PreviousJudgments radarSummaryId={detail.id} enabled={Boolean(detail.isAuthenticated)} />
+        <Box component="section" id="source-reading" sx={{ mt: 4, borderTop: 1, borderColor: 'divider', pt: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { sm: 'center' }, justifyContent: 'space-between', gap: 2 }}>
+            <Box sx={{ maxWidth: 640 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <BookOpenCheck size={16} aria-hidden />
+                <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Reader</Typography>
+              </Box>
+              <Typography variant="caption" component="p" color="text.secondary" sx={{ mt: 0.5 }}>
                 在来源网站继续阅读、保存和同步；只有你明确保存时才会上传内容。
-              </p>
-            </div>
-            <Link
-              href="/reading/install"
-              className="inline-flex min-h-9 shrink-0 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)]"
-            >
-              <BookOpenCheck className="size-3.5" aria-hidden />
+              </Typography>
+            </Box>
+            <AppButton component={Link} href={getReaderInstallHref(readerUrl)} variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}>
               安装 Reader
-            </Link>
-          </div>
-        </section>
-      </main>
-    </div>
+            </AppButton>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
   );
 }

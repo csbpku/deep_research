@@ -31,14 +31,23 @@ const E2E_CREDENTIALS_TOKEN = process.env.E2E_CREDENTIALS_TOKEN ?? randomBytes(3
 process.env.E2E_BASE_URL = BASE_URL;
 process.env.E2E_CREDENTIALS_TOKEN = E2E_CREDENTIALS_TOKEN;
 
+// Password/session and seeded-database cases run in their dedicated CI job.
+// Never point these fixtures at the ordinary development or generic E2E server.
+const isolatedMuiSpecs = [
+  '**/mui-admin.spec.ts', '**/knowledge-reuse.spec.ts',
+  '**/knowledge-loop-integration.spec.ts', '**/mui-my-topics.spec.ts',
+  '**/mui-me.spec.ts', '**/mui-topics.spec.ts', '**/radar-preview-viewport.spec.ts',
+];
+
 export default defineConfig({
   testDir: './e2e',
   // 匹配 testDir 下的 .spec.ts 文件（避免扫到 src/** 的 vitest .test.ts）
-  testMatch: '**/*.spec.ts',
+  testMatch: process.env.MUI_ISOLATED_BROWSER === '1' ? isolatedMuiSpecs : '**/*.spec.ts',
+  testIgnore: process.env.MUI_ISOLATED_BROWSER === '1' ? [] : isolatedMuiSpecs,
   // 预热所有 E2E 用到的 route：next dev 懒编译 + 多 worker 并行
   // 首次请求未编译 route 时偶发 500。globalSetup 触发一次编译，
   // 让所有 spec 拿到的是已就绪的 endpoint。
-  globalSetup: './e2e/global-setup.ts',
+  globalSetup: process.env.MUI_ISOLATED_BROWSER === '1' ? './e2e/mui-isolated-setup.ts' : './e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -46,7 +55,8 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
 
   // 串行启动 web（ai-engine 由 dev:ai 单独起；详见 docs/E2E_TESTING.md）
-  webServer: {
+  // A missing isolated listener must fail closed, never start a .env-backed dev server.
+  webServer: process.env.MUI_ISOLATED_BROWSER === '1' ? undefined : {
     command: `./node_modules/.bin/next dev --turbopack --hostname ${bindHost} --port ${baseUrl.port}`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,

@@ -1,24 +1,22 @@
 # AI技术调研平台
 
 > AI 帮我们读文章、抓热搜、看趋势；我们给反馈、踩坑记下来，团队的判断和经验会越攒越多。
-> 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v4.0
+> 架构基线：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) v4.2
 
 [![CI](https://github.com/csbpku/deep_research/actions/workflows/ci.yml/badge.svg)](https://github.com/csbpku/deep_research/actions/workflows/ci.yml)
 
 ## 这个项目做什么
 
-一个面向个人 / 小团队的技术调研与情报沉淀平台。AI 自动跟进 GitHub、arXiv、RSS、微信公众号和社区讨论等来源，把候选人文章用多维度评分排序、聚合；成员阅读、做标注、转发给同事，团队对这些内容的判断会被保留、检索、再利用。
+一个面向个人和小团队的技术调研与知识沉淀平台。平台从 GitHub、arXiv、RSS、微信公众号、社区和成员提交中发现技术内容，协助阅读、研究、讨论和归档；研究、批注与个人判断可以检索并在后续调研中复用。
 
 **核心能力**
 
-- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和用户分享持续发现候选；默认 `browser` 模式可在同步时临时抓取正文用于摘要和评分，但不持久化全文或运行后续 enrichment；用户从原文或 Reader 阅读。`enriched` 仅作为显式回滚路径，历史数据继续保留。
-- **技术专题**：关注长期专题后自动聚合热点议题，生成带可点击引用的综述（tldr / keyChanges / subtopics / openQuestions）；发布调研自动回流专题，`/me/topics` 汇总未读议题与最近研究。
-- **沉淀库**：研究稿与知识卡片共用同一结构，支持私人草稿、显式发布、全文搜索和修改审计；Reader 笔记可保存为私人知识，AI 回答或报告中的选中判断可确认后另存。
-- **原网页阅读助手（第一版）**：`apps/extension/` 提供独立的 WXT + React + TypeScript Chrome 116+ MV3 插件。用户在公开技术网页中按需翻译、选段解读、连续追问，并显式保存摘录到研究库；插件不自动抓取或保存整篇正文。运行 `npm run build` 生成可加载的 `.output/chrome-mv3`，`npm run package` 生成 Chrome ZIP。
-- **雷达迁移开关**：`RADAR_READING_MODE=browser` 是默认值；同步期间可临时抓取来源正文用于摘要和评分，但不保存全文或运行后续文章/Zread enrichment。设置为 `enriched` 才显式启用旧的服务端正文链路。
-- **文件导入**：上传 `.md / .txt / .html`，异步转成当前用户的私有 Markdown 草稿。
-- **AI 调研**：对话澄清主题/背景/资料与产物类型，自动推断 objective 并给出 Research Brief 与可复用上下文；已有私人知识可作为默认未勾选的候选，只有用户确认后才进入本轮来源。异步流水线生成产物并入库，草稿必须实际修改过才能发布。
-- **团队讨论 + Admin**：团队讨论常驻雷达正文下方，支持 @成员、回复通知和“我的通知”；成员可把高价值评论提议沉淀为知识卡片。Admin 对雷达做软屏蔽/恢复，而非逐条审批，并处理分享审核、评论提炼、同步状态和失败任务。
+- **技术雷达**：从 GitHub、arXiv、RSS、微信公众号、Hacker News / Product Hunt / Reddit 等社区和成员分享发现候选，并提供评分、筛选、反馈和讨论。默认 `RADAR_READING_MODE=browser` 在同步时临时读取来源正文用于摘要和评分，不持久化全文，也不运行后续 enrichment；`enriched` 是显式兼容/回滚路径。
+- **技术专题**：关注长期专题后自动聚合热点议题，生成带可点击引用的综述；发布的调研可回流专题，`/me/topics` 汇总关注专题的未读议题与最近研究。
+- **研究与知识库**：AI 调研可生成研究稿、快速判断、Slides 提纲和网页简报；研究稿支持修订、来源与事实审核，满足修改和质量门禁后才能发布。研究稿与知识卡片支持私人草稿、显式发布、全文搜索和修改审计；已有私人知识可由用户选入调研上下文，Reader 笔记及经确认的 AI 判断可保存为私人知识。
+- **Chrome Reader 扩展**：`apps/extension/` 提供 WXT、React、TypeScript 和 MUI 构建的 MV3 阅读侧栏。用户可在网页中选段问答、连续追问、整页或选段翻译、解读技术图片，并管理会话、收藏和阅读历史。可连接自行配置的模型服务，也可选用平台模式；读取网页和发送内容由用户操作触发。构建和安装见下文及 [`apps/extension/README.md`](./apps/extension/README.md)。
+- **文件导入与成员分享**：上传 `.md / .txt / .html` 可异步转换为私有 Markdown 草稿；成员也可提交网页链接或文件，经安全抓取和审核进入雷达候选。
+- **团队讨论 + Admin**：雷达和沉淀支持评论、@成员、回复通知和“我的通知”；成员可提议把高价值评论沉淀为知识卡片。Admin 管理成员、雷达治理、分享审核、专题提案、评论提炼、同步状态、失败任务和 LLM 用量。
 - **搜索与分享**：全文检索（PostgreSQL GIN / 触发器）+ 成员对外分享（URL 经 SSRF-safe 抓取 + LLM 摘要后入候选池）。
 - **运行底线**：权限、成本埋点、结构化日志、`pg_dump` 备份恢复、Docker Compose 部署脚手架。
 
@@ -29,8 +27,12 @@
 ```mermaid
 flowchart LR
     subgraph Web["apps/web · Next.js 15"]
-        UI["页面 / 雷达 / 主题 / 沉淀"]
+        UI["页面 / 雷达 / 主题 / 研究与知识库"]
         BFF["BFF + NextAuth + Prisma"]
+    end
+
+    subgraph Reader["apps/extension · Chrome MV3"]
+        Panel["阅读侧栏 / 会话 / 翻译"]
     end
 
     subgraph Engine["packages/ai-engine · FastAPI + Python"]
@@ -47,6 +49,7 @@ flowchart LR
 
     Sources["GitHub · arXiv · RSS · 微信 · 社区"] --> Radar
     UI --> BFF
+    Panel -. "可选平台模式" .-> BFF
     BFF --> DB
     BFF <--> Engine
     Research --> Adapter
@@ -55,9 +58,11 @@ flowchart LR
     DB <--> Nginx
 ```
 
-- **`apps/web/`** —— 用户能看到的：登录、技术雷达、主题、沉淀详情 / 编辑、文件导入、管理员控制台。
-- **`packages/ai-engine/`** —— 后台长任务：雷达同步 → 增强 → 主题刷新、AI 调研 5 步流水线、文件导入转换、分享提交、SSRF-safe URL fetch、Tavily retriever。
-- **`packages/shared/`** —— TypeScript ↔ Python 镜像的 Zod schema、错误码、状态枚举；跨语言双方向只读，改动走独立 PR。
+- **`apps/web/`** —— Next.js 页面与 BFF：登录、技术雷达、专题、研究与知识库、搜索、文件导入、Reader 平台 API 和管理控制台。
+- **`apps/extension/`** —— Chrome Reader 扩展：网页阅读侧栏、本地模型配置、问答与翻译，以及可选的平台连接。
+- **`packages/ai-engine/`** —— FastAPI 后台：雷达同步与审核、专题聚合、AI 调研和事实审核、文件导入与分享任务；检索由所选的 gpt-researcher retriever 配置提供。
+- **`packages/shared/`** —— TypeScript 与 Python 共用的 schema、错误码和状态契约。
+- **`packages/design-system/`** —— Web 与 Reader 共用的设计 token、主题和生成的样式基础。
 - **`infra/`** —— `docker-compose.yml` + nginx + 多阶段 Dockerfile + `pg-backup.sh` / `pg-restore.sh` / `import-tmp-cleanup.sh`。
 
 更多见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。
@@ -109,13 +114,15 @@ launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.deep-research.w
 
 | 层 | 选型 |
 |---|---|
-| Frontend / BFF | Next.js 15（App Router）、React 19、TypeScript、Vitest、Playwright、NextAuth、Prisma |
-| AI / 后台 | Python 3.11、FastAPI、Pydantic、psycopg、`gpt-researcher` 主适配（`fake` 作 fallback）、Tavily retriever、uv |
+| Web / BFF | Next.js 15（App Router）、React 19、TypeScript、MUI、NextAuth、Prisma、Vitest、Playwright |
+| Reader 扩展 | Chrome Manifest V3、WXT、React、TypeScript、MUI；可配置兼容模型服务或连接平台 |
+| AI / 后台 | Python 3.11、FastAPI、Pydantic、psycopg、`gpt-researcher` 主适配（`fake` 用于测试/快速体验）、uv |
+| 共享 UI | `packages/design-system/`：Web 与 Reader 共用的 token、主题和样式基础 |
 | 数据库 | PostgreSQL 16 + `pg_trgm` 模糊检索，`tsvector` 全文索引；migration 由 Prisma 管理 |
-| 部署 | Docker Compose + nginx 1.27（HTTP-only，TLS 模板待签发），本地/单 VPS |
+| 部署 | Docker Compose + nginx 1.27，本地或单 VPS |
 | 工具链 | pnpm workspace（10+）、uv、ruff + mypy、tsc、GitHub Actions CI |
 
-外部依赖：Anthropic / OpenAI（按 adapter）、Tavily；登录支持邮箱密码，Google OAuth 可选。
+外部依赖：按配置使用受支持的 LLM provider 和检索器（Tavily 为可选 retriever）；登录支持邮箱密码，Google OAuth 可选。
 
 ## 本地部署
 
@@ -151,9 +158,9 @@ pnpm dev:ai      # → http://localhost:4000
 
 首次安装后：
 
-1. 初始管理员默认是 `shaobo.chen@shopee.com`，setup 会把它创建或提升为 Admin。
-2. 登录页选择“注册账号”，使用同一邮箱设置一次密码；bootstrap Admin 在 Beta 模式下也保留该入口。
-3. 之后使用邮箱密码登录，管理后台地址为 `/admin`。邀请码不会打印到日志。
+1. setup 会按 `BOOTSTRAP_ADMIN_EMAIL` 创建或提升初始管理员。
+2. 登录页可使用邮箱密码注册；`AUTH_BETA_MODE=1` 时，需由 Admin 预先创建普通成员账号。
+3. 管理后台地址为 `/admin`。
 
 首次启动或切换分支后，可显式复核数据库与服务：
 
@@ -164,7 +171,7 @@ curl -fsS http://localhost:3000/api/healthz
 curl -fsS http://localhost:4000/healthz
 ```
 
-默认 `AUTH_BETA_MODE=0` 开放邮箱密码注册。设置 `AUTH_BETA_MODE=1` 后，只有 Admin 预创建的账号及 bootstrap Admin 可完成首次注册/登录建档；未知邮箱会被拒绝。`AUTH_EMAIL_VERIFICATION=1` 并配置 SMTP 后，邮箱验证码只用于密码注册，之后登录仍使用密码；给已存在但没有密码的账号（Admin 预创建、仅 OAuth 登录）设置密码必须通过该验证码，未启用邮箱验证时 `/api/auth/register` 拒绝此类请求，需使用原登录方式。旧 `/api/auth/activate` 才使用 `ALLOWED_EMAIL_DOMAINS` 与 `AUTH_INVITE_CODE`。`--quick` 生成的配置不会注册 OAuth provider，但邮箱密码登录仍可用。`BOOTSTRAP_ADMIN_EMAIL` 默认是 `shaobo.chen@shopee.com`，首次启动会幂等创建/提升该 Admin。
+默认 `AUTH_BETA_MODE=0` 开放邮箱密码注册。设置 `AUTH_BETA_MODE=1` 后，只有 Admin 预创建的账号及 bootstrap Admin 可完成首次注册/登录建档；未知邮箱会被拒绝。`AUTH_EMAIL_VERIFICATION=1` 并配置 SMTP 后，邮箱验证码用于密码注册，以及为已存在但没有密码的账号设置密码。旧 `/api/auth/activate` 才使用 `ALLOWED_EMAIL_DOMAINS` 与 `AUTH_INVITE_CODE`。`--quick` 使用 fake adapter，不要求 OAuth 或模型凭证。
 
 未配置 Google OAuth 时，仍可免登录浏览首页、雷达、调研库和主题等界面；提交 AI 调研、评论、关注/收藏、我的内容和管理后台等操作需要登录。`--quick` 使用 fake adapter，AI 调研返回 mock 数据，不产生 API 费用。
 
@@ -175,7 +182,7 @@ curl -fsS http://localhost:4000/healthz
 ```bash
 cp .env.example .env
 # 至少替换 POSTGRES_PASSWORD、NEXTAUTH_SECRET、INTERNAL_SERVICE_TOKEN，
-# 并填写 ALLOWED_EMAIL_DOMAINS 和所选 AI provider 凭证；Google OAuth 可选。
+# 再按需配置认证模式、所选 AI provider / retriever；Google OAuth 可选。
 docker compose --env-file .env -f infra/docker-compose.yml config --quiet
 docker compose --env-file .env -f infra/docker-compose.yml up -d --build
 curl -fsS http://localhost:3000/api/healthz      # web
@@ -185,11 +192,22 @@ docker compose --env-file .env -f infra/docker-compose.yml ps
 
 容器启动时 Web entrypoint 自动执行 `prisma migrate deploy`、Admin bootstrap 和默认雷达信息源 bootstrap。PostgreSQL 只绑定 `127.0.0.1:5432`；生产环境不要改成公网监听。完整环境变量清单见 [`.env.example`](./.env.example)。
 
+### Chrome Reader 扩展（本地加载）
+
+先在仓库根目录安装 workspace 依赖，再构建扩展：
+
+```bash
+pnpm install
+pnpm --filter @deep-research/reader-extension build
+```
+
+在 Chrome 打开 `chrome://extensions`，启用开发者模式并选择“加载已解压的扩展程序”，目录选 `apps/extension/.output/chrome-mv3`。打开网页后点击扩展图标；独立模式可在设置中连接兼容的模型服务，平台模式可选连接本平台。模型设置、隐私边界与详细功能见 [`apps/extension/README.md`](./apps/extension/README.md)。
+
 ### 验证
 
 ```bash
 pnpm typecheck
-pnpm test                      # vitest 单测
+pnpm test                      # workspace 单测（Web、扩展与共享包）
 pnpm --filter @deep-research/web exec playwright test --project=chromium   # E2E
 cd packages/ai-engine && uv run pytest -q && uv run ruff check . && uv run mypy ai_engine tools
 ```
@@ -197,6 +215,8 @@ cd packages/ai-engine && uv run pytest -q && uv run ruff check . && uv run mypy 
 ## 单 VPS 生产部署
 
 推荐 Ubuntu 24.04 LTS、2 vCPU / 4 GB RAM 起步、独立域名和非 root 运维账号。以下是当前仓库已支持的单机拓扑；高可用、多机数据库和集中监控不在当前范围。
+
+日常升级通过下方 GitHub Actions 流程发布，开发与合并约定见 [`CONTRIBUTING.md`](./CONTRIBUTING.md)。下面的主机初始化与本机构建示例仅用于首次搭建或明确授权的应急操作；已有生产配置不得重复复制示例 `.env` 覆盖。
 
 1. DNS：将域名的 `A/AAAA` 记录指向 VPS；先等待解析生效。
 2. 主机：安装 Docker Engine/Compose，克隆到 `/opt/deep_research`，只允许 SSH、80、443 入站；不要放行 3000、4000、5432。
@@ -220,7 +240,7 @@ curl -fsS https://research.example.com/ai-healthz
 
 #### GitHub Actions + GHCR 快速部署
 
-仓库提供 `.github/workflows/deploy.yml`。它在 `CI` 成功后自动构建 Web、AI engine 两个 Linux/amd64 核心镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；VPS 上的 `.env`、数据库卷、证书和日志不会被覆盖。真实浏览器 `render-review` 改为按需启用的 Compose profile，不进入默认发布链路。失败时工作流会尝试恢复上一次记录的镜像 SHA。
+仓库提供 `.github/workflows/deploy.yml`。它在 `main` 的 CI 成功后自动构建 Web、AI engine 两个 Linux/amd64 核心镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；保留 VPS `.env` 中的应用配置与凭据，只更新发布元数据和验证过的镜像选择器，数据库卷、证书和日志保持原样。真实浏览器 `render-review` 改为按需启用的 Compose profile，不进入默认发布链路。失败时工作流尝试恢复发布前实际运行的镜像引用和发布配置。
 
 首次启用需要在 GitHub `Settings → Environments → production` 配置：
 
@@ -228,9 +248,9 @@ curl -fsS https://research.example.com/ai-healthz
 - 如果 GHCR 包保持私有，再加 `GHCR_USERNAME`、`GHCR_READ_TOKEN`
 - Variable：`VPS_DEPLOY_PATH`，不填时默认 `/opt/deep_research`
 
-部署用户需要能运行 Docker。建议使用专用非 root 用户和仅用于部署的 SSH key；`VPS_KNOWN_HOSTS` 应保存固定的 SSH 主机指纹，工作流不会关闭 host key 校验。当前生产 VPS 地址为 `159.223.50.187`；不需要域名也能完成镜像部署。
+部署用户需要能运行 Docker。建议使用专用非 root 用户和仅用于部署的 SSH key；`VPS_KNOWN_HOSTS` 应保存固定的 SSH 主机指纹，工作流不会关闭 host key 校验。不需要域名也能完成镜像部署。
 
-之后只要把代码推送到 `main`，CI 通过就会自动部署。也可以在 Actions 页面手动运行 `Deploy`。镜像回滚不回滚数据库 schema，新增迁移必须保持向前兼容。
+之后通过经授权的 PR 合入受保护的 `main`，main CI 通过后自动部署。Actions 页面手动运行 `Deploy` 也要求同一 main 提交已有成功 CI，不能作为绕过检查的入口。镜像回滚不回滚数据库 schema，新增迁移必须保持向前兼容。
 
 备份、升级和回滚：每天运行 `infra/pg-backup.sh` 并把备份复制到异机/对象存储；定期在隔离库执行 `infra/pg-restore.sh`。升级前先备份；如果需要数据库恢复，使用 `infra/pg-restore.sh`，不要把镜像回滚当成数据库回滚。
 
@@ -239,19 +259,23 @@ curl -fsS https://research.example.com/ai-healthz
 | 路径 | 作用 |
 |---|---|
 | `apps/web/` | Next.js 15 Web + BFF + Prisma + Vitest / Playwright |
-| `packages/ai-engine/` | FastAPI + `gpt-researcher` 适配 + radar / import worker + SSRF-safe fetch |
-| `packages/shared/` | 跨 runtime 的 Zod schema、错误码、状态枚举（双方只读） |
+| `apps/extension/` | WXT / React Chrome MV3 Reader 扩展与浏览器端阅读体验 |
+| `packages/ai-engine/` | FastAPI + `gpt-researcher` 适配 + 雷达、调研、审核、导入和分享 workers |
+| `packages/shared/` | TypeScript 与 Python 共用的 schema、错误码和状态契约 |
+| `packages/design-system/` | Web 与 Reader 共用的设计 token、主题和样式生成器 |
 | `infra/` | `docker-compose.yml`、nginx、Dockerfile、`pg-backup.sh`、`pg-restore.sh` |
 | `docs/` | 本地开发知识层；从 [`docs/README.md`](./docs/README.md) 进入，当前规范与历史归档分层维护 |
 | `scripts/` | 仓库根 helper：`setup.sh`、`cost_extrapolation.py`、`test-local-env.sh` |
 
 ## 当前状态
 
-当前技术方案摘要见 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md)；数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)；带日期的测试、部署和线上证据见 [`docs/PROJECT_STATUS.md`](./docs/PROJECT_STATUS.md)。本 README 只维护使用入口，不记录演进过程。
+当前技术方案摘要见 [`docs/TECHNICAL_OVERVIEW.md`](./docs/TECHNICAL_OVERVIEW.md)；数据模型、安全边界与部署拓扑见 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)。本 README 只维护使用入口，不记录演进过程或内部运行状态。
 
 ## 贡献
 
 这是一个个人项目仓库，目前不接受外部 PR。新克隆按 `scripts/setup.sh` 即可起，按 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 约定的架构与数据模型工作。
+
+获授权的开发者与 Bot 统一遵循 [`CONTRIBUTING.md`](./CONTRIBUTING.md)：从最新 `origin/main` 新建短期 `codex/功能名` 分支，推送分支、创建 PR，经 CI 和合并授权后合回 `main`。两台电脑通过 GitHub 同步；`main` 合并会触发生产部署。
 
 ## License
 

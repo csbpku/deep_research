@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useState } from 'react';
+import { tokensFor, type DesignTokens } from '@deep-research/design-system';
 
 let mermaidPromise: Promise<typeof import('mermaid')> | null = null;
 
@@ -31,7 +32,8 @@ function removeMermaidTempNodes(id: string) {
   }
 }
 
-function readInkColor(variable: string, fallback: string): string {
+function readSharedColor(key: keyof DesignTokens, fallback: string): string {
+  const variable = `--dr-${key}`;
   const value = getComputedStyle(document.documentElement).getPropertyValue(variable).trim();
   return value || fallback;
 }
@@ -57,27 +59,28 @@ export default function MermaidDiagram({ chart }: { chart: string }) {
     void loadMermaid()
       .then(async ({ default: mermaid }) => {
         const dark = document.documentElement.classList.contains('dark');
-        const inkPage = readInkColor('--ink-page', dark ? '#1d2026' : '#ffffff');
-        const inkSurface = readInkColor('--ink-surface', dark ? '#252a32' : '#eef0eb');
-        const inkText = readInkColor('--ink-text', dark ? '#f1f3ef' : '#20211f');
-        const inkMuted = readInkColor('--ink-muted', dark ? '#b7bdb6' : '#5e625d');
-        const inkAccent = readInkColor('--ink-accent', dark ? '#8eabff' : '#315fe8');
-        const inkRule = readInkColor('--ink-rule', dark ? '#343b45' : '#d9ddd5');
+        const shared = tokensFor(dark ? 'dark' : 'light');
+        const page = readSharedColor('color-surface', shared['color-surface']);
+        const surface = readSharedColor('color-surface-container', shared['color-surface-container']);
+        const text = readSharedColor('color-text', shared['color-text']);
+        const muted = readSharedColor('color-text-secondary', shared['color-text-secondary']);
+        const accent = readSharedColor('color-primary', shared['color-primary']);
+        const outline = readSharedColor('color-outline', shared['color-outline']);
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
           theme: 'base',
-          fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+          fontFamily: shared['font-family'],
           themeVariables: {
-            primaryColor: inkSurface,
-            primaryTextColor: inkText,
-            primaryBorderColor: inkAccent,
-            lineColor: inkMuted,
-            secondaryColor: inkPage,
-            tertiaryColor: inkSurface,
-            clusterBkg: inkPage,
-            clusterBorder: inkRule,
-            edgeLabelBackground: inkPage,
+            primaryColor: surface,
+            primaryTextColor: text,
+            primaryBorderColor: accent,
+            lineColor: muted,
+            secondaryColor: page,
+            tertiaryColor: surface,
+            clusterBkg: page,
+            clusterBorder: outline,
+            edgeLabelBackground: page,
           },
         });
         const result = await mermaid.render(id, normalizeMermaidSource(chart));
@@ -118,14 +121,14 @@ export default function MermaidDiagram({ chart }: { chart: string }) {
 
   return (
     <figure
-      className="my-6 overflow-x-auto rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-4 py-5"
+      className="my-6 overflow-x-auto rounded-md border border-[color:var(--dr-color-outline)] bg-[color:var(--dr-color-surface)] px-4 py-5"
       aria-label="Mermaid 图表"
     >
       {svg ? (
         <div className="flex min-w-fit justify-center [&>svg]:h-auto [&>svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
         <div
-          className="motion-safe:animate-pulse motion-reduce:animate-none h-24 rounded-md bg-[var(--ink-surface)]"
+          className="motion-safe:animate-pulse motion-reduce:animate-none h-24 rounded-md bg-[color:var(--dr-color-surface-container)]"
           aria-label="正在生成图表"
         />
       )}

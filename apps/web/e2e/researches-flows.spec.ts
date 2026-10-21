@@ -18,7 +18,7 @@ test.describe('Research flows', () => {
   test('draft deep link selects 我的草稿 tab', async ({ page }) => {
     const res = await page.goto('/researches?tab=draft');
     expect(res?.status()).toBe(200);
-    await expect(page.getByRole('tab', { name: '草稿' })).toHaveAttribute('data-state', 'active');
+    await expect(page.getByRole('tab', { name: '草稿', exact: true })).toHaveAttribute('aria-selected', 'true');
   });
 
   test('research detail page handles missing id gracefully', async ({ page }) => {
@@ -47,13 +47,15 @@ test.describe('Research flows', () => {
 
     try {
       await page.goto('/researches?tab=draft');
+      await expect(page.getByRole('tab', { name: '草稿', exact: true })).toHaveAttribute('aria-selected', 'true');
       await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
-      await expect(page.getByRole('button', { name: `打开草稿操作：${title}` })).toBeVisible();
+      await expect(page.getByRole('button', { name: `打开草稿操作：${title}`, exact: true })).toBeVisible();
 
       await page.goto(`/researches/${draft.id}`);
       await page.getByRole('button', { name: `删除草稿：${title}` }).click();
-      await expect(page.getByRole('dialog')).toContainText('此操作无法撤销');
-      await page.getByRole('button', { name: '永久删除' }).click();
+      const confirmDialog = page.getByRole('dialog', { name: '永久删除这份草稿？', exact: true });
+      await expect(confirmDialog).toContainText('此操作无法撤销');
+      await confirmDialog.getByRole('button', { name: '永久删除', exact: true }).click();
 
       await expect(page).toHaveURL(/\/researches\?tab=draft/u);
       const deleted = await page.request.get(`/api/researches/${draft.id}`);

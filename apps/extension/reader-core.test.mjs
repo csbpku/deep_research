@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+test('translation delivery requires a page receipt and retains explicit per-passage failures', async () => {
+  const { applyTextTranslations } = await import('./reader-core.js');
+  const items = [{ id: 'a', text: '第一段', sourceText: 'First' }, { id: 'b', text: '第二段', sourceText: 'Second' }];
+  for (const deliver of [async () => undefined, async () => { throw new Error('closed tab'); }]) {
+    const results = await applyTextTranslations(items, deliver);
+    assert.ok(results.every(item => !item.text && item.error));
+  }
+  const results = await applyTextTranslations(items, async message => {
+    assert.equal(message.type, 'deep-research:apply-translations');
+    return { ok: true, appliedIds: ['a'], failedItems: [{ id: 'b', error: 'source changed' }] };
+  });
+  assert.deepEqual(results[0], items[0]);
+  assert.equal(results[1].text, '');
+  assert.equal(results[1].error, 'source changed');
+  const replay = await applyTextTranslations(items, async () => ({ ok: true, appliedIds: ['a', 'b'], count: 0 }));
+  assert.deepEqual(replay, items, 'already displayed translations are valid confirmations too');
+});
+
 test('loopback model discovery omits empty authentication; cloud still requires a key', async () => {
   const { discoverModels, providerReady, requestChat } = await import('./reader-core.js');
   const originalFetch = globalThis.fetch;
@@ -483,6 +501,56 @@ test('image translation forwards cancellation and reuses the local result cache'
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('an inconclusive image result is retried through the model, then a usable result is cached', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCache = readerStore.cacheTranslation;
+  let calls = 0;
+  let writes = 0;
+  readerStore.cacheTranslation = async (...args) => { writes += 1; return originalCache.apply(readerStore, args); };
+  globalThis.fetch = async () => {
+    calls += 1;
+    const result = calls <= 2
+      ? { hasReadableText: false, regions: [], confidence: 0.1, note: '无法确认图片文字。' }
+      : { regions: [{ text: 'Hello', translation: '你好', x: 1, y: 2, width: 20, height: 10 }], confidence: 0.99 };
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) } }] }));
+  };
+  try {
+    const provider = { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' };
+    const image = { id: 'retry-inconclusive', src: 'https://example.com/retry-inconclusive.png', width: 100, height: 80 };
+    const first = await translateImage(provider, { title: 'Retry' }, image);
+    assert.equal(first.noText, false);
+    assert.equal(first.regions.length, 0);
+    assert.equal(writes, 0, 'A failed attempt must not become a translation cache hit');
+    const retried = await translateImage(provider, { title: 'Retry' }, image);
+    assert.equal(calls, 3, 'A new user attempt must reach the model');
+    assert.equal(retried.regions[0].translation, '你好');
+    assert.equal(writes, 1);
+    assert.deepEqual((await translateImage(provider, { title: 'Retry' }, image)).regions, retried.regions);
+    assert.equal(calls, 3, 'Successful output still reuses the cache');
+  } finally { globalThis.fetch = originalFetch; readerStore.cacheTranslation = originalCache; }
+});
+
+test('legacy cached image failures do not prevent a fresh model request', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGet = readerStore.getCachedTranslation;
+  let calls = 0;
+  readerStore.getCachedTranslation = async () => ({ regions: [], fallbackRegions: [], fallbackText: '', noText: false, keptOriginal: false, confidence: 0, note: '需要重试' });
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      regions: [{ text: 'Hello', translation: '你好', x: 1, y: 2, width: 20, height: 10 }], confidence: 0.99,
+    }) } }] }));
+  };
+  try {
+    const result = await translateImage(
+      { baseUrl: 'https://example.com/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Legacy cache' }, { id: 'legacy-image-failure', src: 'https://example.com/legacy-image-failure.png', width: 100, height: 80 },
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.regions[0].translation, '你好');
+  } finally { globalThis.fetch = originalFetch; readerStore.getCachedTranslation = originalGet; }
 });
 
 test('vision-unavailable images stay original without becoming retryable failures', async () => {
@@ -1560,6 +1628,36 @@ test('incremental translation keeps old failures until an item resolves', () => 
   assert.deepEqual(mergeProcessedIds(['block-1'], ['block-1', 'block-3']), ['block-1', 'block-3']);
 });
 
+test('a complete document snapshot retires failures for images outside the current article', () => {
+  const previous = [
+    { id: 'footer-decoration', kind: 'image', error: 'Old ornament failed' },
+    { id: 'diagram', kind: 'image', error: 'Diagram still needs retry' },
+    { id: 'paragraph', kind: 'text', error: 'Text still needs retry' },
+  ];
+  const context = { full: true, images: [{ id: 'diagram' }], imageCandidateCount: 1, imageTruncated: false };
+  const result = mergeTranslationFailures(previous, [], [], context);
+  assert.deepEqual(result.map((item) => item.id), ['diagram', 'paragraph']);
+  assert.equal(previous.length, 3, 'reconciliation must not mutate the stored input');
+  assert.deepEqual(mergeTranslationFailures(previous, [], [], { ...context, images: [], imageCandidateCount: 0 }).map((item) => item.id), ['paragraph']);
+});
+
+test('partial, selected, or truncated image snapshots preserve earlier failures', () => {
+  const previous = [{ id: 'not-in-snapshot', kind: 'image', error: 'Still retryable' }];
+  const complete = { full: true, images: [], imageCandidateCount: 0, imageTruncated: false };
+  for (const context of [
+    {},
+    { ...complete, full: false },
+    { ...complete, scope: 'selection' },
+    { ...complete, imageTruncated: true },
+    { ...complete, imageTruncated: undefined },
+    { ...complete, imageCandidateCount: undefined },
+    { ...complete, imageCandidateCount: 41 },
+    { ...complete, images: undefined },
+  ]) {
+    assert.deepEqual(mergeTranslationFailures(previous, [], [], context), previous);
+  }
+});
+
 
 test('plain Markdown citations recover only exact source quotes and tolerate emphasis', () => {
   const quote = 'A combined coffee/tea pot that is temporarily out of coffee should instead return 503.';
@@ -1581,4 +1679,12 @@ test('unescaped quotes inside a complete answer do not leak the JSON envelope or
   assert.doesNotMatch(displayed, /"answer":|"evidence":/);
   assert.equal(readingAnswerText('An ordinary Markdown answer.'), 'An ordinary Markdown answer.');
   assert.equal(readingAnswerText('API example: {"answer":"example"}'), 'API example: {"answer":"example"}');
+});
+
+test('platform selection translation envelopes display only the translated text', async () => {
+  const { readingAnswerText } = await import('./reader-core.js');
+  const raw = JSON.stringify({ translation: 'Read on the original webpage.\nDiscuss in the sidebar.' });
+  assert.equal(readingAnswerText(raw), 'Read on the original webpage.\nDiscuss in the sidebar.');
+  assert.equal(parseReadingAnswer(raw, { body: '在原网页阅读', url: 'https://example.com' }).answer, 'Read on the original webpage.\nDiscuss in the sidebar.');
+  assert.equal(readingAnswerText('API example: {"translation":"example"}'), 'API example: {"translation":"example"}');
 });

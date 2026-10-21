@@ -1,18 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
+import Typography from '@mui/material/Typography';
 
-import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { cn } from '@/lib/utils';
+import { AppButton as Button, AppIconButton } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
 
 export function DeleteDraftButton({
   researchId,
@@ -30,6 +23,7 @@ export function DeleteDraftButton({
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   async function deleteDraft() {
     setDeleting(true);
@@ -53,42 +47,64 @@ export function DeleteDraftButton({
 
   return (
     <>
-      <Button
-        type="button"
-        variant={compact ? 'ghost' : 'outline'}
-        size={compact ? 'icon-sm' : 'sm'}
-        className={cn('text-destructive hover:text-destructive', className)}
-        aria-label={`删除草稿：${title}`}
-        title={compact ? '删除草稿' : undefined}
-        onClick={() => {
-          setError(null);
-          setOpen(true);
-        }}
-      >
-        <Trash2 />
-        {compact ? null : '删除草稿'}
-      </Button>
+      {compact ? (
+        <AppIconButton
+          type="button"
+          color="error"
+          className={className}
+          aria-label={`删除草稿：${title}`}
+          title="删除草稿"
+          onClick={() => {
+            setError(null);
+            setOpen(true);
+          }}
+        >
+          <Trash2 size={16} aria-hidden="true" />
+        </AppIconButton>
+      ) : (
+        <Button
+          type="button"
+          variant="outlined"
+          color="error"
+          size="small"
+          className={className}
+          aria-label={`删除草稿：${title}`}
+          onClick={() => {
+            setError(null);
+            setOpen(true);
+          }}
+          startIcon={<Trash2 aria-hidden="true" />}
+        >
+          删除草稿
+        </Button>
+      )}
 
-      <Dialog open={open} onOpenChange={(nextOpen) => !deleting && setOpen(nextOpen)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>永久删除这份草稿？</DialogTitle>
-            <DialogDescription>
-              “{title}”及其挂载资料会被删除，此操作无法撤销。
-            </DialogDescription>
-          </DialogHeader>
-          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={deleting}>
+      <AppDialog
+        open={open}
+        onClose={() => { if (!deleting) setOpen(false); }}
+        title="永久删除这份草稿？"
+        description={`“${title}”及其挂载资料会被删除，此操作无法撤销。`}
+        initialFocusRef={cancelRef}
+        actions={(
+          <>
+            <Button ref={cancelRef} type="button" variant="outlined" onClick={() => setOpen(false)} disabled={deleting}>
               取消
             </Button>
-            <Button type="button" variant="destructive" onClick={() => void deleteDraft()} disabled={deleting}>
-              <Trash2 />
+            <Button
+              type="button"
+              variant="contained"
+              color="error"
+              onClick={() => void deleteDraft()}
+              disabled={deleting}
+              startIcon={<Trash2 aria-hidden="true" />}
+            >
               {deleting ? '删除中…' : '永久删除'}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </>
+        )}
+      >
+        {error ? <Typography component="p" color="error" role="alert">{error}</Typography> : null}
+      </AppDialog>
     </>
   );
 }

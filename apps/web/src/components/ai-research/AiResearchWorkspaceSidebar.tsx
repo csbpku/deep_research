@@ -3,6 +3,7 @@
 import { AiResearchConversationSidebar } from '@/components/ai-research/AiResearchConversationSidebar';
 import { AiResearchTaskHistory } from '@/components/ai-research/AiResearchTaskHistory';
 import { RecentResearchArtifacts } from '@/components/ai-research/RecentResearchArtifacts';
+import Stack from '@mui/material/Stack';
 
 export function AiResearchWorkspaceSidebar({
   activeConversationId,
@@ -16,10 +17,10 @@ export function AiResearchWorkspaceSidebar({
   showRecentArtifacts?: boolean;
 }) {
   return (
-    <div className="space-y-4">
+    <Stack spacing={2}>
       <AiResearchConversationSidebar activeConversationId={activeConversationId} />
       {showRecentArtifacts ? <RecentResearchArtifacts openTaskHistoryOnLoad={openTaskHistoryOnLoad} /> : null}
       {showTaskHistory ? <AiResearchTaskHistory initialOpen={openTaskHistoryOnLoad} /> : null}
-    </div>
+    </Stack>
   );
 }

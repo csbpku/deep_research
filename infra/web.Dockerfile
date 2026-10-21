@@ -16,6 +16,9 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 RUN printf "node-linker=hoisted\ninject-workspace-packages=true\n" > .npmrc
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
+# This workspace is injected with Web's React peers. Its source and generated
+# CSS must exist before install, otherwise the injected package is incomplete.
+COPY packages/design-system packages/design-system
 
 RUN pnpm install --config.node-linker=hoisted --filter '@deep-research/web...' --filter '@deep-research/shared' \
     --frozen-lockfile
@@ -26,6 +29,7 @@ WORKDIR /repo
 
 COPY apps/web apps/web
 COPY packages/shared packages/shared
+COPY packages/design-system packages/design-system
 # The public Reader policy and the packaged offline policy share one source.
 COPY apps/extension/privacy-policy.json apps/extension/privacy-policy.json
 

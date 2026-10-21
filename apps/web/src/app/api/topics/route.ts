@@ -95,7 +95,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       },
     }),
     prisma.researchTopic.findMany({
-      where: { topicId: { in: topicIds } },
+      where: { topicId: { in: topicIds }, research: { status: 'published' } },
       orderBy: { createdAt: 'desc' },
       distinct: ['topicId'],
       select: {

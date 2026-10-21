@@ -55,8 +55,8 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | 变量 | 类型 | 说明 | 缺省 |
 |---|---|---|---|
 | `TAVILY_API_KEY` | secret | 外部搜索凭证；仅当 `RETRIEVER=tavily` 时必填，`duckduckgo` 不需要 | 条件必填 |
-| `RESEARCH_LLM` | `provider:model` | 完整 AI 调研主模型；gpt-researcher 兼容槽由它派生 | `minimax:MiniMax-M3` |
-| `UTILITY_LLM` | `provider:model` | 评分、摘要、审核、聊天等工具型任务主模型 | `minimax:MiniMax-M3` |
+| `RESEARCH_LLM` | `provider:model` | 完整 AI 调研主模型；gpt-researcher 兼容槽由它派生 | `minimax:MiniMax-M3.1-Flash` |
+| `UTILITY_LLM` | `provider:model` | 评分、摘要、审核、聊天等工具型任务主模型 | `minimax:MiniMax-M3.1-Flash` |
 | `FALLBACK_LLM` | `provider:model` | 所有共享调用的独立备用模型 | `deepseek:deepseek-v4-flash` |
 | `SMART_LLM` / `FAST_LLM` / `STRATEGIC_LLM` / `BRIEF_LLM` | `provider:model` | 仅供 gpt-researcher 兼容的 legacy mirror，不作为业务路由真源 | 由 canonical 路由派生 |
 | `ANTHROPIC_API_KEY` | secret | Anthropic 兼容 provider 的轻量任务凭证 | 按 provider 必填 |
@@ -129,11 +129,11 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `ZREAD_CLI_TIMEOUT_SECONDS` | int | CLI 目录+页面生成超时；0=不限时，中断保留已生成的部分页 | `7200` |
 | `GBRAIN_MCP_URL` | url | 只读 GBrain HTTP MCP sidecar 端点（可选） | 空 |
 | `GBRAIN_MCP_TOKEN` | secret | GBrain sidecar 鉴权 token（可选） | 空 |
-| `ANYTHINGLLM_URL` | url | AnythingLLM 雷达/聊天集成端点（可选） | 空 |
+| `ANYTHINGLLM_URL` | url | AnythingLLM 可选端点：AI 调研助手集成及遗留雷达 AI 会话 API；雷达页面当前未挂载该聊天面板 | 空 |
 | `ANYTHINGLLM_API_KEY` | secret | AnythingLLM API key（可选） | 空 |
 | `ANYTHINGLLM_WORKSPACE` | str | AnythingLLM workspace slug（可选） | 空 |
 | `ANYTHINGLLM_ENABLED` | bool | 是否启用 AnythingLLM 集成 | `true` |
-| `ANYTHINGLLM_RADAR_IDS` | csv | 限定启用的雷达 ID；空=全部雷达聊天 | 空 |
+| `ANYTHINGLLM_RADAR_IDS` | csv | 遗留雷达 AI 会话 API 的 ID 限制；空=所有雷达候选可作为会话种子；当前无对应页面入口 | 空 |
 | `ANYTHINGLLM_PERSONAL_KNOWLEDGE_ENABLED` | enum: 0/1 | 独立个人知识向量索引总开关；按用户隔离 workspace，不复用共享雷达/聊天 workspace。固定镜像的隔离账号入库、检索、编辑、删除闭环和资源核验完成前必须保持关闭 | `0` |
 | `KNOWLEDGE_INDEX_WORKER_POLL_SECONDS` | float | 个人知识索引 outbox worker 空队列轮询间隔 | `2` |
 | `KNOWLEDGE_INDEX_LEASE_SECONDS` | int | 个人知识索引 outbox 任务租约；小于 `60` 会按 `60` 处理 | `300` |

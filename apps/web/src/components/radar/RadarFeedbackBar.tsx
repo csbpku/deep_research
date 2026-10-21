@@ -10,7 +10,10 @@
 
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
 import {
   CheckCircle2,
   Search,
@@ -20,8 +23,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { AppButton as Button } from '@/components/material/AppButton';
 
 export type RadarFeedbackType =
   | 'useful'
@@ -113,7 +115,7 @@ export function RadarFeedbackBar({
   }
 
   return (
-    <div className={cn('flex flex-nowrap items-center gap-2 py-1', className)} role="group" aria-label="雷达候选反馈">
+    <Box className={className} role="group" aria-label="雷达候选反馈" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm, paddingBlock: space.xs }}>
       {types.map((ft) => {
         const meta = FEEDBACK_LABELS[ft];
         const Icon = meta.icon;
@@ -124,26 +126,27 @@ export function RadarFeedbackBar({
           <Button
             key={ft}
             type="button"
-            variant={active ? 'default' : 'outline'}
-            size="xs"
-            className="rounded-full"
+            variant={active ? 'contained' : 'outlined'}
+            size="small"
             onClick={() => handleClick(ft)}
             disabled={isPending}
             aria-pressed={active}
             aria-label={`${meta.label}（${total}）`}
           >
-            <Icon className={cn('size-3.5', active && 'fill-current')} />
+            <Icon size={16} fill={active ? 'currentColor' : 'none'} aria-hidden />
             {meta.label}
-            <span className="tabular-nums opacity-75">{total}</span>
+            {ft !== 'favorite' || total > 0 ? (
+              <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums' }}>{total}</Box>
+            ) : null}
           </Button>
         );
       })}
       {err ? (
-        <span role="alert" className="ml-1 text-xs text-destructive">
+        <Typography role="alert" variant="metadata" color="error.main">
           {err}
-        </span>
+        </Typography>
       ) : null}
-    </div>
+    </Box>
   );
 }
 

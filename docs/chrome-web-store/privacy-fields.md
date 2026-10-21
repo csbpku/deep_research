@@ -18,7 +18,7 @@ Help users read and understand the current web article in place: translate its t
 | storage | Stores extension activation state, the optional platform authorization token and short-lived coordination state across the side panel and service worker. |
 | unlimitedStorage | Supports local reading sessions, saved notes, bounded translation cache and temporary task inputs without losing them to the default storage quota. Cache is capped at 500 entries; temporary task inputs are removed on completion/cancellation. |
 | alarms | Wakes the service worker to inspect/resume translation work already started by the user. Does not crawl pages or start unrelated reading tasks. |
-| Optional HTTP(S) host access | Users may read arbitrary article sites, configure different model API hosts, connect a self-hosted platform, or translate images served from a separate host. Access is requested per specific origin when that operation is enabled by the user. The production package has no required host_permissions. |
+| Optional HTTP(S) host access | Users may read arbitrary article sites, configure different model API hosts, connect a self-hosted platform, or translate images served from a separate host. Access is requested per specific origin when that operation is enabled by the user. Required host access is limited to techradar.top and www.techradar.top for the trusted-click source-launch bridge; it does not read login credentials or unrelated pages. |
 
 ## Remote code
 

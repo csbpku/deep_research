@@ -101,7 +101,7 @@ function LazyArticleBlock({
       className="group relative -mx-3 scroll-mt-6 rounded-md px-3 py-2 transition-colors"
       style={rendered ? undefined : { minHeight: estimatedBlockHeight(block), contentVisibility: 'auto', containIntrinsicSize: '280px' }}
     >
-      {rendered ? <MarkdownContent content={block} className="text-[16px] text-[var(--ink-text)]" /> : null}
+      {rendered ? <MarkdownContent content={block} className="text-[var(--ink-text)]" /> : null}
     </section>
   );
 }
@@ -324,7 +324,7 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
     <div ref={rootRef} className={cn('relative', className)}>
       {toc.length && showMobileToc ? (
         <details className="mb-6 rounded-lg border border-[var(--ink-rule)] bg-[var(--ink-page)] lg:hidden">
-          <summary className="cursor-pointer px-3 py-2.5 text-xs font-semibold text-[var(--ink-text)]">目录</summary>
+          <summary className="cursor-pointer px-3 py-3 text-xs font-semibold text-[var(--ink-text)]">目录</summary>
           <TocList items={toc} />
         </details>
       ) : null}
@@ -356,7 +356,7 @@ export const RadarOriginalArticle = memo(function RadarOriginalArticle({
         <div
           data-radar-reading-body="true"
           className={cn(
-            'reading-workbench-markdown min-w-0 text-[16px] text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20 lg:pl-8',
+            'reading-workbench-markdown min-w-0 text-[var(--ink-text)] selection:bg-[var(--ink-accent)]/20 lg:pl-8',
             readingMeasure === 'regular' && 'reading-measure-regular',
           )}
         >

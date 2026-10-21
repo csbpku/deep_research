@@ -154,6 +154,8 @@
 
 ## 3. Reader 的差异化
 
+前面的日期化 Monica 观察和早期实现验收属于历史依据，不代表当前 Reader 的界面布局或最新测试结果。现役界面、共享 MUI 设计系统和语言行为以 [技术方案](./TECHNICAL_OVERVIEW.md) 为准。
+
 - **技术文章身份**：优先识别文章、小节、代码块、表格、图示、GitHub README 和 Zread 页面，不把所有网页当作同一种聊天上下文。
 - **证据优先**：模型证据必须能在当前页面精确定位；内容版本变化后旧证据标记失效，而不是跳到相似句子。
 - **适用边界**：回答不仅给结论，还要说明假设、限制、未知项和可能的反例。
@@ -177,18 +179,18 @@
 - PostgreSQL 中的 `ReadingSession` 是跨设备会话权威；研究库 `Research` / `ResearchSource` 是确认成果权威。
 - 本地 IndexedDB 仍保留恢复缓存和同步失败保护，不能成为唯一副本。
 - 网页全文档案、图片字节、翻译缓存和 API Key 不写入平台数据库。
-- 图片理解可继续使用独立模式配置的视觉模型，避免平台被迫接收图片字节。
+- 图片翻译和图示问答可使用平台视觉路由。用户触发图片任务时扩展发送有界 PNG/JPEG/WebP 图片字节；服务端不按用户提供的 URL 抓图，图片字节不写入平台数据库。
 
 ## 5. 雷达到原文
 
-`external_reading` 雷达详情先显示安装和数据边界，再用带来源标记的 URL 打开原文：
+`external_reading` 雷达详情的原文动作先探测 Reader。兼容扩展打开来源页并唤起原生侧栏；未安装时进入 Chrome Web Store，旧下载引导页重定向商店。来源标记包括：
 
 ```text
 deep-research-source=radar
 deep-research-summary=<summary UUID>
 ```
 
-已安装并启用 Reader 时，content script 识别来源标记、移除标记后生成 canonical URL，并在侧栏提示“来自 Deep Research 雷达”。没有安装扩展时，外部站点本身无法被平台注入安装提示，因此安装引导必须在离开雷达之前完成，不能假装平台能控制任意第三方网页。
+已安装并启用 Reader 时，content script 识别来源标记、移除标记后生成 canonical URL，并在侧栏保留雷达身份。扩展外部连接只接受配置的平台来源和受校验的 HTTP(S) 原文 URL；平台不向任意第三方网页注入安装提示。
 
 ## 6. 明确不做
 

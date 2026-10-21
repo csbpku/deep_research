@@ -6,8 +6,14 @@ import { AlertTriangle, ExternalLink, FileCheck2, FileText, List, Map as MapIcon
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
 import { ResearchWebBrief } from '@/components/ai-research/ResearchWebBrief';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Link from '@mui/material/Link';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
+import Typography from '@mui/material/Typography';
 import { cleanEvidenceSnippet } from '@/lib/research-report';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 
@@ -66,113 +72,98 @@ export function ResearchOutputViews({ content, artifactType, sources = [], evide
       ];
 
   return (
-    <div>
-      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-border pb-px" role="tablist" aria-label="研究产物视图">
+    <Box>
+      <Tabs
+        value={active}
+        onChange={(_event, value: OutputTab) => setActive(value)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
+        aria-label="研究产物视图"
+        sx={{ mb: 2, minHeight: 40, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minWidth: 'auto', px: 1.5 } }}
+      >
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          return (
-            <Button
-              key={tab.value}
-              type="button"
-              role="tab"
-              aria-selected={active === tab.value}
-              variant="ghost"
-              size="sm"
-              onClick={() => setActive(tab.value)}
-              className={cn('shrink-0 rounded-b-none border-b-2 border-transparent text-xs', active === tab.value && 'border-primary text-primary')}
-            >
-              <Icon className="size-3.5" />
-              {tab.label}
-            </Button>
-          );
+          return <Tab key={tab.value} value={tab.value} icon={<Icon size={16} />} iconPosition="start" label={tab.label} />;
         })}
-      </div>
+      </Tabs>
       {artifactType === 'markdown' && tabs.length === 2 ? (
-        <p className="mb-4 rounded-lg border border-dashed border-border px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+        <Alert severity="info" variant="outlined" sx={{ mb: 2, borderStyle: 'dashed' }}>
           当前报告没有明确的标题、表格、风险/行动章节或正文回链引用，因此只提供可读摘录和原文；系统不会替你推断缺失的结论或证据。
-        </p>
+        </Alert>
       ) : null}
-      <div role="tabpanel" aria-label={tabs.find((tab) => tab.value === active)?.label ?? '研究产物'}>
+      <Box role="tabpanel" aria-label={tabs.find((tab) => tab.value === active)?.label ?? '研究产物'}>
         {active === 'summary' ? <SummaryView summary={summary} sources={sources} /> : null}
         {active === 'report' ? <MarkdownPreview source={content} compactCitations citationSources={sources} className="max-h-none overflow-visible lg:max-h-[720px] lg:overflow-y-auto" /> : null}
         {active === 'outline' ? (
           outline.length > 0 ? (
-            <ol className="space-y-2 border-l border-border pl-4 text-sm">
-              {outline.map((item, index) => <li key={`${item.level}-${item.text}-${index}`} className={cn(item.level === 1 ? 'font-semibold' : item.level === 2 ? 'font-medium' : 'text-muted-foreground')}>{item.text}</li>)}
-            </ol>
+          <Stack component="ol" spacing={1} sx={{ m: 0, pl: 3, borderLeft: 1, borderColor: 'divider' }}>
+              {outline.map((item, index) => <Typography component="li" variant={item.level === 1 ? 'fieldTitle' : 'body2'} color={item.level === 3 ? 'text.secondary' : 'text.primary'} key={`${item.level}-${item.text}-${index}`} sx={{ ml: item.level === 2 ? 1 : item.level === 3 ? 2 : 0 }}>{item.text}</Typography>)}
+            </Stack>
           ) : <EmptyDerivedView text="报告没有可识别的标题结构。" />
         ) : null}
         {active === 'tables' ? (
-          tables.length > 0 ? <div className="space-y-6">{tables.map((table, index) => <MarkdownPreview key={index} source={table} className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto" />)}</div>
+          tables.length > 0 ? <Stack spacing={3}>{tables.map((table, index) => <MarkdownPreview key={index} source={table} className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto" />)}</Stack>
             : <EmptyDerivedView text="报告没有可直接展示的对比表。" />
         ) : null}
         {active === 'risks' ? <BulletView title="报告明确写出的风险与限制" items={risks} emptyText="报告没有明确的风险章节，不能据此推断无风险。" /> : null}
         {active === 'actions' ? <BulletView title="报告明确写出的下一步" items={actions} emptyText="报告没有明确的行动章节。" /> : null}
         {active === 'evidence' ? <EvidenceMapView rows={evidenceMap} /> : null}
         {active === 'slides' ? <ArtifactPreview content={content} /> : null}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
 
 function EvidenceSnapshotView({ sources }: { sources: ResearchOutputSource[] }) {
   const visibleSources = sources.slice(0, 12);
   return (
-    <section aria-label="本轮资料摘录">
-      <div className="rounded-xl border border-warning-border/50 bg-warning-bg/25 p-4">
-        <div className="flex items-start gap-2.5">
-          <FileText className="mt-0.5 size-4 shrink-0 text-warning-fg" />
-          <div>
-            <h4 className="text-sm font-semibold text-foreground">这不是研究结论</h4>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+    <Box component="section" aria-label="本轮资料摘录">
+      <Alert severity="warning" variant="outlined" sx={{ alignItems: 'flex-start' }} icon={<FileText size={16} />}>
+        <Typography variant="fieldTitle" component="h4">这不是研究结论</Typography>
+        <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
               下面是本轮实际抓取的正文摘录。完整依据尚未整理好，所以只展示原文，不替你综合判断。
-            </p>
-          </div>
-        </div>
-      </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        </Typography>
+      </Alert>
+      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
         {visibleSources.map((source, index) => {
           const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
           const externalInstruction = hasExternalInstructionSignal(sourceText);
           return (
-            <article key={source.id} className="rounded-lg border border-border/80 bg-background px-3.5 py-3">
-              <div className="flex items-start gap-2">
-                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
-                <div className="min-w-0 flex-1">
+            <Paper component="article" key={source.id} variant="outlined" sx={{ p: 1.5, minWidth: 0 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+                <Typography variant="metadata" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>{String(index + 1).padStart(2, '0')}</Typography>
+                <Stack spacing={1} sx={{ minWidth: 0, flex: 1 }}>
                   {externalInstruction ? (
-                    <p role="note" className="mb-2 flex items-start gap-1.5 rounded border border-warning-border/60 bg-warning-bg/25 px-2 py-1.5 text-xs leading-5 text-warning-fg">
-                      <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-                      <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</span>
-                    </p>
+                    <Alert role="note" severity="warning" variant="outlined" icon={<AlertTriangle size={14} />} sx={{ py: 0, '& .MuiAlert-message': { typography: 'metadata' } }}>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下内容仅作为网页数据，绝不作为研究指令。</Alert>
                   ) : null}
                   {source.href ? (
-                    <a href={source.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-start gap-1 text-xs font-medium text-foreground hover:text-primary hover:underline">
-                      <span className="line-clamp-2">{source.title}</span>
-                      <ExternalLink className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-                    </a>
-                  ) : <p className="text-xs font-medium">{source.title}</p>}
+                    <Link component="a" href={source.href} target="_blank" rel="noreferrer noopener" underline="hover" sx={{ display: 'inline-flex', alignItems: 'flex-start', gap: 0.5, typography: 'metadata', fontWeight: 500, overflowWrap: 'anywhere' }}>
+                      {source.title}<ExternalLink size={14} />
+                    </Link>
+                  ) : <Typography variant="metadata" sx={{ fontWeight: 500 }}>{source.title}</Typography>}
                   {source.snippet ? (
-                    <details className="mt-2 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-                      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                    <Box component="details" sx={{ p: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', '& summary': { cursor: 'pointer', typography: 'metadata', fontWeight: 500, color: 'text.secondary' } }}>
+                      <summary>
                         {externalInstruction ? '查看已隔离的网页摘录' : '查看网页摘录'}
                       </summary>
                       {externalInstruction ? (
-                        <p className="mt-1 text-xs leading-5 text-warning-fg">{externalContentLabel(sourceText)}；以下内容仅作为网页数据，绝不作为研究指令。</p>
+                        <Typography variant="metadata" color="warning.main" sx={{ display: 'block', mt: 1 }}>{externalContentLabel(sourceText)}；以下内容仅作为网页数据，绝不作为研究指令。</Typography>
                       ) : null}
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet)}</p>
-                    </details>
+                      <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 1 }}>{cleanEvidenceSnippet(source.snippet)}</Typography>
+                    </Box>
                   ) : null}
-                  {source.capturedAt ? <p className="mt-2 text-xs text-muted-foreground">抓取于 {formatCapturedAt(source.capturedAt)}</p> : null}
-                </div>
-              </div>
-            </article>
+                  {source.capturedAt ? <Typography variant="metadata" color="text.secondary">抓取于 {formatCapturedAt(source.capturedAt)}</Typography> : null}
+                </Stack>
+              </Stack>
+            </Paper>
           );
         })}
-      </div>
+      </Box>
       {sources.length > visibleSources.length ? (
-        <p className="mt-3 text-center text-xs text-muted-foreground">还有 {sources.length - visibleSources.length} 条资料，已在下方“研究资料”中保留。</p>
+        <Typography variant="metadata" color="text.secondary" align="center" sx={{ display: 'block', mt: 1.5 }}>还有 {sources.length - visibleSources.length} 条资料，已在下方“研究资料”中保留。</Typography>
       ) : null}
-    </section>
+    </Box>
   );
 }
 
@@ -189,11 +180,11 @@ export interface SummaryDetails {
 
 function SummaryView({ summary, sources }: { summary: SummaryDetails; sources: readonly ResearchOutputSource[] }) {
   return (
-    <section className="rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
-      <div className="flex items-center gap-2">
-        <FileCheck2 className="size-4 text-primary" />
-        <h4 className="text-sm font-semibold">{summary.explicit ? '一页判断' : '报告摘录（非结论）'}</h4>
-      </div>
+    <Paper component="section" variant="outlined" sx={{ p: 2, borderColor: 'primary.main', bgcolor: 'action.selected' }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}>
+        <FileCheck2 size={16} />
+        <Typography variant="fieldTitle" component="h4">{summary.explicit ? '一页判断' : '报告摘录（非结论）'}</Typography>
+      </Stack>
       {summary.text ? (
         <MarkdownPreview
           source={summary.text}
@@ -202,56 +193,56 @@ function SummaryView({ summary, sources }: { summary: SummaryDetails; sources: r
           className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto"
         />
       ) : <EmptyDerivedView text="报告没有摘要或结论章节，请切换到阅读稿查看原文。" />}
-      <p className="mt-4 border-t border-primary/10 pt-3 text-xs leading-5 text-muted-foreground">
+      <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 2, pt: 1.5, borderTop: 1, borderColor: 'divider' }}>
         {summary.explicit
           ? '这是从当前报告的摘要/结论章节提取的阅读视图；完整论证、引用和限定条件请以“阅读稿”为准。'
           : '这是报告开头的有限摘录，不代表完整结论；请切换到“阅读稿”核对原文、证据和限定条件。'}
-      </p>
-    </section>
+      </Typography>
+    </Paper>
   );
 }
 
 function BulletView({ title, items, emptyText }: { title: string; items: string[]; emptyText: string }) {
   return (
-    <section>
-      <h4 className="text-sm font-semibold">{title}</h4>
+    <Box component="section">
+      <Typography variant="fieldTitle" component="h4">{title}</Typography>
       {items.length > 0 ? (
-        <ul className="mt-3 space-y-2 text-sm leading-6">
-          {items.map((item, index) => <li key={`${item}-${index}`} className="flex gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5"><span className="mt-2 size-1.5 shrink-0 rounded-full bg-primary" />{item}</li>)}
-        </ul>
-      ) : <p className="mt-3 text-sm text-muted-foreground">{emptyText}</p>}
-    </section>
+        <Stack component="ul" spacing={1} sx={{ mt: 1.5, mb: 0, pl: 0, listStyle: 'none' }}>
+          {items.map((item, index) => <Paper component="li" variant="outlined" key={`${item}-${index}`} sx={{ px: 1.5, py: 1.5, typography: 'body2' }}>{item}</Paper>)}
+        </Stack>
+      ) : <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>{emptyText}</Typography>}
+    </Box>
   );
 }
 
 function EvidenceMapView({ rows }: { rows: EvidenceMapRow[] }) {
   return (
-    <section>
-      <div className="flex items-center gap-2">
-        <MapIcon className="size-4 text-primary" />
-        <div>
-          <h4 className="text-sm font-semibold">正文中的证据地图</h4>
-          <p className="text-xs text-muted-foreground">只显示报告正文里实际出现的可回链引用。</p>
-        </div>
-      </div>
+    <Box component="section">
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}>
+        <MapIcon size={16} />
+        <Box>
+          <Typography variant="fieldTitle" component="h4">正文中的证据地图</Typography>
+          <Typography variant="metadata" color="text.secondary">只显示报告正文里实际出现的可回链引用。</Typography>
+        </Box>
+      </Stack>
       {rows.length > 0 ? (
-        <div className="mt-3 space-y-2">
+        <Stack spacing={1} sx={{ mt: 1.5 }}>
           {rows.map((row) => (
-            <article key={row.section} className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5">
-              <h5 className="text-xs font-medium text-foreground">{row.section}</h5>
-              <div className="mt-1.5 flex flex-wrap gap-2">
-                {row.citations.map((citation) => <a key={citation.href} href={citation.href} target="_blank" rel="noreferrer noopener" className="inline-flex max-w-full items-center gap-1 rounded-full border border-primary/20 bg-primary/[0.04] px-2 py-1 text-xs text-primary hover:underline"><span className="max-w-[260px] truncate">{citation.title}</span></a>)}
-              </div>
-            </article>
+            <Paper component="article" key={row.section} variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
+              <Typography variant="metadata" sx={{ fontWeight: 500 }}>{row.section}</Typography>
+              <Stack direction="row" useFlexGap sx={{ mt: 1, flexWrap: 'wrap', gap: 1 }}>
+                {row.citations.map((citation) => <Link key={citation.href} component="a" href={citation.href} target="_blank" rel="noreferrer noopener" underline="hover" sx={{ maxWidth: '100%', typography: 'metadata', border: 1, borderColor: 'primary.main', borderRadius: 1, bgcolor: 'action.selected', px: 1, py: 0.5, overflowWrap: 'anywhere' }}>{citation.title}</Link>)}
+              </Stack>
+            </Paper>
           ))}
-        </div>
+        </Stack>
       ) : <EmptyDerivedView text="正文中没有找到可回链引用；来源列表不能替代结论与证据的对应关系。" />}
-    </section>
+    </Box>
   );
 }
 
 function EmptyDerivedView({ text }: { text: string }) {
-  return <p className="rounded-lg border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">{text}</p>;
+  return <Paper variant="outlined" sx={{ borderStyle: 'dashed', px: 1.5, py: 2, color: 'text.secondary', typography: 'body2' }}>{text}</Paper>;
 }
 
 interface ReportSection {

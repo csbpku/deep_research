@@ -72,11 +72,11 @@ flowchart LR
 
 ### 技术栈
 
-- Web：Next.js 15、TypeScript、Tailwind CSS、shadcn/ui、TanStack Query。
-- 编辑器：react-md-editor。
+- Web：Next.js 15、TypeScript、MUI 9.5、Emotion、TanStack Query。Web/Reader 共享 `packages/design-system`；原生内容 DOM 和兼容 CSS 的边界见技术方案。
+- 编辑器：Markdown 文本编辑与预览，沿用安全清洗和发布审核边界。
 - Auth：NextAuth.js JWT + scrypt 邮箱密码登录，Google OAuth 可选；`AUTH_BETA_MODE=0`（默认）允许公开邮箱注册，`=1` 仅允许 Admin 预创建账号及 bootstrap Admin；`AUTH_EMAIL_VERIFICATION=1` 时验证码只用于密码注册，后续登录使用密码；已存在但无密码的账号只有通过验证码才能设置密码，验证关闭时注册接口拒绝。
 - ORM/数据库：Prisma + PostgreSQL 16 + `tsvector/GIN`；检索使用内置 `simple` 配置，中文分词升级为可选增强。
-- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计，`llm_token_budget_events` 记录预留与结算。用户滚动周期和平台 UTC 日 token 上限由环境变量配置，默认关闭；当前以单次模型调用为预留单位。
+- AI：主引擎 gpt-researcher；FakeAdapter 为测试/CI fallback。共享调用走 `RESEARCH_LLM` / `UTILITY_LLM` / `FALLBACK_LLM` 三层路由（旧四槽位名仅作兼容镜像），附主模型重试、endpoint 熔断冷却与临时故障恢复 worker；`llm_usage_events` 记录用量审计，`llm_token_budget_events` 记录预留与结算。用户滚动周期和平台 UTC 日 token 上限由环境变量配置，默认关闭；长篇多步请求在首个模型调用前按全部分块预留，其他调用按单次预留，详见技术方案。
 - 数据源：Tavily、arxiv、GitHub、Zread（远程优先，本地 CLI 回退）、WeWe RSS 微信公众号；AnythingLLM sidecar 承担可选讨论与个人向量索引，GBrain MCP 为可选知识检索集成。
 - 部署：Docker Compose + nginx + TLS + 日志卷 + 每日 pg_dump。
 
@@ -246,7 +246,7 @@ flowchart LR
 - `originalSha256` 是历史/显式 enrichment 正文版本锚点；插件侧使用当前页面内容指纹，翻译、AI 阅读和高亮结果必须绑定对应版本，不能覆盖原文。
 - Web 端统一使用 `MarkdownContent` renderer；原始 HTML 默认跳过，URL 协议只允许 `http`、`https`、`mailto`。
 - `collection/deep_read` 的 legacy enrichment 完成后才执行 reader quality 和内容呈现审核；默认 browser 模式不创建后续 enrichment、reader quality 或呈现审核任务。真实浏览器渲染审核属于可选 `browser-review` profile，不进入默认生产流程。
-- 雷达详情公开读取；反馈、评论、AI 聊天和深入调研仍走登录权限。
+- 雷达详情公开读取；反馈、评论和深入调研仍走登录权限。雷达产品界面提供评论、反馈与深入调研，不提供 AI 聊天面板。
 
 ### 文件导入
 

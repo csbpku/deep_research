@@ -1,10 +1,10 @@
 import type { Config } from 'tailwindcss';
 
 /**
- * Tailwind 配置 —— 技术调研平台设计系统。
+ * Tailwind 迁移兼容配置 —— 视觉值只从共享设计 token 派生。
  *
- * 所有颜色都映射到 globals.css 里的 CSS 变量（shadcn HSL 三元组约定），
- * 这样 `.dark` 一挂上，整站配色自动切换，组件里不需要写任何 dark: 变体色值。
+ * 颜色别名由 design-system 生成到 legacy-bridge.css（shadcn HSL 三元组约定）；
+ * `.dark` 在 html 上切换时，旧 utility 与 MUI 使用同一套浅深色语义。
  *
  * ⚠️ 依赖 postcss.config.js —— 没有它 @tailwind 指令不会被处理。
  */
@@ -122,16 +122,7 @@ const config: Config = {
 
       fontFamily: {
         // 使用系统字体，确保离线构建与中英文渲染都不依赖外部字体 CDN。
-        sans: [
-          'ui-sans-serif',
-          'system-ui',
-          'PingFang SC',
-          'Hiragino Sans GB',
-          'Noto Sans SC',
-          'Microsoft YaHei',
-          'Arial',
-          'sans-serif',
-        ],
+        sans: ['var(--dr-font-family)'],
         mono: [
           'ui-monospace',
           'SFMono-Regular',
@@ -157,11 +148,11 @@ const config: Config = {
       },
       maxWidth: {
         // 列表/控制台页用 shell
-        shell: '1280px',
-        // 中文长文阅读：35–45 字/行，行高 1.7。760 是舒适上限 (v6.4 fix: 原 640px 是真 bug)
-        measure: '760px',
+        shell: 'var(--dr-width-shell)',
+        // 中文长文阅读舒适上限。
+        measure: 'var(--dr-width-reading)',
         // 列表类路由 (雷达/搜索) - 可选
-        'content-list': 'var(--content-list)',
+        'content-list': 'var(--dr-width-content-list)',
       },
 
       keyframes: {

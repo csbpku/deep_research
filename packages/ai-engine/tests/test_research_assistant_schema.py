@@ -355,6 +355,44 @@ async def test_reading_assistant_stream_emits_provider_deltas(monkeypatch) -> No
     assert '"streaming": true' in response.text
 
 
+@pytest.mark.parametrize("blocking_fallback", [False, True])
+@pytest.mark.parametrize(("operation", "token_limit"), [("ask", 6000), ("explain", 3000)])
+async def test_reading_stream_reports_truncation_before_parsing_empty_reasoning(
+    monkeypatch, blocking_fallback: bool, operation: str, token_limit: int,
+) -> None:
+    calls = []
+
+    async def truncated_result(**kwargs):
+        calls.append(kwargs)
+        return TextGenerationResult(
+            text="<think>Reasoning exhausted the output allowance",
+            input_tokens=10, output_tokens=token_limit,
+            requested_model="test-model", actual_model="test-model", provider="fake",
+            finish_reason="length", truncated=True,
+        )
+
+    async def fake_stream_text(**kwargs):
+        if blocking_fallback:
+            raise NotImplementedError("streaming unavailable")
+        return await truncated_result(**kwargs)
+
+    monkeypatch.setattr(app_module, "stream_text", fake_stream_text)
+    monkeypatch.setattr(app_module, "generate_text", truncated_result)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+        headers={"x-internal-token": "test-only-ai-engine-token", "x-request-id": "reader-truncation-check"},
+    ) as client:
+        response = await client.post("/api/ai/research-assistant/stream", json={
+            "operation": operation, "body": "A bounded queue protects memory.", "scope": "selection",
+        })
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert '"code": "AI_RESPONSE_TRUNCATED"' in response.text
+    assert '"request_id": "reader-truncation-check"' in response.text
+    assert "event: done" not in response.text
+    assert calls[0]["max_tokens"] == token_limit
+
+
 async def test_translation_uses_full_output_budget_and_reports_provider_truncation(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -386,3 +424,30 @@ async def test_translation_uses_full_output_budget_and_reports_provider_truncati
     assert payload["suggestion"] == "完整译文"
     assert payload["truncated"] is True
     assert payload["finishReason"] == "length"
+
+
+async def test_reader_image_question_uses_vision_and_bounded_followup(monkeypatch) -> None:
+    calls = {}
+    monkeypatch.delenv("READING_VISION_LLM", raising=False)
+    monkeypatch.setenv("UTILITY_LLM", "minimax:MiniMax-M3.1-Flash")
+
+    async def vision(**kwargs):
+        calls.update(kwargs)
+        return SimpleNamespace(text='{"answer":"A queue connects the workers.","evidence":[]}', truncated=False, finish_reason="stop", input_tokens=10, output_tokens=10, provider="minimax", requested_model="MiniMax-M3.1-Flash", actual_model="MiniMax-M3.1-Flash")
+
+    monkeypatch.setattr(app_module, "generate_vision", vision)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"x-internal-token": "test-only-ai-engine-token"}) as client:
+        response = await client.post("/api/ai/reading/answer-image", json={
+            "image_media_type": "image/png", "image_base64": base64.b64encode(b"\x89PNG\r\n\x1a\n").decode(),
+            "language": "en", "body": "A queue connects the workers.", "prompt": "请解释这张技术图示。", "history": [{"role": "assistant", "content": "Two workers are shown."}],
+        })
+        invalid = await client.post("/api/ai/reading/answer-image", json={"image_media_type": "image/png", "image_base64": "bm90LXBuZw==", "prompt": "Explain"})
+        too_long = await client.post("/api/ai/reading/answer-image", json={"image_media_type": "image/png", "image_base64": "AAAA", "prompt": "Explain", "body": "x" * 24001})
+    assert response.status_code == 200
+    assert calls["llm_spec"] == "minimax:MiniMax-M3.1-Flash"
+    assert "Two workers are shown." in calls["user_prompt"]
+    assert "A queue connects the workers." in calls["user_prompt"]
+    assert "Write every user-facing JSON field in en" in calls["system_prompt"]
+    assert calls["max_tokens"] == 6000
+    assert invalid.status_code == 400
+    assert too_long.status_code == 422

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
-import type { Page, Response } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { test, expect, loginWithCredentials, waitForHydration } from './fixtures';
 
 const prisma = new PrismaClient();
@@ -231,6 +231,9 @@ test.describe('Research follow-up and personal knowledge', () => {
         });
       });
 
+      const contextResponsePromise = page.waitForResponse(response =>
+        new URL(response.url()).pathname === '/api/ai-research/context'
+        && response.request().method() === 'GET');
       await page.goto('/ai-research');
       const input = page.getByRole('textbox', { name: 'AI 调研对话输入' });
       const createdConversationResponse = page.waitForResponse((response) => {
@@ -248,31 +251,22 @@ test.describe('Research follow-up and personal knowledge', () => {
 
       await expect(page.getByText('研究方案', { exact: true })).toBeVisible();
       await waitForHydration(page);
-      const contextDetails = page.locator('details').filter({ hasText: '已有资料（可选）' });
-      await expect(contextDetails).toHaveCount(1);
-      const contextSummary = contextDetails.locator('summary');
-      let contextResponse: Response | null = null;
-      page.on('response', (response) => {
-        if (new URL(response.url()).pathname === '/api/ai-research/context') {
-          contextResponse = response;
-        }
-      });
-      await contextSummary.click();
-      await expect(contextDetails).toHaveAttribute('open', '');
-      await expect(contextSummary).toHaveAttribute('aria-expanded', 'true');
-      await expect(page.getByText('正在搜索可用个人资料…')).toBeVisible();
-      await expect.poll(() => contextResponse).not.toBeNull();
-      expect(contextResponse?.status()).toBe(200);
-      const retrieved = await contextResponse?.json() as { items: Array<{ id: string }> };
+      // Relevant private judgments load automatically from the question. They
+      // remain unselected until the user explicitly chooses one.
+      const contextResponse = await contextResponsePromise;
+      expect(contextResponse.status()).toBe(200);
+      const retrieved = await contextResponse.json() as { items: Array<{ id: string }> };
       expect(retrieved.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: savedResearchId }),
       ]));
-      const suggestedSource = page.getByRole('button', { name: new RegExp(sourceTitle) });
+      const sourceCard = page.getByRole('region', { name: '相关历史判断与资料' })
+        .locator('label').filter({ hasText: sourceTitle });
+      const suggestedSource = sourceCard.getByRole('checkbox', { name: `使用资料：${sourceTitle}`, exact: true });
       await expect(suggestedSource).toBeVisible();
-      await expect(suggestedSource).toContainText('仅本人');
-      await expect(suggestedSource).toHaveAttribute('aria-pressed', 'false');
-      await suggestedSource.click();
-      await expect(suggestedSource).toHaveAttribute('aria-pressed', 'true');
+      await expect(sourceCard).toContainText('仅本人');
+      await expect(suggestedSource).not.toBeChecked();
+      await suggestedSource.check();
+      await expect(suggestedSource).toBeChecked();
       await page.getByRole('button', { name: '开始调研' }).click();
 
       await expect.poll(() => submitted).not.toBeNull();

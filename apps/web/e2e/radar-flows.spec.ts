@@ -61,7 +61,7 @@ test.describe('Radar flows', () => {
   });
 
   test('committed search state is reproducible after a second query and refresh', async ({ page }) => {
-    const radarResponse = await page.request.get('/api/radar?quality=collection&page=1&per_page=1');
+    const radarResponse = await page.request.get('/api/radar?quality=deep_read&page=1&per_page=1');
     expect(radarResponse.ok()).toBe(true);
     const radar = await radarResponse.json() as {
       items: Array<{ title: string }>;
@@ -70,7 +70,9 @@ test.describe('Radar flows', () => {
 
     const firstTitle = radar.items[0].title;
     const firstTerm = firstTitle.split(/\s+/u).find((word) => word.length >= 3) ?? firstTitle;
-    await page.goto('/radar');
+    // Use the same time/quality scope as the source query. The newest local
+    // fixture can be older than seven days; this test is about search state.
+    await page.goto('/radar?date=all');
     const search = page.getByRole('searchbox', { name: '搜索雷达内容' });
     await search.fill(firstTerm);
     await page.getByRole('button', { name: '搜索', exact: true }).click();
@@ -82,11 +84,11 @@ test.describe('Radar flows', () => {
     await page.getByRole('button', { name: '搜索', exact: true }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe(emptyTerm);
     await expect(page.locator('article')).toHaveCount(0);
-    await expect(page.getByText('暂无候选')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '当前筛选没有内容' })).toBeVisible();
 
     await page.reload();
     await expect(page.locator('article')).toHaveCount(0);
-    await expect(page.getByText('暂无候选')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '当前筛选没有内容' })).toBeVisible();
   });
 
   test('radar detail page returns 200 or 404 (depends on id existence)', async ({ page }) => {

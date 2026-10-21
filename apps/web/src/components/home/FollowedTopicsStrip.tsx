@@ -7,12 +7,15 @@
 
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { Flame, Pin, Sparkles, TrendingUp, type LucideIcon } from 'lucide-react';
+import { Flame, Inbox, Pin, Sparkles, TrendingUp, type LucideIcon } from 'lucide-react';
+import Box from '@mui/material/Box';
+import MaterialLink from '@mui/material/Link';
+import Skeleton from '@mui/material/Skeleton';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 
-import { EmptyState } from '@/components/EmptyState';
 import { SectionCard } from '@/components/domain/SectionCard';
-import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/skeleton';
+import { StatusBadge } from '@/components/domain/StatusBadge';
 
 interface FollowedTopic {
   followId: string;
@@ -33,10 +36,10 @@ interface FollowedTopicsResponse {
   items: FollowedTopic[];
 }
 
-const TIER_LABELS: Record<string, { label: string; cls: string; Icon: LucideIcon }> = {
-  hot: { label: '热门', cls: 'bg-status-failed-bg text-status-failed-fg', Icon: Flame },
-  warming: { label: '升温', cls: 'bg-status-running-bg text-status-running-fg', Icon: TrendingUp },
-  emerging: { label: '新出现', cls: 'bg-muted text-muted-foreground', Icon: Sparkles },
+const TIER_LABELS: Record<string, { label: string; Icon: LucideIcon }> = {
+  hot: { label: '热门', Icon: Flame },
+  warming: { label: '升温', Icon: TrendingUp },
+  emerging: { label: '新出现', Icon: Sparkles },
 };
 
 function formatTimeAgo(iso: string | null): string {
@@ -63,70 +66,75 @@ export function FollowedTopicsStrip() {
   const items = data?.items.slice(0, 5) ?? [];
 
   return (
-    <div className="mt-6">
+    <Box sx={{ mt: space.lg }}>
       <SectionCard
         title="我关注的主题"
         icon={Pin}
         actions={
-          <Link href="/topics" className="text-xs text-primary hover:underline">
+          <MaterialLink component={Link} href="/topics" underline="hover" color="primary.main" variant="metadata">
             全部主题 →
-          </Link>
+          </MaterialLink>
         }
-        bodyClassName="p-0"
+        bodySpacing="none"
       >
         {isLoading ? (
-          <div className="grid gap-2 p-4">
+          <Box sx={{ display: 'grid', gap: space.sm, p: space.md }}>
             {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-12 w-full" />
+              <Skeleton key={i} variant="rounded" width="100%" height={48} />
             ))}
-          </div>
+          </Box>
         ) : items.length === 0 ? (
-          <EmptyState
-            title="还没有关注任何主题"
-            description="在主题页点击「关注」即可在此显示。"
-            className="border-0 bg-transparent px-0 py-8"
-            action={
-              <Link href="/topics" className="text-sm text-primary hover:underline">
-                浏览主题 →
-              </Link>
-            }
-          />
+          <Box sx={{ display: 'grid', justifyItems: 'center', gap: space.sm, px: space.md, py: space.wide, textAlign: 'center' }}>
+            <Box component="span" sx={{ display: 'inline-flex', color: 'text.secondary' }}>
+              <Inbox aria-hidden="true" size={24} color="currentColor" />
+            </Box>
+            <Typography component="h3" variant="fieldTitle">还没有关注任何主题</Typography>
+            <Typography variant="body2" color="text.secondary">在主题页点击「关注」即可在此显示。</Typography>
+            <MaterialLink component={Link} href="/topics" underline="hover" color="primary.main" variant="body2">
+              浏览主题 →
+            </MaterialLink>
+          </Box>
         ) : (
-          <ul className="divide-y divide-border">
-            {items.map(({ topic }) => {
+          <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+            {items.map(({ topic }, index) => {
               const tier = TIER_LABELS[topic.tier] ?? TIER_LABELS.emerging;
               const Icon = tier.Icon;
               return (
-                <li key={topic.id}>
-                  <Link
+                <Box component="li" key={topic.id} sx={{ minWidth: 0 }}>
+                  <Box
+                    component={Link}
                     href={`/topics/${topic.slug}`}
-                    className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/30 sm:items-center"
+                    sx={{
+                      display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, gap: space.md,
+                      minWidth: 0, px: space.md, py: space.sm, color: 'inherit', textDecoration: 'none',
+                      borderBottom: index < items.length - 1 ? 1 : 0, borderColor: 'divider',
+                      transition: `background-color ${tokens['motion-fast']}`,
+                      '&:hover': { bgcolor: 'action.hover' },
+                      '&:hover h3': { color: 'primary.main' },
+                    }}
                   >
-                    <Badge className={tier.cls}>
-                      <Icon className="size-3" />
-                      {tier.label}
-                    </Badge>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-sm font-semibold leading-snug tracking-normal hover:text-primary">
+                    <StatusBadge kind="topicTier" value={topic.tier} label={tier.label} icon={<Icon aria-hidden="true" />} />
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography component="h3" variant="listTitle" noWrap sx={{ transition: `color ${tokens['motion-fast']}` }}>
                         {topic.name}
-                      </h3>
+                      </Typography>
                       {topic.summary ? (
-                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                        <Typography variant="metadata" color="text.secondary" sx={{ mt: space.xs, display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 1 }}>
                           {topic.summary}
-                        </p>
+                        </Typography>
                       ) : null}
-                      <p className="mt-1 font-mono text-xs text-muted-foreground">
+                      <Typography variant="metadata" color="text.secondary" sx={{ mt: space.xs, fontVariantNumeric: 'tabular-nums' }}>
                         {topic.candidateCount} 条相关内容 · {topic.sourceCount} 个采集渠道
                         {topic.lastSyncedAt ? ` · 更新 ${formatTimeAgo(topic.lastSyncedAt)}` : null}
-                      </p>
-                    </div>
-                  </Link>
-                </li>
+                      </Typography>
+                    </Box>
+                  </Box>
+                </Box>
               );
             })}
-          </ul>
+          </Box>
         )}
       </SectionCard>
-    </div>
+    </Box>
   );
 }

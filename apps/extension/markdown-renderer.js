@@ -232,10 +232,60 @@ function appendRichText(parent, value) {
   });
 }
 
-export function renderMarkdown(container, value) {
+// Structured answers arrive a JSON string fragment at a time. Decode only the
+// answer field so the stream never exposes the JSON envelope or partial escapes.
+export function streamingAnswerText(value) {
+  const text = String(value || '');
+  const field = text.match(/"(?:answer|translation)"\s*:\s*"/u);
+  if (!field) return /^\s*[\[{]/u.test(text) ? '' : text.trim();
+  let output = '';
+  for (let index = field.index + field[0].length; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '"') break;
+    if (character !== '\\') { output += character; continue; }
+    const escaped = text[++index];
+    if (!escaped) break;
+    if (escaped === 'u') {
+      const hex = text.slice(index + 1, index + 5);
+      if (!/^[\da-f]{4}$/iu.test(hex)) break;
+      output += String.fromCharCode(Number.parseInt(hex, 16));
+      index += 4;
+    } else output += ({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' })[escaped] ?? escaped;
+  }
+  return output;
+}
+
+export function completeStreamingMarkdown(value) {
+  let text = String(value || '');
+  // Incomplete link syntax should not flash URLs or formatting delimiters.
+  text = text.replace(/\[([^\]\n]*)\]\([^\)\n]*$/u, '$1');
+  text = text.replace(/(?:^|\n)\s*#{1,6}\s*$/u, '');
+  text = text.replace(/(?:^|\n)[\t ]*(?:[-+*]|\d+[.)])[\t ]*$/u, '');
+  const fences = text.match(/^\s*```/gmu) || [];
+  if (fences.length % 2) return text;
+  const lastLineStart = text.lastIndexOf('\n') + 1;
+  let line = text.slice(lastLineStart);
+  for (const marker of ['`', '**', '__', '~~', '*', '_']) {
+    const matches = [];
+    for (let index = 0; index < line.length; index += 1) {
+      if (!line.startsWith(marker, index) || line[index - 1] === '\\' || line[index - 1] === marker[0] || line[index + marker.length] === marker[0]) continue;
+      if (marker === '_' && /[\p{L}\p{N}]/u.test(line[index - 1] || '') && /[\p{L}\p{N}]/u.test(line[index + 1] || '')) continue;
+      matches.push({ index });
+      index += marker.length - 1;
+    }
+    if (matches.length % 2) {
+      const last = matches.at(-1);
+      if (!line.slice(last.index + marker.length).trim()) line = line.slice(0, last.index);
+      else line += marker;
+    }
+  }
+  return text.slice(0, lastLineStart) + line;
+}
+
+export function renderMarkdown(container, value, { streaming = false } = {}) {
   if (!container) return;
-  container.textContent = '';
-  parseMarkdownBlocks(value).forEach((block) => {
+  const fragment = document.createDocumentFragment();
+  parseMarkdownBlocks(streaming ? completeStreamingMarkdown(value) : value).forEach((block) => {
     let node;
     if (block.type === 'heading') {
       node = document.createElement(`h${Math.min(6, block.level + 2)}`);
@@ -308,6 +358,15 @@ export function renderMarkdown(container, value) {
       node.className = 'reader-markdown-paragraph';
       appendRichText(node, block.content);
     }
-    container.appendChild(node);
+    fragment.appendChild(node);
   });
+  // Keep completed blocks mounted during streaming. Rebuilding the whole
+  // response on every delta causes visible jumps and destroys text selection.
+  const next = [...fragment.childNodes];
+  next.forEach((node, index) => {
+    const existing = container.childNodes[index];
+    if (!existing) container.appendChild(node);
+    else if (!existing.isEqualNode(node)) container.replaceChild(node, existing);
+  });
+  while (container.childNodes.length > next.length) container.lastChild.remove();
 }

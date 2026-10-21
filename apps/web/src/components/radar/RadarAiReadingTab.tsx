@@ -69,7 +69,7 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
       {guide.summary ? (
         <section aria-labelledby="radar-guide-summary" className="rounded-md border border-[var(--ink-accent)]/20 bg-[var(--ink-accent)]/[0.07] px-4 py-4">
           <h3 id="radar-guide-summary" className="mb-2 font-sans text-xs font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">一句话判断</h3>
-          <p className="font-serif text-base leading-7 text-[var(--ink-text)]">{guide.summary}</p>
+          <p className="text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)]">{guide.summary}</p>
         </section>
       ) : null}
 
@@ -80,18 +80,18 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
             {guide.outline.map((item, i) => (
               <div
                 key={`${item.heading ?? 'section'}-${i}`}
-                className="flex gap-3 rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-3 py-2.5 transition-colors hover:bg-[var(--ink-accent)]/[0.05]"
+                className="flex gap-3 rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-3 py-3 transition-colors hover:bg-[var(--ink-accent)]/[0.05]"
               >
                 <span className="mt-0.5 font-mono text-xs text-[var(--ink-accent)]">{String(i + 1).padStart(2, '0')}</span>
                 <div className="min-w-0">
                   <div className="font-sans text-xs font-semibold text-[var(--ink-text)]">{item.heading || `部分 ${i + 1}`}</div>
-                  {item.takeaway ? <p className="mt-1 font-serif text-xs leading-5 text-[var(--ink-muted)]">{item.takeaway}</p> : null}
+                  {item.takeaway ? <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">{item.takeaway}</p> : null}
                   {item.quote ? (
                     <button
                       type="button"
                       onClick={() => onHighlightClick?.(item.quote!, item.sourceBlockIndex, guide.outline?.length)}
                       aria-label={`跳到原文:${item.heading ?? `部分 ${i + 1}`}`}
-                      className="mt-1 inline-flex items-center gap-0.5 text-xs text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
+                      className="mt-1 inline-flex items-center gap-1 text-xs text-[var(--ink-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40"
                     >
                       <Crosshair className="size-3" aria-hidden />
                       查看原文
@@ -109,11 +109,11 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
           <SectionHeading>关键观点</SectionHeading>
           <div id="radar-guide-takeaways" className="space-y-2">
             {visibleTakeaways.map((item, i) => (
-              <article key={`${item.claim ?? 'takeaway'}-${i}`} className="rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-3.5 py-3">
+              <article key={`${item.claim ?? 'takeaway'}-${i}`} className="rounded-md border border-[var(--ink-rule)] bg-[var(--ink-page)] px-3 py-3">
                 <div className="flex gap-2">
                   <span className="mt-0.5 shrink-0 font-mono text-xs text-[var(--ink-accent)]">{String(i + 1).padStart(2, '0')}</span>
                   <div className="min-w-0">
-                    <p className="font-serif text-sm leading-6 text-[var(--ink-text)]">{item.claim || '未提供明确观点。'}</p>
+                    <p className="text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-[var(--ink-text)]">{item.claim || '未提供明确观点。'}</p>
                     {item.whyItMatters ? <p className="mt-1 text-xs leading-5 text-[var(--ink-muted)]">为什么重要：{item.whyItMatters}</p> : null}
                   </div>
                 </div>
@@ -137,7 +137,7 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
       {guide.implications?.length ? (
         <section>
           <SectionHeading>可能的应用影响</SectionHeading>
-          <ul className="rounded-md border border-status-succeeded-border/70 bg-status-succeeded-bg px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
+          <ul className="rounded-md border border-status-succeeded-border/70 bg-status-succeeded-bg px-4 py-3 text-sm leading-6 text-[var(--ink-muted)]">
             {guide.implications.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-status-succeeded-fg">{item}</li>)}
           </ul>
         </section>
@@ -145,19 +145,19 @@ export function RadarAiReadingTab({ guide, onHighlightClick }: RadarAiReadingTab
 
       <div className="mt-6 border-t border-[var(--ink-rule)] pt-2">
         <CollapsibleSection title="风险与限制" count={caveats.length}>
-          <ul className="rounded-md border border-warning-border/80 bg-warning-bg px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
+          <ul className="rounded-md border border-warning-border/80 bg-warning-bg px-4 py-3 text-sm leading-6 text-[var(--ink-muted)]">
             {caveats.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-warning-fg">{item}</li>)}
           </ul>
         </CollapsibleSection>
         <CollapsibleSection title="待验证问题" count={guide.openQuestions?.length ?? 0}>
-          <ul className="rounded-md border border-status-running-border/70 bg-status-running-bg px-4 py-3 font-serif text-sm leading-6 text-[var(--ink-muted)]">
+          <ul className="rounded-md border border-status-running-border/70 bg-status-running-bg px-4 py-3 text-sm leading-6 text-[var(--ink-muted)]">
             {guide.openQuestions?.map((item, i) => <li key={`${item}-${i}`} className="mb-1.5 last:mb-0 pl-1 marker:text-status-running-fg">{item}</li>)}
           </ul>
         </CollapsibleSection>
         <CollapsibleSection title="值得回看的原文摘录" count={guide.highlights?.length ?? 0}>
           <div className="space-y-2">
             {guide.highlights?.map((item, i) => (
-              <button key={`${item.quote ?? 'quote'}-${i}`} type="button" onClick={() => onHighlightClick?.(item.quote ?? '')} className="block w-full border-l-2 border-[var(--ink-accent)] bg-[var(--ink-page)] px-3.5 py-3 text-left font-serif text-[13px] leading-6 text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40">
+              <button key={`${item.quote ?? 'quote'}-${i}`} type="button" onClick={() => onHighlightClick?.(item.quote ?? '')} className="block w-full border-l-2 border-[var(--ink-accent)] bg-[var(--ink-page)] px-3 py-3 text-left text-[length:var(--dr-type-label)] leading-[var(--dr-line-height-body)] text-[var(--ink-muted)] hover:bg-[var(--ink-paper)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40">
                 <span className="mb-1 block font-sans text-xs font-semibold uppercase tracking-[0.08em] text-[var(--ink-accent)]">原文摘录 · {i + 1}</span>
                 <span className="font-semibold text-[var(--ink-text)]">{item.quote}</span>
                 {item.rationale ? <span className="mt-0.5 block text-xs text-[var(--ink-faint)]">{item.rationale}</span> : null}

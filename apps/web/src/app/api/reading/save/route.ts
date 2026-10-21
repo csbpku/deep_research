@@ -10,6 +10,7 @@ import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import { requireReadingUser } from '../../../../lib/reading-auth';
 import { readingKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../../lib/personal-knowledge-index';
+import { attachRadarTopics, knowledgePageUrl, previousReadingJudgments, readingRadarOrigin } from '../../../../lib/knowledge-provenance';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +20,10 @@ const saveReading = apiHandler<[NextRequest]>(async (req) => {
   if (user instanceof Response) return user;
   const input = await parseBody(req, ReadingSaveInputSchema);
   if (input instanceof NextResponse) return input;
+  const radar = input.radarSummaryId ? await readingRadarOrigin(input.radarSummaryId, input.url) : null;
+  if (input.radarSummaryId && !radar) {
+    return toApiErrorResponse({ code: 'VALIDATION_FAILED', message: '雷达来源与当前网页不匹配或已不可用', requestId });
+  }
   if (!input.quote.trim() && !input.note.trim() && !input.aiAnswer?.trim()) {
       return toApiErrorResponse({ code: 'VALIDATION_FAILED', message: '至少保存一段摘录、笔记或 AI 结论', requestId });
   }
@@ -59,6 +64,7 @@ const saveReading = apiHandler<[NextRequest]>(async (req) => {
     value: input.url,
     anchor: input.anchor ?? null,
     capturedAt: new Date().toISOString(),
+    ...(radar ? { radarSummaryId: radar.id } : {}),
   } satisfies Prisma.InputJsonValue;
 
   if (req.method === 'PUT') {
@@ -66,11 +72,20 @@ const saveReading = apiHandler<[NextRequest]>(async (req) => {
       return toApiErrorResponse({ code: 'VALIDATION_FAILED', message: '更新收藏需要原保存标识', requestId });
     }
     const updated = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM researches
+        WHERE "authorId" = ${user.id}::uuid AND "readingSaveKey" = ${readingSaveKey}::uuid
+          AND type = 'knowledge' AND status = 'draft' FOR UPDATE`;
       const existing = await tx.research.findFirst({
         where: { authorId: user.id, readingSaveKey, type: 'knowledge', status: 'draft' },
-        select: { id: true, researchSources: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true } } },
+        select: { id: true, researchSources: { orderBy: { createdAt: 'asc' }, take: 1, select: { id: true, canonicalKey: true, sourceRef: true } } },
       });
       if (!existing) return null;
+      const originalSource = existing.researchSources[0];
+      if (originalSource?.canonicalKey && knowledgePageUrl(originalSource.canonicalKey) !== knowledgePageUrl(input.url)) return null;
+      const originalRef = originalSource?.sourceRef;
+      const priorRadar = originalRef && typeof originalRef === 'object' && !Array.isArray(originalRef)
+        && typeof originalRef.radarSummaryId === 'string' ? originalRef.radarSummaryId : null;
+      if (radar && priorRadar && radar.id !== priorRadar) return null;
       // Check ownership and draft state again in the mutation, including races
       // with publishing. A reading token must never edit published research.
       const changed = await tx.research.updateMany({
@@ -78,13 +93,13 @@ const saveReading = apiHandler<[NextRequest]>(async (req) => {
         data: { title: input.title, body, conclusion, knowledgeIndexText, tags: input.tags, aiAssisted: Boolean(input.aiAnswer?.trim()) },
       });
       if (!changed.count) return null;
-      const originalSource = existing.researchSources[0];
       if (originalSource) {
         await tx.researchSource.updateMany({
           where: { id: originalSource.id, researchId: existing.id },
-          data: { sourceRef, canonicalKey: input.url, title: input.title, description: input.quote.slice(0, 1_000) },
+          data: { sourceRef: { ...sourceRef, ...(priorRadar ? { radarSummaryId: priorRadar } : {}) }, canonicalKey: input.url, title: input.title, description: input.quote.slice(0, 1_000) },
         });
       }
+      if (radar) await attachRadarTopics(tx, existing.id, radar.id);
       await queuePersonalKnowledgeIndex(tx, {
         ownerId: user.id, researchId: existing.id, operation: knowledgeIndexText ? 'upsert' : 'delete',
       });
@@ -132,6 +147,7 @@ const saveReading = apiHandler<[NextRequest]>(async (req) => {
           description: input.quote.slice(0, 1_000),
         },
       });
+      if (radar) await attachRadarTopics(tx, research.id, radar.id);
       if (knowledgeIndexText) {
         await queuePersonalKnowledgeIndex(tx, {
           ownerId: user.id,
@@ -172,3 +188,15 @@ const saveReading = apiHandler<[NextRequest]>(async (req) => {
 
 export const POST = saveReading;
 export const PUT = saveReading;
+
+export const GET = apiHandler<[NextRequest]>(async req => {
+  const user = await requireReadingUser(req);
+  if (user instanceof Response) return user;
+  const url = new URL(req.url).searchParams.get('url') ?? '';
+  if (url.length > 2048 || !knowledgePageUrl(url)) {
+    return toApiErrorResponse({ code: 'VALIDATION_FAILED', message: '网页地址无效', requestId: withRequestId(req.headers) });
+  }
+  return NextResponse.json({ items: await previousReadingJudgments(user.id, url) }, {
+    headers: { 'cache-control': 'private, no-store' },
+  });
+});

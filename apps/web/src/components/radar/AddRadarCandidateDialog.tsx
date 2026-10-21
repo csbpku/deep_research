@@ -9,13 +9,22 @@
 //   - 文件大小、扩展名、MIME 由 BFF 二次校验；前端仅给基础提示。
 
 import { useState, useRef } from 'react';
+import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, FileUp, Link as LinkIcon, Loader2, RotateCcw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileUp, Link as LinkIcon, RotateCcw } from 'lucide-react';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import CircularProgress from '@mui/material/CircularProgress';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
+import Typography from '@mui/material/Typography';
 
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
+import { AppButton } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
+import { AppTextField } from '@/components/material/AppTextField';
 
 const ACCEPTED_MIME = 'application/pdf,text/markdown,text/x-markdown,text/html,text/plain,.pdf,.md,.markdown,.html,.htm,.txt';
 const MAX_FILE_MB = 10;
@@ -53,15 +62,15 @@ const STATUS_LABELS: Record<string, string> = {
   failed: '失败',
 };
 
-const STATUS_TONE: Record<string, string> = {
-  received: 'bg-muted text-muted-foreground',
-  type_detected: 'bg-muted text-muted-foreground',
-  extracting: 'bg-status-running-bg text-status-running-fg',
-  scoring: 'bg-status-running-bg text-status-running-fg',
-  enriching: 'bg-status-running-bg text-status-running-fg',
-  completed: 'bg-status-succeeded-bg text-status-succeeded-fg',
-  duplicate: 'bg-status-partial-bg text-status-partial-fg',
-  failed: 'bg-status-failed-bg text-status-failed-fg',
+const STATUS_COLOR: Record<string, 'default' | 'info' | 'success' | 'warning' | 'error'> = {
+  received: 'default',
+  type_detected: 'default',
+  extracting: 'info',
+  scoring: 'info',
+  enriching: 'info',
+  completed: 'success',
+  duplicate: 'warning',
+  failed: 'error',
 };
 
 export function AddRadarCandidateDialog() {
@@ -125,96 +134,92 @@ export function AddRadarCandidateDialog() {
 
   return (
     <>
-      <Button type="button" onClick={() => setOpen(true)} variant="default" size="sm">
-        <LinkIcon className="size-4" />
+      <AppButton type="button" onClick={() => setOpen(true)} variant="contained" size="small" startIcon={<LinkIcon />}>
         添加内容
-      </Button>
+      </AppButton>
       {open ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setOpen(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="添加雷达内容"
-        >
-          <div
-            className="w-full max-w-xl rounded-lg border border-border bg-card p-4 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <header className="mb-3 flex items-center justify-between">
-              <h2 className="text-base font-semibold">添加雷达内容</h2>
-              <Button type="button" variant="ghost" size="xs" onClick={() => setOpen(false)}>
-                关闭
-              </Button>
-            </header>
+        <AppDialog open onClose={() => setOpen(false)} title="添加雷达内容">
+          <Stack spacing={2}>
+            <Tabs value={tab} onChange={(_, value: 'url' | 'file') => setTab(value)} aria-label="添加内容类型">
+              <Tab value="url" icon={<LinkIcon size={16} />} iconPosition="start" label="URL 链接" />
+              <Tab value="file" icon={<FileUp size={16} />} iconPosition="start" label="文件" />
+            </Tabs>
 
-            <Tabs value={tab} onValueChange={(v) => setTab(v as 'url' | 'file')}>
-              <TabsList>
-                <TabsTrigger value="url">
-                  <LinkIcon className="size-3" />
-                  URL 链接
-                </TabsTrigger>
-                <TabsTrigger value="file">
-                  <FileUp className="size-3" />
-                  文件
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="url" className="space-y-2">
-                <p className="text-xs text-muted-foreground">
+            {tab === 'url' ? (
+              <Stack spacing={2}>
+                <Typography variant="body2" color="text.secondary">
                   支持 GitHub 仓库 / Issue / PR / Release、arXiv、普通文章链接。
-                </p>
-                <Input
+                </Typography>
+                <AppTextField
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://github.com/owner/repo"
                   aria-label="雷达内容 URL"
                 />
-                <Button
+                <AppButton
                   type="button"
-                  size="sm"
+                  size="small"
+                  variant="contained"
                   disabled={!url || submitUrlMut.isPending}
+                  startIcon={submitUrlMut.isPending ? <CircularProgress size={16} color="inherit" /> : <LinkIcon />}
                   onClick={() => submitUrlMut.mutate(url)}
                 >
-                  {submitUrlMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <LinkIcon className="size-4" />}
                   提交
-                </Button>
-              </TabsContent>
-
-              <TabsContent value="file" className="space-y-2">
-                <p className="text-xs text-muted-foreground">
+                </AppButton>
+              </Stack>
+            ) : (
+              <Stack spacing={2}>
+                <Typography variant="body2" color="text.secondary">
                   支持 PDF / Markdown / HTML / TXT；单文件 ≤ {MAX_FILE_MB} MB。
-                </p>
-                <input
+                </Typography>
+                <Box
+                  component="input"
                   ref={fileInputRef}
                   type="file"
                   accept={ACCEPTED_MIME}
                   onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                  className="block w-full text-sm"
                   aria-label="雷达内容文件"
+                  sx={{
+                    width: '100%',
+                    color: 'text.secondary',
+                    font: 'inherit',
+                    '&::file-selector-button': {
+                      minHeight: 36,
+                      mr: 1.5,
+                      px: 1.5,
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                      bgcolor: 'background.paper',
+                      color: 'text.primary',
+                      font: 'inherit',
+                      cursor: 'pointer',
+                    },
+                    '@media (pointer: coarse)': { '&::file-selector-button': { minHeight: 44 } },
+                  }}
                 />
-                <Button
+                <AppButton
                   type="button"
-                  size="sm"
+                  size="small"
+                  variant="contained"
                   disabled={!file || submitFileMut.isPending}
+                  startIcon={submitFileMut.isPending ? <CircularProgress size={16} color="inherit" /> : <FileUp />}
                   onClick={() => file && submitFileMut.mutate(file)}
                 >
-                  {submitFileMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}
                   上传
-                </Button>
-              </TabsContent>
-            </Tabs>
+                </AppButton>
+              </Stack>
+            )}
 
             {error ? (
-              <p className="mt-3 flex items-center gap-1.5 text-xs text-destructive" role="alert">
-                <AlertTriangle className="size-3" />
+              <Alert severity="error" icon={<AlertTriangle size={18} />} role="alert">
                 {error}
-              </p>
+              </Alert>
             ) : null}
 
             <SubmissionsHistory onRetry={(id) => retryMut.mutate(id)} retrying={retryMut.isPending} />
-          </div>
-        </div>
+          </Stack>
+        </AppDialog>
       ) : null}
     </>
   );
@@ -232,57 +237,62 @@ function SubmissionsHistory({ onRetry, retrying }: { onRetry: (id: string) => vo
   });
 
   const items = q.data?.items ?? [];
-  if (q.isLoading) return <p className="mt-4 text-xs text-muted-foreground">加载中…</p>;
+  if (q.isLoading) return <Typography variant="metadata" color="text.secondary">加载中…</Typography>;
   if (items.length === 0) {
-    return <p className="mt-4 text-xs text-muted-foreground">还没有提交记录。</p>;
+    return <Typography variant="metadata" color="text.secondary">还没有提交记录。</Typography>;
   }
 
   return (
-    <div className="mt-4">
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">处理回执</h3>
-      <ul className="grid list-none gap-2 p-0">
+    <Box sx={{ mt: 1 }}>
+      <Typography variant="fieldTitle" component="h3" sx={{ mb: 1, color: 'text.secondary' }}>处理回执</Typography>
+      <Stack component="ul" spacing={1} sx={{ listStyle: 'none', m: 0, p: 0 }}>
         {items.map((s) => {
           const label = s.detectedKind ?? s.canonicalUrl ?? s.rawInput;
           return (
-            <li key={s.id} className="rounded border border-border bg-background p-2.5 text-xs">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge className={STATUS_TONE[s.status] ?? 'bg-muted text-muted-foreground'}>
-                  {STATUS_LABELS[s.status] ?? s.status}
-                </Badge>
-                <span className="font-mono text-xs text-muted-foreground">
+            <Paper component="li" key={s.id} variant="outlined" sx={{ p: 1.5, listStyle: 'none' }}>
+              <Stack direction="row" useFlexGap spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                <Chip
+                  size="small"
+                  color={STATUS_COLOR[s.status] ?? 'default'}
+                  label={STATUS_LABELS[s.status] ?? s.status}
+                />
+                <Typography variant="metadata" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
                   {s.id.slice(0, 8)}…
-                </span>
+                </Typography>
                 {s.status === 'completed' && s.summaryId ? (
-                  <a
+                  <AppButton
+                    component={Link}
                     href={`/radar/${s.summaryId}`}
-                    className="ml-auto inline-flex items-center gap-0.5 text-primary hover:underline"
+                    variant="text"
+                    size="small"
+                    sx={{ ml: 'auto' }}
+                    startIcon={<CheckCircle2 />}
                   >
-                    <CheckCircle2 className="size-3" />
                     打开雷达内容
-                  </a>
+                  </AppButton>
                 ) : null}
                 {s.status === 'failed' ? (
-                  <Button
+                  <AppButton
                     type="button"
-                    size="xs"
-                    variant="outline"
-                    className="ml-auto"
+                    size="small"
+                    variant="outlined"
+                    sx={{ ml: 'auto' }}
                     disabled={retrying}
+                    startIcon={<RotateCcw />}
                     onClick={() => onRetry(s.id)}
                   >
-                    <RotateCcw className="size-3" />
                     重试
-                  </Button>
+                  </AppButton>
                 ) : null}
-              </div>
-              <p className="mt-1 truncate text-foreground">{label}</p>
+              </Stack>
+              <Typography variant="metadata" sx={{ mt: 0.5, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</Typography>
               {s.errorMessage ? (
-                <p className="mt-0.5 text-destructive">{s.errorMessage}</p>
+                <Typography variant="metadata" color="error.main" sx={{ mt: 0.5, display: 'block' }}>{s.errorMessage}</Typography>
               ) : null}
-            </li>
+            </Paper>
           );
         })}
-      </ul>
-    </div>
+      </Stack>
+    </Box>
   );
 }

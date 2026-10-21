@@ -9,8 +9,8 @@ Admin-only `POST /api/admin/radar/governance` accepts `mode` (`preview`, `report
 supplies the session identity; the internal engine checks the real database Admin
 and batch owner again. Existing single-item governance remains available.
 
-This batch API changes no schema and performs no physical deletion. The separate
-opt-in continuous repair command below supports confirmed-noise deletion.
+This batch API changes no schema and performs no physical deletion. Separate
+Admin maintenance commands support confirmed-noise and unavailable-source disposal.
 Preview fixes a server-owned
 inventory, evidence, protections, before/after fields and timestamps. Duplicate
 titles are review suggestions only. Apply uses at most 100 operations per atomic
@@ -91,6 +91,42 @@ source, allowing only layout whitespace differences. Invalid/missing evidence,
 invalid JSON or short summaries remain explicit failures. A completion checkpoint
 is accepted only while a valid score and usable summary/judgement are present.
 
+Length alone does not establish a usable brief. Sync, repair and the quality
+audit recognize explicit source-unavailable responses and summaries inferred
+only from a title. They preserve useful abstracts and honest limitations.
+Repair replaces only missing/placeholder fields and rejects another refusal as
+`MODEL_SUMMARY_INVALID`; sync records `REPAIR_SUMMARY_UNAVAILABLE` for follow-up
+instead of persisting the refusal as successful interpretation.
+
+Automatic all-zero handling remains unresolved. A separate internal Admin
+operation may explicitly review a readable, seven-zero assessment as noise
+without manufacturing nonzero dimensions or changing public score gates. The
+`reviewed_zero_noise_v1` proof requires a null existing score, current rubric,
+no hard veto, a grounded weakness quote, live source hash, unchanged row
+fingerprint/updatedAt, a reasoned review decision and a successful scoring usage
+event. Deletion uses the same real-Admin check, reference locks, archive,
+transactional audit and conditional restore as other noise dispositions. It is
+not a new public or automatic deletion endpoint.
+
+Generic HTML repair first reads at most 2 MB. Only a size-limit failure permits
+one further read up to 8 MB/15 seconds with the same host, redirect and SSRF
+constraints; the entire source phase has a 55-second deadline. Larger reads and
+18,000-character extracts are explicitly labelled partial source evidence, never
+as a full-source or all-chunks review. Generic article selection prefers the
+article/main containing the page heading and avoids unrelated recommendation
+cards. A recognized robot challenge fails before a model call. Cached originals
+are eligible only with ready reader status and exact byte count/SHA-256; other
+caches remain preserved while the live source is checked.
+
+Scoring distinguishes malformed dimensions (`MODEL_SCORE_FORMAT`), title mismatch
+(`MODEL_TITLE_MISMATCH`), safety veto (`MODEL_UNSAFE_VETO`) and actual seven-zero
+output (`MODEL_UNASSESSABLE`). Vetoes and unassessable results stop automatic model
+retries until new evidence or a corrected request justifies an audited requeue.
+None of these model failures establishes noise or source unavailability. A
+publication URL correction requires verified original identity, an unchanged-row
+check and an Admin audit retaining the old URL; it preserves the content ID,
+existing valid scores and historical source evidence.
+
 GitHub repository evidence prefers the README API. API rate limiting cools that
 API for one hour within the running worker while allowing same-repository public
 raw `HEAD/README.md`, `README.rst`, or `README` reads. Both hosts use bounded safe
@@ -116,10 +152,23 @@ without being mistaken for a fetch failure. Leading error pages, HTML shells and
 other challenge markers are still rejected; generic HTML and cached content keep
 their existing checks. This exception never rewrites the evidence text.
 
+Explicit `.pdf` source URLs use a per-request PDF opt-in in the SSRF-safe fetcher,
+with the exact original host/URL, zero redirects, PDF MIME and magic verification,
+and a 12 MiB/25-second fetch cap. Generic fetches retain their text-only defaults.
+Extraction runs in a credential-free child process with a 12-second wall deadline,
+6 CPU seconds, 512 MiB address-space limit on Linux, at most 80 pages and 200,000
+characters. The scoring input remains at most 18,000 characters; truncation or a
+page without extractable text never proves complete evidence. Damaged, encrypted,
+scanned and extraction-limit failures have explicit terminal reasons. Neither PDF
+bytes nor extracted body is stored. Exhausted historical failures require a
+verified new source preflight and audited Admin requeue; deployment alone does
+not reset a budget.
+
 The owner's standing policy `current_valid_noise_v1` disposes automatic radar
 with a current, valid, non-default, non-zero seven-dimension noise score. Source
 fetch failures, excerpts and missing quotations do not block deletion. Missing,
 invalid and legacy scores remain reviewable; fetch failure alone is not noise.
+The owner's separate unavailable-source authorization below does not require a noise score.
 Existing valid scores are preserved rather than replaced to force eligibility.
 
 New sync skips unreferenced confirmed noise before inserting into `summaries`.
@@ -145,6 +194,48 @@ python -m scripts.purge_scored_noise preview --actor <admin> --state-dir <new-pr
 python -m scripts.purge_scored_noise apply --actor <admin> --state-dir <same-path> --limit 10
 python -m scripts.purge_scored_noise apply --actor <admin> --state-dir <same-path> --limit 100
 ```
+
+### Incomplete radar with unavailable sources
+
+`incomplete_source_unavailable_v1` is a separate owner-authorized Admin maintenance
+policy for automatic radar still missing a valid score or usable brief. It requires
+a source-only preflight within 24 hours, a matching full-row fingerprint and
+`updatedAt`, and historical source failures tied to that same row version. Historical
+attempts must be blocked, or already failed at least three times during backoff.
+The latest observation must confirm access denial/payment/authentication, missing
+content, unsafe access, unusable text or supported-document failure. A timeout
+requires three historical timeouts or two separately timestamped fresh timeouts.
+Model failures, rate limits, oversized responses and unverified README paths remain
+ineligible. Complete rows and approved/manual shares are outside this policy.
+
+```sh
+python -m scripts.purge_unavailable_radar preview --actor <admin> --state-dir <new-private-path> --inspection <private-source-preflight.json>
+python -m scripts.purge_unavailable_radar apply --actor <admin> --state-dir <same-path> --limit 10
+python -m scripts.purge_unavailable_radar apply --actor <admin> --state-dir <same-path> --limit 100
+```
+
+This command makes no source/model calls. It reuses the verified backup, real Admin,
+reference-table locks, same-transaction audit, full-row archive, CAS and committed
+checkpoint safeguards. `radar_source_unavailable_delete` records the original score
+and failure evidence without asserting noise. Restore accepts only the matching
+archive hash and committed audit, rejects later ID/URL conflicts and records
+`radar_source_unavailable_restore`.
+
+Source disposal retains its narrowly scoped diagnostics in the database. Historical
+rows stay unchanged; pending rows become dismissed because their content was disposed,
+not because scoring succeeded. `radar_source_diagnostics_preserve` records old states,
+timestamps, archive hash and post-change full-row fingerprints in the same transaction.
+The Admin-only maintenance core `retain_deleted_diagnostics` can recover diagnostics
+from an already committed legacy source-disposal archive, without restoring content
+or invoking a model. It rejects changed diagnostic rows and reconciles repeated work
+using the committed audit. Recovery and content restore share a per-content transaction
+lock. Content restore checks the retained full-row fingerprints before restoring the
+original diagnostic states; any later diagnostic edit causes `RESTORE_CONFLICT` and
+rolls back the whole restore. It never overwrites subsequent changes.
+
+Sync respects both deletion policies for the same source/URL/publication identity;
+an audited restore or a new publication permits normal discovery again. Unavailable
+source disposal is explicit maintenance, not unconditional future-source deletion.
 
 Preview fixes row fingerprints, timestamps, scores and protection reasons. Changed
 rows are skipped. Execution loads full rows individually and reuses Admin checks,
@@ -210,7 +301,6 @@ formal deploys update the worker to the same immutable image. Its restart policy
 and checkpoint survive host/container replacement; main `--remove-orphans` cannot
 remove the independent project. Inspect each unresolved item and public/referenced
 paths before claiming that the backlog is cleared.
-
 
 # Unified external reading and scoring (5.1)
 

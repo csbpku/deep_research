@@ -85,7 +85,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string; ver
     const diff = computeDiff(current, next);
     const contentChanged = Object.keys(diff).length > 0;
     const knowledgeIndexText = research.type === 'knowledge'
-      ? research.readingSaveKey
+      ? research.readingSaveKey && research.creationMethod === 'manual'
         ? readingKnowledgeIndexTextFromBody(next.body)
         : confirmedKnowledgeIndexText(next)
       : undefined;

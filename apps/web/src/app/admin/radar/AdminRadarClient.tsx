@@ -7,6 +7,7 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, MoreHorizontal, RotateCcw, Workflow, X } from 'lucide-react';
+import { Alert, Box, Checkbox, Stack, Typography } from '@mui/material';
 
 import { EmptyState } from '@/components/EmptyState';
 import { RadarCandidateCard } from '@/components/radar/RadarCandidateCard';
@@ -15,25 +16,27 @@ import type { RadarFeedbackCounts } from '@/components/radar/RadarFeedbackBar';
 import { FilterBar } from '@/components/domain/FilterBar';
 import { PageHeader } from '@/components/domain/PageHeader';
 import { Pagination } from '@/components/domain/Pagination';
-import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
 import { AdminActionDialog } from '@/components/admin/AdminActionDialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { AppButton } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
+  Button,
+  Skeleton,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../AdminMaterial';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 import type { DistilledScore } from '@deep-research/shared/schemas';
+import { summarizeAdminBulkResults } from '../admin-bulk-results';
+import styles from '../admin.module.css';
 
 interface RadarCandidateListItem {
   id: string;
@@ -100,8 +103,9 @@ export default function AdminRadarClient() {
   const [sourceType, setSourceType] = useState(ALL_SOURCES);
   const [queue, setQueue] = useState<Queue>(ALL_QUEUES);
   const [page, setPage] = useState(1);
-  const [actionErr, setActionErr] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ severity: 'success' | 'warning' | 'error'; message: string } | null>(null);
   const [dismissing, setDismissing] = useState<{ id: string; title: string } | null>(null);
+  const [confirmingBulkDismiss, setConfirmingBulkDismiss] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const query = useQuery<RadarListResponse>({
@@ -139,12 +143,10 @@ export default function AdminRadarClient() {
       return r.json();
     },
     onSuccess: () => {
-      setActionErr(null);
+      setActionFeedback({ severity: 'success', message: '雷达条目已屏蔽' });
       void queryClient.invalidateQueries({ queryKey: ['adminRadar'] });
     },
-    onError: (e) => {
-      setActionErr(e instanceof Error ? e.message : '屏蔽失败');
-    },
+    onError: (e) => setActionFeedback({ severity: 'error', message: e instanceof Error ? e.message : '屏蔽失败' }),
   });
 
   const createResearchMutation = useMutation({
@@ -157,13 +159,11 @@ export default function AdminRadarClient() {
       return r.json();
     },
     onSuccess: (data) => {
-      setActionErr(null);
+      setActionFeedback({ severity: 'success', message: '已创建 AI 调研草稿' });
       const researchId = (data as { research?: { id?: string } }).research?.id;
       if (researchId) router.push(`/researches/${researchId}/edit`);
     },
-    onError: (e) => {
-      setActionErr(e instanceof Error ? e.message : '创建调研失败');
-    },
+    onError: (e) => setActionFeedback({ severity: 'error', message: e instanceof Error ? e.message : '创建调研失败' }),
   });
 
   const restoreMutation = useMutation({
@@ -176,12 +176,10 @@ export default function AdminRadarClient() {
       return r.json();
     },
     onSuccess: () => {
-      setActionErr(null);
+      setActionFeedback({ severity: 'success', message: '雷达条目已恢复' });
       void queryClient.invalidateQueries({ queryKey: ['adminRadar'] });
     },
-    onError: (e) => {
-      setActionErr(e instanceof Error ? e.message : '恢复失败');
-    },
+    onError: (e) => setActionFeedback({ severity: 'error', message: e instanceof Error ? e.message : '恢复失败' }),
   });
 
   const items = query.data?.items ?? [];
@@ -197,22 +195,24 @@ export default function AdminRadarClient() {
 
   const bulkActionMutation = useMutation({
     mutationFn: async (action: 'dismiss' | 'restore') => {
-      const responses = await Promise.all(
-        selectedIds.map((id) => fetch(`/api/admin/radar/${id}/${action}`, { method: 'POST' })),
-      );
-      const failed = responses.find((response) => !response.ok);
-      if (failed) {
-        const body = await failed.json().catch(() => ({}));
-        throw new Error((body as { message?: string }).message ?? '批量操作失败');
-      }
-      return selectedIds.length;
+      return Promise.all(selectedIds.map(async (id) => {
+        try {
+          const response = await fetch(`/api/admin/radar/${id}/${action}`, { method: 'POST' });
+          if (response.ok) return { id, ok: true };
+          const body = await response.json().catch(() => ({}));
+          return { id, ok: false, message: (body as { message?: string }).message ?? `HTTP ${response.status}` };
+        } catch (error) {
+          return { id, ok: false, message: error instanceof Error ? error.message : '网络请求失败' };
+        }
+      }));
     },
-    onSuccess: (count, action) => {
-      setSelectedIds([]);
-      setActionErr(`${count} 条内容已${action === 'dismiss' ? '屏蔽' : '恢复'}`);
+    onSuccess: (results, action) => {
+      const summary = summarizeAdminBulkResults(results, action === 'dismiss' ? '屏蔽' : '恢复');
+      setSelectedIds(summary.failedIds);
+      setActionFeedback({ severity: summary.failedIds.length ? 'warning' : 'success', message: summary.message });
       void queryClient.invalidateQueries({ queryKey: ['adminRadar'] });
     },
-    onError: (error) => setActionErr(error instanceof Error ? error.message : '批量操作失败'),
+    onError: (error) => setActionFeedback({ severity: 'error', message: error instanceof Error ? error.message : '批量操作失败' }),
   });
 
   useEffect(() => {
@@ -226,7 +226,7 @@ export default function AdminRadarClient() {
   }
 
   return (
-    <div className="mx-auto max-w-shell">
+    <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 1280 }}>
       <PageHeader
         title="Admin · 雷达治理"
         description="按需巡检和屏蔽无关内容，或从高价值信号创建调研；雷达内容无需逐条审批。"
@@ -293,22 +293,19 @@ export default function AdminRadarClient() {
       </FilterBar>
 
       {query.data ? (
-        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">
+        <Stack sx={{ mb: 1.5, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 1.5 }}>
+          <Typography variant="caption" color="text.primary" sx={{ fontWeight: 600 }}>
             {QUEUE_OPTIONS.find((option) => option.value === queue)?.label}
-          </span>
-          <span>当前页 {items.length} 条 / 共 {query.data.total} 条</span>
-          <span>按评分或风险信号优先排序</span>
-        </div>
+          </Typography>
+          <Typography variant="caption" color="text.secondary">当前页 {items.length} 条 / 共 {query.data.total} 条</Typography>
+          <Typography variant="caption" color="text.secondary">按评分或风险信号优先排序</Typography>
+        </Stack>
       ) : null}
 
-      {actionErr ? (
-        <div
-          role="alert"
-          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-sm text-destructive"
-        >
-          {actionErr}
-        </div>
+      {actionFeedback ? (
+        <Alert severity={actionFeedback.severity} role={actionFeedback.severity === 'error' ? 'alert' : 'status'} sx={{ mb: 1.5 }}>
+          {actionFeedback.message}
+        </Alert>
       ) : null}
 
       {query.isLoading ? (
@@ -324,14 +321,13 @@ export default function AdminRadarClient() {
       ) : (
         <div className="space-y-2">
           {actionableItems.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs">
               <label className="inline-flex cursor-pointer items-center gap-2 font-medium">
-                <input
-                  type="checkbox"
+                <Checkbox
+                  size="small"
                   checked={allVisibleSelected}
                   onChange={(event) => setSelectedIds(event.target.checked ? actionableItems.map((item) => item.id) : [])}
                   aria-label="全选当前页可治理内容"
-                  className="size-3.5 accent-primary"
                 />
                 全选当前页
               </label>
@@ -344,11 +340,7 @@ export default function AdminRadarClient() {
                       variant="outline"
                       size="xs"
                       disabled={bulkActionMutation.isPending}
-                      onClick={() => {
-                        if (window.confirm(`确定屏蔽选中的 ${selectedIds.length} 条内容吗？`)) {
-                          bulkActionMutation.mutate('dismiss');
-                        }
-                      }}
+                      onClick={() => setConfirmingBulkDismiss(true)}
                     >
                       <X />
                       批量屏蔽
@@ -374,12 +366,12 @@ export default function AdminRadarClient() {
           {items.map((it) => (
             <div key={it.id} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-2">
               {it.status === 'candidate' || it.status === 'rejected' ? (
-                <input
-                  type="checkbox"
+                <Checkbox
+                  size="small"
                   checked={selectedIds.includes(it.id)}
                   onChange={(event) => toggleSelected(it.id, event.target.checked)}
                   aria-label={`选择雷达条目：${it.title}`}
-                  className="mt-5 size-3.5 shrink-0 accent-primary"
+                  sx={{ mt: 1.5 }}
                 />
               ) : (
                 <span aria-hidden="true" className="size-3.5 shrink-0" />
@@ -432,7 +424,31 @@ export default function AdminRadarClient() {
           setDismissing(null);
         }}
       />
-    </div>
+      <AppDialog
+        open={confirmingBulkDismiss}
+        onClose={() => setConfirmingBulkDismiss(false)}
+        title="屏蔽选中内容？"
+        description={`确定屏蔽选中的 ${selectedIds.length} 条内容吗？`}
+        actions={(
+          <>
+            <AppButton type="button" variant="outlined" onClick={() => setConfirmingBulkDismiss(false)}>
+              取消
+            </AppButton>
+            <AppButton
+              type="button"
+              variant="contained"
+              color="error"
+              onClick={() => {
+                setConfirmingBulkDismiss(false);
+                bulkActionMutation.mutate('dismiss');
+              }}
+            >
+              确认屏蔽
+            </AppButton>
+          </>
+        )}
+      />
+    </Box>
   );
 }
 

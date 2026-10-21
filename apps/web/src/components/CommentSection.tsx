@@ -13,15 +13,22 @@
 //
 // ⚠️ e2e 契约：data-testid="comment-section"、data-testid={`star-button-${id}`}
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, Lightbulb, MessageSquare, Sparkles, Star } from 'lucide-react';
+import Alert from '@mui/material/Alert';
+import MuiAvatar from '@mui/material/Avatar';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import ListItemButton from '@mui/material/ListItemButton';
+import Paper from '@mui/material/Paper';
+import Popper from '@mui/material/Popper';
+import Skeleton from '@mui/material/Skeleton';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Avatar as AvatarRoot, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { cn } from '@/lib/utils';
+import { AppButton as Button } from '@/components/material/AppButton';
 import { sha256Hex } from '@/lib/text-anchor';
 
 interface CommentAuthor {
@@ -74,6 +81,11 @@ interface CommentListResponse {
 
 const COMMENT_BODY_LIMIT = 2000;
 const COMMENT_MENTION_LIMIT = 10;
+const compactActionSx = {
+  minHeight: '32px',
+  paddingInline: space.sm,
+  '@media (pointer:coarse)': { minHeight: 'var(--dr-touch-target)' },
+} as const;
 
 export interface CommentSectionProps {
   /** 'summary' or 'research' */
@@ -214,20 +226,24 @@ export function CommentSection({
   });
 
   return (
-    <section
-      className={cn(compact ? 'rounded-md border border-border bg-card p-3' : 'mt-4 rounded-md border border-border bg-card p-4')}
-      data-testid="comment-section"
-    >
-      <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
-        <MessageSquare className="size-4 text-muted-foreground" />
-        讨论 ({listQuery.data?.total ?? 0})
-      </h2>
+    <Paper component="section" variant="outlined" className="material-surface" data-testid="comment-section" sx={{
+      minWidth: 0, mt: compact ? 0 : space.md, padding: compact ? space.md : space.lg,
+      borderRadius: tokens['radius-medium'],
+    }}>
+      <Stack component="header" direction="row" spacing={space.sm} sx={{ alignItems: 'center', marginBottom: space.md }}>
+        <MessageSquare size={18} aria-hidden="true" color="var(--dr-color-text-secondary)" />
+        <Typography component="h2" variant="control" sx={{ fontWeight: 600 }}>
+          讨论 ({listQuery.data?.total ?? 0})
+        </Typography>
+      </Stack>
 
       {anchor && (
-        <div className="mb-3 rounded border border-border bg-muted/30 p-2.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">针对选中文本</span>
-          <p className="mt-1 line-clamp-3 leading-relaxed">“{anchor.quote}”</p>
-        </div>
+        <Box sx={{ marginBottom: space.md, padding: space.md, border: 1, borderColor: 'divider', borderRadius: tokens['radius-small'], bgcolor: 'action.hover' }}>
+          <Typography variant="metadata" sx={{ fontWeight: 500, color: 'text.primary' }}>针对选中文本</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ marginTop: space.xs, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}>
+            “{anchor.quote}”
+          </Typography>
+        </Box>
       )}
 
       <CommentInput
@@ -238,29 +254,25 @@ export function CommentSection({
         }}
       />
 
-      {createMut.isError && (
-        <p className="mt-2 text-xs text-destructive">{(createMut.error as Error).message}</p>
-      )}
+      {createMut.isError && <Alert severity="error" sx={{ marginTop: space.sm, py: 0 }}>{(createMut.error as Error).message}</Alert>}
 
       {listQuery.isLoading && (
-        <div className="mt-4 space-y-3">
+        <Stack spacing={space.md} sx={{ marginTop: space.lg }} role="status" aria-label="正在加载讨论">
           {[0, 1].map((i) => (
-            <div key={i} className="flex gap-2.5">
-              <Skeleton className="size-8 shrink-0 rounded-full" />
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-3 w-full" />
-              </div>
-            </div>
+            <Stack key={i} direction="row" spacing={space.sm}>
+              <Skeleton variant="circular" width={32} height={32} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Skeleton width="6rem" height={20} />
+                <Skeleton width="100%" height={20} />
+              </Box>
+            </Stack>
           ))}
-        </div>
+        </Stack>
       )}
 
-      {listQuery.isError && (
-        <p className="mt-4 text-sm text-destructive">{(listQuery.error as Error).message}</p>
-      )}
+      {listQuery.isError && <Alert severity="error" sx={{ marginTop: space.lg }}>{(listQuery.error as Error).message}</Alert>}
 
-      <div className="mt-4">
+      <Box sx={{ marginTop: space.lg }}>
         {(listQuery.data?.items ?? []).map((c) => (
           <CommentRow
             key={c.id}
@@ -280,8 +292,8 @@ export function CommentSection({
             contentHash={contentHash}
           />
         ))}
-      </div>
-    </section>
+      </Box>
+    </Paper>
   );
 }
 
@@ -322,103 +334,77 @@ function CommentRow({
   const anchorStale = comment.anchor ? isCommentAnchorStale(comment.anchor, content, contentHash) : false;
 
   return (
-    // group/comment 让 hover 才浮现操作按钮 —— 默认页面更安静
-    <article className="group/comment border-b border-border py-3 last:border-b-0">
-      <div className="flex gap-2.5">
-        <Avatar user={comment.author} />
-        <div className="min-w-0 flex-1">
-          <div className="mb-1 flex flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold">{comment.author.name}</span>
-            <span className="text-xs text-muted-foreground">
-              {formatRelative(comment.createdAt)}
-            </span>
+    <Box component="article" sx={{
+      minWidth: 0, paddingBlock: space.md, borderBottom: 1, borderColor: 'divider',
+      '&:last-of-type': { borderBottom: 0 },
+      '@media (min-width:640px) and (hover:hover) and (pointer:fine)': {
+        '& .comment-actions': { opacity: 0, transition: 'opacity var(--dr-motion-fast)' },
+        '&:hover .comment-actions, &:focus-within .comment-actions': { opacity: 1 },
+      },
+    }}>
+      <Stack direction="row" spacing={space.sm} sx={{ alignItems: 'flex-start' }}>
+        <CommentAvatar user={comment.author} />
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Stack direction="row" spacing={space.sm} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center', marginBottom: space.xs }}>
+            <Typography variant="control" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{comment.author.name}</Typography>
+            <Typography variant="metadata" color="text.secondary">{formatRelative(comment.createdAt)}</Typography>
             {comment.promoteStatus === 'approved' && (
-              <span className="inline-flex items-center gap-1 rounded bg-radar-published-bg px-1.5 py-0.5 text-xs text-radar-published-fg">
-                <Sparkles className="size-3" />
-                已提炼为知识卡片
-              </span>
+              <Chip size="small" icon={<Sparkles size={14} aria-hidden="true" />} label="已提炼为知识卡片" sx={{ color: 'success.main', bgcolor: 'var(--dr-color-success-container)' }} />
             )}
             {comment.promoteStatus === 'nominated' && (
-              <span className="inline-flex items-center gap-1 rounded bg-accent px-1.5 py-0.5 text-xs text-accent-foreground">
-                <Lightbulb className="size-3" />
-                待提炼
-              </span>
+              <Chip size="small" icon={<Lightbulb size={14} aria-hidden="true" />} label="待提炼" sx={{ color: 'primary.main', bgcolor: 'primary.light' }} />
             )}
             {comment.promoteStatus === 'rejected' && (
-              <span className="rounded bg-radar-rejected-bg px-1.5 py-0.5 text-xs text-radar-rejected-fg">
-                暂不提炼
-              </span>
+              <Chip size="small" label="暂不提炼" sx={{ color: 'text.secondary', bgcolor: 'action.hover' }} />
             )}
-          </div>
+          </Stack>
 
           <CommentBody body={comment.body} mentions={comment.mentions} />
 
           {comment.anchor ? (
-            <div className="mt-2 rounded border border-border/70 bg-muted/25 px-2.5 py-2 text-xs text-muted-foreground">
-              <div className="font-medium text-foreground">引用原文</div>
-              <p className="mt-1 line-clamp-3 leading-relaxed">“{comment.anchor.quote}”</p>
-              {anchorStale ? <p className="mt-1 text-status-warning-fg">引用位置可能已失效，正文已发生变化。</p> : null}
-            </div>
+            <Box sx={{ marginTop: space.sm, padding: space.md, border: 1, borderColor: 'divider', borderRadius: tokens['radius-small'], bgcolor: 'action.hover' }}>
+              <Typography variant="metadata" sx={{ fontWeight: 500 }}>引用原文</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ marginTop: space.xs, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-wrap' }}>
+                “{comment.anchor.quote}”
+              </Typography>
+              {anchorStale ? <Typography variant="metadata" color="warning.main" sx={{ display: 'block', marginTop: space.xs }}>引用位置可能已失效，正文已发生变化。</Typography> : null}
+            </Box>
           ) : null}
 
-          {/* 操作按钮 hover 才出现（mockup 风格） */}
-          <div className="mt-1.5 flex items-center gap-1 opacity-100 transition-opacity duration-150 sm:opacity-0 sm:group-hover/comment:opacity-100 sm:focus-within:opacity-100">
+          <Box className="comment-actions" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.xs, marginTop: space.xs }}>
             <Button
               type="button"
-              variant="ghost"
-              size="xs"
+              variant="text"
+              size="small"
               onClick={() => onStar(starred ? 'unstar' : 'star')}
               disabled={!currentUserId}
-              className={cn(
-                starred
-                  ? 'text-amber-600 hover:text-amber-600'
-                  : 'text-muted-foreground hover:text-amber-600',
-              )}
+              aria-pressed={starred}
+              sx={{ ...compactActionSx, color: starred ? 'warning.main' : 'text.secondary', '&:hover': { color: 'warning.main' } }}
               data-testid={`star-button-${comment.id}`}
             >
-              <Star className={cn('size-3.5', starred && 'fill-current')} />
+              <Star size={16} aria-hidden="true" fill={starred ? 'currentColor' : 'none'} />
               {comment.starCount > 0 ? comment.starCount : '重要'}
             </Button>
             {currentUserId && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground"
-                onClick={() => setReplyOpen((v) => !v)}
-              >
+              <Button type="button" variant="text" size="small" sx={compactActionSx} onClick={() => setReplyOpen((v) => !v)}>
                 回复
               </Button>
             )}
             {currentUserId && comment.promoteStatus === 'none' && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground hover:text-primary"
-                onClick={onNominate}
-                disabled={nominating}
-              >
-                <Lightbulb className="size-3.5" />
+              <Button type="button" variant="text" size="small" sx={compactActionSx} onClick={onNominate} disabled={nominating}>
+                <Lightbulb size={16} aria-hidden="true" />
                 {nominating ? '提交中…' : '提议沉淀'}
               </Button>
             )}
             {canDelete && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                className="text-destructive hover:text-destructive"
-                onClick={onDelete}
-              >
+              <Button type="button" variant="text" size="small" color="error" sx={compactActionSx} onClick={onDelete}>
                 删除
               </Button>
             )}
-          </div>
+          </Box>
 
-          {/* 回复输入框 */}
           {replyOpen && (
-            <div className="mt-2">
+            <Box sx={{ marginTop: space.sm }}>
               <CommentInput
                 placeholder={`回复 ${comment.author.name}… 输入 @ 提及成员`}
                 small
@@ -428,39 +414,30 @@ function CommentRow({
                 }}
                 onCancel={() => setReplyOpen(false)}
               />
-            </div>
+            </Box>
           )}
 
-          {/* 嵌套回复（仅 1 层） */}
           {comment.children.length > 0 && (
-            <div className="ml-2 mt-2 border-l-2 border-border pl-3">
+            <Box component="section" aria-label={`${comment.author.name}的回复`} sx={{ marginTop: space.sm, marginLeft: space.sm, paddingLeft: space.md, borderLeft: 2, borderColor: 'divider' }}>
               {comment.children.slice(0, repliesExpanded ? undefined : 2).map((r) => (
-                <div key={r.id} className="py-1.5">
-                  <div className="mb-0.5 flex items-center gap-2">
-                    <span className="text-xs font-semibold">{r.author.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatRelative(r.createdAt)}
-                    </span>
-                  </div>
+                <Box key={r.id} sx={{ paddingBlock: space.xs }}>
+                  <Stack direction="row" spacing={space.sm} sx={{ marginBottom: '2px' }}>
+                    <Typography variant="metadata" sx={{ fontWeight: 600 }}>{r.author.name}</Typography>
+                    <Typography variant="metadata" color="text.secondary">{formatRelative(r.createdAt)}</Typography>
+                  </Stack>
                   <CommentBody body={r.body} mentions={r.mentions} reply />
-                </div>
+                </Box>
               ))}
               {!repliesExpanded && comment.childCount > comment.children.length && (
-                <Button
-                  type="button"
-                  variant="link"
-                  size="xs"
-                  className="mt-1 h-auto p-0"
-                  onClick={() => setRepliesExpanded(true)}
-                >
+                <Button type="button" variant="text" size="small" sx={{ ...compactActionSx, paddingInline: 0 }} onClick={() => setRepliesExpanded(true)}>
                   查看全部 {comment.childCount} 条回复
                 </Button>
               )}
-            </div>
+            </Box>
           )}
-        </div>
-      </div>
-    </article>
+        </Box>
+      </Stack>
+    </Box>
   );
 }
 
@@ -473,17 +450,18 @@ function isCommentAnchorStale(anchor: CommentAnchor, content?: string, currentHa
 
 function CommentBody({ body, mentions = [], reply = false }: { body: string; mentions?: MentionedMember[]; reply?: boolean }) {
   const names = [...mentions].sort((a, b) => b.name.length - a.name.length).map((member) => member.name);
+  const bodySx = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: reply ? 'text.secondary' : 'text.primary' } as const;
   if (names.length === 0) {
-    return <p className={cn('whitespace-pre-wrap break-words leading-relaxed', reply ? 'text-[13px] text-muted-foreground' : 'text-sm')}>{body}</p>;
+    return <Typography component="p" variant="body2" sx={bodySx}>{body}</Typography>;
   }
   const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const parts = body.split(new RegExp(`(@(?:${escaped.join('|')}))`, 'g'));
   return (
-    <p className={cn('whitespace-pre-wrap break-words leading-relaxed', reply ? 'text-[13px] text-muted-foreground' : 'text-sm')}>
+    <Typography component="p" variant="body2" sx={bodySx}>
       {parts.map((part, index) => names.some((name) => part === `@${name}`)
-        ? <span key={`${part}-${index}`} className="font-medium text-primary">{part}</span>
+        ? <Typography key={`${part}-${index}`} component="span" variant="inherit" sx={{ fontWeight: 500, color: 'primary.main' }}>{part}</Typography>
         : part)}
-    </p>
+    </Typography>
   );
 }
 
@@ -510,6 +488,7 @@ function CommentInput({
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<MentionedMember[]>([]);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const membersQuery = useQuery<{ items: MentionedMember[] }>({
     queryKey: ['team-members', mentionQuery],
@@ -571,8 +550,10 @@ function CommentInput({
   };
 
   return (
-    <div className="relative">
-      <Textarea
+    <Box sx={{ position: 'relative', minWidth: 0 }}>
+      <Box
+        component="textarea"
+        ref={inputRef}
         value={body}
         onChange={(e) => updateBody(e.target.value)}
         onKeyDown={(e) => {
@@ -585,61 +566,76 @@ function CommentInput({
         disabled={disabled}
         rows={small ? 2 : 3}
         maxLength={COMMENT_BODY_LIMIT}
-        className={cn('resize-y', small ? 'min-h-[56px] text-[13px]' : 'min-h-[72px]')}
         aria-label="评论内容，输入 @ 可选择团队成员"
+        sx={{
+          display: 'block', boxSizing: 'border-box', width: '100%', minHeight: small ? '56px' : '72px',
+          resize: 'vertical', padding: space.sm, border: 1, borderColor: 'var(--dr-color-outline-strong)',
+          borderRadius: tokens['radius-small'], bgcolor: 'background.paper', color: 'text.primary',
+          fontFamily: 'inherit', fontSize: tokens['type-body'], lineHeight: tokens['line-height-body'],
+          '&::placeholder': { color: 'text.disabled', opacity: 1 },
+          '&:disabled': { cursor: 'not-allowed', opacity: 0.6 },
+        }}
       />
       {mentionOpen && (
-        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg" role="listbox" aria-label="选择要提及的成员">
-          {membersQuery.isLoading ? <p className="px-2 py-2 text-xs text-muted-foreground">正在查找成员…</p> : null}
-          {membersQuery.data?.items.map((member) => {
-            const selected = selectedMembers.some((item) => item.id === member.id);
-            return (
-              <button
-                key={member.id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => selectMember(member)}
-                className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-              >
-                <Avatar user={member} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{member.name}</span>
-                  {member.email ? <span className="block truncate text-xs text-muted-foreground">{member.email}</span> : null}
-                </span>
-                {selected ? <Check className="size-4 text-primary" /> : null}
-              </button>
-            );
-          })}
-          {!membersQuery.isLoading && membersQuery.data?.items.length === 0 ? (
-            <p className="px-2 py-2 text-xs text-muted-foreground">没有匹配的成员</p>
-          ) : null}
-        </div>
-      )}
-      {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-          {body.length}/{COMMENT_BODY_LIMIT}
-        </span>
-        <div className="ml-auto flex justify-end gap-2">
-        {onCancel && (
-          <Button type="button" variant="outline" size="xs" onClick={onCancel}>
-            取消
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="xs"
-          aria-label="发布评论"
-          onClick={submit}
-          disabled={disabled || submitting || !body.trim()}
+        <Popper
+          open={mentionOpen}
+          anchorEl={inputRef.current}
+          placement="bottom-start"
+          style={{ width: inputRef.current?.getBoundingClientRect().width }}
+          modifiers={[{ name: 'flip' }, { name: 'preventOverflow', options: { padding: 8 } }]}
+          sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
         >
-          {submitting ? '发送中…' : '发送 (⌘+Enter)'}
-        </Button>
-        </div>
-      </div>
-    </div>
+          <Paper component="div" variant="outlined" role="listbox" aria-label="选择要提及的成员" aria-multiselectable="true" sx={{ maxHeight: '14rem', overflowY: 'auto', padding: space.xs, boxShadow: tokens['elevation-2'] }}>
+            {membersQuery.isLoading ? <Typography role="status" variant="metadata" color="text.secondary" sx={{ padding: space.sm }}>正在查找成员…</Typography> : null}
+            {membersQuery.data?.items.map((member) => {
+              const selected = selectedMembers.some((item) => item.id === member.id);
+              return (
+                <ListItemButton
+                  key={member.id}
+                  component="button"
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  selected={selected}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectMember(member)}
+                  sx={{ minHeight: '44px', gap: space.sm, paddingInline: space.sm, paddingBlock: space.xs, textAlign: 'left' }}
+                >
+                  <CommentAvatar user={member} />
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography variant="control" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{member.name}</Typography>
+                    {member.email ? <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{member.email}</Typography> : null}
+                  </Box>
+                  {selected ? <Check size={16} aria-hidden="true" color="var(--dr-color-primary)" /> : null}
+                </ListItemButton>
+              );
+            })}
+            {!membersQuery.isLoading && membersQuery.data?.items.length === 0 ? (
+              <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', padding: space.sm }}>没有匹配的成员</Typography>
+            ) : null}
+          </Paper>
+        </Popper>
+      )}
+      {error && <Alert severity="error" sx={{ marginTop: space.xs, py: 0 }}>{error}</Alert>}
+      <Stack direction="row" spacing={space.sm} sx={{ alignItems: 'center', justifyContent: 'space-between', marginTop: space.xs }}>
+        <Typography variant="metadata" color="text.secondary" sx={{ fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>
+          {body.length}/{COMMENT_BODY_LIMIT}
+        </Typography>
+        <Stack direction="row" spacing={space.sm}>
+          {onCancel && <Button type="button" variant="outlined" size="small" onClick={onCancel}>取消</Button>}
+          <Button
+            type="button"
+            variant="contained"
+            size="small"
+            aria-label="发布评论"
+            onClick={submit}
+            disabled={disabled || submitting || !body.trim()}
+          >
+            {submitting ? '发送中…' : '发送 (⌘+Enter)'}
+          </Button>
+        </Stack>
+      </Stack>
+    </Box>
   );
 }
 
@@ -647,29 +643,22 @@ function CommentInput({
 // 头像占位
 // ────────────────────────────────────────────────────────────
 
-function Avatar({ user }: { user: CommentAuthor }) {
-  const [loaded, setLoaded] = useState(false);
+function CommentAvatar({ user }: { user: CommentAuthor }) {
   const initial = user.name?.[0] ?? '?';
   const hue = hashHue(user.id);
   return (
-    <AvatarRoot className="size-8">
-      {user.avatarUrl ? (
-        <AvatarImage
-          src={user.avatarUrl}
-          alt={user.name}
-          className={loaded ? undefined : 'opacity-0'}
-          onLoad={() => setLoaded(true)}
-          onError={() => setLoaded(false)}
-        />
-      ) : null}
-      <AvatarFallback
-        className={cn('text-sm font-semibold text-white', loaded && 'opacity-0')}
-        // ⚠️ 全站唯一允许的内联颜色：色相由 user.id 运行时算出，无法 token 化。
-        style={{ background: `hsl(${hue} 70% 45%)` }}
-      >
-        {initial}
-      </AvatarFallback>
-    </AvatarRoot>
+    <MuiAvatar
+      src={user.avatarUrl ?? undefined}
+      alt={user.name}
+      sx={{
+        width: '32px', height: '32px', flexShrink: 0, fontSize: tokens['type-label'], fontWeight: 600,
+        color: 'common.white',
+        // 用户标识生成的色相是运行时身份色，不属于可共享语义 palette。
+        bgcolor: `hsl(${hue} 70% 45%)`,
+      }}
+    >
+      {initial}
+    </MuiAvatar>
   );
 }
 

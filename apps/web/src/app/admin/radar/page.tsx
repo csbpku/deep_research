@@ -8,10 +8,10 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/session';
-import { EmptyState } from '@/components/EmptyState';
-import { Button } from '@/components/ui/button';
-import { PageHeader } from '@/components/domain/PageHeader';
+import { Alert, Box, Typography } from '@mui/material';
+import { Button } from '../AdminMaterial';
 import AdminRadarClient from './AdminRadarClient';
+import styles from '../admin.module.css';
 
 function maskEmail(email: string): string {
   const [user, domain] = email.split('@');
@@ -26,18 +26,18 @@ export default async function AdminRadarPage() {
   }
   if (u.role !== 'admin') {
     return (
-      <div className="mx-auto max-w-measure">
-        <PageHeader title="Admin" description="Admin 控制台 · 仅管理员可见" />
-        <EmptyState
-          title="403 — 需要管理员权限"
-          description={`当前账号 ${maskEmail(u.email)} 角色为普通成员；Admin 入口仅管理员可见。`}
-          action={
-            <Button asChild variant="outline" size="sm">
-              <Link href="/">返回首页</Link>
-            </Button>
-          }
-        />
-      </div>
+      <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 760 }}>
+        <Typography variant="h1" component="h1">Admin</Typography>
+        <Alert severity="error" sx={{ mt: 2 }}>
+          <Typography variant="subtitle2" component="div">403 — 需要管理员权限</Typography>
+          <Typography variant="body2" sx={{ mt: 0.5 }}>
+            当前账号 {maskEmail(u.email)} 角色为普通成员；Admin 入口仅管理员可见。
+          </Typography>
+          <Button asChild variant="outline" size="sm" sx={{ mt: 2 }}>
+            <Link href="/">返回首页</Link>
+          </Button>
+        </Alert>
+      </Box>
     );
   }
   return <AdminRadarClient />;

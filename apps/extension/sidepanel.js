@@ -1,7 +1,12 @@
+import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecords, renderMaterialOptions, renderMaterialFollowups, renderMaterialFailures } from './components/material-runtime.tsx';
+import { t, localizedMarkup, getUiLanguage, setUiLanguage } from './i18n.js';
 import { platformAnswerErrorMessage } from './platform-answer.js';
-import { waitForAnswerTask, requestAnswerTask } from './answer-task.js';
+import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
+import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
 import { readerStore } from './reader-store.js';
 import {
+  prepareVisionImage,
+  applyTextTranslations,
   discoverModels,
   isLocalProvider,
   translationContext,
@@ -24,7 +29,9 @@ import {
   translateBlocks,
   translateImage,
 } from './reader-core.js';
-import { renderMarkdown } from './markdown-renderer.js';
+import { renderMarkdown, streamingAnswerText } from './markdown-renderer.js';
+import { ModelConnectionError, modelConnectionError, normalizeModelBaseUrl, validateModelConnection } from './model-connection.js';
+import { findProvider, matchingProviders } from './provider-catalog.js';
 import {
   DEFAULT_WEB_APP_URL,
   LEGACY_LOCAL_WEB_APP_URL,
@@ -36,18 +43,22 @@ import {
 
 const $ = (id) => document.getElementById(id);
 let provider = null;
+let translationLanguage = 'interface';
 let pageContext = null;
 let documentContext = null;
 let selectionContext = null;
 let imageContext = null;
 let latestAnswer = '';
 let latestStructuredAnswer = null;
+let latestAnswerContext = null;
 let discussionHistory = [];
 let discussionScope = 'page';
 let discussionIntent = 'ask';
 let discussionOpen = false;
+let pendingAnswer = null;
 let pendingPageAction = null;
 let discussionController = null;
+let discussionSubscription = null;
 let discussionRunning = false;
 let translationController = null;
 let translationRequested = false;
@@ -67,11 +78,15 @@ let sessionSyncTimer = 0;
 let radarEntryPlatformUrl = '';
 let radarEntryPromptKey = '';
 let radarEntrySummaryId = '';
+let radarEntryUrl = '';
+let platformDisconnecting = false;
+let pageKnowledgeKey = '';
+let pageKnowledgeRequest = 0;
+let pageKnowledgeController = null;
 // `init()` loads the persisted token asynchronously.  A callback can finish
 // the PKCE exchange during that window; an older `loadPlatformState()` result
 // must not overwrite the newer connection event and hide the sync controls.
 let platformStateEvents = 0;
-let targetLanguage = 'zh-CN';
 const windowSourceTab = Number(new URLSearchParams(location.search).get('sourceTab'));
 const boundWindowTabId = windowSourceTab > 0 && Number.isInteger(windowSourceTab) ? windowSourceTab : null;
 let activeTabId = boundWindowTabId;
@@ -107,32 +122,24 @@ function renderComposerModelOptions() {
   const models = new Map([[provider.model, { id: provider.model, label: provider.model }]]);
   if (sameModelConnection(composerModelCache?.connection, provider)) for (const item of composerModelCache.models) models.set(item.id, item);
   const options = [...models.values()].filter(item => `${item.label} ${item.id}`.toLocaleLowerCase().includes(search));
-  const nodes = options.map(item => {
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'composer-model-option'; button.setAttribute('role', 'option');
-    button.setAttribute('aria-selected', String(item.id === provider.model)); button.textContent = item.label;
-    button.title = item.id; button.dataset.modelId = item.id;
-    button.addEventListener('click', () => void chooseComposerModel(item.id));
-    return button;
-  });
-  $('composer-model-options').replaceChildren(...nodes);
-  if (!nodes.length) $('composer-model-status').textContent = '没有匹配的模型。';
+  renderMaterialOptions($('composer-model-options'), options, provider.model, model => void chooseComposerModel(model));
+  $('composer-model-status').textContent = options.length ? t("切换用于下一次提问；当前回答继续使用原模型。") : t("没有匹配的模型。");
 }
 async function refreshComposerModels() {
   if (readingMode !== 'local' || !providerReady(provider)) return;
   composerModelController?.abort();
   const controller = new AbortController(); composerModelController = controller;
   const connection = { ...provider };
-  $('composer-model-status').textContent = '正在读取模型列表…';
+  $('composer-model-status').textContent = t("正在读取模型列表…");
   try {
     const models = await discoverModels(connection, { signal: controller.signal });
     if (controller.signal.aborted || !sameModelConnection(connection, provider) || readingMode !== 'local') return;
     composerModelCache = { connection, models, fetchedAt: Date.now() };
     renderComposerModelOptions();
-    $('composer-model-status').textContent = '切换用于下一次提问；当前回答继续使用原模型。';
+    $('composer-model-status').textContent = t("切换用于下一次提问；当前回答继续使用原模型。");
   } catch (error) {
     if (controller.signal.aborted) return;
-    $('composer-model-status').textContent = `${error.message || '模型列表暂不可用'}。可继续使用当前模型，或打开连接设置。`;
+    $('composer-model-status').textContent = t("{0}。可继续使用当前模型，或打开连接设置。", error.message || '模型列表暂不可用');
   }
 }
 async function chooseComposerModel(model) {
@@ -142,19 +149,18 @@ async function chooseComposerModel(model) {
     closeComposerModelMenu();
     applyProviderFields(); renderPersistentComposer();
     $('question-input')?.focus();
-  } catch (error) { $('composer-model-status').textContent = error.message || '模型切换失败，请重试。'; }
+  } catch (error) { $('composer-model-status').textContent = error.message || t("模型切换失败，请重试。"); }
 }
 function toggleComposerModelMenu() {
   if (readingMode !== 'local') return;
   if (!providerReady(provider)) { showSettings(); return; }
   if (!$('composer-model-menu').classList.contains('hidden')) { closeComposerModelMenu({ restoreFocus: true }); return; }
-  if ($('chat-tools-menu')) $('chat-tools-menu').open = false;
   $('composer-model-search').value = '';
   renderComposerModelOptions();
   show($('composer-model-menu'), true); $('composer-model').setAttribute('aria-expanded', 'true');
   $('composer-model-search').focus();
   if (!sameModelConnection(composerModelCache?.connection, provider) || Date.now() - composerModelCache.fetchedAt > 60_000) void refreshComposerModels();
-  else $('composer-model-status').textContent = '切换用于下一次提问；当前回答继续使用原模型。';
+  else $('composer-model-status').textContent = t("切换用于下一次提问；当前回答继续使用原模型。");
 }
 function switchQuestionDraft(url = '') {
   if (url === draftPageUrl) return;
@@ -166,13 +172,30 @@ function switchQuestionDraft(url = '') {
 function persistQuestionDraft() {
   if (draftPageUrl) questionDrafts.set(draftPageUrl, $('question-input')?.value || '');
   try { sessionStorage.setItem('readerQuestionDrafts', JSON.stringify([...questionDrafts].slice(-50))); } catch { /* Full or unavailable storage must not block chat. */ }
+  updateSendAvailability();
+}
+
+function detachCurrentAnswer() {
+  discussionSubscription?.abort();
+  discussionSubscription = null;
+  discussionController = null;
+  discussionRunning = false;
+  pendingAnswer = null;
+  renderPendingAnswer();
+}
+
+function updateSendAvailability() {
+  renderProgress();
+  const send = $('send-question');
+  if (!send) return;
+  send.disabled = send.dataset.contextReady !== 'true' || !$('question-input')?.value.trim() || discussionRunning;
 }
 let sessionGeneration = 0;
 let interactionGeneration = 0;
 const DISCUSSION_INTENTS = new Set(['explain', 'ask', 'summary', 'selection-summary', 'translate', 'map', 'architecture', 'tradeoffs']);
 
-function sendToPage(payload) {
-  chrome.runtime.sendMessage({ type: 'deep-research:to-page', payload, ...(boundWindowTabId ? { tabId: boundWindowTabId } : {}) }).catch(() => {});
+function sendToPage(payload, tabId = boundWindowTabId || activeTabId) {
+  return chrome.runtime.sendMessage({ type: 'deep-research:to-page', payload, ...(tabId ? { tabId } : {}) }).catch(() => ({ ok: false }));
 }
 
 function focusReadingAnchor(anchor) {
@@ -187,7 +210,12 @@ function setWorkspaceView(view) {
   if (view === 'tools') view = 'chat';
   if (!shell || !['chat', 'library'].includes(view)) return;
   shell.dataset.workspaceView = view;
-  try { sessionStorage.setItem('readerWorkspaceView', view); } catch { /* Optional navigation preference. */ }
+  // Keep deep links in sync with the visible tab. An old ?view=library must
+  // not send a chat back to Saved when changing language or reloading.
+  const viewUrl = new URL(location.href);
+  if (view === 'chat') viewUrl.searchParams.delete('view');
+  else viewUrl.searchParams.set('view', view);
+  if (viewUrl.href !== location.href) window.history.replaceState(null, '', viewUrl.href);
   for (const name of ['chat', 'tools', 'library']) {
     const button = $(`nav-${name}`);
     button?.classList.toggle('active', name === view);
@@ -203,16 +231,14 @@ function setupWorkspaceLayout() {
   $('chat-to-reading')?.addEventListener('click', () => focusReadingAnchor(activeDiscussionScope() === 'selection' ? selectionContext?.selection : null));
   $('chat-translate-all')?.addEventListener('click', () => { focusReadingAnchor(null); void startFullTranslation(); });
   $('copy-chat-selection')?.addEventListener('click', () => void copyCurrentSelection());
-  $('clear-chat-selection')?.addEventListener('click', () => { selectionContext = null; discussionScope = 'page'; discussionIntent = 'ask'; renderPage(); saveLocalSession(); });
+  $('clear-chat-selection')?.addEventListener('click', () => { selectionContext = null; discussionScope = 'page'; discussionIntent = 'ask'; sendToPage({ type: 'deep-research:clear-native-selection' }); renderPage(); saveLocalSession(); });
   $('toggle-chat-selection')?.addEventListener('click', () => {
     const expanded = !$('chat-selection-card').classList.contains('expanded');
     $('chat-selection-card').classList.toggle('expanded', expanded);
     $('toggle-chat-selection').setAttribute('aria-expanded', String(expanded));
-    $('toggle-chat-selection').textContent = expanded ? '收起' : '展开';
+    $('toggle-chat-selection').textContent = expanded ? t("收起") : t("展开");
   });
-  const toolsMenu = $('chat-tools-menu');
   document.addEventListener('pointerdown', event => {
-    if (toolsMenu?.open && !toolsMenu.contains(event.target)) toolsMenu.open = false;
     if (!$('composer-model-menu')?.contains(event.target) && !$('composer-model')?.contains(event.target)) closeComposerModelMenu();
   });
   $('composer-model-search')?.addEventListener('input', renderComposerModelOptions);
@@ -228,9 +254,6 @@ function setupWorkspaceLayout() {
     const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1) : (current + 1) % options.length;
     options[index].focus();
   });
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && toolsMenu?.open) { toolsMenu.open = false; toolsMenu.querySelector('summary')?.focus(); }
-  });
   $('dismiss-notice')?.addEventListener('click', () => setNotice(''));
   for (const view of ['chat', 'tools', 'library']) {
     $(`nav-${view}`)?.addEventListener('click', () => {
@@ -244,29 +267,56 @@ function setupWorkspaceLayout() {
   const input = $('question-input');
   if (!handle || !input) return;
   let preferredHeight = 60;
+  let manuallySized = false;
+  const maxInputHeight = () => {
+    const limit = Math.min(240, window.innerHeight * 0.4);
+    const composer = $('persistent-composer');
+    const area = composer?.parentElement;
+    if (!composer?.getClientRects().length || !area?.clientHeight) return Math.max(60, limit);
+    const overhead = Math.max(0, composer.getBoundingClientRect().height - input.getBoundingClientRect().height);
+    const style = getComputedStyle(composer);
+    const margin = (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+    // Leave a readable transcript and keep Send inside the panel even when
+    // selection/image context consumes part of the composer.
+    return Math.max(60, Math.min(limit, area.clientHeight - overhead - margin - 60));
+  };
+  const updateSizeControl = height => {
+    const toggle = $('composer-size-toggle');
+    if (toggle) {
+      toggle.disabled = maxInputHeight() <= 60;
+      toggle.title = toggle.disabled ? t('窗口空间不足，请先增大浏览器高度') : t('展开或收起输入框');
+      toggle.setAttribute('aria-expanded', String(height > 61));
+      toggle.setAttribute('aria-label', height > 61 ? t('收起输入框') : t('展开输入框'));
+    }
+    handle.setAttribute('aria-valuemax', String(Math.floor(maxInputHeight())));
+  };
   const resize = (height) => {
-    const bounded = Math.round(Math.max(60, Math.min(240, window.innerHeight * 0.4, height)));
+    const bounded = Math.round(Math.max(60, Math.min(maxInputHeight(), height)));
     preferredHeight = bounded;
+    manuallySized = true;
     input.style.height = `${bounded}px`;
     handle.setAttribute('aria-valuenow', String(bounded));
+    updateSizeControl(bounded);
     try { localStorage.setItem('readerComposerHeight', String(bounded)); } catch { /* Optional preference. */ }
   };
   try { const saved = Number(localStorage.getItem('readerComposerHeight')); if (saved) resize(saved); } catch { /* Default height remains usable. */ }
   fitComposerInput = () => {
     if (!input.getClientRects().length) return;
-    const baseline = Math.max(60, Math.min(preferredHeight, 240, window.innerHeight * 0.4));
+    const baseline = Math.max(60, Math.min(preferredHeight, maxInputHeight()));
     input.style.height = `${baseline}px`;
-    const height = Math.max(baseline, Math.min(240, window.innerHeight * 0.4, input.scrollHeight));
+    const height = manuallySized ? baseline : Math.max(baseline, Math.min(maxInputHeight(), input.scrollHeight));
     input.style.height = `${Math.round(height)}px`;
     handle.setAttribute('aria-valuenow', String(Math.round(height)));
+    updateSizeControl(height);
   };
+  $('composer-size-toggle')?.addEventListener('click', () => resize(input.getBoundingClientRect().height > 61 ? 60 : 240));
   input.addEventListener('input', fitComposerInput);
   window.addEventListener('resize', fitComposerInput);
   $('composer-model')?.addEventListener('click', toggleComposerModelMenu);
   $('starter-summary')?.addEventListener('click', () => $('chat-summary')?.click());
-  $('starter-mechanism')?.addEventListener('click', () => $('quick-mechanism')?.click());
   handle.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
+    event.preventDefault();
     const startY = event.clientY;
     const startHeight = input.getBoundingClientRect().height;
     handle.setPointerCapture(event.pointerId);
@@ -296,7 +346,7 @@ function setChatExpanded(expanded) {
   $('page-view')?.classList.toggle('chat-expanded', expanded);
   const button = $('expand-chat');
   if (button) {
-    button.textContent = expanded ? '恢复布局' : '放大聊天';
+    button.textContent = expanded ? t("恢复布局") : t("放大聊天");
     button.setAttribute('aria-pressed', String(expanded));
   }
 }
@@ -308,15 +358,16 @@ async function copyCurrentSelection() {
     await navigator.clipboard.writeText(quote);
     const button = $('copy-chat-selection');
     if (button) {
-      button.textContent = '已复制';
-      window.setTimeout(() => { button.textContent = '复制选段'; }, 1800);
+      button.textContent = t("已复制");
+      window.setTimeout(() => { button.textContent = t("复制选段"); }, 1800);
     }
   } catch {
-    setNotice('浏览器没有开放剪贴板权限，请在原网页选择原文复制。');
+    setNotice(t("浏览器没有开放剪贴板权限，请在原网页选择原文复制。"));
   }
 }
 
 function setNotice(message = '', target = $('notice')) {
+  if (target.dataset) delete target.dataset.result;
   target.textContent = message;
   show(target, Boolean(message));
 }
@@ -336,23 +387,23 @@ function contextHasReadableBody(context) {
 
 function pageReadDescriptor(context = pageContext || documentContext) {
   if (activationNeeded?.reason === 'unsupported') {
-    return { state: 'error', label: '当前页面不支持', detail: 'Chrome 保护页、扩展商店等页面不能注入阅读助手。' };
+    return { state: 'error', label: t("当前页面不支持"), detail: t("Chrome 保护页、扩展商店等页面不能注入阅读助手。") };
   }
   if (activationNeeded?.reason === 'permission') {
-    return { state: 'idle', label: '尚未启用此站点', detail: '点击“启用此站点”后，Reader 才会读取正文。' };
+    return { state: 'idle', label: t("尚未启用此站点"), detail: t("点击“启用此站点”后，Reader 才会读取正文。") };
   }
   if (!context) {
-    return { state: pageReadState === 'error' ? 'error' : 'loading', label: '正在读取正文', detail: '正在提取标题、章节和可用正文。' };
+    return { state: pageReadState === 'error' ? 'error' : 'loading', label: t("正在读取正文"), detail: t("正在提取标题、章节和可用正文。") };
   }
   if (!contextHasReadableBody(context)) {
-    return { state: 'error', label: '没有可用正文', detail: '没有提取到可用于问答的正文；可以重新加载页面或选择一段原文。' };
+    return { state: 'error', label: t("没有可用正文"), detail: t("没有提取到可用于问答的正文；可以重新加载页面或选择一段原文。") };
   }
   const blocks = Number(context.blockCount || context.blocks?.length || 0);
   const chars = Number(context.bodyCharCount || String(context.body || '').length || 0);
   const bounded = context.bodyTruncated || context.blocksTruncated;
-  const details = [`${blocks} 个正文块`, `${chars.toLocaleString()} 字符`];
-  if (bounded) details.push('已按上下文上限截取');
-  return { state: 'ready', label: '正文已读取', detail: details.join(' · ') };
+  const details = [t("{0} 个正文块", blocks), t("{0} 字符", chars.toLocaleString())];
+  if (bounded) details.push(t("已按上下文上限截取"));
+  return { state: 'ready', label: t("正文已读取"), detail: details.join(' · ') };
 }
 
 function updatePageContextUi(context = pageContext || documentContext || selectionContext) {
@@ -368,7 +419,6 @@ function updatePageContextUi(context = pageContext || documentContext || selecti
   if (meta) meta.textContent = descriptor.detail;
   const scope = activeDiscussionScope();
   if ($('page-context-scope')) $('page-context-scope').textContent = discussionScopeLabel(scope);
-  if ($('quick-actions-scope')) $('quick-actions-scope').textContent = '整页正文';
   sendToPage({
     type: 'deep-research:reader-status',
     state: descriptor.state,
@@ -378,6 +428,7 @@ function updatePageContextUi(context = pageContext || documentContext || selecti
 }
 
 function renderPersistentComposer(scope = activeDiscussionScope()) {
+  updateTranslationLanguageUi();
   const context = activeDiscussionContext(scope);
   const composer = $('persistent-composer');
   if (!composer) return;
@@ -387,12 +438,16 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   const selectionReady = scope === 'selection' && Boolean(context?.selection?.quote);
   show($('copy-chat-selection'), selectionReady);
   show($('chat-selection-card'), selectionReady);
+  show($('selection-section'), selectionReady);
+  show($('image-section'), scope === 'image' && Boolean(imageContext?.image));
+  show($('chat-summary'), scope !== 'image');
+  show($('chat-translate'), scope !== 'image');
   const selectionQuote = $('chat-selection-quote');
   if (selectionQuote && selectionQuote.textContent !== (context?.selection?.quote || '')) {
     selectionQuote.textContent = context?.selection?.quote || '';
     $('chat-selection-card').classList.remove('expanded');
     $('toggle-chat-selection').setAttribute('aria-expanded', 'false');
-    $('toggle-chat-selection').textContent = '展开';
+    $('toggle-chat-selection').textContent = t("展开");
   }
   const pageReady = scope !== 'page' || contextHasReadableBody(context);
   const canSend = scope === 'page'
@@ -401,30 +456,32 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
       ? Boolean(pageReady && selectionReady)
       : Boolean(imageContext?.image && pageReady);
   if ($('composer-scope-label')) $('composer-scope-label').textContent = discussionScopeLabel(scope);
-  if ($('composer-context-status')) $('composer-context-status').textContent = `正文状态：${descriptor.label}`;
+  if ($('composer-context-status')) $('composer-context-status').textContent = t("正文状态：{0}", descriptor.label);
   const question = $('question-input');
   if (question) {
     question.placeholder = scope === 'selection'
-      ? '问问这段内容…'
+      ? t("问问这段内容…")
       : scope === 'image'
-        ? '问问这张图…'
-        : '问问这篇文章…';
+        ? t("问问这张图…")
+        : t("问问这篇文章…");
   }
   fitComposerInput();
   const model = $('composer-model');
   if (model) {
     model.disabled = readingMode === 'platform';
-    model.textContent = readingMode === 'platform' ? '平台模型' : `${provider?.model || '配置模型'}⌄`;
-    model.title = readingMode === 'platform' ? '由平台配置固定模型' : `独立模式 · ${provider?.model || '未配置'} · 点击切换模型`;
+    $('composer-model-label').textContent = readingMode === 'platform' ? t("平台模型") : (provider?.model || t("配置模型"));
+    model.title = readingMode === 'platform' ? t("由平台配置固定模型") : t("独立模式 · {0} · 点击切换模型", provider?.model || '未配置');
     if (readingMode === 'platform') { closeComposerModelMenu(); model.removeAttribute('aria-haspopup'); }
     else model.setAttribute('aria-haspopup', 'dialog');
   }
   const send = $('send-question');
   if (send) {
-    send.disabled = !canSend || discussionRunning;
+    send.dataset.contextReady = String(canSend);
+    updateSendAvailability();
     show($('stop-answer'), discussionRunning);
-    if ($('answer-task-status')) $('answer-task-status').textContent = discussionRunning ? '回答进行中 · 可继续阅读' : '';
-    send.title = canSend ? '使用上方显示的范围发送问题' : descriptor.detail;
+    show(send, !discussionRunning);
+    if ($('answer-task-status')) $('answer-task-status').textContent = discussionRunning ? t("回答进行中 · 可继续阅读") : '';
+    send.title = canSend ? t("使用上方显示的范围发送问题") : descriptor.detail;
   }
 }
 
@@ -449,9 +506,9 @@ function updateAiAvailabilityBanner() {
   if (!hasReadableContext || ready) return;
   const platform = readingMode === 'platform';
   message.textContent = platform
-    ? '平台模式尚未连接，问答、总结和翻译暂不可用。'
-    : '独立模式尚未配置模型，问答、总结和翻译暂不可用。';
-  action.textContent = platform ? '连接平台' : '配置模型';
+    ? t("平台模式尚未连接，问答、总结和翻译暂不可用。")
+    : t("独立模式尚未配置模型，问答、总结和翻译暂不可用。");
+  action.textContent = platform ? t("连接平台") : t("配置模型");
 }
 
 function updateReadingModeUi() {
@@ -459,53 +516,53 @@ function updateReadingModeUi() {
   $('mode-local')?.setAttribute('aria-pressed', String(!platform));
   $('mode-platform')?.setAttribute('aria-pressed', String(platform));
   $('storage-status')?.classList.toggle('platform', platform);
-  if ($('storage-status')) $('storage-status').textContent = platform ? '平台模式' : '独立模式';
+  if ($('storage-status')) $('storage-status').textContent = platform ? t("平台模式") : t("独立模式");
   show($('platform-settings'), platform);
   show($('local-provider-settings'), !platform);
   if ($('platform-inline-status')) {
     $('platform-inline-status').textContent = platform
-      ? platformConnected ? '会话与结论同步到调研平台' : '平台模式尚未连接'
-      : '成果保存在浏览器本地';
+      ? platformConnected ? t("会话与结论同步到调研平台") : t("平台模式尚未连接")
+      : t("成果保存在浏览器本地");
   }
   if ($('platform-inline-description')) {
     $('platform-inline-description').textContent = platform
       ? platformConnected
-        ? '问答、总结和全文翻译使用平台 AI Engine；图片只在你发起全文翻译时由浏览器读取字节并发送给视觉模型。'
-        : '连接调研平台后即可使用平台 AI Engine，无需配置本地模型。'
-      : '会话和阅读成果保存在浏览器；需要同步到研究库时可切换平台模式。';
+        ? t("问答、总结和全文翻译使用平台 AI Engine；图片在你发起图示问答或翻译时由浏览器读取字节并发送给视觉模型。")
+        : t("连接调研平台后即可使用平台 AI Engine，无需配置本地模型。")
+      : t("会话和阅读成果保存在浏览器；需要同步到研究库时可切换平台模式。");
   }
-  if ($('sync-selection')) $('sync-selection').textContent = '重试同步';
+  if ($('sync-selection')) $('sync-selection').textContent = t("重试同步");
   show($('sync-selection'), platform && platformConnected && Boolean(lastSavedInsight) && insightSyncFailed);
   show($('sync-session'), platform && platformConnected && Boolean(contextUrl()));
   show($('restore-session'), platform && platformConnected);
   if ($('mode-data-note')) {
     $('mode-data-note').textContent = platform
       ? platformConnected
-        ? '平台模式：文本操作使用调研平台 AI Engine；发起全文翻译时，图片字节会按需发送给视觉模型，但不会保存到平台阅读库。图示问答暂不支持。'
-        : '平台模式尚未连接：连接并登录后使用调研平台 AI Engine；当前不会调用本地模型。'
-      : '独立模式：模型请求、聊天记录和阅读成果保存在本地，可导出或清除。';
+        ? t("平台模式：文本操作使用调研平台 AI Engine；发起图示问答或翻译时，图片字节会按需发送给视觉模型，不会保存到平台阅读库。")
+        : t("平台模式尚未连接：连接并登录后使用调研平台 AI Engine；当前不会调用本地模型。")
+      : t("独立模式：模型请求、聊天记录和阅读成果保存在本地，可导出或清除。");
   }
   const guidance = $('mode-guidance');
   if (guidance) {
     guidance.classList.remove('is-warning', 'is-connected');
     if (platform && platformConnected) {
-      guidance.textContent = '平台模式已连接。问答、总结、全文翻译和图片文字翻译使用调研平台 AI Engine；图片仅在你发起翻译时由浏览器读取并上传字节，不会让服务器抓取图片地址。';
+      guidance.textContent = t("平台模式已连接。问答、总结、全文翻译和图片文字翻译使用调研平台 AI Engine；图片仅在你发起图示问答或翻译时由浏览器读取并上传字节，不会让服务器抓取图片地址。");
       guidance.classList.add('is-connected');
       show(guidance, true);
     } else if (platform) {
-      guidance.textContent = '平台模式尚未连接。点击下方“连接平台”并完成登录；无需填写本地模型服务。';
+      guidance.textContent = t("平台模式尚未连接。点击下方“连接平台”并完成登录；无需填写本地模型服务。");
       guidance.classList.add('is-warning');
       show(guidance, true);
     } else if (!providerReady(provider)) {
-      guidance.textContent = '选择服务并连接，模型列表会自动读取；本地代理的 API Key 可留空。';
+      guidance.textContent = t("选择服务并连接，模型列表会自动读取；本地代理的 API Key 可留空。");
       guidance.classList.add('is-warning');
       show(guidance, true);
     } else {
       show(guidance, false);
     }
   }
-  if (platform) setStatus(platformConnected, platformConnected ? '平台 AI 已连接' : '平台未连接');
-  else setStatus(providerReady(provider), providerReady(provider) ? '本地模型已连接' : '未配置模型');
+  if (platform) setStatus(platformConnected, platformConnected ? t("平台 AI 已连接") : t("平台未连接"));
+  else setStatus(providerReady(provider), providerReady(provider) ? t("{0} 已配置", provider.model) : t("未配置模型"));
   updateAiAvailabilityBanner();
 }
 
@@ -517,16 +574,43 @@ async function setReadingMode(mode) {
   try {
     await readerStore.setSetting('readingMode', readingMode);
   } catch {
-    setNotice('运行模式已切换，但未能保存设置；重新打开侧栏后可能恢复之前的模式。', $('settings-notice'));
+    setNotice(t("运行模式已切换，但未能保存设置；重新打开侧栏后可能恢复之前的模式。"), $('settings-notice'));
   }
 }
 
 function currentReadingLanguage() {
-  return $('translation-language')?.value || targetLanguage || 'zh-CN';
+  return getUiLanguage();
 }
 
-function readingProvider() {
-  return provider ? { ...provider, language: currentReadingLanguage() } : provider;
+function currentTranslationLanguage() {
+  return resolveTranslationLanguage(translationLanguage, getUiLanguage());
+}
+
+function updateTranslationLanguageUi() {
+  window.dispatchEvent(new CustomEvent('reader:translation-language-state', { detail: {
+    value: translationLanguage, disabled: translationRunning || Boolean(retryingTranslationId), visible: activeDiscussionScope() !== 'image',
+  } }));
+}
+
+async function changeTranslationLanguage(value) {
+  if (translationRunning || retryingTranslationId) return;
+  const next = normalizeTranslationLanguage(value);
+  try {
+    await readerStore.setSetting('translationLanguage', next);
+    translationLanguage = next;
+    // Existing translations remain readable until the next explicit translation.
+    // Stop automatic continuation in the old language after a page mutation.
+    fullTranslationEnabled = false;
+    translationRequested = false;
+    pendingJob = null;
+    updateTranslationLanguageUi();
+  } catch {
+    setNotice(t("翻译语言未能保存，请重试。"));
+  }
+}
+
+function readingProvider(language = currentTranslationLanguage()) {
+  return provider ? { ...provider, language } : provider;
 }
 
 function providerPreset(kind) {
@@ -534,15 +618,7 @@ function providerPreset(kind) {
 }
 
 function streamAnswerPreview(value) {
-  const text = String(value || '');
-  const answerField = text.match(/"answer"\s*:\s*"((?:\\.|[^"\\])*)/u);
-  if (answerField) {
-    try { return JSON.parse(`"${answerField[1]}"`); } catch { return answerField[1].replace(/\\n/gu, '\n').replace(/\\"/gu, '"'); }
-  }
-  // A compatible provider may return ordinary prose despite the JSON request.
-  // Avoid showing a half-written JSON envelope in that case.
-  if (!/[{}[\]]/u.test(text)) return text.trim().slice(0, 4_000);
-  return '';
+  return streamingAnswerText(value);
 }
 
 function bindCitationReferences(container, evidenceItems) {
@@ -555,7 +631,7 @@ function bindCitationReferences(container, evidenceItems) {
     }
     reference.href = item.url || contextUrl() || '#';
     reference.removeAttribute('target');
-    reference.title = item.anchor?.quote ? '跳转到对应原文证据' : '打开原文';
+    reference.title = item.anchor?.quote ? t("跳转到对应原文证据") : t("打开原文");
     reference.addEventListener('click', (event) => {
       if (!item.anchor?.quote) return;
       event.preventDefault();
@@ -585,49 +661,12 @@ function renderStructuredAnswer(result) {
   renderMarkdown(answerOutput, readingAnswerText(answer.answer || latestAnswer));
   bindCitationReferences(answerOutput, evidenceItems);
   const evidenceLabel = evidencePart?.querySelector('.response-section-label');
-  if (evidenceLabel) evidenceLabel.textContent = evidenceItems.length ? `原文证据 · ${evidenceItems.length}` : '原文证据';
-  evidenceList.textContent = '';
-  evidenceItems.forEach((item, index) => {
-    const link = document.createElement('a');
-    link.className = 'evidence-item';
-    link.href = item.url || contextUrl() || '#';
-    link.target = '_blank';
-    link.rel = 'noreferrer noopener';
-    link.id = `reader-evidence-${index + 1}`;
-    link.dataset.evidenceIndex = String(index);
-    link.title = item.anchor?.quote ? '定位原文' : '打开原文';
-    const number = document.createElement('span');
-    number.className = 'evidence-number';
-    number.textContent = `[${index + 1}]`;
-    const content = document.createElement('span');
-    content.className = 'evidence-content';
-    if (item.claim) {
-      const claim = document.createElement('span');
-      claim.className = 'evidence-claim';
-      const fullClaim = String(item.claim || '').trim();
-      claim.textContent = `${fullClaim.slice(0, 112)}${fullClaim.length > 112 ? '…' : ''}`;
-      claim.title = fullClaim;
-      content.appendChild(claim);
-    }
-    const quote = document.createElement('span');
-    quote.className = 'evidence-quote';
-    const fullQuote = String(item.quote || '').trim();
-    quote.textContent = `“${fullQuote.slice(0, 120)}${fullQuote.length > 120 ? '…' : ''}”`;
-    quote.title = fullQuote;
-    content.appendChild(quote);
-    const openLabel = document.createElement('span');
-    openLabel.className = 'evidence-open';
-    openLabel.textContent = item.anchor?.quote ? '定位原文' : '打开原文';
-    content.appendChild(openLabel);
-    link.append(number, content);
-    link.addEventListener('click', (event) => {
-      if (item.anchor?.quote) {
-        event.preventDefault();
-        focusReadingAnchor(item.anchor);
-      }
-    });
-    evidenceList.appendChild(link);
-  });
+  if (evidenceLabel) evidenceLabel.textContent = evidenceItems.length ? t("原文证据 · {0}", evidenceItems.length) : t("原文证据");
+  renderMaterialEvidence(evidenceList, evidenceItems.map((item, index) => ({
+    id: `reader-evidence-${index + 1}`, claim: item.claim, quote: item.quote,
+    url: item.url || contextUrl(), anchored: Boolean(item.anchor?.quote),
+    onLocate: item.anchor?.quote ? () => focusReadingAnchor(item.anchor) : undefined,
+  })));
   show(evidencePart, evidenceList.childElementCount > 0);
   renderMarkdown($('answer-background-text'), answer.background || '');
   bindCitationReferences($('answer-background-text'), evidenceItems);
@@ -644,10 +683,12 @@ function renderStructuredAnswer(result) {
       limitationList.appendChild(li);
     });
   show(limitationsPart, limitationList.childElementCount > 0);
-  const moreParts = [answer.background && '背景', answer.inference && '推断', limitationList.childElementCount && '未知项'].filter(Boolean);
+  const moreParts = [answer.background && t("背景"), answer.inference && t("推断"), limitationList.childElementCount && t("未知项")].filter(Boolean);
   $('answer-more-summary').textContent = moreParts.join(' · ');
   show($('answer-more'), moreParts.length > 0);
-  const warningText = Array.isArray(answer.warnings) ? [...new Set(answer.warnings.filter(Boolean))].join('\n') : '';
+  const warningText = Array.isArray(answer.warnings)
+    ? [...new Set(answer.warnings.filter(Boolean).map((warning) => t(warning)))].join('\n')
+    : '';
   warnings.textContent = warningText;
   show(warnings, Boolean(warningText));
   show(structured, Boolean(evidenceList.childElementCount || answer.background || answer.inference || limitationList.childElementCount || warningText));
@@ -662,28 +703,44 @@ function answerClipboardText() {
   const lines = [String(answer.answer || latestAnswer || '').trim()];
   const evidence = Array.isArray(answer.evidence) ? answer.evidence : [];
   if (evidence.length) {
-    lines.push('', '原文证据');
+    lines.push('', t("原文证据"));
     evidence.forEach((item, index) => {
       const quote = String(item?.quote || '').trim();
       const claim = String(item?.claim || '').trim();
       if (quote) lines.push(`[${index + 1}] ${quote}${claim ? `：${claim}` : ''}`);
     });
   }
-  if (answer.inference) lines.push('', `AI 推断：${answer.inference}`);
+  if (answer.inference) lines.push('', t("AI 推断：{0}", answer.inference));
   return lines.join('\n').trim();
 }
 
 async function copyAnswer() {
   const text = answerClipboardText();
   if (!text) {
-    setNotice('当前还没有可复制的回答。');
+    setNotice(t("当前还没有可复制的回答。"));
     return;
   }
   try {
     await navigator.clipboard.writeText(text);
-    setNotice('回答和原文证据已复制。');
+    setNotice(t("回答和原文证据已复制。"));
   } catch {
-    setNotice('浏览器没有开放剪贴板权限，请手动选择回答复制。');
+    setNotice(t("浏览器没有开放剪贴板权限，请手动选择回答复制。"));
+  }
+}
+
+async function submitReadingForm(buttonId, noticeId, submit) {
+  const button = $(buttonId);
+  if (!button || button.disabled) return;
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = t("保存中…");
+  button.setAttribute('aria-busy', 'true');
+  try { await submit(); }
+  catch (error) { setNotice(error instanceof Error ? error.message : t("保存失败，请重试。"), $(noticeId)); }
+  finally {
+    button.disabled = false;
+    button.textContent = label;
+    button.removeAttribute('aria-busy');
   }
 }
 
@@ -692,16 +749,10 @@ function ensureSaveDialog() {
   const bindActions = (dialog) => {
     if (!dialog || dialog.dataset.readerActionsBound === 'true') return dialog;
     dialog.dataset.readerActionsBound = 'true';
-    dialog.querySelector('#confirm-save')?.addEventListener('click', () => void confirmSaveInsight());
+    dialog.querySelector('#confirm-save')?.addEventListener('click', () => void submitReadingForm('confirm-save', 'save-notice', confirmSaveInsight));
     dialog.querySelector('#cancel-save')?.addEventListener('click', () => { editingInsight = null; pendingInsightSource = null; showReading(); });
     return dialog;
   };
-  if (section) return bindActions(section);
-  section = document.createElement('section');
-  section.id = 'save-dialog';
-  section.className = 'setting-panel hidden';
-  section.innerHTML = `<div class="eyebrow">保存阅读成果</div><h2>留下以后能复用的结论</h2><p id="save-mode-note" class="small" style="margin-top:8px">保存为可检索的阅读结论卡，不会在原文添加高亮。</p><div class="card paper"><div class="card-title"><label for="save-quote">原文摘录</label><span id="save-source-title">当前页面</span></div><textarea id="save-quote" class="input" style="margin-top:9px;min-height:100px"></textarea></div><div class="field"><label for="save-note">我的笔记</label><textarea id="save-note" placeholder="补充自己的判断、待验证问题或使用场景"></textarea></div><div class="field"><label for="save-ai-answer">要保存的 AI 结论</label><textarea id="save-ai-answer" placeholder="可以删掉不想长期保留的部分"></textarea></div><div class="field"><label for="save-tags">标签（用逗号分隔，最多 10 个）</label><input id="save-tags" class="input" placeholder="架构, 性能, 待验证" /></div><div id="save-notice" class="notice hidden" role="status" aria-live="polite"></div><div class="actions"><button id="confirm-save" class="primary">保存到阅读库</button><button id="cancel-save" class="secondary">取消</button></div>`;
-  document.querySelector('main.shell')?.appendChild(section);
   return bindActions(section);
 }
 
@@ -710,39 +761,38 @@ function ensureAnnotationDialog() {
   const bindActions = (dialog) => {
     if (!dialog || dialog.dataset.readerActionsBound === 'true') return dialog;
     dialog.dataset.readerActionsBound = 'true';
-    dialog.querySelector('#confirm-annotation')?.addEventListener('click', () => void confirmAnnotation());
+    dialog.querySelector('#confirm-annotation')?.addEventListener('click', () => void submitReadingForm('confirm-annotation', 'annotation-notice', confirmAnnotation));
     dialog.querySelector('#cancel-annotation')?.addEventListener('click', () => { editingAnnotation = null; showReading(); });
     return dialog;
   };
-  if (section) return bindActions(section);
-  section = document.createElement('section');
-  section.id = 'annotation-dialog';
-  section.className = 'setting-panel hidden';
-  section.innerHTML = '<div class="eyebrow">原文标注</div><h2>给这段内容留下位置标记</h2><p class="small" style="margin-top:8px">保存后会按原文位置叠加高亮，并保留一条短笔记；不会创建阅读结论卡。仅在原文版本匹配时高亮，标注保存在浏览器本地。</p><div class="card paper"><div class="card-title"><label for="annotation-quote">待标注原文</label><span id="annotation-source-title">当前页面</span></div><textarea id="annotation-quote" class="input" style="margin-top:9px;min-height:100px" readonly></textarea></div><div class="field"><label for="annotation-note">标注笔记</label><textarea id="annotation-note" placeholder="例如：这里是性能瓶颈的关键假设"></textarea></div><div id="annotation-notice" class="notice hidden" role="status" aria-live="polite"></div><div class="actions"><button id="confirm-annotation" class="primary">保存标注并高亮</button><button id="cancel-annotation" class="secondary">取消</button></div>';
-  document.querySelector('main.shell')?.appendChild(section);
   return bindActions(section);
 }
 
 function contextUrl() { return documentContext?.url || pageContext?.url || selectionContext?.url || ''; }
 
 function normalizeRadarSummaryId(value) {
-  const candidate = String(value || '').trim();
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(candidate)
-    ? candidate
-    : '';
+  return readerStore.normalizeRadarSummaryId(value);
+}
+
+function currentRadarSummaryId(url = contextUrl()) {
+  const key = readerStore.knowledgePageKey(url);
+  return key && key === radarEntryUrl ? normalizeRadarSummaryId(radarEntrySummaryId) : '';
 }
 
 function applyRadarEntryContext(context) {
   if (context?.entrySource !== 'radar') {
+    if (radarEntryUrl && readerStore.knowledgePageKey(context?.url) === radarEntryUrl) return;
     radarEntryPlatformUrl = '';
     radarEntryPromptKey = '';
     radarEntrySummaryId = '';
+    radarEntryUrl = '';
     return;
   }
   const hintedOrigin = trustedPlatformHint(context.entryPlatformUrl, platformUrl);
   const summaryId = normalizeRadarSummaryId(context.entrySummaryId);
   if (hintedOrigin) radarEntryPlatformUrl = hintedOrigin;
-  if (summaryId) radarEntrySummaryId = summaryId;
+  radarEntrySummaryId = summaryId;
+  radarEntryUrl = readerStore.knowledgePageKey(context.url);
 
   const configuredOrigin = normalizePlatformOrigin(platformUrl);
   const canUseHint = !configuredOrigin
@@ -759,7 +809,7 @@ function applyRadarEntryContext(context) {
   if (!promptKey || promptKey === ':') return;
   if (promptKey === radarEntryPromptKey || platformConnected) return;
   radarEntryPromptKey = promptKey;
-  setNotice('这篇内容来自调研平台雷达；连接后可同步会话和确认保存的结论。');
+  setNotice(t("这篇内容来自调研平台雷达；连接后可同步会话和确认保存的结论。"));
 }
 
 function persistJobPatch(job, patch) {
@@ -775,9 +825,9 @@ function translationCoverageWarning(context) {
   const totalChars = Number(context.bodyCharCount || String(context.body || '').length || 0);
   const processedChars = String(context.body || '').length;
   const details = [];
-  if (context.blocksTruncated) details.push(`正文块 ${processedBlocks.toLocaleString()} / ${totalBlocks.toLocaleString()}`);
-  if (context.bodyTruncated) details.push(`字符 ${processedChars.toLocaleString()} / ${totalChars.toLocaleString()}`);
-  return `本页超出当前处理上限（${details.join('，')}）；未覆盖内容没有翻译。`;
+  if (context.blocksTruncated) details.push(t("正文块 {0} / {1}", processedBlocks.toLocaleString(), totalBlocks.toLocaleString()));
+  if (context.bodyTruncated) details.push(t("字符 {0} / {1}", processedChars.toLocaleString(), totalChars.toLocaleString()));
+  return t("本页超出当前处理上限（{0}）；未覆盖内容没有翻译。", details.join('，'));
 }
 
 function saveLocalSession() {
@@ -785,7 +835,7 @@ function saveLocalSession() {
   const pageVersion = documentContext?.contentHash || pageContext?.contentHash || selectionContext?.contentHash || null;
   const snapshot = {
     url: contextUrl(),
-    title: activeSessionTitle || documentContext?.title || pageContext?.title || selectionContext?.title || '未命名页面',
+    title: activeSessionTitle || documentContext?.title || pageContext?.title || selectionContext?.title || t("未命名页面"),
     titleEdited: Boolean(activeSessionTitle && activeSessionTitle !== (documentContext?.title || pageContext?.title || selectionContext?.title || '')),
     version: pageVersion,
     stale: false,
@@ -795,7 +845,7 @@ function saveLocalSession() {
     discussion: discussionHistory,
     discussionScope,
     discussionIntent,
-    radarSummaryId: radarEntrySummaryId || null,
+    radarSummaryId: currentRadarSummaryId() || null,
     image: imageContext?.image ? {
       id: imageContext.image.id,
       src: imageContext.image.src || '',
@@ -834,13 +884,24 @@ async function resumeSession(context) {
     const version = context.contentHash || context.version || null;
     if (version) await readerStore.markSessionsStale(context.url, version);
     const pending = await consumePendingSession(context, version);
-    const session = pending || await readerStore.getSession(context.url, version);
-    if (!session || generation !== sessionGeneration || interaction !== interactionGeneration) return;
+    const session = pending || await readerStore.getReadingSession(context.url, version);
+    if (!session || generation !== sessionGeneration || interaction !== interactionGeneration
+      || readerStore.pageKey(context.url) !== readerStore.pageKey(contextUrl())) return;
+    const restoredRadarSummaryId = normalizeRadarSummaryId(session.radarSummaryId);
+    if (!currentRadarSummaryId(context.url) && restoredRadarSummaryId) {
+      radarEntrySummaryId = restoredRadarSummaryId;
+      radarEntryUrl = readerStore.knowledgePageKey(context.url);
+    }
     const preserveSelection = Boolean(selectionContext?.selection?.quote && selectionContext.url === context.url);
+    const restoredSelection = session.stale ? null : session.selection || null;
     activeSessionTitle = session.titleEdited ? (session.title || context.title || '') : '';
     if (Number(session.scrollY) > 0 || session.selection?.quote || session.image?.id || session.answer || session.discussion?.length) {
       latestAnswer = session.answer || '';
       latestStructuredAnswer = session.answerStructured || null;
+      if (session.stale && latestStructuredAnswer) latestStructuredAnswer = { ...latestStructuredAnswer, evidence: [], warnings: [...(latestStructuredAnswer.warnings || []), t("页面内容已更新，旧引文定位已撤销。")] };
+      latestAnswerContext = session.answer || session.answerStructured
+        ? { ...context, radarSummaryId: restoredRadarSummaryId || undefined, scope: session.stale ? 'page' : session.discussionScope || 'page', selection: restoredSelection }
+        : null;
       discussionHistory = Array.isArray(session.discussion) ? session.discussion : [];
       discussionOpen = Boolean(
         session.answer
@@ -850,21 +911,19 @@ async function resumeSession(context) {
       if (!preserveSelection) discussionIntent = DISCUSSION_INTENTS.has(session.discussionIntent)
         ? session.discussionIntent
         : session.discussion?.some((item) => item?.role === 'user') ? 'ask' : 'explain';
-      if (session.selection?.quote && !preserveSelection) {
-        selectionContext = { ...context, scope: 'selection', selection: session.selection };
+      if (restoredSelection?.quote && !preserveSelection) {
+        selectionContext = { ...context, scope: 'selection', selection: restoredSelection };
       }
-      if (!preserveSelection) discussionScope = ['selection', 'page', 'image'].includes(session.discussionScope)
+      if (!preserveSelection) discussionScope = !session.stale && ['selection', 'page', 'image'].includes(session.discussionScope)
         ? session.discussionScope
-        : 'selection';
-    if (session.image?.id) imageContext = { ...context, image: session.image, restored: true };
-    const restoredRadarSummaryId = normalizeRadarSummaryId(session.radarSummaryId);
-    if (restoredRadarSummaryId) radarEntrySummaryId = restoredRadarSummaryId;
-    renderPage();
-      if (!preserveSelection) sendToPage({ type: 'deep-research:restore-progress', scrollY: session.scrollY, anchor: session.selection || null });
-      if (session.pendingEvidenceAnchor?.quote) {
+        : 'page';
+      if (session.image?.id) imageContext = { ...context, image: session.image, restored: true };
+      renderPage();
+      if (!preserveSelection) sendToPage({ type: 'deep-research:restore-progress', scrollY: session.scrollY, anchor: restoredSelection });
+      if (!session.stale && session.pendingEvidenceAnchor?.quote) {
         sendToPage({ type: 'deep-research:focus-anchor', anchor: session.pendingEvidenceAnchor });
       }
-      if (session.stale) setNotice('已恢复历史会话；当前原文版本不同，旧证据请重新核对后再继续。');
+      if (session.stale) setNotice(t("已恢复历史会话；当前原文版本不同，旧证据请重新核对后再继续。"));
       if (session.resumedFromHistory) window.setTimeout(() => $('question-input')?.focus(), 0);
     }
   })();
@@ -888,7 +947,7 @@ async function consumePendingSession(context, currentVersion) {
   const restored = {
     ...rest,
     url: context.url,
-    title: pending.title || context.title || '未命名页面',
+    title: pending.title || context.title || t("未命名页面"),
     version: currentVersion || pending.version || null,
     stale,
     staleAgainstVersion: stale ? currentVersion : null,
@@ -903,35 +962,35 @@ async function consumePendingSession(context, currentVersion) {
 function formatCoverage(context, scope) {
   if (scope === 'selection') {
     const quoteLength = String(context?.selection?.quote || '').length;
-    const section = context?.sectionTitle || '所在小节';
-    return `当前选段 · ${quoteLength.toLocaleString()} 字符 · ${section}`;
+    const section = context?.sectionTitle || t("所在小节");
+    return t("当前选段 · {0} 字符 · {1}", quoteLength.toLocaleString(), section);
   }
-  if (scope === 'image') return '当前图示与页面正文';
+  if (scope === 'image') return t("当前图示与页面正文");
   const blocks = Number(context?.blockCount || context?.blocks?.length || 0);
   const chars = Number(context?.bodyCharCount || String(context?.body || '').length || 0);
   const bounded = context?.bodyTruncated || context?.blocksTruncated;
-  const parts = ['整页正文'];
-  if (blocks) parts.push(`${blocks} 个正文块`);
-  if (chars) parts.push(`${chars.toLocaleString()} 字符`);
-  if (bounded) parts.push('已按上下文上限截取');
+  const parts = [t("整页正文")];
+  if (blocks) parts.push(t("{0} 个正文块", blocks));
+  if (chars) parts.push(t("{0} 字符", chars.toLocaleString()));
+  if (bounded) parts.push(t("已按上下文上限截取"));
   return parts.join(' · ');
 }
 
 function discussionIntentLabel(intent = discussionIntent) {
-  if (intent === 'summary') return '全文总结';
-  if (intent === 'selection-summary') return '选段总结';
-  if (intent === 'translate') return '翻译';
-  if (intent === 'map') return '文章地图';
-  if (intent === 'architecture') return '关键机制';
-  if (intent === 'tradeoffs') return '风险与取舍';
-  if (intent === 'ask') return '提问';
-  return '解读';
+  if (intent === 'summary') return t("全文总结");
+  if (intent === 'selection-summary') return t("选段总结");
+  if (intent === 'translate') return t("翻译");
+  if (intent === 'map') return t("文章地图");
+  if (intent === 'architecture') return t("关键机制");
+  if (intent === 'tradeoffs') return t("风险与取舍");
+  if (intent === 'ask') return t("提问");
+  return t("解读");
 }
 
 function discussionScopeLabel(scope = discussionScope) {
-  if (scope === 'page') return '整页正文';
-  if (scope === 'image') return '当前图示';
-  return '当前选段';
+  if (scope === 'page') return t("整页正文");
+  if (scope === 'image') return t("当前图示");
+  return t("当前选段");
 }
 
 function discussionLabel(scope = discussionScope, intent = discussionIntent) {
@@ -940,7 +999,7 @@ function discussionLabel(scope = discussionScope, intent = discussionIntent) {
 
 function renderDiscussionScopeControls(scope = discussionScope) {
   const selectionAvailable = Boolean(selectionContext?.selection?.quote);
-  const imageAvailable = readingMode !== 'platform' && Boolean(imageContext?.image);
+  const imageAvailable = Boolean(imageContext?.image);
   const hasAlternative = selectionAvailable || imageAvailable;
   const options = [
     ['scope-page', 'page'],
@@ -979,117 +1038,51 @@ function renderDiscussionContext(scope = discussionScope, intent = discussionInt
   const detail = $('discussion-context-detail');
   const source = context || activeDiscussionContext(scope);
   if (label) label.textContent = discussionLabel(scope, intent);
-  if ($('discussion-source-title')) { $('discussion-source-title').textContent = source?.title || pageContext?.title || '当前页面'; $('discussion-source-title').title = `${source?.title || '当前页面'}\n${source?.url || ''}`; }
+  if ($('discussion-source-title')) { $('discussion-source-title').textContent = source?.title || pageContext?.title || t("当前页面"); $('discussion-source-title').title = `${source?.title || t("当前页面")}\n${source?.url || ''}`; }
   if ($('discussion-source-url')) $('discussion-source-url').textContent = source?.url || pageContext?.url || '';
   if (detail) {
     detail.textContent = formatCoverage(source, scope);
   }
   renderDiscussionScopeControls(scope);
-  if ($('chat-scope-description')) $('chat-scope-description').textContent = scope === 'selection' ? '基于当前选段' : scope === 'image' ? '基于当前图示' : '基于整篇文章';
+  if ($('chat-scope-description')) $('chat-scope-description').textContent = scope === 'selection' ? t("基于当前选段") : scope === 'image' ? t("基于当前图示") : t("基于整篇文章");
   updatePageContextUi(source || pageContext || documentContext);
   renderPersistentComposer(scope);
 }
 
 function suggestedFollowups(scope = activeDiscussionScope(), intent = discussionIntent) {
   if (scope === 'selection') {
-    if (intent === 'translate') return ['这段中的技术术语分别是什么意思？', '把这段改写成实现步骤。', '这段内容有哪些隐含前提？'];
-    if (intent === 'selection-summary') return ['这段结论依赖哪些原文证据？', '这段和文章主线是什么关系？', '这段有没有可能的反例？'];
-    return ['这段代码或机制的关键约束是什么？', '能用一个具体例子说明吗？', '这段方案的替代做法是什么？'];
+    if (intent === 'translate') return [t("这段中的技术术语分别是什么意思？"), t("把这段改写成实现步骤。"), t("这段内容有哪些隐含前提？")];
+    if (intent === 'selection-summary') return [t("这段结论依赖哪些原文证据？"), t("这段和文章主线是什么关系？"), t("这段有没有可能的反例？")];
+    return [t("这段代码或机制的关键约束是什么？"), t("能用一个具体例子说明吗？"), t("这段方案的替代做法是什么？")];
   }
-  if (scope === 'image') return ['图中的数据流瓶颈在哪里？', '哪些组件关系可以从图中直接确认？', '这张图对应的实现风险是什么？'];
-  if (intent === 'summary') return ['作者的核心假设是什么？', '哪些结论需要结合其他资料核对？', '这套方案与常见做法相比改变了什么？'];
-  if (intent === 'map') return ['先解释最关键的一条依赖链。', '哪一章最值得优先阅读？', '文章的主线是否存在跳步？'];
-  if (intent === 'architecture') return ['哪些组件是不可替代的？', '如果规模扩大，最先遇到什么瓶颈？', '请把架构转成实现检查清单。'];
-  if (intent === 'tradeoffs') return ['哪些取舍是文章明确说出的？', '有哪些失败条件没有被验证？', '请给出一个反例或替代方案。'];
-  return ['用一个具体例子说明刚才的结论。', '这篇文章有哪些隐含前提？', '请把回答压缩成实现检查清单。'];
+  if (scope === 'image') return [t("图中的数据流瓶颈在哪里？"), t("哪些组件关系可以从图中直接确认？"), t("这张图对应的实现风险是什么？")];
+  if (intent === 'summary') return [t("作者的核心假设是什么？"), t("哪些结论需要结合其他资料核对？"), t("这套方案与常见做法相比改变了什么？")];
+  if (intent === 'map') return [t("先解释最关键的一条依赖链。"), t("哪一章最值得优先阅读？"), t("文章的主线是否存在跳步？")];
+  if (intent === 'architecture') return [t("哪些组件是不可替代的？"), t("如果规模扩大，最先遇到什么瓶颈？"), t("请把架构转成实现检查清单。")];
+  if (intent === 'tradeoffs') return [t("哪些取舍是文章明确说出的？"), t("有哪些失败条件没有被验证？"), t("请给出一个反例或替代方案。")];
+  return [t("用一个具体例子说明刚才的结论。"), t("这篇文章有哪些隐含前提？"), t("请把回答压缩成实现检查清单。")];
 }
 
 function renderDiscussionFollowups(scope = activeDiscussionScope(), intent = discussionIntent) {
   const section = $('discussion-followups');
   const list = $('discussion-followup-list');
   if (!section || !list) return;
-  list.textContent = '';
-  if (!latestStructuredAnswer || discussionRunning) {
-    show(section, false);
-    return;
-  }
-  suggestedFollowups(scope, intent).forEach((prompt) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'discussion-followup';
-    button.textContent = prompt;
-    button.title = '继续使用当前上下文提问';
-    button.addEventListener('click', () => {
-      if (discussionRunning) return;
-      void explainOrAsk(prompt, scope, 'ask');
-    });
-    list.appendChild(button);
-  });
-  show(section, list.childElementCount > 0);
+  const prompts = latestStructuredAnswer && !discussionRunning ? suggestedFollowups(scope, intent) : [];
+  renderMaterialFollowups(list, prompts, prompt => { if (!discussionRunning) void explainOrAsk(prompt, scope, 'ask'); });
+  show(section, prompts.length > 0);
 }
 
 function renderConversation() {
   const list = $('conversation-list');
   if (!list) return;
-  list.textContent = '';
-  const messages = discussionHistory.filter((item) => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
-  const latestAssistant = [...messages].reverse().find(candidate => candidate.role === 'assistant');
-  messages.forEach((item) => {
-    const message = document.createElement('article');
-    message.className = `conversation-message ${item.role === 'user' ? 'user' : 'assistant'}`;
-    const header = document.createElement('div');
-    header.className = 'conversation-message-header';
-    header.textContent = item.role === 'user' ? '你' : 'Reader';
-    const body = document.createElement('div');
-    body.className = 'conversation-message-body';
-    if (item.role === 'assistant') {
-      renderMarkdown(body, readingAnswerText(item.content));
-      if (item === latestAssistant && item.content === latestStructuredAnswer?.answer) {
-        bindCitationReferences(body, Array.isArray(latestStructuredAnswer.evidence) ? latestStructuredAnswer.evidence : []);
-      } else {
-        bindCitationReferences(body, []);
-      }
-    }
-    else body.textContent = String(item.content || '');
-    message.append(header, body);
-    // The latest answer keeps its evidence-aware actions below the response.
-    // Earlier responses can be copied in place without changing the active answer.
-    if (item.role === 'assistant' && item !== latestAssistant) {
-      const actions = document.createElement('div');
-      actions.className = 'conversation-message-tools';
-      const copy = document.createElement('button');
-      copy.className = 'text-button conversation-copy';
-      copy.type = 'button';
-      copy.textContent = '复制';
-      copy.setAttribute('aria-label', '复制这条回答');
-      copy.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(readingAnswerText(item.content)); copy.textContent = '已复制'; }
-        catch { setNotice('浏览器没有开放剪贴板权限，请手动选择回答复制。'); }
-      });
-      actions.appendChild(copy); message.appendChild(actions);
-    }
-    list.appendChild(message);
+  const messages = discussionHistory.filter(item => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  renderMaterialConversation(list, messages, {
+    copy: true,
+    bindLatest: element => bindCitationReferences(element, Array.isArray(latestStructuredAnswer?.evidence) ? latestStructuredAnswer.evidence : []),
+    onCopyError: () => setNotice(t("浏览器没有开放剪贴板权限，请手动选择回答复制。")),
   });
   show(list, messages.length > 0);
   show($('conversation-empty'), messages.length === 0 && !discussionRunning);
-}
-
-function revealLatestAnswerDetails() {
-  const transcript = $('chat-transcript');
-  if (!transcript) return;
-  const target = $('answer-evidence-list')?.lastElementChild
-    || $('discussion-followups')
-    || $('answer-actions');
-  if (!target) return;
-  requestAnimationFrame(() => {
-    const transcriptRect = transcript.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    if (targetRect.bottom > transcriptRect.bottom) {
-      transcript.scrollTop += targetRect.bottom - transcriptRect.bottom + 8;
-    } else if (targetRect.top < transcriptRect.top) {
-      transcript.scrollTop -= transcriptRect.top - targetRect.top + 8;
-    }
-  });
 }
 
 function renderEmptyState() {
@@ -1098,40 +1091,40 @@ function renderEmptyState() {
   const primary = $('empty-settings');
   if (!title || !description || !primary) return;
   if (!textModelReady()) {
-    title.textContent = readingMode === 'platform' ? '平台模式尚未连接。' : '独立模式尚未配置模型。';
+    title.textContent = readingMode === 'platform' ? t("平台模式尚未连接。") : t("独立模式尚未配置模型。");
     description.textContent = readingMode === 'platform'
-      ? '连接并登录调研平台后，问答与全文翻译即可使用平台 AI Engine。'
-      : '配置本地模型，或在设置中切换到平台模式并连接调研平台。';
-    primary.textContent = readingMode === 'platform' ? '连接调研平台' : '配置独立模型';
+      ? t("连接并登录调研平台后，问答与全文翻译即可使用平台 AI Engine。")
+      : t("配置本地模型，或在设置中切换到平台模式并连接调研平台。");
+    primary.textContent = readingMode === 'platform' ? t("连接调研平台") : t("配置独立模型");
     primary.disabled = false;
     show(primary, true);
     return;
   }
   if (activationNeeded?.reason === 'unsupported') {
-    title.textContent = '当前页面不支持阅读。';
-    description.textContent = 'Chrome 内置页、扩展商店和其他受保护页面不允许注入阅读助手。请切换到公开文章、文档或 GitHub 页面。';
+    title.textContent = t("当前页面不支持阅读。");
+    description.textContent = t("Chrome 内置页、扩展商店和其他受保护页面不允许注入阅读助手。请切换到公开文章、文档或 GitHub 页面。");
     show(primary, false);
     return;
   }
   if (activationNeeded?.reason === 'unknown') {
-    title.textContent = '暂时无法确认当前网页。';
-    description.textContent = '请切回普通网页，或点击浏览器工具栏中的 Deep Research Reader 图标后重试。';
-    primary.textContent = '重新检查当前页';
+    title.textContent = t("暂时无法确认当前网页。");
+    description.textContent = t("请切回普通网页，或点击浏览器工具栏中的 Deep Research Reader 图标后重试。");
+    primary.textContent = t("重新检查当前页");
     primary.disabled = false;
     show(primary, true);
     return;
   }
   if (activationNeeded?.reason === 'permission') {
-    title.textContent = '启用当前网页，开始阅读。';
-    description.textContent = '只会为这个站点申请访问权限。点击后才读取当前页面，之后在本窗口切换网页会再次询问。';
-    primary.textContent = '启用此站点';
+    title.textContent = t("启用当前网页，开始阅读。");
+    description.textContent = t("只会为这个站点申请访问权限。点击后才读取当前页面，之后在本窗口切换网页会再次询问。");
+    primary.textContent = t("启用此站点");
     primary.disabled = false;
     show(primary, true);
     return;
   }
-  title.textContent = '开始阅读当前网页。';
-  description.textContent = '点击下方按钮只启用当前页；全文翻译、选段解读和讨论都从原网页开始。';
-  primary.textContent = '开始阅读当前页';
+  title.textContent = t("开始阅读当前网页。");
+  description.textContent = t("点击下方按钮只启用当前页；全文翻译、选段解读和讨论都从原网页开始。");
+  primary.textContent = t("开始阅读当前页");
   primary.disabled = false;
   show(primary, true);
 }
@@ -1143,29 +1136,34 @@ function renderSavedInsightBanner() {
   const visible = Boolean(lastSavedInsight?.id && lastSavedInsight.url && lastSavedInsight.url === currentUrl);
   show(banner, visible);
   if (!visible) return;
-  if ($('saved-insight-title')) $('saved-insight-title').textContent = '已保存阅读结论';
+  if ($('saved-insight-title')) $('saved-insight-title').textContent = t("已保存阅读结论");
   if ($('saved-insight-detail')) {
     $('saved-insight-detail').textContent = lastSavedInsight.quote
-      ? `已保存摘录和结论：${String(lastSavedInsight.quote).slice(0, 72)}${String(lastSavedInsight.quote).length > 72 ? '…' : ''}`
-      : '可以回到当前会话继续讨论。';
+      ? t("已保存摘录和结论：{0}{1}", String(lastSavedInsight.quote).slice(0, 72), String(lastSavedInsight.quote).length > 72 ? '…' : '')
+      : t("可以回到当前会话继续讨论。");
   }
 }
 
 function latestAnswerSource() {
-  const context = activeDiscussionContext(activeDiscussionScope()) || documentContext || pageContext || selectionContext;
+  const context = latestAnswerContext || activeDiscussionContext(activeDiscussionScope()) || documentContext || pageContext || selectionContext;
   if (!context?.url) return null;
+  const radarSummaryId = latestAnswerContext
+    ? normalizeRadarSummaryId(latestAnswerContext.radarSummaryId) || undefined
+    : currentRadarSummaryId(context.url) || undefined;
   const answer = latestStructuredAnswer && typeof latestStructuredAnswer === 'object'
     ? latestStructuredAnswer
     : null;
   const evidence = Array.isArray(answer?.evidence)
-    ? answer.evidence.find((item) => item?.quote && item?.anchor?.quote)
+    ? answer.evidence.find((item) => item?.quote && item?.anchor?.quote
+      && (!item.url || readerStore.pageKey(item.url) === readerStore.pageKey(context.url)))
     : null;
   if (evidence) {
     const version = context.contentHash || context.version || evidence.anchor.contentHash || null;
     return {
-      title: context.title || '未命名页面',
+      title: context.title || t("未命名页面"),
       url: context.url,
-      document: { url: context.url, title: context.title || '未命名页面', version },
+      radarSummaryId,
+      document: { url: context.url, title: context.title || t("未命名页面"), version },
       quote: String(evidence.quote).trim(),
       anchor: evidence.anchor,
       note: '',
@@ -1173,14 +1171,19 @@ function latestAnswerSource() {
       tags: [],
     };
   }
-  if (selectionContext?.selection?.quote && selectionContext.url === context.url) {
-    const version = selectionContext.contentHash || selectionContext.version || selectionContext.selection.contentHash || null;
+  const scope = latestAnswerContext?.scope || activeDiscussionScope();
+  const selection = scope === 'selection'
+    ? (context.selection?.quote ? context.selection : selectionContext?.selection)
+    : null;
+  if (selection?.quote && (latestAnswerContext || !selectionContext?.url || selectionContext.url === context.url)) {
+    const version = context.contentHash || context.version || selection.contentHash || null;
     return {
-      title: selectionContext.title || context.title || '未命名页面',
-      url: selectionContext.url,
-      document: { url: selectionContext.url, title: selectionContext.title || context.title || '未命名页面', version },
-      quote: selectionContext.selection.quote,
-      anchor: selectionContext.selection,
+      title: context.title || selectionContext?.title || t("未命名页面"),
+      url: context.url,
+      radarSummaryId,
+      document: { url: context.url, title: context.title || selectionContext?.title || t("未命名页面"), version },
+      quote: selection.quote,
+      anchor: selection,
       note: '',
       aiAnswer: latestAnswer,
       tags: [],
@@ -1189,31 +1192,20 @@ function latestAnswerSource() {
   const body = String(context.body || '').trim();
   if (!body) return null;
   return {
-    title: context.title || '未命名页面',
+    title: context.title || t("未命名页面"),
     url: context.url,
-    document: { url: context.url, title: context.title || '未命名页面', version: context.contentHash || context.version || null },
+    radarSummaryId,
+    document: { url: context.url, title: context.title || t("未命名页面"), version: context.contentHash || context.version || null },
     quote: body.slice(0, 600),
     note: '',
     aiAnswer: latestAnswer,
     tags: [],
-    fallbackWarning: '当前回答没有可精确定位的原文证据；这里只能保存页面开头的无锚点摘录，请确认后再保存。',
+    fallbackWarning: t("当前回答没有可精确定位的原文证据；这里只能保存页面开头的无锚点摘录，请确认后再保存。"),
   };
 }
 
-function returnLatestAnswerToSource() {
-  const source = latestAnswerSource();
-  if (!source) {
-    setNotice('当前回答没有可回链的原文证据。');
-    return;
-  }
-  if (!source.anchor?.quote) {
-    setNotice('当前回答没有可精确定位的证据，无法安全跳回原文。');
-    return;
-  }
-  focusReadingAnchor(source.anchor);
-}
-
 function renderPage() {
+  void updatePageKnowledge();
   if (['settings-view', 'save-dialog', 'annotation-dialog'].some((id) => {
     const view = $(id);
     return view && !view.classList.contains('hidden');
@@ -1228,37 +1220,34 @@ function renderPage() {
     renderEmptyState();
     return;
   }
-  $('page-title').textContent = context.title || '未命名页面';
+  $('page-title').textContent = context.title || t("未命名页面");
   $('page-source').textContent = context.url || '';
   updatePageContextUi(context);
   const scopeNotice = $('scope-notice');
   const scopeWarnings = Array.isArray(context.scopeWarnings) ? context.scopeWarnings.filter(Boolean) : [];
   if (context.entrySource === 'radar') {
-    scopeWarnings.unshift('来自 Deep Research 雷达。连接和同步仍需你的明确操作。');
+    scopeWarnings.unshift(t("来自 Deep Research 雷达。连接和同步仍需你的明确操作。"));
   }
   if (scopeNotice) {
     scopeNotice.textContent = scopeWarnings.join('\n');
+    show($('scope-details'), scopeWarnings.length > 0);
     show(scopeNotice, scopeWarnings.length > 0);
   }
   if (context.translationDetected && !translationRequested) {
-    setNotice('检测到页面可能已有其他翻译插件。开启 Deep Research Reader 前请确认是否继续，避免重复插入译文。');
+    setNotice(t("检测到页面可能已有其他翻译插件。开启 Deep Research Reader 前请确认是否继续，避免重复插入译文。"));
   }
-  show($('selection-section'), Boolean(selectionContext?.selection?.quote));
-  if (selectionContext?.selection?.quote) {
-    $('selection-quote').textContent = selectionContext.selection.quote;
-    $('selection-scope').textContent = selectionContext.sectionTitle || '所在小节';
-  }
-  show($('image-section'), Boolean(imageContext?.image));
   if (imageContext?.image) {
     const image = imageContext.image;
-    $('image-preview-title').textContent = image.alt || image.src || `图示 ${image.id || ''}`;
+    $('image-preview-title').textContent = image.alt || t("当前图示");
+    const thumbnail = $('image-preview-thumbnail');
+    const previewUrl = image.dataUrl || image.src || '';
+    if (thumbnail) { thumbnail.src = /^(https?:\/\/|data:image\/)/u.test(previewUrl) ? previewUrl : ''; show(thumbnail, Boolean(thumbnail.getAttribute('src'))); }
     $('image-preview-meta').textContent = readingMode === 'platform'
-      ? '平台模式暂不支持围绕图示问答；全文翻译仍可按需识别并翻译图片文字。'
+      ? t("平台视觉模型结合当前图示和正文回答；图片仅在你提问时发送。")
       : imageContext.restored
-        ? '已恢复图示讨论上下文；如需继续追问，请在原网页重新点击该图示。'
-        : `${image.width || '?'} × ${image.height || '?'} · 图片内容只按需发送给视觉模型`;
-    show($('explain-image'), readingMode !== 'platform');
-    show($('ask-image'), readingMode !== 'platform');
+        ? t("已恢复图示讨论上下文；如需继续追问，请在原网页重新点击该图示。")
+        : t("{0} × {1} · 图片内容只按需发送给视觉模型", image.width || '?', image.height || '?');
+    show($('explain-image'), true);
   }
   const visibleDiscussionScope = activeDiscussionScope();
   // Keep the page action surface compact until the user chooses a discussion
@@ -1275,92 +1264,71 @@ function renderPage() {
   show($('discussion-section'), discussionVisible);
   renderDiscussionContext(visibleDiscussionScope, discussionIntent, activeDiscussionContext(visibleDiscussionScope));
   renderConversation();
-  renderMarkdown($('answer-output'), readingAnswerText(latestAnswer));
-  show($('answer-output'), discussionOpen && (discussionRunning || !discussionHistory.length));
+  show($('answer-output'), discussionRunning && Boolean(pendingAnswer?.streamedText));
   renderStructuredAnswer(latestStructuredAnswer);
   renderDiscussionFollowups(visibleDiscussionScope, discussionIntent);
   renderPersistentComposer(visibleDiscussionScope);
+  renderPendingAnswer();
   renderSavedInsightBanner();
 }
 
-function renderProgress(textDone = 0, textTotal = 0, imageDone = 0, imageTotal = 0) {
-  show($('translation-summary'), translationRunning || translationPaused);
-  if ($('translation-summary-text')) $('translation-summary-text').textContent = translationPaused ? '翻译已暂停 · 已完成内容保留' : `正在翻译 ${textDone}/${textTotal} 段 · ${imageDone}/${imageTotal} 图`;
-  if ($('translation-summary-pause')) $('translation-summary-pause').textContent = translationPaused ? '继续' : '暂停';
+function renderProgress(textDone = activeJobRecord?.textDone || 0, textTotal = activeJobRecord?.textTotal || 0, imageDone = activeJobRecord?.imageDone || 0, imageTotal = activeJobRecord?.imageTotal || 0) {
+  updateTranslationLanguageUi();
+  const skippedTextCount = activeJobRecord?.skippedTextIds?.length || 0;
+  const displayTotal = Math.max(0, textTotal - skippedTextCount);
+  const displayDone = Math.min(displayTotal, Array.isArray(activeJobRecord?.appliedTextIds)
+    ? activeJobRecord.appliedTextIds.length : (pageContext?.translatedBlockIds?.length || 0));
+  const displayIncomplete = activeJobRecord?.status !== 'cancelled' && !translationRunning && displayTotal > 0 && displayDone < displayTotal;
+  const needsRetry = !translationRunning && !translationPaused && failedTranslationItems.length > 0;
+  const hasTranslations = Boolean(translatedTextIds.size || translatedImageIds.size || pageContext?.translatedBlockIds?.length || pageContext?.translatedImageIds?.length || ((translationRequested || fullTranslationEnabled) && (textDone || imageDone)));
+  const failed = !translationRunning && !translationPaused && (activeJobRecord?.status === 'failed' || displayIncomplete);
+  const visible = translationRunning || translationPaused || needsRetry || hasTranslations || failed;
+  const task = $('translation-summary');
+  const previousState = task.dataset.state;
+  show(task, visible);
+  task.dataset.state = needsRetry || failed ? 'error' : translationPaused ? 'paused' : translationRunning ? 'progress' : 'completed';
+  $('translation-summary-text').textContent = translationPaused ? t("翻译已暂停，已完成内容保留")
+    : translationRunning ? (textTotal || imageTotal ? t("正在翻译 · {0}/{1} 段{2}", displayDone, displayTotal, imageTotal ? ` · ${t("{0} / {1} 张图片", imageDone, imageTotal)}` : '') : t("正在读取网页…"))
+      : needsRetry ? t("{0} 项翻译需要重试", failedTranslationItems.length)
+        : failed ? t("翻译未完成，可重试")
+          : activeJobRecord?.status === 'cancelled' ? t("翻译已取消，已完成内容保留")
+            : t("本页已有译文");
+  const details = $('translation-details');
+  if (!visible) details.open = false;
+  else if ((needsRetry || failed) && previousState !== 'error') details.open = true;
   show($('progress-area'), Boolean(textTotal || imageTotal || translationRunning || failedTranslationItems.length));
-  const textPercent = textTotal ? Math.round((textDone / textTotal) * 100) : 0;
+  const textPercent = displayTotal ? Math.round((displayDone / displayTotal) * 100) : 0;
   const imagePercent = imageTotal ? Math.round((imageDone / imageTotal) * 100) : 0;
-  $('text-progress-value').textContent = `${textDone} / ${textTotal}`;
+  $('text-progress-value').textContent = `${displayDone} / ${displayTotal}`;
+  $('text-progress-value').title = skippedTextCount ? t("已显示 {0} 段译文；{1} 个代码块保留原文，不计入翻译完成数。", displayDone, skippedTextCount) : t("已在原网页显示的译文数量");
   $('text-progress-track').setAttribute('aria-valuenow', String(textPercent));
-  $('text-progress-track').setAttribute('aria-valuetext', textTotal ? `${textDone} / ${textTotal} 个正文片段` : '尚未开始');
+  $('text-progress-track').setAttribute('aria-valuetext', displayTotal ? t("{0} / {1} 个正文片段", displayDone, displayTotal) : t("尚未开始"));
   $('text-progress-bar').style.width = `${textPercent}%`;
-  $('image-progress-value').textContent = imageTotal ? `${imageDone} / ${imageTotal}` : '无可读取图片';
+  $('image-progress-value').textContent = imageTotal ? `${imageDone} / ${imageTotal}` : t("无可读取图片");
   $('image-progress-value').title = imageTotal && readingMode === 'platform'
-    ? '图片文字翻译由调研平台视觉能力处理；图片只在本次操作中按需上传，不会保存到平台阅读库。'
+    ? t("图片文字翻译由调研平台视觉能力处理；图片只在本次操作中按需上传，不会保存到平台阅读库。")
     : '';
   $('image-progress-track').setAttribute('aria-valuenow', String(imagePercent));
-  $('image-progress-track').setAttribute('aria-valuetext', imageTotal ? `${imageDone} / ${imageTotal} 张图片` : '无可读取图片');
+  $('image-progress-track').setAttribute('aria-valuetext', imageTotal ? t("{0} / {1} 张图片", imageDone, imageTotal) : t("无可读取图片"));
   $('image-progress-bar').style.width = `${imagePercent}%`;
   $('progress-area').setAttribute('aria-busy', String(translationRunning));
-  $('translate-all').textContent = translationRunning ? '处理中…' : '全文翻译';
-  $('translate-all').disabled = translationRunning;
-  show($('pause-translation'), translationRunning);
-  show($('cancel-translation'), translationRunning);
+  $('chat-translate').disabled = translationRunning && activeDiscussionScope() !== 'selection';
+  $('pause-translation').textContent = translationPaused && translationRunning ? t("正在暂停…") : translationPaused ? t("继续") : failed ? t("重试") : t("暂停");
+  $('pause-translation').disabled = translationPaused && translationRunning;
+  show($('pause-translation'), translationRunning || translationPaused || failed);
+  show($('cancel-translation'), translationRunning || translationPaused);
+  show($('restore-page'), hasTranslations);
   renderTranslationFailures();
 }
 
 function renderTranslationFailures() {
   const section = $('translation-failures');
   if (!section) return;
-  section.textContent = '';
-  if (!failedTranslationItems.length) {
-    show(section, false);
-    return;
-  }
-  const title = document.createElement('div');
-  title.className = 'translation-failures-title';
-  title.textContent = `${failedTranslationItems.length} 项需要处理`;
-  section.appendChild(title);
-  failedTranslationItems.slice(0, 20).forEach((item) => {
-    const row = document.createElement('div');
-    row.className = 'translation-failure-row';
-    const copy = document.createElement('div');
-    copy.className = 'translation-failure-label';
-    copy.textContent = `${item.kind === 'image' ? '图片' : '正文'} · ${item.label || item.id}`;
-    copy.title = item.error || '';
-    const error = document.createElement('div');
-    error.className = 'translation-failure-error';
-    error.textContent = item.error || '处理失败';
-    copy.appendChild(error);
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'translation-retry';
-    button.textContent = retryingTranslationId === item.id ? '处理中…' : '重试';
-    button.disabled = Boolean(retryingTranslationId);
-    button.addEventListener('click', () => void retryTranslationItem(item));
-    row.append(copy);
-    if (item.kind === 'image' && /动画图片只处理/u.test(item.error || '')) {
-      const frameButton = document.createElement('button');
-      frameButton.type = 'button';
-      frameButton.className = 'translation-retry';
-      frameButton.textContent = '标记当前帧';
-      frameButton.disabled = Boolean(retryingTranslationId);
-      frameButton.addEventListener('click', () => {
-        sendToPage({ type: 'deep-research:mark-static-frame', imageId: item.id });
-        setNotice('已标记当前帧；正在重新读取图片，随后可重试翻译。');
-      });
-      row.append(frameButton);
-    }
-    row.append(button);
-    section.appendChild(row);
+  renderMaterialFailures(section, failedTranslationItems, retryingTranslationId, item => void retryTranslationItem(item), id => {
+    sendToPage({ type: 'deep-research:mark-static-frame', imageId: id });
+    setNotice(t("已标记当前帧；正在重新读取图片，随后可重试翻译。"));
   });
-  if (failedTranslationItems.length > 20) {
-    const more = document.createElement('div');
-    more.className = 'translation-failure-error';
-    more.textContent = `还有 ${failedTranslationItems.length - 20} 项未展开。再次点击全文翻译可继续处理。`;
-    section.appendChild(more);
-  }
-  show(section, true);
+  show(section, failedTranslationItems.length > 0);
 }
 
 async function applyAnnotationsForContext(context) {
@@ -1381,76 +1349,113 @@ async function applyAnnotationsForContext(context) {
 }
 
 async function updateLibrary() {
-  const [insights, sessions, annotations] = await Promise.all([
+  void updatePageKnowledge({ refresh: true });
+  const [insights, annotations] = await Promise.all([
     readerStore.listInsights(),
-    readerStore.listSessions(),
     readerStore.listAnnotations(),
   ]);
   const list = $('library-list');
   const historyButton = $('open-history');
-  if (historyButton) historyButton.textContent = sessions.length ? `聊天记录 · ${sessions.length}` : '聊天记录';
-  if (!insights.length && !sessions.length && !annotations.length) {
-    list.textContent = '还没有本地保存的成果。';
-    return;
+  if (historyButton) historyButton.textContent = t("聊天记录");
+  const records = [
+    ...insights.slice(0, 12).map(insight => ({ key: insight.id, className: 'insight-row', title: insight.title || insight.quote,
+      detail: insight.quote, tags: insight.tags, meta: new Date(insight.createdAt).toLocaleString(), actions: [
+        { label: t("编辑"), action: 'edit', run: () => openSaveDialog(insight) },
+        { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteInsight(insight.id); await updateLibrary(); } },
+      ] })),
+    ...annotations.slice(0, 12).map(annotation => ({ key: annotation.id, className: 'insight-row annotation-row',
+      title: annotation.note || annotation.document?.title || t("未命名标注"), detail: annotation.anchor?.quote,
+      meta: t("标注 · {0}", new Date(annotation.updatedAt || annotation.createdAt).toLocaleString()), actions: [
+        { label: t("回到原文"), action: 'focus', run: async () => { try { await chrome.tabs.create({ url: buildAnnotationUrl(annotation.document.url, annotation.anchor), active: true }); } catch { setNotice(t("无法打开原文，请复制来源地址后重试。")); } } },
+        { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteAnnotation(annotation.id); if (readerStore.pageKey(contextUrl()) === readerStore.pageKey(annotation.document.url)) sendToPage({ type: 'deep-research:clear-annotations' }); await updateLibrary(); } },
+      ] })),
+  ];
+  renderMaterialRecords(list, records, t("还没有收藏。点击选段旁的“保存摘录”或回答下方的“保存结论”，确认后才会加入这里。聊天记录自动保存在“历史”中。"));
+}
+
+async function openKnowledgeUrl(value) {
+  if (!readerStore.knowledgePageKey(value)) return;
+  try { await chrome.tabs.create({ url: value, active: true }); }
+  catch { setNotice(t("无法打开原文，请复制来源地址后重试。")); }
+}
+
+function renderPageKnowledge(items) {
+  const host = $('page-knowledge-list');
+  if (!host) return;
+  const wasVisible = !$('page-knowledge')?.classList.contains('hidden');
+  renderMaterialRecords(host, items.map(item => {
+    const text = String(item.note || item.aiAnswer || item.quote || item.anchor?.quote || '').trim();
+    const date = new Date(item.updatedAt || item.createdAt || '');
+    const source = item.kind === 'platform' ? t("研究库") : item.kind === 'annotation' ? t("标注") : t("本地收藏");
+    const researchUrl = platformConnected && item.platformResearchId
+      ? `${platformUrl}/researches/${encodeURIComponent(item.platformResearchId)}` : '';
+    return {
+      key: `${item.kind}:${item.id}`, title: item.title || item.document?.title || source,
+      detail: text.slice(0, 240) + (text.length > 240 ? '…' : ''),
+      meta: [source, Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString()].filter(Boolean).join(' · '),
+      status: item.stale ? t("旧版本") : undefined,
+      warning: item.stale,
+      actions: [
+        { label: t("原文 ↗"), action: 'source', run: () => void openKnowledgeUrl(item.url || item.document?.url) },
+        ...(researchUrl ? [{ label: t("研究库"), action: 'research', run: () => {
+          if (platformConnected && item.platformOrigin === normalizePlatformOrigin(platformUrl)) void openKnowledgeUrl(researchUrl);
+        } }] : []),
+        ...(item.kind === 'insight' ? [{ label: t("编辑"), action: 'edit', run: async () => {
+          const insight = await readerStore.getInsight(item.id);
+          if (insight) openSaveDialog(insight);
+        } }] : []),
+      ],
+    };
+  }));
+  show($('page-knowledge'), items.length > 0);
+  if (items.length && !wasVisible && $('page-knowledge-disclosure')) $('page-knowledge-disclosure').open = true;
+}
+
+async function updatePageKnowledge({ refresh = false } = {}) {
+  const url = contextUrl();
+  const version = documentContext?.contentHash || pageContext?.contentHash || selectionContext?.contentHash || null;
+  const origin = platformConnected && !platformDisconnecting ? normalizePlatformOrigin(platformUrl) : '';
+  const events = platformStateEvents;
+  const key = JSON.stringify([url, version, origin, events]);
+  if (!refresh && key === pageKnowledgeKey) return;
+  pageKnowledgeKey = key;
+  const request = ++pageKnowledgeRequest;
+  pageKnowledgeController?.abort();
+  const controller = new AbortController();
+  pageKnowledgeController = controller;
+  renderPageKnowledge([]);
+  if (!readerStore.knowledgePageKey(url)) return;
+  const current = () => request === pageKnowledgeRequest && contextUrl() === url
+    && events === platformStateEvents && !controller.signal.aborted
+    && origin === (platformConnected && !platformDisconnecting ? normalizePlatformOrigin(platformUrl) : '');
+  try {
+    const local = await readerStore.listPageKnowledge(url, { version, origin });
+    if (!current()) return;
+    renderPageKnowledge(local);
+    if (!origin) return;
+    const token = await readPlatformToken();
+    if (!token || !current()) return;
+    const response = await fetch(`${origin}/api/reading/save?url=${encodeURIComponent(url)}`, {
+      headers: { authorization: `Bearer ${token}` }, cache: 'no-store',
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8_000)]),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!current()) return;
+    if (response.status === 401 || response.status === 403) {
+      setPlatformConnected(false, t("平台令牌已失效，请重新连接"));
+      return;
+    }
+    if (!response.ok) return;
+    const items = await readerStore.listPageKnowledge(url, { version, origin, platformItems: payload.items });
+    if (current()) renderPageKnowledge(items);
+  } catch {
+    // Optional recall must not interrupt local reading or expose cached cloud
+    // results after a disconnect. Local confirmed records remain available.
   }
-  list.textContent = '';
-  insights.slice(0, 12).forEach((insight) => {
-    const row = document.createElement('div');
-    row.className = 'insight-row';
-    // Imported titles, tags and IDs are untrusted data. Keep the markup
-    // static and assign all user-controlled values through textContent.
-    row.innerHTML = '<div class="row-main"><div class="row-title"></div><div class="row-meta"></div></div><div class="actions" style="margin-top:0"><button class="text-button" data-action="edit">编辑</button><button class="text-button" data-action="delete">删除</button></div>';
-    row.querySelector('.row-title').textContent = insight.quote || insight.title;
-    row.querySelector('.row-meta').textContent = `收藏${insight.tags?.length ? ` · ${insight.tags.join('、')}` : ''} · ${new Date(insight.createdAt).toLocaleString()}`;
-    row.querySelector('[data-action="edit"]').addEventListener('click', () => openSaveDialog(insight));
-    row.querySelector('[data-action="delete"]').addEventListener('click', async () => { await readerStore.deleteInsight(insight.id); updateLibrary(); });
-    list.appendChild(row);
-  });
-  annotations.slice(0, 12).forEach((annotation) => {
-    const row = document.createElement('div');
-    row.className = 'insight-row annotation-row';
-    row.innerHTML = '<div class="row-main"><div class="row-title"></div><div class="row-meta"></div></div><div class="actions" style="margin-top:0"><button class="text-button" data-action="focus">回到原文</button><button class="text-button" data-action="delete">删除</button></div>';
-    row.querySelector('.row-title').textContent = annotation.note || annotation.anchor?.quote || annotation.document?.title || '未命名标注';
-    row.querySelector('.row-meta').textContent = `标注 · ${annotation.anchor?.quote || ''} · ${new Date(annotation.updatedAt || annotation.createdAt).toLocaleString()}`;
-    row.querySelector('[data-action="focus"]').addEventListener('click', async () => {
-      try {
-        await chrome.tabs.create({ url: buildAnnotationUrl(annotation.document.url, annotation.anchor), active: true });
-      } catch {
-        setNotice('无法打开原文，请复制来源地址后重试。');
-      }
-    });
-    row.querySelector('[data-action="delete"]').addEventListener('click', async () => {
-      await readerStore.deleteAnnotation(annotation.id);
-      if (readerStore.pageKey(contextUrl()) === readerStore.pageKey(annotation.document.url)) sendToPage({ type: 'deep-research:clear-annotations' });
-      await updateLibrary();
-    });
-    list.appendChild(row);
-  });
-  sessions.slice(0, 6).forEach((session) => {
-    const row = document.createElement('div');
-    row.className = 'session-row';
-    row.innerHTML = '<div class="row-main"><div class="row-title"></div><div class="row-meta"></div></div><div class="actions" style="margin-top:0"><button class="text-button" data-action="open">打开原文</button><button class="text-button" data-action="delete">删除</button></div>';
-    row.querySelector('.row-title').textContent = session.title || session.url;
-    row.querySelector('.row-meta').textContent = `最近阅读 · ${new Date(session.updatedAt).toLocaleString()}`;
-    row.querySelector('[data-action="open"]').addEventListener('click', async () => {
-      try {
-        await chrome.tabs.create({ url: session.url, active: true });
-        setNotice('已打开原文；点击 Reader 后会恢复这页的本地阅读状态。');
-      } catch {
-        setNotice('无法打开原文，请复制来源地址后重试。');
-      }
-    });
-    row.querySelector('[data-action="delete"]').addEventListener('click', async () => {
-      await readerStore.deleteSession(session.url, session.version || null);
-      setNotice('这条本地阅读会话已删除。');
-      await updateLibrary();
-    });
-    list.appendChild(row);
-  });
 }
 
 async function findPendingTranslation(context) {
-  if (!context?.url || translationRunning || pendingJob?.documentUrl === context.url) return;
+  if (!context?.url || translationRunning || (pendingJob?.documentUrl === context.url && pendingJob?.targetLanguage === currentTranslationLanguage())) return;
   const jobs = await readerStore.listJobs();
   const version = context.contentHash || context.version || null;
   const sameUrlJobs = jobs.filter((item) => item.documentUrl === context.url);
@@ -1458,24 +1463,24 @@ async function findPendingTranslation(context) {
   // but never resume one whose source hash is different (or missing). Mark it
   // stale so a later panel open cannot mistake it for recoverable work.
   const staleJobs = sameUrlJobs.filter((item) => version && item.status !== 'stale' && item.contentHash !== version);
-  await Promise.all(staleJobs.map((item) => readerStore.saveJob({ ...item, status: 'stale', error: '页面内容已变化，旧翻译任务已失效', tabId: undefined })));
-  if (staleJobs.length) setNotice('页面内容已变化，旧的翻译任务、证据和讨论已失效；请重新开始。');
-  const job = sameUrlJobs.find((item) => item.contentHash && version && item.contentHash === version);
+  await Promise.all(staleJobs.map((item) => readerStore.saveJob({ ...item, status: 'stale', error: t("页面内容已变化，旧翻译任务已失效"), tabId: undefined })));
+  if (staleJobs.length) setNotice(t("页面内容已变化，旧的翻译任务、证据和讨论已失效；请重新开始。"));
+  const job = sameUrlJobs.find((item) => item.contentHash && version && item.contentHash === version && item.targetLanguage === currentTranslationLanguage());
   if (!job || !['queued', 'running', 'cancelled', 'failed', 'completed', 'completed_with_errors'].includes(job.status)) return;
-  pendingJob = job;
-  activeJobRecord = job;
+  pendingJob = { ...job, appliedTextIds: context.translatedBlockIds || [] };
+  activeJobRecord = pendingJob;
   failedTranslationItems = Array.isArray(job.failedItems) ? job.failedItems : [];
   renderProgress(job.textDone || 0, job.textTotal || 0, job.imageDone || 0, job.imageTotal || 0);
-  const progress = `已处理 ${job.textDone || 0}/${job.textTotal || 0} 个正文块、${job.imageDone || 0}/${job.imageTotal || 0} 张图片`;
+  const progress = t("已处理 {0}/{1} 个正文块、{2}/{3} 张图片", job.textDone || 0, job.textTotal || 0, job.imageDone || 0, job.imageTotal || 0);
   const statusNotice = job.status === 'completed_with_errors'
-    ? `上次全文翻译完成，但有 ${failedTranslationItems.length} 项未完成；可以逐项重试。`
+    ? t("上次全文翻译完成，但有 {0} 项未完成；可以逐项重试。", failedTranslationItems.length)
     : job.status === 'completed'
-      ? `上次全文翻译已完成：${progress}。`
+      ? t("上次全文翻译已完成：{0}。", progress)
       : job.status === 'cancelled'
-        ? `上次全文翻译已暂停：${progress}；点击“全文翻译”可从本地缓存继续。`
+        ? t("上次全文翻译已暂停：{0}；点击“全文翻译”可从本地缓存继续。", progress)
         : job.status === 'failed'
-          ? `上次全文翻译中断：${progress}；点击“全文翻译”可从本地缓存重试。`
-          : `上次全文翻译尚未结束：${progress}；已完成内容会从本地缓存跳过。`;
+          ? t("上次全文翻译中断：{0}；点击“全文翻译”可从本地缓存重试。", progress)
+          : t("上次全文翻译尚未结束：{0}；已完成内容会从本地缓存跳过。", progress);
   // Completed progress remains available in Tools; don't replay its success banner on every reopen.
   if (job.status !== 'completed' || failedTranslationItems.length) setNotice(statusNotice);
   // A side-panel document can be destroyed while a request is in flight. A
@@ -1493,60 +1498,53 @@ async function findPendingTranslation(context) {
     translationController?.abort();
     translationController = new AbortController();
     pendingJob = null;
-    setNotice('正在恢复上次未完成的全文翻译；已完成内容会从本地缓存跳过。');
+    setNotice(t("正在恢复上次未完成的全文翻译；已完成内容会从本地缓存跳过。"));
     sendToPage({ type: 'deep-research:request-full-document' });
   }
 }
 
 function applyProviderFields() {
   const kind = provider?.providerKind || 'openai';
-  if ($('provider-kind')) $('provider-kind').value = kind;
-  if ($('provider-url')) $('provider-url').value = provider?.baseUrl || providerPreset(kind).baseUrl || '';
-  if ($('provider-model')) $('provider-model').value = provider?.model || '';
-  if ($('provider-key')) $('provider-key').value = provider?.apiKey || '';
-  if ($('translation-language')) $('translation-language').value = targetLanguage || 'zh-CN';
+  if (!providerFieldsDirty) {
+    $('provider-kind').value = kind;
+    providerFormKind = kind;
+    $('provider-url').value = provider?.baseUrl || providerPreset(kind).baseUrl || '';
+    $('provider-model').value = providerReady(provider) ? provider.model : '';
+    $('provider-key').value = provider?.apiKey || '';
+    renderSettingsModels(providerReady(provider) ? provider.model : '');
+    $('provider-connection-state').textContent = providerReady(provider) ? t("已配置") : t("未连接");
+  }
   updateProviderForm();
-  if ($('provider-model-list') && provider?.model) $('provider-model-list').replaceChildren(new Option(provider.model, provider.model));
-  if (readingMode === 'platform') setStatus(platformConnected, platformConnected ? '平台 AI 已连接' : '平台未连接');
-  else setStatus(providerReady(provider), providerReady(provider) ? `${provider.model} 已就绪` : '未配置模型');
+  if (readingMode === 'platform') setStatus(platformConnected, platformConnected ? t("平台 AI 已连接") : t("平台未连接"));
+  else setStatus(providerReady(provider), providerReady(provider) ? t("{0} 已配置", provider.model) : t("未配置模型"));
 }
 
 function updateProviderForm() {
   const kind = $('provider-kind')?.value || 'openai';
   const preset = providerPreset(kind);
-  const custom = kind === 'custom' || kind === 'custom-anthropic' || kind === 'local-proxy';
-  show($('provider-custom-url-field'), custom);
-  if (!custom && $('provider-url')) $('provider-url').value = preset.baseUrl;
+  show($('provider-custom-url-field'), true);
+  renderProviderPickerSelection();
   if ($('provider-model')) $('provider-model').placeholder = preset.placeholder;
-  if ($('provider-key-label')) $('provider-key-label').textContent = isLocalProvider({ baseUrl: $('provider-url').value }) ? 'API Key（本地服务选填）' : 'API Key';
+  if ($('provider-key-label')) $('provider-key-label').textContent = isLocalProvider({ baseUrl: $('provider-url').value }) ? t("API Key（本地服务选填）") : 'API Key';
   if ($('provider-endpoint-hint')) {
-    $('provider-endpoint-hint').textContent = custom
-      ? preset.protocol === 'anthropic'
-        ? '自定义服务需要提供 Anthropic-compatible /messages 接口。'
-        : '自定义服务需要提供 OpenAI-compatible /chat/completions 接口。'
-      : preset.protocol === 'anthropic'
-        ? '将使用 Anthropic Messages API：/messages。浏览器直连需要服务端允许扩展页面的 CORS 请求。'
-        : `将使用 ${preset.label} 的 OpenAI-compatible /chat/completions 接口：${preset.baseUrl}`;
+    try {
+      const baseUrl = normalizeModelBaseUrl($('provider-url').value, kind);
+      $('provider-endpoint-hint').textContent = `${preset.protocol === 'anthropic' ? 'Anthropic' : t("OpenAI 兼容")} · ${baseUrl}`;
+    } catch { $('provider-endpoint-hint').textContent = ''; }
   }
 }
 
-async function loadTargetLanguage() {
-  targetLanguage = await readerStore.getSetting('targetLanguage', 'zh-CN');
-  if (!['zh-CN', 'zh-TW', 'ja-JP', 'en-US'].includes(targetLanguage)) targetLanguage = 'zh-CN';
-  if ($('translation-language')) $('translation-language').value = targetLanguage;
-}
-
 async function requestOriginPermission(baseUrl) {
-  if (!$('request-provider-origin').checked || !chrome.permissions?.request) return true;
+  if (!chrome.permissions?.request) return true;
   let origin;
-  try { origin = `${new URL(baseUrl).origin}/*`; } catch { throw new Error('模型服务地址不是有效 URL'); }
+  try { origin = `${new URL(baseUrl).origin}/*`; } catch { throw new Error(t("模型服务地址不是有效 URL")); }
   return chrome.permissions.request({ origins: [origin] });
 }
 
 async function requestSpecificOrigin(baseUrl) {
   if (!chrome.permissions?.request) return true;
   let origin;
-  try { origin = `${new URL(baseUrl).origin}/*`; } catch { throw new Error('平台地址不是有效 URL'); }
+  try { origin = `${new URL(baseUrl).origin}/*`; } catch { throw new Error(t("平台地址不是有效 URL")); }
   return chrome.permissions.request({ origins: [origin] });
 }
 
@@ -1566,12 +1564,15 @@ function requestImageOrigins(images = []) {
 
 function setPlatformConnected(connected, message = '') {
   platformConnected = connected;
+  if (!connected) window.clearTimeout(sessionSyncTimer);
+  if (connected) platformDisconnecting = false;
+  void updatePageKnowledge();
   if (!$('platform-status')) return;
   show($('connect-platform'), !connected);
   show($('disconnect-platform'), connected);
-  $('platform-status').textContent = message || (connected ? '已连接 Deep Research' : '未连接');
+  $('platform-status').textContent = message || (connected ? t("已连接 Deep Research") : t("未连接"));
   $('platform-status').classList.toggle('connected', connected);
-  if ($('sync-selection')) $('sync-selection').textContent = '重试同步';
+  if ($('sync-selection')) $('sync-selection').textContent = t("重试同步");
   show($('sync-selection'), connected && Boolean(lastSavedInsight) && insightSyncFailed);
   show($('sync-session'), connected && Boolean(contextUrl()));
   show($('restore-session'), connected);
@@ -1610,26 +1611,26 @@ async function loadPlatformState() {
   setPlatformConnected(hasToken);
 }
 
-async function readPlatformToken() {
+async function readPlatformToken(origin = platformUrl) {
   const stored = await chrome.storage.local.get(['readerToken', 'readerTokenOrigin', 'readerPlatformUrl']);
   if (!stored.readerToken) return '';
   const bound = stored.readerTokenOrigin || stored.readerPlatformUrl || '';
-  return tokenBoundToOrigin(bound, platformUrl) ? stored.readerToken : '';
+  return tokenBoundToOrigin(bound, origin) ? stored.readerToken : '';
 }
 
 async function connectPlatform() {
   platformUrl = resolvePlatformOrigin(platformUrl, radarEntryPlatformUrl);
   updatePlatformTarget();
   if (platformUrl !== DEFAULT_WEB_APP_URL
-    && !window.confirm(`将连接到非默认平台 ${platformUrl}，并把阅读内容和访问令牌发送到该地址。仅在你信任它时继续。`)) {
-    setPlatformConnected(false, '已取消连接');
+    && !window.confirm(t("将连接到非默认平台 {0}，并把阅读内容和访问令牌发送到该地址。仅在你信任它时继续。", platformUrl))) {
+    setPlatformConnected(false, t("已取消连接"));
     return;
   }
   try {
     const granted = await requestSpecificOrigin(platformUrl);
-    if (!granted) { setPlatformConnected(false, '没有获得平台访问权限'); return; }
+    if (!granted) { setPlatformConnected(false, t("没有获得平台访问权限")); return; }
   } catch (error) {
-    setPlatformConnected(false, error instanceof Error ? error.message : '无法获得平台访问权限');
+    setPlatformConnected(false, error instanceof Error ? error.message : t("无法获得平台访问权限"));
     return;
   }
 
@@ -1637,7 +1638,7 @@ async function connectPlatform() {
     const response = await fetch(`${platformUrl}/healthz`, { cache: 'no-store', signal: AbortSignal.timeout(8_000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
   } catch {
-    setPlatformConnected(false, `无法连接调研平台（${new URL(platformUrl).host}），请检查网络后重试`);
+    setPlatformConnected(false, t("无法连接调研平台（{0}），请检查网络后重试", new URL(platformUrl).host));
     return;
   }
 
@@ -1645,35 +1646,43 @@ async function connectPlatform() {
     readerStore.setSetting('platformUrl', platformUrl),
     chrome.storage.local.set({ readerPlatformUrl: platformUrl }),
   ]);
-  setPlatformConnected(false, '正在打开 Deep Research 登录…');
+  setPlatformConnected(false, t("正在打开 Deep Research 登录…"));
   try {
     const result = await chrome.runtime.sendMessage({ type: 'deep-research:connect' });
-    if (!result?.ok) throw new Error(result?.message || '无法打开平台授权页');
+    if (!result?.ok) throw new Error(result?.message || t("无法打开平台授权页"));
   } catch (error) {
-    setPlatformConnected(false, error instanceof Error ? error.message : '无法打开平台授权页');
+    setPlatformConnected(false, error instanceof Error ? error.message : t("无法打开平台授权页"));
   }
 }
 
 async function disconnectPlatform() {
-  const readerToken = await readPlatformToken();
+  const origin = platformUrl;
+  const tokenRead = readPlatformToken(origin);
+  platformDisconnecting = true;
+  platformStateEvents += 1;
+  setPlatformConnected(false, t("已断开平台连接"));
+  const readerToken = await tokenRead;
   if (readerToken) {
     try {
-      await fetch(`${platformUrl}/api/reading/token/revoke`, { method: 'POST', headers: { authorization: `Bearer ${readerToken}` } });
+      await fetch(`${origin}/api/reading/token/revoke`, { method: 'POST', headers: { authorization: `Bearer ${readerToken}` } });
     } catch {
       // Local disconnect still removes the credential if the platform is down.
     }
   }
   chrome.runtime.sendMessage({ type: 'deep-research:disconnect' }).catch(() => {});
-  setPlatformConnected(false, '已断开平台连接');
+  setPlatformConnected(false, t("已断开平台连接"));
 }
 
 async function syncInsight(insight = lastSavedInsight) {
-  if (!insight) { setNotice('先收藏一个选段，再同步到研究库。'); return; }
+  if (!insight) { setNotice(t("先收藏一个选段，再同步到研究库。")); return; }
+  const origin = platformUrl;
+  const events = platformStateEvents;
+  const connected = () => platformConnected && !platformDisconnecting && platformUrl === origin && platformStateEvents === events;
   const readerToken = await readPlatformToken();
-  if (!readerToken) {
+  if (!readerToken || !connected()) {
     insightSyncFailed = true;
     updateReadingModeUi();
-    setNotice('先在设置中连接 Deep Research，再重试同步。');
+    setNotice(t("先在设置中连接 Deep Research，再重试同步。"));
     return;
   }
   insightSyncFailed = false;
@@ -1691,43 +1700,59 @@ async function syncInsight(insight = lastSavedInsight) {
         aiAnswer: insight.aiAnswer || undefined,
         anchor: insight.anchor,
         tags: Array.isArray(insight.tags) ? insight.tags : [],
+        ...(normalizeRadarSummaryId(insight.radarSummaryId) ? { radarSummaryId: normalizeRadarSummaryId(insight.radarSummaryId) } : {}),
       }),
     };
-    let response = await fetch(`${platformUrl}/api/reading/save`, request);
+    let response = await fetch(`${origin}/api/reading/save`, request);
     let payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.message || '研究库同步失败');
+    if (!connected()) return;
+    if (!response.ok) throw new Error(payload.message || t("研究库同步失败"));
     if (payload.deduplicated) {
-      response = await fetch(`${platformUrl}/api/reading/save`, { ...request, method: 'PUT' });
+      response = await fetch(`${origin}/api/reading/save`, { ...request, method: 'PUT' });
       payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.updated) throw new Error(payload.message || '平台尚不支持更新此收藏；修改已保存在本地，云端尚未更新。');
+      if (!connected()) return;
+      if (!response.ok || !payload.updated) throw new Error(payload.message || t("平台尚不支持更新此收藏；修改已保存在本地，云端尚未更新。"));
     }
+    const linked = normalizeRadarSummaryId(payload.draft?.id)
+      ? await readerStore.linkInsightToPlatform(insight.id, payload.draft.id, origin) : null;
+    if (!connected()) return;
+    if (linked && lastSavedInsight?.id === linked.id) lastSavedInsight = linked;
+    void updatePageKnowledge({ refresh: true });
     insightSyncFailed = false;
     updateReadingModeUi();
-    setNotice(payload.updated ? '已更新 Deep Research 研究库中的收藏。' : '已同步到 Deep Research 研究库。');
+    setNotice(payload.updated ? t("已更新 Deep Research 研究库中的收藏。") : t("已同步到 Deep Research 研究库。"));
   } catch (error) {
+    if (!connected()) return;
     insightSyncFailed = true;
     updateReadingModeUi();
-    if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, '平台令牌已失效，请重新连接');
-    setNotice(error instanceof Error ? error.message : '研究库同步失败');
+    if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, t("平台令牌已失效，请重新连接"));
+    setNotice(error instanceof Error ? error.message : t("研究库同步失败"));
   }
 }
 
 async function syncCurrentSession({ quiet = false } = {}) {
-  const readerToken = await readPlatformToken();
-  if (!readerToken) { setNotice('先在设置中连接 Deep Research。'); return; }
+  const generation = sessionGeneration;
+  const events = platformStateEvents;
+  const origin = platformUrl;
   const context = documentContext || pageContext || selectionContext;
-  if (!context?.url) { setNotice('当前没有可同步的阅读会话。'); return; }
+  const current = () => generation === sessionGeneration && events === platformStateEvents
+    && platformConnected && !platformDisconnecting && platformUrl === origin && context?.url === contextUrl();
+  if (!current()) return;
+  const readerToken = await readPlatformToken();
+  if (!current()) return;
+  if (!readerToken) { setNotice(t("先在设置中连接 Deep Research。")); return; }
+  if (!context?.url) { setNotice(t("当前没有可同步的阅读会话。")); return; }
   const image = imageContext?.image;
   const state = {
     selection: selectionContext?.selection || null,
     answer: latestAnswer || '',
     answerStructured: latestStructuredAnswer || null,
-    discussion: discussionHistory.slice(-20).map((item) => ({
+    discussion: discussionHistory.map((item) => ({
       role: item.role === 'assistant' ? 'assistant' : 'user',
       content: String(item.content || '').slice(0, 8_000),
     })),
     discussionScope,
-    radarSummaryId: radarEntrySummaryId || null,
+    radarSummaryId: currentRadarSummaryId() || null,
     image: image ? {
       id: String(image.id || '').slice(0, 160),
       // Never synchronize a data URL or image bytes. A public HTTPS URL is
@@ -1742,26 +1767,32 @@ async function syncCurrentSession({ quiet = false } = {}) {
   };
   try {
     const clientId = await readerStore.getClientId();
-    const response = await fetch(`${platformUrl}/api/reading/session`, {
+    if (!current()) return;
+    const version = context.contentHash || selectionContext?.selection?.contentHash || null;
+    const idempotencyKey = await readerStore.getSessionSyncKey(context.url, version);
+    if (!current()) return;
+    const response = await fetch(`${origin}/api/reading/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
       body: JSON.stringify({
         clientId,
-        idempotencyKey: await readerStore.getSessionSyncKey(context.url, context.contentHash || selectionContext?.selection?.contentHash || null),
+        idempotencyKey,
         document: {
           url: context.url,
-          title: context.title || '未命名页面',
-          version: context.contentHash || selectionContext?.selection?.contentHash || null,
+          title: context.title || t("未命名页面"),
+          version,
         },
         state,
       }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.message || '阅读会话同步失败');
-    if (!quiet) setNotice('当前阅读会话已同步；正文和翻译缓存仍只保存在本地。');
+    if (!current()) return;
+    if (!response.ok) throw new Error(payload.message || t("阅读会话同步失败"));
+    if (!quiet) setNotice(t("当前阅读会话已同步；正文和翻译缓存仍只保存在本地。"));
   } catch (error) {
-    if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, '平台令牌已失效，请重新连接');
-    if (!quiet) setNotice(error instanceof Error ? error.message : '阅读会话同步失败');
+    if (!current()) return;
+    if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, t("平台令牌已失效，请重新连接"));
+    if (!quiet) setNotice(error instanceof Error ? error.message : t("阅读会话同步失败"));
   }
 }
 
@@ -1770,7 +1801,7 @@ function platformContext(context, scope) {
   const selection = scope === 'selection' ? context?.selection : undefined;
   return {
     url: context.url,
-    title: String(context.title || '当前网页').slice(0, 300),
+    title: String(context.title || t("当前网页")).slice(0, 300),
     language: currentReadingLanguage(),
     scope,
     body,
@@ -1781,8 +1812,9 @@ function platformContext(context, scope) {
 
 
 async function requestPlatformTranslations(context, blocks, options = {}) {
+  context = { ...context, targetLanguage: context.targetLanguage || currentTranslationLanguage() };
   const readerToken = await readPlatformToken();
-  if (!readerToken) throw new Error('平台连接已失效，请重新连接');
+  if (!readerToken) throw new Error(t("平台连接已失效，请重新连接"));
   const tasks = splitTranslationBlocks(blocks);
   const output = [];
   const completedBySource = new Map();
@@ -1806,8 +1838,8 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
       body: JSON.stringify({
         url: context.url,
-        title: String(context.title || '当前网页').slice(0, 300),
-        language: currentReadingLanguage(),
+        title: String(context.title || t("当前网页")).slice(0, 300),
+        language: (context.targetLanguage || currentTranslationLanguage()),
         context: translationContext(context, batch),
         blocks: batch.map(({ id, text }) => ({ id: requestIds.get(id), text })),
       }),
@@ -1815,8 +1847,8 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) setPlatformConnected(false, '平台连接已失效，请重新连接');
-      throw new Error(payload.message || '平台 AI 翻译暂时不可用');
+      if (response.status === 401 || response.status === 403) setPlatformConnected(false, t("平台连接已失效，请重新连接"));
+      throw new Error(payload.message || t("平台 AI 翻译暂时不可用"));
     }
     const byId = new Map((Array.isArray(payload.translations) ? payload.translations : []).map((item) => [item.id, item]));
     for (const block of batch) {
@@ -1825,7 +1857,7 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
         ...block,
         text: '',
         sourceText: block.text,
-        error: result?.error || '平台没有返回该段翻译',
+        error: result?.error || t("平台没有返回该段翻译"),
       };
       output.push(translated);
       const sourceId = String(block.sourceBlockId || block.id);
@@ -1847,7 +1879,7 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
     while (!batchError && nextBatch < batches.length) {
       const batchIndex = nextBatch++;
       if (options.signal?.aborted) {
-        batchError = new DOMException('翻译已取消', 'AbortError');
+        batchError = new DOMException(t("翻译已取消"), 'AbortError');
         return;
       }
       try {
@@ -1863,17 +1895,18 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
   return blocks.map((block) => {
     const parts = output.filter((item) => String(item.sourceBlockId || item.id) === String(block.id));
     const [combined] = combineTranslationParts([block], parts);
-    return combined || { ...block, text: '', sourceText: block.text, error: '正文片段翻译不完整，请重试' };
+    return combined || { ...block, text: '', sourceText: block.text, error: t("正文片段翻译不完整，请重试") };
   });
 }
 
 async function requestPlatformImageTranslation(context, image, options = {}) {
+  context = { ...context, targetLanguage: context.targetLanguage || currentTranslationLanguage() };
   const readerToken = await readPlatformToken();
-  if (!readerToken) throw new Error('平台连接已失效，请重新连接');
+  if (!readerToken) throw new Error(t("平台连接已失效，请重新连接"));
   const imageProvider = {
     baseUrl: `${platformUrl}/api/reading`,
     model: 'platform-reading-vision',
-    language: currentReadingLanguage(),
+    language: (context.targetLanguage || currentTranslationLanguage()),
     visionReady: true,
   };
   return translateImage(imageProvider, makeDocument(context), image, {
@@ -1890,143 +1923,410 @@ async function requestPlatformImageTranslation(context, image, options = {}) {
         body: JSON.stringify({
           imageDataUrl,
           alt: String(image.alt || '').slice(0, 500),
-          title: String(context.title || '技术文章配图').slice(0, 300),
-          language: currentReadingLanguage(),
+          title: String(context.title || t("技术文章配图")).slice(0, 300),
+          language: (context.targetLanguage || currentTranslationLanguage()),
           retry: userText.includes('上一轮没有返回可定位的文字区域'),
         }),
         signal,
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (response.status === 401 || response.status === 403) setPlatformConnected(false, '平台连接已失效，请重新连接');
-        throw new Error(payload.message || '平台视觉模型暂时不可用');
+        if (response.status === 401 || response.status === 403) setPlatformConnected(false, t("平台连接已失效，请重新连接"));
+        throw new Error(payload.message || t("平台视觉模型暂时不可用"));
       }
       return payload;
     },
     requestText: async ({ userPrompt, signal }) => {
       const [translated] = await requestPlatformTranslations(context, [{ id: `svg-${image.id}`, text: userPrompt }], { signal });
-      if (!translated?.text) throw new Error(translated?.error || 'SVG 图中文字翻译失败');
+      if (!translated?.text) throw new Error(translated?.error || t("SVG 图中文字翻译失败"));
       return { choices: [{ message: { content: translated.text } }] };
     },
   });
 }
 
 async function restoreCloudSession() {
-  const readerToken = await readPlatformToken();
-  if (!readerToken) { setNotice('先在设置中连接 Deep Research。', $('settings-notice')); return; }
+  const generation = sessionGeneration;
+  const events = platformStateEvents;
+  const origin = platformUrl;
   const context = documentContext || pageContext || selectionContext;
-  if (!context?.url) { setNotice('当前没有可恢复的阅读页面。', $('settings-notice')); return; }
+  const current = () => generation === sessionGeneration && events === platformStateEvents
+    && platformConnected && !platformDisconnecting && platformUrl === origin && context?.url === contextUrl();
+  const readerToken = await readPlatformToken();
+  if (!readerToken) { setNotice(t("先在设置中连接 Deep Research。"), $('settings-notice')); return; }
+  if (!context?.url) { setNotice(t("当前没有可恢复的阅读页面。"), $('settings-notice')); return; }
+  if (!current()) return;
   try {
     const clientId = await readerStore.getClientId();
-    const response = await fetch(`${platformUrl}/api/reading/session?clientId=${encodeURIComponent(clientId)}`, {
+    if (!current()) return;
+    const response = await fetch(`${origin}/api/reading/session?clientId=${encodeURIComponent(clientId)}`, {
       headers: { authorization: `Bearer ${readerToken}` },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.message || '云端会话读取失败');
+    if (!current()) return;
+    if (!response.ok) throw new Error(payload.message || t("云端会话读取失败"));
     const currentUrl = readerStore.pageKey(context.url);
     const remote = (Array.isArray(payload.sessions) ? payload.sessions : [])
       .filter((item) => item?.document?.url && readerStore.pageKey(item.document.url) === currentUrl)
       .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
     if (!remote) {
-      setNotice('云端没有当前页面的同步会话。', $('settings-notice'));
+      setNotice(t("云端没有当前页面的同步会话。"), $('settings-notice'));
       return;
     }
     await readerStore.saveSession({
-      url: remote.document.url,
-      title: remote.document.title || context.title || '未命名页面',
-      version: remote.document.version || null,
       ...(remote.state && typeof remote.state === 'object' ? remote.state : {}),
+      url: remote.document.url,
+      title: remote.document.title || context.title || t("未命名页面"),
+      version: remote.document.version || null,
       updatedAt: remote.updatedAt || new Date().toISOString(),
     });
+    if (!current()) return;
     // Force the local resume path to consume the freshly downloaded state.
     resumedUrls.delete(context.url);
     await resumeSession(context);
-    setNotice('已恢复云端阅读会话；正文和翻译缓存仍只保存在本地。', $('settings-notice'));
+    if (!current()) return;
+    setNotice(t("已恢复云端阅读会话；正文和翻译缓存仍只保存在本地。"), $('settings-notice'));
   } catch (error) {
-    if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, '平台令牌已失效，请重新连接');
-    setNotice(error instanceof Error ? error.message : '云端会话读取失败', $('settings-notice'));
+    if (!current()) return;
+    if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, t("平台令牌已失效，请重新连接"));
+    setNotice(error instanceof Error ? error.message : t("云端会话读取失败"), $('settings-notice'));
   }
 }
 
 let modelDiscoveryController = null;
 let modelDiscoveryTimer = null;
+let providerFieldsDirty = false;
+let providerFormKind = 'openai';
+const providerFormDrafts = new Map();
+let settingsModels = [];
+let discoveredConnection = null;
+let providerValidationController = null;
+let verifiedSettingsConnection = null;
+
+function renderProviderPickerSelection() {
+  const selected = findProvider($('provider-kind').value);
+  $('provider-picker-label').textContent = t(selected.label);
+  $('provider-picker-subtitle').textContent = t(selected.subtitle);
+  $('provider-picker-icon').src = `providers/${selected.icon}`;
+  $('provider-picker-icon').classList.toggle('provider-logo-dark', selected.id === 'moonshot');
+  for (const button of $('provider-picker-options').querySelectorAll('[data-provider-id]')) {
+    button.setAttribute('aria-selected', String(button.dataset.providerId === selected.id));
+  }
+}
+
+function filterProviderPicker() {
+  const matches = new Set(matchingProviders($('provider-picker-search').value).map(item => item.id));
+  for (const button of $('provider-picker-options').querySelectorAll('[data-provider-id]')) {
+    show(button, matches.has(button.dataset.providerId));
+  }
+  for (const group of $('provider-picker-options').querySelectorAll('[data-provider-group]')) {
+    show(group, Boolean(group.querySelector('[data-provider-id]:not(.hidden)')));
+  }
+  show($('provider-picker-empty'), matches.size === 0);
+}
+
+function positionProviderPicker() {
+  const menu = $('provider-picker-menu');
+  if (menu.classList.contains('hidden')) return;
+  const rect = $('provider-picker-trigger').getBoundingClientRect();
+  if (rect.bottom < 48 || rect.top > innerHeight) { closeProviderPicker(); return; }
+  const below = innerHeight - rect.bottom - 14;
+  const above = rect.top - 14;
+  const useAbove = below < 280 && above > below;
+  const available = Math.max(80, Math.min(440, (useAbove ? above : below) - 6));
+  const width = Math.min(440, rect.width, innerWidth - 24);
+  Object.assign(menu.style, {
+    width: `${width}px`,
+    left: `${Math.max(12, Math.min(rect.left, innerWidth - width - 12))}px`,
+    top: useAbove ? 'auto' : `${rect.bottom + 6}px`,
+    bottom: useAbove ? `${innerHeight - rect.top + 6}px` : 'auto',
+    maxHeight: `${available}px`,
+  });
+}
+
+function closeProviderPicker({ restoreFocus = false } = {}) {
+  show($('provider-picker-menu'), false);
+  $('provider-picker-trigger').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) $('provider-picker-trigger').focus();
+}
+
+function setupProviderPicker() {
+  const choose = (id) => {
+    $('provider-kind').value = id;
+    $('provider-kind').dispatchEvent(new Event('change', { bubbles: true }));
+    closeProviderPicker({ restoreFocus: true });
+  };
+  $('provider-picker-trigger').addEventListener('click', () => {
+    if (!$('provider-picker-menu').classList.contains('hidden')) { closeProviderPicker(); return; }
+    $('provider-picker-search').value = '';
+    filterProviderPicker();
+    renderProviderPickerSelection();
+    show($('provider-picker-menu'), true);
+    $('provider-picker-trigger').setAttribute('aria-expanded', 'true');
+    positionProviderPicker();
+    $('provider-picker-search').focus();
+  });
+  $('provider-picker-close').addEventListener('click', () => closeProviderPicker({ restoreFocus: true }));
+  $('provider-picker-search').addEventListener('input', filterProviderPicker);
+  $('provider-picker-custom').addEventListener('click', () => choose('custom'));
+  for (const button of $('provider-picker-options').querySelectorAll('[data-provider-id]')) {
+    button.addEventListener('click', () => choose(button.dataset.providerId));
+  }
+  $('provider-picker-menu').addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeProviderPicker({ restoreFocus: true });
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (event.target === $('provider-picker-search') && event.key !== 'ArrowDown') return;
+    const options = [...$('provider-picker-options').querySelectorAll('[data-provider-id]:not(.hidden)')];
+    if (!options.length) return;
+    event.preventDefault();
+    const current = options.indexOf(document.activeElement);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+      : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1) : (current + 1) % options.length;
+    options[index].focus();
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!$('provider-picker').contains(event.target)) closeProviderPicker();
+  });
+  document.addEventListener('focusin', event => {
+    if (!$('provider-picker').contains(event.target)) closeProviderPicker();
+  });
+  $('settings-view').addEventListener('scroll', positionProviderPicker, { passive: true });
+  window.addEventListener('resize', positionProviderPicker);
+}
+
 function providerFromFields() {
   const kind = $('provider-kind').value;
-  return { providerKind: kind, baseUrl: $('provider-url').value.trim() || providerPreset(kind).baseUrl, model: $('provider-model-list').value || $('provider-model').value.trim(), apiKey: $('provider-key').value.trim() };
+  return { providerKind: kind, baseUrl: $('provider-url').value.trim(), model: $('provider-model-list').value || $('provider-model').value.trim(), apiKey: $('provider-key').value.trim() };
 }
+
+function sameSettingsConnection(a, b) {
+  try {
+    return Boolean(a && b && a.providerKind === b.providerKind && a.apiKey === b.apiKey
+      && normalizeModelBaseUrl(a.baseUrl, a.providerKind) === normalizeModelBaseUrl(b.baseUrl, b.providerKind));
+  } catch { return false; }
+}
+
+function clearProviderErrors() {
+  for (const id of ['provider-url', 'provider-key', 'provider-model-list']) $(id).removeAttribute('aria-invalid');
+}
+
+function resetProviderValidation() {
+  const controller = providerValidationController;
+  providerValidationController = null;
+  controller?.abort();
+  verifiedSettingsConnection = null;
+  $('provider-test-status').textContent = '';
+  $('test-provider').disabled = false;
+  $('test-provider').textContent = t("测试连接");
+}
+
+function setDiscoveryState(state, message) {
+  const busy = state === 'loading';
+  const current = providerFromFields();
+  const saved = providerReady(provider) && sameSettingsConnection(provider, current) && provider.model === current.model;
+  const status = $('model-discovery-status');
+  status.textContent = message;
+  status.dataset.state = state;
+  status.setAttribute('role', state === 'error' ? 'alert' : 'status');
+  $('refresh-models').disabled = busy;
+  $('refresh-models').setAttribute('aria-busy', String(busy));
+  $('refresh-models').textContent = busy ? t("正在连接…") : state === 'ready' ? t("刷新模型列表") : t("连接并获取模型");
+  $('provider-connection-state').textContent = busy ? t("连接中") : state === 'ready' ? t("模型已读取") : state === 'error' ? t("连接未完成") : saved ? t("已配置") : t("未连接");
+  $('provider-connection-state').classList.toggle('connected', state === 'ready');
+}
+
+function showProviderError(error, candidate, target = $('model-discovery-status'), focusField = true) {
+  const issue = modelConnectionError(error, candidate);
+  if (target === $('model-discovery-status')) setDiscoveryState('error', issue.message);
+  else { target.textContent = issue.message; target.dataset.state = 'error'; target.setAttribute('role', 'alert'); }
+  if (issue.field && $(issue.field)) {
+    $(issue.field).setAttribute('aria-invalid', 'true');
+    if (focusField) $(issue.field).focus();
+  }
+  if (['MODELS_UNSUPPORTED', 'EMPTY_MODELS'].includes(issue.code)) $('manual-model-settings').open = true;
+}
+
+function renderSettingsModels(selected = $('provider-model-list').value || $('provider-model').value) {
+  const query = $('provider-model-search').value.trim().toLocaleLowerCase();
+  const models = sameSettingsConnection(discoveredConnection, providerFromFields()) ? settingsModels : [];
+  const visible = models.filter(item => `${item.id} ${item.label}`.toLocaleLowerCase().includes(query));
+  const list = $('provider-model-list');
+  const items = visible.map(item => new Option(item.label, item.id));
+  if (selected && !models.some(item => item.id === selected)) items.unshift(new Option(t("{0}（当前配置）", selected), selected));
+  if (items.length && !items.some(item => item.value === selected)) items.unshift(new Option(t("请选择模型"), ''));
+  list.replaceChildren(...(items.length ? items : [new Option(query ? t("没有匹配的模型") : t("请先连接模型服务"), '')]));
+  if (items.some(item => item.value === selected)) list.value = selected;
+  else if (query) list.value = '';
+  show($('provider-model-search'), models.length > 6);
+}
+
+function changeProviderKind() {
+  providerFormDrafts.set(providerFormKind, { ...providerFromFields(), providerKind: providerFormKind });
+  const kind = $('provider-kind').value;
+  const draft = providerFormDrafts.get(kind) || { baseUrl: providerPreset(kind).baseUrl, apiKey: '', model: '' };
+  providerFormKind = kind;
+  $('provider-url').value = draft.baseUrl;
+  $('provider-key').value = draft.apiKey;
+  $('provider-key').type = 'password';
+  $('provider-key-toggle').setAttribute('aria-pressed', 'false');
+  $('provider-key-toggle').setAttribute('aria-label', t("显示 API Key"));
+  $('provider-key-toggle').title = t("显示 API Key");
+  $('provider-model').value = draft.model;
+  $('provider-model-search').value = '';
+  discoveredConnection = null;
+  settingsModels = [];
+  $('provider-model-list').replaceChildren(new Option(draft.model || t("请先连接模型服务"), draft.model || ''));
+  scheduleModelDiscovery();
+}
+
 async function refreshModels({ requestPermission = false } = {}) {
+  clearTimeout(modelDiscoveryTimer);
   modelDiscoveryController?.abort();
   const controller = new AbortController();
   modelDiscoveryController = controller;
-  const candidate = providerFromFields();
-  if (!candidate.baseUrl || (!candidate.apiKey && !isLocalProvider(candidate))) return;
-  $('model-discovery-status').textContent = '正在获取模型…';
+  let candidate = providerFromFields();
+  clearProviderErrors();
   try {
-    if (requestPermission && !(await requestOriginPermission(candidate.baseUrl))) throw new Error('未获得模型服务访问权限');
+    candidate = validateModelConnection(candidate);
+    // Request host access in the click's gesture; automatic refresh never prompts.
+    const permission = requestPermission ? requestOriginPermission(candidate.baseUrl) : Promise.resolve(true);
+    setDiscoveryState('loading', requestPermission ? t("正在连接 {0}…", new URL(candidate.baseUrl).host) : t("正在读取模型列表…"));
+    if (!(await permission)) throw new ModelConnectionError('PERMISSION', t("未允许访问这个服务，请再次点击连接并在 Chrome 中允许访问"));
+    if (controller.signal.aborted) return;
     const models = await discoverModels(candidate, { signal: controller.signal });
     if (controller !== modelDiscoveryController) return;
-    const list = $('provider-model-list');
-    list.replaceChildren(...models.map(model => new Option(model.label, model.id)));
-    if (models.some(model => model.id === candidate.model)) list.value = candidate.model;
-    $('provider-model').value = list.value;
+    settingsModels = models;
+    discoveredConnection = candidate;
+    $('provider-model-search').value = '';
+    const selected = candidate.model || '';
+    $('provider-model').value = selected;
+    renderSettingsModels(selected);
     $('manual-model-settings').open = false;
-    $('model-discovery-status').textContent = `已找到 ${models.length} 个模型`;
+    providerFieldsDirty = true;
+    setDiscoveryState('ready', t("已读取 {0} 个模型 · {1}", models.length, new URL(candidate.baseUrl).host));
   } catch (error) {
     if (controller !== modelDiscoveryController || controller.signal.aborted) return;
-    $('provider-model-list').replaceChildren(new Option('模型列表暂不可用', ''));
-    $('model-discovery-status').textContent = `${error.message || '无法连接服务'}。可重试，或使用自定义模型 ID。`;
+    showProviderError(error, candidate, $('model-discovery-status'), requestPermission);
   }
 }
+
 function scheduleModelDiscovery() {
+  providerFieldsDirty = true;
   updateProviderForm();
   modelDiscoveryController?.abort();
-  $('provider-model-list').replaceChildren(new Option('正在准备获取模型', ''));
+  resetProviderValidation();
+  clearProviderErrors();
+  $('provider-model-search').value = '';
+  renderSettingsModels();
   clearTimeout(modelDiscoveryTimer);
-  modelDiscoveryTimer = setTimeout(() => void refreshModels(), 500);
+  let candidate;
+  try { candidate = validateModelConnection(providerFromFields()); }
+  catch (error) {
+    setDiscoveryState('idle', error.code === 'KEY_REQUIRED' ? t("填写 API Key 后连接服务") : t("填写 API 地址后连接服务"));
+    return;
+  }
+  setDiscoveryState('idle', t("等待连接 · {0}", new URL(candidate.baseUrl).host));
+  modelDiscoveryTimer = setTimeout(async () => {
+    const allowed = !chrome.permissions?.contains || await chrome.permissions.contains({ origins: [`${new URL(candidate.baseUrl).origin}/*`] }).catch(() => false);
+    if (allowed && sameSettingsConnection(candidate, providerFromFields())) void refreshModels();
+  }, 500);
 }
-async function testProvider(nextProvider) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12_000);
+
+async function testProvider(nextProvider, controller = new AbortController()) {
+  const timer = setTimeout(() => controller.abort(), 8_000);
   try {
     const payload = await requestChat(nextProvider, [{ role: 'user', content: 'Reply with OK only. Do not reason.' }], { temperature: 0, maxTokens: 128, signal: controller.signal });
-    if (!payload?.choices?.[0]?.message?.content && !payload?.content?.length) throw new Error('模型没有返回文本，请选择可聊天的模型');
+    if (!payload?.choices?.[0]?.message?.content && !payload?.content?.length) throw new ModelConnectionError('EMPTY_REPLY', t("服务已响应，但短验证没有返回文本；可保存后试用，或选择其他聊天模型"));
   } finally { clearTimeout(timer); }
 }
+
+async function testSettingsProvider() {
+  let candidate = providerFromFields();
+  const button = $('test-provider');
+  const target = $('provider-test-status');
+  providerValidationController?.abort();
+  const controller = new AbortController();
+  providerValidationController = controller;
+  clearProviderErrors();
+  try {
+    candidate = validateModelConnection(candidate, { requireModel: true });
+    const permission = requestOriginPermission(candidate.baseUrl);
+    button.disabled = true;
+    button.textContent = t("测试中…");
+    target.dataset.state = 'loading';
+    target.setAttribute('role', 'status');
+    target.textContent = t("正在测试所选模型…");
+    if (!(await permission)) throw new ModelConnectionError('PERMISSION', t("未允许访问这个服务，请重新测试并在 Chrome 中允许访问"));
+    if (controller.signal.aborted) return;
+    const started = Date.now();
+    await testProvider(candidate, controller);
+    if (!sameSettingsConnection(candidate, providerFromFields()) || candidate.model !== providerFromFields().model) return;
+    verifiedSettingsConnection = candidate;
+    target.dataset.state = 'verified';
+    target.textContent = t("连接成功 · {0} · {1} 秒", candidate.model, ((Date.now() - started) / 1000).toFixed(1));
+    $('provider-connection-state').textContent = t("测试通过");
+  } catch (error) {
+    if (controller !== providerValidationController) return;
+    if (controller.signal.aborted && !sameSettingsConnection(candidate, providerFromFields())) return;
+    showProviderError(error, candidate, target);
+  } finally {
+    if (controller === providerValidationController) { button.disabled = false; button.textContent = t("测试连接"); }
+  }
+}
+
 async function saveSettings() {
-  const nextProvider = providerFromFields();
-  const started = Date.now();
+  let nextProvider = providerFromFields();
+  clearTimeout(modelDiscoveryTimer);
+  modelDiscoveryController?.abort();
   const button = $('save-settings');
   button.disabled = true;
-  setNotice('正在快速验证文本连接…', $('settings-notice'));
+  clearProviderErrors();
   try {
-    const granted = await requestOriginPermission(nextProvider.baseUrl);
-    if (!granted) throw new Error('没有获得模型服务域名权限');
-    if (!nextProvider.model) throw new Error('请选择服务返回的模型');
-    await testProvider(nextProvider);
-    provider = await saveProvider(nextProvider);
-    setStatus(true, `${provider.model} 已就绪`);
-    updateAiAvailabilityBanner();
-    setNotice(`连接成功（${((Date.now() - started) / 1000).toFixed(1)} 秒）。图片能力可按需检测。`, $('settings-notice'));
+    nextProvider = validateModelConnection(nextProvider, { requireModel: true });
+    if (!(await requestOriginPermission(nextProvider.baseUrl))) throw new ModelConnectionError('PERMISSION', t("未允许访问这个服务，配置尚未保存"));
+    if (!sameSettingsConnection(nextProvider, providerFromFields()) || nextProvider.model !== providerFromFields().model) return;
+    const verified = sameSettingsConnection(verifiedSettingsConnection, nextProvider) && verifiedSettingsConnection.model === nextProvider.model;
+    provider = await saveProvider({ ...nextProvider, ...(verified ? { connectionVerifiedAt: new Date().toISOString() } : {}) });
+    providerFieldsDirty = false;
+    applyProviderFields();
+    setDiscoveryState('idle', t("配置已保存"));
+    renderPersistentComposer();
+    updateReadingModeUi();
+    setNotice(t("模型配置已保存。"), $('settings-notice'));
+    $('settings-notice').dataset.result = 'success';
   } catch (error) {
-    setNotice(error instanceof Error ? error.message : '模型连接失败', $('settings-notice'));
+    showProviderError(error, nextProvider, $('provider-test-status'));
   } finally { button.disabled = false; }
 }
 
 async function startFullTranslation() {
-  setWorkspaceView('tools');
+  setWorkspaceView('chat');
   if (!textModelReady()) {
-    showModelSetupGuidance('全文翻译');
+    showModelSetupGuidance(t("全文翻译"));
     return;
   }
-  if (pageContext?.translationDetected && !window.confirm('检测到页面可能已有其他翻译插件。继续会在现有译文旁再次插入内容，是否仍要继续？')) {
-    setNotice('已取消全文翻译，请保留一个整页翻译器。');
+  if (pageContext?.translationDetected && !window.confirm(t("检测到页面可能已有其他翻译插件。继续会在现有译文旁再次插入内容，是否仍要继续？"))) {
+    setNotice(t("已取消全文翻译，请保留一个整页翻译器。"));
     return;
   }
   // Request image hosts while the button gesture is still active. A denial
   // must not block text translation; unreadable images remain visible as
   // explicit retry/authorization failures.
   const imagePermissionGranted = await requestImageOrigins((pageContext?.images || []).filter((image) => image.src && !image.dataUrl));
-  if (!imagePermissionGranted) setNotice('未获得部分图片站点权限；正文会继续翻译，相关图片可授权后重试。');
+  if (!imagePermissionGranted) setNotice(t("未获得部分图片站点权限；正文会继续翻译，相关图片可授权后重试。"));
+  // A page-level task replaces the temporary selection toolbar so it cannot
+  // sit over translated paragraphs or intercept their inline controls.
+  sendToPage({ type: 'deep-research:clear-native-selection' });
+  if (pageContext?.displayedTranslationLanguage && pageContext.displayedTranslationLanguage !== currentTranslationLanguage()) {
+    await sendToPage({ type: 'deep-research:restore-translations', silent: true });
+    translatedTextIds.clear(); translatedImageIds.clear();
+    pageContext.translatedBlockIds = []; pageContext.translatedImageIds = [];
+    pageContext.displayedTranslationLanguage = '';
+  }
   translationRequested = true;
   fullTranslationEnabled = true;
   translationPaused = false;
@@ -2038,16 +2338,18 @@ async function startFullTranslation() {
   const resumableJob = pendingJob || activeJobRecord;
   activeJobRecord = resumableJob?.documentUrl === url
     && resumableJob?.contentHash === version
+    && resumableJob?.targetLanguage === currentTranslationLanguage()
     && ['queued', 'running', 'cancelled', 'failed', 'completed_with_errors'].includes(resumableJob.status)
     ? resumableJob
     : { id: `translation-${crypto.randomUUID()}`, documentUrl: url, contentHash: version, kind: 'text', status: 'queued', textDone: 0, textTotal: 0, imageDone: 0, imageTotal: 0 };
   failedTranslationItems = Array.isArray(activeJobRecord.failedItems) ? activeJobRecord.failedItems : [];
   pendingJob = null;
-  persistJobPatch(activeJobRecord, { status: 'queued', error: undefined });
+  persistJobPatch(activeJobRecord, { status: 'queued', targetLanguage: currentTranslationLanguage(), error: undefined });
   translationController?.abort();
   translationController = new AbortController();
   renderProgress();
-  setNotice(platformModeReady() ? '正在读取正文，随后交由调研平台 AI Engine 翻译…' : '正在读取当前页面的正文和图片…');
+  $('translation-summary').scrollIntoView({ block: 'nearest' });
+  setNotice(platformModeReady() ? t("正在读取正文，随后交由调研平台 AI Engine 翻译…") : t("正在读取当前页面的正文和图片…"));
   sendToPage({ type: 'deep-research:request-full-document' });
 }
 
@@ -2063,10 +2365,10 @@ function cancelCurrentTranslation() {
   translationController?.abort();
   translationController = null;
   if (job?.id) {
-    persistJobPatch(job, { status: 'cancelled', error: '用户取消了翻译', tabId: undefined });
+    persistJobPatch(job, { status: 'cancelled', error: t("用户取消了翻译"), tabId: undefined });
     chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: job.id }).catch(() => {});
   }
-  setNotice('翻译已取消，已完成内容保留。再次点击“全文翻译”可以继续。');
+  setNotice(t("翻译已取消，已完成内容保留。再次点击“全文翻译”可以继续。"));
   renderProgress(job?.textDone || 0, job?.textTotal || 0, job?.imageDone || 0, job?.imageTotal || 0);
   saveLocalSession();
 }
@@ -2074,38 +2376,42 @@ function cancelCurrentTranslation() {
 async function retryTranslationItem(item) {
   if (!item || retryingTranslationId || translationRunning) return;
   if (!textModelReady()) {
-    showModelSetupGuidance('翻译重试');
+    showModelSetupGuidance(t("翻译重试"));
     return;
   }
-  const context = documentContext || pageContext;
+  const sourceContext = documentContext || pageContext;
+  const context = sourceContext ? { ...sourceContext, targetLanguage: activeJobRecord?.targetLanguage || currentTranslationLanguage() } : null;
   if (!context) {
-    setNotice('当前页面正文尚未提取，无法重试。');
+    setNotice(t("当前页面正文尚未提取，无法重试。"));
     return;
   }
   const document = makeDocument(context);
   const controller = new AbortController();
   retryingTranslationId = item.id;
   renderTranslationFailures();
+  updateTranslationLanguageUi();
   try {
     if (item.kind === 'text') {
       const block = (documentContext?.blocks || context.blocks || []).find((candidate) => candidate.id === item.id);
-      if (!block) throw new Error('正文已变化，请重新开启全文翻译');
+      if (!block) throw new Error(t("正文已变化，请重新开启全文翻译"));
       const results = platformModeReady()
         ? await requestPlatformTranslations(context, [block], { signal: controller.signal })
-        : await translateBlocks(readingProvider(), document, [block], { signal: controller.signal });
+        : await translateBlocks(readingProvider(context.targetLanguage), document, [block], { signal: controller.signal });
       const [translated] = results;
-      if (!translated?.text) throw new Error(translated?.error || '正文翻译结果为空');
-      sendToPage({ type: 'deep-research:apply-translations', translations: [translated] });
+      if (!translated?.text) throw new Error(translated?.error || t("正文翻译结果为空"));
+      const [applied] = await applyTextTranslations([{ ...translated, targetLanguage: context.targetLanguage }], payload => sendToPage({ ...payload, documentUrl: context.url }));
+      if (applied?.error) throw new Error(applied.error);
+      persistJobPatch(activeJobRecord, { appliedTextIds: mergeProcessedIds(activeJobRecord?.appliedTextIds || [], [item.id]) });
       translatedTextIds.add(item.id);
     } else {
       const image = (documentContext?.images || context.images || []).find((candidate) => candidate.id === item.id);
-      if (!image) throw new Error('图片已变化，请重新开启全文翻译');
+      if (!image) throw new Error(t("图片已变化，请重新开启全文翻译"));
       const permissionGranted = await requestImageOrigins(image.src && !image.dataUrl ? [image] : []);
-      if (!permissionGranted && !image.dataUrl) throw new Error('未获得图片站点权限；允许后可重试图片翻译。');
+      if (!permissionGranted && !image.dataUrl) throw new Error(t("未获得图片站点权限；允许后可重试图片翻译。"));
       const translated = platformModeReady()
         ? await requestPlatformImageTranslation(context, image, { signal: controller.signal })
-        : await translateImage(readingProvider(), document, image, { signal: controller.signal, fetchImageBytes: true });
-      if (!translated.regions?.length && !translated.fallbackText && !translated.fallbackRegions?.length && !translated.noText && !translated.keptOriginal) throw new Error(translated.note || '图片没有可安全显示的译文');
+        : await translateImage(readingProvider(context.targetLanguage), document, image, { signal: controller.signal, fetchImageBytes: true });
+      if (!translated.regions?.length && !translated.fallbackText && !translated.fallbackRegions?.length && !translated.noText && !translated.keptOriginal) throw new Error(translated.note || t("图片没有可安全显示的译文"));
       if (translated.regions?.length || translated.fallbackText || translated.fallbackRegions?.length) sendToPage({ type: 'deep-research:apply-image-translations', translations: [translated] });
       translatedImageIds.add(item.id);
     }
@@ -2115,9 +2421,9 @@ async function retryTranslationItem(item) {
       status: failedTranslationItems.length ? 'completed_with_errors' : 'completed',
       completedAt: new Date().toISOString(),
     });
-    setNotice(failedTranslationItems.length ? `已完成一项，还剩 ${failedTranslationItems.length} 项。` : '失败项已全部完成。');
+    setNotice(failedTranslationItems.length ? t("已完成一项，还剩 {0} 项。", failedTranslationItems.length) : t("失败项已全部完成。"));
   } catch (error) {
-    const message = error instanceof Error ? error.message : '重试失败';
+    const message = error instanceof Error ? error.message : t("重试失败");
     failedTranslationItems = failedTranslationItems.map((candidate) => candidate.id === item.id ? { ...candidate, error: message } : candidate);
     persistJobPatch(activeJobRecord, { failedItems: failedTranslationItems, status: 'completed_with_errors', error: message });
     setNotice(message);
@@ -2131,11 +2437,12 @@ async function processDocument(context, runId = activeTranslationRun) {
   if (!translationRequested || !translationRunning || runId !== activeTranslationRun) return;
   const job = activeJobRecord;
   const controller = translationController;
+  const targetTabId = boundWindowTabId || activeTabId;
   const completionNotice = context.scope === 'selection'
-    ? '选段翻译完成。可以选择、复制或放大原文旁的译文。'
-    : '全文翻译完成。可以滚动阅读，或选择一段文字继续追问。';
+    ? t("选段翻译完成。可以选择、复制或放大原文旁的译文。")
+    : t("全文翻译完成。可以滚动阅读，或选择一段文字继续追问。");
   const usePlatform = platformModeReady();
-  context = boundTaskContext({ ...context, targetLanguage: currentReadingLanguage() }, { preserveAllBlocks: true });
+  context = boundTaskContext({ ...context, targetLanguage: currentTranslationLanguage() }, { preserveAllBlocks: true });
   documentContext = context;
   updatePageContextUi(context);
   const coverageWarning = translationCoverageWarning(context);
@@ -2164,13 +2471,29 @@ async function processDocument(context, runId = activeTranslationRun) {
   const document = makeDocument(context);
   const blocks = Array.isArray(context.blocks) ? context.blocks : [];
   const images = Array.isArray(context.images) ? context.images : [];
-  const cachedTranslations = (Array.isArray(job?.textTranslations) ? job.textTranslations : []).filter((item) => item.text && blocks.some((block) => block.id === item.id && block.text === item.sourceText));
-  const completedTextIds = new Set([...cachedTranslations.map((item) => item.id), ...(context.translatedBlockIds || [])]);
-  if (cachedTranslations.length) sendToPage({ type: 'deep-research:apply-translations', translations: cachedTranslations });
-  const processedTextIds = mergeProcessedIds(Array.isArray(job?.processedTextIds) ? job.processedTextIds : [], [...completedTextIds]);
+  failedTranslationItems = mergeTranslationFailures(failedTranslationItems, [], [], context);
+  const cachedTranslations = (job?.targetLanguage === context.targetLanguage && Array.isArray(job?.textTranslations) ? job.textTranslations : []).filter((item) => item.text && blocks.some((block) => block.id === item.id && block.text === item.sourceText));
+  const pageTranslatedIds = context.displayedTranslationLanguage === context.targetLanguage ? (context.translatedBlockIds || []) : [];
+  const completedTextIds = new Set([...cachedTranslations.map((item) => item.id), ...pageTranslatedIds]);
+  const appliedTextIds = new Set([...(context.full ? [] : (job?.appliedTextIds || [])), ...pageTranslatedIds]);
+  const applyTranslations = async (items) => {
+    const results = await applyTextTranslations(items.map(item => ({ ...item, targetLanguage: context.targetLanguage })), payload => sendToPage({ ...payload, documentUrl: context.url }, targetTabId));
+    if (runId !== activeTranslationRun) return results;
+    for (const item of results) {
+      if (item.text) { appliedTextIds.add(item.id); translatedTextIds.add(item.id); }
+      else { appliedTextIds.delete(item.id); translatedTextIds.delete(item.id); }
+    }
+    persistJobPatch(job, { appliedTextIds: [...appliedTextIds] });
+    return results;
+  };
+  if (cachedTranslations.length) await applyTranslations(cachedTranslations);
+  const processedTextIds = mergeProcessedIds(Array.isArray(job?.processedTextIds) ? job.processedTextIds : [], [...completedTextIds])
+    .filter((id) => !context.full || blocks.some((block) => block.id === id));
   const processedImageIds = Array.isArray(job?.processedImageIds) ? job.processedImageIds : [];
   const blockIds = blocks.map((block) => block.id).filter(Boolean);
   const imageIds = images.map((image) => image.id).filter(Boolean);
+  const textTotal = context.full ? blocks.length : Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size);
+  const skippedTextIds = mergeProcessedIds(context.full ? [] : (job?.skippedTextIds || []), blocks.filter((block) => block.kind === 'code').map((block) => block.id));
   let textDone = 0;
   let imageDone = 0;
   const translatableBlocks = blocks.filter((block) => block.kind !== 'code' && !completedTextIds.has(block.id));
@@ -2180,71 +2503,72 @@ async function processDocument(context, runId = activeTranslationRun) {
     status: 'running',
     documentUrl: context.url || job?.documentUrl || '',
     contentHash: context.contentHash || context.version || job?.contentHash || null,
-    textDone: Math.max(Number(job?.textDone) || 0, processedTextIds.length),
-    textTotal: Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size),
+    targetLanguage: context.targetLanguage,
+    textDone: context.full ? processedTextIds.length : Math.max(Number(job?.textDone) || 0, processedTextIds.length),
+    textTotal: textTotal,
     imageDone: Math.max(Number(job?.imageDone) || 0, processedImageIds.length),
     imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size),
     processedTextIds,
+    appliedTextIds: [...appliedTextIds],
+    skippedTextIds,
     processedImageIds,
+    failedItems: failedTranslationItems,
   });
-  renderProgress(Math.max(Number(job?.textDone) || 0, processedTextIds.length), Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), Math.max(Number(job?.imageDone) || 0, processedImageIds.length), Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
+  renderProgress(Math.max(Number(job?.textDone) || 0, processedTextIds.length), textTotal, Math.max(Number(job?.imageDone) || 0, processedImageIds.length), Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
   const imageLimitNotice = context.imageTruncated
-    ? `图片超过处理上限，已列出 ${images.length}/${context.imageCandidateCount || images.length} 张，未处理部分已明确保留。`
+    ? t("图片超过处理上限，已列出 {0}/{1} 张，未处理部分已明确保留。", images.length, context.imageCandidateCount || images.length)
     : '';
   setNotice(usePlatform
-    ? `正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。${coverageWarning ? `\n${coverageWarning}` : ''}${imageLimitNotice ? `\n${imageLimitNotice}` : ''}`
-    : `正文翻译会按块处理；图片无法翻译时保留原图并继续。${coverageWarning ? `\n${coverageWarning}` : ''}${imageLimitNotice ? `\n${imageLimitNotice}` : ''}`);
+    ? t("正文与图片文字翻译通过调研平台 AI Engine 处理；图片字节仅在本次操作中由浏览器读取并按需上传，不会上传图片 URL。{0}{1}", coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : '')
+    : t("正文翻译会按块处理；图片无法翻译时保留原图并继续。{0}{1}", coverageWarning ? `\n${coverageWarning}` : '', imageLimitNotice ? `\n${imageLimitNotice}` : ''));
   try {
     const translationOptions = {
       signal: controller.signal,
       // Apply each completed block immediately. Waiting for every paragraph
       // made a long page feel frozen even though the model was already
       // returning usable results.
-      onResult: (item) => {
+      onResult: async (item) => {
         if (runId !== activeTranslationRun || !item?.text) return;
-        translatedTextIds.add(item.id);
         const savedResults = new Map((job.textTranslations || []).map((result) => [result.id, result]));
         savedResults.set(item.id, item);
         persistJobPatch(job, {
           textTranslations: [...savedResults.values()],
           processedTextIds: mergeProcessedIds(job.processedTextIds || [], [item.id]),
         });
-        sendToPage({ type: 'deep-research:apply-translations', translations: [item] });
+        await applyTranslations([item]);
       },
       onProgress: (done) => {
         textDone = Math.max(Number(job?.textDone) || 0, done + skippedCodeBlocks);
-        renderProgress(textDone, Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
-        persistJobPatch(job, { textDone, textTotal: Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size) });
+        renderProgress(textDone, textTotal, imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
+        persistJobPatch(job, { textDone, textTotal: textTotal });
       },
     };
-    const translations = usePlatform
+    let translations = usePlatform
       ? await requestPlatformTranslations(context, translatableBlocks, translationOptions)
-      : await translateBlocks(readingProvider(), document, translatableBlocks, translationOptions);
+      : await translateBlocks(readingProvider(context.targetLanguage), document, translatableBlocks, translationOptions);
     job.processedTextIds = mergeProcessedIds(processedTextIds, [
       ...translations.filter((item) => item.text || item.error).map((item) => item.id),
       ...blocks.filter((block) => block.kind === 'code').map((block) => block.id),
     ]);
-    const usableTranslations = translations.filter((item) => item.text);
     if (runId !== activeTranslationRun) return;
-    if (usableTranslations.length) {
-      usableTranslations.forEach((item) => translatedTextIds.add(item.id));
-      sendToPage({ type: 'deep-research:apply-translations', translations: usableTranslations });
-    }
+    const finalResults = await applyTranslations([...cachedTranslations, ...translations.filter((item) => item.text)]);
+    const renderedById = new Map(finalResults.map((item) => [item.id, item]));
+    translations = [...cachedTranslations, ...translations].map((item) => renderedById.get(item.id) || item);
     const imageTranslations = [];
     for (const image of images) {
-      if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
+      if (controller.signal.aborted) throw new DOMException(t("翻译已取消"), 'AbortError');
       try {
         const translated = usePlatform
           ? await requestPlatformImageTranslation(context, image, { signal: controller.signal })
-          : await translateImage(readingProvider(), document, image, { signal: controller.signal, fetchImageBytes: true });
+          : await translateImage(readingProvider(context.targetLanguage), document, image, { signal: controller.signal, fetchImageBytes: true });
         imageTranslations.push(translated);
       } catch (error) {
-        if (controller.signal.aborted) throw new DOMException('翻译已取消', 'AbortError');
-        imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : '图片翻译失败' });
+        if (controller.signal.aborted) throw new DOMException(t("翻译已取消"), 'AbortError');
+        imageTranslations.push({ ...image, regions: [], confidence: 0, note: error instanceof Error ? error.message : t("图片翻译失败") });
       }
       imageDone += 1;
       job.processedImageIds = mergeProcessedIds(processedImageIds, imageTranslations.filter((item) => !item.skipped).map((item) => item.id).filter(Boolean));
-      renderProgress(textDone, Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size));
+      renderProgress(textDone, textTotal, imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size));
       persistJobPatch(job, { imageDone, imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size), processedImageIds: job.processedImageIds });
     }
     if (runId !== activeTranslationRun) return;
@@ -2265,7 +2589,7 @@ async function processDocument(context, runId = activeTranslationRun) {
         id: item.id,
         kind: 'image',
         label: item.alt || item.src || item.id,
-        error: item.note || '图片翻译失败',
+        error: item.note || t("图片翻译失败"),
       })));
     const resolvedIds = [
       ...translations.filter((item) => item.text).map((item) => item.id),
@@ -2274,20 +2598,20 @@ async function processDocument(context, runId = activeTranslationRun) {
     failedTranslationItems = mergeTranslationFailures(failedTranslationItems, currentFailures, resolvedIds);
     const imageWarnings = imageTranslations
       .filter((item) => item.noText || item.keptOriginal || (item.fallbackText && item.note) || item.sourceWarning)
-      .map((item) => `图片 ${item.id}: ${[item.sourceWarning, item.skipped ? '已跳过并保留原图' : '', item.noText ? '未发现可可靠读取的文字' : '', item.keptOriginal && !item.skipped ? '图片文字为技术标识符，保留原文' : '', item.note].filter(Boolean).join('；')}`);
+      .map((item) => t("图片 {0}: {1}", item.id, [item.sourceWarning, item.skipped ? '已跳过并保留原图' : '', item.noText ? '未发现可可靠读取的文字' : '', item.keptOriginal && !item.skipped ? '图片文字为技术标识符，保留原文' : '', item.note].filter(Boolean).join('；')));
     renderTranslationFailures();
-    const failures = failedTranslationItems.map((item) => `${item.kind === 'image' ? '图片' : '正文'} ${item.id}: ${item.error}`);
+    const failures = failedTranslationItems.map((item) => `${item.kind === 'image' ? t("图片") : t("正文")} ${item.id}: ${item.error}`);
     setNotice(failures.length
-      ? `翻译完成，但有 ${failures.length} 项需要重试。\n${[...failures, coverageWarning, ...imageWarnings].filter(Boolean).slice(0, 5).join('\n')}`
+      ? t("翻译完成，但有 {0} 项需要重试。\n{1}", failures.length, [...failures, coverageWarning, ...imageWarnings].filter(Boolean).slice(0, 5).join('\n'))
       : imageWarnings.length
-        ? `${coverageWarning ? '已翻译可处理正文，未覆盖部分没有翻译。' : '全文翻译完成。'}${coverageWarning ? `\n${coverageWarning}` : ''}\n${imageWarnings.slice(0, 3).join('\n')}`
+        ? `${coverageWarning ? t("已翻译可处理正文，未覆盖部分没有翻译。") : t("全文翻译完成。")}${coverageWarning ? `\n${coverageWarning}` : ''}\n${imageWarnings.slice(0, 3).join('\n')}`
         : coverageWarning
-          ? `已翻译可处理正文，未覆盖部分没有翻译。\n${coverageWarning}`
+          ? t("已翻译可处理正文，未覆盖部分没有翻译。\n{0}", coverageWarning)
           : completionNotice);
     if (runId === activeTranslationRun) persistJobPatch(job, {
       status: failedTranslationItems.length ? 'completed_with_errors' : 'completed',
       textDone,
-      textTotal: Math.max(Number(job?.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
+      textTotal: textTotal,
       imageDone: Math.max(Number(job?.imageDone) || 0, imageDone),
       imageTotal: Math.max(Number(job?.imageTotal) || 0, new Set([...job.processedImageIds, ...imageIds]).size),
       processedTextIds: job.processedTextIds,
@@ -2297,14 +2621,14 @@ async function processDocument(context, runId = activeTranslationRun) {
     });
   } catch (error) {
     if (runId === activeTranslationRun) {
-      if (error instanceof DOMException && error.name === 'AbortError') setNotice('翻译已暂停。再次点击全文翻译会从缓存结果继续。');
-      else setNotice(error instanceof Error ? error.message : '全文翻译失败');
+      if (error instanceof DOMException && error.name === 'AbortError') setNotice(t("翻译已暂停。再次点击全文翻译会从缓存结果继续。"));
+      else setNotice(error instanceof Error ? error.message : t("全文翻译失败"));
     }
-    if (runId === activeTranslationRun) persistJobPatch(job, { status: error instanceof DOMException && error.name === 'AbortError' ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : '全文翻译失败' });
+    if (runId === activeTranslationRun) persistJobPatch(job, { status: error instanceof DOMException && error.name === 'AbortError' ? 'cancelled' : 'failed', error: error instanceof Error ? error.message : t("全文翻译失败") });
   } finally {
     if (runId === activeTranslationRun) {
       translationRunning = false;
-      renderProgress(textDone, Math.max(Number(job?.textTotal) || 0, new Set([...processedTextIds, ...blockIds]).size), imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
+      renderProgress(textDone, textTotal, imageDone, Math.max(Number(job?.imageTotal) || 0, new Set([...processedImageIds, ...imageIds]).size));
       saveLocalSession();
     }
   }
@@ -2322,7 +2646,7 @@ function discussionPrompt(scope, intent) {
   if (intent === 'architecture') return ARCHITECTURE_PROMPT;
   if (intent === 'tradeoffs') return TRADEOFFS_PROMPT;
   if (intent === 'selection-summary') return SELECTION_SUMMARY_PROMPT;
-  if (intent === 'translate') return `请将当前选段翻译成${currentReadingLanguage()}，保留 API、类名、函数名、命令、代码和技术标识符；只翻译自然语言，不要补充解释。`;
+  if (intent === 'translate') return `请将当前选段翻译成${currentTranslationLanguage()}，保留 API、类名、函数名、命令、代码和技术标识符；只翻译自然语言，不要补充解释。`;
   if (intent === 'explain') return scope === 'image' ? '请解释这张技术图示。' : '请解释当前技术内容，指出它解决的问题、关键机制和一个具体例子。';
   return scope === 'image' ? '请围绕当前技术图示回答问题。' : '';
 }
@@ -2330,26 +2654,59 @@ function discussionPrompt(scope, intent) {
 function discussionUserLabel(scope, intent, question = '') {
   const explicitQuestion = String(question || '').trim();
   if (explicitQuestion) return explicitQuestion;
-  if (intent === 'summary') return '总结本页';
-  if (intent === 'map') return '梳理文章地图';
-  if (intent === 'architecture') return '分析关键机制';
-  if (intent === 'tradeoffs') return '审查风险与取舍';
-  if (intent === 'selection-summary') return '总结当前选段';
-  if (intent === 'translate') return '翻译当前选段';
+  if (intent === 'summary') return t("总结本页");
+  if (intent === 'map') return t("梳理文章地图");
+  if (intent === 'architecture') return t("分析关键机制");
+  if (intent === 'tradeoffs') return t("审查风险与取舍");
+  if (intent === 'selection-summary') return t("总结当前选段");
+  if (intent === 'translate') return t("翻译当前选段");
   if (intent === 'explain') {
-    if (scope === 'image') return '解读当前图示';
-    if (scope === 'selection') return '解释当前选段';
-    return '解释当前页面';
+    if (scope === 'image') return t("解读当前图示");
+    if (scope === 'selection') return t("解释当前选段");
+    return t("解释当前页面");
   }
-  if (scope === 'image') return '围绕当前图示提问';
-  if (scope === 'selection') return '围绕当前选段提问';
-  return '围绕当前页面提问';
+  if (scope === 'image') return t("围绕当前图示提问");
+  if (scope === 'selection') return t("围绕当前选段提问");
+  return t("围绕当前页面提问");
 }
 
 function revealDiscussion({ focusInput = false } = {}) {
   window.setTimeout(() => {
     if (focusInput) $('question-input')?.focus({ preventScroll: true });
   }, 0);
+}
+
+function renderPendingAnswer() {
+  const turn = $('pending-turn');
+  if (!turn) return;
+  const visible = Boolean(discussionRunning && pendingAnswer);
+  show(turn, visible);
+  turn.setAttribute('aria-busy', String(discussionRunning));
+  if (!pendingAnswer) return;
+  $('pending-question').textContent = pendingAnswer.userMessage;
+  $('answer-progress-text').textContent = pendingAnswer.status;
+  const output = $('answer-output');
+  if (output.dataset.streamed !== pendingAnswer.streamedText) {
+    renderMarkdown(output, pendingAnswer.streamedText || '', { streaming: true });
+    output.dataset.streamed = pendingAnswer.streamedText || '';
+  }
+  show($('answer-output'), Boolean(pendingAnswer.streamedText));
+}
+
+function updatePendingAnswer(update = {}) {
+  if (!pendingAnswer) return;
+  const transcript = $('chat-transcript');
+  const followOutput = transcript && transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 96;
+  if (update.status) pendingAnswer.status = update.status;
+  if (typeof update.streamedText === 'string') pendingAnswer.streamedText = update.streamedText;
+  renderPendingAnswer();
+  if (followOutput) requestAnimationFrame(() => { transcript.scrollTop = transcript.scrollHeight; });
+}
+
+function revealPendingAnswer() {
+  const transcript = $('chat-transcript');
+  if (!transcript) return;
+  requestAnimationFrame(() => transcript.scrollTo({ top: transcript.scrollHeight, behavior: 'smooth' }));
 }
 
 function openDiscussion(scope = 'page', intent = 'ask') {
@@ -2367,10 +2724,10 @@ function openDiscussion(scope = 'page', intent = 'ask') {
   renderDiscussionContext(nextScope, discussionIntent, context);
   if ($('question-input')) {
     $('question-input').placeholder = nextScope === 'selection'
-      ? '问问这段内容…'
+      ? t("问问这段内容…")
       : nextScope === 'image'
-        ? '问问这张图…'
-        : '问问这篇文章…';
+        ? t("问问这张图…")
+        : t("问问这篇文章…");
     revealDiscussion({ focusInput: true });
   }
 }
@@ -2385,7 +2742,7 @@ function setDiscussionScope(scope) {
         ? 'page'
         : null;
   if (!nextScope) {
-    setNotice(requested === 'selection' ? '先在原网页选择一段正文。' : '先在原网页点击一张图示。');
+    setNotice(requested === 'selection' ? t("先在原网页选择一段正文。") : t("先在原网页点击一张图示。"));
     return;
   }
   discussionScope = nextScope;
@@ -2400,7 +2757,7 @@ async function handlePageAction(action) {
   if (!normalized) return;
   if (!pageContext && !documentContext) {
     pendingPageAction = normalized;
-    setNotice('正在读取当前页面，动作会在正文准备好后继续。');
+    setNotice(t("正在读取当前页面，动作会在正文准备好后继续。"));
     sendToPage({ type: 'deep-research:request-page' });
     return;
   }
@@ -2420,135 +2777,185 @@ async function handlePageAction(action) {
 async function resumeBackgroundAnswer(context) {
   const snapshot = await chrome.runtime.sendMessage({ type: 'deep-research:answer-current', url: context.url, contentHash: context.contentHash });
   if (!snapshot || discussionRunning || context.url !== contextUrl()) return;
-  if (['failed', 'interrupted'].includes(snapshot.status)) { setNotice(snapshot.error || '回答未完成，请重试'); if (!$('question-input').value) $('question-input').value = snapshot.prompt || snapshot.question || ''; return; }
+  const presentation = answerTaskPresentation(snapshot);
+  const input = $('question-input');
+  // Remove only a draft proven to be the internal prompt from an older task.
+  // Unrelated text the user has started typing must survive task recovery.
+  if (snapshot.prompt && snapshot.prompt !== snapshot.question && input.value.trim() === snapshot.prompt.trim()) {
+    input.value = '';
+    persistQuestionDraft();
+  }
+  if (['failed', 'interrupted'].includes(snapshot.status)) {
+    setNotice(t("上次回答未完成：{0}", snapshot.error || t("回答未完成，请重试")));
+    if (!input.value && presentation.draft) { input.value = presentation.draft; persistQuestionDraft(); }
+    return;
+  }
   if (snapshot.status !== 'running') return;
   discussionController = new AbortController();
+  discussionSubscription = new AbortController();
+  const subscription = discussionSubscription;
   discussionRunning = true; discussionOpen = true;
+  pendingAnswer = { userMessage: presentation.userMessage || t("继续回答"), status: t("正在继续后台回答…"), streamedText: snapshot.streamed ? streamAnswerPreview(snapshot.streamed) : '' };
   renderPage(); renderPersistentComposer();
+  revealPendingAnswer();
   try {
     const result = await waitForAnswerTask(snapshot.id, {
       signal: discussionController.signal,
-      onDelta: text => { if (context.url === contextUrl()) { $('answer-output').textContent = streamAnswerPreview(text); show($('answer-output'), true); } },
+      detachSignal: subscription.signal,
+      onProgress: (done, total, phase) => { if (context.url === contextUrl()) updatePendingAnswer({ status: phase === 'merging' ? t("正在汇总原文依据…") : t("正在核对原文依据（{0}/{1}）…", done, total) }); },
+      onDelta: text => { if (context.url === contextUrl()) updatePendingAnswer({ status: t("正在生成回答…"), streamedText: streamAnswerPreview(text) }); },
     });
     if (context.url === contextUrl()) {
-      const session = await readerStore.getSession(context.url, context.contentHash || null);
+      const session = await readerStore.getReadingSession(context.url, context.contentHash || null);
       discussionHistory = session?.discussion || discussionHistory;
       latestStructuredAnswer = result; latestAnswer = result.answer || '';
+      latestAnswerContext = { ...context, radarSummaryId: normalizeRadarSummaryId(session?.radarSummaryId) || undefined, scope: session?.discussionScope || 'page', selection: session?.selection || null };
       renderConversation(); renderStructuredAnswer(result);
     }
-  } catch (error) { if (context.url === contextUrl() && error.name !== 'AbortError') setNotice(error.message || '回答未完成'); }
-  finally { discussionRunning = false; show($('answer-output'), false); renderPersistentComposer(); }
+  } catch (error) { if (context.url === contextUrl() && error.name !== 'AbortError') setNotice(error.message || t("回答未完成")); }
+  finally { if (discussionSubscription === subscription) { discussionRunning = false; pendingAnswer = null; renderPendingAnswer(); renderPersistentComposer(); } }
 }
 
 async function explainOrAsk(question = '', scope = discussionScope, intent = discussionIntent) {
-  if (discussionRunning) { setNotice('当前回答仍在继续。可以选择下一段，或点击停止回答后再发起新问题。'); return; }
+  if (discussionRunning) { setNotice(t("当前回答仍在继续。可以选择下一段，或点击停止回答后再发起新问题。")); return; }
+  const imagePermission = scope === 'image' && imageContext?.image && !imageContext.image.dataUrl ? requestImageOrigins([imageContext.image]) : Promise.resolve(true);
+  const current = pageContext || documentContext || selectionContext;
+  if (current) await resumeSession(current);
+  if (discussionRunning || current?.url !== contextUrl()) return;
   interactionGeneration += 1;
   const normalizedIntent = DISCUSSION_INTENTS.has(intent) ? intent : 'ask';
   const sourceContext = scope === 'page' || scope === 'image' ? (documentContext || pageContext) : selectionContext;
   const image = scope === 'image' ? imageContext?.image : null;
   if (!sourceContext || (scope === 'selection' && !sourceContext.selection?.quote) || (scope === 'image' && !image)) {
-    setNotice(scope === 'image' ? '先在原网页点击一张图示的“解读”按钮。' : '先在原网页选择一段正文，或先打开整页讨论。');
+    setNotice(scope === 'image' ? t("先在原网页点击一张图示的“解读”按钮。") : t("先在原网页选择一段正文，或先打开整页讨论。"));
     return;
   }
   if (scope === 'page' && !contextHasReadableBody(sourceContext)) {
     pageReadState = 'error';
     updatePageContextUi(sourceContext);
     renderPersistentComposer(scope);
-    setNotice('没有提取到可用于问答的正文。请重新加载页面，或先选择一段原文后提问。');
+    setNotice(t("没有提取到可用于问答的正文。请重新加载页面，或先选择一段原文后提问。"));
     return;
   }
-  if (scope === 'image' && readingMode === 'platform') {
-    setNotice('平台 AI Engine 暂未提供图示视觉理解接口。切换到独立模式并配置视觉模型后可继续。');
-    return;
-  }
-  if (scope === 'image' && !providerReady(provider)) {
-    showModelSetupGuidance('图示解读');
+  if (scope === 'image' && !platformModeReady() && !providerReady(provider)) {
+    showModelSetupGuidance(t("图示解读"));
     return;
   }
   if (!textModelReady()) {
     const setupAction = scope === 'selection'
-      ? normalizedIntent === 'ask' ? '选段问答'
-        : normalizedIntent === 'translate' ? '选段翻译'
-          : normalizedIntent === 'selection-summary' ? '选段总结' : '选段解读'
-      : normalizedIntent === 'summary' ? '全文总结'
-        : normalizedIntent === 'map' ? '文章地图'
-          : normalizedIntent === 'architecture' ? '关键机制分析'
-            : normalizedIntent === 'tradeoffs' ? '风险与取舍分析'
-              : normalizedIntent === 'translate' ? '全文翻译'
-                : normalizedIntent === 'ask' ? '整页问答' : '整页解读';
+      ? normalizedIntent === 'ask' ? t("选段问答")
+        : normalizedIntent === 'translate' ? t("选段翻译")
+          : normalizedIntent === 'selection-summary' ? t("选段总结") : t("选段解读")
+      : normalizedIntent === 'summary' ? t("全文总结")
+        : normalizedIntent === 'map' ? t("文章地图")
+          : normalizedIntent === 'architecture' ? t("关键机制分析")
+            : normalizedIntent === 'tradeoffs' ? t("风险与取舍分析")
+              : normalizedIntent === 'translate' ? t("全文翻译")
+                : normalizedIntent === 'ask' ? t("整页问答") : t("整页解读");
     showModelSetupGuidance(setupAction);
     return;
   }
+  setNotice('');
   discussionScope = scope;
   discussionIntent = normalizedIntent;
+  if (scope === 'selection') sendToPage({ type: 'deep-research:clear-native-selection' });
   discussionOpen = true;
   setWorkspaceView('chat');
   renderDiscussionContext(scope, normalizedIntent, sourceContext);
-  $('answer-output').textContent = '正在阅读这段原文并核对证据…';
-  show($('answer-output'), true);
   latestStructuredAnswer = null;
+  latestAnswerContext = {
+    ...sourceContext,
+    radarSummaryId: currentRadarSummaryId(sourceContext.url) || undefined,
+    scope,
+    ...(scope === 'selection' ? { selection: sourceContext.selection } : {}),
+  };
   renderStructuredAnswer(null);
   show($('discussion-section'), true);
   revealDiscussion();
   discussionController?.abort();
   discussionController = new AbortController();
+  discussionSubscription = new AbortController();
+  const subscription = discussionSubscription;
   discussionRunning = true;
   renderPersistentComposer(scope);
   latestAnswer = '';
   let streamBuffer = '';
   const requestSource = { ...sourceContext, scope };
   const requestHistory = [...discussionHistory];
-  const submittedDraft = $('question-input').value;
+  const submittedDraft = question && $('question-input').value.trim() === question.trim() ? $('question-input').value : '';
+  // The pending turn owns the submitted question. Persist its cleared draft
+  // before a page switch so it cannot reappear on return or sidebar reload.
+  if (submittedDraft) { $('question-input').value = ''; persistQuestionDraft(); }
   const userMessage = discussionUserLabel(scope, normalizedIntent, question);
+  pendingAnswer = {
+    userMessage,
+    status: scope === 'selection' ? t("正在读取所选原文…") : scope === 'image' ? t("正在分析当前图示…") : t("正在读取文章内容…"),
+    streamedText: '',
+  };
+  renderConversation();
+  renderPendingAnswer();
+  revealPendingAnswer();
   const requestPrompt = question || discussionPrompt(scope, normalizedIntent);
   const taskController = discussionController;
-  const stillVisible = () => contextUrl() === requestSource.url && (!requestSource.contentHash || requestSource.contentHash === (pageContext?.contentHash || documentContext?.contentHash));
-  const updateWaiting = (text) => { if (stillVisible()) { $('answer-output').textContent = text; show($('answer-output'), true); } };
+  const stillVisible = () => discussionSubscription === subscription && contextUrl() === requestSource.url;
+  const updateWaiting = (text) => { if (stillVisible()) updatePendingAnswer({ status: text }); };
   try {
+    if (!(await imagePermission)) throw new Error(t("未获得图片站点权限，请授权后重试。"));
+    const preparedImage = image ? await prepareVisionImage(image, { signal: taskController.signal }) : image;
     const result = await requestAnswerTask({
       id: `answer-${crypto.randomUUID()}`, context: requestSource, question: requestPrompt,
       history: requestHistory, userMessage, scope, intent: normalizedIntent,
-      mode: platformModeReady() && scope !== 'image' ? 'platform' : 'standalone',
-      platformUrl, language: currentReadingLanguage(), image,
+      mode: platformModeReady() ? 'platform' : 'standalone',
+      platformUrl, language: currentReadingLanguage(), replyLanguage: normalizedIntent === 'translate' ? currentTranslationLanguage() : question ? 'auto' : currentReadingLanguage(), image: preparedImage,
       action: !question && normalizedIntent === 'explain' ? 'explain' : !question && normalizedIntent === 'translate' ? 'translate' : 'ask',
       maxTokens: normalizedIntent === 'summary' ? 6000 : 5000,
     }, {
       signal: taskController.signal,
-      onProgress: (done, total, phase) => updateWaiting(phase === 'merging' ? '正在汇总全文证据…' : `正在核对原文（${done}/${total}）…`),
-      onDelta: text => { streamBuffer = text; updateWaiting(streamAnswerPreview(text) || '模型正在整理回答…'); },
+      detachSignal: subscription.signal,
+      onProgress: (done, total, phase) => updateWaiting(phase === 'merging' ? t("原文已读取，正在整合依据…") : t("正在核对原文依据（{0}/{1}）…", done, total)),
+      onDelta: text => { if (stillVisible()) { streamBuffer = text; updatePendingAnswer({ status: t("正在生成回答…"), streamedText: streamAnswerPreview(text) }); } },
     });
-    if (!stillVisible()) { discussionRunning = false; renderPersistentComposer(); setNotice('上一篇文章的回答已完成，已保存在历史中。'); return; }
+    if (!stillVisible()) return;
     latestStructuredAnswer = typeof result === 'string' ? { answer: result, evidence: [], background: '', inference: '', limitations: [], warnings: [] } : result;
+    if (requestSource.contentHash && requestSource.contentHash !== (pageContext?.contentHash || documentContext?.contentHash)) latestStructuredAnswer = { ...latestStructuredAnswer, evidence: [], warnings: [...(latestStructuredAnswer.warnings || []), t("页面内容已更新，旧引文定位已撤销。")] };
     latestAnswer = latestStructuredAnswer.answer || '';
     discussionHistory = [
       ...discussionHistory,
       { role: 'user', content: userMessage },
       { role: 'assistant', content: latestAnswer },
-    ].slice(-20);
+    ];
     discussionRunning = false;
-    if ($('question-input').value === submittedDraft) $('question-input').value = '';
+    pendingAnswer = null;
+    renderPendingAnswer();
     renderPersistentComposer(scope);
     renderConversation();
     renderStructuredAnswer(latestStructuredAnswer);
     show($('answer-output'), false);
-    revealLatestAnswerDetails();
+    // Keep the reading position when the streamed answer gains supporting details.
     saveLocalSession();
   } catch (error) {
+    if (!stillVisible()) return;
     if (error instanceof DOMException && error.name === 'AbortError') {
+      if (!$('question-input').value && submittedDraft) { $('question-input').value = submittedDraft; persistQuestionDraft(); }
       discussionRunning = false;
-      show($('answer-output'), false);
+      pendingAnswer = null;
+      renderPendingAnswer();
       renderPage();
       return;
     }
     discussionRunning = false;
+    pendingAnswer = null;
+    renderPendingAnswer();
     renderPersistentComposer(scope);
+    if (!$('question-input').value && submittedDraft) { $('question-input').value = submittedDraft; persistQuestionDraft(); }
     latestAnswer = '';
     latestStructuredAnswer = null;
+    latestAnswerContext = null;
     $('answer-output').textContent = '';
     renderConversation();
     show($('answer-output'), false);
     renderStructuredAnswer(null);
-    setNotice(error instanceof Error ? error.message : '解读失败');
+    setNotice(error instanceof Error ? t(error.message) : t("解读失败"));
   }
 }
 
@@ -2562,7 +2969,7 @@ function openAnnotationDialog(annotation = null) {
     anchor: selectionContext.selection,
     note: '',
   } : null);
-  if (!source?.anchor?.quote) { setNotice('先在原网页选择一段正文。'); return; }
+  if (!source?.anchor?.quote) { setNotice(t("先在原网页选择一段正文。")); return; }
   editingAnnotation = annotation;
   const dialog = ensureAnnotationDialog();
   show($('page-view'), false);
@@ -2570,7 +2977,7 @@ function openAnnotationDialog(annotation = null) {
   show($('settings-view'), false);
   show(ensureSaveDialog(), false);
   show(dialog, true);
-  $('annotation-source-title').textContent = source.document?.title || selectionContext?.title || '当前页面';
+  $('annotation-source-title').textContent = source.document?.title || selectionContext?.title || t("当前页面");
   $('annotation-quote').value = source.anchor.quote;
   $('annotation-note').value = source.note || '';
   $('annotation-notice').textContent = '';
@@ -2582,13 +2989,13 @@ async function confirmAnnotation() {
   const anchor = editingAnnotation?.anchor || selectionContext?.selection;
   const context = selectionContext || documentContext || pageContext;
   const note = $('annotation-note').value.trim();
-  if (!anchor?.quote || !context?.url) { setNotice('当前原文锚点已失效，请重新选择。', $('annotation-notice')); return; }
+  if (!anchor?.quote || !context?.url) { setNotice(t("当前原文锚点已失效，请重新选择。"), $('annotation-notice')); return; }
   const version = context.contentHash || context.version || anchor.contentHash || null;
-  if (!version) { setNotice('当前页面还没有稳定版本指纹，请等待正文提取后重试。', $('annotation-notice')); return; }
+  if (!version) { setNotice(t("当前页面还没有稳定版本指纹，请等待正文提取后重试。"), $('annotation-notice')); return; }
   const saved = await readerStore.saveAnnotation({
     ...(editingAnnotation || {}),
     id: editingAnnotation?.id,
-    document: { url: context.url, title: context.title || '未命名页面', version },
+    document: { url: context.url, title: context.title || t("未命名页面"), version },
     anchor: { ...anchor, contentHash: anchor.contentHash || version },
     note,
   });
@@ -2596,7 +3003,7 @@ async function confirmAnnotation() {
   pendingAnnotationHighlightId = saved.id;
   sendToPage({ type: 'deep-research:apply-annotation', annotation: saved });
   showReading();
-  setNotice('标注已保存，正在原文中定位高亮。');
+  setNotice(t("标注已保存，正在原文中定位高亮。"));
   await updateLibrary();
 }
 
@@ -2604,15 +3011,18 @@ function openSaveDialog(insight = null) {
   const source = insight || latestAnswerSource() || (selectionContext?.selection?.quote ? {
     title: selectionContext.title,
     url: selectionContext.url,
+    document: { url: selectionContext.url, title: selectionContext.title, version: selectionContext.contentHash || selectionContext.version || selectionContext.selection.contentHash || null },
     quote: selectionContext.selection.quote,
     note: '',
     aiAnswer: latestAnswer,
     anchor: selectionContext.selection,
     tags: [],
   } : null);
-  if (!source) { setNotice('先生成回答，或在原网页选择一段正文。'); return; }
+  if (!source) { setNotice(t("先生成回答，或在原网页选择一段正文。")); return; }
   editingInsight = insight;
-  pendingInsightSource = source;
+  pendingInsightSource = insight ? { ...insight } : readerStore.captureInsightSource(source, {
+    url: contextUrl(), radarSummaryId: currentRadarSummaryId(),
+  });
   const dialog = ensureSaveDialog();
   show($('page-view'), false);
   show($('empty-view'), false);
@@ -2620,13 +3030,13 @@ function openSaveDialog(insight = null) {
   show(ensureAnnotationDialog(), false);
   show(dialog, true);
   const destination = platformModeReady()
-    ? '确认后保存到调研平台研究库。'
+    ? t("确认后保存到调研平台研究库。")
     : readingMode === 'platform'
-      ? '平台尚未连接，本次会保存在浏览器本地。'
-      : '独立模式下保存在浏览器本地。';
-  $('save-mode-note').textContent = `保存为可检索的阅读结论卡：原文摘录、笔记、AI 结论和标签；不会在原文添加高亮。${destination}`;
-  $('confirm-save').textContent = platformModeReady() ? '保存到调研平台' : '保存到本地阅读库';
-  $('save-source-title').textContent = source.title || source.document?.title || '当前页面';
+      ? t("平台尚未连接，本次会保存在浏览器本地。")
+      : t("独立模式下保存在浏览器本地。");
+  $('save-mode-note').textContent = t("保存为可检索的阅读结论卡：原文摘录、笔记、AI 结论和标签；不会在原文添加高亮。{0}", destination);
+  $('confirm-save').textContent = platformModeReady() ? t("保存到调研平台") : t("保存到本地阅读库");
+  $('save-source-title').textContent = source.title || source.document?.title || t("当前页面");
   $('save-quote').value = source.quote || '';
   $('save-note').value = source.note || '';
   $('save-ai-answer').value = source.aiAnswer || '';
@@ -2638,25 +3048,25 @@ function openSaveDialog(insight = null) {
 }
 
 async function confirmSaveInsight() {
+  const connectionEvents = platformStateEvents;
   const quote = $('save-quote').value.trim();
-  if (!quote) { setNotice('至少保留一段原文摘录。', $('save-notice')); return; }
-  const source = editingInsight || pendingInsightSource || latestAnswerSource() || selectionContext;
-  const url = editingInsight?.url || editingInsight?.document?.url || source?.url || source?.document?.url || selectionContext?.url || '';
-  const title = editingInsight?.title || editingInsight?.document?.title || source?.title || source?.document?.title || selectionContext?.title || '未命名页面';
-  if (!url) { setNotice('当前页面来源缺失，请重新选择原文。', $('save-notice')); return; }
+  if (!quote) { setNotice(t("至少保留一段原文摘录。"), $('save-notice')); $('save-quote').focus(); return; }
+  const source = editingInsight || pendingInsightSource;
+  const url = source?.url || source?.document?.url || '';
+  const title = source?.title || source?.document?.title || t("未命名页面");
+  if (!url) { setNotice(t("当前页面来源缺失，请重新选择原文。"), $('save-notice')); return; }
   const tags = $('save-tags').value.split(',').map((item) => item.trim()).filter(Boolean).slice(0, 10);
   const sourceVersion = source?.document?.version
     || source?.version
-    || selectionContext?.contentHash
-    || selectionContext?.version
-    || selectionContext?.selection?.contentHash
-    || editingInsight?.document?.version
+    || source?.contentHash
+    || source?.anchor?.contentHash
     || null;
   const saved = await readerStore.saveInsight({
     ...(editingInsight || {}),
     id: editingInsight?.id,
     title,
     url,
+    radarSummaryId: normalizeRadarSummaryId(source.radarSummaryId) || undefined,
     document: { url, title, version: sourceVersion },
     quote,
     note: $('save-note').value.trim(),
@@ -2668,8 +3078,6 @@ async function confirmSaveInsight() {
       ? editingInsight.anchor
       : source?.anchor && source.anchor.quote === quote
         ? source.anchor
-        : selectionContext?.selection && selectionContext.selection.quote === quote
-          ? selectionContext.selection
         : undefined,
   });
   lastSavedInsight = saved;
@@ -2680,14 +3088,14 @@ async function confirmSaveInsight() {
   // message and the panel's in-memory flag may arrive in either order, so a
   // just-confirmed save must re-read it before deciding whether to expose the
   // sync action.
-  const stored = await chrome.storage.local.get(['readerToken']);
-  if (stored.readerToken && !platformConnected) setPlatformConnected(true, `已连接 · ${platformUrl}`);
+  const token = await readPlatformToken();
+  if (token && !platformConnected && !platformDisconnecting && connectionEvents === platformStateEvents) setPlatformConnected(true, t("已连接 · {0}", platformUrl));
   showReading();
   show($('sync-selection'), false);
   if (platformModeReady()) {
     await syncInsight(saved);
   } else {
-    setNotice('已保存到本地阅读库。', $('notice'));
+    setNotice(t("已保存到本地阅读库。"), $('notice'));
   }
   await updateLibrary();
 }
@@ -2710,7 +3118,7 @@ function currentActivationOrigin() {
 async function requestCurrentSiteAccess() {
   const target = currentActivationOrigin();
   if (!Number.isInteger(target?.tabId) || !chrome.permissions?.request) {
-    setNotice('当前页面无法申请访问权限，请切换到普通网页后重试。');
+    setNotice(t("当前页面无法申请访问权限，请切换到普通网页后重试。"));
     return;
   }
   // Start the permission request before the first await so Chrome keeps the
@@ -2719,25 +3127,25 @@ async function requestCurrentSiteAccess() {
   try {
     const granted = await permissionRequest;
     if (!granted) {
-      setNotice('没有获得当前站点权限；页面内容仍未读取。');
+      setNotice(t("没有获得当前站点权限；页面内容仍未读取。"));
       return;
     }
     const result = await chrome.runtime.sendMessage({ type: 'deep-research:activate-current-page', tabId: target.tabId });
     if (!result?.ok) {
-      setNotice(result?.error || '当前页面无法启用阅读。');
+      setNotice(result?.error || t("当前页面无法启用阅读。"));
       return;
     }
     activationNeeded = null;
-    setNotice('已启用当前站点，正在读取页面正文…');
+    setNotice(t("已启用当前站点，正在读取页面正文…"));
     renderEmptyState();
   } catch (error) {
-    setNotice(error instanceof Error ? error.message : '站点权限申请失败。');
+    setNotice(error instanceof Error ? error.message : t("站点权限申请失败。"));
   }
 }
 
 async function activateCurrentPage() {
   if (activationNeeded?.reason === 'unsupported') {
-    setNotice('当前页面不支持阅读，请切换到公开文章、文档或 GitHub 页面。');
+    setNotice(t("当前页面不支持阅读，请切换到公开文章、文档或 GitHub 页面。"));
     return;
   }
   if (activationNeeded?.reason === 'unknown') {
@@ -2756,23 +3164,23 @@ async function activateCurrentPage() {
     tabId = tab?.id;
   }
   if (!Number.isInteger(tabId)) {
-    setNotice('没有找到当前页面，请重新点击扩展按钮。');
+    setNotice(t("没有找到当前页面，请重新点击扩展按钮。"));
     return;
   }
   const result = await chrome.runtime.sendMessage({ type: 'deep-research:activate-current-page', tabId }).catch(() => null);
-  if (!result?.ok) setNotice(result?.error || '当前页面无法启用阅读。');
+  if (!result?.ok) setNotice(result?.error || t("当前页面无法启用阅读。"));
 }
 
 function handleEmptyPrimary() {
   if (!textModelReady()) {
-    showModelSetupGuidance(readingMode === 'platform' ? '平台 AI' : '阅读');
+    showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读"));
     return;
   }
   void activateCurrentPage();
 }
 
 function showSettings() {
-  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), false); applyProviderFields(); updateReadingModeUi();
+  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); updateReadingModeUi();
 }
 
 function showModelSetupGuidance(action) {
@@ -2781,16 +3189,25 @@ function showModelSetupGuidance(action) {
   if (!guidance) return;
   const nextStep = readingMode === 'platform'
     ? platformConnected
-      ? '平台已连接，请返回阅读后重试。'
-      : '连接调研平台并完成登录；无需配置本地模型。'
-    : '填写下方的模型服务、模型名称和 API Key，或切换到平台模式并连接调研平台。';
-  guidance.textContent = `${action}尚未开始。${nextStep}`;
+      ? t("平台已连接，请返回阅读后重试。")
+      : t("连接调研平台并完成登录；无需配置本地模型。")
+    : t("填写模型服务地址和 API Key，连接后选择模型；本地服务可不填 Key。也可切换到平台模式。");
+  guidance.textContent = t("{0}尚未开始。{1}", action, nextStep);
   guidance.classList.add('is-warning');
   show(guidance, true);
 }
 
 function showReading() {
-  show($('settings-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('reader-status-strip'), true); show($('settings-button'), true); renderPage(); updateLibrary();
+  closeProviderPicker();
+  clearTimeout(modelDiscoveryTimer);
+  modelDiscoveryController?.abort();
+  if ($('model-discovery-status').dataset.state === 'loading') setDiscoveryState('idle', t("等待连接"));
+  resetProviderValidation();
+  $('provider-key').type = 'password';
+  $('provider-key-toggle').setAttribute('aria-pressed', 'false');
+  $('provider-key-toggle').setAttribute('aria-label', t("显示 API Key"));
+  $('provider-key-toggle').title = t("显示 API Key");
+  show($('settings-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('reader-status-strip'), true); show($('settings-button'), true); $('settings-button').setAttribute('aria-pressed', 'false'); setWorkspaceView(document.querySelector('.shell').dataset.workspaceView || 'chat'); renderPage(); updateLibrary();
 }
 
 async function openHistoryPage() {
@@ -2799,7 +3216,7 @@ async function openHistoryPage() {
     await sessionSaveQueue;
     window.location.href = chrome.runtime.getURL(`reading-history.html?surface=sidepanel${boundWindowTabId ? `&sourceTab=${boundWindowTabId}` : ''}`);
   } catch {
-    setNotice('无法打开侧栏内的阅读历史。');
+    setNotice(t("无法打开侧栏内的阅读历史。"));
   }
 }
 
@@ -2817,7 +3234,7 @@ function handleSelectionAction(message) {
     renderPage();
   }
   if (message.action === 'translate' && selectionContext) {
-    if (!textModelReady()) { showModelSetupGuidance('选段翻译'); return; }
+    if (!textModelReady()) { showModelSetupGuidance(t("选段翻译")); return; }
     translationRequested = true;
     fullTranslationEnabled = false;
     translationRunning = true;
@@ -2883,22 +3300,24 @@ chrome.runtime.onMessage.addListener((message) => {
     pageReadState = message.reason === 'unsupported' ? 'error' : 'idle';
     if (Number.isInteger(message.tabId)) activeTabId = message.tabId;
     renderPage();
-    if (activationNeeded.reason === 'permission') setNotice('此站点尚未启用；点击“启用此站点”后才会读取页面。');
+    if (activationNeeded.reason === 'permission') setNotice(t("此站点尚未启用；点击“启用此站点”后才会读取页面。"));
     return;
   }
   if (message.type === 'deep-research:connection-state') {
     platformStateEvents += 1;
-    setPlatformConnected(Boolean(message.connected), message.connected ? `已连接 · ${platformUrl}` : (message.status || '未连接'));
+    setPlatformConnected(Boolean(message.connected), message.connected ? t("已连接 · {0}", platformUrl) : (message.status || t("未连接")));
     return;
   }
   if (message.type === 'deep-research:clear-page') {
+    detachCurrentAnswer();
     switchQuestionDraft();
     if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {});
-    activeTranslationRun += 1; sessionGeneration += 1; sessionResumeTasks.clear(); activeJobRecord = null; pendingJob = null; failedTranslationItems = []; retryingTranslationId = null; pageContext = null; documentContext = null; selectionContext = null; imageContext = null; latestAnswer = ''; latestStructuredAnswer = null; discussionHistory = []; discussionScope = 'page'; discussionIntent = 'ask'; discussionOpen = false; activeSessionTitle = ''; resumedUrls.clear(); activationNeeded = null; pageReadState = 'idle'; lastSavedInsight = null; pendingInsightSource = null; translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; radarEntryPlatformUrl = ''; radarEntryPromptKey = ''; radarEntrySummaryId = ''; translatedTextIds.clear(); translatedImageIds.clear(); sendToPage({ type: 'deep-research:clear-annotations' }); renderPage(); return;
+    activeTranslationRun += 1; sessionGeneration += 1; sessionResumeTasks.clear(); activeJobRecord = null; pendingJob = null; failedTranslationItems = []; retryingTranslationId = null; pageContext = null; documentContext = null; selectionContext = null; imageContext = null; latestAnswer = ''; latestStructuredAnswer = null; latestAnswerContext = null; discussionHistory = []; discussionScope = 'page'; discussionIntent = 'ask'; discussionOpen = false; activeSessionTitle = ''; resumedUrls.clear(); activationNeeded = null; pageReadState = 'idle'; lastSavedInsight = null; pendingInsightSource = null; translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; radarEntryPlatformUrl = ''; radarEntryPromptKey = ''; radarEntrySummaryId = ''; radarEntryUrl = ''; translatedTextIds.clear(); translatedImageIds.clear(); sendToPage({ type: 'deep-research:clear-annotations' }); renderPage(); return;
   }
   if (message.type === 'deep-research:page-context' && message.context) {
     switchQuestionDraft(message.context.url);
     if (Number.isInteger(message.tabId)) activeTabId = message.tabId;
+    if (activationNeeded) setNotice('');
     activationNeeded = null;
     pageReadState = contextHasReadableBody(message.context) ? 'ready' : 'error';
     const documentChanged = Boolean(pageContext?.url && pageContext.url !== message.context.url);
@@ -2911,6 +3330,7 @@ chrome.runtime.onMessage.addListener((message) => {
     pageContext = message.context;
     const documentContextChanged = Boolean(documentContext?.url && documentContext.url !== pageContext.url);
     if (documentChanged || contentChanged || documentContextChanged) {
+      if (documentChanged || documentContextChanged) detachCurrentAnswer();
       if ((documentChanged || contentChanged) && activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {});
       if (documentChanged || contentChanged) {
         sessionGeneration += 1;
@@ -2931,12 +3351,14 @@ chrome.runtime.onMessage.addListener((message) => {
       if (documentChanged) {
         latestAnswer = '';
         latestStructuredAnswer = null;
+        latestAnswerContext = null;
         discussionHistory = [];
         discussionScope = 'page';
         discussionIntent = 'ask';
         discussionOpen = false;
         activeSessionTitle = '';
       } else if (contentChanged) {
+        latestAnswerContext = null;
         const scopeChanged = discussionScope !== 'page';
         if (scopeChanged) {
           discussionScope = 'page';
@@ -2948,19 +3370,19 @@ chrome.runtime.onMessage.addListener((message) => {
             evidence: [],
             warnings: [...new Set([
               ...(Array.isArray(latestStructuredAnswer.warnings) ? latestStructuredAnswer.warnings : []),
-              '页面内容已更新，旧引文定位已撤销。',
+              t("页面内容已更新，旧引文定位已撤销。"),
             ])],
           };
         }
         setNotice(scopeChanged
-          ? '页面内容已变化；聊天记录已保留，旧引文定位已撤销，讨论范围已切换到整页。'
-          : '页面内容已变化；聊天记录已保留，旧引文定位已撤销。');
+          ? t("页面内容已变化；聊天记录已保留，旧引文定位已撤销，讨论范围已切换到整页。")
+          : t("页面内容已变化；聊天记录已保留，旧引文定位已撤销。"));
       }
       if (documentChanged || contentChanged) resumedUrls.delete(message.context.url);
       failedTranslationItems = [];
       translatedTextIds.clear();
       translatedImageIds.clear();
-      if (documentChanged) setNotice('页面已切换，旧的证据和讨论已清除。请在新页面重新开始。');
+      if (documentChanged) setNotice('');
     }
     applyRadarEntryContext(pageContext);
     renderPage(); setPlatformConnected(platformConnected); void applyAnnotationsForContext(pageContext);
@@ -2986,7 +3408,7 @@ chrome.runtime.onMessage.addListener((message) => {
       return;
     }
     if (fullTranslationEnabled && !translationPaused && !translationRunning && textModelReady() && Array.isArray(pageContext.blocks)) {
-      const pendingBlocks = pageContext.blocks.filter((block) => !translatedTextIds.has(block.id) && !pageContext.translatedBlockIds?.includes(block.id));
+      const pendingBlocks = pageContext.blocks.filter((block) => block.kind !== 'code' && !translatedTextIds.has(block.id) && !pageContext.translatedBlockIds?.includes(block.id));
       const pendingImages = (pageContext.images || []).filter((image) => !translatedImageIds.has(image.id) && !pageContext.translatedImageIds?.includes(image.id));
       if (pendingBlocks.length || pendingImages.length) {
         translationRunning = true;
@@ -3018,18 +3440,18 @@ chrome.runtime.onMessage.addListener((message) => {
     activeJobRecord = { ...activeJobRecord, ...(message.job || {}) };
     failedTranslationItems = Array.isArray(message.failures) ? message.failures : (activeJobRecord.failedItems || []);
     translationRunning = false;
-    translationPaused = false;
+    translationPaused = Boolean(message.cancelled && translationPaused);
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
     const failures = failedTranslationItems.length;
     const workerWarnings = Array.isArray(message.warnings) ? message.warnings : (Array.isArray(activeJobRecord.warnings) ? activeJobRecord.warnings : []);
-    const explicitCancellation = cancellationRequested || message.job?.error === '用户取消了翻译';
+    const explicitCancellation = cancellationRequested || message.job?.error === t("用户取消了翻译");
     cancellationRequested = false;
     setNotice(message.cancelled
       ? (explicitCancellation
-        ? '翻译已取消，已完成内容保留。再次点击“全文翻译”可以继续。'
-        : '翻译已暂停。再次点击全文翻译会从本地缓存继续。')
-      : failures ? `翻译完成，但有 ${failures} 项需要重试。${workerWarnings.length ? `\n${workerWarnings.slice(0, 3).join('\n')}` : ''}`
-        : workerWarnings.length ? `全文翻译完成。${workerWarnings.slice(0, 3).join('\n')}` : '全文翻译完成。可以滚动阅读，或选择一段文字继续追问。');
+        ? t("翻译已取消，已完成内容保留。再次点击“全文翻译”可以继续。")
+        : t("翻译已暂停。再次点击全文翻译会从本地缓存继续。"))
+      : failures ? t("翻译完成，但有 {0} 项需要重试。{1}", failures, workerWarnings.length ? `\n${workerWarnings.slice(0, 3).join('\n')}` : '')
+        : workerWarnings.length ? t("全文翻译完成。{0}", workerWarnings.slice(0, 3).join('\n')) : t("全文翻译完成。可以滚动阅读，或选择一段文字继续追问。"));
     saveLocalSession();
   }
   if (message.type === 'deep-research:selection' && message.context) {
@@ -3045,7 +3467,7 @@ chrome.runtime.onMessage.addListener((message) => {
     if (!sameSelection) {
       interactionGeneration += 1;
       discussionIntent = 'ask';
-      if (discussionRunning) setNotice('选段已更新，将用于下一问；当前回答继续使用发起时的原文。');
+      if (discussionRunning) setNotice(t("选段已更新，将用于下一问；当前回答继续使用发起时的原文。"));
     }
     imageContext = null;
     selectionContext = message.context;
@@ -3054,12 +3476,9 @@ chrome.runtime.onMessage.addListener((message) => {
     saveLocalSession();
   }
   if (message.type === 'deep-research:image-action' && message.image) {
-    if (discussionRunning) { setNotice('当前回答继续运行；完成后可解读图示。'); return; }
+    if (discussionRunning) { setNotice(t("当前回答继续运行；完成后可解读图示。")); return; }
     selectionContext = null;
     imageContext = { ...(documentContext || pageContext || {}), image: message.image, restored: false };
-    latestAnswer = '';
-    latestStructuredAnswer = null;
-    discussionHistory = [];
     discussionScope = 'image';
     discussionIntent = 'explain';
     discussionOpen = true;
@@ -3075,6 +3494,8 @@ chrome.runtime.onMessage.addListener((message) => {
     void handlePageAction(message.action);
   }
   if (message.type === 'deep-research:translations-restored') {
+    if (activeJobRecord) persistJobPatch(activeJobRecord, { appliedTextIds: [] });
+    if (pageContext) pageContext.translatedBlockIds = [];
     // A content mutation can invalidate the page version while the user is
     // still in full-translation mode. Preserve that intent and take a fresh
     // snapshot only after the old wrappers are gone. An explicit user restore
@@ -3094,44 +3515,47 @@ chrome.runtime.onMessage.addListener((message) => {
     translationRunning = resumeFullTranslation;
     if (resumeFullTranslation) {
       translationController = new AbortController();
-      setNotice('页面内容已更新，正在继续翻译新增正文和图片…');
+      setNotice(t("页面内容已更新，正在继续翻译新增正文和图片…"));
       void sendToPage({ type: 'deep-research:request-full-document' });
     } else {
       translationRequested = false;
       fullTranslationEnabled = false;
       translationPaused = false;
-      setNotice('已恢复原文。');
+      setNotice(t("已恢复原文。"));
     }
     renderProgress();
   }
   if (message.type === 'deep-research:anchor-unresolved') {
-    setNotice(message.reason || '原文已变化，无法准确定位；没有跳转到相似段落。');
+    setNotice(message.reason || t("原文已变化，无法准确定位；没有跳转到相似段落。"));
   }
   if (message.type === 'deep-research:anchor-resolved') {
-    setNotice('已回到原文证据。');
+    setNotice(t("已回到原文证据。"));
   }
   if (message.type === 'deep-research:annotation-unresolved') {
     if (!pendingAnnotationHighlightId || message.id === pendingAnnotationHighlightId) {
-      setNotice(message.reason || '原文已变化，标注已保存，但没有高亮到不匹配的位置。');
+      setNotice(message.reason || t("原文已变化，标注已保存，但没有高亮到不匹配的位置。"));
       pendingAnnotationHighlightId = null;
     }
   }
   if (message.type === 'deep-research:annotation-resolved' && message.id === pendingAnnotationHighlightId) {
-    setNotice('标注已保存，并已在原文高亮。');
+    setNotice(t("标注已保存，并已在原文高亮。"));
     pendingAnnotationHighlightId = null;
   }
 });
 
 async function init() {
   setupWorkspaceLayout();
-  try { setWorkspaceView(new URLSearchParams(location.search).get('view') || sessionStorage.getItem('readerWorkspaceView') || 'chat'); } catch { /* Default chat. */ }
+  setWorkspaceView(new URLSearchParams(location.search).get('view') || 'chat');
   $('question-input').addEventListener('input', persistQuestionDraft);
   window.addEventListener('pagehide', persistQuestionDraft);
   $('question-input').addEventListener('keydown', event => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); $('send-question').click(); }
   });
   provider = await loadProvider();
-  await loadTargetLanguage();
+  translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface'));
+  updateTranslationLanguageUi();
+  window.addEventListener('reader:translation-language-change', event => void changeTranslationLanguage(event.detail));
+
   readingMode = await readerStore.getSetting('readingMode', 'local');
   applyProviderFields();
   await loadPlatformState();
@@ -3140,38 +3564,75 @@ async function init() {
   $('settings-button').addEventListener('click', showSettings); $('empty-settings').addEventListener('click', handleEmptyPrimary); $('empty-history')?.addEventListener('click', () => void openHistoryPage()); $('open-history-header')?.addEventListener('click', () => void openHistoryPage()); $('close-settings').addEventListener('click', showReading);
   $('mode-local')?.addEventListener('click', () => void setReadingMode('local'));
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
-  $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? '平台 AI' : '阅读'));
-  $('provider-kind')?.addEventListener('change', () => { $('provider-url').value = providerPreset($('provider-kind').value).baseUrl; scheduleModelDiscovery(); });
-  $('translation-language')?.addEventListener('change', async (event) => {
-    targetLanguage = event.target.value;
-    await readerStore.setSetting('targetLanguage', targetLanguage);
-  });
-  $('translation-summary-pause').addEventListener('click', () => translationPaused ? void startFullTranslation() : $('pause-translation').click());
+  $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读")));
+  $('provider-kind')?.addEventListener('change', changeProviderKind);
+  setupProviderPicker();
   $('stop-answer').addEventListener('click', () => discussionController?.abort());
+  $('interface-language').value = (await chrome.storage.local.get('readerUiLanguage')).readerUiLanguage || 'system';
+  $('interface-language').addEventListener('change', async event => {
+    persistQuestionDraft();
+    saveLocalSession();
+    await sessionSaveQueue;
+    await setUiLanguage(event.target.value);
+    location.reload();
+  });
   $('refresh-models').addEventListener('click', () => void refreshModels({ requestPermission: true }));
   $('provider-url').addEventListener('input', scheduleModelDiscovery);
   $('provider-key').addEventListener('input', scheduleModelDiscovery);
-  $('provider-model-list').addEventListener('change', () => { $('provider-model').value = $('provider-model-list').value; });
-  $('provider-model').addEventListener('input', () => { $('provider-model-list').value = ''; });
+  $('provider-model-list').addEventListener('change', () => { $('provider-model').value = $('provider-model-list').value; providerFieldsDirty = true; resetProviderValidation(); });
+  $('provider-model').addEventListener('input', () => { $('provider-model-list').value = ''; providerFieldsDirty = true; resetProviderValidation(); });
+  $('provider-model-search').addEventListener('input', () => renderSettingsModels());
+  $('provider-key-toggle').addEventListener('click', () => {
+    const visible = $('provider-key').type === 'password';
+    $('provider-key').type = visible ? 'text' : 'password';
+    $('provider-key-toggle').setAttribute('aria-pressed', String(visible));
+    $('provider-key-toggle').setAttribute('aria-label', visible ? t("隐藏 API Key") : t("显示 API Key"));
+    $('provider-key-toggle').title = visible ? t("隐藏 API Key") : t("显示 API Key");
+  });
+  $('test-provider').addEventListener('click', () => void testSettingsProvider());
   $('test-vision').addEventListener('click', async () => {
     const button = $('test-vision'); button.disabled = true;
-    try { await testVisionProvider(providerFromFields()); provider = await saveProvider({ ...providerFromFields(), visionReady: true }); setNotice('图片能力检测通过。', $('settings-notice')); }
-    catch (error) { setNotice(error.message || '图片能力检测失败', $('settings-notice')); }
+    let candidate = providerFromFields();
+    try {
+      candidate = validateModelConnection(candidate, { requireModel: true });
+      if (!(await requestOriginPermission(candidate.baseUrl))) throw new ModelConnectionError('PERMISSION', t("未允许访问这个服务，图片能力检测尚未开始"));
+      await testVisionProvider(candidate);
+      if (!sameSettingsConnection(candidate, providerFromFields()) || candidate.model !== providerFromFields().model) return;
+      provider = await saveProvider({ ...candidate, visionReady: true });
+      providerFieldsDirty = false;
+      setNotice(t("图片能力检测通过。"), $('settings-notice'));
+    }
+    catch (error) { showProviderError(error, candidate, $('provider-test-status')); }
     finally { button.disabled = false; }
   });
   $('chat-summary').addEventListener('click', () => void explainOrAsk('', activeDiscussionScope(), activeDiscussionScope() === 'selection' ? 'selection-summary' : 'summary'));
   $('chat-translate').addEventListener('click', () => activeDiscussionScope() === 'selection' ? void explainOrAsk('', 'selection', 'translate') : void startFullTranslation());
-  $('chat-tools-menu').addEventListener('click', event => { if (event.target.closest('button') && !['pause-translation', 'cancel-translation'].includes(event.target.closest('button').id)) $('chat-tools-menu').open = false; });
-  $('save-settings').addEventListener('click', () => void saveSettings()); $('translate-all').addEventListener('click', () => void startFullTranslation()); $('quick-summary')?.addEventListener('click', () => void explainOrAsk('', 'page', 'summary')); $('quick-map')?.addEventListener('click', () => void explainOrAsk('', 'page', 'map')); $('quick-mechanism')?.addEventListener('click', () => void explainOrAsk('', 'page', 'architecture')); $('quick-tradeoffs')?.addEventListener('click', () => void explainOrAsk('', 'page', 'tradeoffs')); $('pause-translation').addEventListener('click', () => { translationPaused = true; cancellationRequested = false; if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {}); translationController?.abort(); renderProgress(); }); $('cancel-translation').addEventListener('click', cancelCurrentTranslation);
-  $('restore-page').addEventListener('click', () => { activeTranslationRun += 1; cancellationRequested = false; if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {}); persistJobPatch(activeJobRecord, { status: 'cancelled', error: '用户恢复了原文' }); translationController?.abort(); translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false; sendToPage({ type: 'deep-research:restore-translations' }); });
-  $('summarize-selection')?.addEventListener('click', () => void explainOrAsk('', 'selection', 'selection-summary'));
-  $('explain-selection').addEventListener('click', () => void explainOrAsk('', 'selection', 'explain'));
-  $('translate-selection')?.addEventListener('click', () => void explainOrAsk('', 'selection', 'translate'));
-  $('ask-selection').addEventListener('click', () => openDiscussion('selection', 'ask'));
+  $('save-settings').addEventListener('click', () => void saveSettings());
+  $('pause-translation').addEventListener('click', () => {
+    if (!translationRunning) { void startFullTranslation(); return; }
+    translationPaused = true;
+    cancellationRequested = false;
+    if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {});
+    translationController?.abort();
+    renderProgress();
+  });
+  $('cancel-translation').addEventListener('click', cancelCurrentTranslation);
+  $('restore-page').addEventListener('click', () => {
+    activeTranslationRun += 1;
+    cancellationRequested = false;
+    if (activeJobRecord?.id) chrome.runtime.sendMessage({ type: 'deep-research:translation-cancel', jobId: activeJobRecord.id }).catch(() => {});
+    persistJobPatch(activeJobRecord, { status: 'cancelled', error: t("用户恢复了原文") });
+    translationController?.abort();
+    translationRequested = false; fullTranslationEnabled = false; translationPaused = false; translationRunning = false;
+    activeJobRecord = null; pendingJob = null; failedTranslationItems = [];
+    translatedTextIds.clear(); translatedImageIds.clear();
+    if (pageContext) pageContext = { ...pageContext, translatedBlockIds: [], translatedImageIds: [] };
+    renderProgress();
+    sendToPage({ type: 'deep-research:restore-translations' });
+  });
   $('annotate-selection').addEventListener('click', () => void openAnnotationDialog());
   $('save-selection').addEventListener('click', () => void saveInsight());
   $('save-answer')?.addEventListener('click', () => void openSaveDialog());
-  $('return-answer')?.addEventListener('click', returnLatestAnswerToSource);
   $('open-page-chat')?.addEventListener('click', () => openDiscussion('page', 'ask'));
   $('expand-chat')?.addEventListener('click', () => setChatExpanded(!$('page-view')?.classList.contains('chat-expanded')));
   document.addEventListener('keydown', (event) => {
@@ -3182,16 +3643,11 @@ async function init() {
   $('scope-selection')?.addEventListener('click', () => setDiscussionScope('selection'));
   $('scope-image')?.addEventListener('click', () => setDiscussionScope('image'));
   $('explain-image').addEventListener('click', () => void explainOrAsk('', 'image', 'explain'));
-  $('ask-image').addEventListener('click', () => openDiscussion('image', 'ask'));
   $('clear-image').addEventListener('click', () => {
     imageContext = null;
     if (discussionScope === 'image') {
       discussionScope = 'page';
       discussionIntent = 'ask';
-      latestAnswer = '';
-      latestStructuredAnswer = null;
-      discussionHistory = [];
-      renderStructuredAnswer(null);
     }
     renderPage();
     saveLocalSession();
@@ -3204,15 +3660,11 @@ async function init() {
     if (question) void explainOrAsk(question, activeDiscussionScope(), 'ask');
   });
   $('copy-answer')?.addEventListener('click', () => void copyAnswer());
-  $('continue-answer')?.addEventListener('click', () => {
-    $('question-input')?.focus();
-    // The composer remains visible below the transcript.
-  });
   $('continue-saved-discussion')?.addEventListener('click', () => {
     openDiscussion(activeDiscussionScope(), 'ask');
   });
   $('refresh-library').addEventListener('click', () => void updateLibrary());
-  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice('翻译缓存已清除。', $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm('清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。')) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false); await loadTargetLanguage(); applyProviderFields(); setNotice('本地阅读数据已清除。', $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); provider = await loadProvider(); await loadTargetLanguage(); platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice('阅读数据已导入。', $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof Error ? error.message : '导入失败', $('settings-notice')); } });
+  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
   await updateLibrary();
   void restorePendingPageAction();
   void restorePendingSelectionAction();

@@ -141,12 +141,12 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
           )}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5"><Star className="size-3.5" aria-hidden />{formatStars(meta.stars)}</span>
-          {meta.forks != null && <span className="inline-flex items-center gap-1.5"><GitFork className="size-3.5" aria-hidden />{formatStars(meta.forks)}</span>}
-          {meta.openIssues != null && <span className="inline-flex items-center gap-1.5"><CircleDot className="size-3.5" aria-hidden />{meta.openIssues}</span>}
-          {meta.defaultBranch && <span className="inline-flex items-center gap-1.5"><GitBranch className="size-3.5" aria-hidden />{meta.defaultBranch}</span>}
+          <span className="inline-flex items-center gap-1"><Star className="size-3.5" aria-hidden />{formatStars(meta.stars)}</span>
+          {meta.forks != null && <span className="inline-flex items-center gap-1"><GitFork className="size-3.5" aria-hidden />{formatStars(meta.forks)}</span>}
+          {meta.openIssues != null && <span className="inline-flex items-center gap-1"><CircleDot className="size-3.5" aria-hidden />{meta.openIssues}</span>}
+          {meta.defaultBranch && <span className="inline-flex items-center gap-1"><GitBranch className="size-3.5" aria-hidden />{meta.defaultBranch}</span>}
           {meta.lastPushedAt && (
-            <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex items-center gap-1">
               <Clock3 className="size-3.5" aria-hidden />
               {new Date(meta.lastPushedAt).toLocaleDateString('zh-CN', {
                 year: 'numeric',
@@ -156,11 +156,11 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
             </span>
           )}
           {meta.snapshotFetchedAt && (
-            <span className="inline-flex items-center gap-1.5"><Radio className="size-3.5" aria-hidden />{new Date(meta.snapshotFetchedAt).toLocaleDateString('zh-CN')}</span>
+            <span className="inline-flex items-center gap-1"><Radio className="size-3.5" aria-hidden />{new Date(meta.snapshotFetchedAt).toLocaleDateString('zh-CN')}</span>
           )}
         </div>
         {meta.description && (
-          <div className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+          <div className="mt-3 max-w-3xl text-sm leading-[var(--dr-line-height-body)] text-muted-foreground">
             {meta.description}
           </div>
         )}
@@ -173,7 +173,7 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
           <span>文件结构</span>
           <span className="font-normal text-muted-foreground">({buckets.length} 顶层)</span>
           {meta.trimmed && (
-            <span className="ml-auto rounded border border-warning-border bg-warning-bg px-1.5 py-0.5 text-xs font-medium text-warning-fg">
+            <span className="ml-auto rounded border border-warning-border bg-warning-bg px-1 py-1 text-xs font-medium text-warning-fg">
               已截断
             </span>
           )}
@@ -184,17 +184,17 @@ export function RadarRepoStructureCard({ meta, owner, repo }: Props) {
               <div className={bucket.key ? 'flex items-start gap-2 break-all font-semibold text-primary' : 'flex items-start gap-2 break-all text-foreground'}>
                 {bucket.type === 'tree' ? <FolderOpen className="mt-1 size-3.5 shrink-0" aria-hidden /> : <FileText className="mt-1 size-3.5 shrink-0" aria-hidden />}
                 <span className="min-w-0">{bucket.name}</span>
-                {bucket.key && <span className="mt-0.5 shrink-0 text-xs" aria-label="关键入口">●</span>}
+                {bucket.key && <span className="mt-1 shrink-0 text-xs" aria-label="关键入口">●</span>}
               </div>
               {bucket.children.length > 0 && (
-                <div className="ml-2 mt-0.5 space-y-0.5 border-l border-border pl-4">
+                <div className="ml-2 mt-1 space-y-1 border-l border-border pl-4">
                   {bucket.children.map((child) => (
                     <div key={child.path} className={child.key ? 'flex items-start gap-2 break-all font-medium text-primary' : 'flex items-start gap-2 break-all'}>
                       <FileText className="mt-1 size-3 shrink-0" aria-hidden />
                       <span className="min-w-0">{child.path.replace(`${bucket.name}/`, '')}</span>
-                      {child.key && <span className="mt-0.5 shrink-0 text-xs" aria-label="关键入口">●</span>}
+                      {child.key && <span className="mt-1 shrink-0 text-xs" aria-label="关键入口">●</span>}
                       {child.size != null && (
-                        <span className="shrink-0 font-sans text-xs font-normal text-muted-foreground">({formatSize(child.size)})</span>
+                        <span className="shrink-0 font-[family-name:var(--dr-font-family)] text-xs font-normal text-muted-foreground">({formatSize(child.size)})</span>
                       )}
                     </div>
                   ))}

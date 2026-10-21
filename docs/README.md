@@ -1,52 +1,26 @@
 # 项目文档入口
 
-> 更新日期：2026-10-14
-> 当前技术方案只保留一份摘要；日期化运行证据与历史材料分开存放。
+> 面向使用者和开发者的现行文档入口。内部维护记录保存在本地忽略文件中，不作为 GitHub 文档发布。
 
 ## 先看哪一份
 
 | 目的 | 文档 | 说明 |
 |---|---|---|
-| 快速理解当前技术方案 | [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md) | 当前实现、个人知识索引边界、运行拓扑、服务生命周期、雷达缺分维护和文档分层 |
+| 快速理解当前技术方案 | [`TECHNICAL_OVERVIEW.md`](./TECHNICAL_OVERVIEW.md) | 系统职责、运行拓扑、核心数据流与集成边界 |
 | 理解 Reader 产品边界与 Monica 对照 | [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md) | 原网页 UI 观察、技术阅读差异化、双模式权威数据边界和非目标 |
-| 发布 Reader 到 Chrome Web Store | [`chrome-web-store/README.md`](./chrome-web-store/README.md) | 上传包、图标截图、隐私声明、审核说明和商店 ID 接入 |
-| 查看日期化进度、部署和验证证据 | [`PROJECT_STATUS.md`](./PROJECT_STATUS.md) | 只记录事实，不承载架构说明 |
 | 测试用户功能 | [`FUNCTIONAL_CHECKLIST.md`](./FUNCTIONAL_CHECKLIST.md) | 短冒烟路径、功能矩阵、失败恢复和验收记录模板 |
 | 理解当前系统 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | 当前产品范围、架构、权限、安全和数据边界 |
-| 跑 Web/Python E2E | [`E2E_TESTING.md`](./E2E_TESTING.md) | 环境、命令、测试设计和已知限制 |
+| 构建与验证 | 根目录 [`README.md`](../README.md) | 启动、类型检查、测试和构建命令 |
+| 开发分支、跨电脑协作与 PR 发布 | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | `main` 稳定基线、短期任务分支、CI、合并授权和部署状态 |
 | 修改 API、状态、错误或环境变量 | [`contracts/README.md`](./contracts/README.md) | 跨 runtime 的共享契约入口 |
-| 做不可逆的架构或产品决策 | [`decisions/README.md`](./decisions/README.md) | ADR 索引 |
-| 新人启动、开发和部署 | [`wiki/README.md`](./wiki/README.md) | getting started、development、deployment、operations |
-| 查看历史质量快照 | [`archive/2026-09-14-knowledge-closeout/radar-zread-gaps-20260908.md`](./archive/2026-09-14-knowledge-closeout/radar-zread-gaps-20260908.md) | 2026-09-08 的 Zread / enrichment 快照，不是当前基线 |
-| 查看历史体验审核 | [`archive/2026-09-14-knowledge-closeout/ui-ux-review-20260908-round2.md`](./archive/2026-09-14-knowledge-closeout/ui-ux-review-20260908-round2.md) | 2026-09-08 的 UI/UX 复盘，不是当前规范 |
+| 部署与回滚 | [`infra/README.md`](../infra/README.md) | 生产拓扑、镜像、健康检查和备份边界 |
 
-## 历史材料
-
-- [`weekly/`](./weekly/)：按周保存交付证据。它是历史记录，不是当前行为的唯一依据。
-- [`archive/`](./archive/)：已完成计划、旧版方案、一次性 prompt、旧 mockup 和被替代的评审记录。
-- [`inputs/`](./inputs/)：外部参考材料，只读；其中的时点数据使用前要重新核验。
-
-当前已归档：
-
-- [`archive/2026-09-08-implementation-plan.md`](./archive/2026-09-08-implementation-plan.md)：W1-W13 实施计划
-- [`archive/2026-09-08-p1-plan.md`](./archive/2026-09-08-p1-plan.md)：P1 执行计划
-- [`archive/2026-09-08-diagrams-v3.6.md`](./archive/2026-09-08-diagrams-v3.6.md)：旧版产品全景图
-- [`archive/2026-09-08-agent-prompts/`](./archive/2026-09-08-agent-prompts/)：W1-W5 Agent prompt
-- [`archive/2026-09-08-mockups/`](./archive/2026-09-08-mockups/)：旧版视觉 mockup
-- [`archive/2026-09-08-ui-ux-review-round1.md`](./archive/2026-09-08-ui-ux-review-round1.md)：被 Round 2 替代的 UI/UX review
-- [`archive/2026-09-14-knowledge-closeout/`](./archive/2026-09-14-knowledge-closeout/)：本次收口归档的项目状态、Zread 快照、UI/UX 复盘和一次性日报
 
 ## 维护规则
 
 1. 当前行为只写 `README.md`、`TECHNICAL_OVERVIEW.md`、`ARCHITECTURE.md`、`contracts/`、`FUNCTIONAL_CHECKLIST.md` 或 wiki 中对应的现役页面。
-2. 当前状态、测试数字、follow-up 和真实验收证据只写 `PROJECT_STATUS.md`；周报和复盘只记录历史交付。
-3. 已完成的计划不再放在根目录；需要追溯时移入 `archive/`，不删除原文。
-4. 新增文档前先判断它属于当前规范、验收清单、契约/决策、运行手册还是历史证据；同一事实只保留一个权威解释。
-5. 任何“已通过”“已修复”“已部署”都要带验证日期和证据，不以代码存在或旧周报替代真实验证。
-6. 不把 `PROJECT_STATUS.md`、weekly、一次性评审或中间计划当作技术方案摘要；它们只回答“何时发生过什么”。
-
-补充：`.gitignore` 默认排除 `contracts/`、`wiki/`、`weekly/`、`archive/` 和
-`PROJECT_STATUS.md` 中尚未纳入版本控制的文件；已跟踪文件仍会进入提交。目前
-`PROJECT_STATUS.md`、`contracts/radar-governance.md` 及部分 Reader 验收证据已跟踪。
-新增公开契约或运行证据需要单独 review；不要整体强制加入忽略目录，更不能提交
-数据库快照、用户数据或备份。当前技术方案权威摘要为 `TECHNICAL_OVERVIEW.md`。
+2. 当前进度、测试数字、follow-up、真实验收证据、工作计划和复盘属于内部维护记录，保存在 Agent 规则、商店发布材料、`docs/PROJECT_STATUS.md`、`docs/weekly/` 等本地文件中；新增材料应被忽略，已跟踪文件需先从 Git 索引解除跟踪，才不会随提交发布到 GitHub。
+3. 对外文档只描述稳定的系统行为、使用方法、契约和边界；不写阶段进度、一次性结果或内部部署状态。
+4. 新增文档前先判断受众和类别；同一稳定事实只保留一个权威解释。
+5. 外部发布状态必须以公开页面和正式版本为准；本地构建或草稿不写入对外文档。
+6. `.gitignore` 中的内部目录若已被跟踪，需从 Git 索引解除跟踪并保留本地文件；忽略规则不会自动取消跟踪。

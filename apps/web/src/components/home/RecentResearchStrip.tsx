@@ -9,11 +9,15 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Library, Star } from 'lucide-react';
+import Box from '@mui/material/Box';
+import MaterialLink from '@mui/material/Link';
+import Skeleton from '@mui/material/Skeleton';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 
 import { SectionCard } from '@/components/domain/SectionCard';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TagChip, TagList } from '@/components/domain/TagChip';
-import { Skeleton } from '@/components/ui/skeleton';
 
 interface ResearchItem {
   id: string;
@@ -79,70 +83,77 @@ export function RecentResearchStrip() {
   if (!isLoading && items.length === 0) return null;
 
   return (
-    <div className="mt-6">
+    <Box sx={{ mt: space.lg }}>
       <SectionCard
         title="研究库精选"
         icon={Library}
         actions={
-          <Link href="/researches" className="text-xs text-primary hover:underline">
+          <MaterialLink component={Link} href="/researches" underline="hover" color="primary.main" variant="metadata">
             查看全部 →
-          </Link>
+          </MaterialLink>
         }
       >
         {isLoading ? (
-          <div className="grid gap-3 md:grid-cols-2">
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }, gap: space.md }}>
             {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-24 w-full" />
+              <Skeleton key={i} variant="rounded" width="100%" height={96} />
             ))}
-          </div>
+          </Box>
         ) : (
-          <ul className="grid gap-3 md:grid-cols-2">
+          <Box component="ul" sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }, gap: space.md, listStyle: 'none', m: 0, p: 0 }}>
             {items.map((item) => (
-              <li key={item.id}>
-                <Link
+              <Box component="li" key={item.id} sx={{ minWidth: 0 }}>
+                <MaterialLink
+                  component={Link}
                   href={`/researches/${item.id}`}
-                  className="group flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-card p-3 transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  underline="none"
+                  color="inherit"
+                  sx={{
+                    display: 'flex', height: '100%', minWidth: 0, flexDirection: 'column', gap: space.sm,
+                    border: 1, borderColor: 'divider', borderRadius: tokens['radius-small'], bgcolor: 'background.paper', p: space.md,
+                    transition: `transform ${tokens['motion-fast']}, border-color ${tokens['motion-fast']}, box-shadow ${tokens['motion-fast']}`,
+                    '&:hover': { transform: 'translateY(-1px)', borderColor: 'primary.main', boxShadow: 1 },
+                    '&:hover h3': { color: 'primary.main' },
+                    '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: '2px' },
+                  }}
                 >
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.xs }}>
                     <StatusBadge kind="method" value={item.creationMethod} />
                     {item.featuredAt ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/60 bg-amber-400/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                        <Star className="size-3" />
-                        精华
-                      </span>
+                      <StatusBadge kind="featured" value="true" icon={<Star aria-hidden="true" />} />
                     ) : null}
-                  </div>
-                  <h3 className="line-clamp-2 text-sm font-semibold leading-snug tracking-normal group-hover:text-primary">
+                  </Box>
+                  <Typography component="h3" variant="listTitle" sx={{ display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, transition: `color ${tokens['motion-fast']}` }}>
                     {item.title}
-                  </h3>
-                  <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                  </Typography>
+                  <Typography variant="metadata" color="text.secondary" sx={{ display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>
                     {excerpt(item.body, 140)}
-                  </p>
+                  </Typography>
                   {item.tags.length > 0 ? (
-                    <TagList className="mt-auto">
+                    <TagList style={{ marginTop: 'auto' }}>
                       {item.tags.slice(0, 2).map((t) => (
                         <TagChip key={t}>{t}</TagChip>
                       ))}
                       {item.tags.length > 2 ? (
-                        <span className="font-mono text-xs text-muted-foreground">
+                        <Typography variant="metadata" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                           +{item.tags.length - 2}
-                        </span>
+                        </Typography>
                       ) : null}
                     </TagList>
                   ) : null}
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="truncate">{item.author.name}</span>
-                    <span aria-hidden>·</span>
-                    <span className="font-mono tabular-nums">
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm, minWidth: 0, color: 'text.secondary' }}>
+                    <Typography variant="metadata" noWrap sx={{ minWidth: 0, flex: 1, color: 'inherit' }}>{item.author.name}</Typography>
+                    <Typography component="span" variant="metadata" aria-hidden="true" sx={{ color: 'inherit' }}>·</Typography>
+                    <Typography component="span" variant="metadata" sx={{ flexShrink: 0, color: 'inherit', fontVariantNumeric: 'tabular-nums' }}>
                       {formatTimeAgo(item.publishedAt ?? item.createdAt)}
-                    </span>
-                  </div>
-                </Link>
-              </li>
+                    </Typography>
+                  </Box>
+                </MaterialLink>
+              </Box>
             ))}
-          </ul>
+          </Box>
         )}
       </SectionCard>
-    </div>
+    </Box>
   );
 }

@@ -2,15 +2,19 @@
 
 // /researches/import — 从文件导入入口页。
 //
-// 这个页面 = 一个简短说明 + ImportDialog 默认打开。
-// 同时挂载在 /researches/new 的"从文件导入"卡片中（保持单一来源）。
+// 这个页面 = 一段简短说明 + ImportDialog 默认打开。
+// 同时挂载在 /researches/new 的“从文件导入”入口中（保持单一来源）。
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Upload } from 'lucide-react';
+import Box from '@mui/material/Box';
+import Breadcrumbs from '@mui/material/Breadcrumbs';
+import Button from '@mui/material/Button';
+import MaterialLink from '@mui/material/Link';
+import Typography from '@mui/material/Typography';
 
 import { ImportDialog } from '@/components/ImportDialog';
-import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/domain/PageHeader';
 
 export default function ImportPage() {
@@ -22,33 +26,30 @@ export default function ImportPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-measure">
-      <nav className="mb-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        <Link href="/researches" className="hover:text-foreground hover:underline">
+    <Box sx={{ width: '100%', maxWidth: 'var(--dr-width-reading)', mx: 'auto' }}>
+      <Breadcrumbs aria-label="面包屑" sx={{ mb: 1 }}>
+        <MaterialLink component={Link} href="/researches" underline="hover" color="text.secondary" variant="metadata">
           研究库
-        </Link>
-        <span>/</span>
-        <Link href="/researches/new" className="hover:text-foreground hover:underline">
+        </MaterialLink>
+        <MaterialLink component={Link} href="/researches/new" underline="hover" color="text.secondary" variant="metadata">
           新建
-        </Link>
-        <span>/</span>
-        <span>从文件导入</span>
-      </nav>
+        </MaterialLink>
+        <Typography color="text.primary" variant="metadata">从文件导入</Typography>
+      </Breadcrumbs>
 
       <PageHeader
+        variant="workbench"
         title="从文件导入"
         description="支持 .md / .txt / .html 文件（单文件 ≤ 5MB）。系统会清除 HTML 中的危险标签与事件属性，并把内容转换为 Markdown。成功后会创建一份个人草稿（不自动发布），可继续编辑。"
       />
 
-      {!dialogOpen && (
-        <Button type="button" onClick={() => setDialogOpen(true)}>
-          <Upload />
+      {!dialogOpen ? (
+        <Button type="button" onClick={() => setDialogOpen(true)} startIcon={<Upload size={16} />}>
           选择文件
         </Button>
-      )}
+      ) : null}
 
-      {dialogOpen && <ImportDialog onClose={() => setDialogOpen(false)} />}
-
-    </div>
+      {dialogOpen ? <ImportDialog onClose={() => setDialogOpen(false)} /> : null}
+    </Box>
   );
 }

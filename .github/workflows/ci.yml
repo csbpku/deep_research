@@ -71,6 +71,7 @@ jobs:
       E2E: "1"
       AI_ENGINE_URL: http://localhost:4000
       # CI 用 fake secrets（NextAuth/AI engine env 校验）
+      INTERNAL_SERVICE_TOKEN: ci-web-e2e-service-token-not-for-production
       GOOGLE_CLIENT_ID: ci-fake-client-id
       GOOGLE_CLIENT_SECRET: ci-fake-client-secret
       ANTHROPIC_API_KEY: sk-ant-ci-fake-key
@@ -194,6 +195,91 @@ jobs:
         run: |
           if [ -f "$RUNNER_TEMP/ai-engine.pid" ]; then
             kill "$(cat "$RUNNER_TEMP/ai-engine.pid")" || true
+          fi
+
+  web-mui-e2e:
+    name: web (isolated MUI E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deep_research_mui_e2e_20261020
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:55432/deep_research_mui_e2e_20261020
+      MUI_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:55432/deep_research_mui_e2e_20261020
+      MUI_DETAIL_FIXTURES: "1"
+      MUI_ISOLATED_BROWSER: "1"
+      E2E_PRODUCTION: "1"
+      E2E: "1"
+      E2E_BASE_URL: http://127.0.0.1:3188
+      NEXTAUTH_URL: http://127.0.0.1:3188
+      NEXTAUTH_SECRET: ci-mui-fixture-secret-never-for-production
+      # This service binds only loopback; production retains HTTPS-only auth.
+      AUTH_ALLOW_INSECURE_HTTP: "1"
+      AI_ENGINE_URL: http://127.0.0.1:1
+      INTERNAL_SERVICE_TOKEN: ci-mui-fixture-token-never-for-production
+      GOOGLE_CLIENT_ID: ci-mui-fake-client-id
+      GOOGLE_CLIENT_SECRET: ci-mui-fake-client-secret
+      ANTHROPIC_API_KEY: sk-ant-ci-fake-key
+      TAVILY_API_KEY: tvly-ci-fake-key
+      ALLOWED_EMAIL_DOMAINS: e2e.local
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.0.0 }
+      - uses: actions/setup-node@v6
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @deep-research/web db:generate
+      - name: Migrate fresh isolated fixture database
+        run: pnpm --filter @deep-research/web exec prisma migrate deploy
+      - name: Seed dedicated MUI identities and content
+        run: pnpm --filter @deep-research/web exec tsx scripts/seed-mui-browser.ts
+      - name: Build production fixture service
+        run: pnpm --filter @deep-research/web build
+      - name: Install Playwright Chromium
+        run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
+      - name: Start production fixture service
+        run: |
+          pnpm --filter @deep-research/web exec next start --hostname 127.0.0.1 --port 3188 > "$RUNNER_TEMP/mui-web.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/mui-web.pid"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3188/api/healthz > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/mui-web.log"
+          exit 1
+      - name: Isolated MUI production browser tests
+        run: pnpm --filter @deep-research/web test:e2e
+      - name: Upload isolated browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mui-browser-evidence
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+            ${{ runner.temp }}/mui-web.log
+          retention-days: 14
+      - name: Stop isolated fixture service
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/mui-web.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/mui-web.pid")" || true
           fi
 
   python-e2e:

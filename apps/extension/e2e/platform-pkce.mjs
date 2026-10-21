@@ -306,6 +306,9 @@ try {
   if (await panel.locator('#platform-url').count()) throw new Error('平台设置仍要求手动填写地址');
   if ((await panel.locator('#platform-target').innerText()) !== `127.0.0.1:${port}`) throw new Error('平台目标没有读取已配置的平台来源');
   const authorizationPage = context.waitForEvent('page');
+  // Only this isolated mock origin is trusted by the fixture. The shipped
+  // UI correctly asks before connecting to a non-default platform.
+  panel.once('dialog', dialog => dialog.accept());
   await panel.locator('#connect-platform').click();
   await authorizationPage;
   // The test-only manifest pre-authorizes localhost so headless Chrome can
@@ -337,6 +340,11 @@ try {
 
   // The public-page dock must keep using the connected platform's AI Engine.
   // Run this action first so a live acceptance makes exactly one model call.
+  await page.bringToFront();
+  await serviceWorker.evaluate(async origin => {
+    const [tab] = await chrome.tabs.query({ url: `${origin}/fixture.html` });
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  }, localPlatformUrl);
   await panel.locator('#close-settings').click();
   const pageContextReady = await panel.waitForFunction(
     () => Boolean(document.querySelector('#page-source')?.textContent),
@@ -418,6 +426,8 @@ try {
     selection?.addRange(range);
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
+  await panel.locator('#scope-selection').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#chat-tools-menu > summary').click();
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#explain-selection').click();
   await panel.waitForFunction(
@@ -457,6 +467,8 @@ try {
     null,
     { timeout: 10_000 },
   );
+  await panel.locator('#scope-selection').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#chat-tools-menu > summary').click();
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
   const saveActionState = await panel.locator('#save-selection').evaluate((node) => {
     const ancestors = [];
@@ -498,6 +510,8 @@ try {
   if (await panel.locator('#sync-selection').innerText() !== '重试同步') {
     throw new Error('the manual sync action must be labeled as a retry');
   }
+  await panel.setViewportSize({ width: 360, height: 720 });
+  await panel.screenshot({ path: `${testExtensionRoot}/platform-sync-retry.png` });
   await panel.locator('#sync-selection').click();
   await panel.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('同步到 Deep Research'), null, { timeout: 10_000 });
   if (received.saves.length !== 2 || received.saves[0].input.idempotencyKey !== received.saves[1].input.idempotencyKey) {
@@ -513,9 +527,11 @@ try {
     if (tab?.id) await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
   });
   await panel.waitForFunction(() => Boolean(document.querySelector('#sync-session') && !document.querySelector('#sync-session').classList.contains('hidden')), null, { timeout: 10_000 });
-  await panel.locator('#sync-session').evaluate((node) => node.click());
+  await panel.locator('#nav-library').click();
+  await panel.locator('#sync-session').click();
   await panel.waitForTimeout(800);
-  await panel.locator('#disconnect-platform').evaluate((node) => node.click());
+  await panel.locator('#settings-button').click();
+  await panel.locator('#disconnect-platform').click();
   try {
     await panel.waitForFunction(() => document.querySelector('#disconnect-platform')?.classList.contains('hidden'), null, { timeout: 10_000 });
   } catch (error) {

@@ -58,7 +58,7 @@ export function RadarRepoSummary({
   return (
     <section className="my-5 rounded-lg bg-muted/30 px-4 py-4" aria-labelledby="repo-summary-title">
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-        <h2 id="repo-summary-title" className="flex items-center gap-1.5 text-sm font-semibold">
+        <h2 id="repo-summary-title" className="flex items-center gap-1 text-sm font-semibold">
           <Github className="size-4 text-muted-foreground" aria-hidden />
           {summaryText ? '项目解读' : 'AI 一句话解读'}
         </h2>
@@ -83,12 +83,12 @@ export function RadarRepoSummary({
         </div>
       </div>
       {showBrief && summaryText ? (
-        <div className="mb-4 rounded-md border-l-2 border-primary bg-background/70 px-3 py-2.5">
+        <div className="mb-4 rounded-md border-l-2 border-primary bg-background/70 px-3 py-2">
           <p className="mb-1 text-xs font-medium text-muted-foreground">AI 一句话解读</p>
-          <p className="text-sm leading-7 text-foreground/90">{briefText}</p>
+          <p className="text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-foreground/90">{briefText}</p>
         </div>
       ) : null}
-      <div className="space-y-3 text-sm leading-7 text-foreground/90">
+      <div className="space-y-3 text-[length:var(--dr-type-reading)] leading-[var(--dr-line-height-reading)] text-foreground/90">
         {summaryText
           ? paragraphs.map((paragraph, index) => (
             <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>

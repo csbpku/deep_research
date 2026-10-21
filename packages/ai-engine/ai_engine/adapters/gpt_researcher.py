@@ -74,6 +74,7 @@ from ai_engine.llm.client import (
 )
 from ai_engine.llm.config import (
     fallback_spec as configured_fallback_spec,
+    minimax_reasoning_effort,
     resolve_route,
     resolve_spec,
     resolve_wire_spec,
@@ -607,6 +608,11 @@ try:  # pragma: no cover — import-time guard
         no_temperature = getattr(_llm_mod, "NO_SUPPORT_TEMPERATURE_MODELS", ())
         if model in supports_reasoning:
             provider_kwargs["reasoning_effort"] = reasoning_effort
+        effort = minimax_reasoning_effort(model, tier="heavy")
+        if effort and llm_provider == "openai":
+            provider_kwargs["reasoning_effort"] = (
+                reasoning_effort or provider_kwargs.get("reasoning_effort") or effort
+            )
         if model not in no_temperature:
             provider_kwargs["temperature"] = temperature
             provider_kwargs["max_tokens"] = max_tokens

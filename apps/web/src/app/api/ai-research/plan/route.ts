@@ -22,6 +22,7 @@ import {
 } from '@deep-research/shared/schemas';
 import type { ResearchObjective } from '@deep-research/shared/states';
 import { recordProductEvent } from '@/lib/product-events';
+import { extractPersonalContextKeywords, findPersonalContext } from '@/lib/personal-context-relevance';
 
 const PlanInput = z.object({
   question: z.string().min(2).max(2000),
@@ -31,6 +32,7 @@ const PlanInput = z.object({
   outputType: z.enum(['markdown', 'slides', 'web']).optional(),
   sourcePolicy: z.enum(['prefer_user_sources', 'only_user_sources']).optional(),
   primaryTopicId: z.string().uuid().optional(),
+  topicHint: z.string().uuid().optional(),
 });
 
 const DECIDE_KEYWORDS = /(决策|选型|是否|应不应该|该不该|迁移|上不|还是|比较|对比|区别|优劣|vs|vs\.|compare|comparison|选用|采用|替换|落地)/iu;
@@ -199,16 +201,9 @@ function buildPlanSteps(objective: ResearchObjective, question: string): Researc
 async function matchTopics(question: string, topicIdHint?: string): Promise<
   Array<{ topicId: string; slug: string; name: string; confidence: number }>
 > {
-  const tokens = Array.from(
-    new Set(
-      question
-        .toLowerCase()
-        .match(/[\p{L}\p{N}][\p{L}\p{N}-]{1,24}/gu)
-        ?.filter((t) => t.length >= 2) ?? [],
-    ),
-  ).slice(0, 8);
+  const tokens = extractPersonalContextKeywords(question);
 
-  const candidates = await prisma.topic.findMany({
+  const candidates = tokens.length ? await prisma.topic.findMany({
     where: {
       enabled: true,
       OR: tokens.flatMap((t) => [
@@ -218,7 +213,7 @@ async function matchTopics(question: string, topicIdHint?: string): Promise<
     },
     take: 8,
     select: { id: true, slug: true, name: true, summary: true, candidateCount: true, keywords: true },
-  });
+  }) : [];
 
   const scored = candidates
     .map((c) => {
@@ -242,33 +237,15 @@ async function matchTopics(question: string, topicIdHint?: string): Promise<
   if (topicIdHint) {
     const exact = await prisma.topic.findUnique({
       where: { id: topicIdHint },
-      select: { id: true, slug: true, name: true },
+      select: { id: true, slug: true, name: true, enabled: true },
     });
-    if (exact && !scored.some((s) => s.topicId === exact.id)) {
-      scored.unshift({ ...exact, confidence: 0.95, topicId: exact.id });
+    if (exact?.enabled) {
+      const existing = scored.findIndex((item) => item.topicId === exact.id);
+      if (existing >= 0) scored.splice(existing, 1);
+      scored.unshift({ slug: exact.slug, name: exact.name, confidence: 0.95, topicId: exact.id });
     }
   }
-  return scored;
-}
-
-async function suggestContext(
-  userId: string,
-  question: string,
-): Promise<Array<{ kind: 'research' | 'knowledge' | 'issue'; id: string; title: string; snippet: string }>> {
-  const rows = await prisma.research.findMany({
-    where: {
-      authorId: userId,
-      title: { contains: question.slice(0, 60), mode: 'insensitive' },
-    },
-    take: 5,
-    select: { id: true, title: true, body: true, type: true },
-  });
-  return rows.map((r) => ({
-    kind: r.type === 'knowledge' ? 'knowledge' : 'research',
-    id: r.id,
-    title: r.title,
-    snippet: (r.body ?? '').slice(0, 240),
-  }));
+  return scored.slice(0, 4);
 }
 
 export const dynamic = 'force-dynamic';
@@ -283,14 +260,12 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
   const question = body.question.trim();
   const objective = inferObjective(question);
 
-  // Topic matching and personal-context suggestions are independent reads.
-  // Run them together so a slow history query does not add another full
-  // round-trip before the user can review or start the research.
-  const [topics, suggestedContext] = await Promise.all([
-    matchTopics(question, body.primaryTopicId),
-    suggestContext(u.id, question),
-  ]);
-  const primary = topics[0]?.topicId ?? body.primaryTopicId;
+  const topicHint = body.primaryTopicId ?? body.topicHint;
+  const topics = await matchTopics(question, topicHint);
+  const primary = topicHint ?? topics[0]?.topicId;
+  const suggestedContext = await findPersonalContext(
+    u.id, question, Array.from(new Set([...(topicHint ? [topicHint] : []), ...topics.map((topic) => topic.topicId)])),
+  );
 
   const brief = questionToBrief(question, objective, primary, {
     constraints: body.constraints,

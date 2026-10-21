@@ -299,6 +299,8 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
       sections: null,
       figures: null,
       sourceOutline,
+      canManage: u?.role === 'admin',
+      isAuthenticated: Boolean(u),
     });
   }
 

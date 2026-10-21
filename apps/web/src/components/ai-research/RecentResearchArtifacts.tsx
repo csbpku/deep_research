@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import React, { useState } from 'react';
 import {
   ArrowUpRight,
   FileEdit,
@@ -18,19 +18,21 @@ import {
 import { EmptyState } from '@/components/EmptyState';
 import { AiResearchTaskHistory } from '@/components/ai-research/AiResearchTaskHistory';
 import { StatusBadge } from '@/components/domain/StatusBadge';
-import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Skeleton } from '@/components/ui/skeleton';
+import { AiResearchButton as Button } from '@/components/ai-research/AiResearchMaterial';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
+import MuiLink from '@mui/material/Link';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import Paper from '@mui/material/Paper';
+import Skeleton from '@mui/material/Skeleton';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
 import { rerunResearchTask } from '@/components/ai-research/rerunResearchTask';
 import { taskStatusBadgeValue, taskStatusLabel } from '@/lib/ai-research-task-status';
 import { retryOnceAi } from '@/lib/errors/friendly';
-import { toApiHttpError } from '@/lib/errors/api-error';
-import { cn } from '@/lib/utils';
+import { ApiHttpError, toApiHttpError } from '@/lib/errors/api-error';
 
 interface RecentResearchArtifact {
   jobId: string;
@@ -89,7 +91,7 @@ function relativeTime(iso: string | null): string {
 
 function RecentTaskFooter({ openTaskHistoryOnLoad }: { openTaskHistoryOnLoad: boolean }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+    <Stack direction="row" useFlexGap spacing={1} sx={{ pt: 0.5, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
       <AiResearchTaskHistory
         initialOpen={openTaskHistoryOnLoad}
         trigger={(onOpen) => (
@@ -98,22 +100,18 @@ function RecentTaskFooter({ openTaskHistoryOnLoad }: { openTaskHistoryOnLoad: bo
             type="button"
             variant="link"
             size="xs"
-            className="h-auto px-1 text-xs"
             onClick={onOpen}
           >
             查看全部任务
-            <ArrowUpRight />
+            <ArrowUpRight size={14} />
           </Button>
         )}
       />
-      <Link
-        href="/researches"
-        className="inline-flex items-center gap-1 px-1 text-xs text-muted-foreground hover:text-foreground"
-      >
-        <FolderOpen className="size-3.5" />
+      <MuiLink component={Link} href="/researches" underline="hover" color="text.secondary" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, typography: 'metadata', px: 0.5 }}>
+        <FolderOpen size={14} />
         研究库
-      </Link>
-    </div>
+      </MuiLink>
+    </Stack>
   );
 }
 
@@ -123,9 +121,12 @@ export function RecentResearchArtifacts({
   openTaskHistoryOnLoad?: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const queryClient = useQueryClient();
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [menuJobId, setMenuJobId] = useState<string | null>(null);
   const query = useQuery<{ items: RecentResearchArtifact[] }>({
     queryKey: ['ai-research-jobs', 'recent-artifacts'],
     queryFn: async () => {
@@ -133,13 +134,18 @@ export function RecentResearchArtifacts({
       if (!response.ok) throw await toApiHttpError(response, '加载最近任务失败');
       return await response.json() as { items: RecentResearchArtifact[] };
     },
-    retry: retryOnceAi,
+    retry: (count, error) => !(error instanceof ApiHttpError && error.status === 401) && retryOnceAi(count, error),
+    refetchOnMount: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
+    refetchOnWindowFocus: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
+    refetchOnReconnect: (query) => !(query.state.error instanceof ApiHttpError && query.state.error.status === 401),
     refetchInterval: (data) => (
-      data.state.data?.items.some((item) => item.status === 'queued' || item.status === 'running')
+      !(data.state.error instanceof ApiHttpError && data.state.error.status === 401)
+      && data.state.data?.items.some((item) => item.status === 'queued' || item.status === 'running')
         ? 8_000
         : false
     ),
   });
+  const loginRequired = query.isError && query.error instanceof ApiHttpError && query.error.status === 401;
 
   async function rerun(item: RecentResearchArtifact) {
     setRerunning(item.jobId);
@@ -156,31 +162,36 @@ export function RecentResearchArtifacts({
   }
 
   return (
-    <section className="border-t border-border pt-4" aria-labelledby="recent-research-tasks-heading">
-      <div className="mb-2 min-w-0">
-        <h2 id="recent-research-tasks-heading" className="flex items-center gap-1.5 text-xs font-semibold">
-          <Sparkles className="size-3.5 text-primary" />
-          最近任务
-        </h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">最近 3 项，继续查看或恢复工作</p>
-      </div>
+    <Box component="section" sx={{ pt: 2, borderTop: 1, borderColor: 'divider' }} aria-labelledby="recent-research-tasks-heading">
+      <Box sx={{ mb: 1.5, minWidth: 0 }}>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+          <Sparkles size={14} color="var(--dr-color-primary)" />
+          <Typography id="recent-research-tasks-heading" variant="fieldTitle" component="h2">最近任务</Typography>
+        </Stack>
+        <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>最近 3 项，继续查看或恢复工作</Typography>
+      </Box>
 
       {query.isLoading ? (
-        <div className="space-y-2" aria-busy="true">
-          {[0, 1, 2].map((item) => <Skeleton key={item} className="h-20 w-full rounded-md" />)}
-        </div>
+        <Stack spacing={1} aria-busy="true">
+          {[0, 1, 2].map((item) => <Skeleton key={item} variant="rounded" height={80} />)}
+        </Stack>
+      ) : loginRequired ? (
+        <Alert severity="info" action={
+          <Button asChild variant="link" size="xs">
+            <Link href={`/signin?${new URLSearchParams({ callbackUrl: pathname || '/ai-research' })}`}>登录</Link>
+          </Button>
+        }>
+          登录后查看最近任务。
+        </Alert>
       ) : query.isError ? (
-        <div className="space-y-2">
-          <div className="rounded-md border border-destructive/30 bg-destructive/[0.04] p-3 text-xs text-destructive">
+        <Stack spacing={1.5}>
+          <Alert severity="error" action={<Button type="button" variant="link" size="xs" onClick={() => void query.refetch()}>重试</Button>}>
             最近任务暂时无法加载。
-            <button type="button" className="ml-1 font-medium underline underline-offset-2" onClick={() => void query.refetch()}>
-              重试
-            </button>
-          </div>
+          </Alert>
           <RecentTaskFooter openTaskHistoryOnLoad={openTaskHistoryOnLoad} />
-        </div>
+        </Stack>
       ) : query.data?.items.length ? (
-        <div className="space-y-2">
+        <Stack spacing={1.5}>
           {query.data.items.map((item) => {
             const finished = isTerminal(item);
             const inFlight = item.status === 'queued' || item.status === 'running';
@@ -197,107 +208,77 @@ export function RecentResearchArtifacts({
             const mainLabel = !finished ? '查看进度' : evidenceOnly || !hasReaderReport ? '查看资料' : '查看结果';
 
             return (
-              <article
-                key={item.jobId}
-                className="rounded-md border border-border bg-card p-3 transition-colors hover:border-primary/35"
-              >
-                <div className="flex items-start gap-2">
-                  <span className={cn(
-                    'mt-0.5 grid size-6 shrink-0 place-items-center rounded-md',
-                    finished && hasReaderReport ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary',
-                  )}>
-                    {finished && hasReaderReport
-                      ? <FileEdit className="size-3.5" />
-                      : <Search className="size-3.5" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5 pr-1">
+              <Paper component="article" variant="outlined" key={item.jobId} sx={{ p: 1.5, transition: 'border-color 120ms ease-out', '&:hover': { borderColor: 'primary.main' } }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+                  <Box sx={{ mt: 0.5, width: 28, height: 28, flexShrink: 0, display: 'grid', placeItems: 'center', borderRadius: 1, bgcolor: finished && hasReaderReport ? 'action.hover' : 'action.selected', color: finished && hasReaderReport ? 'text.secondary' : 'primary.main' }}>
+                    {finished && hasReaderReport ? <FileEdit size={16} /> : <Search size={16} />}
+                  </Box>
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography variant="listTitle" component="h3" title={item.topic} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>
+                      <MuiLink component={Link} href={`/ai-research/${item.jobId}`} color="inherit" underline="hover">{item.topic}</MuiLink>
+                    </Typography>
+                    <MuiLink component={Link} href={`/ai-research/${item.jobId}`} underline="hover" sx={{ display: 'inline-flex', mt: 0.5, typography: 'metadata', fontWeight: 500 }}>{mainLabel}</MuiLink>
+                    <Stack direction="row" useFlexGap spacing={1} sx={{ mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
                       <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
-                      <span className="text-xs text-muted-foreground">
+                      <Typography variant="metadata" color="text.secondary">
                         {RESEARCH_MODE_LABEL[item.reportLength ?? 'standard'] ?? '研究深度'} ·{' '}
                         {REPORT_TYPE_LABEL[item.reportType] ?? '调研任务'} · {relativeTime(item.createdAt)}
-                      </span>
-                    </div>
-                    <p
-                      className="mt-1 line-clamp-2 text-sm font-medium leading-5"
-                      title={item.topic}
-                    >
-                      {item.topic}
-                    </p>
-                    {!finished && item.currentStep ? (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}
-                      </p>
-                    ) : null}
-                  </div>
+                      </Typography>
+                    </Stack>
+                    {!finished && item.currentStep ? <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>当前：{STEP_LABEL[item.currentStep] ?? item.currentStep}</Typography> : null}
+                  </Box>
                   {hasMenuActions ? (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="shrink-0"
-                          title={`更多操作：${item.topic}`}
-                          aria-label={`更多操作：${item.topic}`}
-                        >
-                          <MoreHorizontal className="size-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
+                    <>
+                      <IconButton
+                        size="small"
+                        title={`更多操作：${item.topic}`}
+                        aria-label={`更多操作：${item.topic}`}
+                        aria-haspopup="menu"
+                        aria-expanded={menuJobId === item.jobId && Boolean(menuAnchor)}
+                        onClick={(event) => { setMenuJobId(item.jobId); setMenuAnchor(event.currentTarget); }}
+                        sx={{ flexShrink: 0 }}
+                      >
+                        <MoreHorizontal size={18} />
+                      </IconButton>
+                      <Menu
+                        anchorEl={menuJobId === item.jobId ? menuAnchor : null}
+                        open={menuJobId === item.jobId && Boolean(menuAnchor)}
+                        onClose={() => { setMenuAnchor(null); setMenuJobId(null); }}
+                        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+                      >
                         {item.draftResearchId ? (
-                          <DropdownMenuItem asChild>
-                            <Link href={`/researches/${item.draftResearchId}/edit`}>
-                              <FileEdit />
-                              打开草稿
-                            </Link>
-                          </DropdownMenuItem>
+                          <MenuItem component={Link} href={`/researches/${item.draftResearchId}/edit`} onClick={() => { setMenuAnchor(null); setMenuJobId(null); }}>
+                            <FileEdit size={16} />打开草稿
+                          </MenuItem>
                         ) : null}
                         {canContinue ? (
-                          <DropdownMenuItem asChild>
-                            <Link href={`/ai-research/${item.jobId}#research-chat`}>
-                              <MessageCircle />
-                              继续追问
-                            </Link>
-                          </DropdownMenuItem>
+                          <MenuItem component={Link} href={`/ai-research/${item.jobId}#research-chat`} onClick={() => { setMenuAnchor(null); setMenuJobId(null); }}>
+                            <MessageCircle size={16} />继续追问
+                          </MenuItem>
                         ) : null}
                         {!inFlight ? (
-                          <DropdownMenuItem
-                            disabled={rerunning === item.jobId}
-                            onSelect={() => void rerun(item)}
-                          >
-                            <RotateCw className={cn(rerunning === item.jobId && 'animate-spin')} />
-                            {rerunning === item.jobId ? '重新运行中…' : '重新运行'}
-                          </DropdownMenuItem>
+                          <MenuItem disabled={rerunning === item.jobId} onClick={() => { setMenuAnchor(null); setMenuJobId(null); void rerun(item); }}>
+                            <RotateCw size={16} />{rerunning === item.jobId ? '重新运行中…' : '重新运行'}
+                          </MenuItem>
                         ) : null}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                      </Menu>
+                    </>
                   ) : null}
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2 pl-8">
-                  <Link href={`/ai-research/${item.jobId}`} className="text-xs font-medium text-primary hover:underline">
-                    {mainLabel}
-                  </Link>
-                  {item.publishedResearchId ? (
-                    <span className="text-xs text-muted-foreground">已进入研究库</span>
-                  ) : null}
-                </div>
-              </article>
+                </Stack>
+                {item.publishedResearchId ? <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 1, pl: 4.5 }}>已进入研究库</Typography> : null}
+              </Paper>
             );
           })}
-          {rerunError ? (
-            <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/[0.04] px-3 py-2 text-xs text-destructive">
-              {rerunError}
-            </p>
-          ) : null}
+          {rerunError ? <Alert severity="error" role="alert">{rerunError}</Alert> : null}
           <RecentTaskFooter openTaskHistoryOnLoad={openTaskHistoryOnLoad} />
-        </div>
+        </Stack>
       ) : (
-        <div className="space-y-2">
+        <Stack spacing={1.5}>
           <EmptyState title="还没有研究任务" description="提交一次 AI 调研后，最近任务会出现在这里。" />
           <RecentTaskFooter openTaskHistoryOnLoad={openTaskHistoryOnLoad} />
-        </div>
+        </Stack>
       )}
-    </section>
+    </Box>
   );
 }

@@ -1,10 +1,102 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
+import nodeVm from 'node:vm';
+import { applyTextTranslations, mergeTranslationFailures, responseLanguageInstruction } from './reader-core.js';
+import { answerTaskPresentation } from './answer-task.js';
+import { readerStore } from './reader-store.js';
+const t = (message, ...values) => message.replace(/\{(\d+)\}/gu, (_, index) => String(values[index] ?? ''));
+const vm = {
+  ...nodeVm,
+  createContext: sandbox => nodeVm.createContext(Object.assign(sandbox, { t, responseLanguageInstruction, currentTranslationLanguage: sandbox.currentTranslationLanguage || sandbox.currentReadingLanguage || (() => 'zh-CN'), updateTranslationLanguageUi: () => {} })),
+  runInNewContext: (source, sandbox, options) => nodeVm.runInNewContext(source, Object.assign(sandbox, { t, responseLanguageInstruction, currentTranslationLanguage: sandbox.currentTranslationLanguage || sandbox.currentReadingLanguage || (() => 'zh-CN'), updateTranslationLanguageUi: () => {} }), options),
+};
 const panel = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const content = readFileSync(new URL('./content.js', import.meta.url), 'utf8');
 function extract(source, start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
+
+test('platform output-limit failures retain their cause and either request-id spelling', () => {
+  const source = readFileSync(new URL('./platform-answer.js', import.meta.url), 'utf8');
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(extract(source, 'export function platformAnswerErrorMessage(', '\n// end').replace('export ', ''), sandbox);
+  for (const key of ['request_id', 'requestId']) {
+    sandbox.payload = { code: 'AI_RESPONSE_TRUNCATED', [key]: 'request-123' };
+    const result = vm.runInContext('platformAnswerErrorMessage(payload)', sandbox);
+    assert.match(result, /输出上限/);
+    assert.match(result, /request-123/);
+    assert.doesNotMatch(result, /联系平台管理员/);
+  }
+});
+
+test('answer recovery separates quick-action labels, typed drafts and legacy internal prompts', async () => {
+  const prompt = 'Internal summary instructions: use four Markdown sections and evidence cards.';
+  const cases = [
+    { status: 'failed', question: '总结本页', prompt, initial: prompt, expected: '' },
+    { status: 'interrupted', question: '总结本页', prompt, initial: '', expected: '' },
+    { status: 'failed', question: '总结本页', prompt, initial: 'My next question', expected: 'My next question' },
+    { status: 'failed', question: 'Why a queue?', prompt: 'Why a queue?', initial: '', expected: 'Why a queue?' },
+    { status: 'failed', userMessage: '总结本页', intent: 'summary', draft: '', initial: '', expected: '' },
+    { status: 'running', question: '总结本页', prompt, initial: '', expected: '' },
+  ];
+  for (const item of cases) {
+    const input = { value: item.initial };
+    const labels = [];
+    const sandbox = { answerTaskPresentation, discussionRunning: false, discussionSubscription: null, AbortController,
+      chrome: { runtime: { sendMessage: async () => item } }, contextUrl: () => 'https://article.test',
+      $: () => input, persistQuestionDraft: () => {}, setNotice: () => {}, renderPage: () => labels.push(sandbox.pendingAnswer?.userMessage),
+      renderPersistentComposer: () => {}, revealPendingAnswer: () => {}, renderPendingAnswer: () => {},
+      waitForAnswerTask: async () => { throw new DOMException('Detached', 'AbortError'); },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(panel, 'async function resumeBackgroundAnswer(', 'async function explainOrAsk('), sandbox);
+    await vm.runInContext("resumeBackgroundAnswer({url:'https://article.test'})", sandbox);
+    assert.equal(input.value, item.expected);
+    assert.ok(labels.every(label => label === '总结本页'));
+  }
+});
+
+test('new background answer snapshots omit model instructions and retain only display labels and typed drafts', async () => {
+  const source = readFileSync(new URL('./answer-worker.js', import.meta.url), 'utf8');
+  for (const intent of ['summary', 'ask']) {
+    const stored = [];
+    let listener;
+    const sandbox = { tasks: new Map(), AbortController, key: id => id, execute: () => {},
+      chrome: { runtime: { id: 'test', getURL: () => 'chrome-extension://test/', onMessage: { addListener: fn => { listener = fn; } } },
+        storage: { session: { set: async value => stored.push(value) } } },
+    };
+    vm.runInNewContext(source.slice(source.indexOf('chrome.runtime.onMessage.addListener(')), sandbox);
+    listener({ type: 'deep-research:answer-start', input: { id: 'job', context: { url: 'https://article.test' }, history: [], intent,
+      userMessage: intent === 'summary' ? '总结本页' : 'My actual question', question: 'Internal model instruction' } },
+    { id: 'test', url: 'chrome-extension://test/sidepanel.html' }, () => {});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(!('prompt' in stored[0].job));
+    assert.equal(stored[0].job.draft, intent === 'ask' ? 'My actual question' : '');
+  }
+});
+
+test('translation progress counts confirmed page translations instead of processed model blocks', () => {
+  const nodes = new Map();
+  const $ = id => {
+    if (!nodes.has(id)) nodes.set(id, { dataset: {}, style: {}, setAttribute(name, value) { this[name] = value; } });
+    return nodes.get(id);
+  };
+  const sandbox = { $, activeJobRecord: { textDone: 410, textTotal: 410, status: 'completed' }, pageContext: { translatedBlockIds: [] },
+    translationRunning: false, translationPaused: false, translationRequested: true, fullTranslationEnabled: true,
+    failedTranslationItems: [], translatedTextIds: new Set(), translatedImageIds: new Set(), readingMode: 'platform',
+    show: () => {}, renderTranslationFailures: () => {}, activeDiscussionScope: () => 'page',
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'function renderProgress(', 'function renderTranslationFailures('), sandbox);
+  vm.runInContext('renderProgress()', sandbox);
+  assert.equal($('text-progress-value').textContent, '0 / 410');
+  assert.equal($('translation-summary').dataset.state, 'error');
+  assert.equal($('text-progress-bar').style.width, '0%');
+  sandbox.activeJobRecord = { textDone: 3, textTotal: 3, appliedTextIds: ['a', 'b'], skippedTextIds: ['code'], status: 'completed' };
+  vm.runInContext('renderProgress()', sandbox);
+  assert.equal($('text-progress-value').textContent, '2 / 2');
+  assert.equal($('translation-summary').dataset.state, 'completed');
+});
 
 test('section traversal terminates through nested trailing containers and stops at peer heading', () => {
   const node = (tagName, text) => ({ tagName, innerText: text, nodeType: 1, closest: () => null });
@@ -45,12 +137,12 @@ function translationSandbox(context, imageRequest) {
   const job = { id: 'job', textDone: 0, textTotal: 0, imageDone: 0, imageTotal: 0 };
   const notices = [];
   const sandbox = {
-    DOMException, context, translationController: controller, activeJobRecord: job,
+    DOMException, context, boundWindowTabId: null, activeTabId: 7, applyTextTranslations, translationController: controller, activeJobRecord: job,
     translationRequested: true, translationRunning: true, activeTranslationRun: 1,
     failedTranslationItems: [], translatedTextIds: new Set(), translatedImageIds: new Set(),
     platformModeReady: () => true, boundTaskContext: (c) => c, currentReadingLanguage: () => 'zh-CN',
     updatePageContextUi: () => {}, updateReaderTranslations: () => {}, translationCoverageWarning: () => '', makeDocument: (c) => c,
-    persistJobPatch: (j, p) => Object.assign(j, p), renderProgress: () => {}, sendToPage: () => {},
+    persistJobPatch: (j, p) => Object.assign(j, p), renderProgress: () => {}, sendToPage: async (m) => ({ ok: true, appliedIds: (m.translations || []).map(item => item.id) }),
     setNotice: (n) => notices.push(n), requestPlatformTranslations: async () => [],
     requestPlatformImageTranslation: async (...args) => imageRequest(controller, ...args),
     mergeProcessedIds: (a, b) => [...new Set([...a, ...b])],
@@ -136,7 +228,7 @@ test('macOS Option letter symbols still trigger selection shortcuts; editors rem
 
 
 test('Escape closes selection translation even when focus is outside its shadow root', () => {
-  const handler = extract(content, "  document.addEventListener('keydown',", '  function showSelectionToolbar(');
+  const handler = extract(content, "  document.addEventListener('keydown', (event) => {", '  function showSelectionToolbar(');
   let listener;
   let closed = 0;
   vm.runInNewContext(handler, {
@@ -155,6 +247,9 @@ test('duplicate saved insight explicitly updates the cloud and reports unsupport
       chrome: { storage: { local: { get: async () => ({ readerToken: 'test', readerTokenOrigin: 'https://platform.test' }) } } },
       tokenBoundToOrigin: (a, b) => a === b,
       platformUrl: 'https://platform.test', insightSyncFailed: false,
+      platformConnected: true, platformDisconnecting: false, platformStateEvents: 0,
+      normalizeRadarSummaryId: readerStore.normalizeRadarSummaryId,
+      updatePageKnowledge: () => {},
       updateReadingModeUi: () => {}, setNotice: (n) => notices.push(n),
       fetch: async (_url, request) => {
         methods.push(request.method);
@@ -172,6 +267,155 @@ test('duplicate saved insight explicitly updates the cloud and reports unsupport
   }
 });
 
+test('saving freezes radar and version at capture; editing never borrows the current radar or anchor', async () => {
+  const radarId = '30000000-0000-4000-8000-000000000001';
+  const originalRadarId = '30000000-0000-4000-8000-000000000002';
+  for (const editing of [false, true, 'with-radar']) {
+    let visibleUrl = 'https://save-source.test/original';
+    const saved = [];
+    const fields = new Map();
+    const $ = id => {
+      if (!fields.has(id)) fields.set(id, { value: '', focus() {} });
+      return fields.get(id);
+    };
+    const original = { id: 'old-insight', url: visibleUrl, title: 'Original', quote: 'Source quote',
+      document: { url: visibleUrl, version: editing ? null : 'v1' },
+      ...(editing === 'with-radar' ? { radarSummaryId: originalRadarId } : {}) };
+    const sandbox = {
+      $, readingMode: 'local', editingInsight: null, pendingInsightSource: null, platformStateEvents: 0,
+      platformConnected: false, platformDisconnecting: false, selectionContext: null,
+      latestAnswerSource: () => original, currentRadarSummaryId: () => radarId, contextUrl: () => visibleUrl,
+      normalizeRadarSummaryId: readerStore.normalizeRadarSummaryId,
+      readerStore: { ...readerStore, saveInsight: async item => { saved.push(item); return { ...item, id: item.id || 'new-insight' }; } },
+      ensureSaveDialog: () => ({}), ensureAnnotationDialog: () => ({}), show() {}, setNotice() {},
+      platformModeReady: () => false, readPlatformToken: async () => '', showReading() {}, updateLibrary: async () => {},
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(panel, 'function openSaveDialog(', 'function saveInsight('), sandbox);
+    sandbox.input = editing ? original : null;
+    vm.runInContext('openSaveDialog(input)', sandbox);
+    visibleUrl = 'https://save-source.test/unrelated';
+    sandbox.selectionContext = { url: visibleUrl, contentHash: 'unrelated-v9', selection: { quote: original.quote, contentHash: 'unrelated-v9' } };
+    await vm.runInContext('confirmSaveInsight()', sandbox);
+    assert.equal(saved[0].url, original.url);
+    assert.equal(saved[0].document.version, editing ? null : 'v1');
+    assert.equal(saved[0].anchor, undefined);
+    assert.equal(saved[0].radarSummaryId, editing === 'with-radar' ? originalRadarId : editing ? undefined : radarId);
+  }
+});
+
+test('insight sync sends only the saved valid radar and retains returned draft identity and origin', async () => {
+  const draftId = '40000000-0000-4000-8000-000000000001';
+  for (const radarSummaryId of [draftId, 'not-a-uuid', undefined]) {
+    const requests = [];
+    const links = [];
+    const sandbox = {
+      platformUrl: 'https://platform.test', platformConnected: true, platformDisconnecting: false, platformStateEvents: 0,
+      lastSavedInsight: { id: 'local' }, readPlatformToken: async () => 'bound-token',
+      normalizeRadarSummaryId: readerStore.normalizeRadarSummaryId,
+      updateReadingModeUi() {}, updatePageKnowledge() {}, setNotice() {},
+      readerStore: { linkInsightToPlatform: async (...args) => { links.push(args); return { id: 'local', platformResearchId: args[1], platformOrigin: args[2] }; } },
+      fetch: async (url, request) => { requests.push([url, JSON.parse(request.body)]); return { ok: true, json: async () => ({ draft: { id: draftId } }) }; },
+      input: { id: 'local', url: 'https://source.test', quote: 'Evidence', radarSummaryId },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(panel, 'async function syncInsight(', 'async function syncCurrentSession('), sandbox);
+    await vm.runInContext('syncInsight(input)', sandbox);
+    assert.equal(requests[0][1].radarSummaryId, radarSummaryId === draftId ? draftId : undefined);
+    assert.equal(Object.hasOwn(requests[0][1], 'radarSummaryId'), radarSummaryId === draftId);
+    assert.deepEqual(links, [['local', draftId, 'https://platform.test']]);
+    assert.equal(sandbox.lastSavedInsight.platformResearchId, draftId);
+  }
+});
+
+test('disconnect during a deduplicated save prevents PUT and late platform identity writes', async () => {
+  let release;
+  const response = new Promise(resolve => { release = resolve; });
+  const calls = [];
+  const sandbox = {
+    platformUrl: 'https://platform.test', platformConnected: true, platformDisconnecting: false, platformStateEvents: 0,
+    readPlatformToken: async () => 'token', normalizeRadarSummaryId: readerStore.normalizeRadarSummaryId,
+    updateReadingModeUi() {}, setNotice() {}, fetch: async (_url, request) => { calls.push(request.method); return response; },
+    readerStore: { linkInsightToPlatform: async () => { throw new Error('must not write after disconnect'); } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'async function syncInsight(', 'async function syncCurrentSession('), sandbox);
+  const work = vm.runInContext("syncInsight({id:'local',url:'https://source.test',quote:'Evidence'})", sandbox);
+  await new Promise(resolve => setImmediate(resolve));
+  sandbox.platformConnected = false;
+  sandbox.platformStateEvents++;
+  release({ ok: true, json: async () => ({ deduplicated: true }) });
+  await work;
+  assert.deepEqual(calls, ['POST']);
+});
+
+test('same-page recall is offline while disconnected and rejects late results after page or connection changes', async () => {
+  for (const transition of ['offline', 'page', 'disconnect', 'connected']) {
+    let release;
+    const response = new Promise(resolve => { release = resolve; });
+    const rendered = [];
+    const calls = [];
+    let visibleUrl = 'https://recall-source.test/article?utm_source=radar#intro';
+    const sandbox = {
+      pageKnowledgeKey: '', pageKnowledgeRequest: 0, pageKnowledgeController: null,
+      documentContext: null, pageContext: { contentHash: 'v1' }, selectionContext: null,
+      platformUrl: 'https://platform.test', platformConnected: transition !== 'offline', platformDisconnecting: false, platformStateEvents: 0,
+      contextUrl: () => visibleUrl, normalizePlatformOrigin: value => value, AbortController, AbortSignal,
+      renderPageKnowledge: items => rendered.push(items),
+      readPlatformToken: async () => 'bound-token',
+      readerStore: { ...readerStore, listPageKnowledge: async (_url, options) => options.platformItems || [{ id: 'local', note: 'Confirmed' }] },
+      fetch: async (url, request) => { calls.push({ url, request }); return response; },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(panel, 'async function updatePageKnowledge(', 'async function findPendingTranslation('), sandbox);
+    const work = vm.runInContext('updatePageKnowledge()', sandbox);
+    await new Promise(resolve => setImmediate(resolve));
+    if (transition === 'page') visibleUrl = 'https://recall-source.test/other';
+    if (transition === 'disconnect') { sandbox.platformConnected = false; sandbox.platformStateEvents++; }
+    release({ ok: true, json: async () => ({ items: [{ id: 'remote', note: 'Confirmed remote' }] }) });
+    await work;
+    if (transition === 'offline') assert.equal(calls.length, 0);
+    else {
+      assert.equal(calls.length, 1);
+      assert.equal(new URL(calls[0].url).searchParams.get('url'), 'https://recall-source.test/article?utm_source=radar#intro');
+      assert.equal(calls[0].request.cache, 'no-store');
+    }
+    assert.equal(rendered.some(items => items.some(item => item.id === 'remote')), transition === 'connected');
+  }
+});
+
+test('session restoration recovers explicit radar without a chat and rejects unrelated or stale anchors', async () => {
+  const radarId = '50000000-0000-4000-8000-000000000001';
+  for (const mode of ['radar-only', 'stale', 'switched']) {
+    const messages = [];
+    const url = 'https://restore-source.test/article';
+    const session = { url, radarSummaryId: radarId, ...(mode === 'stale' ? {
+      stale: true, version: 'old', answer: 'Historical answer', answerStructured: { answer: 'Historical answer', evidence: [{ quote: 'Old evidence' }] },
+      selection: { quote: 'Old evidence' }, pendingEvidenceAnchor: { quote: 'Old evidence' }, discussionScope: 'selection',
+    } : {}) };
+    const sandbox = {
+      readerStore: { ...readerStore, markSessionsStale: async () => {}, getReadingSession: async () => session },
+      resumedUrls: new Set(), sessionResumeTasks: new Map(), sessionGeneration: 0, interactionGeneration: 0,
+      contextUrl: () => mode === 'switched' ? 'https://restore-source.test/unrelated' : url,
+      consumePendingSession: async () => null, context: { url, contentHash: 'current' },
+      selectionContext: null, radarEntrySummaryId: '', radarEntryUrl: '', imageContext: null, DISCUSSION_INTENTS: new Set(['ask']),
+      renderPage() {}, sendToPage: message => messages.push(message), setNotice() {},
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(panel, 'function normalizeRadarSummaryId(', 'function applyRadarEntryContext(')
+      + extract(panel, 'async function resumeSession(', 'async function consumePendingSession('), sandbox);
+    await vm.runInContext('resumeSession(context)', sandbox);
+    assert.equal(sandbox.radarEntrySummaryId, mode === 'switched' ? '' : radarId);
+    if (mode === 'stale') {
+      assert.equal(sandbox.latestStructuredAnswer.evidence.length, 0);
+      assert.equal(sandbox.selectionContext, null);
+      assert.equal(sandbox.discussionScope, 'page');
+      assert.equal(messages.some(message => message.type === 'deep-research:focus-anchor'), false);
+      assert.equal(messages.find(message => message.type === 'deep-research:restore-progress').anchor, null);
+    }
+  }
+});
+
 
 test('platform translation resumes completed batches without requesting them again', async () => {
   const context = { url: 'https://a.test', blocks: [{ id: 'a', text: 'First' }, { id: 'b', text: 'Second' }], images: [] };
@@ -180,7 +424,7 @@ test('platform translation resumes completed batches without requesting them aga
   sandbox.requestPlatformTranslations = async (_context, blocks, options) => {
     batches.push(blocks.map((b) => b.id));
     const translated = { ...blocks[0], sourceText: blocks[0].text, text: '译文' };
-    options.onResult(translated);
+    await options.onResult(translated);
     options.onProgress(1);
     if (batches.length === 1) {
       sandbox.translationController.abort();
@@ -199,9 +443,30 @@ test('platform translation resumes completed batches without requesting them aga
   assert.equal(job.status, 'completed');
 });
 
+test('changing translation language does not reuse cached or displayed output in the old language', async () => {
+  const context = { full: true, url: 'https://a.test', blocks: [{ id: 'a', text: 'First paragraph' }], images: [],
+    translatedBlockIds: ['a'], displayedTranslationLanguage: 'en' };
+  const { sandbox, job } = translationSandbox(context, () => {});
+  Object.assign(job, { targetLanguage: 'en', textTranslations: [{ id: 'a', sourceText: 'First paragraph', text: 'First paragraph' }] });
+  const requests = [];
+  sandbox.requestPlatformTranslations = async (_context, blocks, options) => {
+    requests.push(...blocks.map(block => block.id));
+    const result = { id: 'a', sourceText: blocks[0].text, text: '第一段' };
+    await options.onResult(result);
+    options.onProgress(1);
+    return [result];
+  };
+  await vm.runInContext('processDocument(context, 1)', sandbox);
+  assert.deepEqual(requests, ['a']);
+  assert.equal(job.targetLanguage, 'zh-CN');
+  assert.equal(job.textTranslations[0].text, '第一段');
+  assert.deepEqual(Array.from(job.appliedTextIds), ['a']);
+});
+
 
 test('workspace navigation selects one view and composer resize is bounded and keyboard accessible', () => {
   const shell = { dataset: {}, classList: { toggle() {} } };
+  const location = { href: 'chrome-extension://reader/sidepanel.html?view=library&sourceTab=42' };
   const nodes = new Map();
   for (const id of ['nav-chat', 'nav-tools', 'nav-library', 'open-wide-window', 'composer-resize', 'question-input']) {
     nodes.set(id, { handlers: {}, attributes: {}, style: {}, classList: { toggle: () => {}, add: () => {} },
@@ -214,7 +479,8 @@ test('workspace navigation selects one view and composer resize is bounded and k
   }
   const sandbox = {
     document: { querySelector: () => shell, addEventListener() {} }, $: (id) => nodes.get(id),
-    window: { innerHeight: 900, addEventListener() {} }, localStorage: { getItem: () => null, setItem: () => {} },
+    window: { innerHeight: 900, addEventListener() {}, history: { replaceState(_state, _title, url) { location.href = url; } } }, localStorage: { getItem: () => null, setItem: () => {} },
+    URL, location,
     boundWindowTabId: null,
   };
   vm.createContext(sandbox);
@@ -223,6 +489,9 @@ test('workspace navigation selects one view and composer resize is bounded and k
   assert.equal(shell.dataset.workspaceView, 'library');
   assert.equal(nodes.get('nav-library').attributes['aria-pressed'], 'true');
   assert.equal(nodes.get('nav-chat').attributes['aria-pressed'], 'false');
+  vm.runInContext("setWorkspaceView('chat')", sandbox);
+  assert.equal(new URL(location.href).searchParams.has('view'), false);
+  assert.equal(new URL(location.href).searchParams.get('sourceTab'), '42');
   const handle = nodes.get('composer-resize');
   const key = (value) => handle.handlers.keydown({ key: value, preventDefault() {} });
   key('End');
@@ -234,7 +503,7 @@ test('workspace navigation selects one view and composer resize is bounded and k
   const input = nodes.get('question-input');
   input.scrollHeight = 320;
   input.handlers.input();
-  assert.equal(input.style.height, '240px');
+  assert.equal(input.style.height, '76px', 'manual size must not be overridden by long input');
   input.scrollHeight = 60;
   input.handlers.input();
   assert.equal(input.style.height, '76px', 'automatic growth preserves the manual preferred height');
@@ -246,7 +515,7 @@ test('source messages target the bound article instead of the extension tab', as
   const sent = [];
   const sandbox = {
     message: { type: 'deep-research:to-page', tabId: 42, payload: { type: 'deep-research:request-page' } },
-    sender: { url: 'chrome-extension://test/sidepanel.html?sourceTab=42' },
+    sender: { url: 'chrome-extension://test/sidepanel.html?sourceTab=42' }, sendResponse: () => {},
     chrome: { runtime: { getURL: (path) => `chrome-extension://test/${path}` }, tabs: {
       sendMessage: async (id, payload) => sent.push([id, payload.type]),
       query: () => { throw new Error('Must not query the popup as current article'); },
@@ -346,6 +615,7 @@ test('a second translation start during the job-record read is queued instead of
   const sandbox = {
     translationJobs, AbortController, DOMException,
     boundTaskContext: (context) => context,
+    mergeTranslationFailures,
     readerStore: { getJob: async () => { await gate; return null; }, saveJob: async () => { throw new Error('stop'); } },
   };
   vm.createContext(sandbox);

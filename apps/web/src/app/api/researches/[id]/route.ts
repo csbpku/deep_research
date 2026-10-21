@@ -113,6 +113,10 @@ const researchSelect = {
     },
   },
   sourceCommentId: true,
+  researchTopics: {
+    where: { topic: { enabled: true } }, take: 20,
+    select: { topic: { select: { id: true, slug: true, name: true } } },
+  },
   publishedAt: true,
   featuredAt: true,
   createdAt: true,
@@ -301,6 +305,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
     ...shapeResearchDetail(research),
     canEdit,
     canManageStatus,
+    researchTopics: research.researchTopics ?? [],
     researchSources: researchSources.map((s) => ({
       id: s.id,
       sourceRef: s.sourceRef,
@@ -537,7 +542,7 @@ export const PUT = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
   const diff = computeDiff(prevSnapshot, nextSnapshot);
   const contentChanged = Object.keys(diff).length > 0;
   const nextKnowledgeIndexText = existing.type === 'knowledge'
-    ? existing.readingSaveKey
+    ? existing.readingSaveKey && existing.creationMethod === 'manual'
       ? readingKnowledgeIndexTextFromBody(nextSnapshot.body)
       : confirmedKnowledgeIndexText(nextSnapshot)
     : undefined;

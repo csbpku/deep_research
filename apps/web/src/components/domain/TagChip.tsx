@@ -1,7 +1,8 @@
 import * as React from 'react';
 import Link from 'next/link';
+import Chip from '@mui/material/Chip';
 
-import { cn } from '@/lib/utils';
+import styles from './domain.module.css';
 
 /**
  * TagChip —— 标签胶囊。
@@ -17,21 +18,15 @@ export function TagChip({
   href?: string;
   className?: string;
 }) {
-  const base = cn(
-    'inline-flex items-center rounded px-1.5 py-0.5 font-mono text-xs text-muted-foreground',
-    'bg-muted transition-colors duration-150',
-    href && 'cursor-pointer hover:bg-accent hover:text-accent-foreground',
-    className,
-  );
-
+  const base = [styles.tagChip, className].filter(Boolean).join(' ');
   if (href) {
     return (
-      <Link href={href} className={base}>
-        {children}
+      <Link href={href} className={styles.tagLink}>
+        <Chip component="span" className={base} size="small" label={children} />
       </Link>
     );
   }
-  return <span className={base}>{children}</span>;
+  return <Chip component="span" className={base} size="small" label={children} />;
 }
 
 /** 标签组容器：自动换行 + 一致间距。 */
@@ -41,7 +36,7 @@ export function TagList({
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('flex flex-wrap items-center gap-1.5', className)} {...props}>
+    <div className={[styles.tagList, className].filter(Boolean).join(' ')} {...props}>
       {children}
     </div>
   );

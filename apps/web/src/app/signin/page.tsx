@@ -1,8 +1,14 @@
-import { Button } from '@/components/ui/button';
-import { PageHeader } from '@/components/domain/PageHeader';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Divider from '@mui/material/Divider';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
+import { AppButton } from '@/components/material/AppButton';
 import { signIn } from '@/lib/auth/config';
 import { getWebEnv } from '@/lib/env';
 import { isProductionAuthAllowed } from '@/lib/auth/transport';
+import { safeInternalCallbackUrl } from '@/lib/auth/callback-url';
 import { Github } from 'lucide-react';
 import { headers } from 'next/headers';
 import { PasswordAuthForms } from './PasswordAuthForms';
@@ -37,9 +43,8 @@ export default async function SignInPage({
   // W9 安全复审修订（S0）：此前 searchParams.callbackUrl 直接喂给
   // signIn('google', { redirectTo: callbackUrl })，无任何域名/路径校验，
   // 攻击者可构造 /signin?callbackUrl=https://evil.com 做开放重定向钓鱼。
-  // 现在只接受以 / 开头的相对路径（同源），任何绝对 URL 一律丢掉。
-  const raw = sp?.callbackUrl;
-  const callbackUrl = raw && raw.startsWith('/') ? raw : '/';
+  // Parse instead of checking only the first slash: `//host/path` is external.
+  const callbackUrl = safeInternalCallbackUrl(sp?.callbackUrl);
 
   async function doSignIn() {
     'use server';
@@ -54,23 +59,26 @@ export default async function SignInPage({
   }
 
   return (
-    <div className="mx-auto max-w-md py-10 text-center">
-      <PageHeader
-        title="登录"
-        description={
-          googleOnly
-            ? '使用 Google 登录。'
-            : googleConfigured && githubConfigured
-              ? '使用 Google、GitHub，或邮箱密码登录。'
-              : googleConfigured
-                ? '使用 Google 或邮箱密码登录。'
-                : githubConfigured
-                  ? '使用 GitHub 或邮箱密码登录。'
-                  : '使用邮箱和密码登录。'
-        }
-      />
+    <Box component="div" sx={{ width: '100%', maxWidth: '480px', marginInline: 'auto', paddingBlock: { xs: space.lg, sm: space.wide }, paddingInline: { xs: space.md, sm: space.lg } }}>
+      <Stack component="section" aria-labelledby="signin-title" sx={{ gap: space.lg }}>
+        <Stack component="header" sx={{ gap: space.sm, textAlign: 'center', paddingInline: { xs: 0, sm: space.md } }}>
+          <Typography id="signin-title" component="h1" variant="pageTitle">登录</Typography>
+          <Typography component="p" variant="body1" color="text.secondary">
+            {
+            googleOnly
+              ? '使用 Google 登录。'
+              : googleConfigured && githubConfigured
+                ? '使用 Google、GitHub，或邮箱密码登录。'
+                : googleConfigured
+                  ? '使用 Google 或邮箱密码登录。'
+                  : githubConfigured
+                    ? '使用 GitHub 或邮箱密码登录。'
+                    : '使用邮箱和密码登录。'
+            }
+          </Typography>
+        </Stack>
       {error ? (
-        <p role="alert" className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-left text-sm text-destructive">
+        <Alert severity="error" variant="outlined" sx={{ textAlign: 'left', borderRadius: 'var(--dr-radius-medium)' }}>
           {error === 'AccessDenied'
             ? betaMode
               ? '当前为 Beta 测试，仅限管理员白名单中的邮箱登录。'
@@ -78,7 +86,7 @@ export default async function SignInPage({
               ? 'Google 账号未能完成登录，或账号已被禁用。'
               : 'OAuth 账号未能完成登录，或账号已被禁用。'
             : '登录失败，请稍后重试或检查账号信息。'}
-        </p>
+        </Alert>
       ) : null}
       {!googleOnly && authAllowed ? (
         <PasswordAuthForms
@@ -87,45 +95,44 @@ export default async function SignInPage({
           emailVerification={emailVerification}
         />
       ) : !googleOnly ? (
-        <p role="alert" className="mt-6 rounded-lg border border-warning-border bg-warning-bg/40 p-4 text-left text-sm leading-6 text-warning-fg">
+        <Alert severity="warning" variant="outlined" sx={{ textAlign: 'left', borderRadius: 'var(--dr-radius-medium)' }}>
           当前连接未启用 HTTPS。为保护密码和会话，邮箱密码登录与邀请码激活已暂停，请先通过 HTTPS 访问本站。
-        </p>
+        </Alert>
       ) : null}
       {authAllowed && (googleConfigured || githubConfigured) ? (
-        <div className="mt-4 border-t border-border pt-4">
+        <Stack component="section" aria-label="其他登录方式" sx={{ gap: space.md }}>
+          <Divider />
           {googleConfigured ? (
             <form action={doSignIn}>
-              <Button type="submit" variant="outline" size="lg" className="w-full">
+              <AppButton type="submit" variant="outlined" size="large" fullWidth>
                 <GoogleMark />
                 使用 Google 登录
-              </Button>
+              </AppButton>
             </form>
           ) : null}
-          {githubConfigured ? (
-            <form action={doGithubSignIn} className={googleConfigured ? 'mt-3' : undefined}>
-              <Button type="submit" variant="outline" size="lg" className="w-full">
-                <Github className="size-4" aria-hidden />
+          {githubConfigured ? <Box component="form" action={doGithubSignIn}>
+              <AppButton type="submit" variant="outlined" size="large" fullWidth>
+                <Github aria-hidden />
                 使用 GitHub 登录
-              </Button>
-            </form>
-          ) : null}
-        </div>
+              </AppButton>
+            </Box> : null}
+        </Stack>
       ) : authAllowed && isDevMode && !googleOnly && !googleConfigured && !githubConfigured ? (
-        <p className="mt-4 text-xs text-muted-foreground">OAuth 尚未配置，当前使用邮箱密码登录。</p>
+        <Typography component="p" variant="metadata" color="text.secondary" sx={{ textAlign: 'center' }}>OAuth 尚未配置，当前使用邮箱密码登录。</Typography>
       ) : googleOnly && !googleConfigured ? (
-        <p role="alert" className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-left text-sm text-destructive">
+        <Alert severity="error" variant="outlined" sx={{ textAlign: 'left', borderRadius: 'var(--dr-radius-medium)' }}>
           Google OAuth 尚未配置，当前无法登录。
-        </p>
+        </Alert>
       ) : null}
-
-    </div>
+      </Stack>
+    </Box>
   );
 }
 
 /** Google 品牌标 —— 官方四色，不走主题 token（品牌色不应随主题变化）。 */
 function GoogleMark() {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden className="size-4">
+    <svg viewBox="0 0 24 24" aria-hidden style={{ width: 16, height: 16 }}>
       <path
         fill="#4285F4"
         d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.76h3.57c2.08-1.92 3.28-4.74 3.28-8.09Z"

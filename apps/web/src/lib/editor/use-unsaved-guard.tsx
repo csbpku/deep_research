@@ -22,15 +22,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
 
 export interface UnsavedGuardApi {
   /** 包了守卫的 router —— 编辑器 header 用这套替换原生 router。 */
@@ -57,6 +50,7 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
   >(null);
   const allowNextRef = useRef(false);
   const allowPopRef = useRef(false);
+  const stayRef = useRef<HTMLButtonElement>(null);
 
   // 浏览器关闭 / 刷新 —— 标准 beforeunload 协议。
   useEffect(() => {
@@ -184,29 +178,23 @@ export function useUnsavedGuard(isDirty: boolean, message?: string): UnsavedGuar
   const isOpen = pending !== null;
 
   const confirmDialog = (
-    <Dialog
+    <AppDialog
       open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) handleStay();
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>离开当前页面？</DialogTitle>
-          <DialogDescription>
-            {message ?? '当前有尚未保存的修改，离开后这些修改会丢失。'}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={handleStay}>
+      onClose={handleStay}
+      title="离开当前页面？"
+      description={message ?? '当前有尚未保存的修改，离开后这些修改会丢失。'}
+      initialFocusRef={stayRef}
+      actions={(
+        <>
+          <Button ref={stayRef} type="button" variant="outlined" onClick={handleStay}>
             留在页面
           </Button>
-          <Button type="button" variant="destructive" onClick={handleConfirm}>
+          <Button type="button" variant="contained" color="error" onClick={handleConfirm}>
             放弃修改并离开
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </>
+      )}
+    />
   );
 
   return {

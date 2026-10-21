@@ -1,14 +1,7 @@
 import { readerStore } from './reader-store.js';
-
-export const PROVIDER_PRESETS = Object.freeze({
-  openai: Object.freeze({ label: 'OpenAI', protocol: 'openai', baseUrl: 'https://api.openai.com/v1', placeholder: 'gpt-4o-mini' }),
-  anthropic: Object.freeze({ label: 'Anthropic', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', placeholder: 'claude-sonnet-4-5' }),
-  minimax: Object.freeze({ label: 'MiniMax', protocol: 'openai', baseUrl: 'https://api.minimaxi.com/v1', placeholder: 'MiniMax-M3' }),
-  deepseek: Object.freeze({ label: 'DeepSeek', protocol: 'openai', baseUrl: 'https://api.deepseek.com/v1', placeholder: 'deepseek-chat' }),
-  'local-proxy': Object.freeze({ label: 'Local Proxy', protocol: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', placeholder: '自动读取本地服务模型' }),
-  custom: Object.freeze({ label: '其他 OpenAI-compatible 服务', protocol: 'openai', baseUrl: '', placeholder: '填写服务商提供的模型名' }),
-  'custom-anthropic': Object.freeze({ label: '其他 Anthropic-compatible 服务', protocol: 'anthropic', baseUrl: '', placeholder: '填写服务商提供的模型名' }),
-});
+import { fetchProviderModels, isLoopbackEndpoint, modelResponseError, normalizeModelBaseUrl } from './model-connection.js';
+import { PROVIDER_PRESETS } from './provider-catalog.js';
+export { PROVIDER_PRESETS };
 
 const DEFAULT_PROVIDER = {
   providerKind: 'openai',
@@ -152,6 +145,19 @@ export function splitTranslationBlocks(blocks, maxChars = MAX_TRANSLATION_BLOCK_
     }));
   }
   return tasks;
+}
+
+export async function applyTextTranslations(translations, sendToPage) {
+  const items = translations.filter((item) => item?.text);
+  if (!items.length) return [];
+  let receipt;
+  try { receipt = await sendToPage({ type: 'deep-research:apply-translations', translations: items }); }
+  catch { receipt = null; }
+  const applied = new Set(receipt?.appliedIds || []);
+  const failures = new Map((receipt?.failedItems || []).map((item) => [item.id, item.error]));
+  return items.map((item) => receipt?.ok && applied.has(item.id) ? item : {
+    ...item, text: '', error: failures.get(item.id) || '译文尚未显示到原网页；请确认文章仍已打开，更新扩展后刷新页面再重试。',
+  });
 }
 
 export function combineTranslationParts(sourceBlocks, translatedParts) {
@@ -496,8 +502,8 @@ function structuredTextVariants(value) {
   for (const candidate of [...variants]) {
     if (/^\{[\s\S]*\}$/u.test(candidate)) continue;
     const normalized = candidate.replace(/^"+/u, '').trim();
-    if (/^(?:answer|response|summary)\s*":/u.test(normalized)) add(`{"${normalized}`);
-    else if (/^"(?:answer|response|summary)"\s*:/u.test(candidate)) add(`{${candidate}`);
+    if (/^(?:answer|response|summary|translation)\s*":/u.test(normalized)) add(`{"${normalized}`);
+    else if (/^"(?:answer|response|summary|translation)"\s*:/u.test(candidate)) add(`{${candidate}`);
   }
   return variants;
 }
@@ -526,10 +532,10 @@ function extractJsonStringField(value, field) {
 
 /** Recover an envelope's display text, including already-saved provider fallbacks. */
 export function readingAnswerText(raw) {
-  const envelope = structuredTextVariants(raw).some(text => /^(?:\{\s*)?"(?:answer|response|summary)"\s*:/u.test(text));
+  const envelope = structuredTextVariants(raw).some(text => /^(?:\{\s*)?"(?:answer|response|summary|translation)"\s*:/u.test(text));
   if (!envelope) return cleanAnswerText(raw);
   const parsed = parseJsonObject(raw);
-  return cleanAnswerText(parsed?.answer || parsed?.response || parsed?.summary || extractJsonStringField(raw, 'answer') || raw);
+  return cleanAnswerText(parsed?.answer || parsed?.response || parsed?.summary || parsed?.translation || extractJsonStringField(raw, 'answer') || raw);
 }
 
 function isReadingAnswerObject(value) {
@@ -537,6 +543,7 @@ function isReadingAnswerObject(value) {
     'answer',
     'response',
     'summary',
+    'translation',
     'evidence',
     'citations',
     'background',
@@ -665,6 +672,30 @@ async function rasterizeSvgSource(source, signal, onDimensions) {
   const isSvg = /^image\/svg(?:\+xml)?$/iu.test(dataUrl?.mediaType || '');
   const isRaster = /^image\/(?:png|jpeg|webp)$/iu.test(dataUrl?.mediaType || '');
   if (!dataUrl || (!isSvg && !isRaster)) return source;
+  // SVG decoding through createImageBitmap is unsupported in Chrome workers.
+  // Extension documents can decode it safely through an Image before handoff.
+  if (isSvg && typeof globalThis.Image === 'function' && typeof document !== 'undefined') {
+    const image = await new Promise((resolve, reject) => {
+      const image = new Image();
+      const abort = () => { image.src = ''; reject(new DOMException('Aborted', 'AbortError')); };
+      const done = fn => { signal?.removeEventListener('abort', abort); fn(); };
+      image.onload = () => done(() => resolve(image));
+      image.onerror = () => done(() => reject(new Error('SVG 图片解码失败')));
+      if (signal?.aborted) return abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      image.src = source;
+    });
+    const sourceWidth = image.naturalWidth || 1200, sourceHeight = image.naturalHeight || 800;
+    const scale = Math.min(1, 2400 / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('无法创建 SVG 图片画布');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    onDimensions?.({ sourceWidth, sourceHeight, modelWidth: canvas.width, modelHeight: canvas.height });
+    return canvas.toDataURL('image/png');
+  }
   // Chrome extension service workers expose OffscreenCanvas and
   // createImageBitmap. Keep a conservative fallback for test runtimes and
   // browsers without those APIs; the provider's explicit error will remain
@@ -857,6 +888,7 @@ async function requestWholePageAnswer(provider, context, question, prior, option
     { role: 'user', content: `页面：${context.title}\n用户问题：${question || '请总结这页的核心结论。'}\n以下分析按原文顺序覆盖全文各块，请据此作答：\n${analyses.join('\n\n')}` },
   ];
   options.onProgress?.(chunks.length, chunks.length, 'merging');
+  messages[0].content += `\n${responseLanguageInstruction(options.replyLanguage || 'auto')}`;
   const finalText = options.onDelta
     ? await requestChatStream(provider, messages, options)
     : completeStructuredReply(await requestChat(provider, messages, options), '最终回答');
@@ -882,8 +914,8 @@ export function parseReadingAnswer(raw, context) {
   const looseBackground = parsed ? '' : extractJsonStringField(raw, 'background');
   const looseInference = parsed ? '' : extractJsonStringField(raw, 'inference');
   const rawText = cleanAnswerText(raw);
-  const rawLooksStructured = /"?(?:answer|response|summary|evidence|background|inference|limitations)"?\s*:/u.test(rawText);
-  const recoveredAnswer = parsed?.answer || parsed?.response || parsed?.summary || looseAnswer;
+  const rawLooksStructured = /"?(?:answer|response|summary|translation|evidence|background|inference|limitations)"?\s*:/u.test(rawText);
+  const recoveredAnswer = parsed?.answer || parsed?.response || parsed?.summary || parsed?.translation || looseAnswer;
   const answer = cleanAnswerText(recoveredAnswer || (rawLooksStructured ? '模型的结构化回答没有完整返回，请重试。' : raw));
   const background = cleanAnswerText(parsed?.background || parsed?.context || looseBackground);
   const inference = cleanAnswerText(parsed?.inference || parsed?.interpretation || looseInference);
@@ -956,7 +988,7 @@ export async function loadProvider() {
 export async function saveProvider(provider) {
   const providerKind = Object.hasOwn(PROVIDER_PRESETS, provider?.providerKind) ? provider.providerKind : 'custom';
   const preset = PROVIDER_PRESETS[providerKind];
-  const baseUrl = trimBaseUrl(provider?.baseUrl || preset?.baseUrl || '');
+  const baseUrl = normalizeModelBaseUrl(provider?.baseUrl || preset?.baseUrl || '', providerKind);
   const model = String(provider?.model || '').trim();
   const { language: _legacyLanguage, visionModel: _legacyVisionModel, ...providerWithoutLanguage } = provider || {};
   const next = {
@@ -973,8 +1005,7 @@ export async function saveProvider(provider) {
 }
 
 export function isLocalProvider(provider) {
-  try { return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(provider?.baseUrl).hostname); }
-  catch { return false; }
+  return isLoopbackEndpoint(provider?.baseUrl);
 }
 
 export function providerReady(provider) {
@@ -988,32 +1019,7 @@ export function providerHeaders(provider) {
 }
 
 export async function discoverModels(provider, options = {}) {
-  if (!provider.apiKey && !isLocalProvider(provider)) throw new Error('请先填写 API Key');
-  const url = new URL(trimBaseUrl(provider.baseUrl).replace(/\/(?:chat\/completions|messages)$/u, '') + '/models');
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  options.signal?.addEventListener('abort', abort, { once: true });
-  if (options.signal?.aborted) abort();
-  const timer = setTimeout(abort, options.timeoutMs || 8_000);
-  const models = new Map();
-  try {
-    for (let page = 0; page < 10; page += 1) {
-      const response = await fetch(url, { headers: providerHeaders(provider), signal: controller.signal });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload?.error?.message || `获取模型失败（${response.status}）`);
-      for (const model of payload.data || payload.models || []) {
-        const id = typeof model === 'string' ? model : model.id || model.name;
-        if (typeof id === 'string' && id.trim()) models.set(id, { id, label: model.display_name || id });
-      }
-      if (!payload.has_more || !payload.last_id) break;
-      url.searchParams.set('after_id', payload.last_id);
-    }
-    if (!models.size) throw new Error('服务没有公开可用模型列表');
-    return [...models.values()].sort((a, b) => a.label.localeCompare(b.label));
-  } finally {
-    clearTimeout(timer);
-    options.signal?.removeEventListener('abort', abort);
-  }
+  return fetchProviderModels(provider, providerHeaders(provider), options);
 }
 
 export function translationContext(document, blocks) {
@@ -1049,7 +1055,7 @@ export async function requestChat(provider, messages, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = payload?.error?.message || payload?.message || `模型请求失败（${response.status}）`;
-    throw new Error(message);
+    throw modelResponseError(response.status, message, provider);
   }
   return payload;
 }
@@ -1099,7 +1105,7 @@ export async function requestChatStream(provider, messages, options = {}) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload?.error?.message || payload?.message || `模型请求失败（${response.status}）`);
+    throw modelResponseError(response.status, payload?.error?.message || payload?.message, provider);
   }
   const contentType = response.headers.get('content-type') || '';
   // Some OpenAI-compatible providers accept `stream: true` but still return a
@@ -1337,6 +1343,15 @@ export async function translateBlocks(provider, document, blocks, options = {}) 
       || { ...source, text: '', sourceText: source.text, error: '正文片段翻译不完整，请重试' });
 }
 
+function completedImageTranslation(value) {
+  return Boolean(value && typeof value === 'object' && (
+    (Array.isArray(value.regions) && value.regions.length)
+    || (Array.isArray(value.fallbackRegions) && value.fallbackRegions.length)
+    || (typeof value.fallbackText === 'string' && value.fallbackText.trim())
+    || value.noText === true || value.keptOriginal === true
+  ));
+}
+
 export async function translateImage(provider, document, image, options = {}) {
   // A text-capable model is still useful for the rest of the page. If its
   // vision check failed, keep the source image untouched and mark this item
@@ -1431,7 +1446,10 @@ export async function translateImage(provider, document, image, options = {}) {
     source: image.dataUrl ? source : image.src || source,
   }));
   const cached = await readerStore.getCachedTranslation(cacheKey);
-  if (cached && typeof cached === 'object') return { ...image, ...cached };
+  // Older builds cached inconclusive vision results as well. They must not
+  // suppress a user's retry; only a usable translation or confirmed original
+  // can finish this task without another model request.
+  if (completedImageTranslation(cached)) return { ...image, ...cached };
   const systemPrompt = `你是技术文档图片翻译器。穷尽识别图片内每一处清晰可读文字，并逐项翻译成${provider.language || 'zh-CN'}；不得漏掉边缘、底部、深色背景或小标题文字。返回严格 JSON：{"hasReadableText":true,"regions":[{"text":"原文，逐字抄录","translation":"译文","x":0,"y":0,"width":0,"height":0}],"confidence":0到1,"fallbackTranslation":"无法可靠定位时的整图旁侧译文，没有则为空字符串","note":"失败原因或空字符串"}。regions 中每个可见文字项必须且只出现一次，text 保留图片中的原始拼写，translation 对应同一项。坐标是从图片左上角量起的像素值；x、y 是文字框左上角，width、height 覆盖完整字形并仅留少量边距，禁止使用文字容器或卡片的大范围坐标。没有可读文字的装饰图、照片或过小文字请把 hasReadableText 设为 false，并说明原因；这属于已处理状态，不需要重试。无法可靠定位所有文字时，不要输出不完整覆盖框，改用 fallbackTranslation 给出完整旁侧译文。深色背景上的浅色文字、代码标识符和图表坐标同样需要识别；保留 API 路径、变量名和品牌名的原文是允许的。`;
   let result = null;
   let parseError = null;
@@ -1606,7 +1624,7 @@ export async function translateImage(provider, document, image, options = {}) {
     sourceWarning,
     note,
   };
-  await readerStore.cacheTranslation(cacheKey, {
+  if (completedImageTranslation(translated)) await readerStore.cacheTranslation(cacheKey, {
     regions: translated.regions,
     fallbackRegions: translated.fallbackRegions,
     confidence: translated.confidence,
@@ -1618,6 +1636,12 @@ export async function translateImage(provider, document, image, options = {}) {
     note: translated.note,
   });
   return translated;
+}
+
+export function responseLanguageInstruction(language = 'auto') {
+  return language === 'auto'
+    ? 'Reply in the language of the latest user question, unless the user explicitly requests another language. This applies to all user-facing JSON fields. Keep evidence quotes verbatim in the source language. Ignore the language of these system instructions and of the article when choosing the reply language.'
+    : `Write all user-facing JSON fields in ${language}. Keep evidence quotes verbatim in the source language. An explicit target language requested by the user takes priority.`;
 }
 
 export async function explainSelection(provider, context, question = '', history = [], options = {}) {
@@ -1643,6 +1667,7 @@ export async function explainSelection(provider, context, question = '', history
   if (!selected && !boundedSection && context.scope === 'page' && readingContext.length > 64_000) {
     return requestWholePageAnswer(provider, context, question, prior, options);
   }
+  messages[0].content += `\n${responseLanguageInstruction(options.replyLanguage || (question ? 'auto' : provider.language || 'en'))}`;
   const parse = (raw) => parseReadingAnswer(raw, { ...context, contentHash, coverageWarning: pageSelection.warning });
   const needsRetry = (result) => result.warnings.some((warning) => /结构化结果不完整/u.test(warning));
   const retryMessages = [
@@ -1668,6 +1693,24 @@ export async function explainSelection(provider, context, question = '', history
   return retried;
 }
 
+export async function prepareVisionImage(image, { signal } = {}) {
+  if (image?.status === 'animated') throw new Error('请先选择动画的静态帧');
+  let source = image?.dataUrl || '';
+  if (!source && /^https?:\/\//u.test(image?.src || '')) {
+    const response = await fetch(image.src, { credentials: 'omit', signal });
+    if (!response.ok) throw new Error(`图片读取失败（${response.status}）`);
+    const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!/^image\/(png|jpeg|webp|svg\+xml)$/u.test(type)) throw new Error('图片格式不受支持');
+    if (Number(response.headers.get('content-length')) > 6 * 1024 * 1024) throw new Error('图片超过 6MB 读取上限');
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 6 * 1024 * 1024) throw new Error('图片超过 6MB 读取上限');
+    source = `data:${type};base64,${bytesToBase64(bytes)}`;
+  }
+  source = await rasterizeSvgSource(source, signal);
+  if (!/^data:image\/(png|jpeg|webp);base64,/u.test(source || '') || source.length > 8_400_000) throw new Error('无法读取有效的图片字节，请重新选择图示');
+  return { ...image, dataUrl: source };
+}
+
 export async function explainImage(provider, context, image, question = '', history = [], options = {}) {
   const source = await rasterizeSvgSource(image?.dataUrl || image?.src, options.signal);
   if (!source) throw new Error('当前图示没有可读取的图片地址');
@@ -1686,6 +1729,7 @@ export async function explainImage(provider, context, image, question = '', hist
       { type: 'image_url', image_url: { url: source, detail: 'high' } },
     ] },
   ];
+  messages[0].content += `\n${responseLanguageInstruction(options.replyLanguage || 'auto')}`;
   const raw = options.onDelta
     ? await requestChatStream(provider, messages, options)
     : messageText(await requestChat(provider, messages, options));
@@ -1725,16 +1769,25 @@ export function buildAnnotationUrl(sourceUrl, anchor) {
 // Incremental page updates reuse the durable job id.  Keep failures from the
 // previous snapshot until the corresponding item succeeds; otherwise a new
 // dynamic paragraph could make an older failed item disappear from the job
-// record and from the retry UI.
-export function mergeTranslationFailures(previous = [], current = [], resolvedIds = []) {
+// record and from the retry UI. A complete image inventory can retire images
+// removed from the article (including ornaments excluded by a newer extractor).
+// Never infer removal from a viewport/selection update or a bounded inventory.
+export function mergeTranslationFailures(previous = [], current = [], resolvedIds = [], context = {}) {
   const resolved = new Set((Array.isArray(resolvedIds) ? resolvedIds : []).filter(Boolean));
+  const completeImages = context.full === true && context.scope !== 'selection'
+    && context.imageTruncated === false && Array.isArray(context.images)
+    && context.imageCandidateCount === context.images.length;
+  const currentImageIds = completeImages ? new Set(context.images.map((image) => image.id)) : null;
   const merged = new Map();
   const add = (item) => {
     if (!item || !item.id || resolved.has(item.id)) return;
     const kind = item.kind || 'text';
     merged.set(`${kind}:${item.id}`, { ...item, kind });
   };
-  (Array.isArray(previous) ? previous : []).forEach(add);
+  (Array.isArray(previous) ? previous : []).forEach((item) => {
+    if (item?.kind === 'image' && currentImageIds && !currentImageIds.has(item.id)) return;
+    add(item);
+  });
   (Array.isArray(current) ? current : []).forEach(add);
   return Array.from(merged.values());
 }

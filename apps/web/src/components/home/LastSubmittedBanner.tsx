@@ -6,8 +6,12 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Rocket, X } from 'lucide-react';
+import Box from '@mui/material/Box';
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 
-import { Button } from '@/components/ui/button';
+import { AppButton, AppIconButton } from '@/components/material/AppButton';
 import {
   type LastSubmitted,
   clearLastSubmitted,
@@ -24,29 +28,35 @@ export function LastSubmittedBanner() {
   if (!entry) return null;
 
   return (
-    <div
+    <Paper
       role="status"
-      className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-3 py-2 text-sm"
+      variant="outlined"
+      sx={{
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.md,
+        borderRadius: tokens['radius-small'], px: space.md, py: space.sm,
+        bgcolor: 'background.paper', fontSize: tokens['type-body'], lineHeight: tokens['line-height-body'],
+      }}
     >
-      <Rocket className="size-4 shrink-0 text-muted-foreground" />
-      <span className="flex-1 text-muted-foreground">
-        刚提交的:<strong className="font-medium text-foreground">{entry.topic}</strong>
-      </span>
-      <Button asChild size="xs" variant="outline">
-        <Link href={`/ai-research/${entry.jobId}`}>查看进度</Link>
-      </Button>
-      <Button
+      <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0, color: 'text.secondary' }}>
+        <Rocket aria-hidden="true" size={16} color="currentColor" />
+      </Box>
+      <Typography variant="body2" color="text.secondary" sx={{ minWidth: 0, flex: 1 }}>
+        刚提交的:<Box component="strong" sx={{ ml: space.xs, fontWeight: 500, color: 'text.primary', overflowWrap: 'anywhere' }}>{entry.topic}</Box>
+      </Typography>
+      <AppButton component={Link} href={`/ai-research/${entry.jobId}`} size="small" variant="outlined">
+        查看进度
+      </AppButton>
+      <AppIconButton
         type="button"
-        variant="ghost"
-        size="icon-sm"
+        size="small"
         onClick={() => {
           clearLastSubmitted();
           setEntry(null);
         }}
         aria-label="关闭"
       >
-        <X />
-      </Button>
-    </div>
+        <X aria-hidden="true" />
+      </AppIconButton>
+    </Paper>
   );
 }

@@ -1,9 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import React from 'react';
-import { useEffect, useRef, useState } from 'react';
-import { BookOpen, ChevronDown, ExternalLink, Github, Sparkles, X } from 'lucide-react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { BookOpen, ExternalLink, Github, Sparkles, X } from 'lucide-react';
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import Chip from '@mui/material/Chip';
+import { space, tokens } from '@deep-research/design-system';
+import { AppButton, AppIconButton } from '@/components/material/AppButton';
 
 import { DistilledScorePanel } from './DistilledScorePanel';
 import {
@@ -11,13 +15,13 @@ import {
   externalReaderUrl,
   formatRadarDetailDate,
   radarSummaryParts,
-  ReaderSourcePrompt,
   type ExternalReadingDetail,
 } from './RadarExternalReadingLanding';
 import { formatRadarContentKind, formatSourceType } from '@/lib/radar/source-labels';
-import { TIER_LABELS, tierClasses } from '@/components/domain/ScoreBar';
-import { cn } from '@/lib/utils';
+import { TIER_LABELS, readingTierColor } from '@/components/domain/ScoreBar';
 import { zreadRepositoryUrl } from './radar-repository';
+import { RadarSourceChip } from './RadarSourceChip';
+import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -38,8 +42,76 @@ export function RadarPreviewPanel({
   className?: string;
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
-  const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const scrollPort = panel?.closest<HTMLElement>('#main-content');
+    // The mobile drawer is already bounded by its fixed viewport container.
+    if (!panel || !scrollPort) return;
+    let frame = 0;
+    let revealControls = true;
+    const update = () => {
+      frame = 0;
+      if (!panel.getClientRects().length) return;
+      const viewport = window.visualViewport;
+      const portBounds = scrollPort.getBoundingClientRect();
+      const bottom = Math.min(
+        (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
+        portBounds.bottom,
+      );
+      const panelStyle = getComputedStyle(panel);
+      const bodyStyle = scrollContainerRef.current ? getComputedStyle(scrollContainerRef.current) : null;
+      const spacing = Number.parseFloat(panelStyle.getPropertyValue('--dr-space-4')) || 16;
+      const gap = Math.max(spacing, Number.parseFloat(getComputedStyle(scrollPort).paddingBottom) || 0);
+      const available = () => Math.max(0, Math.floor(bottom - Math.max(panel.getBoundingClientRect().top, portBounds.top) - gap));
+      const controlsHeight = (panel.querySelector<HTMLElement>('header')?.offsetHeight ?? 0)
+        + (panel.querySelector<HTMLElement>('footer')?.offsetHeight ?? 0)
+        + (Number.parseFloat(bodyStyle?.paddingTop ?? '') || 0)
+        + (Number.parseFloat(bodyStyle?.paddingBottom ?? '') || 0)
+        + (Number.parseFloat(panelStyle.borderTopWidth) || 0)
+        + (Number.parseFloat(panelStyle.borderBottomWidth) || 0);
+      if (available() < controlsHeight) {
+        // In a very short window, move only enough to fit the controls and a
+        // small reading area; do not force the user to the end of the list.
+        const minimum = Math.min(controlsHeight + (revealControls ? spacing * 4 : 0), bottom - portBounds.top - gap);
+        scrollPort.scrollTop += Math.max(0, minimum - available());
+      }
+      revealControls = false;
+      const height = `${available()}px`;
+      if (panel.style.getPropertyValue('--radar-preview-available-height') !== height) {
+        panel.style.setProperty('--radar-preview-available-height', height);
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    const resize = () => {
+      revealControls = true;
+      schedule();
+    };
+    update();
+    const observer = new ResizeObserver(entries => {
+      if (entries.some(entry => entry.target === scrollPort)) revealControls = true;
+      schedule();
+    });
+    observer.observe(scrollPort);
+    observer.observe(panel);
+    for (const controls of panel.querySelectorAll(':scope > header, :scope > footer')) observer.observe(controls);
+    window.addEventListener('resize', resize);
+    scrollPort.addEventListener('scroll', schedule, { passive: true });
+    window.visualViewport?.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('scroll', schedule);
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', resize);
+      scrollPort.removeEventListener('scroll', schedule);
+      window.visualViewport?.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('scroll', schedule);
+    };
+  }, []);
 
   useEffect(() => {
     setPlatformOrigin(window.location.origin);
@@ -56,7 +128,6 @@ export function RadarPreviewPanel({
   const { lead, supportingExcerpt } = radarSummaryParts(detail);
   const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
   const tierLabel = tier ? (TIER_LABELS[tier] ?? tier) : '待判断';
-  const tierVisual = tierClasses(tier ?? 'collection');
   const tags = cleanRadarTags(detail.tags);
   const sourceUrlAvailable = isHttpUrl(detail.url);
   const zreadUrl = detail.originalKind === 'github_repo'
@@ -64,144 +135,71 @@ export function RadarPreviewPanel({
     : null;
   const readerUrl = externalReaderUrl(detail.url, detail.id, platformOrigin);
   const openSource = () => {
-    setSourcePromptOpen(false);
-    window.open(readerUrl, '_blank', 'noopener,noreferrer');
+    window.location.assign(readerUrl);
   };
 
   return (
-    <aside
-      className={cn('flex min-h-0 min-w-0 flex-col overflow-hidden border border-[var(--ink-rule)] bg-[var(--ink-page)] font-sans shadow-sm max-h-[90dvh] lg:max-h-[calc(100dvh-8rem)]', className)}
-      aria-label="文章概览"
-    >
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--ink-rule)] px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2 text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
-          <Sparkles className="size-3 shrink-0" aria-hidden />
-          <span>文章概览</span>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex size-11 shrink-0 items-center justify-center text-[var(--ink-muted)] transition-colors hover:bg-[var(--ink-surface)] hover:text-[var(--ink-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:size-7"
-          aria-label="关闭预览"
-          title="关闭预览"
-        >
-          <X className="size-4" aria-hidden />
-        </button>
-      </header>
-
-      <div ref={scrollContainerRef} className="min-h-0 overflow-y-auto px-4 py-4 sm:px-5">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold text-[var(--ink-muted)]">
-          <span>{sourceName}</span>
-          <span aria-hidden className="text-[var(--ink-faint)]">·</span>
-          <span>{contentLabel.short}</span>
-          {publishedLabel ? (
-            <>
-              <span aria-hidden className="text-[var(--ink-faint)]">·</span>
-              <span>发布 {publishedLabel}</span>
-            </>
-          ) : null}
-        </div>
-
-        <h2 className="mt-3 break-words font-serif text-xl font-semibold leading-[1.15] text-[var(--ink-text)] [overflow-wrap:anywhere]">
-          {detail.title}
-        </h2>
-
-        <section className="mt-5 border-l-2 border-[var(--ink-accent)] pl-3" aria-labelledby="radar-preview-summary">
-          <p id="radar-preview-summary" className="text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
-            AI 摘要
-          </p>
-          <p className="mt-1 text-xs leading-5 text-[var(--ink-faint)]">
+    <Box ref={panelRef} component="aside" data-radar-knowledge-id={detail.id} className={className} aria-label="文章概览" sx={{
+      display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden',
+      overflowWrap: 'anywhere',
+      border: 1, borderColor: 'divider', borderRadius: tokens['radius-medium'], bgcolor: 'background.paper',
+      maxHeight: { xs: '90dvh', lg: 'var(--radar-preview-available-height, calc(100dvh - 8rem))' },
+    }}>
+      <Box component="header" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: space.md, borderBottom: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0 }}>
+        <Typography variant="control" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: space.sm }}>
+          <Sparkles size={16} aria-hidden />文章概览
+        </Typography>
+        <AppIconButton type="button" onClick={onClose} aria-label="关闭预览" title="关闭预览"><X size={18} aria-hidden /></AppIconButton>
+      </Box>
+      <Box ref={scrollContainerRef} data-radar-preview-body sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overscrollBehaviorY: 'contain', padding: space.lg }}>
+        <Typography component="div" variant="metadata" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', columnGap: space.sm, rowGap: space.xs }}>
+          <RadarSourceChip sourceType={detail.sourceType} sourceName={detail.sourceName} label={sourceName} /><span aria-hidden>·</span><span>{contentLabel.short}</span>
+          {publishedLabel ? <><span aria-hidden>·</span><span>发布 {publishedLabel}</span></> : null}
+        </Typography>
+        <Typography component="h2" variant="panelTitle" sx={{ marginTop: space.md, overflowWrap: 'anywhere' }}>{detail.title}</Typography>
+        <Box component="section" aria-labelledby="radar-preview-summary" sx={{ marginTop: space.section, borderLeft: 2, borderColor: 'primary.main', paddingLeft: space.md }}>
+          <Typography component="h3" id="radar-preview-summary" variant="fieldTitle">AI 摘要</Typography>
+          <Typography component="p" variant="metadata" color="text.secondary" sx={{ marginTop: space.xs }}>
             同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
-          </p>
-          <p className="mt-2 whitespace-pre-line font-serif text-base leading-6 text-[var(--ink-text)] sm:text-sm sm:leading-[1.55]">{lead}</p>
+          </Typography>
+          <Typography component="p" variant="reading" sx={{ marginTop: space.sm, whiteSpace: 'pre-line' }}>{lead}</Typography>
           {supportingExcerpt ? (
-            <div className="mt-3 border-t border-[var(--ink-rule)] pt-2.5">
-              <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-muted)]">
-                原文补充
-              </p>
-              <p className="mt-1.5 line-clamp-4 whitespace-pre-line font-serif text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.55]">
-                {supportingExcerpt}
-              </p>
-            </div>
+            <Box sx={{ marginTop: space.md, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
+              <Typography component="h3" variant="fieldTitle">原文补充</Typography>
+              <Typography component="p" variant="reading" color="text.secondary" sx={{ marginTop: space.sm, display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-line' }}>{supportingExcerpt}</Typography>
+            </Box>
           ) : null}
-        </section>
-
+        </Box>
         {detail.selectionReason?.trim() ? (
-          <section className="mt-5 border-t border-[var(--ink-rule)] pt-3.5">
-            <p className="text-xs font-extrabold uppercase tracking-[0.12em] text-[var(--ink-accent)]">
-              为什么值得看
-            </p>
-            <p className="mt-2 text-base leading-6 text-[var(--ink-muted)] sm:text-sm sm:leading-[1.55]">{detail.selectionReason.trim()}</p>
-          </section>
+          <Box component="section" sx={{ marginTop: space.section, paddingTop: space.lg, borderTop: 1, borderColor: 'divider' }}>
+            <Typography component="h3" variant="fieldTitle">为什么值得看</Typography>
+            <Typography component="p" variant="reading" color="text.secondary" sx={{ marginTop: space.sm }}>{detail.selectionReason.trim()}</Typography>
+          </Box>
         ) : null}
-
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--ink-rule)] pt-3">
-          <span className={cn('inline-flex min-h-6 items-center border px-2 text-xs font-bold', tierVisual.border, tierVisual.text)}>
-            {tierLabel}
-          </span>
-          {tags.length ? (
-            <div className="flex flex-wrap gap-1.5">
-              {tags.map((tag) => (
-                <span key={tag} className="border border-[var(--ink-rule)] px-1.5 py-0.5 text-xs text-[var(--ink-muted)]">
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
+          <Chip size="small" variant="outlined" label={tierLabel} sx={{ color: readingTierColor(tier), borderColor: 'currentColor' }} />
+          {tags.map(tag => <Chip key={tag} size="small" variant="outlined" label={`#${tag}`} />)}
+        </Box>
+        <PreviousJudgments radarSummaryId={detail.id} enabled={Boolean(detail.isAuthenticated)} />
         {detail.distilledScore ? (
-          <details className="group mt-4 border-t border-[var(--ink-rule)] pt-3">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-bold text-[var(--ink-muted)] hover:text-[var(--ink-accent)] [&::-webkit-details-marker]:hidden">
-              <span>查看评分依据</span>
-              <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
-            </summary>
-            <div className="pt-3">
-              <DistilledScorePanel score={detail.distilledScore} effectiveTier={tier} embedded />
-            </div>
-          </details>
+          <Box component="details" sx={{ marginTop: space.lg, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
+            <Typography component="summary" variant="control" sx={{ cursor: 'pointer', color: 'text.secondary' }}>查看评分依据</Typography>
+            <Box sx={{ paddingTop: space.md }}><DistilledScorePanel score={detail.distilledScore} effectiveTier={tier} embedded /></Box>
+          </Box>
         ) : null}
-      </div>
-
-      <footer className="flex shrink-0 flex-wrap gap-2 border-t border-[var(--ink-rule)] bg-[var(--ink-paper)] px-4 py-2.5 sm:px-5">
+      </Box>
+      <Box component="footer" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, borderTop: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0 }}>
+        <RadarKnowledgeActions key={detail.id} detail={detail} />
         {sourceUrlAvailable ? (
-          <button
-            type="button"
-            data-reader-url={readerUrl}
-            onClick={() => setSourcePromptOpen(true)}
-            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 bg-[var(--ink-accent)] px-3 text-xs font-bold text-white transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:min-h-9"
-          >
-            {zreadUrl ? <Github className="size-3.5" aria-hidden /> : <ExternalLink className="size-3.5" aria-hidden />}
-            {zreadUrl ? '打开 GitHub' : '打开原文'}
-          </button>
+          <AppButton type="button" variant="contained" data-reader-launch-source={readerUrl} onClick={openSource} sx={{ flex: '1 0 auto' }}>
+            {zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}{zreadUrl ? '打开 GitHub' : '打开原文'}
+          </AppButton>
         ) : null}
         {zreadUrl ? (
-          <a
-            href={zreadUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:min-h-9"
-          >
-            <BookOpen className="size-3.5" aria-hidden />
-            打开 Zread
-          </a>
+          <AppButton component="a" variant="outlined" href={zreadUrl} target="_blank" rel="noopener noreferrer" sx={{ flex: '1 0 auto' }}><BookOpen aria-hidden />打开 Zread</AppButton>
         ) : null}
-        <Link
-          href={`/ai-research?seed=${encodeURIComponent(detail.id)}`}
-          prefetch={false}
-          className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 border border-[var(--ink-rule)] px-3 text-xs font-bold text-[var(--ink-text)] transition-colors hover:border-[var(--ink-accent)] hover:text-[var(--ink-accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink-accent)]/40 lg:min-h-9"
-        >
-          <Sparkles className="size-3.5" aria-hidden />
-          深入调研
-        </Link>
-      </footer>
-      {sourcePromptOpen ? (
-        <ReaderSourcePrompt
-          readerUrl={readerUrl}
-          onClose={() => setSourcePromptOpen(false)}
-          onOpen={openSource}
-        />
-      ) : null}
-    </aside>
+        <AppButton component={Link} href={`/ai-research?seed=${encodeURIComponent(detail.id)}`} prefetch={false} variant="outlined" sx={{ flex: '1 0 auto' }}><Sparkles aria-hidden />深入调研</AppButton>
+      </Box>
+    </Box>
   );
 }

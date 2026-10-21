@@ -1,10 +1,17 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import React, { useEffect, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
+import { AppButton } from '@/components/material/AppButton';
 import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
@@ -100,132 +107,125 @@ export function PasswordAuthForms({
     }
   }
 
-  return (
-    <section className="mt-6 rounded-lg border border-border bg-card p-5 text-left">
-      <div className="flex gap-2 border-b border-border pb-3">
-        <button
-          type="button"
-          className={mode === 'signin' ? 'font-medium text-foreground' : 'text-muted-foreground'}
-          onClick={() => {
-            setMode('signin');
-            setError(null);
-            setNotice(null);
-          }}
-        >
-          邮箱密码登录
-        </button>
-        <span className="text-muted-foreground">/</span>
-        <button
-          type="button"
-          className={mode === 'register' ? 'font-medium text-foreground' : 'text-muted-foreground'}
-          onClick={() => {
-            setMode('register');
-            setError(null);
-            setNotice(null);
-          }}
-        >
-          注册账号
-        </button>
-      </div>
+  function changeMode(nextMode: Mode) {
+    setMode(nextMode);
+    setError(null);
+    setNotice(null);
+  }
 
-      <form onSubmit={submit} className="mt-4 space-y-4">
-        {mode === 'register' && betaMode ? (
-          <p className="border-l-2 border-primary/60 pl-3 text-xs leading-5 text-muted-foreground">
-            当前为 Beta 测试，仅限管理员白名单中的邮箱注册。
-          </p>
-        ) : null}
-        {mode === 'register' ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="name">名称</Label>
-            <Input
-              id="name"
-              name="name"
-              autoComplete="name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={80}
-              placeholder="可选"
-              disabled={pending}
-            />
-          </div>
-        ) : null}
-        <div className="space-y-1.5">
-          <Label htmlFor="email">邮箱</Label>
-          <Input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            required
-            disabled={pending}
-          />
-        </div>
-        {mode === 'register' && emailVerification ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="verificationCode">邮箱验证码</Label>
-            <div className="flex gap-2">
-              <Input
-                id="verificationCode"
-                name="verificationCode"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{6}"
-                maxLength={6}
-                value={verificationCode}
-                onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="6 位验证码"
-                required
+  return (
+      <Paper component="section" variant="outlined" sx={{ padding: { xs: space.md, sm: space.lg }, textAlign: 'left' }}>
+        <Tabs
+          value={mode}
+          onChange={(_event, value: Mode) => changeMode(value)}
+          variant="fullWidth"
+          aria-label="邮箱登录或注册"
+          sx={{ borderBottom: 1, borderColor: 'divider' }}
+        >
+          <Tab id="auth-signin-tab" aria-controls="auth-form-panel" value="signin" label="邮箱密码登录" />
+          <Tab id="auth-register-tab" aria-controls="auth-form-panel" value="register" label="注册账号" />
+        </Tabs>
+
+        <Box role="tabpanel" id="auth-form-panel" aria-labelledby={`auth-${mode}-tab`} sx={{ paddingTop: space.lg }}>
+          <Stack component="form" onSubmit={submit} sx={{ gap: space.md }}>
+            {mode === 'register' && betaMode ? (
+              <Typography component="p" variant="metadata" color="text.secondary" sx={{ borderLeft: 2, borderColor: 'primary.main', paddingLeft: space.sm }}>
+                当前为 Beta 测试，仅限管理员白名单中的邮箱注册。
+              </Typography>
+            ) : null}
+            {mode === 'register' ? (
+              <TextField
+                fullWidth
+                id="name"
+                name="name"
+                label="名称"
+                autoComplete="name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                slotProps={{ htmlInput: { maxLength: 80 } }}
+                placeholder="可选"
                 disabled={pending}
               />
-              <Button
-                type="button"
-                variant="outline"
-                className="shrink-0"
-                disabled={pending || sendingCode || codeCooldown > 0 || !email.trim()}
-                onClick={sendVerificationCode}
+            ) : null}
+            <TextField
+              fullWidth
+              id="email"
+              name="email"
+              type="email"
+              label="邮箱"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+              disabled={pending}
+            />
+            {mode === 'register' && emailVerification ? (
+              <Stack
+                sx={{
+                  flexDirection: { xs: 'column', sm: 'row' },
+                  alignItems: { xs: 'stretch', sm: 'flex-start' },
+                  gap: space.sm,
+                }}
               >
-                {sendingCode ? '发送中…' : codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}
-              </Button>
-            </div>
-            {codeNotice ? <p className="text-xs text-muted-foreground" role="status">{codeNotice}</p> : null}
-          </div>
-        ) : null}
-        <div className="space-y-1.5">
-          <Label htmlFor="password">密码</Label>
-          <Input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            minLength={PASSWORD_MIN_LENGTH}
-            maxLength={PASSWORD_MAX_LENGTH}
-            required
-            disabled={pending}
-          />
-          {mode === 'register' ? (
-            <p className="text-xs text-muted-foreground">
-              至少 {PASSWORD_MIN_LENGTH} 个字符。
-            </p>
-          ) : null}
-        </div>
-        {error ? (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        ) : null}
-        {notice ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {notice}
-          </p>
-        ) : null}
-        <Button type="submit" className="w-full" disabled={pending}>
-          {pending ? '处理中…' : mode === 'register' ? '注册并登录' : '登录'}
-        </Button>
-      </form>
-    </section>
+                <TextField
+                  fullWidth
+                  id="verificationCode"
+                  name="verificationCode"
+                  label="邮箱验证码"
+                  autoComplete="one-time-code"
+                  slotProps={{ htmlInput: { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6 } }}
+                  value={verificationCode}
+                  onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="6 位验证码"
+                  required
+                  disabled={pending}
+                  sx={{ flex: 1, minWidth: 0 }}
+                />
+                <AppButton
+                  type="button"
+                  variant="outlined"
+                  disabled={pending || sendingCode || codeCooldown > 0 || !email.trim()}
+                  onClick={sendVerificationCode}
+                  sx={{ flexShrink: 0, width: { xs: '100%', sm: 'auto' } }}
+                >
+                  {sendingCode ? '发送中…' : codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}
+                </AppButton>
+              </Stack>
+            ) : null}
+            <TextField
+              fullWidth
+              id="password"
+              name="password"
+              type="password"
+              label="密码"
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              slotProps={{ htmlInput: { minLength: PASSWORD_MIN_LENGTH, maxLength: PASSWORD_MAX_LENGTH } }}
+              required
+              disabled={pending}
+            />
+            {codeNotice ? <Typography component="p" variant="metadata" color="text.secondary" role="status">{codeNotice}</Typography> : null}
+            {mode === 'register' ? (
+              <Typography component="p" variant="metadata" color="text.secondary">
+                至少 {PASSWORD_MIN_LENGTH} 个字符。
+              </Typography>
+            ) : null}
+            {error ? (
+              <Alert severity="error" variant="outlined">
+                {error}
+              </Alert>
+            ) : null}
+            {notice ? (
+              <Alert severity="info" variant="outlined" role="status">
+                {notice}
+              </Alert>
+            ) : null}
+            <AppButton type="submit" variant="contained" fullWidth disabled={pending}>
+              {pending ? '处理中…' : mode === 'register' ? '注册并登录' : '登录'}
+            </AppButton>
+          </Stack>
+        </Box>
+    </Paper>
   );
 }

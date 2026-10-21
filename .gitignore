@@ -1,6 +1,7 @@
 # 依赖
 node_modules/
 .pnpm-store/
+/.wxt/
 
 # Next.js
 .next/
@@ -15,6 +16,8 @@ next-env.d.ts
 dist/
 build/
 *.tsbuildinfo
+/Reader-Test-0.2.15/
+/Reader-Test-0.2.22/
 
 # Python（uv）
 .venv/
@@ -48,6 +51,8 @@ apps/web/data/import-tmp/
 infra/data/import-tmp/
 
 # docs 工作区夹子（不进 git，按用户偏好）
+/AGENTS.md
+/CLAUDE.md
 docs/references/
 docs/inputs/
 docs/notes/
@@ -66,8 +71,11 @@ docs/P1_PLAN.md
 docs/E2E_TESTING.md
 docs/DIAGRAMS.md
 docs/PROJECT_STATUS.md
+docs/chrome-web-store/
 docs/WEEK0_DONE.md
 docs/MODULE_MAP.md
+# 内部维护方案（只在本地工作区保存，不进入 GitHub）
+docs/design/web-mui-migration.md
 
 .claude/
 packages/ai-engine/reports/

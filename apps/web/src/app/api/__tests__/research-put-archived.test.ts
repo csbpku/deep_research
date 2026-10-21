@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   reviewRunUpdateMany: vi.fn(),
   auditCreate: vi.fn(),
   transaction: vi.fn(),
+  indexUpsert: vi.fn(),
 }));
 
 vi.mock('@/lib/api-handler', async (importOriginal) => ({
@@ -43,6 +44,7 @@ beforeEach(() => {
   mocks.requireUser.mockResolvedValue({ id: USER_ID, role: 'member' });
   mocks.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb({
     research: { update: mocks.researchUpdate }, researchReviewRun: { updateMany: mocks.reviewRunUpdateMany }, researchAudit: { create: mocks.auditCreate },
+    personalKnowledgeIndexTask: { upsert: mocks.indexUpsert },
   }));
   mocks.researchUpdate.mockResolvedValue({
     id: RESEARCH_ID, type: 'research', status: 'archived', title: 't', body: 'new body', tags: [],
@@ -52,6 +54,15 @@ beforeEach(() => {
 });
 
 describe('PUT /api/researches/[id] on archived research', () => {
+  it('keeps confirmed card text indexed when its idempotency key is not a Reader origin', async () => {
+    mocks.researchFindUnique.mockResolvedValue({
+      ...existing('ai_research', 'draft'), type: 'knowledge',
+      readingSaveKey: '55555555-5555-4555-8555-555555555555',
+    });
+    expect((await put()).status).toBe(200);
+    expect(mocks.researchUpdate.mock.calls[0][0].data.knowledgeIndexText).toContain('new body');
+    expect(mocks.indexUpsert.mock.calls[0][0].create.operation).toBe('upsert');
+  });
   it('lets the owner edit an archived manual research (contract: owner may edit archived)', async () => {
     mocks.researchFindUnique.mockResolvedValue(existing('manual'));
     const res = await put();

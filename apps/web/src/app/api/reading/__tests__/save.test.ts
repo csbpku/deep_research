@@ -12,6 +12,11 @@ const mocks = vi.hoisted(() => ({
   researchUpdateMany: vi.fn(),
   researchFindUnique: vi.fn(),
   researchSourceUpdateMany: vi.fn(),
+  summaryFindUnique: vi.fn(),
+  researchFindMany: vi.fn(),
+  topicCandidateFindMany: vi.fn(),
+  researchTopicUpsert: vi.fn(),
+  lock: vi.fn(),
 }));
 
 vi.mock('../../../../lib/api-handler', () => ({
@@ -20,10 +25,10 @@ vi.mock('../../../../lib/api-handler', () => ({
 }));
 vi.mock('../../../../lib/reading-auth', () => ({ requireReadingUser: mocks.requireReadingUser }));
 vi.mock('../../../../lib/db', () => ({
-  prisma: { $transaction: mocks.transaction, research: { findFirst: mocks.findFirst } },
+  prisma: { $transaction: mocks.transaction, research: { findFirst: mocks.findFirst, findMany: mocks.researchFindMany }, summary: { findUnique: mocks.summaryFindUnique } },
 }));
 
-import { POST, PUT } from '../save/route';
+import { GET, POST, PUT } from '../save/route';
 
 const USER = { id: '11111111-1111-4111-8111-111111111111', email: 'reader@example.com', role: 'member' as const };
 const body = 'A paragraph from the original page.';
@@ -50,12 +55,17 @@ beforeEach(() => {
   mocks.researchCreate.mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', title: 'Docs', status: 'draft', createdAt: new Date() });
   mocks.researchFindFirst.mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', researchSources: [{ id: 'original-source' }] });
   mocks.researchUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.researchFindMany.mockResolvedValue([]);
+  mocks.topicCandidateFindMany.mockResolvedValue([{ topicId: 'topic' }]);
   mocks.researchFindUnique.mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', title: 'Docs', status: 'draft', createdAt: new Date() });
   mocks.transaction.mockImplementation((callback: (tx: unknown) => unknown) => callback({
     research: { create: mocks.researchCreate, findFirst: mocks.researchFindFirst, updateMany: mocks.researchUpdateMany, findUniqueOrThrow: mocks.researchFindUnique },
     researchSource: { create: mocks.researchSourceCreate, updateMany: mocks.researchSourceUpdateMany },
     researchAudit: { create: mocks.researchAuditCreate },
     personalKnowledgeIndexTask: { upsert: mocks.indexTaskUpsert },
+    topicCandidate: { findMany: mocks.topicCandidateFindMany },
+    researchTopic: { upsert: mocks.researchTopicUpsert },
+    $queryRaw: mocks.lock,
   }));
 });
 
@@ -67,6 +77,7 @@ describe('PUT /api/reading/save', () => {
     expect(response.status).toBe(200);
     expect((await response.json()).updated).toBe(true);
     expect(mocks.researchCreate).not.toHaveBeenCalled();
+    expect(mocks.lock).toHaveBeenCalledTimes(1);
     expect(mocks.researchUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ authorId: USER.id, status: 'draft', readingSaveKey: input.idempotencyKey }),
       data: expect.objectContaining({ body: expect.stringContaining('Edited note') }),
@@ -102,9 +113,44 @@ describe('PUT /api/reading/save', () => {
     expect(response.status).toBe(400);
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
+
+  it('preserves an existing radar origin for legacy edits that omit it', async () => {
+    const radarId = '44444444-4444-4444-8444-444444444444';
+    mocks.researchFindFirst.mockResolvedValue({
+      id: 'draft', researchSources: [{ id: 'source', canonicalKey: input.url, sourceRef: { radarSummaryId: radarId } }],
+    });
+    expect((await PUT(request(input, 'PUT') as never)).status).toBe(200);
+    expect(mocks.researchSourceUpdateMany.mock.calls[0][0].data.sourceRef.radarSummaryId).toBe(radarId);
+    expect(mocks.lock.mock.invocationCallOrder[0]).toBeLessThan(mocks.researchFindFirst.mock.invocationCallOrder[0]!);
+  });
 });
 
 describe('POST /api/reading/save', () => {
+  it('inherits the validated radar identity and topics at explicit save', async () => {
+    const radarId = '44444444-4444-4444-8444-444444444444';
+    mocks.summaryFindUnique.mockResolvedValue({
+      id: radarId, url: 'https://example.com/docs', source: 'user', status: 'published',
+      shareSource: { status: 'approved' }, distilledTier: 'deep_read',
+    });
+    const response = await POST(request({ url: 'https://example.com/docs', title: 'Docs', quote: body, note: 'A confirmed judgment', radarSummaryId: radarId }) as never);
+    expect(response.status).toBe(201);
+    expect(mocks.researchSourceCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ sourceRef: expect.objectContaining({ radarSummaryId: radarId }) }),
+    }));
+    expect(mocks.researchTopicUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ topicId: 'topic', relationType: 'auto' }),
+    }));
+  });
+
+  it('rejects a forged radar-to-URL association without writing', async () => {
+    mocks.summaryFindUnique.mockResolvedValue({
+      url: 'https://example.com/other', source: 'user', status: 'published',
+      shareSource: { status: 'approved' },
+    });
+    const response = await POST(request({ url: 'https://example.com/docs', title: 'Docs', quote: body, radarSummaryId: '44444444-4444-4444-8444-444444444444' }) as never);
+    expect(response.status).toBe(400);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
   it('rejects an edited quote while retaining the old anchor', async () => {
     const response = await POST(request({
       url: 'https://example.com/docs',
@@ -161,6 +207,23 @@ describe('POST /api/reading/save', () => {
     expect(create.data.conclusion).toContain('我的笔记');
     expect(mocks.indexTaskUpsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({ operation: 'upsert' }),
+    }));
+  });
+});
+
+describe('GET /api/reading/save', () => {
+  it('requires an authenticated reader before returning previous judgments', async () => {
+    mocks.requireReadingUser.mockResolvedValue(new Response(null, { status: 401 }));
+    const response = await GET(new Request('http://localhost/api/reading/save?url=https://example.com/docs') as never);
+    expect(response.status).toBe(401);
+    expect(mocks.researchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('uses private no-store responses and an owner-filtered query', async () => {
+    const response = await GET(new Request('http://localhost/api/reading/save?url=https://example.com/docs') as never);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(mocks.researchFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ authorId: USER.id, knowledgeIndexText: { not: null } }),
     }));
   });
 });

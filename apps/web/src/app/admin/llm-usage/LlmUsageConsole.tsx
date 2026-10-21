@@ -3,8 +3,29 @@
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  IconButton,
+  InputAdornment,
+  Paper,
+  Skeleton,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
+} from '@mui/material';
 import { AlertTriangle, ArrowLeftRight, CheckCircle2, Clock3, GitBranch, RefreshCw, Search } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import styles from '../admin.module.css';
 
 type UsageItem = {
   id: string;
@@ -56,9 +77,8 @@ type UsageResponse = {
 };
 
 const number = new Intl.NumberFormat('zh-CN');
-
-function token(value: number | null): string { return number.format(value ?? 0); }
-function modelLabel(model: string): string { return model.replace(/^anthropic:/u, '').replace(/^openai:/u, ''); }
+const token = (value: number | null) => number.format(value ?? 0);
+const modelLabel = (model: string) => model.replace(/^anthropic:/u, '').replace(/^openai:/u, '');
 
 export default function LlmUsageConsole() {
   const [days, setDays] = useState(7);
@@ -82,8 +102,27 @@ export default function LlmUsageConsole() {
     });
   }, [attentionOnly, search, usage.data?.items]);
 
-  if (usage.isLoading) return <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[0, 1, 2, 3].map((item) => <div className="h-24 animate-pulse rounded-lg bg-muted" key={item} />)}</div>;
-  if (usage.isError || !usage.data) return <div className="rounded-lg border border-red-500/25 bg-red-500/5 p-4 text-sm text-red-700 dark:text-red-300"><div className="flex items-center gap-2"><AlertTriangle className="size-4" />无法读取 LLM 用量审计</div><button className="mt-3 rounded-md border px-3 py-1.5 text-sm hover:bg-muted" onClick={() => usage.refetch()} type="button">重新读取</button></div>;
+  if (usage.isLoading) {
+    return (
+      <Box className={styles.adminRoot} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', xl: 'repeat(4, 1fr)' }, gap: 2 }}>
+        {[0, 1, 2, 3].map((item) => <Skeleton key={item} variant="rounded" height={100} />)}
+      </Box>
+    );
+  }
+  if (usage.isError || !usage.data) {
+    return (
+      <Alert
+        className={styles.adminRoot}
+        severity="error"
+        action={<Button color="inherit" size="small" onClick={() => void usage.refetch()}>重新读取</Button>}
+      >
+        <Stack sx={{ flexDirection: 'row', gap: 1, alignItems: 'center' }}>
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>无法读取 LLM 用量审计</span>
+        </Stack>
+      </Alert>
+    );
+  }
 
   const { summary, operationBreakdown, modelBreakdown, daily, failureBreakdown } = usage.data;
   const totalTokens = summary.inputTokens + summary.outputTokens;
@@ -97,123 +136,279 @@ export default function LlmUsageConsole() {
     .slice(0, 5);
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="text-lg font-semibold">Token 消耗</h2><p className="mt-1 text-xs text-muted-foreground">按环节统计实际记录的输入与输出 Token。</p></div>
-        <div className="flex items-center gap-1 rounded-md border bg-card p-1">{[1, 7, 30].map((value) => <button className={`rounded px-3 py-1.5 text-xs ${days === value ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-muted'}`} key={value} onClick={() => setDays(value)} type="button">最近 {value} 天</button>)}<button aria-label="刷新" className="ml-1 rounded p-1.5 text-muted-foreground hover:bg-muted" onClick={() => usage.refetch()} type="button"><RefreshCw className="size-3.5" /></button></div>
-      </div>
+    <Stack className={styles.adminRoot} component="section" sx={{ gap: 3 }}>
+      <Stack sx={{ flexDirection: { xs: 'column', sm: 'row' }, gap: 2, alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
+        <Box>
+          <Typography variant="h2">Token 消耗</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            按环节统计实际记录的输入与输出 Token。
+          </Typography>
+        </Box>
+        <Stack sx={{ flexDirection: 'row', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+          <ToggleButtonGroup
+            aria-label="用量时间范围"
+            exclusive
+            size="small"
+            value={days}
+            onChange={(_event, value: number | null) => { if (value !== null) setDays(value); }}
+          >
+            {[1, 7, 30].map((value) => (
+              <ToggleButton key={value} value={value} aria-label={`最近 ${value} 天`}>
+                最近 {value} 天
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+          <IconButton aria-label="刷新用量" title="刷新用量" onClick={() => void usage.refetch()}>
+            <RefreshCw size={17} aria-hidden="true" />
+          </IconButton>
+        </Stack>
+      </Stack>
 
-      <section className="flex flex-col gap-4 rounded-md border border-primary/20 bg-primary/[0.035] p-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h3 className="text-sm font-semibold">运行信号</h3>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            先看异常和降级，再进入按环节与按模型的明细。
-          </p>
-        </div>
-        <div className="grid grid-cols-3 gap-3 text-right">
-          <Signal label="失败率" value={`${failureRate}%`} tone={failureRate > 0 ? 'danger' : 'success'} />
-          <Signal label="降级率" value={`${fallbackRate}%`} tone={fallbackRate > 0 ? 'warning' : 'success'} />
-          <Signal label="已知成本" value={`$${(summary.knownCostCents / 100).toFixed(2)}`} tone="default" />
-        </div>
-      </section>
+      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, bgcolor: 'action.hover' }}>
+        <Stack sx={{ flexDirection: { xs: 'column', sm: 'row' }, gap: 2, alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
+          <Box>
+            <Typography variant="subtitle2">运行信号</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              先看异常和降级，再进入按环节与按模型的明细。
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(80px, 1fr))', gap: { xs: 2, sm: 3 }, textAlign: 'right' }}>
+            <Signal label="失败率" value={`${failureRate}%`} tone={failureRate > 0 ? 'danger' : 'success'} />
+            <Signal label="降级率" value={`${fallbackRate}%`} tone={fallbackRate > 0 ? 'warning' : 'success'} />
+            <Signal label="已知成本" value={`$${(summary.knownCostCents / 100).toFixed(2)}`} tone="default" />
+          </Box>
+        </Stack>
+      </Paper>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><SummaryCard label="总 Token" value={token(totalTokens)} /><SummaryCard label="输入 Token" value={token(summary.inputTokens)} /><SummaryCard label="输出 Token" value={token(summary.outputTokens)} /><SummaryCard label="调用 / 降级" value={`${token(summary.calls)} / ${token(summary.fallbackCount)}`} hint={summary.failureCount > 0 ? `失败 ${token(summary.failureCount)} 次` : '没有失败调用'} /></div>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' }, gap: 2 }}>
+        <SummaryCard label="总 Token" value={token(totalTokens)} />
+        <SummaryCard label="输入 Token" value={token(summary.inputTokens)} />
+        <SummaryCard label="输出 Token" value={token(summary.outputTokens)} />
+        <SummaryCard label="调用 / 降级" value={`${token(summary.calls)} / ${token(summary.fallbackCount)}`} hint={summary.failureCount > 0 ? `失败 ${token(summary.failureCount)} 次` : '没有失败调用'} />
+      </Box>
 
-      <section className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <h3 className="text-sm font-semibold">运行趋势与异常排行</h3>
-          <p className="mt-1 text-xs text-muted-foreground">按天观察 Token 峰值，再定位失败最多的环节和原因。</p>
-        </div>
-        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,1fr)]">
-          <div className="min-w-0 rounded-md bg-muted/25 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h4 className="text-xs font-semibold">Token 趋势</h4>
-                <p className="mt-1 text-xs text-muted-foreground">柱高按当前时间范围内的日总 Token 归一化。</p>
-              </div>
-              <span className="font-mono text-xs tabular-nums text-muted-foreground">{daily.length} 天</span>
-            </div>
+      <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+        <SectionHeading title="运行趋势与异常排行" description="按天观察 Token 峰值，再定位失败最多的环节和原因。" />
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.4fr) minmax(280px, 1fr)' }, gap: 2.5, p: { xs: 2, sm: 2.5 } }}>
+          <Box sx={{ minWidth: 0, borderRadius: 'var(--dr-radius-small)', bgcolor: 'action.hover', p: 2 }}>
+            <Stack sx={{ flexDirection: 'row', gap: 2, alignItems: 'center', justifyContent: 'space-between' }}>
+              <Box>
+                <Typography variant="subtitle2">Token 趋势</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                  柱高按当前时间范围内的日总 Token 归一化。
+                </Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>{daily.length} 天</Typography>
+            </Stack>
             {daily.length > 0 ? (
               <>
-                <div className="mt-4 flex h-28 items-end gap-1 overflow-hidden" aria-label="每日 Token 趋势">
+                <Box aria-label="每日 Token 趋势" role="img" sx={{ mt: 2, display: 'flex', alignItems: 'end', gap: 1, height: 116, overflow: 'hidden' }}>
                   {daily.map((item) => (
-                    <div
+                    <Box
                       key={item.date}
-                      className="group relative flex min-w-0 flex-1 items-end"
                       title={`${formatTrendDate(item.date)} · ${token(item.totalTokens)} Token · 失败 ${item.failureCount} · 降级 ${item.fallbackCount}`}
-                    >
-                      <div
-                        className="w-full min-w-[3px] rounded-t-sm bg-primary/75 transition-colors group-hover:bg-primary"
-                        style={{ height: `${Math.max(4, (item.totalTokens / maxDailyTokens) * 100)}%` }}
-                      />
-                    </div>
+                      sx={{ flex: '1 1 0', minWidth: 4, height: `${Math.max(4, (item.totalTokens / maxDailyTokens) * 100)}%`, bgcolor: 'primary.main', opacity: 0.78, borderRadius: 'var(--dr-radius-xs) var(--dr-radius-xs) 0 0', transition: 'opacity var(--dr-motion-fast)', '&:hover': { opacity: 1 } }}
+                    />
                   ))}
-                </div>
-                <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-                  <span>{formatTrendDate(daily[0].date)}</span>
-                  <span>{formatTrendDate(daily[daily.length - 1].date)}</span>
-                </div>
+                </Box>
+                <Stack sx={{ mt: 1, flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" color="text.secondary">{formatTrendDate(daily[0].date)}</Typography>
+                  <Typography variant="caption" color="text.secondary">{formatTrendDate(daily[daily.length - 1].date)}</Typography>
+                </Stack>
               </>
             ) : (
-              <p className="mt-6 text-xs text-muted-foreground">当前时间范围内没有趋势数据。</p>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 3 }}>当前时间范围内没有趋势数据。</Typography>
             )}
-          </div>
+          </Box>
 
-          <div className="min-w-0 space-y-4">
-            <RankingList
-              title="失败最多的环节"
-              emptyLabel="当前没有失败环节。"
-              items={topFailedOperations.map((item) => ({
-                label: item.operation,
-                value: item.failureCount,
-                total: item.calls,
-                suffix: '次',
-              }))}
+          <Stack sx={{ minWidth: 0, gap: 2.5 }}>
+            <RankingList title="失败最多的环节" emptyLabel="当前没有失败环节。" items={topFailedOperations.map((item) => ({ label: item.operation, value: item.failureCount, total: item.calls, suffix: '次' }))} />
+            <RankingList title="失败原因" emptyLabel="当前没有失败原因。" items={failureBreakdown.slice(0, 5).map((item) => ({ label: item.kind, value: item.count, total: failureBreakdown[0]?.count ?? item.count, suffix: '次' }))} />
+          </Stack>
+        </Box>
+      </Paper>
+
+      <UsageTable title="按环节汇总" description="这里是主要查看入口；每一行对应一个业务步骤。" label="按环节汇总" minWidth={760}>
+        <TableHead><TableRow>
+          <HeaderCell>环节</HeaderCell><HeaderCell align="right">调用次数</HeaderCell><HeaderCell align="right">输入 Token</HeaderCell><HeaderCell align="right">输出 Token</HeaderCell><HeaderCell align="right">总 Token</HeaderCell><HeaderCell align="right">降级</HeaderCell><HeaderCell align="right">失败</HeaderCell>
+        </TableRow></TableHead>
+        <TableBody>
+          {operationBreakdown.map((item) => <TableRow key={item.operation} hover>
+            <DataCell mono>{item.operation}</DataCell><DataCell align="right" mono>{token(item.calls)}</DataCell><DataCell align="right" mono>{token(item.inputTokens)}</DataCell><DataCell align="right" mono>{token(item.outputTokens)}</DataCell><DataCell align="right" mono bold>{token(item.totalTokens)}</DataCell><DataCell align="right" mono>{token(item.fallbackCount)}</DataCell><DataCell align="right" mono>{token(item.failureCount)}</DataCell>
+          </TableRow>)}
+          {operationBreakdown.length === 0 ? <EmptyTableRow colSpan={7}>当前时间范围内没有记录。</EmptyTableRow> : null}
+        </TableBody>
+      </UsageTable>
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, gap: 2 }}>
+        <UsageTable title="按模型汇总" label="按模型汇总">
+          <TableHead><TableRow><HeaderCell>模型</HeaderCell><HeaderCell align="right">输入</HeaderCell><HeaderCell align="right">输出</HeaderCell><HeaderCell align="right">合计</HeaderCell></TableRow></TableHead>
+          <TableBody>
+            {modelBreakdown.map((item) => <TableRow key={item.model} hover>
+              <DataCell mono>{modelLabel(item.model)}</DataCell><DataCell align="right" mono>{token(item.inputTokens)}</DataCell><DataCell align="right" mono>{token(item.outputTokens)}</DataCell><DataCell align="right" mono bold>{token(item.totalTokens)}</DataCell>
+            </TableRow>)}
+            {modelBreakdown.length === 0 ? <EmptyTableRow colSpan={4}>当前时间范围内没有记录。</EmptyTableRow> : null}
+          </TableBody>
+        </UsageTable>
+        <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+          <SectionHeading title="已知成本" />
+          <Box sx={{ p: 2.5 }}>
+            <Typography variant="h2" sx={{ fontVariantNumeric: 'tabular-nums' }}>${(summary.knownCostCents / 100).toFixed(2)}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, maxWidth: 520 }}>
+              只有上游返回价格或主研究引擎提供成本时才会计入；Token 统计不受此限制。
+            </Typography>
+          </Box>
+        </Paper>
+      </Box>
+
+      <UsageTable
+        title="调用明细"
+        description={`显示最新 ${usage.data.items.length} 条记录。`}
+        label="调用明细"
+        minWidth={980}
+        actions={
+          <Stack sx={{ flexDirection: { xs: 'column', sm: 'row' }, gap: 1 }}>
+            <TextField
+              aria-label="搜索环节或模型"
+              size="small"
+              placeholder="搜索环节或模型"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              slotProps={{ input: { startAdornment: <InputAdornment position="start"><Search size={16} /></InputAdornment> } }}
+              sx={{ width: { xs: '100%', sm: 220 } }}
             />
-            <RankingList
-              title="失败原因"
-              emptyLabel="当前没有失败原因。"
-              items={failureBreakdown.slice(0, 5).map((item) => ({
-                label: item.kind,
-                value: item.count,
-                total: failureBreakdown[0]?.count ?? item.count,
-                suffix: '次',
-              }))}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-border bg-card"><div className="border-b border-border px-4 py-3"><h3 className="text-sm font-semibold">按环节汇总</h3><p className="mt-1 text-xs text-muted-foreground">这里是主要查看入口；每一行对应一个业务步骤。</p></div><TableScrollFrame label="按环节汇总"><table className="w-full min-w-[760px] text-left text-sm"><thead className="border-b border-border bg-muted/40 text-xs text-muted-foreground"><tr><th className="sticky left-0 z-10 bg-muted/40 px-4 py-2.5 font-medium">环节</th><th className="px-4 py-2.5 text-right font-medium">调用次数</th><th className="px-4 py-2.5 text-right font-medium">输入 Token</th><th className="px-4 py-2.5 text-right font-medium">输出 Token</th><th className="px-4 py-2.5 text-right font-medium">总 Token</th><th className="px-4 py-2.5 text-right font-medium">降级</th><th className="px-4 py-2.5 text-right font-medium">失败</th></tr></thead><tbody className="divide-y divide-border">{operationBreakdown.map((item) => <tr className="hover:bg-muted/30" key={item.operation}><td className="sticky left-0 z-[1] bg-card px-4 py-3 font-mono text-xs">{item.operation}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.calls)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.inputTokens)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.outputTokens)}</td><td className="px-4 py-3 text-right font-mono font-semibold tabular-nums">{token(item.totalTokens)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.fallbackCount)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.failureCount)}</td></tr>)}{operationBreakdown.length === 0 && <tr><td className="px-4 py-8 text-center text-muted-foreground" colSpan={7}>当前时间范围内没有记录。</td></tr>}</tbody></table></TableScrollFrame></section>
-
-      <div className="grid gap-4 lg:grid-cols-2"><section className="rounded-lg border border-border bg-card"><div className="border-b border-border px-4 py-3"><h3 className="text-sm font-semibold">按模型汇总</h3></div><TableScrollFrame label="按模型汇总"><table className="w-full text-left text-sm"><thead className="border-b border-border bg-muted/40 text-xs text-muted-foreground"><tr><th className="sticky left-0 z-10 bg-muted/40 px-4 py-2.5 font-medium">模型</th><th className="px-4 py-2.5 text-right font-medium">输入</th><th className="px-4 py-2.5 text-right font-medium">输出</th><th className="px-4 py-2.5 text-right font-medium">合计</th></tr></thead><tbody className="divide-y divide-border">{modelBreakdown.map((item) => <tr key={item.model}><td className="sticky left-0 z-[1] bg-card px-4 py-3 font-mono text-xs">{modelLabel(item.model)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.inputTokens)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.outputTokens)}</td><td className="px-4 py-3 text-right font-mono font-semibold tabular-nums">{token(item.totalTokens)}</td></tr>)}</tbody></table></TableScrollFrame></section><section className="rounded-lg border border-border bg-card"><div className="border-b border-border px-4 py-3"><h3 className="text-sm font-semibold">已知成本</h3></div><div className="px-4 py-4"><div className="text-2xl font-semibold tabular-nums">${(summary.knownCostCents / 100).toFixed(2)}</div><p className="mt-1 text-xs leading-5 text-muted-foreground">只有上游返回价格或主研究引擎提供成本时才会计入；Token 统计不受此限制。</p></div></section></div>
-
-      <section className="rounded-lg border border-border bg-card"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold"><Clock3 className="size-4" />调用明细</h3><p className="mt-1 text-xs text-muted-foreground">显示最新 {usage.data.items.length} 条记录。</p></div><div className="flex items-center gap-2"><label className="relative"><Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><input aria-label="搜索环节" className="h-8 w-44 rounded-md border bg-background pl-8 pr-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring" onChange={(event) => setSearch(event.target.value)} placeholder="搜索环节或模型" value={search} /></label><button className={`h-8 rounded-md border px-3 text-xs ${attentionOnly ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'hover:bg-muted'}`} onClick={() => setAttentionOnly((value) => !value)} type="button">仅看异常</button></div></div><TableScrollFrame label="调用明细"><table className="w-full min-w-[980px] text-left text-xs"><thead className="border-b border-border bg-muted/40 text-muted-foreground"><tr><th className="sticky left-0 z-10 bg-muted/40 px-4 py-2.5 font-medium">时间</th><th className="px-4 py-2.5 font-medium">环节</th><th className="px-4 py-2.5 font-medium">模型</th><th className="px-4 py-2.5 font-medium">状态</th><th className="px-4 py-2.5 text-right font-medium">输入</th><th className="px-4 py-2.5 text-right font-medium">输出</th><th className="px-4 py-2.5 text-right font-medium">延迟</th><th className="px-4 py-2.5 font-medium">备注</th></tr></thead><tbody className="divide-y divide-border">{detailItems.map((item) => <tr className="hover:bg-muted/30" key={item.id}><td className="sticky left-0 z-[1] whitespace-nowrap bg-card px-4 py-3 text-muted-foreground">{new Date(item.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</td><td className="px-4 py-3 font-mono">{item.operation}</td><td className="px-4 py-3 font-mono">{modelLabel(item.actualModel ?? item.requestedModel)}</td><td className="px-4 py-3">{item.usedFallback ? <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300"><GitBranch className="size-3" />降级</span> : item.status === 'succeeded' ? <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="size-3" />成功</span> : <span className="inline-flex items-center gap-1 text-red-700 dark:text-red-300"><AlertTriangle className="size-3" />失败</span>}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.inputTokens)}</td><td className="px-4 py-3 text-right font-mono tabular-nums">{token(item.outputTokens)}</td><td className="px-4 py-3 text-right font-mono tabular-nums text-muted-foreground">{item.latencyMs === null ? '—' : `${token(item.latencyMs)} ms`}</td><td className="max-w-56 truncate px-4 py-3 text-muted-foreground">{item.usedFallback ? `fallback → ${modelLabel(item.fallbackModel ?? 'deepseek-v4-flash')}` : item.errorKind ?? '—'}</td></tr>)}{detailItems.length === 0 && <tr><td className="px-4 py-8 text-center text-muted-foreground" colSpan={8}>没有匹配的调用记录。</td></tr>}</tbody></table></TableScrollFrame></section>
-    </section>
+            <Button
+              variant={attentionOnly ? 'contained' : 'outlined'}
+              color={attentionOnly ? 'warning' : 'inherit'}
+              aria-pressed={attentionOnly}
+              onClick={() => setAttentionOnly((value) => !value)}
+            >
+              仅看异常
+            </Button>
+          </Stack>
+        }
+      >
+        <TableHead><TableRow>
+          <HeaderCell>时间</HeaderCell><HeaderCell>环节</HeaderCell><HeaderCell>模型</HeaderCell><HeaderCell>状态</HeaderCell><HeaderCell align="right">输入</HeaderCell><HeaderCell align="right">输出</HeaderCell><HeaderCell align="right">延迟</HeaderCell><HeaderCell>备注</HeaderCell>
+        </TableRow></TableHead>
+        <TableBody>
+          {detailItems.map((item) => <TableRow key={item.id} hover>
+            <DataCell nowrap secondary>{new Date(item.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}</DataCell>
+            <DataCell mono>{item.operation}</DataCell><DataCell mono>{modelLabel(item.actualModel ?? item.requestedModel)}</DataCell>
+              <TableCell>
+              {item.usedFallback
+                ? <Chip size="small" color="warning" icon={<GitBranch size={14} aria-hidden="true" />} label="降级" />
+                : item.status === 'succeeded'
+                  ? <Chip size="small" color="success" icon={<CheckCircle2 size={14} aria-hidden="true" />} label="成功" />
+                  : <Chip size="small" color="error" icon={<AlertTriangle size={14} aria-hidden="true" />} label="失败" />}
+            </TableCell>
+            <DataCell align="right" mono>{token(item.inputTokens)}</DataCell><DataCell align="right" mono>{token(item.outputTokens)}</DataCell>
+            <DataCell align="right" mono secondary>{item.latencyMs === null ? '—' : `${token(item.latencyMs)} ms`}</DataCell>
+            <DataCell truncate secondary>{item.usedFallback ? `fallback → ${modelLabel(item.fallbackModel ?? 'deepseek-v4-flash')}` : item.errorKind ?? '—'}</DataCell>
+          </TableRow>)}
+          {detailItems.length === 0 ? <EmptyTableRow colSpan={8}>没有匹配的调用记录。</EmptyTableRow> : null}
+        </TableBody>
+      </UsageTable>
+    </Stack>
   );
 }
 
-function TableScrollFrame({ children, label }: { children: ReactNode; label: string }) {
+function SectionHeading({ title, description }: { title: string; description?: string }) {
   return (
-    <div className="overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground lg:hidden">
-        <span>左右滑动查看完整明细</span>
-        <ArrowLeftRight className="size-3.5 shrink-0" aria-hidden="true" />
-      </div>
-      <div
-        className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+    <Box sx={{ px: 2.5, py: 2, borderBottom: 1, borderColor: 'divider' }}>
+      <Typography variant="subtitle2">{title}</Typography>
+      {description ? <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>{description}</Typography> : null}
+    </Box>
+  );
+}
+
+function UsageTable({
+  title,
+  description,
+  label,
+  minWidth,
+  actions,
+  children,
+}: {
+  title: string;
+  description?: string;
+  label: string;
+  minWidth?: number;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Paper variant="outlined" sx={{ minWidth: 0, overflow: 'hidden' }}>
+      {actions ? (
+        <Stack sx={{ px: 2.5, py: 2, borderBottom: 1, borderColor: 'divider', flexDirection: { xs: 'column', md: 'row' }, gap: 1.5, alignItems: { md: 'center' }, justifyContent: 'space-between' }}>
+              <Box>
+                <Stack sx={{ flexDirection: 'row', gap: 1, alignItems: 'center' }}>
+                  {title === '调用明细' ? <Clock3 size={16} aria-hidden="true" /> : null}
+                  <Typography variant="subtitle2">{title}</Typography>
+                </Stack>
+                {description ? <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>{description}</Typography> : null}
+              </Box>
+          {actions}
+        </Stack>
+      ) : <SectionHeading title={title} description={description} />}
+      <TableContainer
         role="region"
         aria-label={label}
         tabIndex={0}
+        sx={{ maxWidth: '100%', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 } }}
       >
-        {children}
-      </div>
-    </div>
+        <Table size="small" sx={{ minWidth: minWidth ?? 0, '& th': { bgcolor: 'action.hover' }, '& td, & th': { borderColor: 'divider' } }}>
+          {children}
+        </Table>
+      </TableContainer>
+      <Stack sx={{ px: 2, py: 1, borderTop: 1, borderColor: 'divider', color: 'text.secondary', display: { xs: 'flex', lg: 'none' }, flexDirection: 'row', gap: 1, alignItems: 'center' }}>
+        <ArrowLeftRight size={14} aria-hidden="true" />
+        <Typography variant="caption">左右滑动查看完整明细</Typography>
+      </Stack>
+    </Paper>
   );
 }
 
+function HeaderCell({ children, align }: { children: ReactNode; align?: 'left' | 'right' | 'center' }) {
+  return <TableCell align={align} sx={{ whiteSpace: 'nowrap', fontSize: 'var(--dr-type-caption)', fontWeight: 600, color: 'text.secondary' }}>{children}</TableCell>;
+}
+
+function DataCell({
+  children,
+  align,
+  mono = false,
+  bold = false,
+  nowrap = false,
+  secondary = false,
+  truncate = false,
+}: {
+  children: ReactNode;
+  align?: 'left' | 'right' | 'center';
+  mono?: boolean;
+  bold?: boolean;
+  nowrap?: boolean;
+  secondary?: boolean;
+  truncate?: boolean;
+}) {
+  return (
+    <TableCell align={align} sx={{ fontFamily: mono ? 'monospace' : undefined, fontVariantNumeric: mono ? 'tabular-nums' : undefined, fontWeight: bold ? 600 : undefined, color: secondary ? 'text.secondary' : undefined, whiteSpace: nowrap ? 'nowrap' : undefined, maxWidth: truncate ? 224 : undefined, overflow: truncate ? 'hidden' : undefined, textOverflow: truncate ? 'ellipsis' : undefined }}>
+      {children}
+    </TableCell>
+  );
+}
+
+function EmptyTableRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  return <TableRow><TableCell align="center" colSpan={colSpan} sx={{ py: 4, color: 'text.secondary' }}>{children}</TableCell></TableRow>;
+}
+
 function SummaryCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return <div className="rounded-lg border border-border bg-card p-4"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>{hint && <div className="mt-1 text-xs text-muted-foreground">{hint}</div>}</div>;
+  return (
+    <Paper variant="outlined" sx={{ p: 2, minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="h2" sx={{ mt: 1, fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' }}>{value}</Typography>
+      {hint ? <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>{hint}</Typography> : null}
+    </Paper>
+  );
 }
 
 function RankingList({
@@ -227,29 +422,28 @@ function RankingList({
 }) {
   const max = Math.max(1, ...items.map((item) => item.value));
   return (
-    <div>
-      <h4 className="text-xs font-semibold">{title}</h4>
+    <Box>
+      <Typography variant="subtitle2">{title}</Typography>
       {items.length === 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">{emptyLabel}</p>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{emptyLabel}</Typography>
       ) : (
-        <div className="mt-2 space-y-2">
+        <Stack sx={{ mt: 1.5, gap: 1.5 }}>
           {items.map((item) => (
-            <div key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-xs">
-              <div className="min-w-0">
-                <div className="truncate font-mono text-xs" title={item.label}>{item.label}</div>
-                <div className="mt-1 h-1.5 overflow-hidden rounded-sm bg-muted">
-                  <div className="h-full rounded-sm bg-status-failed-fg/70" style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }} />
-                </div>
-              </div>
-              <span className="font-mono tabular-nums text-muted-foreground">
-                {token(item.value)}{item.suffix}
-                {item.total > item.value ? ` / ${token(item.total)}` : ''}
-              </span>
-            </div>
+            <Box key={item.label} sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 2, alignItems: 'center' }}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="caption" title={item.label} noWrap sx={{ fontFamily: 'monospace' }}>{item.label}</Typography>
+                <Box sx={{ mt: 1, height: 6, overflow: 'hidden', borderRadius: 'var(--dr-radius-small)', bgcolor: 'action.selected' }}>
+                  <Box sx={{ height: '100%', width: `${Math.max(4, (item.value / max) * 100)}%`, bgcolor: 'error.main', opacity: 0.75, borderRadius: 'var(--dr-radius-small)' }} />
+                </Box>
+              </Box>
+              <Typography variant="caption" color="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                {token(item.value)}{item.suffix}{item.total > item.value ? ` / ${token(item.total)}` : ''}
+              </Typography>
+            </Box>
           ))}
-        </div>
+        </Stack>
       )}
-    </div>
+    </Box>
   );
 }
 
@@ -267,19 +461,11 @@ function Signal({
   value: string;
   tone: 'default' | 'success' | 'warning' | 'danger';
 }) {
+  const color = tone === 'success' ? 'success.main' : tone === 'warning' ? 'warning.main' : tone === 'danger' ? 'error.main' : 'text.primary';
   return (
-    <div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div
-        className={cn(
-          'mt-1 font-mono text-lg font-semibold tabular-nums',
-          tone === 'success' && 'text-emerald-700 dark:text-emerald-300',
-          tone === 'warning' && 'text-amber-700 dark:text-amber-300',
-          tone === 'danger' && 'text-red-700 dark:text-red-300',
-        )}
-      >
-        {value}
-      </div>
-    </div>
+    <Box>
+      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="h3" sx={{ mt: 0.5, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
+    </Box>
   );
 }

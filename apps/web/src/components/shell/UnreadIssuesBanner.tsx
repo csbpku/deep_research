@@ -6,8 +6,7 @@ import { Bell, ChevronRight } from 'lucide-react';
 import { prisma } from '@/lib/db';
 import type { SessionUserOrNull } from '@/lib/auth/session';
 import { collapseTopicIssues } from '@/lib/topics';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import styles from './shell.module.css';
 
 /**
  * AppShell 顶部"未读议题"提示：
@@ -67,16 +66,12 @@ export async function UnreadIssuesBanner({ user }: { user: SessionUserOrNull }) 
   return (
     <Link
       href="/me/topics"
-      className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      className={styles.unread}
     >
-      <Card className="mx-4 my-3 border-primary/40 bg-primary/10 transition-colors hover:bg-primary/15">
-        <CardContent className="flex min-w-0 items-center gap-2 p-3 text-sm">
-          <Bell className="size-4 shrink-0 text-primary" />
-          <span className="min-w-0 truncate font-medium text-primary">我的关注有 {unread} 个新议题未读</span>
-          <Badge className="shrink-0 bg-primary/30 text-primary">{unread}</Badge>
-          <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden />
-        </CardContent>
-      </Card>
+      <Bell aria-hidden />
+      <span className={styles.unreadLabel}>我的关注有 {unread} 个新议题未读</span>
+      <span className={styles.unreadCount}>{unread}</span>
+      <ChevronRight aria-hidden />
     </Link>
   );
 }

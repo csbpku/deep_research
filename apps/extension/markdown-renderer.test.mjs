@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseMarkdownBlocks } from './markdown-renderer.js';
+import { parseMarkdownBlocks, streamingAnswerText, completeStreamingMarkdown } from './markdown-renderer.js';
+
+test('streaming answer decodes JSON escapes without exposing the envelope', () => {
+  assert.equal(streamingAnswerText('{"answer":"## Heading\\n\\n**Bold**\\n- One","evidence":['), '## Heading\n\n**Bold**\n- One');
+  assert.equal(streamingAnswerText('{"answer":"Hello\\u4f'), 'Hello');
+  assert.equal(streamingAnswerText('{"answer":"Hello\\u4f60\\n'), 'Hello你\n');
+  assert.equal(streamingAnswerText('{"ans'), '');
+  assert.equal(streamingAnswerText('An answer with [1] and `{x}`.'), 'An answer with [1] and `{x}`.');
+});
+
+test('streaming Markdown closes partial formatting and keeps completed blocks identical', () => {
+  assert.equal(completeStreamingMarkdown('## Heading\n\nA **bold'), '## Heading\n\nA **bold**');
+  assert.equal(completeStreamingMarkdown('A **'), 'A ');
+  assert.equal(completeStreamingMarkdown('Code `value'), 'Code `value`');
+  assert.equal(completeStreamingMarkdown('[Docs](https://example'), 'Docs');
+  const complete = '## Heading\n\n**Bold** text\n\n- One\n- Two\n\n```js\nconst x = 1;\n```';
+  assert.deepEqual(parseMarkdownBlocks(completeStreamingMarkdown(complete)), parseMarkdownBlocks(complete));
+});
 
 test('reader markdown parser turns numbered summary sections and escaped bullets into blocks', () => {
   const blocks = parseMarkdownBlocks(`按四部分总结：
@@ -59,4 +76,10 @@ test('reader markdown parser keeps GFM tables and ordered lists as structured bl
       { type: 'ordered-list', items: ['先检查原文', '再核对译文'] },
     ],
   );
+});
+
+test('translation streams decode text without exposing the envelope', () => {
+  assert.equal(streamingAnswerText('{"translation":"Hello\\nwor'), 'Hello\nwor');
+  assert.equal(streamingAnswerText('{"transla'), '');
+  assert.equal(streamingAnswerText('{"translation":"Hello\\u'), 'Hello');
 });

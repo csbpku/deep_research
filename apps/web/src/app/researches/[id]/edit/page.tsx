@@ -13,9 +13,20 @@
 //   - 保存草稿 / 发布
 //   - creationMethod 徽标
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { forwardRef, useState, useEffect, useCallback, useMemo, useRef, type ButtonHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogTitle from '@mui/material/DialogTitle';
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
+import { alpha, type SxProps, type Theme } from '@mui/material/styles';
+import { space } from '@deep-research/design-system';
 import {
   ArrowLeft,
   Bold,
@@ -47,21 +58,13 @@ import {
 } from 'lucide-react';
 
 import MarkdownContent from '@/components/MarkdownContent';
+import { AppDialog } from '@/components/material/AppDialog';
 import { type CommentAnchor } from '@/components/CommentSection';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { SectionCard } from '@/components/domain/SectionCard';
 import { TagChip, TagList } from '@/components/domain/TagChip';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { AppButton as MaterialButton } from '@/components/material/AppButton';
+import { AppTextField as Input } from '@/components/material/AppTextField';
 import { useUnsavedGuard } from '@/lib/editor/use-unsaved-guard';
 import { useAutoSave } from '@/lib/editor/use-auto-save';
 import { resolveResearchSourceLink } from '@/lib/research-source-link';
@@ -70,7 +73,6 @@ import { commandQuery, matchingCommands, type MarkdownCommand } from '@/lib/edit
 import { activeOutlineItem, parseOutline } from '@/lib/editor/outline';
 import { cleanResearchMarkdown } from '@/lib/research-markdown-cleanup';
 import type { ReviewPublicationGate } from '@/lib/research-review-decisions';
-import { cn } from '@/lib/utils';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 
 interface ResearchDetail {
@@ -205,6 +207,7 @@ export default function EditorPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
+  const [restoreConfirmAudit, setRestoreConfirmAudit] = useState<AuditEntry | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState(() =>
     draftSnapshot({ title: '', body: '', background: '', conclusion: '', risks: '', tagsInput: '' }),
   );
@@ -865,40 +868,40 @@ export default function EditorPage() {
         };
 
   if (!isNew && loadingExisting) {
-    return <div className="mx-auto max-w-shell rounded-md border border-border bg-card p-6 text-sm text-muted-foreground" aria-busy="true">正在加载编辑器…</div>;
+    return <Paper variant="outlined" aria-busy="true" sx={{ mx: 'auto', maxWidth: 'var(--dr-width-shell)', p: 3, color: 'text.secondary' }}>正在加载编辑器…</Paper>;
   }
   if (!isNew && (existingError || !existing)) {
-    return <div className="mx-auto max-w-shell rounded-md border border-destructive/40 bg-destructive/5 p-6 text-sm text-destructive" role="alert">无法加载这份调研，请返回列表后重试。</div>;
+    return <Alert severity="error" role="alert" sx={{ mx: 'auto', maxWidth: 'var(--dr-width-shell)' }}>无法加载这份调研，请返回列表后重试。</Alert>;
   }
 
   return (
-    <div className="mx-auto max-w-shell">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-        <div className="flex min-w-0 items-center gap-3">
+    <Box sx={{ mx: 'auto', width: '100%', maxWidth: 'var(--dr-width-shell)' }}>
+      <Box component="header" sx={{ mb: 2, pb: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: 1.5 }}>
           <Button type="button" variant="ghost" size="icon-sm" onClick={guardedRouter.back} aria-label="返回">
             <ArrowLeft />
           </Button>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="truncate text-base font-semibold tracking-normal">
+          <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="panelTitle" component="h1" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {isNew ? '新建调研' : isPublishedAi ? '查看已发布 AI 研究' : existing?.status === 'published' ? '编辑已发布文章' : '编辑草稿'}
-              </h1>
+              </Typography>
               {existing?.status && <StatusBadge kind="research" value={existing.status} />}
               {existing?.creationMethod && (
                 <StatusBadge kind="method" value={existing.creationMethod} />
               )}
-            </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">
+            </Box>
+            <Typography variant="metadata" color="text.secondary" component="p" sx={{ mt: 0.5 }}>
               {manualSaveRequired ? '已恢复，待手动保存' : isDirty ? '有未保存修改' : lastSavedAt ? '刚刚保存' : '已加载最新版本'}
-              <span className="mx-1.5">·</span>
+              <Box component="span" sx={{ mx: 0.75 }}>·</Box>
               {wordCount.toLocaleString('zh-CN')} 字
-              <span className="mx-1.5">·</span>
+              <Box component="span" sx={{ mx: 0.75 }}>·</Box>
               {Math.max(1, Math.ceil(wordCount / 450))} 分钟阅读
-              {showAutoStatus ? <><span className="mx-1.5">·</span>{autoSaveLabel(autoSave.status)}</> : null}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+              {showAutoStatus ? <><Box component="span" sx={{ mx: 0.75 }}>·</Box>{autoSaveLabel(autoSave.status)}</> : null}
+            </Typography>
+          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {isPublishedAi ? (
             <Button type="button" size="sm" onClick={() => void handleFork()} disabled={forkMutation.isPending}>
               <GitBranch />
@@ -922,76 +925,100 @@ export default function EditorPage() {
               {publishMutation.isPending ? '发布中…' : '发布调研'}
             </Button>
           )}
-        </div>
-      </header>
+        </Box>
+      </Box>
 
       {flashMessage ? (
-        <div
+        <Alert
+          severity="success"
           role="status"
           aria-live="polite"
-          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-status-success-border bg-status-succeeded-bg px-3 py-2 text-xs text-status-succeeded-fg shadow-sm"
+          sx={{ position: 'fixed', zIndex: 'tooltip', bottom: 2, left: '50%', transform: 'translateX(-50%)', width: 'max-content', maxWidth: 'calc(100vw - 32px)', boxShadow: 'var(--dr-elevation-1)' }}
         >
           {flashMessage}
-        </div>
+        </Alert>
       ) : null}
 
       {isPublishedAi ? (
-        <div className="mb-3 rounded-md border border-primary/25 bg-primary/[0.04] px-3 py-2.5 text-xs leading-relaxed text-muted-foreground" role="status">
-          <p className="font-medium text-foreground">这是已发布版本，内容保持不变。</p>
-          <p className="mt-0.5">如需修改，请创建修订草稿。新草稿会复制当前资料和引用，并更新资料检查后才能发布。</p>
-        </div>
+        <Alert severity="info" role="status" sx={{ mb: 1.5 }}>
+          <Typography variant="control" component="p" sx={{ fontWeight: 600 }}>这是已发布版本，内容保持不变。</Typography>
+          <Typography variant="body2" component="p">如需修改，请创建修订草稿。新草稿会复制当前资料和引用，并更新资料检查后才能发布。</Typography>
+        </Alert>
       ) : null}
 
       {existing?.status === 'draft' && (missingSummaryFields.length > 0 || (reviewRequired && !reviewPublishable)) ? (
-        <div className="mb-3 flex items-start gap-2.5 rounded-md border border-status-warning-fg/30 bg-status-warning-bg/30 px-3 py-2.5 text-xs leading-relaxed text-status-warning-fg" role="status">
-          <span className="mt-0.5 size-1.5 shrink-0 rounded-full bg-status-warning-fg" aria-hidden="true" />
-          <div>
-            <p className="font-medium">暂不能发布</p>
-            <p className="mt-0.5">{missingSummaryFields.length > 0 ? `还缺少：${missingSummaryFields.join('、')}。` : reviewInstruction}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">保存草稿不受影响。</p>
-          </div>
-        </div>
+        <Alert severity="warning" role="status" sx={{ mb: 1.5 }}>
+          <Typography variant="control" component="p" sx={{ fontWeight: 600 }}>暂不能发布</Typography>
+          <Typography variant="body2" component="p">{missingSummaryFields.length > 0 ? `还缺少：${missingSummaryFields.join('、')}。` : reviewInstruction}</Typography>
+          <Typography variant="metadata" component="p" color="text.secondary">保存草稿不受影响。</Typography>
+        </Alert>
       ) : null}
 
       {error && (
-        <div
-          role="alert"
-          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-        >
+        <Alert severity="error" role="alert" sx={{ mb: 1.5 }}>
           {error}
-        </div>
+        </Alert>
       )}
-      <div className="mb-3 flex items-center gap-2 xl:hidden">
+      <Box sx={{ display: { xs: 'flex', xl: 'none' }, alignItems: 'center', gap: 1, mb: 1.5 }}>
         <Button type="button" variant="outline" size="sm" onClick={() => setOutlineOpen(true)}>
-          <PanelLeft />文章大纲 <span className="text-muted-foreground">{outline.length}</span>
+          <PanelLeft />文章大纲 <Typography component="span" variant="metadata" color="text.secondary">{outline.length}</Typography>
         </Button>
-        <Button type="button" variant="outline" size="sm" className="lg:hidden" onClick={() => setMobilePanelOpen(true)}>
+        <Button type="button" variant="outline" size="sm" sx={{ display: { lg: 'none' } }} onClick={() => setMobilePanelOpen(true)}>
           <PanelRight />研究工具
         </Button>
-      </div>
+      </Box>
 
-      {mobilePanelOpen ? <button type="button" aria-label="关闭研究辅助遮罩" className="fixed inset-0 z-40 bg-foreground/20 lg:hidden" onClick={() => setMobilePanelOpen(false)} /> : null}
+      {mobilePanelOpen ? <Box component="button" type="button" aria-label="关闭研究辅助遮罩" sx={{ display: { lg: 'none' }, position: 'fixed', inset: 0, zIndex: 40, border: 0, p: 0, bgcolor: (theme) => alpha(theme.palette.text.primary, 0.2) }} onClick={() => setMobilePanelOpen(false)} /> : null}
 
-      <div ref={workbenchRef} style={{ '--outline-width': `${outlineCollapsed ? 52 : outlineWidth}px`, '--tools-width': `${toolsCollapsed ? 52 : toolsWidth}px` } as React.CSSProperties} className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[var(--outline-width)_minmax(0,1fr)_var(--tools-width)]">
-        <aside className={`relative ${outlineOpen ? 'fixed inset-y-0 left-0 z-50 block w-[min(86vw,280px)] overflow-y-auto bg-background p-3 shadow-xl xl:static xl:z-auto xl:w-auto xl:overflow-visible xl:bg-transparent xl:p-0 xl:shadow-none' : 'hidden xl:block'}`}>
-          <div className={`sticky top-4 rounded-md border border-border bg-card ${outlineCollapsed ? 'p-1.5' : 'p-3'}`}>
-            <div className="mb-2 flex items-center justify-between">
-              {!outlineCollapsed ? <div className="flex items-center gap-2"><p className="text-sm font-medium">文章结构</p><span className="text-xs text-muted-foreground">{outline.length} 节</span></div> : <span className="sr-only">文章结构已收起</span>}
-              <Button type="button" variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={() => setOutlineCollapsed((collapsed) => !collapsed)} aria-label={outlineCollapsed ? '展开文章结构' : '收起文章结构'} title={outlineCollapsed ? '展开文章结构' : '收起文章结构'}>{outlineCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</Button>
-              {outlineOpen ? <Button type="button" variant="ghost" size="icon-sm" className="xl:hidden" onClick={() => setOutlineOpen(false)} aria-label="关闭文章大纲"><X /></Button> : null}
-            </div>
+      <Box ref={workbenchRef} style={{ '--outline-width': `${outlineCollapsed ? 52 : outlineWidth}px`, '--tools-width': `${toolsCollapsed ? 52 : toolsWidth}px` } as React.CSSProperties} sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 280px', xl: 'var(--outline-width) minmax(0, 1fr) var(--tools-width)' } }}>
+        <Box component="aside" sx={{
+          position: { xs: outlineOpen ? 'fixed' : 'relative', xl: 'relative' },
+          top: { xs: outlineOpen ? 0 : 'auto', xl: 'auto' },
+          bottom: { xs: outlineOpen ? 0 : 'auto', xl: 'auto' },
+          left: { xs: outlineOpen ? 0 : 'auto', xl: 'auto' },
+          zIndex: { xs: outlineOpen ? 50 : 'auto', xl: 'auto' },
+          display: { xs: outlineOpen ? 'block' : 'none', xl: 'block' },
+          width: { xs: outlineOpen ? 'min(86vw, 280px)' : 'auto', xl: 'auto' },
+          overflowY: { xs: outlineOpen ? 'auto' : 'visible', xl: 'visible' },
+          bgcolor: { xs: outlineOpen ? 'background.paper' : 'transparent', xl: 'transparent' },
+          p: { xs: outlineOpen ? 1.5 : 0, xl: 0 },
+          boxShadow: { xs: outlineOpen ? 'var(--dr-elevation-1)' : 'none', xl: 'none' },
+        }}>
+          <Paper variant="outlined" sx={{ position: 'sticky', top: 2, p: outlineCollapsed ? 0.75 : 1.5, bgcolor: 'background.paper', borderColor: 'divider' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+              {!outlineCollapsed ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Typography variant="control" component="p" sx={{ fontWeight: 600 }}>文章结构</Typography><Typography variant="metadata" color="text.secondary">{outline.length} 节</Typography></Box> : <span className="sr-only">文章结构已收起</span>}
+              <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { xs: 'none', xl: 'inline-flex' } }} onClick={() => setOutlineCollapsed((collapsed) => !collapsed)} aria-label={outlineCollapsed ? '展开文章结构' : '收起文章结构'} title={outlineCollapsed ? '展开文章结构' : '收起文章结构'}>{outlineCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</Button>
+              {outlineOpen ? <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { xl: 'none' } }} onClick={() => setOutlineOpen(false)} aria-label="关闭文章大纲"><X /></Button> : null}
+            </Box>
             {outline.length > 0 ? (
-              <nav className={`max-h-[calc(100vh-9rem)] space-y-0.5 overflow-y-auto ${outlineCollapsed ? 'grid justify-items-center' : ''}`} aria-label="文章大纲">
+              <Box component="nav" sx={{ maxHeight: 'calc(100vh - 9rem)', display: outlineCollapsed ? 'grid' : 'flex', flexDirection: 'column', alignItems: outlineCollapsed ? 'center' : 'stretch', gap: 0.5, overflowY: 'auto' }} aria-label="文章大纲">
                 {outline.map((item) => (
-                  <button key={item.id} type="button" onClick={() => jumpToOutline(item)} title={outlineCollapsed ? item.text : undefined} aria-label={item.text} className={`rounded transition-colors hover:bg-muted ${outlineCollapsed ? 'size-6 p-0' : 'block w-full px-2 py-1.5 text-left text-xs'} ${item.id === outlineTarget ? 'bg-muted text-foreground' : 'text-muted-foreground'} ${!outlineCollapsed && (item.level === 2 ? 'pl-4' : item.level === 3 ? 'pl-6' : '')}`}>
-                    <span className={`inline-block rounded-full align-middle ${outlineCollapsed ? 'size-2' : 'mr-2 size-1.5'} ${item.id === outlineTarget ? 'bg-foreground' : 'bg-muted-foreground/50'}`} />
+                  <Button
+                    key={item.id}
+                    type="button"
+                    variant={item.id === outlineTarget ? 'secondary' : 'ghost'}
+                    size={outlineCollapsed ? 'icon-sm' : 'xs'}
+                    onClick={() => jumpToOutline(item)}
+                    title={outlineCollapsed ? item.text : undefined}
+                    aria-label={item.text}
+                    sx={{
+                      display: 'flex',
+                      justifyContent: outlineCollapsed ? 'center' : 'flex-start',
+                      width: outlineCollapsed ? 'var(--dr-control-height)' : '100%',
+                      minWidth: 0,
+                      px: outlineCollapsed ? 0 : item.level === 2 ? 2 : item.level === 3 ? 3 : 1,
+                      textAlign: 'left',
+                      whiteSpace: 'normal',
+                    }}
+                  >
+                    <Box component="span" aria-hidden="true" sx={{ display: 'inline-block', flex: '0 0 auto', width: outlineCollapsed ? 8 : 6, height: outlineCollapsed ? 8 : 6, mr: outlineCollapsed ? 0 : 1, borderRadius: '50%', bgcolor: item.id === outlineTarget ? 'text.primary' : 'text.disabled' }} />
                     {!outlineCollapsed ? item.text : <span className="sr-only">{item.text}</span>}
-                  </button>
+                  </Button>
                 ))}
-              </nav>
-            ) : <p className="text-xs leading-relaxed text-muted-foreground">用 Markdown 标题建立结构，导航会自动出现。</p>}
-          </div>
-          {!outlineCollapsed ? <button
+              </Box>
+            ) : <Typography variant="metadata" color="text.secondary">用 Markdown 标题建立结构，导航会自动出现。</Typography>}
+          </Paper>
+          {!outlineCollapsed ? <Box component="button"
             type="button"
             role="separator"
             aria-orientation="vertical"
@@ -1008,11 +1035,11 @@ export default function EditorPage() {
               if (event.key === 'End') { event.preventDefault(); setOutlineWidth(320); }
             }}
             onPointerDown={(event) => startResize('outline', event)}
-            className="absolute -right-2 top-0 hidden h-full w-4 cursor-col-resize xl:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          ><span className="mx-auto block h-full w-px bg-transparent transition-colors hover:bg-border" /></button> : null}
-        </aside>
-        <section className="min-w-0 overflow-hidden rounded-md border border-border bg-card shadow-sm">
-          <div className="border-b border-border px-5 py-3">
+            sx={{ position: 'absolute', top: 0, right: -8, display: { xs: 'none', xl: 'block' }, width: 16, height: '100%', cursor: 'col-resize', border: 0, p: 0, bgcolor: 'transparent', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 }, '&:hover > span': { bgcolor: 'divider' } }}
+          ><Box component="span" sx={{ display: 'block', width: 1, height: '100%', mx: 'auto', bgcolor: 'transparent', transition: 'background-color var(--dr-motion-fast)' }} /></Box> : null}
+        </Box>
+        <Paper component="section" variant="outlined" sx={{ minWidth: 0, overflow: 'hidden', borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 'var(--dr-elevation-1)' }}>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2.5, py: 1.5 }}>
             <label htmlFor="edit-title" className="sr-only">标题</label>
             <Input
               id="edit-title"
@@ -1020,11 +1047,11 @@ export default function EditorPage() {
               onChange={(e) => setTitle(e.target.value)}
               readOnly={isPublishedAi}
               placeholder="给这份调研起一个明确的标题…"
-              className="h-auto border-0 bg-transparent px-0 py-1 text-xl font-semibold shadow-none focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+              sx={{ bgcolor: 'transparent', '& .MuiOutlinedInput-notchedOutline': { border: 0 }, '& .MuiOutlinedInput-input': { px: 0, py: 0.5, fontSize: 'var(--dr-type-title-medium)', fontWeight: 600 } }}
             />
-          </div>
+          </Box>
 
-          <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/30 px-3 py-2">
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, px: 1.5, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
             {/* 全屏编辑按钮: 当前未挂载 Fullscreen API,留待后续接入 CSS 占满视口 + ESC 退出 */}
             {editorTools.map((tool) => {
               const Icon = tool.icon;
@@ -1034,25 +1061,25 @@ export default function EditorPage() {
                 </Button>
               );
             })}
-            <span className="mx-1 h-5 w-px bg-border" />
+            <Box aria-hidden="true" sx={{ mx: 0.5, width: '1px', height: 20, bgcolor: 'divider' }} />
             <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('> 需要核对的事实或判断')} title="插入引用块" aria-label="插入引用块" disabled={view === 'preview' || isPublishedAi}><Quote /></Button>
             <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('- [ ] 待办事项')} title="插入待办事项" aria-label="插入待办事项" disabled={view === 'preview' || isPublishedAi}><ListChecks /></Button>
             <Button type="button" variant="ghost" size="icon-sm" onClick={() => insertBlock('| 维度 | 结论 | 证据 |\n| --- | --- | --- |\n| 示例 | 待填写 | 待补充 |')} title="插入对比表" aria-label="插入对比表" disabled={view === 'preview' || isPublishedAi}><Table2 /></Button>
-            <span className="mx-1 h-5 w-px bg-border" />
-            <span className="hidden text-xs text-muted-foreground sm:inline">Markdown</span>
-            <details className="relative ml-1">
-              <summary className="inline-flex size-7 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="快捷键说明"><Keyboard className="size-3.5" /></summary>
-              <div className="absolute right-0 top-9 z-20 w-56 rounded-md border border-border bg-popover p-2 text-xs text-popover-foreground shadow-md">
-                <p className="mb-1 font-medium text-foreground">键盘快捷键</p>
-                <ul className="space-y-1 text-muted-foreground">
-                  <li><kbd className="font-mono">⌘/Ctrl + S</kbd> 保存草稿</li>
-                  <li><kbd className="font-mono">⌘/Ctrl + B</kbd> 加粗（选中文字）</li>
-                  <li><kbd className="font-mono">⌘/Ctrl + I</kbd> 斜体</li>
+            <Box aria-hidden="true" sx={{ mx: 0.5, width: '1px', height: 20, bgcolor: 'divider' }} />
+            <Typography variant="metadata" color="text.secondary" sx={{ display: { xs: 'none', sm: 'inline' } }}>Markdown</Typography>
+            <Box component="details" sx={{ position: 'relative', ml: 0.5 }}>
+              <Box component="summary" aria-label="快捷键说明" sx={{ display: 'inline-flex', width: 'var(--dr-control-height)', height: 'var(--dr-control-height)', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', listStyle: 'none', borderRadius: 'var(--dr-radius-small)', color: 'text.secondary', '&:hover': { bgcolor: 'action.hover', color: 'text.primary' }, '&::-webkit-details-marker': { display: 'none' } }}><Keyboard size={14} /></Box>
+              <Paper variant="outlined" sx={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 'tooltip', width: 224, p: 1.5, bgcolor: 'background.paper', boxShadow: 'var(--dr-elevation-1)' }}>
+                <Typography variant="control" component="p" sx={{ mb: 1, fontWeight: 600 }}>键盘快捷键</Typography>
+                <Box component="ul" sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, m: 0, pl: 2, color: 'text.secondary', typography: 'metadata' }}>
+                  <li><Box component="kbd" sx={{ fontFamily: 'monospace' }}>⌘/Ctrl + S</Box> 保存草稿</li>
+                  <li><Box component="kbd" sx={{ fontFamily: 'monospace' }}>⌘/Ctrl + B</Box> 加粗（选中文字）</li>
+                  <li><Box component="kbd" sx={{ fontFamily: 'monospace' }}>⌘/Ctrl + I</Box> 斜体</li>
                   <li>工具栏：加粗 / 斜体 / 标题 / 列表 / 行内代码</li>
-                </ul>
-              </div>
-            </details>
-            <div className="ml-auto inline-flex rounded-md border border-border bg-card p-0.5" role="group" aria-label="编辑器视图">
+                </Box>
+              </Paper>
+            </Box>
+            <Paper variant="outlined" sx={{ ml: 'auto', display: 'inline-flex', p: 0.5, borderColor: 'divider' }} role="group" aria-label="编辑器视图">
               {([
                 { key: 'write', label: '编辑', icon: PenLine },
                 { key: 'split', label: '分栏', icon: Columns2 },
@@ -1068,17 +1095,17 @@ export default function EditorPage() {
                     aria-pressed={view === item.key}
                     aria-controls="editor-preview-pane"
                     onClick={() => setView(item.key)}
-                    className="gap-1.5"
+                    sx={{ gap: 0.75 }}
                   >
                     <Icon />
-                    <span className="hidden sm:inline">{item.label}</span>
+                    <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>{item.label}</Box>
                   </Button>
                 );
               })}
-            </div>
-          </div>
+            </Paper>
+          </Box>
 
-          <div className={view === 'split' ? 'grid xl:grid-cols-2' : ''}>
+          <Box sx={view === 'split' ? { display: 'grid', gridTemplateColumns: { xl: 'repeat(2, minmax(0, 1fr))' } } : undefined}>
             {view !== 'preview' && (
               <div>
                 <label htmlFor="edit-body" className="sr-only">正文 Markdown</label>
@@ -1099,46 +1126,82 @@ export default function EditorPage() {
                   onSelect={handleTextSelection}
                   placeholder={'# 从问题背景开始\n\n写下事实、判断和仍需验证的风险…'}
                   spellCheck={false}
-                  className="min-h-[560px] resize-y rounded-none border-0 bg-transparent px-5 py-5 font-sans text-[14px] leading-[1.6] shadow-none selection:bg-primary/20 selection:text-foreground focus-visible:ring-1 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+                  sx={{ minHeight: 560, resize: 'vertical', border: 0, borderRadius: 0, px: 2.5, py: 2.5, bgcolor: 'transparent', '&:hover': { borderColor: 'transparent' }, '&:focus-visible': { outlineOffset: -2 } }}
                 />
                 {commandState && matchingCommands(commandState.query).length > 0 && (
-                  <div className="relative z-10 mx-5 -mt-2 rounded-md border border-border bg-popover p-1 shadow-md" role="listbox" aria-label="Markdown 命令">
-                    {matchingCommands(commandState.query).map((command, index) => <button key={command.key} type="button" role="option" aria-selected={index === commandIndex} onMouseDown={(e) => { e.preventDefault(); insertCommand(command); }} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs ${index === commandIndex ? 'bg-muted' : ''}`}><span className="font-medium">/{command.key}</span><span className="text-muted-foreground">{command.hint}</span></button>)}
-                  </div>
+                  <Box className="material-surface" sx={{ position: 'relative', zIndex: 10, mx: 2.5, mt: -1, p: 0.5, border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-small)', bgcolor: 'background.paper', boxShadow: 'var(--dr-elevation-1)' }} role="listbox" aria-label="Markdown 命令">
+                    {matchingCommands(commandState.query).map((command, index) => (
+                      <Box
+                        key={command.key}
+                        component="button"
+                        type="button"
+                        role="option"
+                        aria-selected={index === commandIndex}
+                        onMouseDown={(e) => { e.preventDefault(); insertCommand(command); }}
+                        sx={{
+                          display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 1, px: 1, py: 0.75, border: 0, borderRadius: 'var(--dr-radius-xs)',
+                          appearance: 'none', bgcolor: index === commandIndex ? 'action.selected' : 'transparent',
+                          color: 'text.primary', font: 'inherit', typography: 'metadata', textAlign: 'left',
+                          cursor: 'pointer', '&:hover': { bgcolor: 'action.hover' },
+                        }}
+                      >
+                        <Box component="span" sx={{ fontWeight: 600 }}>/{command.key}</Box>
+                        <Box component="span" sx={{ color: 'text.secondary' }}>{command.hint}</Box>
+                      </Box>
+                    ))}
+                  </Box>
                 )}
               </div>
             )}
             {view !== 'write' && (
-              <div
+              <Box
                 id="editor-preview-pane"
                 role="region"
                 aria-label="预览"
-                className={view === 'split' ? 'min-h-[560px] border-t border-border px-6 py-5 xl:border-l xl:border-t-0' : 'min-h-[560px] px-7 py-6'}
+                sx={view === 'split' ? {
+                  minHeight: 560, borderTop: { xs: 1, xl: 0 }, borderLeft: { xs: 0, xl: 1 },
+                  borderColor: 'divider', px: space.section, py: space.xl,
+                } : { minHeight: 560, px: space.wide, py: space.section }}
               >
                 <MarkdownContent content={body || '# 开始编写...'} compact />
-              </div>
+              </Box>
             )}
-          </div>
+          </Box>
 
-          <footer className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+          <Box component="footer" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default', px: 2, py: 1, color: 'text.secondary', typography: 'metadata' }}>
             <span>{manualSaveRequired ? '待手动保存' : isDirty ? '未保存' : '已保存'}</span>
             <span aria-hidden>·</span>
             <span>⌘/Ctrl + S 保存</span>
-            {showAutoStatus ? <span className="ml-auto">{autoSaveLabel(autoSave.status)}</span> : null}
-            {existing?.aiAssisted ? <span className="ml-auto">AI 协助产物，请在发布前核对来源</span> : null}
-          </footer>
-        </section>
+            {showAutoStatus ? <Box component="span" sx={{ ml: 'auto' }}>{autoSaveLabel(autoSave.status)}</Box> : null}
+            {existing?.aiAssisted ? <Box component="span" sx={{ ml: 'auto' }}>AI 协助产物，请在发布前核对来源</Box> : null}
+          </Box>
+        </Paper>
 
-        <aside className={`relative ${mobilePanelOpen ? 'fixed inset-x-3 bottom-3 z-50 block max-h-[min(76vh,680px)] lg:sticky lg:inset-x-auto lg:bottom-auto lg:top-4 lg:max-h-none lg:self-start' : 'hidden lg:sticky lg:top-4 lg:block lg:self-start'}`}>
-          <div className={`flex max-h-[calc(100vh-7rem)] min-h-[420px] flex-col overflow-hidden rounded-md border border-border bg-card shadow-lg lg:shadow-none ${toolsCollapsed ? 'min-h-0' : ''}`}>
-            <div className={`border-b border-border ${toolsCollapsed ? 'p-1.5' : 'px-3 pt-2'}`}>
-              <div className={`flex items-center ${toolsCollapsed ? 'justify-center' : 'justify-between px-1 pb-2'}`}>
-                {!toolsCollapsed ? <p className="text-sm font-medium">研究工具</p> : <span className="sr-only">研究工具已收起</span>}
-                <div className="flex items-center gap-1"><span className="text-xs text-muted-foreground">{!toolsCollapsed ? `${outline.length} 节` : ''}</span><Button type="button" variant="ghost" size="icon-sm" className="hidden xl:inline-flex" onClick={() => setToolsCollapsed((collapsed) => !collapsed)} aria-label={toolsCollapsed ? '展开研究工具' : '收起研究工具'} title={toolsCollapsed ? '展开研究工具' : '收起研究工具'}>{toolsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</Button>{mobilePanelOpen ? <Button type="button" variant="ghost" size="icon-sm" className="lg:hidden" onClick={() => setMobilePanelOpen(false)} aria-label="关闭研究工具"><X /></Button> : null}</div>
-              </div>
+        <Box component="aside" sx={{
+          position: { xs: mobilePanelOpen ? 'fixed' : 'relative', lg: 'sticky' },
+          top: { xs: 'auto', lg: 2 },
+          right: { xs: mobilePanelOpen ? 1.5 : 'auto', lg: 'auto' },
+          bottom: { xs: mobilePanelOpen ? 1.5 : 'auto', lg: 'auto' },
+          left: { xs: mobilePanelOpen ? 1.5 : 'auto', lg: 'auto' },
+          zIndex: { xs: mobilePanelOpen ? 50 : 'auto', lg: 'auto' },
+          display: { xs: mobilePanelOpen ? 'block' : 'none', lg: 'block' },
+          maxHeight: { xs: mobilePanelOpen ? 'min(76vh, 680px)' : 'none', lg: 'none' },
+          alignSelf: 'start',
+        }}>
+          <Paper variant="outlined" sx={{ display: 'flex', maxHeight: 'calc(100vh - 7rem)', minHeight: toolsCollapsed ? 0 : 420, flexDirection: 'column', overflow: 'hidden', borderColor: 'divider', bgcolor: 'background.paper', boxShadow: { xs: 'var(--dr-elevation-1)', lg: 'none' } }}>
+            <Box sx={{ p: toolsCollapsed ? 0.75 : 1.5, pb: toolsCollapsed ? 0.75 : 0, borderBottom: 1, borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: toolsCollapsed ? 'center' : 'space-between', px: toolsCollapsed ? 0 : 0.5, pb: toolsCollapsed ? 0 : 1 }}>
+                {!toolsCollapsed ? <Typography variant="control" component="p" sx={{ fontWeight: 600 }}>研究工具</Typography> : <span className="sr-only">研究工具已收起</span>}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  {!toolsCollapsed ? <Typography variant="metadata" color="text.secondary">{outline.length} 节</Typography> : null}
+                  <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { xs: 'none', xl: 'inline-flex' } }} onClick={() => setToolsCollapsed((collapsed) => !collapsed)} aria-label={toolsCollapsed ? '展开研究工具' : '收起研究工具'} title={toolsCollapsed ? '展开研究工具' : '收起研究工具'}>{toolsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</Button>
+                  {mobilePanelOpen ? <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { lg: 'none' } }} onClick={() => setMobilePanelOpen(false)} aria-label="关闭研究工具"><X /></Button> : null}
+                </Box>
+              </Box>
               {!toolsCollapsed ? (
-                <div
-                  className="-mb-px flex min-w-0 overflow-x-auto"
+                <Box
+                  sx={{ mb: '-1px', display: 'flex', minWidth: 0, overflowX: 'auto' }}
                   role="tablist"
                   aria-label="研究辅助面板"
                   onKeyDown={(e) => {
@@ -1159,7 +1222,7 @@ export default function EditorPage() {
                     { key: 'details', label: '文章信息', panelId: 'side-panel-details' },
                     { key: 'versions', label: '版本历史', panelId: 'side-panel-versions' },
                   ] as const).map((item) => (
-                    <button
+                    <Button
                       key={item.key}
                       type="button"
                       role="tab"
@@ -1167,32 +1230,43 @@ export default function EditorPage() {
                       aria-controls={item.panelId}
                       title={item.label}
                       onClick={() => setSidePanel(item.key as typeof sidePanel)}
-                      className={`min-w-max flex-none border-b-2 px-2 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${sidePanel === item.key ? 'border-foreground font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                      variant={sidePanel === item.key ? 'secondary' : 'ghost'}
+                      size="xs"
+                      sx={{
+                        minWidth: 'max-content',
+                        flex: '0 0 auto',
+                        borderRadius: 0,
+                        borderBottom: '2px solid',
+                        borderColor: sidePanel === item.key ? 'primary.main' : 'transparent',
+                        px: 1,
+                        py: 1,
+                        '&:hover': { borderColor: sidePanel === item.key ? 'primary.main' : 'divider' },
+                      }}
                     >
                       {item.label}
-                    </button>
+                    </Button>
                   ))}
-                </div>
+                </Box>
               ) : null}
-            </div>
+            </Box>
 
-            {!toolsCollapsed ? <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {!toolsCollapsed ? <Box sx={{ minHeight: 0, flex: '1 1 auto', overflowY: 'auto', p: 1.5 }}>
               {sidePanel === 'sources' && (
-                <div id="side-panel-sources" role="tabpanel" aria-label="来源与引用" className="space-y-3">
-                  <p className="text-xs leading-relaxed text-muted-foreground">来源用于支撑正文中的判断；正文中的引用标记会连接到对应证据。</p>
+                <Box id="side-panel-sources" role="tabpanel" aria-label="来源与引用" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  <Typography variant="metadata" component="p" color="text.secondary">来源用于支撑正文中的判断；正文中的引用标记会连接到对应证据。</Typography>
                   {selectedText && view !== 'preview' && (
-                    <div className="rounded border border-border bg-muted/20 p-2.5">
-                      <div className="flex items-center gap-1.5 text-xs font-medium text-foreground"><Quote className="size-3.5" />选文工具</div>
-                      <p className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted-foreground">“{selectedText}”</p>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
+                    <Paper variant="outlined" sx={{ p: 1.25, bgcolor: 'action.hover' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color: 'text.primary', typography: 'metadata', fontWeight: 600 }}><Quote size={14} />选文工具</Box>
+                      <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>“{selectedText}”</Typography>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1.5 }}>
                         <Button type="button" size="xs" variant="outline" onClick={copySelectedQuote}><Quote />复制引用</Button>
                         <Button type="button" size="xs" variant="ghost" onClick={() => insertBlock(`> ${selectedText.replace(/\n/g, '\n> ')}`)} disabled={isPublishedAi}><Link2 />插入正文</Button>
-                      </div>
-                      {sources.length > 0 && <p className="mt-1.5 text-xs text-muted-foreground">请在下方来源卡片中选择要关联的证据。</p>}
-                      {flashMessage && <p className="mt-1.5 text-xs text-status-success-fg">{flashMessage}</p>}
-                    </div>
+                      </Box>
+                      {sources.length > 0 && <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1.5 }}>请在下方来源卡片中选择要关联的证据。</Typography>}
+                      {flashMessage && <Typography variant="metadata" component="p" color="success.main" sx={{ mt: 1.5 }}>{flashMessage}</Typography>}
+                    </Paper>
                   )}
-                  <div className="space-y-2">
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                     {sources.length > 0 ? sources.map((source) => {
                       const ref = (source.sourceRef ?? {}) as { type?: string; value?: string };
                       const link = resolveResearchSourceLink(ref, source.canonicalKey);
@@ -1200,82 +1274,85 @@ export default function EditorPage() {
                       const citationMissing = Boolean(citation && !body.includes(citation.marker));
                       const citationStale = Boolean(citation && (citation.startOffset < 0 || citation.endOffset > body.length || citation.endOffset <= citation.startOffset || body.slice(citation.startOffset, citation.endOffset).trim() !== citation.quote.trim()));
                       return (
-                        <SectionCard key={source.id} tone="muted" icon={Link2} className="text-xs">
-                          <div className="text-xs uppercase tracking-wide text-muted-foreground">{sourceTypeLabel(ref.type)}</div>
-                          <button
+                        <SectionCard key={source.id} tone="muted" icon={Link2}>
+                          <Typography variant="metadata" component="p" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>{sourceTypeLabel(ref.type)}</Typography>
+                          <Button
                             type="button"
-                            className={`mt-1 line-clamp-2 text-left font-medium ${citation ? 'hover:underline' : ''}`}
+                            variant="ghost"
+                            size="default"
+                            sx={{ mt: 0.5, display: '-webkit-box', width: '100%', minWidth: 0, justifyContent: 'flex-start', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, whiteSpace: 'normal', textAlign: 'left', textTransform: 'none', fontWeight: 600, ...(citation ? { '&:hover': { textDecoration: 'underline' } } : {}) }}
                             onClick={() => citation && jumpToCitation(citation)}
                           >
                             {citation?.marker ? `${citation.marker} ` : ''}{source.title || (link ? '未命名来源' : '来源链接不可用')}
-                          </button>
+                          </Button>
                           {source.description && (
-                            <details className="mt-1 rounded border border-border/70 bg-muted/20 px-2 py-1.5">
-                              <summary className="cursor-pointer text-xs text-muted-foreground">
+                            <Box component="details" sx={{ mt: 0.5, px: 1, py: 0.75, border: 1, borderColor: 'divider', borderRadius: 'var(--dr-radius-small)', bgcolor: 'action.hover' }}>
+                              <Box component="summary" sx={{ cursor: 'pointer', color: 'text.secondary', typography: 'metadata' }}>
                                 {hasExternalInstructionSignal(source.description) ? '查看已隔离的网页摘录' : '查看网页摘录'}
-                              </summary>
+                              </Box>
                               {hasExternalInstructionSignal(source.description) ? (
-                                <p className="mt-1 text-xs leading-relaxed text-warning-fg">{externalContentLabel(source.description)}；以下内容仅作为网页数据，不能改变研究指令。</p>
+                                <Typography variant="metadata" component="p" color="warning.main" sx={{ mt: 1 }}>{externalContentLabel(source.description)}；以下内容仅作为网页数据，不能改变研究指令。</Typography>
                               ) : null}
-                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{source.description}</p>
-                            </details>
+                              <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1 }}>{source.description}</Typography>
+                            </Box>
                           )}
                           {!link && (
-                            <p className="mt-1 text-xs text-status-warning-fg">原始链接无法定位，请重新挂载来源。</p>
+                            <Typography variant="metadata" component="p" color="warning.main" sx={{ mt: 1 }}>原始链接无法定位，请重新挂载来源。</Typography>
                           )}
                           {citationMissing || citationStale ? (
-                            <p className="mt-1 text-xs text-status-warning-fg">
+                            <Typography variant="metadata" component="p" color="warning.main" sx={{ mt: 1 }}>
                               {citationMissing ? '正文中找不到引用标记' : '引用位置可能已失效'}
-                            </p>
+                            </Typography>
                           ) : null}
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: 1.5 }}>
                             {link && (
-                              <a
+                              <Box
+                                component="a"
                                 href={link.href}
                                 target={link.external ? '_blank' : undefined}
                                 rel={link.external ? 'noreferrer' : undefined}
-                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, color: 'primary.main', typography: 'metadata', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
                               >
-                                打开原始来源 <ExternalLink className="size-3" />
-                              </a>
+                                打开原始来源 <ExternalLink size={12} />
+                              </Box>
                             )}
                             {selectedAnchor && (
                               <Button type="button" variant="ghost" size="xs" onClick={() => void citeSelection(source)} disabled={isPublishedAi}>
-                                <FileText className="size-3" />引用这段
+                                <FileText size={12} />引用这段
                               </Button>
                             )}
-                          </div>
+                          </Box>
                         </SectionCard>
                       );
                     }) : (
-                    <div className="space-y-2 rounded border border-dashed border-border p-3 text-xs leading-relaxed text-muted-foreground">
-                      <p>暂时没有挂载来源。来源会用于正文引用和内容对照，不会单独出现在发布文章中。</p>
-                      <p className="text-xs">
+                    <Paper variant="outlined" sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1.5, borderStyle: 'dashed', color: 'text.secondary' }}>
+                      <Typography variant="metadata" component="p">暂时没有挂载来源。来源会用于正文引用和内容对照，不会单独出现在发布文章中。</Typography>
+                      <Typography variant="metadata" component="p">
                         添加路径：在「AI 助手」标签里选择「补充来源」即可让模型基于当前正文去搜索并挂载候选来源。
-                      </p>
-                    </div>
+                      </Typography>
+                    </Paper>
                   )}
-                  </div>
-                </div>
+                  </Box>
+                </Box>
               )}
 
               {sidePanel === 'assistant' && (
-                <div id="side-panel-assistant" role="tabpanel" aria-label="AI 助手" className="space-y-3 text-xs text-muted-foreground">
-                  <p className="font-medium text-foreground">AI 助手</p>
-                  <p>先选中正文，再选择你要完成的任务。AI 只提供建议或核验结果，接受后才会改动正文。</p>
+                <Box id="side-panel-assistant" role="tabpanel" aria-label="AI 助手" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, color: 'text.secondary' }}>
+                  <Typography variant="control" component="p" color="text.primary" sx={{ fontWeight: 600 }}>AI 助手</Typography>
+                  <Typography variant="metadata" component="p">先选中正文，再选择你要完成的任务。AI 只提供建议或核验结果，接受后才会改动正文。</Typography>
                   {assistantError ? (
-                    <div role="alert" className="rounded border border-destructive/35 bg-destructive/5 p-2.5 text-destructive">
-                      <p>{assistantError}</p>
+                    <Alert role="alert" severity="error" sx={{ py: 0.25 }}>
+                      <Typography variant="metadata" component="p">{assistantError}</Typography>
                       {!assistantBusy && assistantOperation ? (
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: 1 }}>
                           <Button type="button" size="xs" variant="outline" onClick={() => void runAssistant(assistantOperation)}>重试</Button>
-                          <span className="text-xs text-muted-foreground">失败不会改动正文。</span>
-                        </div>
+                          <Typography variant="metadata" color="text.secondary">失败不会改动正文。</Typography>
+                        </Box>
                       ) : null}
-                    </div>
+                    </Alert>
                   ) : null}
-                  {selectedText ? <div className="rounded-md border border-primary/30 bg-primary/10 p-2.5 text-foreground shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"><p className="text-xs font-medium text-primary">当前选文</p><p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{selectedText}</p></div> : null}
-                  <div className="grid gap-2">
+                  {selectedText ? <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'primary.light', bgcolor: 'action.selected' }}><Typography variant="metadata" component="p" color="primary.main" sx={{ fontWeight: 600 }}>当前选文</Typography><Typography variant="body2" component="p" sx={{ mt: 1, whiteSpace: 'pre-wrap' }}>{selectedText}</Typography></Paper> : null}
+                  <Box sx={{ display: 'grid', gap: 1 }}>
                     {([
                       { op: 'rewrite' as const, label: '改写得更清晰', hint: '重写当前段落,保持原意但更易读' },
                       { op: 'summarize' as const, label: '总结这段', hint: '压缩成简短摘要' },
@@ -1292,43 +1369,82 @@ export default function EditorPage() {
                         onClick={() => void runAssistant(operation)}
                         title={hint}
                         aria-label={`${label}:${hint}`}
-                        className="justify-start gap-1.5"
+                        sx={{ justifyContent: 'flex-start', gap: 0.75 }}
                       >
                         {assistantBusy ? '处理中…' : label}
                       </Button>
                     ))}
-                  </div>
+                  </Box>
                   {assistantBusy ? <Button type="button" size="xs" variant="ghost" onClick={cancelAssistant}>取消本次请求</Button> : null}
-                  {assistantResult && <div className="rounded border border-border bg-muted/20 p-2.5"><p className="font-medium text-foreground">建议预览</p><div className="mt-2 grid gap-2"><div><span className="text-xs text-destructive">原文</span><p className="mt-1 whitespace-pre-wrap rounded bg-destructive/5 p-2">{assistantResult.original}</p></div>{assistantResult.suggestion && <div><span className="text-xs text-status-success-fg">建议</span><p className="mt-1 whitespace-pre-wrap rounded bg-status-success-bg/40 p-2">{assistantResult.suggestion}</p></div>}</div>{assistantResult.claims.length > 0 && <div className="mt-2 space-y-1">{assistantResult.claims.map((claim) => <p key={claim.text}><span className="font-medium">[{claim.verdict}]</span> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</p>)}</div>}<div className="mt-2 flex gap-2">{assistantResult.suggestion && <Button type="button" size="xs" onClick={acceptAssistant} disabled={isPublishedAi}>接受建议</Button>}<Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button></div></div>}
-                  {!selectedText && <p>未选中文本。</p>}
-                </div>
+                  {assistantResult ? (
+                    <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+                      <Typography variant="control" component="p" sx={{ fontWeight: 600 }}>建议预览</Typography>
+                      <Box sx={{ display: 'grid', gap: 1 }}>
+                        <Box>
+                          <Typography variant="metadata" color="error.main" sx={{ fontWeight: 600 }}>原文</Typography>
+                          <Alert severity="error" icon={false} sx={{ mt: 0.5, py: 0.5 }}><Typography variant="metadata" component="p" sx={{ whiteSpace: 'pre-wrap' }}>{assistantResult.original}</Typography></Alert>
+                        </Box>
+                        {assistantResult.suggestion ? <Box><Typography variant="metadata" color="success.main" sx={{ fontWeight: 600 }}>建议</Typography><Alert severity="success" icon={false} sx={{ mt: 0.5, py: 0.5 }}><Typography variant="metadata" component="p" sx={{ whiteSpace: 'pre-wrap' }}>{assistantResult.suggestion}</Typography></Alert></Box> : null}
+                    </Box>
+                      {assistantResult.claims.length > 0 ? <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mt: 1.5 }}>{assistantResult.claims.map((claim) => <Typography key={claim.text} variant="metadata"><Box component="span" sx={{ fontWeight: 600 }}>[{claim.verdict}]</Box> {claim.text}{claim.evidence ? ` · ${claim.evidence}` : ''}</Typography>)}</Box> : null}
+                      <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
+                        {assistantResult.suggestion ? <Button type="button" size="xs" onClick={acceptAssistant} disabled={isPublishedAi}>接受建议</Button> : null}
+                        <Button type="button" size="xs" variant="ghost" onClick={() => setAssistantResult(null)}>放弃</Button>
+                      </Box>
+                    </Paper>
+                  ) : null}
+                  {!selectedText && <Typography variant="metadata">未选中文本。</Typography>}
+                </Box>
               )}
 
               {sidePanel === 'versions' && (
-                <div id="side-panel-versions" role="tabpanel" aria-label="版本历史" className="space-y-2">{(existing?.audits ?? []).map((audit) => <div key={audit.id} className="rounded border border-border p-2.5"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium">{auditActionLabel(audit.action)}</div><span className="text-xs text-muted-foreground">{new Date(audit.createdAt).toLocaleString('zh-CN')}</span></div><div className="mt-1 text-xs text-muted-foreground">{audit.editor.name}</div>{audit.sourceIntent === 'revise' ? <div className="mt-2 rounded border border-primary/15 bg-primary/[0.03] p-2 text-xs leading-5"><p className="font-medium text-primary">来自追问修订</p>{audit.sourceQuestion ? <p className="mt-0.5 text-muted-foreground">“{audit.sourceQuestion}”</p> : null}{audit.reason ? <p className="mt-0.5 text-muted-foreground">{audit.reason}</p> : null}</div> : null}{auditDiffEntries(audit.diff).length > 0 ? <div className="mt-2 space-y-1">{auditDiffEntries(audit.diff).slice(0, 3).map((entry) => <div key={entry.field} className="rounded bg-muted/40 p-1.5 text-xs"><div className="font-medium text-foreground">{entry.field}</div><div className="mt-0.5 grid gap-0.5 text-muted-foreground"><span className="line-clamp-2"><b className="text-destructive">前：</b>{entry.from}</span><span className="line-clamp-2"><b className="text-status-success-fg">后：</b>{entry.to}</span></div></div>)}</div> : <p className="mt-2 text-xs text-muted-foreground">状态记录，无字段差异。</p>}
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    className="mt-2"
-                    disabled={!audit.prevSnapshot || isPublishedAi}
-                    onClick={() => {
-                      // 恢复是 destructive:覆盖当前未保存修改。先确认避免误触
-                      if (window.confirm('恢复该版本会覆盖当前未保存的修改,确认继续?')) {
-                        void restoreAudit(audit);
-                      }
-                    }}
-                  >
-                    <RotateCcw />恢复
-                  </Button>
-                </div>)}{!existing?.audits?.length && <p className="text-xs text-muted-foreground">还没有版本记录。</p>}</div>
+                <Box id="side-panel-versions" role="tabpanel" aria-label="版本历史" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {(existing?.audits ?? []).map((audit) => (
+                    <Paper key={audit.id} variant="outlined" sx={{ p: 1.5 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="metadata" sx={{ fontWeight: 600 }}>{auditActionLabel(audit.action)}</Typography>
+                              <Typography variant="metadata" color="text.secondary" sx={{ textAlign: 'right' }}>{new Date(audit.createdAt).toLocaleString('zh-CN')}</Typography>
+                      </Box>
+                      <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>{audit.editor.name}</Typography>
+                      {audit.sourceIntent === 'revise' ? (
+                        <Box sx={{ mt: 1.5, p: 1, border: 1, borderColor: 'primary.light', borderRadius: 'var(--dr-radius-small)', bgcolor: 'action.hover' }}>
+                          <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 600 }}>来自追问修订</Typography>
+                          {audit.sourceQuestion ? <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>“{audit.sourceQuestion}”</Typography> : null}
+                          {audit.reason ? <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 0.5 }}>{audit.reason}</Typography> : null}
+                        </Box>
+                      ) : null}
+                      {auditDiffEntries(audit.diff).length > 0 ? (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 1.5 }}>
+                          {auditDiffEntries(audit.diff).slice(0, 3).map((entry) => (
+                            <Box key={entry.field} sx={{ p: 1, borderRadius: 'var(--dr-radius-small)', bgcolor: 'action.hover' }}>
+                              <Typography variant="metadata" sx={{ fontWeight: 600 }}>{entry.field}</Typography>
+                              <Typography variant="metadata" component="div" color="text.secondary" sx={{ mt: 0.5, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}><Box component="span" sx={{ color: 'error.main', fontWeight: 600 }}>前：</Box>{entry.from}</Typography>
+                              <Typography variant="metadata" component="div" color="text.secondary" sx={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden' }}><Box component="span" sx={{ color: 'success.main', fontWeight: 600 }}>后：</Box>{entry.to}</Typography>
+                            </Box>
+                          ))}
+                        </Box>
+                      ) : <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1.5 }}>状态记录，无字段差异。</Typography>}
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        sx={{ mt: 1.5 }}
+                        disabled={!audit.prevSnapshot || isPublishedAi}
+                        onClick={() => setRestoreConfirmAudit(audit)}
+                      >
+                        <RotateCcw />恢复
+                      </Button>
+                    </Paper>
+                  ))}
+                  {!existing?.audits?.length && <Typography variant="metadata" color="text.secondary">还没有版本记录。</Typography>}
+                </Box>
               )}
 
               {sidePanel === 'details' && (
-                <div id="side-panel-details" role="tabpanel" aria-label="文章信息" className="space-y-4">
-                  <p className="text-xs leading-relaxed text-muted-foreground">补充文章摘要和标签。保存草稿不受发布状态影响。</p>
-                  <div className="space-y-2.5">
-                    <p className="text-xs font-medium text-muted-foreground">研究摘要</p>
+                <Box id="side-panel-details" role="tabpanel" aria-label="文章信息" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <Typography variant="metadata" component="p" color="text.secondary">补充文章摘要和标签。保存草稿不受发布状态影响。</Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                    <Typography variant="control" component="p" color="text.secondary" sx={{ fontWeight: 600 }}>研究摘要</Typography>
                     {(
                       [
                         { id: 'bg', label: '背景', value: background, set: setBackground, ph: '调研背景…' },
@@ -1336,54 +1452,49 @@ export default function EditorPage() {
                         { id: 'rk', label: '风险', value: risks, set: setRisks, ph: '风险与待验证项…' },
                       ] as const
                     ).map((f) => (
-                      <div key={f.id} className="grid gap-1">
-                        <label htmlFor={`edit-${f.id}`} className="text-xs text-muted-foreground">{f.label}</label>
-                        <Textarea id={`edit-${f.id}`} value={f.value} onChange={(e) => f.set(e.target.value)} readOnly={isPublishedAi} rows={3} placeholder={f.ph} className="resize-y text-[13px]" />
-                      </div>
+                      <Box key={f.id} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                        <Typography variant="metadata" component="label" htmlFor={`edit-${f.id}`} color="text.secondary">{f.label}</Typography>
+                        <Textarea id={`edit-${f.id}`} value={f.value} onChange={(e) => f.set(e.target.value)} readOnly={isPublishedAi} rows={3} placeholder={f.ph} />
+                      </Box>
                     ))}
-                  </div>
-                  <div className="border-t border-border pt-3">
-                    <div className={cn(
-                      'rounded-md border p-3 text-xs',
-                      publicationStatus.tone === 'success'
-                        ? 'border-status-success-border bg-status-success-bg/25'
-                        : 'border-status-warning-fg/30 bg-status-warning-bg/25',
-                    )}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">发布状态</span>
-                        <span className={publicationStatus.tone === 'success' ? 'font-medium text-status-success-fg' : 'font-medium text-status-warning-fg'}>{publicationStatus.label}</span>
-                      </div>
-                      <p className="mt-1.5 leading-5 text-muted-foreground">{publicationStatus.detail}</p>
+                    </Box>
+                  <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
+                    <Paper variant="outlined" sx={{ p: 1.5, borderColor: publicationStatus.tone === 'success' ? 'var(--dr-color-success)' : 'var(--dr-color-warning)', bgcolor: publicationStatus.tone === 'success' ? 'var(--dr-color-success-container)' : 'var(--dr-color-warning-container)' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="metadata" color="text.secondary" sx={{ fontWeight: 600 }}>发布状态</Typography>
+                        <Typography variant="metadata" sx={{ color: publicationStatus.tone === 'success' ? 'var(--dr-color-success)' : 'var(--dr-color-warning)', fontWeight: 600 }}>{publicationStatus.label}</Typography>
+                      </Box>
+                      <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1 }}>{publicationStatus.detail}</Typography>
                       {existing?.status === 'draft' && reviewRequired && !reviewPublishable && summaryComplete && (
-                        <Button type="button" variant="outline" size="sm" className="mt-2.5 w-full bg-background/70" onClick={handleReview} disabled={reviewDisabled}>
+                        <Button type="button" variant="outline" size="sm" sx={{ mt: 1.5, width: '100%', bgcolor: 'background.paper' }} onClick={handleReview} disabled={reviewDisabled}>
                           <RotateCcw />
                           {reviewMutation.isPending || reviewInProgress ? '正在检查…' : currentReviewIsCurrent ? '重新检查资料' : '检查当前稿'}
                         </Button>
                       )}
                       {reviewRequired && (
-                        <details className="mt-2.5 border-t border-border/70 pt-2.5">
-                          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">查看依据详情</summary>
-                          <div className="mt-2 space-y-1.5 text-xs leading-5 text-muted-foreground">
-                            <p>资料覆盖：{researchCoverageLabel === '已满足' ? '已覆盖关键部分' : researchCoverageLabel === '不足' ? '还有缺口' : '暂未判断'}</p>
-                            <p>可核对来源：{sources.length} 条</p>
-                            {publicationGate?.status === 'publish_with_disclosure' ? <p>发布后会保留 {publicationGate.disclosedCount} 条不确定性提示。</p> : null}
-                            {currentReviewIsCurrent ? <p>以上状态对应当前正文版本。</p> : <p>正文有过修改，以上状态尚未更新。</p>}
-                          </div>
-                        </details>
+                        <Box component="details" sx={{ mt: 1.5, pt: 1.25, borderTop: 1, borderColor: 'divider' }}>
+                          <Box component="summary" sx={{ cursor: 'pointer', color: 'text.secondary', typography: 'metadata', '&:hover': { color: 'text.primary' } }}>查看依据详情</Box>
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 1, color: 'text.secondary' }}>
+                            <Typography variant="metadata">资料覆盖：{researchCoverageLabel === '已满足' ? '已覆盖关键部分' : researchCoverageLabel === '不足' ? '还有缺口' : '暂未判断'}</Typography>
+                            <Typography variant="metadata">可核对来源：{sources.length} 条</Typography>
+                            {publicationGate?.status === 'publish_with_disclosure' ? <Typography variant="metadata">发布后会保留 {publicationGate.disclosedCount} 条不确定性提示。</Typography> : null}
+                            {currentReviewIsCurrent ? <Typography variant="metadata">以上状态对应当前正文版本。</Typography> : <Typography variant="metadata">正文有过修改，以上状态尚未更新。</Typography>}
+                          </Box>
+                        </Box>
                       )}
-                    </div>
-                  </div>
-                  <div className="border-t border-border pt-3">
-                    <label htmlFor="edit-tags" className="text-xs font-medium text-muted-foreground">标签</label>
-                    <Input id="edit-tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} readOnly={isPublishedAi} placeholder="例如: React, TypeScript, 架构" className="mt-1.5" />
-                    {tags.length > 0 && <TagList className="mt-1">{tags.map((t) => <TagChip key={t}>{t}</TagChip>)}</TagList>}
-                    <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">用逗号分隔，建议保留 2–5 个检索词。</p>
-                  </div>
-                </div>
+                    </Paper>
+                  </Box>
+                  <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
+                    <Typography variant="metadata" component="label" htmlFor="edit-tags" color="text.secondary" sx={{ fontWeight: 600 }}>标签</Typography>
+                    <Input id="edit-tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} readOnly={isPublishedAi} placeholder="例如: React, TypeScript, 架构" sx={{ mt: 1.5 }} />
+                    {tags.length > 0 && <Box sx={{ mt: 0.5 }}><TagList>{tags.map((t) => <TagChip key={t}>{t}</TagChip>)}</TagList></Box>}
+                    <Typography variant="metadata" component="p" color="text.secondary" sx={{ mt: 1.5 }}>用逗号分隔，建议保留 2–5 个检索词。</Typography>
+                  </Box>
+                </Box>
               )}
-            </div> : null}
-          </div>
-          {!toolsCollapsed ? <button
+            </Box> : null}
+          </Paper>
+          {!toolsCollapsed ? <Box component="button"
             type="button"
             role="separator"
             aria-orientation="vertical"
@@ -1400,23 +1511,24 @@ export default function EditorPage() {
               if (event.key === 'End') { event.preventDefault(); setToolsWidth(460); }
             }}
             onPointerDown={(event) => startResize('tools', event)}
-            className="absolute -left-2 top-0 hidden h-full w-4 cursor-col-resize xl:block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          ><span className="mx-auto block h-full w-px bg-transparent transition-colors hover:bg-border" /></button> : null}
-        </aside>
-      </div>
-      <Dialog open={publishConfirmOpen} onOpenChange={setPublishConfirmOpen}>
+            sx={{ position: 'absolute', top: 0, left: -8, display: { xs: 'none', xl: 'block' }, width: 16, height: '100%', cursor: 'col-resize', border: 0, p: 0, bgcolor: 'transparent', '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: -2 }, '&:hover > span': { bgcolor: 'divider' } }}
+          ><Box component="span" sx={{ display: 'block', width: '1px', height: '100%', mx: 'auto', bgcolor: 'transparent', transition: 'background-color var(--dr-motion-fast)' }} /></Box> : null}
+        </Box>
+      </Box>
+      <Dialog open={publishConfirmOpen} onClose={() => setPublishConfirmOpen(false)} fullWidth maxWidth="sm" aria-labelledby="publish-confirm-title">
+        <DialogTitle id="publish-confirm-title">
+          <Typography variant="panelTitle" component="h2">确认发布调研？</Typography>
+        </DialogTitle>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>确认发布调研？</DialogTitle>
-            <DialogDescription>
+          <DialogContentText>
               发布后团队成员可以阅读和评论。{publicationGate?.status === 'publish_with_disclosure'
                 ? `当前版本保留 ${publicationGate.disclosedCount} 条已接受的不确定性，请确认它们已反映在风险或后续行动中。`
                 : publicationGate?.status === 'clear' && researchCoverageLabel === '未评估'
                   ? '关键依据已有，但资料范围没有自动评估；请确认当前资料确实足以回答原始问题。'
                 : '请确认结论、证据和风险已核对。'}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
             <Button type="button" variant="outline" onClick={() => setPublishConfirmOpen(false)}>
               继续编辑
             </Button>
@@ -1430,13 +1542,124 @@ export default function EditorPage() {
             >
               <Send />{publishMutation.isPending ? '发布中…' : '确认发布'}
             </Button>
-          </DialogFooter>
-        </DialogContent>
+        </DialogActions>
       </Dialog>
+      <AppDialog
+        open={Boolean(restoreConfirmAudit)}
+        onClose={() => setRestoreConfirmAudit(null)}
+        title="确认恢复历史版本？"
+        description="恢复该版本会覆盖当前未保存的修改,确认继续?"
+        actions={(
+          <>
+            <Button type="button" variant="outline" onClick={() => setRestoreConfirmAudit(null)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const audit = restoreConfirmAudit;
+                setRestoreConfirmAudit(null);
+                if (audit) void restoreAudit(audit);
+              }}
+            >
+              确认恢复
+            </Button>
+          </>
+        )}
+      />
       {confirmDialog}
-    </div>
+    </Box>
   );
 }
+
+type EditorButtonVariant = 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
+type EditorButtonSize = 'default' | 'sm' | 'xs' | 'lg' | 'icon' | 'icon-sm';
+
+interface EditorButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: EditorButtonVariant;
+  size?: EditorButtonSize;
+  sx?: SxProps<Theme>;
+}
+
+/** Preserve the editor's button call sites while rendering with the shared MUI theme. */
+const Button = forwardRef<HTMLButtonElement, EditorButtonProps>(function Button({
+  variant = 'default',
+  size = 'default',
+  className,
+  sx,
+  ...props
+}, ref) {
+  const muiVariant = variant === 'outline' ? 'outlined' : variant === 'ghost' || variant === 'link' ? 'text' : 'contained';
+  const color = variant === 'destructive' ? 'error' : variant === 'ghost' || variant === 'outline' || variant === 'secondary' ? 'inherit' : 'primary';
+  const sizeSx: SxProps<Theme> = {
+    ...(size === 'xs' ? { '@media (pointer: fine)': { minHeight: 28, px: 1, py: 0.5 } } : {}),
+    ...(size === 'sm' ? { '@media (pointer: fine)': { minHeight: 32, px: 1.5, py: 0.5 } } : {}),
+    ...(size === 'lg' ? { minHeight: 'var(--dr-touch-target)', px: 3 } : {}),
+    ...(size === 'icon' || size === 'icon-sm' ? {
+      width: 'var(--dr-control-height)',
+      minWidth: 'var(--dr-control-height)',
+      px: 0,
+      gap: 0,
+    } : {}),
+    ...(size === 'icon' ? { minHeight: 'var(--dr-control-height)' } : {}),
+    ...(variant === 'secondary' ? {
+      bgcolor: 'action.selected',
+      color: 'text.primary',
+      '&:hover': { bgcolor: 'action.focus' },
+    } : {}),
+    ...(variant === 'link' ? { minHeight: 'auto', px: 0, textDecoration: 'underline', textUnderlineOffset: 3 } : {}),
+  };
+
+  return (
+    <MaterialButton
+      ref={ref}
+      {...props}
+      className={className}
+      variant={muiVariant}
+      color={color}
+      size={size === 'default' || size === 'lg' ? 'medium' : 'small'}
+      sx={sx ? [sizeSx, ...(Array.isArray(sx) ? sx : [sx])] : sizeSx}
+    />
+  );
+});
+
+const editorTextareaSx: SxProps<Theme> = {
+  display: 'block',
+  boxSizing: 'border-box',
+  width: '100%',
+  maxWidth: '100%',
+  px: 1.5,
+  py: 1.25,
+  border: '1px solid',
+  borderColor: 'text.disabled',
+  borderRadius: 'var(--dr-radius-small)',
+  bgcolor: 'background.paper',
+  color: 'text.primary',
+  fontFamily: 'inherit',
+  fontSize: 'var(--dr-type-body)',
+  lineHeight: 'var(--dr-line-height-body)',
+  resize: 'vertical',
+  '&::placeholder': { color: 'text.disabled', opacity: 1 },
+  '&:hover': { borderColor: 'text.secondary' },
+  '&:focus-visible': { outline: '2px solid var(--dr-color-primary)', outlineOffset: 2, borderColor: 'primary.main' },
+  '&:read-only': { bgcolor: 'action.hover' },
+};
+
+interface EditorTextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
+  sx?: SxProps<Theme>;
+}
+
+/** A MUI-system styled native textarea; keeping the actual textarea preserves selection APIs and undo. */
+const Textarea = forwardRef<HTMLTextAreaElement, EditorTextareaProps>(function Textarea({ sx, ...props }, ref) {
+  return (
+    <Box
+      component="textarea"
+      ref={ref}
+      {...props}
+      sx={sx ? [editorTextareaSx, ...(Array.isArray(sx) ? sx : [sx])] : editorTextareaSx}
+    />
+  );
+});
 
 function draftSnapshot(fields: DraftFields): string {
   return JSON.stringify(fields);

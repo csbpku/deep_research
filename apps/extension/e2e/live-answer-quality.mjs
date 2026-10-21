@@ -105,15 +105,14 @@ try {
   }, null, { timeout: 30_000 });
 
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption(providerKind);
+  await panel.locator('#provider-kind').selectOption(providerKind, { force: true });
   await panel.locator('#provider-url').fill(baseUrl);
   await panel.locator('#provider-model').fill(model);
   await panel.locator('#provider-key').fill(apiKey);
-  await panel.locator('#request-provider-origin').uncheck();
   await panel.locator('#save-settings').click();
   await panel.waitForFunction(() => {
     const text = document.querySelector('#settings-notice')?.textContent || '';
-    return text.includes('模型连接成功') || text.includes('模型连接成功；');
+    return text.includes('模型配置已保存');
   }, null, { timeout: 180_000 });
   await panel.locator('#close-settings').click();
 

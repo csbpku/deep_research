@@ -4,6 +4,7 @@
     "jsx": "react-jsx",
     "allowJs": true,
     "checkJs": false,
+    "resolveJsonModule": true,
     "noEmit": true
   },
   "include": [

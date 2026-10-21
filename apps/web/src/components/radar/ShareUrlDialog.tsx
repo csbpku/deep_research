@@ -1,22 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Link as LinkIcon, Loader2 } from 'lucide-react';
+import { CheckCircle2, Link as LinkIcon } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
+import { AppButton as Button } from '@/components/material/AppButton';
+import { AppDialog } from '@/components/material/AppDialog';
+import TextField from '@mui/material/TextField';
+import Chip from '@mui/material/Chip';
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
+import { ErrorState, LoadingState } from '@/components/StateMessage';
 
 interface ShareItem {
   id: string;
@@ -38,6 +33,7 @@ export function ShareUrlDialog() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
+  const urlRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const history = useQuery<{ items: ShareItem[] }>({
     queryKey: ['my-share-submissions'],
@@ -71,67 +67,62 @@ export function ShareUrlDialog() {
 
   const items = history.data?.items ?? [];
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button type="button" size="sm"><LinkIcon />分享链接</Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>分享技术链接</DialogTitle>
-          <DialogDescription>
-            系统会安全抓取并生成摘要，管理员审核后才会出现在技术雷达。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="min-w-0 space-y-3">
-          <Input
+    <>
+      <Button type="button" variant="contained" onClick={() => setOpen(true)}><LinkIcon />分享链接</Button>
+      <AppDialog open={open} onClose={() => setOpen(false)} title="分享技术链接"
+        initialFocusRef={urlRef}
+        description="系统会安全抓取并生成摘要，管理员审核后才会出现在技术雷达。"
+        actions={<>
+          <Button type="button" variant="outlined" onClick={() => setOpen(false)}>关闭</Button>
+          <Button type="button" variant="contained" disabled={!url.trim() || submit.isPending} loading={submit.isPending} onClick={() => submit.mutate()}>
+            <LinkIcon aria-hidden />提交审核
+          </Button>
+        </>}
+      >
+        <Box sx={{ minWidth: 0, display: 'grid', gap: space.md, paddingTop: space.xs }}>
+          <TextField fullWidth inputRef={urlRef} label="分享 URL"
             type="url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             placeholder="https://example.com/technical-article"
-            aria-label="分享 URL"
+            slotProps={{ htmlInput: { 'aria-label': '分享 URL' } }}
           />
-          <Textarea
+          <TextField fullWidth multiline minRows={3} label="分享说明（可选）"
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            maxLength={500}
+            slotProps={{ htmlInput: { maxLength: 500, 'aria-label': '分享说明' } }}
             placeholder="为什么值得关注（可选）"
-            aria-label="分享说明"
           />
-          {submit.error ? <p role="alert" className="text-sm text-destructive">{submit.error.message}</p> : null}
+          {submit.error ? <ErrorState title="提交失败" description={submit.error.message} /> : null}
           {submit.isSuccess ? (
-            <p className="flex items-center gap-1.5 text-sm text-status-succeeded-fg">
-              <CheckCircle2 className="size-4" />已提交，可在下方查看处理状态。
-            </p>
+            <Typography role="status" variant="body1" color="success.main" sx={{ display: 'flex', alignItems: 'center', gap: space.sm }}>
+              <CheckCircle2 size={16} aria-hidden />已提交，可在下方查看处理状态。
+            </Typography>
           ) : null}
-          <section aria-label="我的分享记录" className="min-w-0">
-            <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">最近分享</h3>
-            {history.isLoading ? <p className="text-sm text-muted-foreground">加载中…</p> : null}
-            {!history.isLoading && items.length === 0 ? <p className="text-sm text-muted-foreground">还没有分享记录。</p> : null}
-            <ul className="max-h-52 min-w-0 space-y-2 overflow-y-auto">
+          <Box component="section" aria-label="我的分享记录" sx={{ minWidth: 0 }}>
+            <Typography component="h3" variant="fieldTitle" sx={{ marginBottom: space.sm }}>最近分享</Typography>
+            {history.isLoading ? <LoadingState label="加载中…" /> : null}
+            {history.isError ? <ErrorState title="分享记录加载失败" description={history.error.message} action={<Button onClick={() => void history.refetch()}>重试</Button>} /> : null}
+            {!history.isLoading && !history.isError && items.length === 0 ? <Typography variant="body1" color="text.secondary">还没有分享记录。</Typography> : null}
+            <Box component="ul" sx={{ maxHeight: '208px', minWidth: 0, display: 'grid', gap: space.sm, overflowY: 'auto', listStyle: 'none', padding: 0, margin: 0 }}>
               {items.map((item) => (
-                <li key={item.id} className="min-w-0 rounded-md border border-border p-2 text-xs">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">{STATUS_LABEL[item.status]}</Badge>
-                    <span className="min-w-0 flex-1 truncate font-medium">{item.fetchedTitle ?? item.url}</span>
-                  </div>
-                  {item.fetchErrorMessage ? <p className="mt-1 min-w-0 break-words text-destructive">{item.fetchErrorMessage}</p> : null}
+                <Box component="li" key={item.id} sx={{ minWidth: 0, border: 1, borderColor: 'divider', borderRadius: tokens['radius-small'], padding: space.sm }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm }}>
+                    <Chip size="small" variant="outlined" label={STATUS_LABEL[item.status]} />
+                    <Typography variant="metadata" noWrap sx={{ minWidth: 0, flex: 1, fontWeight: 500 }}>{item.fetchedTitle ?? item.url}</Typography>
+                  </Box>
+                  {item.fetchErrorMessage ? <Typography variant="metadata" color="error.main" component="p" sx={{ marginTop: space.xs, overflowWrap: 'anywhere' }}>{item.fetchErrorMessage}</Typography> : null}
                   {item.publishedSummaryId ? (
-                    <a className="mt-1 inline-block min-w-0 max-w-full truncate text-primary hover:underline" href={`/radar/${item.publishedSummaryId}`}>
+                    <Button component="a" href={`/radar/${item.publishedSummaryId}`} sx={{ marginTop: space.xs }}>
                       查看已收录内容
-                    </a>
+                    </Button>
                   ) : null}
-                </li>
+                </Box>
               ))}
-            </ul>
-          </section>
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => setOpen(false)}>关闭</Button>
-          <Button type="button" disabled={!url.trim() || submit.isPending} onClick={() => submit.mutate()}>
-            {submit.isPending ? <Loader2 className="animate-spin" /> : <LinkIcon />}提交审核
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            </Box>
+          </Box>
+        </Box>
+      </AppDialog>
+    </>
   );
 }

@@ -2,15 +2,21 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { Check, Lightbulb, Loader2, RotateCw, X } from 'lucide-react';
+import { Check, Lightbulb, RotateCw, X } from 'lucide-react';
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import FormLabel from '@mui/material/FormLabel';
+import MaterialLink from '@mui/material/Link';
+import OutlinedInput from '@mui/material/OutlinedInput';
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
+import { space, tokens } from '@deep-research/design-system';
 
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { AppButton, AppIconButton } from '@/components/material/AppButton';
+import { AppTextField } from '@/components/material/AppTextField';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import type { KnowledgeSourceKind } from '@/lib/knowledge-card';
-import { cn } from '@/lib/utils';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -41,6 +47,7 @@ export function KnowledgeCardComposer({
   const [selectedText, setSelectedText] = useState('');
   const [derivedFromText, setDerivedFromText] = useState('');
   const deriveInFlight = useRef(false);
+  const confirmationKey = useRef('');
 
   useEffect(() => {
     function updateSelection(event: Event) {
@@ -72,6 +79,7 @@ export function KnowledgeCardComposer({
     const sourceText = selectedText;
     if (sourceText.length < 8) return;
     deriveInFlight.current = true;
+    confirmationKey.current = crypto.randomUUID();
     setOpen(true);
     setLoading(true);
     setError(null);
@@ -118,6 +126,7 @@ export function KnowledgeCardComposer({
           body: normalizedBody,
           conclusion: conclusion.trim(),
           tags: tags.split(/[,，、]/u).map((tag) => tag.trim()).filter(Boolean).slice(0, 10),
+          idempotencyKey: confirmationKey.current,
         }),
       });
       if (!response.ok) {
@@ -134,107 +143,108 @@ export function KnowledgeCardComposer({
   }
 
   return (
-    <div className="mt-2" data-knowledge-card-composer="true">
+    <Box sx={{ mt: space.sm }} data-knowledge-card-composer="true">
       {savedId ? (
-        <p className="flex flex-wrap items-center gap-1.5 text-xs text-status-success-fg">
-          <Check className="size-3.5" />
+        <Typography component="p" variant="metadata" color="success.main" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.xs }}>
+          <Check aria-hidden="true" size={14} />
           已保存知识卡片
-          <Link href={`/researches/${savedId}`} className="font-medium text-primary hover:underline">查看</Link>
-        </p>
+          <MaterialLink component={Link} href={`/researches/${savedId}`} underline="hover" color="primary.main" sx={{ fontWeight: 500 }}>查看</MaterialLink>
+        </Typography>
       ) : (
         <>
           {!open && selectedText.length >= 8 ? (
-            <Button type="button" variant="ghost" size="xs" onClick={() => void derive()}>
-              <Lightbulb className="size-3.5" />
+            <AppButton type="button" variant="text" size="small" onClick={() => void derive()}>
+              <Lightbulb aria-hidden="true" />
               存为知识
-            </Button>
+            </AppButton>
           ) : null}
           {open ? (
-            <div className="rounded-md border border-method-ai/25 bg-method-ai/5 p-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-xs font-semibold">知识卡片预览</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">仅根据所选判断生成；保存后是私人草稿。</p>
-                </div>
-                <button
+            <Paper variant="outlined" sx={{ display: 'grid', gap: space.md, p: space.md, borderLeftWidth: 2, borderLeftColor: 'var(--dr-color-inference)', bgcolor: 'var(--dr-color-inference-container)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.sm }}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="fieldTitle">知识卡片预览</Typography>
+                  <Typography variant="metadata" color="text.secondary" sx={{ mt: space.xs }}>仅根据所选判断生成；保存后是私人草稿。</Typography>
+                </Box>
+                <AppIconButton
                   type="button"
+                  size="small"
                   aria-label="关闭知识卡片预览"
-                  className="rounded p-1 text-muted-foreground hover:bg-muted"
                   onClick={() => { setOpen(false); setError(null); }}
                 >
-                  <X className="size-3.5" />
-                </button>
-              </div>
-              <blockquote
+                  <X aria-hidden="true" />
+                </AppIconButton>
+              </Box>
+              <Box component="blockquote"
                 aria-label="本次提炼所选原文"
                 title={derivedFromText}
-                className="mt-2 border-l-2 border-method-ai/40 pl-2 text-xs leading-5 text-muted-foreground"
+                sx={{ m: 0, pl: space.sm, borderLeft: 2, borderColor: 'var(--dr-color-inference)', color: 'text.secondary', typography: 'metadata', lineHeight: tokens['line-height-body'] }}
               >
                 {derivedFromText.length > 360 ? `${derivedFromText.slice(0, 360)}…` : derivedFromText}
-              </blockquote>
+              </Box>
               {loading ? (
-                <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground" role="status">
-                  <Loader2 className="size-3.5 animate-spin" />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm, color: 'text.secondary', typography: 'metadata' }} role="status">
+                  <CircularProgress aria-hidden="true" size={14} color="inherit" />
                   正在提炼…
-                </div>
+                </Box>
               ) : preview ? (
-                <div className="mt-3 grid gap-2">
-                  <label className="grid gap-1 text-xs font-medium">
-                    标题
-                    <Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={300} className="h-8 bg-background text-xs" />
-                  </label>
-                  <label className="grid gap-1 text-xs font-medium">
-                    核心结论
-                    <Textarea value={body} onChange={(event) => setBody(event.target.value)} maxLength={50_000} rows={4} className="min-h-[96px] bg-background text-xs leading-5" />
-                  </label>
-                  <label className="grid gap-1 text-xs font-medium">
-                    一句话结论
-                    <Input value={conclusion} onChange={(event) => setConclusion(event.target.value)} maxLength={2_000} className="h-8 bg-background text-xs" />
-                  </label>
-                  <label className="grid gap-1 text-xs font-medium">
-                    标签
-                    <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用顿号或逗号分隔" maxLength={400} className="h-8 bg-background text-xs" />
-                  </label>
-                  {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
-                  <div className="flex flex-wrap justify-end gap-2 pt-1">
-                    <Button type="button" variant="ghost" size="xs" onClick={() => { setOpen(false); setPreview(null); setError(null); }} disabled={saving}>取消</Button>
-                    <Button type="button" size="xs" onClick={() => void save()} disabled={derivedFromText.length < 8 || !title.trim() || !body.trim() || saving}>
-                      {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                <Box sx={{ display: 'grid', gap: space.sm }}>
+                  <Box sx={{ display: 'grid', gap: space.xs }}>
+                    <FormLabel htmlFor={`knowledge-title-${messageId}`} sx={{ typography: 'metadata', fontWeight: 500, color: 'text.primary' }}>标题</FormLabel>
+                    <AppTextField id={`knowledge-title-${messageId}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={300} sx={{ fontSize: tokens['type-caption'] }} />
+                  </Box>
+                  <Box sx={{ display: 'grid', gap: space.xs }}>
+                    <FormLabel htmlFor={`knowledge-body-${messageId}`} sx={{ typography: 'metadata', fontWeight: 500, color: 'text.primary' }}>核心结论</FormLabel>
+                    <OutlinedInput id={`knowledge-body-${messageId}`} fullWidth multiline rows={4} value={body} onChange={(event) => setBody(event.target.value)} inputProps={{ maxLength: 50_000 }} sx={{ alignItems: 'flex-start', fontSize: tokens['type-caption'], lineHeight: tokens['line-height-body'] }} />
+                  </Box>
+                  <Box sx={{ display: 'grid', gap: space.xs }}>
+                    <FormLabel htmlFor={`knowledge-conclusion-${messageId}`} sx={{ typography: 'metadata', fontWeight: 500, color: 'text.primary' }}>一句话结论</FormLabel>
+                    <AppTextField id={`knowledge-conclusion-${messageId}`} value={conclusion} onChange={(event) => setConclusion(event.target.value)} maxLength={2_000} sx={{ fontSize: tokens['type-caption'] }} />
+                  </Box>
+                  <Box sx={{ display: 'grid', gap: space.xs }}>
+                    <FormLabel htmlFor={`knowledge-tags-${messageId}`} sx={{ typography: 'metadata', fontWeight: 500, color: 'text.primary' }}>标签</FormLabel>
+                    <AppTextField id={`knowledge-tags-${messageId}`} value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用顿号或逗号分隔" maxLength={400} sx={{ fontSize: tokens['type-caption'] }} />
+                  </Box>
+                  {error ? <Typography role="alert" variant="metadata" color="error.main">{error}</Typography> : null}
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: space.sm, pt: space.xs }}>
+                    <AppButton type="button" variant="text" size="small" onClick={() => { setOpen(false); setPreview(null); setError(null); }} disabled={saving}>取消</AppButton>
+                    <AppButton type="button" variant="contained" size="small" onClick={() => void save()} disabled={derivedFromText.length < 8 || !title.trim() || !body.trim() || saving}>
+                      {saving ? <CircularProgress aria-hidden="true" size={14} color="inherit" /> : <Check aria-hidden="true" />}
                       {saving ? '保存中…' : '保存知识卡片'}
-                    </Button>
-                  </div>
-                </div>
+                    </AppButton>
+                  </Box>
+                </Box>
               ) : (
-                <div className="mt-3 space-y-2">
-                  <p
+                <Box sx={{ display: 'grid', gap: space.sm }}>
+                  <Typography
                     role={error ? 'alert' : 'status'}
-                    className={cn('text-xs', error ? 'text-destructive' : 'text-muted-foreground')}
+                    variant="metadata"
+                    color={error ? 'error.main' : 'text.secondary'}
                   >
                     {error ?? '正在准备预览…'}
-                  </p>
+                  </Typography>
                   {error ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button type="button" size="sm" variant="outline" onClick={() => void derive()} disabled={loading}>
-                        {loading ? <Loader2 className="animate-spin" /> : <RotateCw />}
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
+                      <AppButton type="button" size="small" variant="outlined" onClick={() => void derive()} disabled={loading}>
+                        {loading ? <CircularProgress aria-hidden="true" size={14} color="inherit" /> : <RotateCw aria-hidden="true" />}
                         重试提炼
-                      </Button>
-                      <Button
+                      </AppButton>
+                      <AppButton
                         type="button"
-                        size="sm"
-                        variant="ghost"
+                        size="small"
+                        variant="text"
                         onClick={() => { setOpen(false); setError(null); }}
                         disabled={loading}
                       >
                         关闭
-                      </Button>
-                    </div>
+                      </AppButton>
+                    </Box>
                   ) : null}
-                </div>
+                </Box>
               )}
-            </div>
+            </Paper>
           ) : null}
         </>
       )}
-    </div>
+    </Box>
   );
 }
