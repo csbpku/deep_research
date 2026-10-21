@@ -433,9 +433,9 @@ jobs:
             mv -f "$tmp" .env
           }
 
-          restore_beta_env() {
+          restore_release_env() {
             local key value
-            for key in READING_EXTENSION_BETA_URL READING_EXTENSION_BETA_PATH READING_EXTENSION_BETA_VERSION READING_EXTENSION_BETA_SHA256; do
+            for key in READING_EXTENSION_BETA_URL READING_EXTENSION_BETA_PATH READING_EXTENSION_BETA_VERSION READING_EXTENSION_BETA_SHA256 WEB_IMAGE AI_ENGINE_IMAGE; do
               if grep -q "^${key}=" "$beta_env_backup"; then
                 value="$(awk -v key="$key" 'index($0, key "=") == 1 { sub("^[^=]*=", ""); print; exit }' "$beta_env_backup")"
                 set_env_value "$key" "$value"
@@ -466,8 +466,8 @@ jobs:
             [ "$status" -ne 0 ] || status=1
             trap - ERR
             set +e
-            echo "[deploy] release failed; restoring previous Beta config and attempting image rollback" >&2
-            if [ "$beta_env_updated" -eq 1 ]; then restore_beta_env || true; fi
+            echo "[deploy] release failed; restoring previous release config and attempting image rollback" >&2
+            if [ "$beta_env_updated" -eq 1 ]; then restore_release_env || true; fi
             if [ -n "$previous_web_image" ] && [ -n "$previous_ai_image" ]; then
               export WEB_IMAGE="$previous_web_image"
               export AI_ENGINE_IMAGE="$previous_ai_image"
@@ -588,6 +588,10 @@ jobs:
               rollback 1
             }
           done
+          # Persist the verified images as well as the marker. Source-snapshot
+          # selectors in .env must not undo this release on the next compose up.
+          set_env_value WEB_IMAGE "$WEB_IMAGE"
+          set_env_value AI_ENGINE_IMAGE "$AI_ENGINE_IMAGE"
           printf '%s\n' "$IMAGE_TAG" > .deployed-image-tag
           echo "[deploy] retained configuration backup: $beta_env_backup"
           trap - ERR
