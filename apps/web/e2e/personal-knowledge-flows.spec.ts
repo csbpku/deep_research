@@ -259,12 +259,14 @@ test.describe('Research follow-up and personal knowledge', () => {
       expect(retrieved.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: savedResearchId }),
       ]));
-      const suggestedSource = page.getByRole('button', { name: new RegExp(sourceTitle) });
+      const sourceCard = page.getByRole('region', { name: '相关历史判断与资料' })
+        .locator('label').filter({ hasText: sourceTitle });
+      const suggestedSource = sourceCard.getByRole('checkbox', { name: `使用资料：${sourceTitle}`, exact: true });
       await expect(suggestedSource).toBeVisible();
-      await expect(suggestedSource).toContainText('仅本人');
-      await expect(suggestedSource).toHaveAttribute('aria-pressed', 'false');
-      await suggestedSource.click();
-      await expect(suggestedSource).toHaveAttribute('aria-pressed', 'true');
+      await expect(sourceCard).toContainText('仅本人');
+      await expect(suggestedSource).not.toBeChecked();
+      await suggestedSource.check();
+      await expect(suggestedSource).toBeChecked();
       await page.getByRole('button', { name: '开始调研' }).click();
 
       await expect.poll(() => submitted).not.toBeNull();
