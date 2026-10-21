@@ -216,6 +216,8 @@ cd packages/ai-engine && uv run pytest -q && uv run ruff check . && uv run mypy 
 
 推荐 Ubuntu 24.04 LTS、2 vCPU / 4 GB RAM 起步、独立域名和非 root 运维账号。以下是当前仓库已支持的单机拓扑；高可用、多机数据库和集中监控不在当前范围。
 
+日常升级通过下方 GitHub Actions 流程发布，开发与合并约定见 [`CONTRIBUTING.md`](./CONTRIBUTING.md)。下面的主机初始化与本机构建示例仅用于首次搭建或明确授权的应急操作；已有生产配置不得重复复制示例 `.env` 覆盖。
+
 1. DNS：将域名的 `A/AAAA` 记录指向 VPS；先等待解析生效。
 2. 主机：安装 Docker Engine/Compose，克隆到 `/opt/deep_research`，只允许 SSH、80、443 入站；不要放行 3000、4000、5432。
 3. Secrets：复制 `.env.example` 为 `.env`，权限设为 `600`；用 `openssl rand -hex 32` 分别生成数据库、NextAuth 和内部服务令牌。设置 `NEXTAUTH_URL=https://research.example.com`。如启用 Google OAuth，再登记 `https://research.example.com/api/auth/callback/google`。
@@ -238,7 +240,7 @@ curl -fsS https://research.example.com/ai-healthz
 
 #### GitHub Actions + GHCR 快速部署
 
-仓库提供 `.github/workflows/deploy.yml`。它在 `CI` 成功后自动构建 Web、AI engine 两个 Linux/amd64 核心镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；VPS 上的 `.env`、数据库卷、证书和日志不会被覆盖。真实浏览器 `render-review` 改为按需启用的 Compose profile，不进入默认发布链路。失败时工作流会尝试恢复上一次记录的镜像 SHA。
+仓库提供 `.github/workflows/deploy.yml`。它在 `main` 的 CI 成功后自动构建 Web、AI engine 两个 Linux/amd64 核心镜像，推送带 commit SHA 的不可变 GHCR 标签，再通过 SSH 让 VPS 拉取并启动；保留 VPS `.env` 中的应用配置与凭据，只更新发布元数据和验证过的镜像选择器，数据库卷、证书和日志保持原样。真实浏览器 `render-review` 改为按需启用的 Compose profile，不进入默认发布链路。失败时工作流尝试恢复发布前实际运行的镜像引用和发布配置。
 
 首次启用需要在 GitHub `Settings → Environments → production` 配置：
 
@@ -248,7 +250,7 @@ curl -fsS https://research.example.com/ai-healthz
 
 部署用户需要能运行 Docker。建议使用专用非 root 用户和仅用于部署的 SSH key；`VPS_KNOWN_HOSTS` 应保存固定的 SSH 主机指纹，工作流不会关闭 host key 校验。不需要域名也能完成镜像部署。
 
-之后只要把代码推送到 `main`，CI 通过就会自动部署。也可以在 Actions 页面手动运行 `Deploy`。镜像回滚不回滚数据库 schema，新增迁移必须保持向前兼容。
+之后通过经授权的 PR 合入受保护的 `main`，main CI 通过后自动部署。Actions 页面手动运行 `Deploy` 也要求同一 main 提交已有成功 CI，不能作为绕过检查的入口。镜像回滚不回滚数据库 schema，新增迁移必须保持向前兼容。
 
 备份、升级和回滚：每天运行 `infra/pg-backup.sh` 并把备份复制到异机/对象存储；定期在隔离库执行 `infra/pg-restore.sh`。升级前先备份；如果需要数据库恢复，使用 `infra/pg-restore.sh`，不要把镜像回滚当成数据库回滚。
 

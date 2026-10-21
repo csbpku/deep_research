@@ -156,7 +156,7 @@ docker compose \
 - 导入临时文件 24 小时清理可验证，备份不包含原始导入文件。
 - nginx 反代把 `/healthz` 转发到 web `/api/healthz`，把 `/ai-healthz` 转发到 ai-engine `/healthz`。
 
-GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Environment secrets 配齐并完成一次 Actions 实跑后，才能标记为 CI / live verified。
+首次接入环境时，必须配置 GitHub Environment secrets 并完成 Actions 实跑，之后才能标记为 CI / live verified；日常发布遵循受保护 main 的 PR/CI 流程。
 
 ## 备份与恢复契约
 
@@ -173,7 +173,7 @@ GHCR 自动发布和 SSH 部署工作流已经入库，但必须等 GitHub Envir
   ```cron
   0 0,12 * * * cd /opt/deep-research && docker compose --env-file .env -f infra/docker-compose.yml exec -T -u root postgres /usr/local/bin/pg-backup.sh /backups >> infra/logs/pg-backup.log 2>&1
   ```
-- 发布前快照：`.github/workflows/deploy.yml` 在启动新版本（web 入口会执行 Prisma migrate）之前，若 postgres 容器在运行，会写入 `infra/backups/pre-deploy-<sha>-<时间>.sql.gz`（保留最近 5 份）；dump 失败会中止发布并回滚 Beta 配置。
+- 发布前快照：`.github/workflows/deploy.yml` 在启动新版本（web 入口会执行 Prisma migrate）之前，若 postgres 容器在运行，会写入 `infra/backups/pre-deploy-<sha>-<时间>.sql.gz`；dump 失败会中止发布并回滚发布配置。工作流不删除旧备份，保留与清理由明确的维护任务处理。
 - 恢复演练脚本：`infra/pg-restore.sh <file> <target_db> --yes`（恢复到生产默认库 `deep_research` 还需 `--confirm-db deep_research`；先用 `--dry-run` 自检）；恢复后自动校验核心表行数。
 
 完成真实构建与恢复演练前，不把以上项目标为已部署或 live verified。
