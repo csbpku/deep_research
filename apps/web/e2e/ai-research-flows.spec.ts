@@ -119,6 +119,11 @@ test.describe('AI Research parent (UI polish)', () => {
   });
 
   test('recent research stays compact and full history opens in a drawer', async ({ page }) => {
+    // Exercise history UI with a successful read; anonymous 401 has its own
+    // login-CTA coverage and intentionally does not expose private history.
+    await page.route('**/api/ai-research/jobs*', route => route.fulfill({
+      json: { items: [], total: 0, limit: 50, offset: 0 },
+    }));
     await page.goto('/ai-research');
     const history = page.getByRole('button', { name: '查看全部任务' });
     await expect(history).toBeVisible();

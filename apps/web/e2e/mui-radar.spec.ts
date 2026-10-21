@@ -58,6 +58,9 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
   });
 
   test('real radar detail keeps the summary-first reading path, expandable score, external Reader prompt and responsive layout', async ({ page }, testInfo) => {
+    // Ten theme/viewport combinations include full axe scans and cold dev
+    // navigations on CI; this is deliberately broader than one UI interaction.
+    test.setTimeout(90_000);
     await page.route('https://example.com/research**', route => route.fulfill({
       contentType: 'text/html', body: '<main><h1>Original article fixture</h1></main>',
     }));

@@ -40,7 +40,7 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - Different computers use separate clones and synchronize through GitHub branches/PRs. Same-machine parallel tasks use separate worktrees; do not switch another agent's working checkout.
 - Commit only task changes, push the task branch and open a PR targeting `main`. CI must pass before merging; preserve unrelated changes and report authentication or CI failures explicitly.
 - Merging `main` triggers automatic production deployment. Obtain explicit authorization for merge/release; creating a PR or passing CI does not authorize deployment. Once authorized, follow CI → merge → Actions deploy → production verification without asking again.
-- Normal releases use GitHub Actions and immutable commit-SHA images. Direct VPS/source-snapshot releases require explicit exceptional authorization and must be reconciled back into a PR; report pushed, merged, deployed and live-verified states separately.
+- Normal releases use GitHub Actions and immutable commit-SHA images. A request to deploy/release authorizes this CI path, not a bypass. Direct VPS/source-snapshot releases require explicit exceptional authorization and must be reconciled back into a PR; report pushed, merged, deployed and live-verified states separately.
 - Delete task branches/worktrees only after reporting the result and receiving cleanup confirmation.
 
 ## Production VPS Access

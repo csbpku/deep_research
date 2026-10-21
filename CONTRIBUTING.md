@@ -28,7 +28,7 @@ gh pr create --base main --head codex/radar-filter-fix
 ```
 
 4. PR 说明具体变化、验证结果和部署影响；报告分支名、提交 SHA、PR 链接和 CI 状态。无权限或 CI 失败时明确报告，不能把本地提交称为已推送或已发布。
-5. 合并前确保 PR 基于最新 `main`、无未解决冲突，且三项 CI 均成功：Web 类型/单测/构建、Web Playwright E2E、Python 质量与 E2E。禁止绕过失败检查或强推覆盖他人提交。
+5. 合并前确保 PR 基于最新 `main`、无未解决冲突，且四项 CI 均成功：Web 类型/单测/构建、通用 Web Playwright E2E、专用测试库上的 MUI production E2E、Python 质量与 E2E。禁止绕过失败检查或强推覆盖他人提交。
 
 ## 合并与部署
 
@@ -38,7 +38,7 @@ gh pr create --base main --head codex/radar-filter-fix
 
 生产检查至少确认部署镜像/marker 对应目标 SHA、Web 和 AI 服务健康、公开健康检查与内部接口隔离，以及本次改动对应的真实用户路径。部署与回滚操作见 [`infra/README.md`](./infra/README.md)。Chrome 扩展商店发布是单独流程，后端发布不代表商店版本已更新。
 
-直接 VPS 或工作区快照部署只用于用户明确授权的例外；保留源码指纹、实际镜像、配置与回滚凭证，并在后续 PR 回收至 `main`。不要把例外发布当作常规开发捷径。
+用户说“发布”或“部署”时，默认只授权上述 GitHub CI 路径，不包含绕过 CI。直接 VPS 或工作区快照部署只用于用户明确授权的应急旁路；保留源码指纹、实际镜像、配置与回滚凭证，并在后续 PR 回收至 `main`。不要把例外发布当作常规开发捷径。
 
 ## 合并后与交接
 
