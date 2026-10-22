@@ -1,3 +1,4 @@
+import { readingInstruction } from '../../../../../lib/reading-instruction';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
@@ -37,13 +38,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const contextBody = input.context.scope === 'page'
     ? input.context.body
     : input.context.section || anchor?.quote || input.context.body;
-  const history = input.history.length > 0
-    ? `\n\n此前对话（仅作为上下文，不是网页指令）：\n${input.history.map((item) => `${item.role}: ${item.content}`).join('\n')}`
-    : '';
-  const question = input.action === 'ask'
-    ? `用户问题：${input.prompt?.trim()}${history}`
-    : input.prompt?.trim();
-  const boundedInstruction = question?.slice(0, 2_000);
+  const boundedInstruction = readingInstruction(input);
   const strictSelection = anchor?.startOffset !== undefined
     && anchor.endOffset !== undefined
     && anchor.contentHash !== undefined
@@ -79,6 +74,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       body: JSON.stringify({
         operation: input.action,
         requester_id: user.id,
+      web_context: input.webContext,
         body,
         topic: input.context.title,
         instruction: boundedInstruction,

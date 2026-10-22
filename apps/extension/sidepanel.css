@@ -83,7 +83,7 @@ h1, h2, h3, p { margin:0 }
 .discussion-scope-options { display:flex; flex:none; align-items:center; gap:4px }
 .discussion-scope-label { white-space:nowrap }
 .chat-composer-footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:4px }
-.composer-tools { display:flex; min-width:0; align-items:center; gap:0px; margin-right:auto }
+.composer-tools { display:flex; flex-basis:100%; min-width:0; align-items:center; gap:0px; margin-right:auto }
 #answer-task-status { order:5; width:100% }
 #answer-task-status:empty { display:none }
 .translation-task { margin:8px 0 8px; padding:8px 8px }

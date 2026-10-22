@@ -701,5 +701,19 @@
   "跟随界面语言": "Follow interface language",
   "用于全文、选段和图片文字翻译；不改变聊天回答语言。": "Applies to pages, selections and image text. Chat reply language stays independent.",
   "翻译语言未能保存，请重试。": "Could not save the translation language. Please try again.",
-  "回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。": "Replies follow your question language. Choose a translation target beside the input; Reader remembers your choice."
+  "回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。": "Replies follow your question language. Choose a translation target beside the input; Reader remembers your choice.",
+  "联网补充": "Web search",
+  "按需搜索": "Search when needed",
+  "已关闭": "Off",
+  "按需搜索公开网络；仅发送必要关键词，翻译和总结不联网。": "Search public sources when needed. Only keywords are sent; translation and summaries stay offline.",
+  "未获得搜索站点权限，联网补充保持关闭。": "Search permission was not granted. Web search remains off.",
+  "联网设置保存失败，请重试。": "Could not save the search preference. Try again.",
+  "正在判断是否需要搜索…": "Checking whether web search is needed…",
+  "正在搜索网络来源…": "Searching the web…",
+  "正在结合原文生成回答…": "Answering with the original page…",
+  "搜索暂不可用，继续依据原文回答…": "Search unavailable; continuing with the original page…",
+  "网络来源 · 搜索摘要": "Web sources · Search excerpts",
+  "联网搜索暂不可用，本次依据原文回答，未核实最新网络信息。": "Web search was unavailable. This answer uses the original page; current web information was not verified.",
+  "可联网核实最新信息": "Enable to check current information",
+  "独立模式需要搜索站点权限，请重新开启联网补充以授权。": "Standalone mode needs search-site permission. Turn web search on again to grant access."
 }

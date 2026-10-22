@@ -1,3 +1,4 @@
+import { SEARCH_ORIGINS } from './web-search.js';
 import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecords, renderMaterialOptions, renderMaterialFollowups, renderMaterialFailures } from './components/material-runtime.tsx';
 import { t, localizedMarkup, getUiLanguage, setUiLanguage } from './i18n.js';
 import { platformAnswerErrorMessage } from './platform-answer.js';
@@ -75,6 +76,23 @@ let retryingTranslationId = null;
 let platformUrl = DEFAULT_WEB_APP_URL;
 let platformConnected = false;
 let readingMode = 'local';
+let webSearchEnabled = false;
+function renderWebSearchToggle() {
+  $('web-search-toggle')?.setAttribute('aria-pressed', String(webSearchEnabled));
+  if ($('web-search-state')) $('web-search-state').textContent = webSearchEnabled ? t('按需搜索') : /最新|现在|还在维护|替代|比较|核实|latest|current|maintain|alternative|compar|verify/iu.test($('question-input')?.value || '') ? t('可联网核实最新信息') : t('已关闭');
+}
+async function syncSearchPermissions() {
+  if (readingMode === 'platform' || !webSearchEnabled) return;
+  if (await chrome.permissions.contains({ origins: SEARCH_ORIGINS })) return;
+  webSearchEnabled = false;
+  renderWebSearchToggle();
+  await readerStore.setSetting('webSearchEnabled', false);
+  setNotice(t('独立模式需要搜索站点权限，请重新开启联网补充以授权。'));
+}
+function answerProgressText(done, total, phase) {
+  const statuses = { 'search-planning': t('正在判断是否需要搜索…'), searching: t('正在搜索网络来源…'), 'search-complete': t('正在结合原文生成回答…'), 'search-unavailable': t('搜索暂不可用，继续依据原文回答…') };
+  return statuses[phase] || (phase === 'merging' ? t('原文已读取，正在整合依据…') : t('正在核对原文依据（{0}/{1}）…', done, total));
+}
 let sessionSyncTimer = 0;
 let radarEntryPlatformUrl = '';
 let radarEntryPromptKey = '';
@@ -569,6 +587,7 @@ function updateReadingModeUi() {
 
 async function setReadingMode(mode) {
   readingMode = mode === 'platform' ? 'platform' : 'local';
+  await syncSearchPermissions();
   updateReadingModeUi();
   renderEmptyState();
   if (readingMode === 'platform' && !platformConnected) showSettings();
@@ -702,6 +721,8 @@ function answerClipboardText() {
     ? latestStructuredAnswer
     : { answer: latestAnswer };
   const lines = [String(answer.answer || latestAnswer || '').trim()];
+  if (answer.searchStatus === 'unavailable') lines.push('', t('联网搜索暂不可用，本次依据原文回答，未核实最新网络信息。'));
+  if (answer.webSources?.length) lines.push('', t('网络来源 · 搜索摘要'), ...answer.webSources.map((item, i) => `[W${i + 1}] ${item.title} ${item.url}`));
   const evidence = Array.isArray(answer.evidence) ? answer.evidence : [];
   if (evidence.length) {
     lines.push('', t("原文证据"));
@@ -1751,6 +1772,8 @@ async function syncCurrentSession({ quiet = false } = {}) {
     discussion: discussionHistory.map((item) => ({
       role: item.role === 'assistant' ? 'assistant' : 'user',
       content: String(item.content || '').slice(0, 8_000),
+      ...(item.webSources ? { webSources: item.webSources } : {}),
+      ...(item.searchStatus ? { searchStatus: item.searchStatus } : {}),
     })),
     discussionScope,
     radarSummaryId: currentRadarSummaryId() || null,
@@ -2798,7 +2821,7 @@ async function resumeBackgroundAnswer(context) {
     const result = await waitForAnswerTask(snapshot.id, {
       signal: discussionController.signal,
       detachSignal: subscription.signal,
-      onProgress: (done, total, phase) => { if (context.url === contextUrl()) updatePendingAnswer({ status: phase === 'merging' ? t("正在汇总原文依据…") : t("正在核对原文依据（{0}/{1}）…", done, total) }); },
+      onProgress: (done, total, phase) => { if (context.url === contextUrl()) updatePendingAnswer({ status: answerProgressText(done, total, phase) }); },
       onDelta: text => { if (context.url === contextUrl()) updatePendingAnswer({ status: t("正在生成回答…"), streamedText: streamAnswerPreview(text) }); },
     });
     if (context.url === contextUrl()) {
@@ -2901,6 +2924,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     const result = await requestAnswerTask({
       id: `answer-${crypto.randomUUID()}`, context: requestSource, question: requestPrompt,
       history: requestHistory, userMessage, scope, intent: normalizedIntent,
+      webSearch: webSearchEnabled && normalizedIntent === 'ask' && Boolean(question),
       mode: platformModeReady() ? 'platform' : 'standalone',
       platformUrl, language: currentReadingLanguage(), replyLanguage: normalizedIntent === 'translate' ? currentTranslationLanguage() : question ? 'auto' : currentReadingLanguage(), image: preparedImage,
       action: !question && normalizedIntent === 'explain' ? 'explain' : !question && normalizedIntent === 'translate' ? 'translate' : 'ask',
@@ -2908,7 +2932,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     }, {
       signal: taskController.signal,
       detachSignal: subscription.signal,
-      onProgress: (done, total, phase) => updateWaiting(phase === 'merging' ? t("原文已读取，正在整合依据…") : t("正在核对原文依据（{0}/{1}）…", done, total)),
+      onProgress: (done, total, phase) => updateWaiting(answerProgressText(done, total, phase)),
       onDelta: text => { if (stillVisible()) { streamBuffer = text; updatePendingAnswer({ status: t("正在生成回答…"), streamedText: streamAnswerPreview(text) }); } },
     });
     if (!stillVisible()) return;
@@ -2918,7 +2942,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     discussionHistory = [
       ...discussionHistory,
       { role: 'user', content: userMessage },
-      { role: 'assistant', content: latestAnswer },
+      { role: 'assistant', content: latestAnswer, webSources: latestStructuredAnswer.webSources || [], searchStatus: latestStructuredAnswer.searchStatus },
     ];
     discussionRunning = false;
     pendingAnswer = null;
@@ -3541,8 +3565,23 @@ chrome.runtime.onMessage.addListener((message) => {
 
 async function init() {
   setupWorkspaceLayout();
+  webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true;
+  renderWebSearchToggle();
+  $('web-search-toggle').addEventListener('click', async () => {
+    const button = $('web-search-toggle');
+    const next = !webSearchEnabled;
+    // Permissions must be requested synchronously within the user's click.
+    const permission = next && !platformModeReady() ? chrome.permissions.request({ origins: SEARCH_ORIGINS }) : Promise.resolve(true);
+    button.disabled = true;
+    try {
+      if (!await permission) { setNotice(t('未获得搜索站点权限，联网补充保持关闭。')); return; }
+      await readerStore.setSetting('webSearchEnabled', next);
+      webSearchEnabled = next; renderWebSearchToggle();
+    } catch { setNotice(t('联网设置保存失败，请重试。')); }
+    finally { button.disabled = false; }
+  });
   setWorkspaceView(new URLSearchParams(location.search).get('view') || 'chat');
-  $('question-input').addEventListener('input', persistQuestionDraft);
+  $('question-input').addEventListener('input', () => { persistQuestionDraft(); renderWebSearchToggle(); });
   window.addEventListener('pagehide', persistQuestionDraft);
   $('question-input').addEventListener('keydown', event => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); $('send-question').click(); }
@@ -3553,6 +3592,7 @@ async function init() {
   window.addEventListener('reader:translation-language-change', event => void changeTranslationLanguage(event.detail));
 
   readingMode = await readerStore.getSetting('readingMode', 'local');
+  await syncSearchPermissions();
   applyProviderFields();
   await loadPlatformState();
   updateReadingModeUi();
@@ -3660,7 +3700,7 @@ async function init() {
     openDiscussion(activeDiscussionScope(), 'ask');
   });
   $('refresh-library').addEventListener('click', () => void updateLibrary());
-  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
+  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
   await updateLibrary();
   void restorePendingPageAction();
   void restorePendingSelectionAction();

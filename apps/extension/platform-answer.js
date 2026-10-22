@@ -1,4 +1,4 @@
-import { parseReadingAnswer, readingAnswerText, responseLanguageInstruction } from './reader-core.js';
+import { parseReadingAnswer, readingAnswerText, responseLanguageInstruction, readingHistoryText } from './reader-core.js';
 export async function requestPlatformAnswer(sourceContext, question, scope, options = {}) {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
@@ -12,11 +12,12 @@ export async function requestPlatformAnswer(sourceContext, question, scope, opti
     },
     body: JSON.stringify({
       action,
+      webContext: options.webContext,
       context: { url: sourceContext.url, title: sourceContext.title.slice(0, 300), body: sourceContext.body, language: options.language || 'zh-CN', scope, ...(sourceContext.section ? { section: sourceContext.section } : {}), ...(scope === 'selection' && sourceContext.selection ? { selection: sourceContext.selection } : {}) },
       ...(question ? { prompt: `${responseLanguageInstruction(options.replyLanguage || 'auto')}\n\nUser question:\n${question}` } : {}),
       history: (options.history || []).slice(-20).map((item) => ({
         role: item.role === 'assistant' ? 'assistant' : 'user',
-        content: String(item.content || '').slice(0, 8_000),
+        content: readingHistoryText(item),
       })),
     }),
     signal: options.signal,
@@ -119,10 +120,10 @@ export async function requestPlatformImageAnswer(context, image, question, optio
   const response = await fetch(`${options.platformUrl}/api/reading/answer-image`, {
     method: 'POST', signal: options.signal,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
-    body: JSON.stringify({ imageDataUrl: image.dataUrl, alt: String(image.alt || '').slice(0, 500),
+    body: JSON.stringify({ webContext: options.webContext, imageDataUrl: image.dataUrl, alt: String(image.alt || '').slice(0, 500),
       title: String(context.title || '').slice(0, 300), body: String(context.body || '').slice(0, 24000),
       prompt: `${responseLanguageInstruction(options.replyLanguage || 'auto')}\n\nUser question:\n${String(question || 'Explain the selected diagram.').slice(0, 3500)}`, language: options.replyLanguage || 'auto',
-      history: (options.history || []).slice(-12).map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '').slice(0, 8000) })) }),
+      history: (options.history || []).slice(-12).map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: readingHistoryText(item) })) }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(platformAnswerErrorMessage(payload, response.status));
@@ -131,4 +132,16 @@ export async function requestPlatformImageAnswer(context, image, question, optio
   if (!result.answer?.trim()) throw new Error('平台 AI 没有返回可读取的内容');
   result.warnings.push('图示分析基于视觉输入；可定位的网页文字证据可能为空。');
   return result;
+}
+
+export async function requestPlatformSearch(question, title, options = {}) {
+  const { readerToken } = await chrome.storage.local.get(['readerToken']);
+  if (!readerToken) throw new Error('Platform connection expired');
+  const response = await fetch(`${options.platformUrl}/api/reading/search`, {
+    method: 'POST', signal: AbortSignal.any([options.signal || new AbortController().signal, AbortSignal.timeout(25000)]),
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${readerToken}` },
+    body: JSON.stringify({ question: question.slice(0, 2000), title: String(title || '').slice(0, 300) }),
+  });
+  if (!response.ok) throw new Error('Search unavailable');
+  return response.json();
 }
