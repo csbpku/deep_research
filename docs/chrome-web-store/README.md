@@ -8,6 +8,7 @@
 - `listing-en.md`：英文商店介绍，与中文说明保持相同功能和使用限制。
 - `privacy-fields.md`：单一用途、逐项权限理由和数据披露草稿。
 - `reviewer-instructions.md`：可复制到私有 Test instructions 的审核操作说明；提交前按实际访问依赖选择说明，测试凭据可选，受限平台的访问方式另行准备。
+- `../../apps/extension/RELEASE_NOTES.md`：按版本记录用户可见变更和商店提交状态；每次提升版本号时先在此落一条记录。
 - `assets/`：128px图标、440×280宣传图及1280×800截图。
 - `brand-spec.md`：素材所用的现有 Reader 标识、颜色和真实 UI 来源。
 - `capture-assets.mjs`：在独立 Chromium 中捕获现有扩展 UI，并生成商店截图；不接触用户 Chrome 配置或私人网页。
@@ -45,6 +46,10 @@ pnpm --dir apps/extension package:store
 8. 从商店真实安装并验证侧栏、选段、问答、全文翻译、原文/译文切换、模型发现、本地导出导入及平台授权。通过后再转公开可见。
 
 后续更新在同一个 Item 上传更高版本并提交审核。后端部署、Beta Release 和商店发布分别记录，不能把其中一项成功当作另两项已完成。
+
+商店审核是逐个版本的固定成本，因此不逐个小功能提交：功能合入 `main` 后先在
+`apps/extension/RELEASE_NOTES.md` 记一条，等攒够一批有用户价值的变更再提升版本号、
+打商店包并提交审核。合入 `main` 只影响平台和 Beta Release，不影响已安装的商店版本。
 
 ## 提交前检查
 
