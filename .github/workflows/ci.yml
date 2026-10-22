@@ -161,8 +161,9 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: playwright-${{ runner.os }}-
 
-      - name: Install Playwright browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+      - name: Install Playwright browsers and OS dependencies
+        # The cache contains browser binaries, not apt libraries or CJK fonts.
+        # --with-deps must run on every fresh runner, including cache hits.
         run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
 
       - name: Playwright E2E
