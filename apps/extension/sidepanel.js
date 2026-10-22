@@ -1820,7 +1820,7 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
   const output = [];
   const completedBySource = new Map();
   const completedSourceIds = new Set();
-  const batches = translationBatches(tasks, { maxBlocks: 12 });
+  const batches = translationBatches(tasks);
   let nextBatch = 0;
   let batchError = null;
   async function processBatch(batchIndex) {

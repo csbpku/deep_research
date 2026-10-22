@@ -5,11 +5,12 @@ import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 
 const directory = await mkdtemp('/private/tmp/reader-language-');
 const requests = [];
+const extraParagraphs = Array.from({ length: 48 }, (_, i) => `<p>Section ${i + 1}: The queue preserves source context while each worker translates a complete paragraph.</p>`).join('');
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="180"><rect width="400" height="180" fill="white"/><text x="40" y="85" font-size="30">Queue → Workers</text></svg>';
 const server = createServer(async (req, res) => {
   res.setHeader('access-control-allow-origin', '*');
   if (req.url === '/diagram.svg') { res.setHeader('content-type', 'image/svg+xml'); res.end(svg); return; }
-  if (req.url === '/article') { res.setHeader('content-type', 'text/html'); res.end('<article><h1>Worker architecture</h1><p>A queue feeds two workers.</p><img src="/diagram.svg" alt="Queue to workers diagram"></article>'); return; }
+  if (req.url === '/article') { res.setHeader('content-type', 'text/html'); res.end(`<article><h1>Worker architecture</h1><p>A queue feeds two workers.</p>${extraParagraphs}<img src="/diagram.svg" alt="Queue to workers diagram"></article>`); return; }
   let raw = ''; for await (const chunk of req) raw += chunk;
   if (req.url === '/api/reading/translate') {
     const input = JSON.parse(raw); requests.push({ type: 'text', ...input });
@@ -79,6 +80,12 @@ try {
   assert.equal(await panel.locator('#translation-language-button').isDisabled(), true);
   await panel.locator('#pause-translation').waitFor({ state: 'hidden', timeout: 20000 });
   assert.ok(requests.some(r => r.type === 'text' && r.language === 'zh-CN'));
+  const textBatches = requests.filter(r => r.type === 'text' && r.language === 'zh-CN');
+  assert.ok(textBatches[0].blocks.length <= 4, 'small leading batch paints early');
+  assert.ok(textBatches.some(r => r.blocks.length === 24), 'later batches fill the backend block capacity');
+  assert.ok(textBatches.every(r => r.blocks.length <= 24 && r.blocks.reduce((sum, block) => sum + block.text.length, 0) <= 3000));
+  assert.equal(textBatches.reduce((sum, r) => sum + r.blocks.length, 0), 50, 'all source paragraphs sent exactly once');
+  assert.equal(await article.locator('[data-deep-research-translation]').count(), 50);
   assert.ok(requests.some(r => r.type === 'image' && r.language === 'zh-CN'));
   await choose('English');
   await panel.locator('#chat-translate').click();
