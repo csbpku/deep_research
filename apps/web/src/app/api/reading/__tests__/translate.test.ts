@@ -207,3 +207,27 @@ describe('POST /api/reading/translate', () => {
     }]);
   });
 });
+
+it('retries only missing and ambiguous paragraphs in a partial structured response', async () => {
+  const singles: string[] = [];
+  mocks.fetchAiEngine.mockImplementation(async (input: { body: { body: string } }) => {
+    if (input.body.body.startsWith('{"blocks":')) return {
+      ok: true, body: { suggestion: JSON.stringify({ translations: [
+        { id: 'block-0', text: '完整有效译文' },
+        { id: 'block-1', text: '冲突甲' },
+        { id: 'block-1', text: '冲突乙' },
+        { id: 'unknown', text: '无关内容' },
+      ] }) },
+    };
+    singles.push(input.body.body);
+    return { ok: true, body: { suggestion: `补译：${input.body.body}` } };
+  });
+  const blocks = ['Valid partial paragraph', 'Ambiguous partial paragraph', 'Missing partial paragraph']
+    .map((text, i) => ({ id: `partial-platform-${i}`, text }));
+  const response = await POST(request(blocks) as never);
+  const result = await response.json();
+  expect(singles.sort()).toEqual(['Ambiguous partial paragraph', 'Missing partial paragraph']);
+  expect(result.translations[0].text).toBe('完整有效译文');
+  expect(result.translations).toHaveLength(3);
+  expect(result.translations.every((item: { text: string; error?: string }) => item.text && !item.error)).toBe(true);
+});

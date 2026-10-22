@@ -100,3 +100,13 @@ test('platform links merge into the current insight, deduplicate recall and disa
   assert.equal(await readerStore.linkInsightToPlatform('linked', researchId, 'https://platform.test'), null);
   assert.equal(await readerStore.linkInsightToPlatform('invalid-radar', 'not-a-uuid', 'https://platform.test'), null);
 });
+
+test('bulk translation cache retains the newest 500 entries and supports an ordered sparse read', async () => {
+  await readerStore.clearCache();
+  const entries = Array.from({ length: 520 }, (_, i) => ({ key: `bulk-${i}`, value: `Translation ${i}` }));
+  await readerStore.cacheTranslations(entries);
+  const cache = await readerStore.getCachedTranslations(['bulk-0', 'bulk-19', 'bulk-20', 'bulk-519', 'absent']);
+  assert.deepEqual([...cache.values()], [null, null, 'Translation 20', 'Translation 519', null]);
+  assert.equal((await readerStore.exportData()).cache, undefined);
+  await readerStore.clearCache();
+});

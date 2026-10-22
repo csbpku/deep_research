@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import nodeVm from 'node:vm';
-import { applyTextTranslations, mergeTranslationFailures, responseLanguageInstruction } from './reader-core.js';
+import { applyTextTranslations, mergeTranslationFailures, responseLanguageInstruction, translationBatches } from './reader-core.js';
 import { answerTaskPresentation } from './answer-task.js';
 import { readerStore } from './reader-store.js';
 const t = (message, ...values) => message.replace(/\{(\d+)\}/gu, (_, index) => String(values[index] ?? ''));
@@ -631,4 +631,47 @@ test('a second translation start during the job-record read is queued instead of
   assert.equal(entry.preserveForRecovery, true);
   assert.ok(entry.job, 'job assigned after the await');
   assert.equal(entry.controller.signal.aborted, true);
+});
+
+test('platform translation keeps at most six requests in flight', async () => {
+  const source = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function requestPlatformTranslations(');
+  const end = source.indexOf('async function requestPlatformImageTranslation(', start);
+  assert.ok(start > 0 && end > start, 'requestPlatformTranslations is present');
+
+  let inFlight = 0;
+  let peak = 0;
+  const blocks = Array.from({ length: 240 }, (_, index) => ({
+    id: `block-${index}`, sourceBlockId: `block-${index}`, text: `原文 ${index}`, partCount: 1, kind: 'text',
+  }));
+
+  const sandbox = {
+    AbortController, DOMException,
+    blocks,
+    t: (message) => message,
+    readPlatformToken: async () => 'token',
+    setPlatformConnected: () => {},
+    currentTranslationLanguage: () => 'zh-CN',
+    platformUrl: 'https://platform.test',
+    splitTranslationBlocks: (items) => items,
+    translationBatches,
+    translationContext: () => '{}',
+    combineTranslationParts: (source, parts) => [parts[0]],
+    fetch: async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return {
+        ok: true,
+        json: async () => ({ translations: [] }),
+      };
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source.slice(start, end), sandbox);
+
+  await vm.runInContext("requestPlatformTranslations({ url: 'https://a.test', title: 'T' }, blocks)", sandbox);
+
+  assert.equal(peak, 6, 'platform translation saturates the engine semaphore without exceeding it');
 });

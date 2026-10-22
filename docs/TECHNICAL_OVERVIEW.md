@@ -79,13 +79,17 @@ PostgreSQL `Research` 是研究库权威数据源；AnythingLLM 只提供可选�
 
 ### 原网页阅读
 
-独立 Beta 在用户点击扩展按钮后通过 `activeTab` / `scripting` 注入当前页，提取正文块、选段和正文图片；侧栏直接调用用户配置的 OpenAI-compatible `/chat/completions` 或 Anthropic-compatible `/messages` 接口，不加载 Web iframe、不要求平台账号、不把 API Key 放进网页。正文按块翻译，图片通过视觉模型返回文字区域与坐标，并在原图上生成可移除的译文覆盖层；Anthropic 图片请求在扩展边界转换为 base64，跨域图片无法读取时保留 URL并显示处理失败。正文、图片和页面内容始终按不可信资料处理，排除表单、密码和 `contenteditable`。
+独立 Beta 在用户点击扩展按钮后通过 `activeTab` / `scripting` 注入当前页，提取正文块、选段和正文图片；侧栏直接调用用户配置的 OpenAI-compatible `/chat/completions` 或 Anthropic-compatible `/messages` 接口，不加载 Web iframe、不要求平台账号、不把 API Key 放进网页。正文翻译的长文首批缩小以提前显示，后续按最多约 3,000 字符批量处理，仍携带标题、提纲、开头及相邻段落语境；结构有效的部分结果只补译缺失或冲突项，截断结果仍完整重试。独立模式的正常批次与补译共享有界队列，翻译缓存按批次读写并保持 500 条上限。图片通过视觉模型返回文字区域与坐标，并在原图上生成可移除的译文覆盖层；Anthropic 图片请求在扩展边界转换为 base64，跨域图片无法读取时保留 URL并显示处理失败。正文、图片和页面内容始终按不可信资料处理，排除表单、密码和 `contenteditable`。
 
 侧栏的阅读会话、滚动位置、选段、讨论和收藏存储在 IndexedDB；全文翻译结果只作为有界缓存，API Key 不进入导出数据。选择整页问答/解释时，平台模式把完整提取正文送入服务端分块分析并汇总；选择选段/章节时则按明确范围处理。React 负责侧栏 UI，独立控制器连接 content script、MV3 worker、IndexedDB 和可选平台服务；页面状态和模型密钥不会写回网页。
+
+Reader 聊天提供默认关闭、记忆选择的“联网补充”。只有显式追问按需规划关键词并检索公开来源，翻译/总结快捷动作不搜索。独立模式直接查询获授权的 Brave/Bing 站点，平台模式经鉴权的 `/api/reading/search` 复用 utility 模型（兼容 `RESEARCH_ASSISTANT_LLM`）和搜索客户端；模型规划调用计入现有额度账本。只向搜索服务发送关键词，不发送原文正文、聊天历史、图片或模型凭据；网络摘要作为单独的有界 `webContext` 输入，最多四条，不能进入原文证据数组。原文 `[1]` 与网络 `[W1]` 分开标记，来源随对应对话保存/同步；失败回到原文回答并明确未联网核实。
 
 界面语言默认跟随浏览器，当前提供简体中文和英文；中文浏览器区域变体统一使用简体中文，其他语言回退英文。翻译目标语言独立选择并记忆，不限制为界面语言。聊天按用户提问语言回答。
 
 平台连接是可选层：连接后才调用 `/api/reading/answer`、`/api/reading/answer/stream`、`/api/reading/translate`、`/api/reading/translate-image`、`/api/reading/answer-image` 和 `/api/reading/save`，将用户确认的成果同步到研究库；平台不可用时，独立翻译、图片处理、讨论和本地收藏仍可用。研究库同步继续保留数据库幂等键和安全锚点校验。雷达的新外部原文入口不依赖 enrichment；`RADAR_READING_MODE=browser` 只停止全文持久化和后续 enrichment，不停止同步期间的临时全文抓取与评分。
+
+平台全文翻译的吞吐由批次与并发决定，不由模型决定。扩展按最多 24 块、约 3,000 字符打包请求，并最多同时发出 6 个请求；Web BFF 以同样的 24 块上限拆分并允许 6 个并发在途；AI engine 的 LLM 信号量 `RADAR_LLM_CONCURRENCY` 同样是 6（registry overlay 默认值，可用 `.env` 覆盖）。三者对齐后，287 块、41,215 字符的文章在生产链路的实测墙钟从约 96 秒降到约 52 秒，覆盖仍为 287/287。可重试的供应商失败（429/529/超时）先等待抖动指数退避再重试，避免立即重试把瞬时过载放大成连续失败；`LLM_RETRY_BACKOFF_SECONDS` 与 `LLM_RETRY_BACKOFF_MAX_SECONDS` 控制退避窗口。MiniMax 的 OpenAI 兼容端点只识别 `reasoning_effort`，不识别 Anthropic 协议的 `output_config.effort`。
 
 Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式权威数据边界和明确非目标见 [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md)。
 

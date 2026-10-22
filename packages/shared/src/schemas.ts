@@ -216,8 +216,14 @@ export const ReadingContextSchema = z.object({
 });
 export type ReadingContext = z.infer<typeof ReadingContextSchema>;
 
+export const ReadingSearchInputSchema = z.object({
+  question: z.string().trim().min(1).max(2_000),
+  title: z.string().max(300).default(''),
+}).strict();
+
 export const ReadingAnswerInputSchema = z.object({
   action: ReadingActionSchema,
+  webContext: z.string().max(8_000).optional(),
   context: ReadingContextSchema,
   prompt: z.string().max(4_000).optional(),
   history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(8_000) }).strict()).max(20).default([]),
@@ -248,6 +254,7 @@ export const ReadingImageTranslateInputSchema = z.object({
 export type ReadingImageTranslateInput = z.infer<typeof ReadingImageTranslateInputSchema>;
 
 export const ReadingImageAnswerInputSchema = ReadingImageTranslateInputSchema.omit({ retry: true }).extend({
+  webContext: z.string().max(8_000).optional(),
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
   body: z.string().max(24000).default(''),
   prompt: z.string().min(1).max(4000),
@@ -269,7 +276,16 @@ export const ReadingEvidenceSchema = z.object({
 }).strict();
 export type ReadingEvidence = z.infer<typeof ReadingEvidenceSchema>;
 
+export const ReadingWebSourceSchema = z.object({
+  title: z.string().max(180),
+  url: ReadingUrlSchema,
+  snippet: z.string().max(600).default(''),
+}).strict();
+export const ReadingSearchStatusSchema = z.enum(['off', 'skipped', 'searched', 'unavailable']);
+
 export const ReadingAnswerSchema = z.object({
+  webSources: z.array(ReadingWebSourceSchema).max(4).optional(),
+  searchStatus: ReadingSearchStatusSchema.optional(),
   answer: z.string().max(20_000),
   background: z.string().max(12_000).default(''),
   inference: z.string().max(12_000).default(''),
@@ -402,6 +418,8 @@ export const ReadingSessionStateSchema = z.object({
   discussion: z.array(z.object({
     role: z.enum(['user', 'assistant']),
     content: z.string().max(8_000),
+    webSources: z.array(ReadingWebSourceSchema).max(4).optional(),
+    searchStatus: ReadingSearchStatusSchema.optional(),
   }).strict()).max(20).default([]),
   discussionScope: z.enum(['selection', 'page', 'image']).default('selection'),
   image: z.object({

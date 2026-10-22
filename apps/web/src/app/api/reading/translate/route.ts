@@ -173,16 +173,22 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       return null;
     }
     const translations = (parsed as { translations?: unknown })?.translations;
-    if (!Array.isArray(translations) || translations.length !== expected.length) return null;
+    if (!Array.isArray(translations)) return null;
     const result = new Map<string, string>();
+    const seen = new Set<string>();
+    const allowed = new Set(expected.map(item => item.modelId));
     for (const item of translations) {
-      if (!item || typeof item !== 'object') return null;
+      if (!item || typeof item !== 'object') continue;
       const id = (item as { id?: unknown }).id;
       const text = (item as { text?: unknown }).text;
-      if (typeof id !== 'string' || typeof text !== 'string' || !text.trim() || result.has(id)) return null;
-      result.set(id, text.trim());
+      if (typeof id !== 'string' || !allowed.has(id)) continue;
+      if (seen.has(id)) {
+        result.delete(id);
+        continue;
+      }
+      seen.add(id);
+      if (typeof text === 'string' && text.trim()) result.set(id, text.trim());
     }
-    if (expected.some((item) => !result.has(item.modelId)) || result.size !== expected.length) return null;
     return result;
   }
 
@@ -235,8 +241,8 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     }
     const retryBlocks: PendingBlock[] = [];
     group.forEach((block) => {
-      const translated = parsed.get(block.modelId)!;
-      if (looksLikeInstructionResponse(block.text, translated)) {
+      const translated = parsed.get(block.modelId);
+      if (!translated || looksLikeInstructionResponse(block.text, translated)) {
         retryBlocks.push(block);
         return;
       }

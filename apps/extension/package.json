@@ -1,10 +1,10 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.28",
+  "version": "0.2.29",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test reader-core.test.mjs reader-store.test.mjs i18n.test.mjs model-connection.test.mjs provider-catalog.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs reader-platform-bridge-utils.test.mjs ui-regressions.test.mjs translation-language.test.mjs",
+    "test": "node --test reader-core.test.mjs reader-store.test.mjs i18n.test.mjs model-connection.test.mjs provider-catalog.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs reader-platform-bridge-utils.test.mjs ui-regressions.test.mjs translation-language.test.mjs web-search.test.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
     "e2e:live-provider": "READER_LIVE=1 node e2e/smoke.mjs",
     "e2e:worker": "node e2e/worker-smoke.mjs",
@@ -37,7 +37,8 @@
     "package:store": "node scripts/sync-static.mjs && wxt build && node scripts/package-store.mjs",
     "typecheck": "wxt prepare && tsc --noEmit -p tsconfig.json",
     "e2e:platform-image": "node e2e/platform-image-answer.mjs",
-    "e2e:translation-language": "node e2e/translation-language.mjs"
+    "e2e:translation-language": "node e2e/translation-language.mjs",
+    "e2e:web-search": "node e2e/web-search.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

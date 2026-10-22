@@ -406,7 +406,7 @@ test('independent translation batches short blocks and maps results back by id',
       blocks,
       { onResult: (item) => completed.push(item.id) },
     );
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     assert.equal(result.length, 48);
     assert.equal(result[0].text, '译:short technical block 0');
     assert.equal(result[47].text, '译:short technical block 47');
@@ -1687,4 +1687,145 @@ test('platform selection translation envelopes display only the translated text'
   assert.equal(readingAnswerText(raw), 'Read on the original webpage.\nDiscuss in the sidebar.');
   assert.equal(parseReadingAnswer(raw, { body: '在原网页阅读', url: 'https://example.com' }).answer, 'Read on the original webpage.\nDiscuss in the sidebar.');
   assert.equal(readingAnswerText('API example: {"translation":"example"}'), 'API example: {"translation":"example"}');
+});
+
+test('partial batch results preserve valid paragraphs and retry only missing or duplicate IDs', async () => {
+  const originalFetch = globalThis.fetch;
+  const singles = [];
+  globalThis.fetch = async (_url, options) => {
+    const content = JSON.parse(options.body).messages.at(-1).content;
+    let answer;
+    if (content.includes('<<<TRANSLATION_BATCH>>>')) {
+      answer = JSON.stringify({ translations: [
+        { id: 'block-0', text: '有效译文' },
+        { id: 'block-1', text: '冲突甲' },
+        { id: 'block-1', text: '冲突乙' },
+        { id: 'invented-id', text: '不属于原文' },
+      ] });
+    } else {
+      const source = content.match(/<<<SOURCE_TEXT>>>\n([\s\S]*?)\n<<<END_SOURCE_TEXT>>>/u)[1];
+      singles.push(source);
+      answer = `补译：${source}`;
+    }
+    return Response.json({ choices: [{ message: { content: answer } }] });
+  };
+  try {
+    const blocks = ['Valid source', 'Duplicated source', 'Missing source'].map((text, index) => ({ id: `partial-${index}`, text }));
+    const emitted = [];
+    const results = await translateBlocks(
+      { baseUrl: 'https://partial.test/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Partial recovery test', blocks }, blocks, { onResult: item => emitted.push(item.id) },
+    );
+    assert.deepEqual(singles.sort(), ['Duplicated source', 'Missing source']);
+    assert.equal(results[0].text, '有效译文');
+    assert.ok(results.every(item => item.text && !item.error));
+    assert.equal(new Set(emitted).size, 3);
+    assert.equal(emitted.length, 3);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('malformed batch retries run concurrently within the configured limit', async () => {
+  const originalFetch = globalThis.fetch;
+  let active = 0;
+  let peak = 0;
+  const started = [];
+  globalThis.fetch = async (_url, options) => {
+    const content = JSON.parse(options.body).messages.at(-1).content;
+    if (content.includes('<<<TRANSLATION_BATCH>>>')) return Response.json({ choices: [{ message: { content: '{}' } }] });
+    const source = content.match(/<<<SOURCE_TEXT>>>\n([\s\S]*?)\n<<<END_SOURCE_TEXT>>>/u)[1];
+    started.push(source);
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    active -= 1;
+    return Response.json({ choices: [{ message: { content: `译文：${source}` } }] });
+  };
+  try {
+    const blocks = Array.from({ length: 8 }, (_, i) => ({ id: `parallel-${i}`, text: `Bounded retry source ${i}` }));
+    const results = await translateBlocks(
+      { baseUrl: 'https://bounded.test/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Bounded retries' }, blocks, { concurrency: 3 },
+    );
+    assert.equal(peak, 3);
+    assert.equal(started.length, 8);
+    assert.ok(results.every(item => item.text && !item.error));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('a long page paints its leading batch while later batches are still pending, with article context intact', async () => {
+  const originalFetch = globalThis.fetch;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let firstPaint;
+  const painted = new Promise(resolve => { firstPaint = resolve; });
+  const batches = [];
+  const blocks = Array.from({ length: 30 }, (_, i) => ({ id: `early-${i}`, text: `Paragraph ${i}: ${'technical content '.repeat(12)}` }));
+  globalThis.fetch = async (_url, options) => {
+    const content = JSON.parse(options.body).messages.at(-1).content;
+    const batch = JSON.parse(content.split('<<<TRANSLATION_BATCH>>>\n')[1]).blocks;
+    assert.match(content, /Architecture context/);
+    batches.push(batch);
+    if (!batch[0].text.startsWith('Paragraph 0:')) await gate;
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ translations: batch.map(item => ({ id: item.id, text: `译文：${item.text}` })) }) } }] });
+  };
+  try {
+    const task = translateBlocks(
+      { baseUrl: 'https://early.test/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Architecture context', blocks }, blocks,
+      { onResult: item => { if (item.id === 'early-0') firstPaint(); } },
+    );
+    await Promise.race([painted, new Promise((_, reject) => setTimeout(() => reject(new Error('first batch waited for tail')), 1000).unref())]);
+    assert.ok(batches[0].reduce((sum, item) => sum + item.text.length, 0) <= 600);
+    release();
+    const results = await task;
+    assert.equal(results.length, blocks.length);
+    assert.ok(results.every(item => item.text && !item.error));
+  } finally { release(); globalThis.fetch = originalFetch; }
+});
+
+test('M3.1 standalone translation uses the platform low-effort policy in both protocols without leaking it to other models', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    return Response.json(body.system
+      ? { content: [{ type: 'text', text: '忠实译文' }] }
+      : { choices: [{ message: { content: '忠实译文' } }] });
+  };
+  try {
+    for (const [model, protocol] of [['MiniMax-M3.1', 'openai'], ['MiniMax-M3.1', 'anthropic'], ['another-model', 'openai']]) {
+      await translateBlocks(
+        { baseUrl: 'https://effort.test/v1', model, providerKind: protocol === 'anthropic' ? 'custom-anthropic' : 'custom', apiKey: 'secret', language: 'zh-CN' },
+        { title: 'Effort policy' }, [{ id: 'effort', text: `Translate policy ${protocol} ${model}` }],
+      );
+    }
+    assert.equal(requests[0].reasoning_effort, 'low');
+    assert.equal(requests[0].max_completion_tokens, 6000);
+    assert.equal(requests[0].max_tokens, undefined);
+    assert.deepEqual(requests[1].output_config, { effort: 'low' });
+    assert.equal(requests[1].max_tokens, 6000);
+    assert.equal(requests[2].reasoning_effort, undefined);
+    assert.equal(requests[2].max_tokens, 6000);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('cancelling a failed batch never starts its queued per-paragraph retries', async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    controller.abort();
+    return Response.json({ choices: [{ message: { content: 'invalid JSON' } }] });
+  };
+  try {
+    await assert.rejects(translateBlocks(
+      { baseUrl: 'https://abort-queue.test/v1', model: 'reader-model', apiKey: 'secret', language: 'zh-CN' },
+      { title: 'Abort retry queue' },
+      [{ id: 'a', text: 'First cancellable paragraph' }, { id: 'b', text: 'Second cancellable paragraph' }],
+      { signal: controller.signal },
+    ), { name: 'AbortError' });
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = originalFetch; }
 });
