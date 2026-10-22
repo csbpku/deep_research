@@ -156,7 +156,7 @@ jobs:
           tag="reader-v$package_version"
 
           previous_sha="$(git rev-parse "$SOURCE_SHA^" 2>/dev/null || true)"
-          if [ -n "$previous_sha" ] && ! git diff --quiet "$previous_sha" "$SOURCE_SHA" -- apps/extension ':!apps/extension/README.md'; then
+          if [ -n "$previous_sha" ] && ! git diff --quiet "$previous_sha" "$SOURCE_SHA" -- apps/extension ':!apps/extension/README.md' ':!apps/extension/RELEASE_NOTES.md'; then
             previous_version="$(git show "$previous_sha:apps/extension/manifest.json" 2>/dev/null | node -e 'let text=""; process.stdin.on("data", chunk => text += chunk); process.stdin.on("end", () => process.stdout.write(JSON.parse(text).version));' || true)"
             if [ "$previous_version" = "$package_version" ]; then
               echo "Extension source changed without a version bump; update the extension version before publishing" >&2
@@ -166,7 +166,7 @@ jobs:
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             release_sha="$(git rev-list -n 1 "$tag")"
-            git diff --quiet "$release_sha" "$SOURCE_SHA" -- apps/extension ':!apps/extension/README.md' || {
+            git diff --quiet "$release_sha" "$SOURCE_SHA" -- apps/extension ':!apps/extension/README.md' ':!apps/extension/RELEASE_NOTES.md' || {
               echo "$tag already points to different extension sources; bump the version" >&2
               exit 1
             }
