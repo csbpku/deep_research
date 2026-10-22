@@ -10,6 +10,7 @@ import {
   discoverModels,
   isLocalProvider,
   translationContext,
+  translationBatches,
   explainSelection,
   readingAnswerText,
   explainImage,
@@ -1819,14 +1820,7 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
   const output = [];
   const completedBySource = new Map();
   const completedSourceIds = new Set();
-  const batches = [];
-  let batch = [];
-  let chars = 0;
-  for (const block of tasks) {
-    if (batch.length && (batch.length >= 12 || chars + block.text.length > 3_000)) { batches.push(batch); batch = []; chars = 0; }
-    batch.push(block); chars += block.text.length;
-  }
-  if (batch.length) batches.push(batch);
+  const batches = translationBatches(tasks, { maxBlocks: 12 });
   let nextBatch = 0;
   let batchError = null;
   async function processBatch(batchIndex) {

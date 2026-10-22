@@ -79,7 +79,7 @@ PostgreSQL `Research` 是研究库权威数据源；AnythingLLM 只提供可选�
 
 ### 原网页阅读
 
-独立 Beta 在用户点击扩展按钮后通过 `activeTab` / `scripting` 注入当前页，提取正文块、选段和正文图片；侧栏直接调用用户配置的 OpenAI-compatible `/chat/completions` 或 Anthropic-compatible `/messages` 接口，不加载 Web iframe、不要求平台账号、不把 API Key 放进网页。正文按块翻译，图片通过视觉模型返回文字区域与坐标，并在原图上生成可移除的译文覆盖层；Anthropic 图片请求在扩展边界转换为 base64，跨域图片无法读取时保留 URL并显示处理失败。正文、图片和页面内容始终按不可信资料处理，排除表单、密码和 `contenteditable`。
+独立 Beta 在用户点击扩展按钮后通过 `activeTab` / `scripting` 注入当前页，提取正文块、选段和正文图片；侧栏直接调用用户配置的 OpenAI-compatible `/chat/completions` 或 Anthropic-compatible `/messages` 接口，不加载 Web iframe、不要求平台账号、不把 API Key 放进网页。正文翻译的长文首批缩小以提前显示，后续按最多约 3,000 字符批量处理，仍携带标题、提纲、开头及相邻段落语境；结构有效的部分结果只补译缺失或冲突项，截断结果仍完整重试。独立模式的正常批次与补译共享有界队列，翻译缓存按批次读写并保持 500 条上限。图片通过视觉模型返回文字区域与坐标，并在原图上生成可移除的译文覆盖层；Anthropic 图片请求在扩展边界转换为 base64，跨域图片无法读取时保留 URL并显示处理失败。正文、图片和页面内容始终按不可信资料处理，排除表单、密码和 `contenteditable`。
 
 侧栏的阅读会话、滚动位置、选段、讨论和收藏存储在 IndexedDB；全文翻译结果只作为有界缓存，API Key 不进入导出数据。选择整页问答/解释时，平台模式把完整提取正文送入服务端分块分析并汇总；选择选段/章节时则按明确范围处理。React 负责侧栏 UI，独立控制器连接 content script、MV3 worker、IndexedDB 和可选平台服务；页面状态和模型密钥不会写回网页。
 

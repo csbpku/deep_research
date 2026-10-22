@@ -477,18 +477,36 @@ export const readerStore = {
     return remove('taskInputs', id);
   },
   async cacheTranslation(key, value) {
-    const result = await put('cache', { id: key, value, updatedAt: new Date().toISOString() });
-    // Translation results are disposable acceleration data. Keep the local
-    // database bounded so a long-running browser profile cannot grow without
-    // limit. The newest entries win; explicit export never includes cache.
-    const entries = await all('cache');
-    if (entries.length > MAX_TRANSLATION_CACHE_ENTRIES) {
-      const stale = entries
-        .sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt)))
-        .slice(0, entries.length - MAX_TRANSLATION_CACHE_ENTRIES);
-      await Promise.all(stale.map((entry) => remove('cache', entry.id)));
-    }
-    return result;
+    await this.cacheTranslations([{ key, value }]);
+    return { id: key, value };
+  },
+  async cacheTranslations(entries) {
+    if (!entries.length) return;
+    // One transaction and one retention pass per model batch, rather than
+    // opening and scanning the whole cache for every paragraph.
+    return withStore('cache', 'readwrite', async (store) => {
+      const updatedAt = new Date().toISOString();
+      const values = entries.map(({ key, value }) => ({ id: key, value, updatedAt }));
+      if (!store) {
+        values.forEach(value => fallbackSet('cache', value));
+        const all = fallbackAll('cache');
+        const stale = all.sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt))).slice(0, Math.max(0, all.length - MAX_TRANSLATION_CACHE_ENTRIES));
+        stale.forEach(value => fallbackRemove('cache', value.id));
+        return;
+      }
+      await Promise.all(values.map(value => requestToPromise(store.put(value))));
+      const all = await requestToPromise(store.getAll());
+      const stale = all.sort((a, b) => String(a.updatedAt).localeCompare(String(b.updatedAt))).slice(0, Math.max(0, all.length - MAX_TRANSLATION_CACHE_ENTRIES));
+      await Promise.all(stale.map(value => requestToPromise(store.delete(value.id))));
+    }).catch(() => undefined);
+  },
+  async getCachedTranslations(keys) {
+    return withStore('cache', 'readonly', async (store) => {
+      const entries = store
+        ? await Promise.all(keys.map(key => requestToPromise(store.get(key))))
+        : keys.map(key => fallbackGet('cache', key));
+      return new Map(keys.map((key, index) => [key, entries[index]?.value ?? null]));
+    }).catch(() => new Map(keys.map(key => [key, null])));
   },
   async getCachedTranslation(key) {
     return (await get('cache', key))?.value ?? null;
