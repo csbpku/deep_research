@@ -53,10 +53,16 @@ services:
       # at the end of an otherwise healthy long research run.
       DB_POOL_MAX_SIZE: "8"
       DB_POOL_TIMEOUT_SECONDS: "90"
-      RADAR_SOURCE_CONCURRENCY: "2"
-      RADAR_CANDIDATE_CONCURRENCY: "1"
-      RADAR_LLM_CONCURRENCY: "3"
-      RADAR_SCORING_CONCURRENCY: "2"
-      RADAR_ENRICHMENT_CONCURRENCY: "1"
+      RADAR_SOURCE_CONCURRENCY: ${RADAR_SOURCE_CONCURRENCY:-2}
+      RADAR_CANDIDATE_CONCURRENCY: ${RADAR_CANDIDATE_CONCURRENCY:-1}
+      # Reading translation batches many blocks per request, so a low LLM
+      # semaphore serialises the whole page into waves of queued calls. Six
+      # in-flight provider requests measured ~45% faster wall time on a
+      # 287-block article with no extra failures; the retry backoff in
+      # ai_engine.llm.client absorbs the transient 529s that appear above
+      # this level. Override via .env to lower it for a smaller host.
+      RADAR_LLM_CONCURRENCY: ${RADAR_LLM_CONCURRENCY:-6}
+      RADAR_SCORING_CONCURRENCY: ${RADAR_SCORING_CONCURRENCY:-2}
+      RADAR_ENRICHMENT_CONCURRENCY: ${RADAR_ENRICHMENT_CONCURRENCY:-1}
       RADAR_CONTENT_RECOVERY_LIMIT: "2"
       LLM_RECOVERY_LIMIT: "10"

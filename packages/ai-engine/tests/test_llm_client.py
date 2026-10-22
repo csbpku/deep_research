@@ -700,3 +700,72 @@ async def test_endpoint_circuit_opens_after_configured_failures(
 
     assert state == "open"
     assert await client._circuit_is_open("https://primary.example/v1") is True
+
+
+def test_retry_backoff_grows_and_stays_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.llm import client
+
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_SECONDS", "2")
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_MAX_SECONDS", "6")
+
+    first = client._retry_backoff_seconds(0)
+    second = client._retry_backoff_seconds(1)
+    fourth = client._retry_backoff_seconds(4)
+
+    # Jitter keeps the delay inside [0.5x, 1.0x] of the nominal value.
+    assert 1.0 <= first <= 2.0
+    assert 2.0 <= second <= 4.0
+    assert 3.0 <= fourth <= 6.0
+
+
+def test_retry_backoff_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.llm import client
+
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_SECONDS", "0")
+
+    assert client._retry_backoff_seconds(0) == 0.0
+
+
+async def test_generate_text_waits_before_retrying_a_retryable_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A saturated provider returns the same error when retried immediately."""
+    attempts: list[float] = []
+    calls = 0
+
+    class Completions:
+        async def create(self, **kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            attempts.append(asyncio.get_event_loop().time())
+            if calls == 1:
+                error = RuntimeError("upstream request failed")
+                error.status_code = 529  # type: ignore[attr-defined]
+                raise error
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+                model="retry-model",
+            )
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setattr("openai.AsyncOpenAI", Client)
+    monkeypatch.setenv("OPENAI_API_KEY", "retry-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:8318/v1")
+    monkeypatch.setenv("RADAR_LLM_CONCURRENCY", "4")
+    monkeypatch.setenv("LLM_RETRY_ATTEMPTS", "1")
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_SECONDS", "0.2")
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_MAX_SECONDS", "0.2")
+
+    result = await generate_text(llm_spec="openai:retry-model", user_prompt="retry-me")
+
+    assert result.text == "ok"
+    assert calls == 2
+    assert attempts[1] - attempts[0] >= 0.1

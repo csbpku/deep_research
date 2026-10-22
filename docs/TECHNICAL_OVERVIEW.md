@@ -87,6 +87,8 @@ PostgreSQL `Research` 是研究库权威数据源；AnythingLLM 只提供可选�
 
 平台连接是可选层：连接后才调用 `/api/reading/answer`、`/api/reading/answer/stream`、`/api/reading/translate`、`/api/reading/translate-image`、`/api/reading/answer-image` 和 `/api/reading/save`，将用户确认的成果同步到研究库；平台不可用时，独立翻译、图片处理、讨论和本地收藏仍可用。研究库同步继续保留数据库幂等键和安全锚点校验。雷达的新外部原文入口不依赖 enrichment；`RADAR_READING_MODE=browser` 只停止全文持久化和后续 enrichment，不停止同步期间的临时全文抓取与评分。
 
+平台全文翻译的吞吐由批次与并发决定，不由模型决定。扩展按最多 24 块、约 3,000 字符打包请求，并最多同时发出 6 个请求；Web BFF 以同样的 24 块上限拆分并允许 6 个并发在途；AI engine 的 LLM 信号量 `RADAR_LLM_CONCURRENCY` 同样是 6（registry overlay 默认值，可用 `.env` 覆盖）。三者对齐后，287 块、41,215 字符的文章在生产链路的实测墙钟从约 96 秒降到约 52 秒，覆盖仍为 287/287。可重试的供应商失败（429/529/超时）先等待抖动指数退避再重试，避免立即重试把瞬时过载放大成连续失败；`LLM_RETRY_BACKOFF_SECONDS` 与 `LLM_RETRY_BACKOFF_MAX_SECONDS` 控制退避窗口。MiniMax 的 OpenAI 兼容端点只识别 `reasoning_effort`，不识别 Anthropic 协议的 `output_config.effort`。
+
 Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式权威数据边界和明确非目标见 [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md)。
 
 雷达迁移由 `RADAR_READING_MODE` 控制，默认值为 `browser`。新同步尽量抓取来源正文用于当次摘要和评分，但不持久化全文；后续 enrichment/recovery 队列保持关闭。专题刷新、议题提取与综合采用统一的公开阅读门槛：已评分的 external-reading 高价值候选使用入库摘要/判断参与专题，不要求持久化正文；旧站内阅读候选仍要求 enrichment、正文质量和内容审核通过。专题关联匹配标题、URL、内容标签及保存的摘要/判断，预设关键词支持中英文；噪声、未评分、已屏蔽/归档、未审核分享和 GitHub Issue/PR/Release 不进入专题。候选成员变化（包括总数不变时的替换）会清除综述缓存与输入 hash，下一轮重新生成。显式设置为 `enriched` 才运行旧的站内正文链路；历史行和显式 Admin enrichment 保留，便于渐进迁移和回滚。

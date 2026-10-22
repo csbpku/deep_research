@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -39,6 +40,28 @@ _loop_semaphores: dict[
 ] = {}
 _circuit_failures: dict[str, tuple[int, float]] = {}
 _circuit_lock = asyncio.Lock()
+
+
+def _retry_backoff_seconds(retry_index: int) -> float:
+    """Exponential backoff before the next provider attempt.
+
+    Retrying a saturated provider immediately converts a transient 529/timeout
+    into a second concurrent failure, so every retryable attempt waits first.
+    The delay is bounded and jittered to keep parallel workers from
+    re-colliding on the same retry tick.
+    """
+    base = max(0.0, float(os.environ.get("LLM_RETRY_BACKOFF_SECONDS", "1.5")))
+    if base <= 0:
+        return 0.0
+    ceiling = max(base, float(os.environ.get("LLM_RETRY_BACKOFF_MAX_SECONDS", "12")))
+    delay = min(ceiling, base * (2 ** max(0, retry_index)))
+    return float(delay * (0.5 + random.random() / 2))
+
+
+async def _await_retry_backoff(retry_index: int) -> None:
+    delay = _retry_backoff_seconds(retry_index)
+    if delay > 0:
+        await asyncio.sleep(delay)
 
 
 @dataclass(slots=True, frozen=True)
@@ -443,6 +466,7 @@ async def generate_text(
                 )
                 if not retryable:
                     raise
+                await _await_retry_backoff(retry_index)
                 continue
             await _circuit_success(route.endpoint_key)
             await _record_success(
@@ -496,7 +520,7 @@ async def generate_vision(
         if await _circuit_is_open(route.endpoint_key):
             last_error = RuntimeError(f"LLM endpoint circuit open: {route.endpoint_key}")
             continue
-        for _ in range(retry_count + 1):
+        for retry_index in range(retry_count + 1):
             total_attempts += 1
             started_at = time.monotonic()
             try:
@@ -538,6 +562,7 @@ async def generate_vision(
                 )
                 if not retryable:
                     raise
+                await _await_retry_backoff(retry_index)
                 continue
             await _circuit_success(route.endpoint_key)
             await _record_success(
@@ -773,6 +798,7 @@ async def stream_text(
                 )
                 if emitted or not retryable:
                     raise
+                await _await_retry_backoff(retry_index)
                 continue
             await _circuit_success(route.endpoint_key)
             await _record_success(

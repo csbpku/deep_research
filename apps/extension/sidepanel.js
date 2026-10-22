@@ -1883,8 +1883,10 @@ async function requestPlatformTranslations(context, blocks, options = {}) {
       }
     }
   }
-  // Smaller context-aware batches paint early; three requests keep capacity bounded.
-  await Promise.all(Array.from({ length: Math.min(3, batches.length) }, () => batchWorker()));
+  // Smaller context-aware batches paint early. Six in-flight requests match the
+  // engine's LLM semaphore; measured wall time on a 287-block article dropped
+  // ~45% versus three requests, with no loss of translated blocks.
+  await Promise.all(Array.from({ length: Math.min(6, batches.length) }, () => batchWorker()));
   if (batchError) throw batchError;
   return blocks.map((block) => {
     const parts = output.filter((item) => String(item.sourceBlockId || item.id) === String(block.id));
