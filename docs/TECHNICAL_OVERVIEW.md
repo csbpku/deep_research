@@ -83,6 +83,8 @@ PostgreSQL `Research` 是研究库权威数据源；AnythingLLM 只提供可选�
 
 侧栏的阅读会话、滚动位置、选段、讨论和收藏存储在 IndexedDB；全文翻译结果只作为有界缓存，API Key 不进入导出数据。选择整页问答/解释时，平台模式把完整提取正文送入服务端分块分析并汇总；选择选段/章节时则按明确范围处理。React 负责侧栏 UI，独立控制器连接 content script、MV3 worker、IndexedDB 和可选平台服务；页面状态和模型密钥不会写回网页。
 
+Reader 聊天提供默认关闭、记忆选择的“联网补充”。只有显式追问按需规划关键词并检索公开来源，翻译/总结快捷动作不搜索。独立模式直接查询获授权的 Brave/Bing 站点，平台模式经鉴权的 `/api/reading/search` 复用 utility 模型（兼容 `RESEARCH_ASSISTANT_LLM`）和搜索客户端；模型规划调用计入现有额度账本。只向搜索服务发送关键词，不发送原文正文、聊天历史、图片或模型凭据；网络摘要作为单独的有界 `webContext` 输入，最多四条，不能进入原文证据数组。原文 `[1]` 与网络 `[W1]` 分开标记，来源随对应对话保存/同步；失败回到原文回答并明确未联网核实。
+
 界面语言默认跟随浏览器，当前提供简体中文和英文；中文浏览器区域变体统一使用简体中文，其他语言回退英文。翻译目标语言独立选择并记忆，不限制为界面语言。聊天按用户提问语言回答。
 
 平台连接是可选层：连接后才调用 `/api/reading/answer`、`/api/reading/answer/stream`、`/api/reading/translate`、`/api/reading/translate-image`、`/api/reading/answer-image` 和 `/api/reading/save`，将用户确认的成果同步到研究库；平台不可用时，独立翻译、图片处理、讨论和本地收藏仍可用。研究库同步继续保留数据库幂等键和安全锚点校验。雷达的新外部原文入口不依赖 enrichment；`RADAR_READING_MODE=browser` 只停止全文持久化和后续 enrichment，不停止同步期间的临时全文抓取与评分。

@@ -196,6 +196,14 @@ function ReaderPanel() {
                   <ReaderButton id="chat-translate" type="button" title={t("翻译当前整篇或选段")} variant="text"><ComposerIcon kind="translate" />{t("翻译")}</ReaderButton>
                   <TranslationLanguagePicker />
                 </div>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm, flex: '1 1 0', minWidth: 0 }}>
+                <ReaderButton id="web-search-toggle" type="button" variant="text" aria-pressed="false" title={t("按需搜索公开网络；仅发送必要关键词，翻译和总结不联网。")}
+                  sx={{ '&[aria-pressed="true"]': { bgcolor: 'action.selected', color: 'primary.main' } }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></svg>
+                  {t("联网补充")}
+                </ReaderButton>
+                <Typography id="web-search-state" variant="caption" color="text.secondary" noWrap>{t("已关闭")}</Typography>
+              </Box>
                 <span id="answer-task-status" className="small" role="status" aria-live="polite" /><ReaderButton id="stop-answer" className="composer-submit hidden" type="button" title={t("停止回答")} aria-label={t("停止回答")} variant="contained" control="icon"><ComposerIcon kind="stop" /></ReaderButton>
                 <ReaderButton id="send-question" className="composer-submit" title={t("发送问题（⌘ / Ctrl + Enter）")} aria-label={t("发送问题")} variant="contained" control="icon"><ComposerIcon kind="send" /></ReaderButton>
               </div>

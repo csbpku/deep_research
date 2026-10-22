@@ -1,6 +1,6 @@
 # Deep Research Reader 隐私政策
 
-最后更新：2026-10-20
+最后更新：2026-10-22
 
 Reader 帮助你在原网页中翻译、理解、讨论和保存阅读成果。独立模式直接使用你选择的模型服务，平台模式可选连接 Deep Research。两种模式都会在你发起 AI 操作时发送完成该操作所需的内容。
 
@@ -25,6 +25,12 @@ API Key 保存在扩展自己的本地 IndexedDB 配置中，仅用于向该模�
 连接后，阅读会话可以同步到平台数据库，包括 URL、标题、页面版本、选区、讨论、回答和滚动位置。仅你确认保存的摘录、笔记、AI 结论、标签和来源会进入平台研究库。阅读同步不保存完整网页全文档案、图片字节、全文翻译缓存或你的模型 API Key。
 
 平台登录服务处理账号信息，扩展本地保存用于连接平台的授权令牌。断开平台会请求服务端撤销令牌并清除本地令牌，已经同步的会话和研究库条目不会因此自动删除。平台及其模型服务可以保留必要的运行、安全或计费记录；扩展不承诺平台模型供应商零留存。
+
+## 可选联网补充
+
+联网补充默认关闭。开启后，Reader 根据当前问题及文章标题判断是否需要搜索；翻译和总结不会触发搜索。仅将生成的必要关键词发送至搜索服务，不把整篇正文、聊天历史、图片、API Key 或平台令牌发送至搜索服务。请避免在联网问题中包含私人信息；关键词可能包含问题或标题中的词语。
+
+当前使用 Brave/Bing 搜索摘要，并过滤明显无关结果。独立模式需你授权搜索站点后，由浏览器直接查询；平台模式由平台服务器查询。搜索服务会接收关键词与请求方 IP 等网络信息，并按其政策处理。搜索摘要不是全文核验，失败时回退到原文回答。网络来源及有界摘要会随聊天记录保存在本地；平台会话同步启用时也随该会话同步。
 
 ## 本地保存与保留时间
 
@@ -66,7 +72,7 @@ GitHub Issues：https://github.com/csbpku/deep_research/issues
 
 # Privacy policy (English)
 
-Last updated: 2026-10-20
+Last updated: 2026-10-22
 
 Reader helps you translate, understand, discuss and save material on its original webpage. Standalone mode connects directly to your selected model service; optional platform mode connects to Deep Research. Both send only the content needed for AI actions you initiate.
 
@@ -91,6 +97,12 @@ Platform mode requires sign-in and authorization. The URL, title, required bound
 Reading sessions may sync URL, title, page version, selection, discussion, answers and scroll position to the platform database. Only excerpts, notes, AI insights, tags and sources you explicitly save enter the research library. Sync does not store full page archives, image bytes, full-page translation caches or your model API key.
 
 The sign-in service processes account information; the extension stores a platform authorization token locally. Disconnecting requests token revocation and removes the local token, but does not automatically delete previously synced records. The platform and its model provider may retain necessary operational, security or billing records; zero retention is not promised.
+
+## Optional web search
+
+Web search is off by default. When enabled, Reader uses the current question and article title to decide whether a search is needed. Translation and summaries do not trigger a search. Only generated keywords are sent to the search service, without full article text, chat history, images, API keys or platform tokens. Avoid private information in web-enabled questions: keywords may include terms from your question or article title.
+
+Reader currently uses Brave/Bing search excerpts; clearly unrelated results are excluded. Standalone mode queries from your browser after you grant search-site permission; platform mode queries from the platform server. The search service receives keywords and network information such as the requesting IP, under its own policies. Excerpts are not full-page verification. Search failures fall back to the original page. Source links and bounded excerpts are saved with local chat history and included when platform session sync is enabled.
 
 ## Local storage and retention
 

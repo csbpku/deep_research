@@ -79,6 +79,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       body: JSON.stringify({
         operation: input.action,
         requester_id: user.id,
+      web_context: input.webContext,
         body,
         topic: input.context.title,
         instruction: boundedInstruction,

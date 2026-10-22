@@ -55,6 +55,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     context: 'reading.answer-image',
     body: {
       requester_id: user.id,
+      web_context: input.webContext,
       image_media_type: imageMediaType,
       image_base64: encoded,
       image_alt: input.alt,

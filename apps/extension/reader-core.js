@@ -371,7 +371,7 @@ function createReasoningStreamFilter() {
   };
 }
 
-function messageText(payload) {
+export function messageText(payload) {
   if (Array.isArray(payload?.content)) {
     return stripReasoningText(payload.content
       .filter((part) => part?.type === 'text' && typeof part.text === 'string')
@@ -888,6 +888,7 @@ async function requestWholePageAnswer(provider, context, question, prior, option
     { role: 'user', content: `页面：${context.title}\n用户问题：${question || '请总结这页的核心结论。'}\n以下分析按原文顺序覆盖全文各块，请据此作答：\n${analyses.join('\n\n')}` },
   ];
   options.onProgress?.(chunks.length, chunks.length, 'merging');
+  if (options.webContext) messages[0].content += `\n${options.webContext}`;
   messages[0].content += `\n${responseLanguageInstruction(options.replyLanguage || 'auto')}`;
   const finalText = options.onDelta
     ? await requestChatStream(provider, messages, options)
@@ -1667,6 +1668,7 @@ export async function explainSelection(provider, context, question = '', history
   if (!selected && !boundedSection && context.scope === 'page' && readingContext.length > 64_000) {
     return requestWholePageAnswer(provider, context, question, prior, options);
   }
+  if (options.webContext) messages[0].content += `\n${options.webContext}`;
   messages[0].content += `\n${responseLanguageInstruction(options.replyLanguage || (question ? 'auto' : provider.language || 'en'))}`;
   const parse = (raw) => parseReadingAnswer(raw, { ...context, contentHash, coverageWarning: pageSelection.warning });
   const needsRetry = (result) => result.warnings.some((warning) => /结构化结果不完整/u.test(warning));
@@ -1729,6 +1731,7 @@ export async function explainImage(provider, context, image, question = '', hist
       { type: 'image_url', image_url: { url: source, detail: 'high' } },
     ] },
   ];
+  if (options.webContext) messages[0].content += `\n${options.webContext}`;
   messages[0].content += `\n${responseLanguageInstruction(options.replyLanguage || 'auto')}`;
   const raw = options.onDelta
     ? await requestChatStream(provider, messages, options)

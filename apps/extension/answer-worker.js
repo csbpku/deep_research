@@ -1,6 +1,7 @@
+import { standaloneSearch, searchContext, safeSourceUrl } from './web-search.js';
 import { readerStore } from './reader-store.js';
 import { loadProvider, explainSelection, explainImage } from './reader-core.js';
-import { requestPlatformAnswer, requestPlatformImageAnswer } from './platform-answer.js';
+import { requestPlatformAnswer, requestPlatformImageAnswer, requestPlatformSearch } from './platform-answer.js';
 
 const tasks = new Map();
 const key = id => `readerAnswer:${id}`;
@@ -31,6 +32,27 @@ async function execute(input, task, controller) {
       onProgress: (...progress) => { task.progress = progress; publish(true); },
     };
     const provider = input.mode === 'standalone' ? { ...await loadProvider(), language: input.language } : null;
+    options.webContext = 'No web search was performed unless external sources are explicitly supplied below. Do not claim live or up-to-date verification based on model memory.';
+    let webSources = []; let searchStatus = 'off';
+    if (input.webSearch && input.intent === 'ask' && input.question) {
+      options.onProgress(0, 0, 'search-planning');
+      try {
+        const found = input.mode === 'platform'
+          ? await requestPlatformSearch(input.question, input.context.title, options)
+          : await standaloneSearch(provider, input.question, { ...options, title: input.context.title });
+        searchStatus = ['searched', 'skipped', 'unavailable'].includes(found?.status) ? found.status : 'unavailable';
+        webSources = (Array.isArray(found.sources) ? found.sources : []).filter(source => safeSourceUrl(source?.url)).slice(0, 4).map(source => ({ title: String(source.title || '').slice(0, 180), url: safeSourceUrl(source.url), snippet: String(source.snippet || '').slice(0, 600) }));
+        if (searchStatus !== 'searched') webSources = [];
+        while (searchContext(webSources).length > 8000) webSources.pop();
+        if (searchStatus === 'searched' && !webSources.length) searchStatus = 'unavailable';
+        if (webSources.length) options.webContext = searchContext(webSources);
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        searchStatus = 'unavailable';
+      }
+      if (searchStatus === 'unavailable') options.webContext = 'The external search was unavailable. Answer only from the original page and clearly labelled general knowledge. Do not claim current web verification.';
+      options.onProgress(0, 0, searchStatus === 'unavailable' ? 'search-unavailable' : 'search-complete');
+    }
     const result = input.mode === 'platform'
       ? input.scope === 'image'
         ? await requestPlatformImageAnswer(input.context, input.image, input.question, options)
@@ -39,8 +61,10 @@ async function execute(input, task, controller) {
         ? await explainImage(provider, input.context, input.image, input.question, input.history, options)
         : await explainSelection(provider, { ...input.context, scope: input.scope }, input.question, input.history, options);
     if (controller.signal.aborted) throw new DOMException('回答已停止', 'AbortError');
+    result.webSources = webSources; result.searchStatus = searchStatus;
+
     const session = await readerStore.getSession(input.context.url, input.context.contentHash || null);
-    const discussion = [...input.history, { id: `${input.id}:user`, role: 'user', content: input.userMessage }, { id: `${input.id}:assistant`, role: 'assistant', content: result.answer || '' }];
+    const discussion = [...input.history, { id: `${input.id}:user`, role: 'user', content: input.userMessage }, { id: `${input.id}:assistant`, role: 'assistant', content: result.answer || '', webSources, searchStatus }];
     await readerStore.saveSession({ ...session, url: input.context.url, title: session?.title || input.context.title, version: input.context.contentHash || null, selection: input.context.selection || null, discussion, discussionScope: input.scope, discussionIntent: input.intent, answer: result.answer || '', answerStructured: result });
     task.result = result; task.status = 'completed';
   } catch (error) {

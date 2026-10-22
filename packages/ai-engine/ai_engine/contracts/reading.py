@@ -110,6 +110,22 @@ class ReadingEvidence(BaseModel):
     anchor: SourceAnchor | None = None
 
 
+class ReadingWebSource(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    title: str = Field(max_length=180)
+    url: str = Field(max_length=2048)
+    snippet: str = Field(default="", max_length=600)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Only public HTTP(S) source links are supported")
+        return value
+
+
 class ReadingAnswer(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -121,6 +137,8 @@ class ReadingAnswer(BaseModel):
     citations: list[ReadingCitation] = Field(default_factory=list, max_length=24)
     warnings: list[str] = Field(default_factory=list, max_length=20)
     structured: bool = False
+    web_sources: list[ReadingWebSource] | None = Field(default=None, max_length=4, alias="webSources")
+    search_status: Literal["off", "skipped", "searched", "unavailable"] | None = Field(default=None, alias="searchStatus")
 
 
 class ReadingResult(BaseModel):

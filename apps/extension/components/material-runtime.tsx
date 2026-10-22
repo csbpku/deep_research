@@ -1,3 +1,4 @@
+import { safeSourceUrl } from '../web-search.js';
 import { space } from "@deep-research/design-system";
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -30,7 +31,7 @@ export function MaterialMarkdown({ text, className, bind }: { text: string; clas
   useLayoutEffect(() => { if (ref.current) { renderMarkdown(ref.current, readingAnswerText(text)); bind?.(ref.current); } }, [text, bind]);
   return <Box ref={ref} className={className} sx={{ fontSize: 'var(--reader-type-reading)', lineHeight: 'var(--reader-line-height-reading)', overflowWrap: 'anywhere' }} />;
 }
-interface Message { role: string; content: string }
+interface Message { role: string; content: string; webSources?: { title: string; url: string }[]; searchStatus?: string }
 function CopyAction({ text, onError }: { text: string; onError?: () => void }) {
   const [copied, setCopied] = useState(false);
   return <ReaderButton className="conversation-copy" variant="outlined" startIcon={<ComposerIcon kind="copy" />} aria-label={t('复制这条回答')} onClick={async () => {
@@ -42,7 +43,16 @@ export function renderMaterialConversation(host: Element, messages: Message[], o
   render(host, messages.map((message, index) => <Box component="article" key={index} className={`conversation-message history-detail-message ${message.role}`} sx={message.role === 'user' ? { justifySelf: 'end', width: 'fit-content', maxWidth: '92%', p: space.md, borderRadius: '12px 12px 4px 12px', bgcolor: 'action.hover' } : { minWidth: 0 }}>
     {message.role === 'assistant' && <Typography component="div" className="conversation-message-header history-detail-message-header" variant="caption" color="text.secondary" sx={{ mb: space.sm }}>Reader</Typography>}
     {message.role === 'assistant' ? <MaterialMarkdown className="conversation-message-body history-detail-message-body" text={message.content} bind={index === latest ? options.bindLatest : undefined} /> : <Typography component="div" className="conversation-message-body history-detail-message-body" variant="body1">{message.content}</Typography>}
-    {options.copy && message.role === 'assistant' && index !== latest && <Box className="conversation-message-tools" sx={{ mt: space.md }}><CopyAction text={message.content} onError={options.onCopyError} /></Box>}
+    {message.role === 'assistant' && Boolean(message.webSources?.length) && <Box className="answer-web-sources" sx={{ mt: space.md, pt: space.md, borderTop: 1, borderColor: 'divider' }}>
+      <Typography variant="caption" component="div" color="text.secondary">{t('网络来源 · 搜索摘要')}</Typography>
+      <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+        {message.webSources?.filter(source => safeSourceUrl(source.url)).slice(0, 4).map((source, i) => <Box component="li" key={source.url} sx={{ mt: space.sm, overflowWrap: 'anywhere' }}>
+          <Typography component="a" href={safeSourceUrl(source.url)} target="_blank" rel="noopener noreferrer" variant="body2" color="primary.main">[W{i + 1}] {source.title || new URL(source.url).hostname}</Typography>
+        </Box>)}
+      </Box>
+    </Box>}
+    {message.role === 'assistant' && message.searchStatus === 'unavailable' && <Typography component="div" variant="caption" color="text.secondary" sx={{ mt: space.sm }}>{t('联网搜索暂不可用，本次依据原文回答，未核实最新网络信息。')}</Typography>}
+    {options.copy && message.role === 'assistant' && index !== latest && <Box className="conversation-message-tools" sx={{ mt: space.md }}><CopyAction text={[message.content, ...(message.webSources || []).map((source, i) => `[W${i + 1}] ${source.title} ${safeSourceUrl(source.url)}`)].join('\n')} onError={options.onCopyError} /></Box>}
   </Box>));
 }
 export interface MaterialEvidence { id?: string; claim?: string; quote?: string; url?: string; anchored?: boolean; onLocate?: () => void }
