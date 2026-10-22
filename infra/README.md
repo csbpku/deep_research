@@ -101,7 +101,7 @@ Playwright 缓存只保存浏览器二进制，不包含 apt 系统库和中文�
 
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。
 2. 推送到 GHCR 对应的两个 `<commit-sha>` 镜像，同时更新 `latest`。
-3. 构建并校验 Reader Beta ZIP。版本号来自扩展 manifest；工作流创建不可覆盖的 `reader-v<version>` GitHub Pre-release，并导出资产 SHA-256。扩展源码变更但未升版本，或已有 release 资产缺失/不匹配时，发布失败，不会覆盖旧资产。
+3. 构建并校验 Reader Beta ZIP。版本号来自扩展 manifest；工作流创建不可覆盖的 `reader-v<version>` GitHub Pre-release，并导出资产 SHA-256。扩展源码变更但未升版本，或已有 release 资产缺失/不匹配时，发布失败，不会覆盖旧资产。版本门禁只覆盖扩展发布内容，`apps/extension/README.md` 与 `apps/extension/RELEASE_NOTES.md` 的改动不算源码变化，不会要求升版本。
 4. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS；更新 `.env` 中的 `READING_EXTENSION_BETA_URL`、`READING_EXTENSION_BETA_PATH`、`READING_EXTENSION_BETA_VERSION` 和 `READING_EXTENSION_BETA_SHA256`。健康检查通过后再持久化 `WEB_IMAGE` / `AI_ENGINE_IMAGE` 为目标 SHA 镜像，防止残留快照选择器让后续 Compose 操作回退；失败回滚时恢复这六项原值，其余配置与凭据保持不变。
 5. VPS 拉取固定 SHA 镜像，使用更新后的 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
 6. 通过 `/healthz`、`/readyz` 和 `/ai-healthz` 做发布后检查；失败时恢复 Beta 配置和发布前实际运行的镜像对。仅在没有现有容器时才回退使用上一 registry SHA。
