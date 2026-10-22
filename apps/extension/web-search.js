@@ -87,4 +87,3 @@ export async function standaloneSearch(provider, question, options = {}) {
   if (!sources.length) throw new Error('No relevant search results');
   return { status: 'searched', sources };
 }
-
