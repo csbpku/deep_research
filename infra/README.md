@@ -95,6 +95,8 @@ AI engine 镜像偏大的原因有两层：
 
 `.github/workflows/deploy.yml` 在 `CI` 成功后执行以下步骤：
 
+CI 和 Deploy 的执行机固定为 `ubuntu-24.04`，不跟随 `ubuntu-latest` 的跨版本迁移。pnpm/uv 安装 Action 使用 Node 24 运行时的官方发布并固定 commit SHA；pnpm 包管理器仍为 10.0.0，uv 保留原有 latest、无缓存安装行为。升级执行机或 Action 时，通过维护 PR 重跑四项 CI，不以压制弃用警告代替兼容性验证。
+
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。
 2. 推送到 GHCR 对应的两个 `<commit-sha>` 镜像，同时更新 `latest`。
 3. 构建并校验 Reader Beta ZIP。版本号来自扩展 manifest；工作流创建不可覆盖的 `reader-v<version>` GitHub Pre-release，并导出资产 SHA-256。扩展源码变更但未升版本，或已有 release 资产缺失/不匹配时，发布失败，不会覆盖旧资产。
