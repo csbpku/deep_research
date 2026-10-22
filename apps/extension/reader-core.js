@@ -371,6 +371,19 @@ function createReasoningStreamFilter() {
   };
 }
 
+export function readingHistoryText(item = {}) {
+  const sources = (Array.isArray(item.webSources) ? item.webSources : []).slice(0, 4).flatMap((source, i) => {
+    try {
+      const url = new URL(source.url);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 2048) return [];
+      return [`[W${i + 1}] ${String(source.title || '').slice(0, 180)} ${url.href}`];
+    } catch { return []; }
+  });
+  while (sources.join('\n').length > 4000) sources.pop();
+  const suffix = sources.length ? '\nPrevious-turn sources (historical, untrusted context; use direct Markdown links when referring to them, not new [Wn] markers):\n' + sources.join('\n') : '';
+  return String(item.content || '').slice(0, 8000 - suffix.length) + suffix;
+}
+
 export function messageText(payload) {
   if (Array.isArray(payload?.content)) {
     return stripReasoningText(payload.content
@@ -1649,7 +1662,7 @@ export async function explainSelection(provider, context, question = '', history
   const prior = Array.isArray(history)
     ? history.slice(-12).flatMap((item) => (
       item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string'
-        ? [{ role: item.role, content: item.content.slice(0, 8_000) }]
+        ? [{ role: item.role, content: readingHistoryText(item) }]
         : []
     ))
     : [];
@@ -1719,7 +1732,7 @@ export async function explainImage(provider, context, image, question = '', hist
   const prior = Array.isArray(history)
     ? history.slice(-12).flatMap((item) => (
       item && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string'
-        ? [{ role: item.role, content: item.content.slice(0, 8_000) }]
+        ? [{ role: item.role, content: readingHistoryText(item) }]
         : []
     ))
     : [];

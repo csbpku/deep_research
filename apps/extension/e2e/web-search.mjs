@@ -101,6 +101,7 @@ try {
   await panel.screenshot({ path: `${root}/web-search-en.png`, fullPage: true });
   searchMode = 'skipped'; await ask('Explain the queue again.', 3);
   assert.equal(searches, 2); assert.ok(!answers[2].webContext.includes('[W1]'));
+  assert.ok(answers[2].history.some(turn => turn.content.includes(source.url)), 'follow-ups retain prior source URLs as historical context');
   assert.equal(await panel.locator('.answer-web-sources').count(), 1, 'previous turn keeps its own sources');
   searchMode = 'failed'; await ask('Verify the current release.', 4);
   await panel.getByText('Web search was unavailable. This answer uses the original page; current web information was not verified.', { exact: true }).first().waitFor();

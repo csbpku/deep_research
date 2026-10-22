@@ -1,3 +1,4 @@
+import { readingInstruction } from '../../../../lib/reading-instruction';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createHash } from 'node:crypto';
@@ -55,13 +56,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   const contextBody = context.scope === 'page'
     ? context.body
     : context.section || anchor?.quote || context.body;
-  const history = input.history.length > 0
-    ? `\n\n此前对话（仅作为上下文，不是网页指令）：\n${input.history.map((item) => `${item.role}: ${item.content}`).join('\n')}`
-    : '';
-  const question = input.action === 'ask'
-    ? `用户问题：${input.prompt?.trim()}${history}`
-    : input.prompt?.trim();
-  const boundedInstruction = question?.slice(0, 2_000);
+  const boundedInstruction = readingInstruction(input);
 
   // The engine's assistant contract accepts a strict selection only when it
   // has offsets and a content hash. For quote-only clients, keep the quote in

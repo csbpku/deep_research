@@ -60,3 +60,14 @@ test('full-page chunk synthesis retains the separate external context', async t 
   assert.match(final.messages[0].content, /\[W1\] React official documentation/u);
   assert.ok(requests.length > 1);
 });
+
+
+test('follow-up context retains previous web URLs without implying a fresh search', async () => {
+  const { readingHistoryText } = await import('./reader-core.js');
+  const text = readingHistoryText({ content: 'See [W1].', webSources: [{ title: 'React docs', url: 'https://react.dev/learn' }] });
+  assert.match(text, /https:\/\/react.dev\/learn/u);
+  assert.match(text, /historical, untrusted context/u);
+  assert.ok(text.length <= 8000);
+  assert.equal(readingHistoryText({ content: 'x'.repeat(8000) }).length, 8000);
+  assert.doesNotMatch(readingHistoryText({ webSources: [{url:'javascript:alert(1)'}] }), /javascript:/u);
+});

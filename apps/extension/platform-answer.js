@@ -1,4 +1,4 @@
-import { parseReadingAnswer, readingAnswerText, responseLanguageInstruction } from './reader-core.js';
+import { parseReadingAnswer, readingAnswerText, responseLanguageInstruction, readingHistoryText } from './reader-core.js';
 export async function requestPlatformAnswer(sourceContext, question, scope, options = {}) {
   const { readerToken } = await chrome.storage.local.get(['readerToken']);
   if (!readerToken) throw new Error('平台连接已失效，请重新连接');
@@ -17,7 +17,7 @@ export async function requestPlatformAnswer(sourceContext, question, scope, opti
       ...(question ? { prompt: `${responseLanguageInstruction(options.replyLanguage || 'auto')}\n\nUser question:\n${question}` } : {}),
       history: (options.history || []).slice(-20).map((item) => ({
         role: item.role === 'assistant' ? 'assistant' : 'user',
-        content: String(item.content || '').slice(0, 8_000),
+        content: readingHistoryText(item),
       })),
     }),
     signal: options.signal,
@@ -123,7 +123,7 @@ export async function requestPlatformImageAnswer(context, image, question, optio
     body: JSON.stringify({ webContext: options.webContext, imageDataUrl: image.dataUrl, alt: String(image.alt || '').slice(0, 500),
       title: String(context.title || '').slice(0, 300), body: String(context.body || '').slice(0, 24000),
       prompt: `${responseLanguageInstruction(options.replyLanguage || 'auto')}\n\nUser question:\n${String(question || 'Explain the selected diagram.').slice(0, 3500)}`, language: options.replyLanguage || 'auto',
-      history: (options.history || []).slice(-12).map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '').slice(0, 8000) })) }),
+      history: (options.history || []).slice(-12).map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: readingHistoryText(item) })) }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(platformAnswerErrorMessage(payload, response.status));
