@@ -1,6 +1,6 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.3.0",
+  "version": "0.2.29",
   "private": true,
   "type": "module",
   "scripts": {
