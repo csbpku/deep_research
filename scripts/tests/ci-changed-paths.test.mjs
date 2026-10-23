@@ -102,6 +102,20 @@ test('a CI tooling change reports the ci-only scope', () => {
   });
 });
 
+test('the Playwright dependency tooling reports the ci-only scope', () => {
+  // These files decide how the browser jobs obtain their system packages.
+  // They are verified by the heavy suites, but no image copies them, so a
+  // change to them does not have to rebuild or redeploy production.
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    assert.equal(scope(dir, base, [['scripts/install-playwright-deps.sh', '#!/usr/bin/env bash\n']]), 'ci-only');
+    assert.equal(scope(dir, base, [['scripts/playwright-deps-packages.mjs', '// printer\n']]), 'ci-only');
+    assert.equal(
+      scope(dir, base, [['scripts/tests/playwright-deps-packages.test.mjs', '// test\n']]),
+      'ci-only',
+    );
+  });
+});
+
 test('a CI tooling change still has to run the heavy suites', () => {
   withRepo(BASE_FILES, ({ dir, base }) => {
     // The exit code stays non-zero, so the heavy jobs are not skipped.

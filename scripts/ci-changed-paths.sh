@@ -127,7 +127,7 @@ while IFS= read -r path; do
 
   case "$path" in
     docs/*|*.md) ;;
-    .github/workflows/*|.github/actions/*|scripts/ci-*.sh|scripts/ci-*.mjs|scripts/tests/ci-*.mjs|scripts/install-playwright-deps.sh|scripts/playwright-deps-packages.mjs)
+    .github/workflows/*|.github/actions/*|scripts/ci-*.sh|scripts/ci-*.mjs|scripts/tests/ci-*.mjs|scripts/install-playwright-deps.sh|scripts/playwright-deps-packages.mjs|scripts/tests/playwright-deps-packages.test.mjs)
       # CI and release tooling. It has to be verified by the heavy suites,
       # but it is not part of any image, so production does not change.
       documentation_only=false
