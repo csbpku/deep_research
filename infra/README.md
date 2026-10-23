@@ -99,6 +99,10 @@ Playwright 缓存只保存浏览器二进制，不包含 apt 系统库和中文�
 
 纯文档改动（每个路径都是 `docs/**` 或 `*.md`）不重建镜像、不重启生产。CI 与 Deploy 共用 `scripts/ci-changed-paths.sh` 判定：CI 跳过类型检查、单测和全部 E2E 套件，Deploy 跳过镜像构建、Reader Beta 发布和 VPS 部署；判定失败时按可发布处理。打进 Reader Beta 包的 Markdown（`apps/extension/{PRIVACY,BETA_INSTALL,COMPATIBILITY,BETA_CHECKLIST}.md`）属于产物，改动它们仍走完整发布流程。
 
+CI 与发布脚手架的改动（`.github/workflows/**`、`.github/actions/**`、`scripts/ci-*`、`scripts/tests/ci-*`、`scripts/install-playwright-deps.sh`、`scripts/playwright-deps-packages.mjs`）同样不重建镜像、不重启生产：它们必须跑完整 CI 验证，但没有任何镜像或扩展包发生变化。`scripts/ci-changed-paths.sh --scope <base> <head>` 输出 `documentation`、`ci-only` 或 `deployable` 三个档位，Deploy 按此决定是否发布。镜像实际 COPY 的文件（例如 `scripts/docker-entrypoint-web.sh`、`infra/*.Dockerfile`）属于 `deployable`。
+
+Playwright 浏览器系统依赖（Chromium 运行库与中日韩字体，约 26 MB）由 `scripts/install-playwright-deps.sh` 安装。包清单从当前安装的 Playwright 依赖表读取，不会随版本漂移；`.deb` 文件缓存在 `/var/cache/apt/playwright`，由 CI 的 `actions/cache` 持久化。这是为了避开 Ubuntu 镜像源的限流：2026-10-23 有一次 CI 的 `apt-get install` 被限流到 35.5 kB/s，单步耗时 11m12s，直接把 `web (Playwright E2E)` 撞到超时。命中缓存时该步骤不再访问网络。相关测试：`node --test scripts/tests/playwright-deps-packages.test.mjs`。
+
 `.github/workflows/deploy.yml` 在 `CI` 成功后执行以下步骤：
 
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。

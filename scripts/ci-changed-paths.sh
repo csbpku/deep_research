@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Decide whether a change set is documentation-only.
+# Classify a change set.
 #
 # Usage (from inside the git work tree that holds the change):
 #   scripts/ci-changed-paths.sh <base-sha> <head-sha>
 #   scripts/ci-changed-paths.sh --list <base-sha> <head-sha>
+#   scripts/ci-changed-paths.sh --scope <base-sha> <head-sha>
 #
 # Exit codes:
 #   0  documentation-only  -> the heavy CI jobs and the release pipeline
@@ -14,6 +15,14 @@
 # The rule is intentionally conservative: anything that is not clearly a
 # documentation path resolves to "deployable", so an unrecognised change can
 # never be silently skipped.
+#
+# `--scope` prints the classification instead of the exit code:
+#   documentation  -> only Markdown and docs/ changed
+#   ci-only        -> only CI and release tooling changed; the heavy CI
+#                     suites still have to run, but no image and no
+#                     extension package changed, so there is nothing to
+#                     deploy
+#   deployable     -> everything else
 set -euo pipefail
 
 # Markdown that ships inside a build artefact is not documentation: the Beta
@@ -33,13 +42,17 @@ ARTEFACT_MARKDOWN_FALLBACK=(
 )
 
 usage() {
-  echo "Usage: $0 [--list] <base-sha> <head-sha>" >&2
+  echo "Usage: $0 [--list|--scope] <base-sha> <head-sha>" >&2
   exit 2
 }
 
 list_only=false
+scope_only=false
 if [ "${1:-}" = "--list" ]; then
   list_only=true
+  shift
+elif [ "${1:-}" = "--scope" ]; then
+  scope_only=true
   shift
 fi
 
@@ -93,6 +106,7 @@ if [ "$list_only" = true ]; then
 fi
 
 documentation_only=true
+ci_only=true
 count=0
 while IFS= read -r path; do
   [ -n "$path" ] || continue
@@ -107,14 +121,31 @@ while IFS= read -r path; do
   done
   if [ "$artefact" = true ]; then
     documentation_only=false
+    ci_only=false
     continue
   fi
 
   case "$path" in
     docs/*|*.md) ;;
-    *) documentation_only=false ;;
+    .github/workflows/*|.github/actions/*|scripts/ci-*.sh|scripts/ci-*.mjs|scripts/tests/ci-*.mjs|scripts/install-playwright-deps.sh|scripts/playwright-deps-packages.mjs)
+      # CI and release tooling. It has to be verified by the heavy suites,
+      # but it is not part of any image, so production does not change.
+      documentation_only=false
+      ;;
+    *) documentation_only=false; ci_only=false ;;
   esac
 done <<< "$changed"
+
+if [ "$scope_only" = true ]; then
+  if [ "$count" -eq 0 ] || [ "$documentation_only" = true ]; then
+    echo "documentation"
+  elif [ "$ci_only" = true ]; then
+    echo "ci-only"
+  else
+    echo "deployable"
+  fi
+  exit 0
+fi
 
 if [ "$count" -eq 0 ] || [ "$documentation_only" = true ]; then
   exit 0
