@@ -2,9 +2,8 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getCurrentUser } from '@/lib/auth/session';
 import { Alert, Box, Typography } from '@mui/material';
-import { Button } from './AdminMaterial';
+import { adminRootSx, Button } from './AdminMaterial';
 import AdminConsole from './AdminConsole';
-import styles from './admin.module.css';
 
 /**
  * Admin 控制台入口（Server Component）：
@@ -25,7 +24,7 @@ export default async function AdminPage() {
   if (!u) redirect('/signin?callbackUrl=/admin');
   if (u.role !== 'admin') {
     return (
-      <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 760 }}>
+      <Box sx={[adminRootSx, { mx: 'auto', width: '100%', maxWidth: 760 }]}>
         <Typography variant="h1" component="h1">Admin</Typography>
         <Alert severity="error" sx={{ mt: 2 }}>
           <Typography variant="subtitle2" component="div">403 — 需要管理员权限</Typography>

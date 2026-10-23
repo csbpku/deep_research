@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 const requests = [];
 const answer = JSON.stringify({ answer: 'Queues protect memory and keep work responsive.', evidence: [{ quote: 'A bounded queue protects memory.', claim: 'Memory bound' }], background: 'Context for the bounded queue [1].', inference: 'Capacity should match the available memory.', limitations: ['The article does not specify the queue capacity.'] });
 const server = createServer(async (req, res) => {
@@ -28,7 +30,7 @@ const server = createServer(async (req, res) => {
   } else res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
 });
 await new Promise(resolve => server.listen(8879, '127.0.0.1', resolve));
-const root = await mkdtemp('/private/tmp/reader-chat-workspace-');
+const root = await mkdtemp(join(tempDir(), 'reader-chat-workspace-'));
 await cp(new URL('../.output/chrome-mv3', import.meta.url).pathname, root+'/extension', { recursive: true });
 const manifest = JSON.parse(await readFile(root+'/extension/manifest.json', 'utf8'));
 manifest.host_permissions = ['http://127.0.0.1/*'];

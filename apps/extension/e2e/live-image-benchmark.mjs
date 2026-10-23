@@ -2,9 +2,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 import { translateImage } from '../reader-core.js';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const manifestPath = process.env.READER_IMAGE_CORPUS
-  || '/private/tmp/deep-research-reader-image-corpus-1789898221386.json';
+  || tempPath('deep-research-reader-image-corpus-1789898221386.json');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const baseUrl = process.env.READER_LIVE_BASE_URL;
 const model = process.env.READER_LIVE_VISION_MODEL || process.env.READER_LIVE_MODEL;
@@ -194,6 +195,6 @@ const summary = {
   })(),
 };
 const outputPath = process.env.READER_IMAGE_BENCHMARK_OUTPUT
-  || `/private/tmp/deep-research-reader-image-benchmark-${Date.now()}.json`;
+  || tempPath(`deep-research-reader-image-benchmark-${Date.now()}.json`);
 await writeFile(outputPath, JSON.stringify({ generatedAt: new Date().toISOString(), model, summary, results }, null, 2));
 console.log(JSON.stringify({ outputPath, summary }, null, 2));

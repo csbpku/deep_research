@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const platformOrigin = 'https://techradar.top';
 const storeUrl = 'https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl';
@@ -46,7 +47,7 @@ async function routeFixtures(page) {
 }
 
 async function verifyWithoutExtension() {
-  const context = await chromium.launchPersistentContext(`/private/tmp/reader-source-no-extension-${Date.now()}`, {
+  const context = await chromium.launchPersistentContext(tempPath(`reader-source-no-extension-${Date.now()}`), {
     executablePath,
     headless: true,
     viewport: { width: 980, height: 760 },
@@ -66,7 +67,7 @@ async function verifyWithoutExtension() {
 }
 
 async function verifyWithExtension() {
-  const context = await chromium.launchPersistentContext(`/private/tmp/reader-source-with-extension-${Date.now()}`, {
+  const context = await chromium.launchPersistentContext(tempPath(`reader-source-with-extension-${Date.now()}`), {
     executablePath,
     headless: true,
     viewport: { width: 980, height: 760 },

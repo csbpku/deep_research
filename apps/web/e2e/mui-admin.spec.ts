@@ -72,6 +72,18 @@ test.describe('MUI Admin module navigation (isolated fixture database)', () => {
       await expect(page.getByRole('tabpanel', { name: label, exact: true })).toBeVisible();
       await expect(tab).toHaveCSS('flex-direction', 'row');
     }
+    const members = page.getByRole('region', { name: '成员列表', exact: true });
+    await expect(members).toBeVisible();
+    expect(await members.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+    await members.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => members.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+    await members.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+    const action = members.locator('tbody tr').first().getByRole('button', { name: '禁用', exact: true });
+    const viewport = (await members.boundingBox())!;
+    const button = (await action.boundingBox())!;
+    expect(button.x).toBeGreaterThanOrEqual(viewport.x);
+    expect(button.x + button.width).toBeLessThanOrEqual(viewport.x + viewport.width);
     await page.screenshot({ path: testInfo.outputPath('admin-tabs-mobile.png'), fullPage: true });
   });
 });

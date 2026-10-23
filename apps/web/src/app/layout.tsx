@@ -5,7 +5,6 @@ import { Providers } from './providers';
 import { AppShell } from '@/components/shell/AppShell';
 import './globals.css';
 import '@deep-research/design-system/tokens.css';
-import '@deep-research/design-system/legacy-bridge.css';
 
 export const metadata = {
   title: 'AI技术调研平台',

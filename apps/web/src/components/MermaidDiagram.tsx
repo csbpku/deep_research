@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useId, useState } from 'react';
+import { keyframes } from '@emotion/react';
+import Box from '@mui/material/Box';
 import { tokensFor, type DesignTokens } from '@deep-research/design-system';
+
+const mermaidPulse = keyframes`
+  50% { opacity: 0.5; }
+`;
 
 let mermaidPromise: Promise<typeof import('mermaid')> | null = null;
 
@@ -106,32 +112,92 @@ export default function MermaidDiagram({ chart }: { chart: string }) {
 
   if (error) {
     return (
-      <div className="my-5 overflow-hidden rounded-md border border-warning-border/70 bg-warning-bg/60">
+      <Box
+        sx={{
+          my: 'var(--dr-space-5)',
+          overflow: 'hidden',
+          border: '1px solid color-mix(in srgb, var(--dr-color-warning) 70%, var(--dr-color-outline))',
+          borderRadius: 'var(--dr-radius-small)',
+          backgroundColor: 'color-mix(in srgb, var(--dr-color-warning-container) 60%, transparent)',
+          color: 'var(--dr-color-warning)',
+        }}
+      >
         <details>
-          <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-warning-fg">
+          <Box
+            component="summary"
+            sx={{
+              cursor: 'pointer',
+              px: 'var(--dr-space-4)',
+              py: 'var(--dr-space-2)',
+              fontSize: 'var(--dr-type-caption)',
+              fontWeight: 'var(--dr-weight-medium)',
+              color: 'var(--dr-color-warning)',
+              '&:focus-visible': {
+                outline: '2px solid var(--dr-color-primary)',
+                outlineOffset: '2px',
+              },
+            }}
+          >
             图表暂时无法绘制，查看原始图表文本
-          </summary>
-          <pre className="overflow-auto whitespace-pre-wrap break-words border-t border-warning-border/60 px-4 py-3 text-xs leading-6 text-warning-fg">
+          </Box>
+          <Box
+            component="pre"
+            sx={{
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+              borderTop: '1px solid color-mix(in srgb, var(--dr-color-warning) 60%, var(--dr-color-outline))',
+              m: 0,
+              px: 'var(--dr-space-4)',
+              py: 'var(--dr-space-3)',
+              fontSize: 'var(--dr-type-caption)',
+              lineHeight: 2,
+              color: 'var(--dr-color-warning)',
+            }}
+          >
             {chart}
-          </pre>
+          </Box>
         </details>
-      </div>
+      </Box>
     );
   }
 
   return (
-    <figure
-      className="my-6 overflow-x-auto rounded-md border border-[color:var(--dr-color-outline)] bg-[color:var(--dr-color-surface)] px-4 py-5"
+    <Box
+      component="figure"
+      sx={{
+        my: 'var(--dr-space-6)',
+        overflowX: 'auto',
+        border: '1px solid var(--dr-color-outline)',
+        borderRadius: 'var(--dr-radius-small)',
+        backgroundColor: 'var(--dr-color-surface)',
+        px: 'var(--dr-space-4)',
+        py: 'var(--dr-space-5)',
+      }}
       aria-label="Mermaid 图表"
     >
       {svg ? (
-        <div className="flex min-w-fit justify-center [&>svg]:h-auto [&>svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+        <Box
+          sx={{
+            display: 'flex',
+            minWidth: 'fit-content',
+            justifyContent: 'center',
+            '& > svg': { height: 'auto', maxWidth: '100%' },
+          }}
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
       ) : (
-        <div
-          className="motion-safe:animate-pulse motion-reduce:animate-none h-24 rounded-md bg-[color:var(--dr-color-surface-container)]"
+        <Box
+          sx={{
+            height: 'calc(var(--dr-space-8) + var(--dr-space-8) + var(--dr-space-8))',
+            borderRadius: 'var(--dr-radius-small)',
+            backgroundColor: 'var(--dr-color-surface-container)',
+            animation: `${mermaidPulse} 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite`,
+            '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+          }}
           aria-label="正在生成图表"
         />
       )}
-    </figure>
+    </Box>
   );
 }

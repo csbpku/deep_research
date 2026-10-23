@@ -1,10 +1,14 @@
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
+import { configureProvider, translateWholeArticle } from './panel-actions.mjs';
 
 const builtExtensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testRoot = await mkdtemp('/private/tmp/deep-research-reader-smoke-');
+const testRoot = await mkdtemp(join(tempDir(), 'deep-research-reader-smoke-'));
 const extensionPath = `${testRoot}/extension`;
 await cp(builtExtensionPath, extensionPath, { recursive: true });
 const testManifestPath = `${extensionPath}/manifest.json`;
@@ -20,6 +24,13 @@ const providerKey = process.env.READER_LIVE_API_KEY || 'test-key';
 if (liveMode && (!process.env.READER_LIVE_BASE_URL || !process.env.READER_LIVE_MODEL || !process.env.READER_LIVE_VISION_MODEL || !process.env.READER_LIVE_API_KEY)) {
   throw new Error('live-provider smoke 需要 READER_LIVE_BASE_URL、READER_LIVE_MODEL、READER_LIVE_VISION_MODEL 和 READER_LIVE_API_KEY；不会回退到假模型');
 }
+// The deterministic fake provider has to be running: the smoke run drives a
+// real translation, and a missing server only shows up as a wall of
+// "Failed to fetch" entries in the panel.
+const fakeProvider = liveMode ? null : spawn(process.execPath, [new URL('./fake-openai.mjs', import.meta.url).pathname], {
+  stdio: ['ignore', 'pipe', 'pipe'],
+  env: { ...process.env, PORT: '8799' },
+});
 const fixtureUrl = process.env.READER_E2E_URL || 'http://127.0.0.1:8765/fixture.html';
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const defaultFixtureUrl = 'http://127.0.0.1:8765/fixture.html';
@@ -34,7 +45,7 @@ if (fixtureUrl === defaultFixtureUrl) {
     fixtureServer.listen(8765, '127.0.0.1', resolve);
   });
 }
-const profilePath = process.env.READER_E2E_PROFILE || `/private/tmp/deep-research-reader-e2e-${Date.now()}`;
+const profilePath = process.env.READER_E2E_PROFILE || tempPath(`deep-research-reader-e2e-${Date.now()}`);
 const executablePath = process.env.CHROME_FOR_TESTING
   || [
     '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -84,11 +95,7 @@ try {
   if (!pageDockPresent) throw new Error('网页右侧 Reader 入口未注入');
 
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom', { force: true });
-  await panel.locator('#provider-url').fill(providerUrl);
-  await panel.locator('#provider-model').fill(providerModel);
-  await panel.locator('#provider-key').fill(providerKey);
-  await panel.locator('#save-settings').click();
+  await configureProvider(panel, { url: providerUrl, model: providerModel, key: providerKey });
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   const settingsNotice = await panel.locator('#settings-notice').innerText();
   if (!settingsNotice.includes('已保存')) throw new Error(`模型配置失败：${settingsNotice}`);
@@ -126,7 +133,7 @@ try {
     // requests. Remove visual candidates and request a fresh page snapshot so
     // this run measures the actual text translation and explanation path.
     await fixture.evaluate(() => document.querySelectorAll('img,svg').forEach((node) => node.remove()));
-    await panel.locator('#translate-all').click();
+    await translateWholeArticle(panel);
     await panel.waitForFunction(() => {
       const value = document.querySelector('#text-progress-value')?.textContent || '';
       return /\d+ \/ \d+/u.test(value) && !value.startsWith('0 /');
@@ -148,8 +155,7 @@ try {
     await fixture.waitForSelector('[data-deep-research-translation]', { state: 'detached', timeout: 5_000 });
     console.log(JSON.stringify({ mode: 'live-text-provider', extensionId, activation, settingsNotice, textState }, null, 2));
   } else {
-  await panel.locator('#translate-all').click();
-  await panel.locator('#image-progress-value').waitFor({ state: 'visible', timeout: 10_000 });
+  await translateWholeArticle(panel);
   const imageProgressTimeout = liveMode
     ? Number(process.env.READER_LIVE_IMAGE_TIMEOUT_MS || 120_000)
     : 20_000;
@@ -228,7 +234,16 @@ try {
       return text.length > 20 && !text.includes('正在读取图示');
     }, null, { timeout: 30_000 });
   } else {
-    await panel.waitForFunction(() => document.querySelector('#answer-output')?.textContent?.includes('图示展示了'), null, { timeout: 20_000 });
+    try {
+      await panel.waitForFunction(() => document.querySelector('#answer-output')?.textContent?.includes('图示展示了'), null, { timeout: 20_000 });
+    } catch (error) {
+      const diagnostic = await panel.evaluate(() => ({
+        answer: document.querySelector('#answer-output')?.textContent || '',
+        notice: document.querySelector('#notice')?.textContent || '',
+        imageVisible: Boolean(document.querySelector('#image-section') && !document.querySelector('#image-section').classList.contains('hidden')),
+      }));
+      throw new Error(`图示解读断言失败：${JSON.stringify(diagnostic)}; ${error.message}`);
+    }
   }
 
   await panel.locator('#restore-page').click();
@@ -249,5 +264,6 @@ try {
   }
 } finally {
   await context.close();
+  fakeProvider?.kill();
   if (fixtureServer) await new Promise((resolve) => fixtureServer.close(resolve));
 }

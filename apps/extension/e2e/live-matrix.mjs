@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 // Read-only public pages. The harness deliberately does not call a model: it
 // verifies that the extension can enter the page, find a bounded reading root,
@@ -48,7 +49,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-live-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-live-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1360, height: 900 },
@@ -227,7 +228,7 @@ try {
     }])),
   };
   const output = { generatedAt: new Date().toISOString(), summary, results };
-  const outputPath = `/private/tmp/deep-research-reader-live-matrix-${Date.now()}.json`;
+  const outputPath = tempPath(`deep-research-reader-live-matrix-${Date.now()}.json`);
   await writeFile(outputPath, JSON.stringify(output, null, 2));
   console.log(JSON.stringify({ summary, outputPath }, null, 2));
 } finally {

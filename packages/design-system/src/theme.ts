@@ -33,10 +33,17 @@ declare module '@mui/material/Typography' {
   }
 }
 
-/** Shared appearance only: no routing, storage, auth, browser APIs, or bundled React. */
-export function designThemeOptions(mode: DesignMode = 'light'): ThemeOptions & { typography: TypographyVariantsOptions } {
+/**
+ * Shared appearance only: no routing, storage, auth, browser APIs, or bundled React.
+ *
+ * `variablePrefix` selects the CSS custom-property namespace that carries the
+ * runtime colour values. The platform uses `--dr-*`; the Reader uses
+ * `--reader-*`. Both read the same token source, so a value is never
+ * duplicated — only the prefix that reaches the runtime differs.
+ */
+export function designThemeOptions(mode: DesignMode = 'light', variablePrefix = 'dr'): ThemeOptions & { typography: TypographyVariantsOptions } {
   const t = tokensFor(mode);
-  const appearance = Object.fromEntries(Object.entries(t).map(([key, value]) => [key, key.startsWith("color-") || key.startsWith("elevation-") ? `var(--dr-${key}, ${value})` : value])) as DesignTokens;
+  const appearance = designAppearance(mode, variablePrefix);
   const title = (size: string): CSSProperties => ({ fontSize: size, fontWeight: t['weight-semibold'], lineHeight: t['line-height-heading'] });
   const pageTitle: CSSProperties = {
     ...title(t['type-page-title-mobile']),
@@ -109,4 +116,24 @@ export function designThemeOptions(mode: DesignMode = 'light'): ThemeOptions & {
       MuiTooltip: { styleOverrides: { tooltip: { fontSize: appearance['type-caption'], backgroundColor: appearance['color-inverse-surface'], color: appearance['color-inverse-text'] } } },
     },
   };
+}
+
+/**
+ * The runtime token map for one surface.
+ *
+ * Colour and elevation resolve to the CSS custom properties that the
+ * generated stylesheet owns, so a scheme switch repaints without rebuilding
+ * the theme. Sizing, spacing and typography stay literal: they do not change
+ * between schemes.
+ */
+export function designAppearance(mode: DesignMode = 'light', variablePrefix = 'dr'): DesignTokens {
+  const t = tokensFor(mode);
+  return Object.fromEntries(
+    Object.entries(t).map(([key, value]) => [
+      key,
+      key.startsWith('color-') || key.startsWith('elevation-')
+        ? `var(--${variablePrefix}-${key}, ${value})`
+        : value,
+    ]),
+  ) as DesignTokens;
 }

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const artifacts = await mkdtemp('/private/tmp/reader-model-configuration-');
+const artifacts = await mkdtemp(join(tempDir(), 'reader-model-configuration-'));
 const build = new URL('../.output/chrome-mv3/', import.meta.url).pathname;
 const requests = [];
 let chatCalls = 0;

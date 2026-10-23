@@ -4,10 +4,12 @@ import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 // Test-only copies and fresh profiles: never install into the user's browser
 // or alter the production build. Every application endpoint is a local mock.
-const directory = await mkdtemp('/private/tmp/reader-knowledge-return-');
+const directory = await mkdtemp(join(tempDir(), 'reader-knowledge-return-'));
 const builtExtension = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const executablePath = process.env.CHROME_FOR_TESTING || [
   '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -162,6 +164,12 @@ try {
   const cards = knowledge.locator('article');
   await knowledge.waitFor({ state: 'visible' });
   await panel.waitForFunction(() => document.querySelectorAll('#page-knowledge-list article').length === 2);
+  // The card is collapsed by default so it cannot squeeze the centred
+  // first-run conversation. The count on its label is what makes recall
+  // visible without expanding, and the records stay one click away.
+  const summary = knowledge.locator('#page-knowledge-disclosure .MuiAccordionSummary-content');
+  assert.equal((await summary.innerText()).trim(), '本页已保存 · 2');
+  await summary.click();
   assert.match(await knowledge.innerText(), /Confirmed local judgement/);
   assert.match(await knowledge.innerText(), /Confirmed source note/);
   assert.doesNotMatch(await knowledge.innerText(), /UNCONFIRMED_CHAT|MUST_NOT_RECALL_OTHER_QUERY/);
@@ -188,9 +196,11 @@ try {
   await panel.setViewportSize({ width: 420, height: 1000 });
   assert.ok(await panel.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'sidepanel has no horizontal overflow');
   const remote = cards.filter({ hasText: 'Previous platform judgement' });
-  const opened = context.waitForEvent('page');
-  await remote.getByRole('button', { name: '研究库', exact: true }).click();
-  const research = await opened; await research.waitForLoadState('domcontentloaded');
+  const [research] = await Promise.all([
+    context.waitForEvent('page'),
+    remote.getByRole('button', { name: '研究库', exact: true }).click(),
+  ]);
+  await research.waitForLoadState('domcontentloaded');
   assert.equal(research.url(), `${origin}/researches/${remoteId}`);
   await research.close();
   report.connectedRecallAndSourceLink = true;

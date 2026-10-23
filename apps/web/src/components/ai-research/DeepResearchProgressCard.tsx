@@ -1,11 +1,11 @@
 'use client';
 
-import { AlertTriangle, Loader2, Radar } from 'lucide-react';
+import { AlertTriangle, Radar } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import type { DeepResearchProgress } from '@/lib/ai-progress';
-import { cn } from '@/lib/utils';
 import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 
@@ -198,43 +198,35 @@ export function DeepResearchProgressCard({
     );
 
     return (
-      <section
-        className="mt-4 rounded-lg border border-primary/15 bg-primary/[0.035] px-4 py-3"
+      <Box
+        component="section"
+        sx={{ mt: 2, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', px: 2, py: 1.5 }}
         aria-label="研究进度摘要"
       >
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-            <span className="font-semibold text-foreground">正在研究</span>
-            <span className="truncate text-muted-foreground">{round}</span>
-          </div>
-          <span className="text-xs text-muted-foreground">{state}</span>
-        </div>
-        <div className="mt-3 grid grid-cols-3 gap-2" aria-label="研究覆盖摘要">
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 1.5, rowGap: 0.5 }}>
+          <Box sx={{ display: 'flex', minWidth: 0, flexWrap: 'wrap', alignItems: 'center', gap: 1, typography: 'metadata' }}>
+            <Typography component="span" variant="metadata" sx={{ fontWeight: 600, color: 'text.primary' }}>正在研究</Typography>
+            <Typography component="span" variant="metadata" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'text.secondary' }}>{round}</Typography>
+          </Box>
+          <Typography component="span" variant="metadata" color="text.secondary">{state}</Typography>
+        </Box>
+        <Box sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1 }} aria-label="研究覆盖摘要">
           <SummaryMetric label="方向" value={roundProgress} />
           <SummaryMetric label="检索线索" value={discovered} />
           <SummaryMetric label="可引用证据" value={captured} emphasized />
-        </div>
-        <div className="mt-3 grid gap-1 text-xs leading-5">
-          <p className="truncate">
-            <span className="font-medium text-foreground">当前：</span>
-            <span className="text-muted-foreground">{focus || state}</span>
-          </p>
-          <p className="truncate">
-            <span className="font-medium text-foreground">还需要：</span>
-            <span className="text-muted-foreground">{gap}</span>
-          </p>
-          <p className="truncate">
-            <span className="font-medium text-foreground">下一步：</span>
-            <span className="text-muted-foreground">{nextStep}</span>
-          </p>
-        </div>
+        </Box>
+        <Box sx={{ mt: 1.5, display: 'grid', gap: 0.5, typography: 'metadata', lineHeight: 1.6 }}>
+          <Typography component="p" variant="metadata" noWrap><Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>当前：</Box><Box component="span" sx={{ color: 'text.secondary' }}>{focus || state}</Box></Typography>
+          <Typography component="p" variant="metadata" noWrap><Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>还需要：</Box><Box component="span" sx={{ color: 'text.secondary' }}>{gap}</Box></Typography>
+          <Typography component="p" variant="metadata" noWrap><Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>下一步：</Box><Box component="span" sx={{ color: 'text.secondary' }}>{nextStep}</Box></Typography>
+        </Box>
         {retrievalDegraded ? (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]" role="status">
-            <AlertTriangle className="mt-1 size-3.5 shrink-0" aria-hidden />
-            <span>{retrievalLabel}</span>
-          </div>
+          <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'flex-start', gap: 1, border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }} role="status">
+            <Box component="span" sx={{ mt: 0.5, display: 'inline-flex', flexShrink: 0 }}><AlertTriangle size={14} aria-hidden /></Box>
+            <Box component="span">{retrievalLabel}</Box>
+          </Box>
         ) : null}
-      </section>
+      </Box>
     );
   }
 
@@ -242,28 +234,28 @@ export function DeepResearchProgressCard({
     return (
       <Paper component="details" variant="outlined" aria-label="研究细节" sx={{ mt: 1.5, bgcolor: 'action.selected' }}>
         <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 1.5, py: 1.5, typography: 'metadata', '&::-webkit-details-marker': { display: 'none' } }}>
-          <span className="inline-flex items-center gap-2 font-medium text-foreground">
-            <Radar className="size-3.5 text-primary" />
+          <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, fontWeight: 500, color: 'text.primary' }}>
+            <Radar size={14} color="var(--dr-color-primary)" />
             研究细节
-          </span>
-          <span className="truncate text-muted-foreground">{round} · {state}</span>
+          </Box>
+          <Typography component="span" variant="metadata" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'text.secondary' }}>{round} · {state}</Typography>
         </Box>
-        <div className="border-t border-primary/10 px-3 pb-3 pt-2">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="深度调研统计">
+        <Box sx={{ borderTop: 1, borderColor: 'divider', px: 1.5, pb: 1.5, pt: 1 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' }, gap: 1 }} aria-label="深度调研统计">
             <ResearchMetric label="已完成方向" value={cumulativeCompleted} emphasized />
             <ResearchMetric label="已打开页面" value={visited ?? '—'} />
             <ResearchMetric label="可引用证据" value={captured} emphasized />
             <ResearchMetric label="检索线索" value={discovered} />
-          </div>
+          </Box>
           {discovered > 0 ? (
-            <p className={cn('mt-2 text-xs leading-5', captured < discovered ? 'text-[var(--dr-color-warning)]' : 'text-muted-foreground')}>
+            <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: captured < discovered ? 'warning.main' : 'text.secondary' }}>
               可引用证据：{captured}/{discovered} 条检索线索已有可核对正文
               {captured < discovered ? '；其余仍只是线索。' : '。'}
-            </p>
+            </Typography>
           ) : null}
-          <div className="mt-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-xs leading-5">
-            <span className="font-medium text-foreground">当前研究方向：</span>
-            <span className="text-muted-foreground">{terminal
+          <Box sx={{ mt: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6 }}>
+            <Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>当前研究方向：</Box>
+            <Box component="span" sx={{ color: 'text.secondary' }}>{terminal
               ? terminalStatus === 'partial'
                 ? '任务在生成报告前停止；已保留本轮实际抓取的正文'
               : terminalStatus === 'succeeded'
@@ -273,95 +265,95 @@ export function DeepResearchProgressCard({
                     ? '检索达到时间盒，已基于现有证据完成综合'
                     : '本轮研究已收敛'
                   : '本轮研究已结束'
-              : focus || (adaptive?.stoppedEarly && stopReasonLabel) || '正在拆分并行研究方向'}</span>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5 text-muted-foreground">
+              : focus || (adaptive?.stoppedEarly && stopReasonLabel) || '正在拆分并行研究方向'}</Box>
+          </Box>
+          <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.5, rowGap: 0.5, typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
             {currentRoundTotal > 0 ? <span>本轮 {currentRoundCompleted}/{currentRoundTotal} 个方向</span> : null}
             {coverage.length > 0 ? <span>官方资料已覆盖 {coveredProducts}/{coverage.length} 个产品</span> : null}
             {followupLabel ? <span>{followupLabel}</span> : null}
-            {evidenceGapLabel ? <span className="text-[var(--dr-color-warning)]">{evidenceGapLabel}</span> : null}
-          </div>
+            {evidenceGapLabel ? <Box component="span" sx={{ color: 'warning.main' }}>{evidenceGapLabel}</Box> : null}
+          </Box>
           {collectionTimeboxed ? (
-            <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+            <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'warning.main' }}>
               检索已达到本轮时间盒{progress.collectionTimeboxSeconds ? `（${progress.collectionTimeboxSeconds} 秒）` : ''}；已停止继续扩展研究树，正在基于现有证据生成报告。
-            </p>
+            </Typography>
           ) : null}
           {retrievalDegraded ? (
-            <div className="mt-2 flex items-start gap-2 text-xs leading-5 text-[var(--dr-color-warning)]" title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
-              <AlertTriangle className="mt-1 size-3 shrink-0" aria-hidden />
-              <span>
+            <Box sx={{ mt: 1, display: 'flex', alignItems: 'flex-start', gap: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }} title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
+              <Box component="span" sx={{ mt: 0.5, display: 'inline-flex', flexShrink: 0 }}><AlertTriangle size={12} aria-hidden /></Box>
+              <Box component="span">
                 {retrievalLabel} {captured > 0 ? `当前仍可核对 ${captured} 条正文。` : ''}
-              </span>
-            </div>
+              </Box>
+            </Box>
           ) : null}
-        </div>
+        </Box>
       </Paper>
     );
   }
 
   return (
     <Paper component="section" variant="outlined" aria-label="深度调研进度" sx={{ mt: compact ? 0 : 2, px: compact ? 1.5 : 2, py: compact ? 1.25 : 1.5, bgcolor: 'action.selected', borderColor: 'primary.main' }}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs" aria-live="polite">
-        <span className="inline-flex items-center gap-2 font-medium text-foreground">
-          <Radar className="size-3.5 text-primary" />
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.5, rowGap: 1, typography: 'metadata' }} aria-live="polite">
+        <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, fontWeight: 500, color: 'text.primary' }}>
+          <Radar size={14} color="var(--dr-color-primary)" />
           深度调研
-        </span>
-        <span className="text-primary">{round}</span>
-        <span className="text-muted-foreground">{branchLabel}</span>
-        <span className="text-muted-foreground">· {state}</span>
-      </div>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        </Box>
+        <Box component="span" sx={{ color: 'primary.main' }}>{round}</Box>
+        <Box component="span" sx={{ color: 'text.secondary' }}>{branchLabel}</Box>
+        <Box component="span" sx={{ color: 'text.secondary' }}>· {state}</Box>
+      </Box>
+      <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>
         先按产品和证据主题分别覆盖多个角度；只有证据不足或出现新缺口时才会继续追查，证据够了就收敛。
-      </p>
+      </Typography>
       {followupLabel ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'text.secondary' }}>
           研究树：{followupLabel}。补查只针对尚未解决的证据缺口，不会把重复搜索计入有效证据。
-        </p>
+        </Typography>
       ) : null}
-      <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4" aria-label="研究覆盖统计">
+      <Box sx={{ mt: 1, display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' }, gap: 1, typography: 'metadata' }} aria-label="研究覆盖统计">
         <ResearchMetric label="已完成方向" value={cumulativeCompleted} emphasized />
         <ResearchMetric label="已打开页面" value={visited ?? '—'} />
         <ResearchMetric label="检索线索" value={discovered} />
         <ResearchMetric label="可引用证据" value={captured} emphasized />
-      </div>
-      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+      </Box>
+      <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'text.secondary' }}>
         检索线索只是研究树中的候选页面；可引用证据表示已打开并取得可核对正文。没有记录页面数时不做推算；数字本身不能单独证明结论正确。
-      </p>
+      </Typography>
       {discovered > 0 ? (
-        <p className={cn('mt-2 text-xs leading-5', captured < discovered ? 'text-[var(--dr-color-warning)]' : 'text-muted-foreground')}>
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: captured < discovered ? 'warning.main' : 'text.secondary' }}>
           可引用证据：{captured}/{discovered} 条检索线索已有可核对正文
           {captured < discovered ? '；其余仍只是线索。' : '。'}
-        </p>
+        </Typography>
       ) : null}
       {selectedProvider ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'text.secondary' }}>
           已启用联网检索；相同问题会复用结果，服务波动时自动切换备用检索。
-        </p>
+        </Typography>
       ) : null}
       {retrievalDegraded ? (
-        <p className="mt-2 flex items-start gap-2 text-xs leading-5 text-[var(--dr-color-warning)]" title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
-          <AlertTriangle className="mt-1 size-3 shrink-0" aria-hidden />
-          <span>{retrievalLabel} {captured > 0 ? `当前仍可核对 ${captured} 条正文。` : ''}</span>
-        </p>
+        <Box component="p" sx={{ mt: 1, display: 'flex', alignItems: 'flex-start', gap: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }} title="部分搜索轮次没有返回结果；这些轮次不会被当作证据">
+          <Box component="span" sx={{ mt: 0.5, display: 'inline-flex', flexShrink: 0 }}><AlertTriangle size={12} aria-hidden /></Box>
+          <Box component="span">{retrievalLabel} {captured > 0 ? `当前仍可核对 ${captured} 条正文。` : ''}</Box>
+        </Box>
       ) : null}
       {focus && !terminal ? (
-        <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, overflow: 'hidden', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, lineHeight: 1.6, color: 'text.secondary' }}>
           当前方向：{focus}
-        </p>
+        </Typography>
       ) : null}
       {waitingForEvidence ? (
-        <div className="mt-2 flex items-start gap-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground" role="status">
-          <Loader2 className="mt-1 size-3.5 shrink-0 animate-spin text-primary" aria-hidden />
-          <p>
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'flex-start', gap: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }} role="status">
+          <CircularProgress size={14} thickness={5} sx={{ mt: 0.5, flexShrink: 0, color: 'primary.main' }} aria-hidden />
+          <Typography component="p" variant="metadata">
             {idleSeconds >= 90
               ? `当前资料响应较慢，已等待约 ${Math.floor(idleSeconds / 60)} 分钟；任务仍在后台运行，已抓取的证据会保留。`
               : '当前资料响应较慢；深度检索仍在等待可核对正文，已抓取的证据会持续保留。'}
-          </p>
-        </div>
+          </Typography>
+        </Box>
       ) : null}
       {coverage.length > 0 ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" aria-label="官方资料覆盖">
-          <span className="text-muted-foreground">官方资料覆盖</span>
+        <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, typography: 'metadata' }} aria-label="官方资料覆盖">
+          <Box component="span" sx={{ color: 'text.secondary' }}>官方资料覆盖</Box>
           {coverage.map((item) => {
             const required = item.requiredCaptured ?? 2;
             const state = item.status === 'covered'
@@ -372,55 +364,56 @@ export function DeepResearchProgressCard({
                   ? '已发现，待确认'
                   : '尚未覆盖';
             return (
-              <span
+              <Box
+                component="span"
                 key={item.label}
-                className={cn(
-                  'rounded-full border px-2 py-1',
-                  item.status === 'covered'
-                    ? 'border-[var(--dr-color-success)] bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]'
+                sx={{
+                  border: 1, borderRadius: 999, px: 1, py: 0.5,
+                  ...(item.status === 'covered'
+                    ? { borderColor: 'success.main', bgcolor: 'var(--dr-color-success-container)', color: 'success.main' }
                     : item.status === 'pending' || item.status === 'partial'
-                      ? 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]'
-                      : 'border-border bg-background text-muted-foreground',
-                )}
+                      ? { borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' }
+                      : { borderColor: 'divider', bgcolor: 'background.default', color: 'text.secondary' }),
+                }}
                 title={`${item.label}：${item.discovered} 个独立页面，已抓取 ${item.captured} 条正文；至少需要 ${required} 条`}
               >
                 {item.label} · {state}{item.captured > 0 ? ` ${item.status === 'covered' ? `${item.captured} 条` : `${item.captured}/${required}`}` : ''}
-              </span>
+              </Box>
             );
           })}
-        </div>
+        </Box>
       ) : null}
       {progress.coverageRepair && progress.coverageRepair.attempted > 0 ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'text.secondary' }}>
           已针对证据不足的产品补查 {progress.coverageRepair.attempted} 个官方入口，新增 {progress.coverageRepair.captured} 条已抓取正文。
-        </p>
+        </Typography>
       ) : null}
       {collectionTimeboxed ? (
-        <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'warning.main' }}>
           检索已达到本轮时间盒{progress.collectionTimeboxSeconds ? `（${progress.collectionTimeboxSeconds} 秒）` : ''}；后续报告只基于已抓取正文，不会把未打开的线索当成证据。
-        </p>
+        </Typography>
       ) : null}
       {evidenceGapRepair && evidenceGapRepair.attempted > 0 ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'text.secondary' }}>
           研究阶段已补查 {evidenceGapRepair.resolved} 个证据缺口；
           {evidenceGapRepair.remaining > 0 ? `仍有 ${evidenceGapRepair.remaining} 个未解决，结果中会提示需要确认。` : '本轮没有遗留研究资料缺口。'}
-        </p>
+        </Typography>
       ) : null}
       {reportWriteFallback ? (
-        <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+        <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'warning.main' }}>
           {reportWriteFallback.reason === 'timeout'
             ? `主报告写作超过 ${reportWriteFallback.timeoutSeconds ?? 180} 秒，`
             : '主报告写作未返回有效正文，'}
           已根据本轮实际抓取的证据重写；若仍缺少结论，会明确标记为需要确认。
-        </p>
+        </Typography>
       ) : null}
       {retrievalDegraded ? (
-        <div className="mt-2 flex gap-2 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]" role="status">
-          <AlertTriangle className="mt-1 size-3.5 shrink-0" aria-hidden />
-          <p>
+        <Box sx={{ mt: 1, display: 'flex', alignItems: 'flex-start', gap: 1, border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }} role="status">
+          <Box component="span" sx={{ mt: 0.5, display: 'inline-flex', flexShrink: 0 }}><AlertTriangle size={14} aria-hidden /></Box>
+          <Typography component="p" variant="metadata">
             {retrievalLabel} 当前仍可核对 {captured} 条正文。
-          </p>
-        </div>
+          </Typography>
+        </Box>
       ) : null}
     </Paper>
   );

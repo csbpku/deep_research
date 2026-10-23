@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const articleUrl = process.env.READER_QUALITY_URL
   || 'https://claude.com/blog/the-ai-native-sdlc-playbook';
@@ -21,7 +22,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const profilePath = `/private/tmp/deep-research-reader-quality-${Date.now()}`;
+const profilePath = tempPath(`deep-research-reader-quality-${Date.now()}`);
 const context = await chromium.launchPersistentContext(profilePath, {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',

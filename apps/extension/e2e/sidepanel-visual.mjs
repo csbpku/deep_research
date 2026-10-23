@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const port = 8891;
@@ -20,7 +22,7 @@ await new Promise((resolve, reject) => {
 });
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testExtensionRoot = await mkdtemp('/private/tmp/deep-research-reader-visual-extension-');
+const testExtensionRoot = await mkdtemp(join(tempDir(), 'deep-research-reader-visual-extension-'));
 const testExtensionPath = `${testExtensionRoot}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
@@ -34,7 +36,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-visual-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-visual-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
@@ -110,6 +112,10 @@ async function layoutReport(page, name) {
 try {
   const serviceWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(serviceWorker.url()).host;
+  // The injected controls follow the browser UI language, which differs
+  // between a developer's macOS session and a Linux CI runner. Pin it so
+  // the label assertions below describe one fixed product state.
+  await serviceWorker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   const article = await context.newPage();
   await article.goto(`http://127.0.0.1:${port}/fixture.html`, { waitUntil: 'domcontentloaded' });
   await article.bringToFront();
@@ -120,16 +126,21 @@ try {
     await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
   });
   await article.waitForSelector('[data-deep-research-dock]', { timeout: 10_000 });
-  await article.screenshot({ path: '/private/tmp/deep-research-reader-right-dock.png' });
-  const accessibilitySession = await context.newCDPSession(article);
-  const { nodes: accessibilityNodes } = await accessibilitySession.send('Accessibility.getFullAXTree');
-  const dockActions = accessibilityNodes
-    .filter((node) => ['总结本页', '翻译本页'].includes(node.name?.value))
-    .map((node) => ({ label: node.name.value, role: node.role?.value }));
+  await article.screenshot({ path: tempPath('deep-research-reader-right-dock.png') });
+  const dockActions = [];
   for (const label of ['总结本页', '翻译本页']) {
-    if (!dockActions.some((item) => item.label === label && item.role === 'button')) {
-      throw new Error(`right dock ${label} action is missing from the browser accessibility tree: ${JSON.stringify(dockActions)}`);
+    // Assert the button role through the accessibility tree Playwright
+    // computes. The raw CDP AX tree only maps shadow-DOM controls to a
+    // `button` role on some Chromium builds, so reading it directly made
+    // this check platform-dependent without testing anything extra.
+    const action = article.getByRole('button', { name: label, exact: true });
+    if (await action.count() !== 1) {
+      throw new Error(`right dock ${label} action is missing from the browser accessibility tree`);
     }
+    if (!await action.isVisible()) {
+      throw new Error(`right dock ${label} action is not visible`);
+    }
+    dockActions.push({ label, role: 'button', visible: true });
   }
 
   const panel = await context.newPage();
@@ -192,7 +203,7 @@ try {
 
   await panel.setViewportSize({ width: 320, height: 820 });
   await panel.locator('#settings-button').click();
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-settings-local-320.png', fullPage: true });
+  await panel.screenshot({ path: tempPath('deep-research-reader-settings-local-320.png'), fullPage: true });
   const local320 = await layoutReport(panel, 'settings-local-320');
   if (!(await panel.locator('#local-provider-settings').isVisible()) || await panel.locator('#platform-settings').isVisible()) {
     throw new Error('独立模式设置应只显示本地模型服务。');
@@ -206,7 +217,7 @@ try {
 
   await panel.setViewportSize({ width: 360, height: 820 });
   await panel.locator('#mode-platform').click();
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-settings-platform-360.png', fullPage: true });
+  await panel.screenshot({ path: tempPath('deep-research-reader-settings-platform-360.png'), fullPage: true });
   const platform360 = await layoutReport(panel, 'settings-platform-360');
   if (await panel.locator('#local-provider-settings').isVisible() || !(await panel.locator('#platform-settings').isVisible())) {
     throw new Error('平台模式设置应只显示连接调研平台。');
@@ -256,7 +267,7 @@ try {
   });
   await panel.waitForFunction(() => Boolean(document.querySelector('#chat-selection-quote')?.textContent), null, { timeout: 10_000 });
   await panel.setViewportSize({ width: 420, height: 820 });
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-article-420.png', fullPage: true });
+  await panel.screenshot({ path: tempPath('deep-research-reader-article-420.png'), fullPage: true });
   const article420 = await layoutReport(panel, 'article-selection-420');
 
   if (await panel.locator('#ask-page').count() !== 0 || await panel.locator('.selection-action-label').isVisible()) {
@@ -286,7 +297,7 @@ try {
   if (!annotationHighlight.withinTarget || !annotationHighlight.background.includes('255, 213, 72')) {
     throw new Error(`saved annotation did not highlight the selected source text: ${JSON.stringify(annotationHighlight)}`);
   }
-  await article.screenshot({ path: '/private/tmp/deep-research-reader-annotation-highlight.png', fullPage: true });
+  await article.screenshot({ path: tempPath('deep-research-reader-annotation-highlight.png'), fullPage: true });
 
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
@@ -299,8 +310,8 @@ try {
   await panel.locator('#question-input').click();
   await panel.locator('#discussion-section').waitFor({ state: 'visible', timeout: 5_000 });
   await panel.locator('#question-input').waitFor({ state: 'visible', timeout: 5_000 });
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-chat-420.png', fullPage: true });
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-chat-420-viewport.png' });
+  await panel.screenshot({ path: tempPath('deep-research-reader-chat-420.png'), fullPage: true });
+  await panel.screenshot({ path: tempPath('deep-research-reader-chat-420-viewport.png') });
   const chatLayout = await panel.locator('#discussion-section').evaluate((section) => {
     const surface = section.querySelector('.chat-window');
     const transcript = section.querySelector('.chat-transcript')?.getBoundingClientRect();
@@ -359,7 +370,7 @@ try {
   await panel.setViewportSize({ width: 320, height: 820 });
   await panel.locator('#open-history-header').click();
   await panel.waitForURL(`chrome-extension://${extensionId}/reading-history.html?surface=sidepanel`);
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-history-320.png', fullPage: true });
+  await panel.screenshot({ path: tempPath('deep-research-reader-history-320.png'), fullPage: true });
   const history320 = await layoutReport(panel, 'history-320');
   const historyBackTop = await panel.locator('#close-history').evaluate((element) => element.getBoundingClientRect().top);
   if (historyBackTop > 100) throw new Error('history back action is not in the header');
@@ -398,14 +409,14 @@ try {
     historyCardActionHeights,
     dock,
     screenshots: [
-      '/private/tmp/deep-research-reader-right-dock.png',
-      '/private/tmp/deep-research-reader-settings-local-320.png',
-      '/private/tmp/deep-research-reader-settings-platform-360.png',
-      '/private/tmp/deep-research-reader-article-420.png',
-      '/private/tmp/deep-research-reader-annotation-highlight.png',
-      '/private/tmp/deep-research-reader-chat-420.png',
-      '/private/tmp/deep-research-reader-chat-420-viewport.png',
-      '/private/tmp/deep-research-reader-history-320.png',
+      tempPath('deep-research-reader-right-dock.png'),
+      tempPath('deep-research-reader-settings-local-320.png'),
+      tempPath('deep-research-reader-settings-platform-360.png'),
+      tempPath('deep-research-reader-article-420.png'),
+      tempPath('deep-research-reader-annotation-highlight.png'),
+      tempPath('deep-research-reader-chat-420.png'),
+      tempPath('deep-research-reader-chat-420-viewport.png'),
+      tempPath('deep-research-reader-history-320.png'),
     ],
   }, null, 2));
 } finally {

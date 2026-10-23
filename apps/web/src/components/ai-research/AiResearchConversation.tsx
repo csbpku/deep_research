@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
+import NextLink from 'next/link';
 import {
   Bot,
   Check,
@@ -22,6 +22,8 @@ import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiRes
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
 import { AppTextField as Input } from '@/components/material/AppTextField';
 import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import Link from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import {
@@ -34,7 +36,6 @@ import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { writeLastSubmitted } from '@/lib/last-submitted';
 import { createUuid } from '@/lib/uuid';
-import { cn } from '@/lib/utils';
 
 interface RadarSeed {
   id: string;
@@ -106,34 +107,22 @@ const STEP_LABELS = ['明确问题', '确认设置', '启动研究', '进行中'
 
 function StepStepper({ step }: { step: number }) {
   return (
-    <ol className="flex flex-wrap items-center gap-2 text-xs" aria-label="调研进度">
+    <Box component="ol" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, m: 0, p: 0, listStyle: 'none', typography: 'metadata' }} aria-label="调研进度">
       {STEP_LABELS.map((label, index) => {
         const state = index < step ? 'done' : index === step ? 'active' : 'todo';
         return (
-          <li key={label} className="flex items-center gap-2">
-            {index > 0 ? <span className="mx-1 h-px w-3 bg-border" aria-hidden /> : null}
-            <span
-              className={cn(
-                'flex size-5 items-center justify-center rounded-full text-xs font-medium leading-none',
-                state === 'done' && 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]',
-                state === 'active' && 'bg-primary text-primary-foreground',
-                state === 'todo' && 'bg-muted text-muted-foreground',
-              )}
-            >
-              {state === 'done' ? <Check className="size-3" /> : index + 1}
-            </span>
-            <span
-              className={cn(
-                state === 'active' ? 'font-medium text-foreground' : 'text-muted-foreground',
-                state === 'todo' && 'text-muted-foreground/60',
-              )}
-            >
+          <Box component="li" key={label} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {index > 0 ? <Box component="span" sx={{ mx: 0.5, width: 12, height: '1px', bgcolor: 'divider' }} aria-hidden /> : null}
+            <Box component="span" sx={{ display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: '50%', typography: 'metadata', fontWeight: 500, lineHeight: 1, ...(state === 'done' ? { bgcolor: 'var(--dr-color-success-container)', color: 'success.main' } : state === 'active' ? { bgcolor: 'primary.main', color: 'primary.contrastText' } : { bgcolor: 'action.hover', color: 'text.disabled' }) }}>
+              {state === 'done' ? <Check size={12} /> : index + 1}
+            </Box>
+            <Typography component="span" variant="metadata" sx={{ fontWeight: state === 'active' ? 500 : undefined, color: state === 'active' ? 'text.primary' : 'text.secondary' }}>
               {label}
-            </span>
-          </li>
+            </Typography>
+          </Box>
         );
       })}
-    </ol>
+    </Box>
   );
 }
 
@@ -164,44 +153,44 @@ function ResearchRunReceipt({
   const selectedCount = sourceCount + selectedContextCount;
 
   return (
-    <section className="rounded-lg border border-primary/20 bg-primary/[0.035] px-4 py-3" aria-label="本次研究收据">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-xs font-semibold text-primary">
-            <Sparkles className="size-3.5" />
+    <Paper component="section" variant="outlined" sx={{ borderColor: 'primary.main', bgcolor: 'action.selected', px: 2, py: 1.5 }} aria-label="本次研究收据">
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', fontWeight: 600, color: 'primary.main' }}>
+            <Sparkles size={14} />
             本次研究已提交
-          </div>
-          <h3 className="mt-1 line-clamp-2 text-sm font-medium leading-5 text-foreground">{topic}</h3>
-        </div>
-          <span className="shrink-0 rounded-full border border-primary/20 bg-background/70 px-2 py-1 text-xs text-primary">
+          </Box>
+          <Typography component="h3" variant="body2" sx={{ mt: 0.5, display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, lineHeight: 1.6, fontWeight: 500 }}>{topic}</Typography>
+        </Box>
+          <Box component="span" sx={{ flexShrink: 0, border: 1, borderColor: 'primary.main', borderRadius: 999, bgcolor: 'background.default', px: 1, py: 0.5, typography: 'metadata', color: 'primary.main' }}>
           {isDeep ? '多轮研究' : '单轮研究'}
-        </span>
-      </div>
-      <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
-        <div className="rounded-lg border border-border/70 bg-background/60 px-3 py-2">
-          <dt className="text-muted-foreground">研究深度</dt>
-          <dd className="mt-1 font-medium text-foreground">{isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</dd>
-        </div>
-        <div className="rounded-lg border border-border/70 bg-background/60 px-3 py-2">
-          <dt className="text-muted-foreground">资料来源</dt>
-          <dd className="mt-1 font-medium text-foreground">{sourceLabel}</dd>
-          {selectedCount > 0 ? <div className="mt-1 text-xs text-muted-foreground">已指定 {selectedCount} 条</div> : null}
-        </div>
-        <div className="rounded-lg border border-border/70 bg-background/60 px-3 py-2">
-          <dt className="text-muted-foreground">交付形式</dt>
-          <dd className="mt-1 font-medium text-foreground">{outputLabel}</dd>
-        </div>
-      </dl>
-      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        </Box>
+      </Box>
+      <Box component="dl" sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1, typography: 'metadata' }}>
+        <Box component="div" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1 }}>
+          <Typography component="dt" variant="metadata" color="text.secondary">研究深度</Typography>
+          <Typography component="dd" variant="metadata" sx={{ mt: 0.5, ml: 0, fontWeight: 500 }}>{isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</Typography>
+        </Box>
+        <Box component="div" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1 }}>
+          <Typography component="dt" variant="metadata" color="text.secondary">资料来源</Typography>
+          <Typography component="dd" variant="metadata" sx={{ mt: 0.5, ml: 0, fontWeight: 500 }}>{sourceLabel}</Typography>
+          {selectedCount > 0 ? <Typography component="div" variant="metadata" color="text.secondary" sx={{ mt: 0.5 }}>已指定 {selectedCount} 条</Typography> : null}
+        </Box>
+        <Box component="div" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1 }}>
+          <Typography component="dt" variant="metadata" color="text.secondary">交付形式</Typography>
+          <Typography component="dd" variant="metadata" sx={{ mt: 0.5, ml: 0, fontWeight: 500 }}>{outputLabel}</Typography>
+        </Box>
+      </Box>
+      <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'text.secondary' }}>
         任务会在后台继续；下方显示真实的研究轮次、已访问页面和可核对正文。资料数量不等于结论质量，未确认内容会单独标记。
-      </p>
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-        <span className="text-muted-foreground">启动配置已锁定，避免运行中产生歧义。</span>
-        <Link href={`/ai-research/${jobId}`} className="font-medium text-primary hover:underline">
+      </Typography>
+      <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.5, rowGap: 0.5, typography: 'metadata' }}>
+        <Typography component="span" variant="metadata" color="text.secondary">启动配置已锁定，避免运行中产生歧义。</Typography>
+        <Link component={NextLink} href={`/ai-research/${jobId}`} underline="hover" sx={{ fontWeight: 500, color: 'primary.main' }}>
           打开任务并继续追问 →
         </Link>
-      </div>
-    </section>
+      </Box>
+    </Paper>
   );
 }
 
@@ -585,69 +574,68 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   return (
     <Paper component="section" variant="outlined" sx={{ overflow: 'hidden' }} aria-label="AI 调研对话">
       <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 2, borderBottom: 1, borderColor: 'divider', px: { xs: 2, sm: 2.5 }, py: 2 }}>
-        <div className="flex items-center gap-3">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box component="span" sx={{ display: 'grid', width: 32, height: 32, flexShrink: 0, placeItems: 'center', borderRadius: 1, color: 'primary.main', bgcolor: 'primary.light' }}>
-            <Sparkles className="size-4" />
+            <Sparkles size={16} />
           </Box>
-          <div>
+          <Box>
             <Typography variant="listTitle" component="h2">调研对话</Typography>
             <Typography variant="metadata" color="text.secondary">对话会自动保存，刷新后仍可继续。</Typography>
-          </div>
-        </div>
+          </Box>
+        </Box>
         <StepStepper step={stepIndex} />
       </Box>
 
-      <div className="flex min-h-0 flex-col">
-        <div
+      <Box sx={{ display: 'flex', minHeight: 0, flexDirection: 'column' }}>
+        <Box
           ref={scrollRef}
-          className="min-h-[320px] flex-1 space-y-5 overflow-visible px-5 py-5 lg:max-h-[70vh] lg:overflow-y-auto"
+          sx={{ display: 'grid', minHeight: 320, flex: 1, gap: 2.5, overflowY: { xs: 'visible', lg: 'auto' }, maxHeight: { xs: 'none', lg: '70vh' }, px: { xs: 2.5, sm: 2.5 }, py: 2.5 }}
           aria-live="polite"
         >
           {hydrating ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'body2', color: 'text.secondary' }}>
+              <CircularProgress size={16} thickness={5} sx={{ color: 'primary.main' }} aria-hidden />
               正在恢复对话…
-            </div>
+            </Box>
           ) : (
             <>
               {messages.map((message) => (
-                <div key={message.id} className={cn('flex items-start gap-3', message.role === 'user' && 'flex-row-reverse')}>
-                  <span className={cn(
-                    'mt-1 grid size-7 shrink-0 place-items-center rounded-lg',
-                    message.role === 'assistant' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
-                  )}>
-                    {message.role === 'assistant' ? <Bot className="size-3.5" /> : <UserRound className="size-3.5" />}
-                  </span>
-                  <div className={cn('min-w-0 max-w-[86%] flex-1', message.role === 'user' && 'flex-none text-right')}>
-                    <span className={cn('mb-1 block text-xs font-semibold uppercase tracking-wide', message.role === 'assistant' ? 'text-primary' : 'text-muted-foreground')}>
+                <Box key={message.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexDirection: message.role === 'user' ? 'row-reverse' : 'row' }}>
+                  <Box component="span" sx={{ mt: 0.5, display: 'grid', width: 28, height: 28, flexShrink: 0, placeItems: 'center', borderRadius: 1, bgcolor: message.role === 'assistant' ? 'action.selected' : 'action.hover', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
+                    {message.role === 'assistant' ? <Bot size={14} /> : <UserRound size={14} />}
+                  </Box>
+                  <Box sx={{ minWidth: 0, maxWidth: '86%', flex: message.role === 'user' ? '0 1 auto' : 1, textAlign: message.role === 'user' ? 'right' : 'left' }}>
+                    <Typography component="span" variant="metadata" sx={{ mb: 0.5, display: 'block', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
                       {message.role === 'assistant' ? 'AI 调研助手' : '你'}
-                    </span>
+                    </Typography>
                     <Typography component="p" variant="reading" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                       {message.content}
                     </Typography>
-                  </div>
-                </div>
+                  </Box>
+                </Box>
               ))}
 
               {phase === 'understand' && messages.length === 1 ? (
-                <div className="ml-10 pt-1">
-                  <div className="flex flex-wrap gap-2">
+                <Box sx={{ ml: 5, pt: 0.5 }}>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                     {EXAMPLE_PROMPTS.map((example) => (
-                      <button
+                      <Button
                         key={example}
                         type="button"
+                        variant="outline"
+                        size="xs"
                         onClick={() => processUserMessage(example)}
-                        className="touch-target rounded-full border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
+                        sx={{ minHeight: 44, borderRadius: 999, borderColor: 'divider', bgcolor: 'background.paper', px: 1.5, py: 1, typography: 'metadata', color: 'text.secondary', transition: (theme) => theme.transitions.create(['background-color', 'border-color', 'color']), '&:hover': { borderColor: 'primary.main', bgcolor: 'action.selected', color: 'text.primary' } }}
                       >
                         {example}
-                      </button>
+                      </Button>
                     ))}
-                  </div>
-                </div>
+                  </Box>
+                </Box>
               ) : null}
 
               {phase !== 'understand' && !activeJobId ? (
-                <div className="ml-10">
+                <Box sx={{ ml: 5 }}>
                   <AiResearchBrief
                     question={topic}
                     context={context}
@@ -660,7 +648,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                         onClick={() => void submit()}
                         disabled={submitting || scopeIncomplete || sourceSelectionIncomplete}
                       >
-                        {submitting ? <Loader2 className="animate-spin" /> : <Send />}
+                        {submitting ? <CircularProgress size={16} thickness={5} aria-hidden /> : <Send size={16} />}
                         {submitting ? '启动中…' : '开始研究'}
                       </Button>
                     )}
@@ -696,19 +684,19 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                       onRemoveSource={(url) => setSourceUrls((current) => current.filter((value) => value !== url))}
                     />
                   </AiResearchBrief>
-                </div>
+                </Box>
               ) : null}
 
               {phase === 'refine' && !activeJobId ? (
-                <div className="ml-10 flex flex-wrap gap-2">
+                <Box sx={{ ml: 5, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                   <Button type="button" variant="outline" size="xs" onClick={() => processUserMessage('跳过')} disabled={submitting || !!activeJobId}>
                     跳过背景
                   </Button>
-                </div>
+                </Box>
               ) : null}
 
               {activeJobId ? (
-                <div className="ml-10 space-y-3">
+                <Box sx={{ ml: 5, display: 'grid', gap: 1.5 }}>
                   <ResearchRunReceipt
                     jobId={activeJobId}
                     topic={topic}
@@ -719,22 +707,22 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                     selectedContextCount={brief?.suggestedContextIds.length ?? 0}
                   />
                   <InlineAiResearchStatus jobId={activeJobId} />
-                </div>
+                </Box>
               ) : null}
             </>
           )}
-        </div>
+        </Box>
 
         {error ? (
-          <div role="alert" className="mx-5 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            <span className="flex-1">{error}</span>
+          <Box role="alert" sx={{ mx: 2.5, mb: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, border: 1, borderColor: 'error.main', borderRadius: 1, bgcolor: 'var(--dr-color-danger-container)', px: 1.5, py: 1, typography: 'body2', color: 'error.main' }}>
+            <Box component="span" sx={{ flex: 1 }}>{error}</Box>
             {canConfigure && !activeJobId ? <Button type="button" variant="outline" size="xs" onClick={() => void submit()}>重试</Button> : null}
             {loginRequired ? (
-              <Link href="/signin?callbackUrl=%2Fai-research" className="text-xs font-medium underline underline-offset-2">
+              <Link component={NextLink} href="/signin?callbackUrl=%2Fai-research" underline="always" sx={{ typography: 'metadata', fontWeight: 500, textUnderlineOffset: 2 }}>
                 登录后继续
               </Link>
             ) : null}
-          </div>
+          </Box>
         ) : null}
 
         <Box component="form" data-ai-research-form onSubmit={handleMessageSubmit} sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper', p: 2 }}>
@@ -756,18 +744,18 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               disabled={submitting || hydrating || !!activeJobId}
               sx={{ '& .MuiOutlinedInput-root': { minHeight: 92, bgcolor: 'transparent', boxShadow: 'none', '& fieldset': { border: 0 } }, '& textarea': { resize: 'none' } }}
             />
-            <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <span className="text-xs text-muted-foreground">
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, px: 1.5, pb: 1.5 }}>
+              <Typography component="span" variant="metadata" color="text.secondary">
                 {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/2000`}
-              </span>
+              </Typography>
               <Button type="submit" size="sm" disabled={!input.trim() || submitting || hydrating || !!activeJobId} aria-label="发送消息（AI 调研）">
-                <Send className="size-3.5" />
+                <Send size={14} />
                 发送
               </Button>
-            </div>
+            </Box>
           </Box>
         </Box>
-      </div>
+      </Box>
     </Paper>
   );
 }
@@ -814,11 +802,11 @@ function ResearchConfirmationControls({
     && sourceRefs.length === 0
     && selectedContextCount === 0;
   return (
-    <div className="space-y-4" aria-label="资料与产出">
-      <fieldset disabled={disabled} className="space-y-2 disabled:opacity-50">
-        <legend className="font-medium text-foreground">交付形式</legend>
-        <p className="text-xs leading-5 text-muted-foreground">选择这次要生成的结果。</p>
-        <div className="grid gap-2 sm:grid-cols-3">
+    <Box sx={{ display: 'grid', gap: 2 }} aria-label="资料与产出">
+      <Box component="fieldset" disabled={disabled} sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0, '&:disabled': { opacity: 0.5 } }}>
+        <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>交付形式</Box>
+        <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>选择这次要生成的结果。</Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1 }}>
           {durableReportOptions.map((option) => {
             const Icon = option.icon;
             const selected = reportType === option.value;
@@ -830,61 +818,61 @@ function ResearchConfirmationControls({
                 size="sm"
                 aria-pressed={selected}
                 onClick={() => onReportTypeChange(option.value)}
-                className="h-auto min-h-12 justify-start whitespace-normal px-3 py-2 text-left"
+                sx={{ height: 'auto', minHeight: 48, justifyContent: 'flex-start', whiteSpace: 'normal', px: 1.5, py: 1, textAlign: 'left' }}
               >
-                <Icon className="size-3.5 shrink-0" />
-                <span className="flex flex-col items-start text-left">
-                  <span className="text-xs font-medium">{option.label}</span>
-                  <span className="text-xs text-muted-foreground">{option.description}</span>
-                </span>
+                <Icon size={14} />
+                <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
+                  <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>{option.label}</Typography>
+                  <Typography component="span" variant="metadata" color="text.secondary">{option.description}</Typography>
+                </Box>
               </Button>
               );
             })}
-        </div>
+        </Box>
         {quickJudgmentOption ? (() => {
           const Icon = quickJudgmentOption.icon;
           const selected = reportType === quickJudgmentOption.value;
           return (
-            <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">只想先看方向？</p>
+            <Paper variant="outlined" sx={{ borderStyle: 'dashed', bgcolor: 'action.hover', px: 1.5, py: 1 }}>
+              <Typography component="p" variant="metadata" sx={{ fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'text.secondary' }}>只想先看方向？</Typography>
               <Button
                 type="button"
                 variant={selected ? 'secondary' : 'ghost'}
                 size="sm"
                 aria-pressed={selected}
                 onClick={() => onReportTypeChange(quickJudgmentOption.value)}
-                className="mt-1 h-auto w-full justify-start whitespace-normal px-2 py-2 text-left"
+                sx={{ mt: 0.5, height: 'auto', width: '100%', justifyContent: 'flex-start', whiteSpace: 'normal', px: 1, py: 1, textAlign: 'left' }}
               >
-                <Icon className="size-3.5 shrink-0" />
-                <span className="flex flex-col items-start text-left">
-                  <span className="text-xs font-medium">{quickJudgmentOption.label}</span>
-                  <span className="text-xs text-muted-foreground">{quickJudgmentOption.description}；不会创建正式研究稿</span>
-                </span>
+                <Icon size={14} />
+                <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
+                  <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>{quickJudgmentOption.label}</Typography>
+                  <Typography component="span" variant="metadata" color="text.secondary">{quickJudgmentOption.description}；不会创建正式研究稿</Typography>
+                </Box>
               </Button>
-            </div>
+            </Paper>
           );
         })() : null}
-      </fieldset>
+      </Box>
 
       {reportType !== 'summary_brief' ? (
-        <fieldset disabled={disabled} className="space-y-2 disabled:opacity-50">
-          <legend className="font-medium text-foreground">研究深度</legend>
-          <p className="text-xs leading-5 text-muted-foreground">
+        <Box component="fieldset" disabled={disabled} sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0, '&:disabled': { opacity: 0.5 } }}>
+          <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>研究深度</Box>
+          <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
             需要快速扫清方向，还是先覆盖多个角度，再根据证据缺口继续查？
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2">
+          </Typography>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
             <Button
               type="button"
               variant={reportLength === 'deep' ? 'secondary' : 'outline'}
               size="sm"
               aria-pressed={reportLength === 'deep'}
               onClick={() => onReportLengthChange('deep')}
-              className="h-auto justify-start whitespace-normal text-left"
+              sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}
             >
-              <span className="flex flex-col items-start">
-                <span className="text-xs font-medium">多轮研究 · 推荐</span>
-                <span className="text-xs font-normal text-muted-foreground">先覆盖多个方向，再补查真实证据缺口；适合重要判断，耗时更长</span>
-              </span>
+              <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>多轮研究 · 推荐</Typography>
+                <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>先覆盖多个方向，再补查真实证据缺口；适合重要判断，耗时更长</Typography>
+              </Box>
             </Button>
             <Button
               type="button"
@@ -892,54 +880,54 @@ function ResearchConfirmationControls({
               size="sm"
               aria-pressed={reportLength === 'standard'}
               onClick={() => onReportLengthChange('standard')}
-              className="h-auto justify-start whitespace-normal text-left"
+              sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}
             >
-              <span className="flex flex-col items-start">
-                <span className="text-xs font-medium">单轮研究</span>
-                <span className="text-xs font-normal text-muted-foreground">只做一轮检索，适合先扫清方向，不适合证据要求很高的决策</span>
-              </span>
+              <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>单轮研究</Typography>
+                <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>只做一轮检索，适合先扫清方向，不适合证据要求很高的决策</Typography>
+              </Box>
             </Button>
-          </div>
+          </Box>
           {reportLength === 'deep' && sourcePolicy !== 'only_user_sources' ? (
-            <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs leading-5 text-muted-foreground">
-              <span className="font-medium text-foreground">这次会做：</span>
+            <Paper variant="outlined" sx={{ borderColor: 'primary.main', bgcolor: 'action.selected', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
+              <Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>这次会做：</Box>
               拆分问题 → 并行检索 → 根据缺口补查 → 生成结果。
               证据足够时会提前收敛，不会为了凑页数继续搜索。
-            </div>
+            </Paper>
           ) : null}
           {reportLength === 'deep' && sourcePolicy === 'only_user_sources' ? (
-            <p className="text-xs leading-5 text-muted-foreground">
+            <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
               当前只使用你提供的资料；不会扩展到网页做多轮检索。
-            </p>
+            </Typography>
           ) : null}
-        </fieldset>
+        </Box>
       ) : null}
 
-      <fieldset disabled={disabled} className="space-y-2 disabled:opacity-50">
-        <legend className="font-medium text-foreground">资料来源</legend>
-        <p className="text-xs leading-5 text-muted-foreground">决定 AI 可以参考哪些资料。</p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Button type="button" aria-pressed={sourcePolicy === 'prefer_user_sources'} variant={sourcePolicy === 'prefer_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('prefer_user_sources')} className="h-auto justify-start whitespace-normal text-left">
-            <span className="flex flex-col items-start">
-              <span className="text-xs font-medium">网页搜索 + 已选资料</span>
-              <span className="text-xs font-normal text-muted-foreground">搜索公开网页；你选中的资料也会一并纳入</span>
-            </span>
+      <Box component="fieldset" disabled={disabled} sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0, '&:disabled': { opacity: 0.5 } }}>
+        <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>资料来源</Box>
+        <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>决定 AI 可以参考哪些资料。</Typography>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
+          <Button type="button" aria-pressed={sourcePolicy === 'prefer_user_sources'} variant={sourcePolicy === 'prefer_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('prefer_user_sources')} sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}>
+            <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>网页搜索 + 已选资料</Typography>
+              <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>搜索公开网页；你选中的资料也会一并纳入</Typography>
+            </Box>
           </Button>
-          <Button type="button" aria-pressed={sourcePolicy === 'only_user_sources'} variant={sourcePolicy === 'only_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('only_user_sources')} className="h-auto justify-start whitespace-normal text-left">
-            <span className="flex flex-col items-start">
-              <span className="text-xs font-medium">仅使用已选资料</span>
-              <span className="text-xs font-normal text-muted-foreground">不访问公开网页，只使用你添加的资料</span>
-            </span>
+          <Button type="button" aria-pressed={sourcePolicy === 'only_user_sources'} variant={sourcePolicy === 'only_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('only_user_sources')} sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}>
+            <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>仅使用已选资料</Typography>
+              <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>不访问公开网页，只使用你添加的资料</Typography>
+            </Box>
           </Button>
-        </div>
-        <div className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-          <span className="font-medium text-foreground">已添加资料：</span>
+        </Box>
+        <Paper variant="outlined" sx={{ bgcolor: 'action.hover', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
+          <Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>已添加资料：</Box>
           {sourceRefs.length > 0 ? `${sourceRefs.length} 条${seed ? '（含当前雷达内容）' : ''}` : '尚未添加'}
           {selectedContextCount > 0 ? ` · ${selectedContextCount} 条已有资料` : ''}
-        </div>
-        <label htmlFor="conversation-source-url" className="block space-y-2">
-          <span className="text-xs text-muted-foreground">添加网页资料（可选）</span>
-          <div className="flex gap-2">
+        </Paper>
+        <Box component="label" htmlFor="conversation-source-url" sx={{ display: 'grid', gap: 1 }}>
+          <Typography component="span" variant="metadata" color="text.secondary">添加网页资料（可选）</Typography>
+          <Box sx={{ display: 'flex', gap: 1 }}>
             <Input
               id="conversation-source-url"
               type="url"
@@ -952,50 +940,52 @@ function ResearchConfirmationControls({
                 }
               }}
               placeholder="https://…"
-              className="h-8 min-w-0 text-xs"
+              sx={{ minWidth: 0, '& .MuiOutlinedInput-root': { height: 32, minHeight: 32 }, '& .MuiOutlinedInput-input': { py: 0.5, fontSize: 'var(--dr-type-caption)' } }}
             />
             <Button type="button" variant="outline" size="icon-sm" onClick={onAddSource} aria-label="添加网页资料">
-              <Link2 className="size-3.5" />
+              <Link2 size={14} />
             </Button>
-          </div>
-        </label>
+          </Box>
+        </Box>
         {sourceUrls.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
             {sourceUrls.map((url) => (
-              <button
+              <Button
                 key={url}
                 type="button"
+                variant="outline"
+                size="xs"
                 onClick={() => onRemoveSource(url)}
-                className="inline-flex max-w-full items-center gap-1 rounded-lg border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+                sx={{ display: 'inline-flex', maxWidth: '100%', minHeight: 32, alignItems: 'center', gap: 0.5, borderColor: 'divider', bgcolor: 'background.paper', px: 1, py: 0.5, typography: 'metadata', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
                 title={`移除资料 ${url}`}
               >
-                <span className="max-w-[220px] truncate">{url}</span>
-                <X className="size-3 shrink-0" />
-              </button>
+                <Box component="span" sx={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</Box>
+                <X size={12} />
+              </Button>
             ))}
-          </div>
+          </Box>
         ) : null}
-      </fieldset>
+      </Box>
 
       {scopeIncomplete ? (
-        <p role="alert" className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+        <Box component="p" role="alert" sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }}>
           “优先资料时间”选择了自定义，请同时填写开始和结束日期后再启动。
-        </p>
+        </Box>
       ) : null}
 
-      <div className="border-t border-border/70 pt-3">
+      <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
         {sourceSelectionIncomplete ? (
-          <p role="alert" className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+          <Box component="p" role="alert" sx={{ mb: 1, border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }}>
             仅使用已选资料时，请先添加至少一条雷达内容、网页资料或已有资料。
-          </p>
+          </Box>
         ) : null}
-        <p className="text-xs leading-5 text-muted-foreground">
+        <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
           {
             sourceSelectionIncomplete
               ? '添加资料后，“开始研究”按钮会恢复可用。'
               : '这些选择会和上面的研究方案一起提交；点击“开始研究”后将锁定。'}
-        </p>
-      </div>
-    </div>
+        </Typography>
+      </Box>
+    </Box>
   );
 }

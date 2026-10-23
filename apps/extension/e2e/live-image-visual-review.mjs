@@ -2,14 +2,15 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
 import { translateImage } from '../reader-core.js';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 // This is an intentionally opt-in visual QA harness. It keeps the image bytes,
 // model regions and rendered overlays under /private/tmp so public reports do
 // not accidentally contain source images or model credentials.
 const corpusPath = process.env.READER_IMAGE_CORPUS
-  || '/private/tmp/deep-research-reader-image-corpus-1789898221386.json';
+  || tempPath('deep-research-reader-image-corpus-1789898221386.json');
 const outputDir = process.env.READER_IMAGE_REVIEW_DIR
-  || `/private/tmp/deep-research-reader-image-visual-review-${Date.now()}`;
+  || tempPath(`deep-research-reader-image-visual-review-${Date.now()}`);
 const baseUrl = process.env.READER_LIVE_BASE_URL;
 const model = process.env.READER_LIVE_VISION_MODEL || process.env.READER_LIVE_MODEL;
 const apiKey = process.env.READER_LIVE_API_KEY;

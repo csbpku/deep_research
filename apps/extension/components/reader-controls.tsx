@@ -33,8 +33,15 @@ export function ReaderDisclosure({ id, className, label, children }: { id?: stri
     if (!node) return;
     Object.defineProperty(node, 'open', { configurable: true, get: () => expanded, set: value => setExpanded(Boolean(value)) });
     node.toggleAttribute('open', expanded);
+    // The reading controller owns the visibility of some regions and records
+    // it in `data-reader-visible`. Expanding an MUI Accordion re-renders
+    // this component, which rewrites the whole class attribute and would
+    // silently restore the initial `hidden` class. Re-apply the recorded
+    // decision after every render so an expanded region stays readable.
+    const visible = node.dataset.readerVisible;
+    if (visible) node.classList.toggle('hidden', visible === 'false');
     return () => { delete (node as HTMLDivElement & { open?: boolean }).open; };
-  }, [expanded]);
+  });
   return <Accordion ref={ref} id={id} className={className} expanded={expanded} onChange={(_, value) => setExpanded(value)} disableGutters elevation={0}>
     <AccordionSummary expandIcon={<ComposerIcon kind="chevron-down" size={20} />}><Typography component="span" variant="subtitle2">{label}</Typography></AccordionSummary>
     <AccordionDetails>{children}</AccordionDetails>

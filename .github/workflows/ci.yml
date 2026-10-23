@@ -357,3 +357,64 @@ jobs:
       - name: Python mypy
         working-directory: packages/ai-engine
         run: uv run mypy ai_engine tools
+
+  reader-e2e:
+    name: reader (extension E2E)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      # The extension talks to a local fixture over loopback, so the E2E
+      # browser needs loopback access and a deterministic build.
+      READER_HEADLESS: "1"
+      NODE_ENV: production
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0 (Node 24; direct pnpm 10 install)
+        with: { version: 10.0.0 }
+      - uses: actions/setup-node@v6
+        with: { node-version: 24, cache: pnpm }
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify the shared design system is generated and current
+        run: |
+          node packages/design-system/scripts/generate.mjs --check
+          node apps/extension/scripts/generate-design-system.mjs --check
+
+      - name: Build the extension
+        run: pnpm --filter @deep-research/reader-extension build
+
+      # The extension requires a real Chromium build: Firefox cannot load
+      # MV3 extensions and the headless shell cannot run them either.
+      - name: Install Chromium for extension E2E
+        run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
+
+      - name: Resolve the Chromium binary for extension E2E
+        id: chrome
+        run: |
+          binary="$(find "$HOME/.cache/ms-playwright" -name chrome -type f -path '*chrome-linux*' | head -n 1)"
+          if [ -z "$binary" ]; then
+            echo "Chromium binary not found under $HOME/.cache/ms-playwright" >&2
+            exit 1
+          fi
+          echo "path=$binary" >> "$GITHUB_OUTPUT"
+
+      - name: Reader visual E2E
+        env:
+          CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
+        run: pnpm --filter @deep-research/reader-extension e2e:visual
+        timeout-minutes: 8
+
+      - name: Reader interaction audit
+        env:
+          CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
+        run: pnpm --filter @deep-research/reader-extension e2e:interaction-audit
+        timeout-minutes: 8
+
+      - name: Reader full-page translation E2E
+        env:
+          CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
+        run: pnpm --filter @deep-research/reader-extension e2e:full-page-translation
+        timeout-minutes: 8

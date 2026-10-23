@@ -24,8 +24,8 @@ test.describe('MUI shell contracts (no database writes)', () => {
         await page.goto('/radar?date=all', { waitUntil: 'commit' });
         // A client-only workaround would lose this heading while bundles wait.
         await expect(page.getByRole('main').getByRole('heading', { name: '技术雷达', exact: true })).toBeVisible();
-        // globals.css retains its legacy 1.7 line-height; MUI CssBaseline's
-        // theme override (1.6) must be emitted through the SSR cache boundary.
+        // globals.css leaves line-height to the shared MUI theme, so this also
+        // confirms the CssBaseline token is emitted through the SSR cache.
         const baselineLineHeightRatio = await page.locator('body').evaluate(element => {
           const style = getComputedStyle(element);
           const lineHeight = Number.parseFloat(style.lineHeight);

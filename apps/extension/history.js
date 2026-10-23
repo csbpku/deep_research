@@ -118,6 +118,21 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => node.classList.remove('visible'), 2800);
 }
 
+/**
+ * Toggle a region's visibility.
+ *
+ * React owns the class list of these regions and rewrites it on every
+ * render (an MUI Accordion does so when it expands). A plain `hidden` class
+ * toggle would therefore be undone by the next render, so the controller's
+ * decision is recorded in `data-reader-visible` and re-applied by the
+ * disclosure component after each render.
+ */
+function showRegion(el, visible = true) {
+  if (!el) return;
+  el.dataset.readerVisible = visible ? 'true' : 'false';
+  el.classList.toggle('hidden', !visible);
+}
+
 function downloadJson(data, filename) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const objectUrl = URL.createObjectURL(blob);
@@ -200,8 +215,8 @@ function renderHistoryDetail(session) {
     activeDetailReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }
   activeDetail = session;
-  $('history-list').classList.add('hidden');
-  $('history-detail').classList.remove('hidden');
+  showRegion($('history-list'), false);
+  showRegion($('history-detail'), true);
   $('history-detail-title').textContent = text(session.title, pageLabel(session.url));
   $('history-detail-source').textContent = session.url || pageLabel(session.url);
   $('history-detail-scope').textContent = `${scopeLabel(session)} · ${intentLabel(session)}`;
@@ -210,7 +225,7 @@ function renderHistoryDetail(session) {
   const selection = $('history-detail-selection');
   selection.textContent = '';
   if (session.selection?.quote) {
-    selection.classList.remove('hidden');
+    showRegion(selection, true);
     const label = document.createElement('div');
     label.className = 'history-detail-label';
     label.textContent = t("当时选中的原文");
@@ -219,7 +234,7 @@ function renderHistoryDetail(session) {
     quote.textContent = session.selection.quote;
     selection.append(label, quote);
   } else {
-    selection.classList.add('hidden');
+    showRegion(selection, false);
   }
 
   const messages = $('history-detail-messages');
@@ -231,32 +246,32 @@ function renderHistoryDetail(session) {
   renderMaterialEvidence(evidence, []);
   if (answer) {
     const evidenceItems = Array.isArray(answer.evidence) ? answer.evidence : [];
-    $('history-detail-evidence-section').classList.toggle('hidden', !evidenceItems.length);
+    showRegion($('history-detail-evidence-section'), evidenceItems.length > 0);
     renderMaterialEvidence(evidence, evidenceItems.map(item => ({ claim: item.claim, quote: item.quote, url: session.url, anchored: Boolean(item.anchor?.quote), onLocate: () => void openSession(session, { anchor: item.anchor }) })));
     const background = $('history-detail-background');
     renderMarkdown(background.querySelector('span'), answer.background || '');
-    background.classList.toggle('hidden', !answer.background);
+    showRegion(background, Boolean(answer.background));
     const inference = $('history-detail-inference');
     renderMarkdown(inference.querySelector('span'), answer.inference || '');
-    inference.classList.toggle('hidden', !answer.inference);
+    showRegion(inference, Boolean(answer.inference));
     const limitations = $('history-detail-limitations');
     renderMarkdown(limitations.querySelector('span'), Array.isArray(answer.limitations) ? answer.limitations.join('\n') : '');
-    limitations.classList.toggle('hidden', !answer.limitations?.length);
+    showRegion(limitations, Boolean(answer.limitations?.length));
     const moreParts = [answer.background && t("背景"), answer.inference && t("推断"), answer.limitations?.length && t("未知项")].filter(Boolean);
     $('history-detail-more-summary').textContent = moreParts.join(' · ');
-    $('history-detail-more').classList.toggle('hidden', !moreParts.length);
+    showRegion($('history-detail-more'), moreParts.length > 0);
     $('history-detail-more').open = false;
-    structured.classList.toggle('hidden', Boolean(!evidenceItems.length && !answer.background && !answer.inference && !answer.limitations?.length));
+    showRegion(structured, Boolean(evidenceItems.length || answer.background || answer.inference || answer.limitations?.length));
   } else {
-    structured.classList.add('hidden');
+    showRegion(structured, false);
   }
   $('history-detail-title').focus({ preventScroll: true });
 }
 
 function closeHistoryDetail({ restoreFocus = true } = {}) {
   activeDetail = null;
-  $('history-detail').classList.add('hidden');
-  $('history-list').classList.remove('hidden');
+  showRegion($('history-detail'), false);
+  showRegion($('history-list'), true);
   if (restoreFocus && activeDetailReturnFocus?.isConnected) activeDetailReturnFocus.focus();
   activeDetailReturnFocus = null;
 }
@@ -301,7 +316,9 @@ function renderEmpty(title, detail) {
 function sessionCard(session) {
   return { key: session.id, title: text(session.title, pageLabel(session.url)), source: session.url,
     status: session.remote ? t("平台同步") : sessionIsOld(session) ? t("旧版本") : t("当前版本"), warning: sessionIsOld(session),
-    detail: recentQuestion(session), meta: `${t("更新于 {0}", formatTime(session.updatedAt))} · ${t("{0} 条消息", messageCount(session))}`,
+    // The scope and the intent are the first thing a returning reader needs:
+    // they say what this chat was about, not just when it happened.
+    detail: recentQuestion(session), meta: `${scopeLabel(session)} · ${intentLabel(session)} · ${t("更新于 {0}", formatTime(session.updatedAt))} · ${t("{0} 条消息", messageCount(session))}`,
     visibleActions: 2, actions: [
       { label: t("继续聊天"), run: () => void openSession(session) },
       { label: t("查看对话"), run: () => renderHistoryDetail(session) },

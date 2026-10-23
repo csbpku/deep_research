@@ -3,20 +3,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { AlertTriangle, Check, CheckCircle2, Clock3, ExternalLink } from 'lucide-react';
-import Link from 'next/link';
+import NextLink from 'next/link';
 
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
 import { ResearchWebBrief } from '@/components/ai-research/ResearchWebBrief';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
+import Box from '@mui/material/Box';
+import Link from '@mui/material/Link';
 import LinearProgress from '@mui/material/LinearProgress';
+import Paper from '@mui/material/Paper';
 import { StatusBadge } from '@/components/domain/StatusBadge';
 import { AiResearchButton as Button } from '@/components/ai-research/AiResearchMaterial';
 import Skeleton from '@mui/material/Skeleton';
+import Typography from '@mui/material/Typography';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi, friendlyMessage } from '@/lib/errors/friendly';
 import { progressPct } from '@/lib/ai-progress';
 import { researchUserStatus } from '@/lib/research-user-status';
-import { cn } from '@/lib/utils';
 import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
 import type { DeepResearchProgress } from '@/lib/ai-progress';
 
@@ -79,29 +82,33 @@ export function shouldPollInlineResearch(job: Pick<InlineJob, 'status' | 'finalS
 function StepStepper({ currentStep, succeeded }: { currentStep: string | null; succeeded: boolean }) {
   const activeIndex = currentStep ? STEP_ORDER.indexOf(currentStep as (typeof STEP_ORDER)[number]) : -1;
   return (
-    <ol className="flex flex-wrap items-center gap-2" aria-label="调研步骤">
+    <Box component="ol" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, m: 0, p: 0, listStyle: 'none' }} aria-label="调研步骤">
       {STEP_ORDER.map((key, index) => {
         const state = succeeded || (activeIndex >= 0 && index < activeIndex) ? 'done' : index === activeIndex ? 'active' : 'todo';
         return (
-          <li key={key} className="flex items-center gap-2">
-            {index > 0 ? <span className="mx-1 h-px w-3 bg-border" aria-hidden /> : null}
-            <span
-              className={cn(
-                'flex size-5 items-center justify-center rounded-full text-xs font-medium leading-none',
-                state === 'done' && 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]',
-                state === 'active' && 'bg-primary text-primary-foreground',
-                state === 'todo' && 'bg-muted text-muted-foreground/70',
-              )}
+          <Box component="li" key={key} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {index > 0 ? <Box component="span" sx={{ mx: 0.5, width: 12, height: '1px', bgcolor: 'divider' }} aria-hidden /> : null}
+            <Box
+              component="span"
+              sx={{
+                display: 'flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: '50%',
+                typography: 'metadata', fontWeight: 500, lineHeight: 1,
+                ...(state === 'done'
+                  ? { bgcolor: 'var(--dr-color-success-container)', color: 'success.main' }
+                  : state === 'active'
+                    ? { bgcolor: 'primary.main', color: 'primary.contrastText' }
+                    : { bgcolor: 'action.hover', color: 'text.disabled' }),
+              }}
             >
-              {state === 'done' ? <Check className="size-3" /> : index + 1}
-            </span>
-            <span className={cn('text-xs', state === 'active' ? 'font-medium text-foreground' : state === 'done' ? 'text-muted-foreground' : 'text-muted-foreground/60')}>
+              {state === 'done' ? <Check size={12} /> : index + 1}
+            </Box>
+            <Typography component="span" variant="metadata" sx={{ fontWeight: state === 'active' ? 500 : undefined, color: state === 'active' ? 'text.primary' : state === 'done' ? 'text.secondary' : 'text.disabled' }}>
               {STEP_LABELS[key]}
-            </span>
-          </li>
+            </Typography>
+          </Box>
         );
       })}
-    </ol>
+    </Box>
   );
 }
 
@@ -170,23 +177,23 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
 
   if (query.isLoading) {
     return (
-      <section className="rounded-lg border border-border bg-background p-4" aria-label="调研状态">
-        <Skeleton className="h-4 w-32" />
-        <Skeleton className="mt-3 h-2 w-full" />
-        <Skeleton className="mt-4 h-12 w-full" />
-      </section>
+      <Paper component="section" variant="outlined" aria-label="调研状态" sx={{ p: 2 }}>
+        <Skeleton variant="text" width={128} height={20} />
+        <Skeleton variant="rounded" sx={{ mt: 1.5, height: 8, width: '100%' }} />
+        <Skeleton variant="rounded" sx={{ mt: 2, height: 48, width: '100%' }} />
+      </Paper>
     );
   }
 
   if (query.isError || !query.data) {
     return (
-      <section className="rounded-lg border border-destructive/25 bg-destructive/5 p-4" role="alert">
-        <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-          <AlertTriangle className="size-4" />
+      <Paper component="section" variant="outlined" role="alert" sx={{ p: 2, borderColor: 'error.main', bgcolor: 'var(--dr-color-danger-container)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'body2', fontWeight: 500, color: 'error.main' }}>
+          <AlertTriangle size={16} />
           调研状态暂时不可读
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">{friendlyMessage(query.error, '请稍后重试。')}</p>
-      </section>
+        </Box>
+        <Typography component="p" variant="metadata" sx={{ mt: 0.5, color: 'text.secondary' }}>{friendlyMessage(query.error, '请稍后重试。')}</Typography>
+      </Paper>
     );
   }
 
@@ -230,63 +237,63 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
           : '研究稿';
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-background" aria-label="调研状态">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+    <Paper component="section" variant="outlined" aria-label="调研状态" sx={{ overflow: 'hidden' }}>
+      <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
             {userStatus.code === 'failed' || userStatus.code === 'needs_revision'
-              ? <AlertTriangle className="size-4 text-[var(--dr-color-warning)]" />
+              ? <AlertTriangle size={16} color="var(--dr-color-warning)" />
               : userStatus.code === 'ready'
-                ? <CheckCircle2 className="size-4 text-[var(--dr-color-success)]" />
+                ? <CheckCircle2 size={16} color="var(--dr-color-success)" />
                 : terminal
-                  ? <AlertTriangle className="size-4 text-[var(--dr-color-warning)]" />
-                  : <Clock3 className="size-4 text-primary" />}
-            <span className="text-sm font-semibold">
+                  ? <AlertTriangle size={16} color="var(--dr-color-warning)" />
+                  : <Clock3 size={16} color="var(--dr-color-primary)" />}
+            <Typography component="span" variant="body2" sx={{ fontWeight: 600 }}>
               {terminal ? userStatus.label : '正在研究'}
-            </span>
+            </Typography>
             <StatusBadge kind="job" value={userStatus.code === 'ready' ? 'succeeded' : userStatus.code === 'failed' ? 'failed' : 'partial'} label={userStatus.label} />
-          </div>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{job.topic ?? '当前调研'}</p>
-        </div>
-        <Link href={`/ai-research/${job.jobId}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+          </Box>
+          <Typography component="p" variant="metadata" noWrap sx={{ mt: 0.5, color: 'text.secondary' }}>{job.topic ?? '当前调研'}</Typography>
+        </Box>
+        <Link component={NextLink} href={`/ai-research/${job.jobId}`} underline="hover" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, typography: 'metadata', fontWeight: 500, color: 'primary.main' }}>
           打开完整任务
-          <ExternalLink className="size-3" />
+          <ExternalLink size={12} />
         </Link>
-      </header>
+      </Box>
 
-      <div className="space-y-4 p-4">
+      <Box sx={{ display: 'grid', gap: 2, p: 2 }}>
         <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} />
 
         {reviewUnavailable ? (
-          <div className="rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]" role="status">
-            <strong className="font-medium">{userStatus.description}</strong>
-            <span className="ml-2">可以打开完整任务查看依据，或稍后重新检查。</span>
-          </div>
+          <Box sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }} role="status">
+            <Box component="strong" sx={{ fontWeight: 500 }}>{userStatus.description}</Box>
+            <Box component="span" sx={{ ml: 1 }}>可以打开完整任务查看依据，或稍后重新检查。</Box>
+          </Box>
         ) : null}
 
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', color: 'text.secondary' }}>
           <LinearProgress variant="determinate" value={pct} sx={{ width: { xs: 128, sm: 192 }, height: 6, borderRadius: 'var(--dr-radius-pill)' }} />
-          <span className="font-mono tabular-nums">{pct}%</span>
-        </div>
+          <Typography component="span" variant="metadata" sx={{ fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>{pct}%</Typography>
+        </Box>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-1 text-xs text-muted-foreground">
-            已抓取正文 <span className="ml-1 font-mono tabular-nums text-foreground">{evidenceCount}</span>
-          </span>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
+          <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'divider', borderRadius: 999, bgcolor: 'background.paper', px: 1, py: 0.5, typography: 'metadata', color: 'text.secondary' }}>
+            已抓取正文 <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: 'text.primary' }}>{evidenceCount}</Box>
+          </Box>
           {terminal && status === 'partial' && job.partialSourcesCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-1 text-xs text-[var(--dr-color-warning)]">
-              部分 <span className="ml-1 font-mono tabular-nums">{job.partialSourcesCount}</span>
-            </span>
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'warning.main', borderRadius: 999, bgcolor: 'var(--dr-color-warning-container)', px: 1, py: 0.5, typography: 'metadata', color: 'warning.main' }}>
+              部分 <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>{job.partialSourcesCount}</Box>
+            </Box>
           ) : null}
           {job.failedSourcesCount > 0 ? (
-            <span className="inline-flex items-center rounded-full border border-destructive/25 bg-destructive/5 px-2 py-1 text-xs text-destructive">
-              失败 <span className="ml-1 font-mono tabular-nums">{job.failedSourcesCount}</span>
-            </span>
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'error.main', borderRadius: 999, bgcolor: 'var(--dr-color-danger-container)', px: 1, py: 0.5, typography: 'metadata', color: 'error.main' }}>
+              失败 <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>{job.failedSourcesCount}</Box>
+            </Box>
           ) : null}
-          <span className="inline-flex items-center rounded-full border border-border bg-card px-2 py-1 text-xs text-muted-foreground">
+          <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'divider', borderRadius: 999, bgcolor: 'background.paper', px: 1, py: 0.5, typography: 'metadata', color: 'text.secondary' }}>
             {deliverableLabel}
-          </span>
-        </div>
+          </Box>
+        </Box>
 
         {job.reportLength === 'deep' && job.researchProgress?.mode === 'deep' ? (
           <DeepResearchProgressCard
@@ -299,33 +306,28 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         ) : null}
 
         {status === 'failed' || status === 'partial' ? (
-          <div className={cn(
-            'rounded-lg border p-3 text-sm',
-            status === 'partial'
-              ? 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]'
-              : 'border-destructive/25 bg-destructive/5 text-destructive',
-          )} role="alert">
-            <strong className="font-medium">
+          <Box sx={{ border: 1, borderRadius: 1, p: 1.5, typography: 'body2', ...(status === 'partial' ? { borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' } : { borderColor: 'error.main', bgcolor: 'var(--dr-color-danger-container)', color: 'error.main' }) }} role="alert">
+            <Box component="strong" sx={{ fontWeight: 500 }}>
               {evidenceOnly
                 ? '资料已保留，但没有形成可交付结论'
                 : status === 'partial' ? '本次调研提前停止' : '调研失败'}
-            </strong>
-            <span className="ml-2">
+            </Box>
+            <Box component="span" sx={{ ml: 1 }}>
               {job.errorCode ? friendlyMessage({ code: job.errorCode }, '调研未能继续') : '请打开完整任务查看详情。'}
-            </span>
-            {job.errorMessage ? <p className="mt-2 text-xs opacity-90">{job.errorMessage}</p> : null}
+            </Box>
+            {job.errorMessage ? <Typography component="p" variant="metadata" sx={{ mt: 1, opacity: 0.9 }}>{job.errorMessage}</Typography> : null}
             {status === 'partial' ? (
-              <p className="mt-2 text-xs opacity-80">
+              <Typography component="p" variant="metadata" sx={{ mt: 1, opacity: 0.8 }}>
                 {evidenceOnly
                   ? '已抓取的正文仍可在完整任务中核对；重新运行会重新生成研究稿，不会把这次资料摘要当成结论。'
                   : '已抓取的正文仍可核对；重新运行会创建一条新的调研任务。'}
-              </p>
+              </Typography>
             ) : null}
-          </div>
+          </Box>
         ) : null}
 
         {status === 'succeeded' && job.artifact?.content ? (
-          <div className="border-t border-border pt-4">
+          <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
             {job.artifact.type === 'slides' ? (
               <ArtifactPreview content={job.artifact.content} />
             ) : job.reportType === 'web_brief' ? (
@@ -335,19 +337,35 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
                 reviewStatus={job.review?.status}
               />
             ) : (
-              <MarkdownPreview source={job.artifact.content} className="max-h-none overflow-visible bg-card lg:max-h-[720px] lg:overflow-y-auto" />
+              <MarkdownPreview
+                source={job.artifact.content}
+                sx={{
+                  maxHeight: 'none',
+                  overflow: 'visible',
+                  bgcolor: 'background.paper',
+                  '@media (min-width: 1024px)': { maxHeight: 720, overflowY: 'auto' },
+                }}
+              />
             )}
-          </div>
+          </Box>
         ) : status === 'succeeded' && job.outputText ? (
-          <MarkdownPreview source={job.outputText} className="max-h-none overflow-visible bg-card lg:max-h-[720px] lg:overflow-y-auto" />
+          <MarkdownPreview
+            source={job.outputText}
+            sx={{
+              maxHeight: 'none',
+              overflow: 'visible',
+              bgcolor: 'background.paper',
+              '@media (min-width: 1024px)': { maxHeight: 720, overflowY: 'auto' },
+            }}
+          />
         ) : null}
 
         {status === 'succeeded' && job.draftResearchId ? (
           <Button asChild size="sm" variant="outline">
-            <Link href={`/researches/${job.draftResearchId}`}>打开可编辑草稿</Link>
+            <NextLink href={`/researches/${job.draftResearchId}`}>打开可编辑草稿</NextLink>
           </Button>
         ) : null}
-      </div>
-    </section>
+      </Box>
+    </Paper>
   );
 }

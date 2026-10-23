@@ -40,7 +40,6 @@ import MaterialLink from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
 import Skeleton from '@mui/material/Skeleton';
 import Typography from '@mui/material/Typography';
-import { cn } from '@/lib/utils';
 import { space } from '@deep-research/design-system';
 import { cleanEvidenceSnippet } from '@/lib/research-report';
 import {
@@ -487,7 +486,7 @@ export default function AiJobStatusPage() {
             : '正在读取调研任务状态…'
         }
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
             <Button
               type="button"
               variant="ghost"
@@ -507,12 +506,11 @@ export default function AiJobStatusPage() {
                 新建 AI 调研
               </Link>
             </Button>
-          </div>
+          </Box>
         }
-        className="mb-5"
       />
 
-      <Box sx={{ mt: 2, display: 'grid', alignItems: 'start', gap: 3, gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '280px minmax(0, 1fr)' } }}>
+      <Box sx={{ mt: space.xl, display: 'grid', alignItems: 'start', gap: 3, gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '280px minmax(0, 1fr)' } }}>
         <Box sx={{ order: { xs: 1, lg: 2 }, minWidth: 0 }}>
           {q.isLoading && !q.data ? (
             <JobStatusSkeleton />
@@ -534,8 +532,7 @@ export default function AiJobStatusPage() {
               component="div"
               role="status"
               aria-live="polite"
-              className="mt-3 px-3 py-2"
-              sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-small)', ...textSx.caption }}
+              sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-small)', ...textSx.caption, mt: space.md, px: space.md, py: space.sm }}
             >
               状态同步暂时失败，已保留上次成功状态；任务可能仍在后台运行，系统会继续重试。
             </Box>
@@ -554,27 +551,27 @@ export default function AiJobStatusPage() {
 function JobStatusSkeleton() {
   return (
     <Paper variant="outlined" sx={{ ...surfaceSx, borderRadius: 'var(--dr-radius-medium)', p: 2 }}>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-2">
-          <Skeleton className="h-3 w-16" />
-          <Skeleton className="h-5 w-40" />
-          <Skeleton className="h-3 w-56" />
-        </div>
-        <div className="shrink-0 space-y-1 text-right">
-          <Skeleton className="ml-auto h-8 w-20" />
-          <Skeleton className="ml-auto h-3 w-16" />
-        </div>
-      </div>
-      <Skeleton className="h-2 w-full" />
-      <div className="mt-4 space-y-3">
-        <Skeleton className="h-3 w-32" />
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <Box component="div" sx={{ mb: space.md, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.md }}>
+        <Box component="div" sx={{ minWidth: 0, display: 'grid', gap: space.sm }}>
+          <Skeleton sx={{ height: 12, width: 64 }} />
+          <Skeleton sx={{ height: 20, width: 160 }} />
+          <Skeleton sx={{ height: 12, width: 224 }} />
+        </Box>
+        <Box component="div" sx={{ flexShrink: 0, display: 'grid', gap: space.xs, textAlign: 'right' }}>
+          <Skeleton sx={{ ml: 'auto', height: 32, width: 80 }} />
+          <Skeleton sx={{ ml: 'auto', height: 12, width: 64 }} />
+        </Box>
+      </Box>
+      <Skeleton sx={{ height: 8, width: '100%' }} />
+      <Box component="div" sx={{ mt: space.lg, display: 'grid', gap: space.md }}>
+        <Skeleton sx={{ height: 12, width: 128 }} />
+        <Box component="div" sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(6, minmax(0, 1fr))' }, gap: space.sm }}>
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full" sx={{ borderRadius: 'var(--dr-radius-medium)' }} />
+            <Skeleton key={i} sx={{ height: 80, width: '100%', borderRadius: 'var(--dr-radius-medium)' }} />
           ))}
-        </div>
-        <Skeleton className="h-8 w-full" />
-      </div>
+        </Box>
+        <Skeleton sx={{ height: 32, width: '100%' }} />
+      </Box>
     </Paper>
   );
 }
@@ -778,24 +775,24 @@ function StatusBody({ s }: { s: AiJobStatus }) {
 
   return (
     <Paper component="section" variant="outlined" className="material-surface" sx={{ overflow: 'hidden' }}>
-      <Box component="div" className="px-5 py-5" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
+      <Box component="div" sx={{ px: space.xl, py: space.xl, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg }}>
+          <Box component="div" sx={{ minWidth: 0 }}>
+            <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
               <StatusBadge kind="job" value={statusLabel} label={statusLabel} />
               {finalStatus === 'succeeded' && !evidenceFreeBrief ? (
                 <ReviewGateChip gate={publicationGate} executionStatus={reviewExecutionStatus} researchSufficiency={researchSufficiency} />
               ) : null}
-              <Box component="span" className="flex flex-wrap gap-x-2 tabular-nums" sx={{ ...textSx.caption, ...textSx.muted }} aria-label={`研究耗时 ${elapsed}`}>
+              <Box component="span" sx={{ display: 'flex', flexWrap: 'wrap', columnGap: space.sm, fontVariantNumeric: 'tabular-nums', ...textSx.caption, ...textSx.muted }} aria-label={`研究耗时 ${elapsed}`}>
                 <span>研究耗时 {elapsed}</span>
               </Box>
-            </div>
-            <Typography component="h2" variant="h2" className="mt-3" sx={{ letterSpacing: '-0.025em' }}>
+            </Box>
+            <Typography component="h2" variant="h2" sx={{ mt: space.md, letterSpacing: '-0.025em' }}>
               {isTerminal
                 ? evidenceOnly ? '资料已保留' : evidenceFreeBrief ? `${outputLabel}已生成，但未找到资料` : finalStatus === 'succeeded' ? reportNeedsReview ? `${outputLabel}已生成` : '研究完成' : '研究已结束'
                 : hasReaderReport ? `${outputLabel}已生成` : '正在建立证据链'}
             </Typography>
-            <Typography component="p" variant="body2" className="mt-1" sx={textSx.muted} aria-live="polite" aria-atomic="true">
+            <Typography component="p" variant="body2" sx={{ mt: space.xs, ...textSx.muted }} aria-live="polite" aria-atomic="true">
               {evidenceFreeBrief
                 ? '本轮没有保存可核对资料；下面的内容只是模型摘录，不能作为已验证的研究结论。'
                 : reviewInProgress
@@ -816,18 +813,18 @@ function StatusBody({ s }: { s: AiJobStatus }) {
                       ? deepResearchActivityLabel(s)
                       : `${activeIdx >= 0 ? STEPS[activeIdx].label : '准备研究'} · ${capturedSources} 条可核对正文`}
             </Typography>
-          </div>
+          </Box>
           {showTerminalOutcome ? (
-            <div className="shrink-0 text-right">
+            <Box component="div" sx={{ flexShrink: 0, textAlign: 'right' }}>
               <Box component="div" sx={{ ...textSx.titleCompact, ...textSx.muted, fontFamily: 'monospace' }}>{terminalProgressLabel}</Box>
-              <Box component="div" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
+              <Box component="div" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }}>
                 {terminalProgressCaption}
               </Box>
-            </div>
+            </Box>
           ) : null}
-        </div>
+        </Box>
         {showTerminalOutcome ? (
-          <Typography component="p" className="mt-4" sx={{ ...textSx.caption, ...textSx.muted }} role="status">
+          <Typography component="p" sx={{ mt: space.lg, ...textSx.caption, ...textSx.muted }} role="status">
             {terminalProgressLabel} · {terminalProgressCaption}
           </Typography>
         ) : null}
@@ -847,14 +844,14 @@ function StatusBody({ s }: { s: AiJobStatus }) {
 
       {/* 完成态首先呈现用户来这里要读懂的结果；过程和来源仍保留在下方供核查。 */}
       {(isTerminal || hasReaderReport) && s.artifact?.content && (hasReaderReport || hasEvidenceSnapshot) ? (
-          <Box component="section" className="px-5 py-6" sx={{ borderTop: '1px solid', borderColor: 'divider', bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 40%, transparent)' }} aria-label={evidenceOnly ? '本轮资料快照' : !isTerminal ? `${outputLabel}（依据整理中）` : `${outputLabel}结果`}>
-          <Box component="div" className="mb-5 flex flex-wrap items-start justify-between gap-3 pb-4" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+          <Box component="section" sx={{ px: space.xl, py: space.section, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'action.selected' }} aria-label={evidenceOnly ? '本轮资料快照' : !isTerminal ? `${outputLabel}（依据整理中）` : `${outputLabel}结果`}>
+          <Box component="div" sx={{ mb: space.xl, pb: space.lg, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.md, borderBottom: '1px solid', borderColor: 'divider' }}>
             <div>
               <Typography component="p" sx={{ ...textSx.caption, ...textSx.semibold, color: evidenceOnly || finalStatus === 'partial' ? 'warning.main' : 'primary.main', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {evidenceOnly ? '资料摘要' : !isTerminal ? `${outputLabel} · 依据整理中` : finalStatus === 'partial' ? `阶段性${outputLabel}` : '研究产物'}
               </Typography>
-              <Typography component="h3" className="mt-1" sx={textSx.titleCompact}>{s.artifact.title}</Typography>
-              <Typography component="p" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
+              <Typography component="h3" sx={{ mt: space.xs, ...textSx.titleCompact }}>{s.artifact.title}</Typography>
+              <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }}>
                 {s.sources.length > 0
                 ? `${s.sources.length < s.savedSourcesCount ? `已保存 ${s.savedSourcesCount} 条，当前展示最近 ${s.sources.length} 条` : `${s.savedSourcesCount} 条资料`} · ${capturedSources} 条有可核对正文 · 第 ${s.artifact.version} 版 · 可打开来源并核对原文`
                   : s.sourcesCount > 0
@@ -862,15 +859,15 @@ function StatusBody({ s }: { s: AiJobStatus }) {
                     : `本轮未保存可核对资料 · 第 ${s.artifact.version} 版`}
               </Typography>
                 {!isTerminal && hasReaderReport ? (
-                  <Typography component="p" className="mt-2 max-w-2xl" sx={{ ...textSx.caption, ...textSx.muted }}>
+                  <Typography component="p" sx={{ mt: space.sm, maxWidth: 672, ...textSx.caption, ...textSx.muted }}>
                     这份研究稿已基于本轮实际抓取的证据生成，可以先阅读；关键结论确认完成后，页面会补充最终状态。
                   </Typography>
                 ) : evidenceOnly ? (
-                  <Typography component="p" className="mt-2 max-w-2xl" sx={{ ...textSx.caption, ...textSx.warning }}>
+                  <Typography component="p" sx={{ mt: space.sm, maxWidth: 672, ...textSx.caption, ...textSx.warning }}>
                     本轮只保存了实际抓取的来源摘录，没有生成可交付的研究结论。请把它当作下一轮研究输入，不要当成已验证报告。
                   </Typography>
                 ) : finalStatus === 'partial' ? (
-                <Typography component="p" className="mt-2 max-w-2xl" sx={{ ...textSx.caption, ...textSx.warning }}>
+                <Typography component="p" sx={{ mt: space.sm, maxWidth: 672, ...textSx.caption, ...textSx.warning }}>
                   研究稿已在关键结论确认完成前保存。它可以阅读和追问，但关键判断请先核对下方来源，或重新运行以完成确认。
                 </Typography>
               ) : null}
@@ -878,7 +875,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             {finalStatus === 'succeeded' && !isBrief && s.draftResearchId ? (
               <Button asChild variant="outline" size="sm">
                 <Link href={`/researches/${s.draftResearchId}/edit`}>
-                  <PenLine className="size-3.5" />
+                  <PenLine size={14} />
                   {s.reportType === 'slides' ? '编辑 Slides 提纲' : '编辑研究稿'}
                 </Link>
               </Button>
@@ -892,13 +889,14 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             ) : null}
             <Button asChild variant="ghost" size="sm">
               <Link href="/researches">
-                <Library className="size-3.5" />
+                <Library size={14} />
                 查看研究库
               </Link>
             </Button>
           </Box>
-          <div
-            className="mx-auto max-w-4xl"
+          <Box
+            component="div"
+            sx={{ mx: 'auto', maxWidth: 'var(--dr-width-content-list)' }}
             data-knowledge-source-message={s.draftResearchId ?? undefined}
           >
             <ResearchOutputViews
@@ -913,12 +911,12 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             {s.draftResearchId ? (
               <KnowledgeCardComposer sourceKind="research_report" messageId={s.draftResearchId} />
             ) : null}
-          </div>
+          </Box>
         </Box>
       ) : null}
 
       {isTerminal && !!s.artifact?.content && (hasReaderReport || hasEvidenceSnapshot) ? (
-        <Box component="div" className="px-5 pb-5" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+        <Box component="div" sx={{ px: space.xl, pb: space.xl, borderTop: '1px solid', borderColor: 'divider' }}>
           <ResearchChatPanel
             conversation={conversationQuery.data ?? null}
             canAsk={hasReaderReport || hasEvidenceSnapshot}
@@ -931,36 +929,36 @@ function StatusBody({ s }: { s: AiJobStatus }) {
         </Box>
       ) : null}
 
-      <div className="p-5">
+      <Box component="div" sx={{ p: space.xl }}>
         {!isBrief && !evidenceOnly && showResultState ? (
-          <section id="quality-check" className="mb-5" aria-label="使用建议">
+          <Box component="section" id="quality-check" sx={{ mb: space.xl }} aria-label="使用建议">
             <ReviewPanel review={s.review} reviewRun={s.reviewRun} researchSufficiency={researchSufficiency} draftResearchId={s.draftResearchId} />
-          </section>
+          </Box>
         ) : null}
         <Box component="details" sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'action.selected' }}>
-          <Box component="summary" className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden" sx={{ ...textSx.label, ...textSx.medium, color: 'text.primary' }}>
+          <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: space.md, px: space.lg, py: space.md, '&::-webkit-details-marker': { display: 'none' }, ...textSx.label, ...textSx.medium, color: 'text.primary' }}>
             <span>查看研究详情</span>
             <Box component="span" sx={{ ...textSx.caption, ...textSx.muted, fontWeight: 'var(--dr-weight-regular)' }}>
-              <span className="hidden sm:inline">研究过程 · 资料 · 证据缺口</span>
-              <span className="sm:hidden">过程与资料</span>
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>研究过程 · 资料 · 证据缺口</Box>
+              <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>过程与资料</Box>
             </Box>
           </Box>
-          <Box component="div" className="px-4 pb-4 pt-4" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
-            <div className="mb-4 flex items-center justify-between">
+          <Box component="div" sx={{ px: space.lg, pb: space.lg, pt: space.lg, borderTop: '1px solid', borderColor: 'divider' }}>
+            <Box component="div" sx={{ mb: space.lg, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <Typography component="p" sx={{ ...textSx.caption, ...textSx.muted }}>按时间顺序记录研究如何得出结论。</Typography>
               </div>
               {!isTerminal ? (
-                <div className="flex items-center gap-2">
+                <Box component="div" sx={{ display: 'flex', alignItems: 'center', gap: space.sm }}>
                   <Button type="button" variant="outline" size="xs" onClick={() => void cancelJob()} disabled={cancelling}>
-                    <XCircle className={cn('size-3', cancelling && 'animate-pulse')} />
+                    <Box component={XCircle} sx={{ width: 12, height: 12, animation: cancelling ? 'researchPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' : 'none', '@keyframes researchPulse': { '50%': { opacity: 0.5 } } }} />
                     {cancelling ? '取消中…' : '取消调研'}
                   </Button>
-                </div>
+                </Box>
               ) : null}
-            </div>
-            {cancelError ? <Typography component="p" role="alert" className="mt-2" sx={{ ...textSx.caption, ...textSx.danger }}>{cancelError}</Typography> : null}
-            <Box component="div" className="relative ml-1 pl-6" sx={{ borderLeft: '1px solid', borderColor: 'divider' }}>
+            </Box>
+            {cancelError ? <Typography component="p" role="alert" sx={{ mt: space.sm, ...textSx.caption, ...textSx.danger }}>{cancelError}</Typography> : null}
+            <Box component="div" sx={{ position: 'relative', ml: space.xs, pl: space.section, borderLeft: '1px solid', borderColor: 'divider' }}>
               {STEPS.map((step, idx) => {
                 const state = stepState(s, idx);
                 const displayStep = isBrief && step.key === 'write'
@@ -990,7 +988,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
           </Box>
         </Box>
         {!isBrief && !evidenceOnly && isTerminal && !['queued', 'reviewing'].includes(s.reviewRun?.executionStatus ?? s.review?.status ?? s.review?.phase ?? '') && !(s.reviewRun?.claims?.length || s.review?.claims?.length) ? <EvidenceLedger review={s.review} sources={s.sources} /> : null}
-      </div>
+      </Box>
 
       {/* 运行细节 —— 默认折叠；步骤状态已显示在研究过程内 */}
       <JobStatusDisclosure s={s} elapsed={elapsed} />
@@ -999,39 +997,37 @@ function StatusBody({ s }: { s: AiJobStatus }) {
         <Box
           component="div"
           role="alert"
-          className="p-4"
-          sx={{ borderTop: '1px solid', borderColor: 'divider', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main', ...textSx.body }}
+          sx={{ p: space.lg, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main', ...textSx.body }}
         >
             <Box component="strong" sx={textSx.medium}>{hasReaderReport ? '阶段性研究稿可用' : '已保留研究资料'}</Box>
-          {s.errorCode ? <Box component="span" className="ml-2">{friendlyMessage({ code: s.errorCode }, '调研在生成结果前中断')}</Box> : null}
-          <Typography component="p" className="mt-2" sx={{ ...textSx.caption, opacity: 0.9 }}>
+          {s.errorCode ? <Box component="span" sx={{ ml: space.sm }}>{friendlyMessage({ code: s.errorCode }, '调研在生成结果前中断')}</Box> : null}
+          <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, opacity: 0.9 }}>
             {hasReaderReport
               ? '任务在结果确认完成前达到时间上限；阶段性研究稿和已抓取资料已保留，可继续阅读、追问或重新运行。'
               : '任务在生成研究结论前结束；已生成资料快照，可先核对原文或基于这批资料追问。本轮没有可编辑研究稿。'}
           </Typography>
-          {s.errorCode ? <Typography component="p" className="mt-1" sx={{ ...textSx.caption, opacity: 0.75 }}>错误码：{s.errorCode}</Typography> : null}
+          {s.errorCode ? <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, opacity: 0.75 }}>错误码：{s.errorCode}</Typography> : null}
         </Box>
       ) : s.errorCode ? (
         <Box
           component="div"
           role="alert"
-          className="p-4"
-          sx={{ borderTop: '1px solid', borderColor: 'divider', bgcolor: 'var(--dr-color-danger-container)', color: 'error.main', ...textSx.body }}
+          sx={{ p: space.lg, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'var(--dr-color-danger-container)', color: 'error.main', ...textSx.body }}
         >
           <Box component="strong" sx={textSx.medium}>{friendlyMessage({ code: s.errorCode }, '调研失败')}</Box>
-          <Box component="span" className="ml-2" sx={{ ...textSx.caption, opacity: 0.8 }}>错误码：{s.errorCode}</Box>
-          {s.errorMessage ? <Typography component="p" className="mt-2" sx={{ ...textSx.caption, opacity: 0.9 }}>{s.errorMessage}</Typography> : null}
+          <Box component="span" sx={{ ml: space.sm, ...textSx.caption, opacity: 0.8 }}>错误码：{s.errorCode}</Box>
+          {s.errorMessage ? <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, opacity: 0.9 }}>{s.errorMessage}</Typography> : null}
           {s.errorDetails ? (
-            <Box component="details" className="mt-2 p-2" sx={{ ...surfaceSx, bgcolor: 'action.selected', ...textSx.caption, ...textSx.muted }}>
-              <Box component="summary" className="cursor-pointer" sx={{ ...textSx.medium, color: 'text.primary' }}>查看错误详情</Box>
-              <Box component="pre" className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words" sx={{ fontFamily: 'monospace' }}>{JSON.stringify(s.errorDetails, null, 2)}</Box>
+            <Box component="details" sx={{ mt: space.sm, p: space.sm, ...surfaceSx, bgcolor: 'action.selected', ...textSx.caption, ...textSx.muted }}>
+              <Box component="summary" sx={{ cursor: 'pointer', ...textSx.medium, color: 'text.primary' }}>查看错误详情</Box>
+              <Box component="pre" sx={{ mt: space.sm, maxHeight: 224, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontFamily: 'monospace' }}>{JSON.stringify(s.errorDetails, null, 2)}</Box>
             </Box>
           ) : null}
         </Box>
       ) : null}
 
       {isTerminal ? (
-        <Box component="div" className="flex flex-wrap items-center justify-between gap-3 p-4" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+        <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.md, p: space.lg, borderTop: '1px solid', borderColor: 'divider' }}>
           <Typography component="div" variant="body2">
             {evidenceOnly ? (
               <Box component="span" sx={textSx.warning}>已保留可核对资料快照；尚未生成研究结论。</Box>
@@ -1053,11 +1049,11 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               <Box component="span" sx={textSx.muted}>任务已撤回。</Box>
             )}
           </Typography>
-          <div className="flex flex-wrap gap-2">
+          <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm }}>
             <Button asChild variant="outline" size="sm">
               <Link href="/ai-research">重新调研</Link>
             </Button>
-          </div>
+          </Box>
         </Box>
       ) : null}
     </Paper>
@@ -1102,26 +1098,26 @@ function EvidencePanel({
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
       >
-          <Box component="span" className="flex min-w-0 items-center gap-2">
-            <Box component={Radar} className="size-4" sx={{ color: 'primary.main' }} />
+          <Box component="span" sx={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: space.sm }}>
+            <Box component={Radar} sx={{ width: 16, height: 16, color: 'primary.main' }} />
             <Typography component="span" sx={{ ...textSx.label, ...textSx.semibold }}>资料与证据</Typography>
           </Box>
-          <Box component="span" className="flex min-w-0 items-center gap-2" sx={{ ...textSx.caption, ...textSx.muted }}>
-          <span className="truncate">
+          <Box component="span" sx={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: space.sm, ...textSx.caption, ...textSx.muted }}>
+          <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             检索线索 {discoveredTotal} · 可引用证据 {capturedTotal}
             {capturedTotal > 0 ? ` · 独立域名 ${independentSourceCount}` : ''}
             {failed > 0 ? ` · ${failed} 条未取到正文` : ''}
-          </span>
-          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          </Box>
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </Box>
       </ButtonBase>
       {expanded ? (
-        <Box component="div" className="px-3 py-3" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
-          <Typography component="p" className="mb-3 px-1" sx={{ ...textSx.caption, ...textSx.muted }}>
+        <Box component="div" sx={{ px: space.md, py: space.md, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Typography component="p" sx={{ mb: space.md, px: space.xs, ...textSx.caption, ...textSx.muted }}>
             来源等级按域名、页面路径和来源类型推断；同一域名的页面只计为一个独立来源，不等同于结论已被证明。
           </Typography>
           {sources.length === 0 ? (
-            <Typography component="p" className="px-1 py-3" sx={{ ...textSx.caption, ...textSx.muted }}>
+            <Typography component="p" sx={{ px: space.xs, py: space.md, ...textSx.caption, ...textSx.muted }}>
               {running
                 ? reportLength === 'deep'
                   ? '正在并行展开多个研究分支；检索线索会先出现，只有取得可核对正文后才会计入可引用证据。'
@@ -1131,40 +1127,40 @@ function EvidencePanel({
                   : '本次任务没有保存可展示的来源。'}
             </Typography>
           ) : (
-            <ul className="grid gap-2 md:grid-cols-2">
+            <Box component="ul" sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }, gap: space.sm, m: 0, p: 0, listStyle: 'none' }}>
               {sources.map((source) => (
-                <Box component="li" key={source.id} className="min-w-0 px-3 py-2" sx={{ ...surfaceSx, borderRadius: 'var(--dr-radius-medium)' }}>
+                <Box component="li" key={source.id} sx={{ minWidth: 0, px: space.md, py: space.sm, ...surfaceSx, borderRadius: 'var(--dr-radius-medium)' }}>
                   {(() => {
                     const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
                     const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
                     const externalInstruction = hasExternalInstructionSignal(sourceText);
                     return (
                       <>
-                  <div className="flex items-start justify-between gap-2">
+                  <Box component="div" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.sm }}>
                     {source.href ? (
                       <MaterialLink
                         component={Link}
                         href={source.href}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="min-w-0"
+                        underline="none"
                         sx={{ minWidth: 0, color: 'text.primary', fontWeight: 'var(--dr-weight-medium)', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}
                       >
-                        <span className="line-clamp-2">{source.title}</span>
+                        <Box component="span" sx={{ display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>{source.title}</Box>
                       </MaterialLink>
                     ) : (
-                      <Box component="span" className="line-clamp-2 min-w-0" sx={{ ...textSx.medium, color: 'text.primary' }}>{source.title}</Box>
+                      <Box component="span" sx={{ minWidth: 0, display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, ...textSx.medium, color: 'text.primary' }}>{source.title}</Box>
                     )}
-                    {source.href ? <Box component={ExternalLink} className="mt-1 size-3 shrink-0" sx={{ color: 'text.secondary' }} /> : null}
-                  </div>
+                    {source.href ? <Box component={ExternalLink} sx={{ mt: space.xs, width: 12, height: 12, flexShrink: 0, color: 'text.secondary' }} /> : null}
+                  </Box>
                   {externalInstruction ? (
-                    <Box component="p" role="note" className="mt-2 flex items-start gap-2 px-2 py-2" sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-xs)', ...textSx.caption }}>
-                      <Box component={AlertTriangle} className="mt-1 size-3 shrink-0" sx={{ color: 'warning.main' }} aria-hidden="true" />
+                    <Box component="p" role="note" sx={{ mt: space.sm, display: 'flex', alignItems: 'flex-start', gap: space.sm, px: space.sm, py: space.sm, ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-xs)', ...textSx.caption }}>
+                      <Box component={AlertTriangle} sx={{ mt: space.xs, width: 12, height: 12, flexShrink: 0, color: 'warning.main' }} aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
                     </Box>
                   ) : null}
-                  {source.snippet ? <Typography component="p" className="mt-2 line-clamp-2" sx={{ ...textSx.caption, ...textSx.muted }}>{cleanEvidenceSnippet(source.snippet, 320)}</Typography> : null}
-                  <Box component="div" className="mt-2 flex items-center gap-2" sx={{ ...textSx.caption, ...textSx.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  {source.snippet ? <Typography component="p" sx={{ mt: space.sm, display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, ...textSx.caption, ...textSx.muted }}>{cleanEvidenceSnippet(source.snippet, 320)}</Typography> : null}
+                  <Box component="div" sx={{ mt: space.sm, display: 'flex', alignItems: 'center', gap: space.sm, ...textSx.caption, ...textSx.muted, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
                     <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
@@ -1178,7 +1174,7 @@ function EvidencePanel({
                   })()}
                 </Box>
               ))}
-            </ul>
+            </Box>
           )}
         </Box>
       ) : null}
@@ -1207,41 +1203,41 @@ function ResearchCheckpoint({
   const gaps = checkpointGaps(s, isTerminal);
   const canRestart = s.finalStatus === 'failed' || s.finalStatus === 'partial' || s.finalStatus === 'cancelled';
   return (
-    <Box component="section" className="mt-4 px-4 py-4" sx={{ border: '1px solid color-mix(in srgb, var(--dr-color-primary) 25%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-primary) 3.5%, var(--dr-color-surface))' }} aria-label="证据检查点">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+    <Box component="section" sx={{ mt: space.lg, px: space.lg, py: space.lg, border: '1px solid color-mix(in srgb, var(--dr-color-primary) 25%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-primary) 3.5%, var(--dr-color-surface))' }} aria-label="证据检查点">
+      <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.md }}>
+        <Box component="div" sx={{ minWidth: 0 }}>
+          <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
             <Typography component="h3" sx={{ ...textSx.label, ...textSx.semibold }}>证据检查点</Typography>
             <Box component="span" sx={{ ...pillSx, bgcolor: 'var(--dr-color-primary-container)', color: 'primary.main' }}>{isTerminal ? '本轮已结束' : '可随时纠偏'}</Box>
-          </div>
-          <Typography component="p" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
+          </Box>
+          <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }}>
             {isTerminal
               ? '下面把本轮已经收集的证据和仍缺的内容集中呈现，帮助你决定是否需要追问、修订或重新研究。'
               : s.reportLength === 'deep'
                 ? `任务会继续按启动时的范围执行；当前已保存 ${sourceCount} 条来源${failed > 0 ? `，其中 ${failed} 条获取失败` : ''}。深度研究会先展开多个角度，再补查证据缺口。`
                 : `任务会继续按启动时的范围执行；当前已记录 ${sourceCount} 条来源${failed > 0 ? `，其中 ${failed} 条获取失败` : ''}。你可以继续等待，也可以现在收敛范围。`}
           </Typography>
-          <Typography component="p" className="mt-1" sx={{ ...textSx.caption, ...textSx.muted }}>
+          <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }}>
             原始检索设置：{scopeSummary(s.brief?.scope)} · {s.sourcePolicy === 'only_user_sources' ? '仅使用已选资料' : '网页搜索 + 已选资料'} · {sourceProvenanceSummary(s)}
             {targetedEvidenceCount > 0 ? ` · 后续声明补证新增 ${targetedEvidenceCount} 条` : ''}
           </Typography>
-        </div>
-      </div>
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
-        <Box component="div" className="p-3" sx={{ ...surfaceSx, borderColor: 'color-mix(in srgb, var(--dr-color-outline) 70%, transparent)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 70%, transparent)', borderRadius: 'var(--dr-radius-medium)' }}>
+        </Box>
+      </Box>
+      <Box component="div" sx={{ mt: space.md, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }, gap: space.md }}>
+        <Box component="div" sx={{ p: space.md, ...surfaceSx, borderColor: 'color-mix(in srgb, var(--dr-color-outline) 70%, transparent)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 70%, transparent)', borderRadius: 'var(--dr-radius-medium)' }}>
             <Typography component="h4" sx={{ ...textSx.caption, ...textSx.semibold, color: 'text.primary' }}>已抓到的证据</Typography>
-          <Box component="ul" className="mt-2 space-y-2" sx={{ ...textSx.caption, ...textSx.muted }}>
-            {findings.map((finding) => <li key={finding} className="flex gap-2"><Box component="span" className="mt-2 size-1 shrink-0" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'primary.main' }} />{finding}</li>)}
+          <Box component="ul" sx={{ mt: space.sm, mb: 0, pl: 0, display: 'grid', gap: space.sm, listStyle: 'none', ...textSx.caption, ...textSx.muted }}>
+            {findings.map((finding) => <Box component="li" key={finding} sx={{ display: 'flex', gap: space.sm }}><Box component="span" sx={{ mt: space.sm, width: 4, height: 4, flexShrink: 0, borderRadius: 'var(--dr-radius-pill)', bgcolor: 'primary.main' }} />{finding}</Box>)}
           </Box>
         </Box>
-        <Box component="div" className="p-3" sx={{ ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-medium)' }}>
+        <Box component="div" sx={{ p: space.md, ...statusToneSx.warning, border: '1px solid', borderRadius: 'var(--dr-radius-medium)' }}>
           <Typography component="h4" sx={{ ...textSx.caption, ...textSx.semibold, color: 'text.primary' }}>还缺什么证据</Typography>
-          <Box component="ul" className="mt-2 space-y-2" sx={{ ...textSx.caption, ...textSx.muted }}>
-            {gaps.map((gap) => <li key={gap} className="flex gap-2"><Box component="span" className="mt-2 size-1 shrink-0" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'warning.main' }} />{gap}</li>)}
+          <Box component="ul" sx={{ mt: space.sm, mb: 0, pl: 0, display: 'grid', gap: space.sm, listStyle: 'none', ...textSx.caption, ...textSx.muted }}>
+            {gaps.map((gap) => <Box component="li" key={gap} sx={{ display: 'flex', gap: space.sm }}><Box component="span" sx={{ mt: space.sm, width: 4, height: 4, flexShrink: 0, borderRadius: 'var(--dr-radius-pill)', bgcolor: 'warning.main' }} />{gap}</Box>)}
           </Box>
         </Box>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      </Box>
+      <Box component="div" sx={{ mt: space.md, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
         {!isTerminal ? (
           <>
             <Typography component="span" sx={{ ...textSx.caption, ...textSx.muted }}>任务会按启动时的设置继续运行；离开页面不会停止。</Typography>
@@ -1266,7 +1262,7 @@ function ResearchCheckpoint({
         ) : (
           <MaterialLink component={Link} href="#research-chat" sx={{ ...textSx.caption, ...textSx.medium, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>继续追问这份研究</MaterialLink>
         )}
-      </div>
+      </Box>
     </Box>
   );
 }
@@ -1687,47 +1683,47 @@ function ReviewPanel({
         <DecisionCoverageMatrixView matrix={researchSufficiency.matrix} recommendation={researchSufficiency.recommendation} />
       ) : null}
       {researchSufficiency?.status === 'insufficient' ? (
-        <div className="mb-3 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
-          <p className="font-medium">资料范围还有缺口</p>
-          <p className="mt-1">
+        <Box component="div" sx={{ mb: space.md, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'var(--dr-color-warning-container)', px: space.md, py: space.sm, ...textSx.caption, color: 'warning.main' }}>
+          <Box component="p" sx={textSx.medium}>资料范围还有缺口</Box>
+          <Box component="p" sx={{ mt: space.xs }}>
             {sufficiencyGapSummary?.cellCount
               ? `当前还有 ${sufficiencyGapSummary.cellCount} 个方案 × 决策维度覆盖单元格待补证。`
               : '当前结果还有待补证的资料范围。'}
             {' '}如果要做完整比较，请补充这些资料。
-          </p>
+          </Box>
           {sufficiencyGapSummary && sufficiencyGapSummary.groups.length > 0 ? (
-            <details className="mt-2 rounded border border-[var(--dr-color-warning)] bg-background/35 px-3 py-2">
-              <summary className="cursor-pointer font-medium">按方案查看待补维度</summary>
-              <div className="mt-2 space-y-2 text-xs leading-5">
+            <Box component="details" sx={{ mt: space.sm, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-small)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 35%, transparent)', px: space.md, py: space.sm }}>
+              <Box component="summary" sx={{ cursor: 'pointer', ...textSx.medium }}>按方案查看待补维度</Box>
+              <Box component="div" sx={{ mt: space.sm, display: 'grid', gap: space.sm, ...textSx.caption }}>
                 {sufficiencyGapSummary.groups.map((group) => (
-                  <p key={group.option}>
-                    <span className="font-medium">{group.option}</span>
-                    <span className="ml-2">{group.dimensions.join('、')}</span>
-                  </p>
+                  <Box component="p" key={group.option}>
+                    <Box component="span" sx={textSx.medium}>{group.option}</Box>
+                    <Box component="span" sx={{ ml: space.sm }}>{group.dimensions.join('、')}</Box>
+                  </Box>
                 ))}
-              </div>
-            </details>
+              </Box>
+            </Box>
           ) : null}
           {sufficiencyGapSummary && sufficiencyGapSummary.otherGaps.length > 0 ? (
-            <details className="mt-2 rounded border border-[var(--dr-color-warning)] bg-background/35 px-3 py-2">
-              <summary className="cursor-pointer font-medium">查看其他缺口</summary>
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-5">
+            <Box component="details" sx={{ mt: space.sm, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-small)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 35%, transparent)', px: space.md, py: space.sm }}>
+              <Box component="summary" sx={{ cursor: 'pointer', ...textSx.medium }}>查看其他缺口</Box>
+              <Box component="ul" sx={{ mt: space.sm, mb: 0, pl: space.lg, display: 'grid', gap: space.xs, ...textSx.caption }}>
                 {sufficiencyGapSummary.otherGaps.map((gap) => <li key={gap}>{gap}</li>)}
-              </ul>
-            </details>
+              </Box>
+            </Box>
           ) : null}
-          <Link href="/ai-research" className="mt-1 inline-flex font-medium text-primary hover:underline">补充资料并重新研究</Link>
-        </div>
+          <MaterialLink component={Link} href="/ai-research" underline="none" sx={{ mt: space.xs, display: 'inline-flex', ...textSx.medium, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>补充资料并重新研究</MaterialLink>
+        </Box>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold">使用建议</h3>
-          <p className="text-xs text-muted-foreground">先看这份结果是否适合直接参考，需要时再查看依据。</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.sm }}>
+        <Box component="div">
+          <Typography component="h3" sx={{ ...textSx.body, ...textSx.semibold }}>使用建议</Typography>
+          <Typography component="p" sx={{ ...textSx.caption, ...textSx.muted }}>先看这份结果是否适合直接参考，需要时再查看依据。</Typography>
+        </Box>
+        <Box component="div" sx={{ display: 'flex', alignItems: 'center', gap: space.sm }}>
           {canReReview ? (
             <Button type="button" variant="default" size="sm" onClick={() => void reReview()} disabled={reReviewing}>
-              <RotateCw className={cn('size-3.5', reReviewing && 'animate-spin')} />
+              <Box component={RotateCw} sx={{ width: 14, height: 14, animation: reReviewing ? 'researchSpin 1s linear infinite' : 'none', '@keyframes researchSpin': { to: { transform: 'rotate(360deg)' } } }} />
               {reReviewing ? '整理中…' : '重新整理依据'}
             </Button>
           ) : pendingClaims.length > 0 ? (
@@ -1739,67 +1735,68 @@ function ReviewPanel({
               <Link href="/ai-research">补充资料并重新研究</Link>
             </Button>
           ) : null}
-        </div>
-      </div>
+        </Box>
+      </Box>
       {reviewStale ? (
-        <div className="mt-2 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
-          <p className="font-medium">研究内容已经变更，需要重新整理依据。</p>
-          <p className="mt-1">上一轮依据仍保留在历史记录中，但不能用于当前版本。</p>
-        </div>
+        <Box component="div" sx={{ mt: space.sm, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'var(--dr-color-warning-container)', px: space.md, py: space.sm, ...textSx.caption, color: 'warning.main' }}>
+          <Box component="p" sx={textSx.medium}>研究内容已经变更，需要重新整理依据。</Box>
+          <Box component="p" sx={{ mt: space.xs }}>上一轮依据仍保留在历史记录中，但不能用于当前版本。</Box>
+        </Box>
       ) : review ? (
         reviewQueued || reviewRunning ? (
-          <div className="mt-2 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs leading-5 text-muted-foreground">
-            <p className="font-medium text-foreground">结果正在整理</p>
-            <p className="mt-1">你可以继续阅读或追问；完成后这里会自动更新。</p>
-          </div>
+          <Box component="div" sx={{ mt: space.sm, border: '1px solid color-mix(in srgb, var(--dr-color-primary) 20%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-primary) 4%, transparent)', px: space.md, py: space.sm, ...textSx.caption, ...textSx.muted }}>
+            <Box component="p" sx={{ ...textSx.medium, color: 'text.primary' }}>结果正在整理</Box>
+            <Box component="p" sx={{ mt: space.xs }}>你可以继续阅读或追问；完成后这里会自动更新。</Box>
+          </Box>
         ) : reviewUnavailable ? (
-          <div className="mt-2 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
-            <p className="font-medium">暂时无法确认</p>
-            <p className="mt-1">这不代表结论错误；当前版本只是还没有得到完整的依据确认。</p>
-          </div>
+          <Box component="div" sx={{ mt: space.sm, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'var(--dr-color-warning-container)', px: space.md, py: space.sm, ...textSx.caption, color: 'warning.main' }}>
+            <Box component="p" sx={textSx.medium}>暂时无法确认</Box>
+            <Box component="p" sx={{ mt: space.xs }}>这不代表结论错误；当前版本只是还没有得到完整的依据确认。</Box>
+          </Box>
         ) : null
       ) : (
-        <p className="mt-2 text-xs text-muted-foreground">检查结果还没有生成；你可以先阅读研究稿，完成后这里会自动显示需要注意的结论。</p>
+        <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, ...textSx.muted }}>检查结果还没有生成；你可以先阅读研究稿，完成后这里会自动显示需要注意的结论。</Typography>
       )}
       {!reviewQueued && !reviewRunning && !reviewUnavailable && !reviewStale && reviewRun?.executionStatus === 'completed' ? (
-        <div className={cn(
-          'mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs',
-          publicationGate.status === 'blocked'
-            ? 'border-[var(--dr-color-danger)]/50 bg-[var(--dr-color-danger-container)]/30'
+        <Box component="div" sx={{
+          mt: space.md, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.sm,
+          border: '1px solid', borderRadius: 'var(--dr-radius-medium)', px: space.md, py: space.sm, ...textSx.caption,
+          ...(publicationGate.status === 'blocked'
+            ? { borderColor: 'color-mix(in srgb, var(--dr-color-danger) 50%, transparent)', bgcolor: 'color-mix(in srgb, var(--dr-color-danger-container) 30%, transparent)' }
             : pendingClaims.length > 0 || publicationGate.status !== 'clear'
-              ? 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)]'
-              : 'border-[var(--dr-color-success)]/50 bg-[var(--dr-color-success-container)]/30',
-        )} aria-label="结果摘要">
-          <div>
-            <span className="font-medium text-foreground">{displayLabel}</span>
-            <span className="ml-2 text-muted-foreground">{summary}</span>
-          </div>
-        </div>
+              ? { borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)' }
+              : { borderColor: 'color-mix(in srgb, var(--dr-color-success) 50%, transparent)', bgcolor: 'color-mix(in srgb, var(--dr-color-success-container) 30%, transparent)' }),
+        }} aria-label="结果摘要">
+          <Box component="div">
+            <Box component="span" sx={{ ...textSx.medium, color: 'text.primary' }}>{displayLabel}</Box>
+            <Box component="span" sx={{ ml: space.sm, ...textSx.muted }}>{summary}</Box>
+          </Box>
+        </Box>
       ) : null}
       {reReviewError ? (
-        <p role="alert" className="mt-2 text-xs text-destructive">{reReviewError}</p>
+        <Typography component="p" role="alert" sx={{ mt: space.sm, ...textSx.caption, ...textSx.danger }}>{reReviewError}</Typography>
       ) : null}
       {decisionError ? (
-        <p role="alert" className="mt-2 text-xs text-destructive">{decisionError}</p>
+        <Typography component="p" role="alert" sx={{ mt: space.sm, ...textSx.caption, ...textSx.danger }}>{decisionError}</Typography>
       ) : null}
       {evidenceTaskError ? (
-        <p role="alert" className="mt-2 text-xs text-destructive">{evidenceTaskError}</p>
+        <Typography component="p" role="alert" sx={{ mt: space.sm, ...textSx.caption, ...textSx.danger }}>{evidenceTaskError}</Typography>
       ) : null}
-      <details id="quality-check-evidence" className="mt-3 rounded border border-border/70 bg-muted/20 p-2 text-xs">
-        <summary className="cursor-pointer font-medium text-foreground">
+      <Box component="details" id="quality-check-evidence" sx={{ mt: space.md, border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-small)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 20%, transparent)', p: space.sm, ...textSx.caption }}>
+        <Box component="summary" sx={{ cursor: 'pointer', ...textSx.medium, color: 'text.primary' }}>
           {pendingClaims.length > 0 ? `查看并处理 ${pendingClaims.length} 条待确认结论` : '查看结论依据'}
-        </summary>
-        <div className="mt-2 space-y-2 rounded border border-border/70 bg-background/50 p-3 text-xs leading-5 text-muted-foreground">
-          <div className="flex flex-wrap gap-x-3 gap-y-1">
+        </Box>
+        <Box component="div" sx={{ mt: space.sm, display: 'grid', gap: space.sm, border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-small)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 50%, transparent)', p: space.md, ...textSx.caption, ...textSx.muted }}>
+          <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', columnGap: space.lg, rowGap: space.xs }}>
             <span>关键结论 {factualClaimCount}</span>
             <span>有直接依据 {claimCounts.supported}</span>
             <span>需要确认 {claimCounts.unverified}</span>
             <span>来源不一致 {claimCounts.contradicted}</span>
-          </div>
+          </Box>
           {citationPendingCount > 0 ? <p>有 {citationPendingCount} 条引用关系还没有完成确认。</p> : null}
           {evidenceBindingRepairedCount > 0 ? <p>已从保存的资料中找到 {evidenceBindingRepairedCount} 条可对照摘录；这不等同于结论已经成立。</p> : null}
           {claims.length > 0 ? (
-            <div className="divide-y divide-border/70 rounded border border-border/70 bg-background">
+            <Box component="div" sx={{ '& > * + *': { borderTop: '1px solid', borderColor: 'divider' }, border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-small)', bgcolor: 'background.paper' }}>
               {claims.map((claim, index) => (
                 <ReviewClaimCard
                   key={claim.claim_id ?? `${claim.claim ?? 'claim'}-${index}`}
@@ -1817,13 +1814,13 @@ function ReviewPanel({
                   onEvidenceTask={requestEvidenceTask}
                 />
               ))}
-            </div>
+            </Box>
           ) : <p>本轮没有保存逐条声明；请直接查看研究资料中的原文。</p>}
           {pendingClaims.length > 0 ? (
-            <p className="border-t border-border/70 pt-2">如果修改正文，相关结果会随当前版本重新检查。</p>
+            <Box component="p" sx={{ borderTop: '1px solid', borderColor: 'divider', pt: space.sm }}>如果修改正文，相关结果会随当前版本重新检查。</Box>
           ) : null}
-        </div>
-      </details>
+        </Box>
+      </Box>
       <AppDialog
         open={Boolean(decisionRequest)}
         onClose={() => { setDecisionRequest(null); setDecisionReason(''); }}
@@ -1842,12 +1839,12 @@ function ReviewPanel({
           </>
         )}
       >
-          <div className="space-y-3">
-            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-foreground">
+          <Box component="div" sx={{ display: 'grid', gap: space.md }}>
+            <Box component="div" sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 30%, transparent)', px: space.md, py: space.sm, ...textSx.caption, color: 'text.primary' }}>
               {decisionRequest?.claim.claim}
-            </div>
-            <label className="grid gap-2 text-xs font-medium" htmlFor="review-decision-reason">
-              处理依据 <span className="font-normal text-muted-foreground">（必填）</span>
+            </Box>
+            <Box component="label" sx={{ display: 'grid', gap: space.sm, ...textSx.caption, ...textSx.medium }} htmlFor="review-decision-reason">
+              处理依据 <Box component="span" sx={{ fontWeight: 'var(--dr-weight-regular)', ...textSx.muted }}>（必填）</Box>
               <Textarea
                 id="review-decision-reason"
                 value={decisionReason}
@@ -1858,8 +1855,8 @@ function ReviewPanel({
                 rows={4}
                 sx={{ '& textarea': { resize: 'vertical' } }}
               />
-            </label>
-          </div>
+            </Box>
+          </Box>
       </AppDialog>
     </section>
   );
@@ -1875,55 +1872,54 @@ function DecisionCoverageMatrixView({
   const evidenceCells = matrix.cells.filter((cell) => cell.state === 'evidence').length;
   const cellMap = new Map(matrix.cells.map((cell) => [`${cell.option}:${cell.dimension}`, cell]));
   const stateLabel = { evidence: '有证据', not_found: '未找到', needs_test: '待实测' } as const;
-  const stateClass = {
-    evidence: 'border-[var(--dr-color-success)]/50 bg-[var(--dr-color-success-container)]/35 text-[var(--dr-color-success)]',
-    not_found: 'border-border bg-muted/35 text-muted-foreground',
-    needs_test: 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]',
+  const stateSx = {
+    evidence: { borderColor: 'color-mix(in srgb, var(--dr-color-success) 50%, transparent)', bgcolor: 'color-mix(in srgb, var(--dr-color-success-container) 35%, transparent)', color: 'success.main' },
+    not_found: { borderColor: 'divider', bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 35%, transparent)', color: 'text.secondary' },
+    needs_test: { borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' },
   } as const;
   return (
-    <details open={!matrix.complete} className="mb-3 rounded-lg border border-border/80 bg-background">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs [&::-webkit-details-marker]:hidden">
-        <span className="font-medium">问题覆盖矩阵</span>
-        <span className={cn('text-xs', matrix.complete ? 'text-[var(--dr-color-success)]' : 'text-[var(--dr-color-warning)]')}>
+    <Box component="details" open={!matrix.complete} sx={{ mb: space.md, border: '1px solid', borderColor: 'color-mix(in srgb, var(--dr-color-outline) 80%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'background.paper' }}>
+      <Box component="summary" sx={{ display: 'flex', cursor: 'pointer', listStyle: 'none', alignItems: 'center', justifyContent: 'space-between', gap: space.md, px: space.md, py: space.sm, ...textSx.caption, '&::-webkit-details-marker': { display: 'none' } }}>
+        <Box component="span" sx={textSx.medium}>问题覆盖矩阵</Box>
+        <Box component="span" sx={{ ...textSx.caption, color: matrix.complete ? 'success.main' : 'warning.main' }}>
           {evidenceCells}/{matrix.cells.length} 格有证据
-        </span>
-      </summary>
-      <div className="border-t border-border/70 px-3 pb-3 pt-2">
-        <p className="mb-2 text-xs leading-5 text-muted-foreground">
+        </Box>
+      </Box>
+      <Box component="div" sx={{ borderTop: '1px solid', borderColor: 'divider', px: space.md, pb: space.md, pt: space.sm }}>
+        <Typography component="p" sx={{ mb: space.sm, ...textSx.caption, ...textSx.muted }}>
           这是研究完成门禁：每个方案 × 决策维度必须逐格处理；“待实测”不等于“没有问题”。
-        </p>
-        <div className="overflow-x-auto rounded border border-border/70">
-          <table className="min-w-[760px] w-full border-collapse text-xs">
-            <thead className="bg-muted/35 text-left text-muted-foreground">
-              <tr><th className="border-b border-border/70 px-2 py-2 font-medium">方案</th>{matrix.dimensions.map((dimension) => <th key={dimension} className="border-b border-border/70 px-2 py-2 font-medium">{dimension}</th>)}</tr>
-            </thead>
-            <tbody>
+        </Typography>
+        <Box component="div" sx={{ overflowX: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-small)' }}>
+          <Box component="table" sx={{ minWidth: 760, width: '100%', borderCollapse: 'collapse', ...textSx.caption }}>
+            <Box component="thead" sx={{ bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 35%, transparent)', color: 'text.secondary', textAlign: 'left' }}>
+              <tr><Box component="th" sx={{ borderBottom: '1px solid', borderColor: 'divider', px: space.sm, py: space.sm, ...textSx.medium }}>方案</Box>{matrix.dimensions.map((dimension) => <Box component="th" key={dimension} sx={{ borderBottom: '1px solid', borderColor: 'divider', px: space.sm, py: space.sm, ...textSx.medium }}>{dimension}</Box>)}</tr>
+            </Box>
+            <Box component="tbody">
               {matrix.options.map((option) => (
                 <tr key={option}>
-                  <th className="border-b border-border/50 px-2 py-2 text-left font-medium text-foreground">{option}</th>
+                  <Box component="th" sx={{ borderBottom: '1px solid color-mix(in srgb, var(--dr-color-outline) 50%, transparent)', px: space.sm, py: space.sm, textAlign: 'left', ...textSx.medium, color: 'text.primary' }}>{option}</Box>
                   {matrix.dimensions.map((dimension) => {
                     const cell = cellMap.get(`${option}:${dimension}`);
                     const state = cell?.state ?? 'not_found';
                     return (
-                      <td key={dimension} className="border-b border-border/50 px-2 py-2">
-                        <span
-                          className={cn('inline-flex rounded border px-2 py-1', stateClass[state])}
+                      <Box component="td" key={dimension} sx={{ borderBottom: '1px solid color-mix(in srgb, var(--dr-color-outline) 50%, transparent)', px: space.sm, py: space.sm }}>
+                        <Box component="span" sx={{ display: 'inline-flex', border: '1px solid', borderRadius: 'var(--dr-radius-small)', px: space.sm, py: space.xs, ...textSx.caption, ...stateSx[state] }}
                           title={cell?.evidenceGap ?? undefined}
                         >
                           {stateLabel[state]}{cell?.evidenceCount ? ` · ${cell.evidenceCount}` : ''}
-                        </span>
-                        {cell?.evidenceGap ? <p className="mt-1 max-w-40 text-xs leading-5 text-[var(--dr-color-warning)]">{cell.evidenceGap}</p> : null}
-                      </td>
+                        </Box>
+                        {cell?.evidenceGap ? <Typography component="p" sx={{ mt: space.xs, maxWidth: 160, ...textSx.caption, color: 'warning.main' }}>{cell.evidenceGap}</Typography> : null}
+                      </Box>
                     );
                   })}
                 </tr>
               ))}
-            </tbody>
-          </table>
-        </div>
-        {recommendation.status === 'incomplete' ? <p className="mt-2 text-xs text-[var(--dr-color-warning)]">结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</p> : null}
-      </div>
-    </details>
+            </Box>
+          </Box>
+        </Box>
+        {recommendation.status === 'incomplete' ? <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, color: 'warning.main' }}>结构化推荐尚不完整：缺少 {recommendation.missingFields.join('、')}。</Typography> : null}
+      </Box>
+    </Box>
   );
 }
 
@@ -1976,11 +1972,11 @@ function ReviewClaimCard({
       : hasReconciledExcerpt || hasCandidateExcerpt
         ? '有资料可对照'
         : '还缺直接依据';
-  const statusClass = status === '有直接依据' || status === '已建立引用'
-    ? 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]'
+  const statusSx = status === '有直接依据' || status === '已建立引用'
+    ? { bgcolor: 'var(--dr-color-success-container)', color: 'success.main' }
     : status === '来源不一致'
-      ? 'bg-[var(--dr-color-danger-container)] text-[var(--dr-color-danger)]'
-      : 'bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]';
+      ? { bgcolor: 'var(--dr-color-danger-container)', color: 'error.main' }
+      : { bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' };
   const needsAction = claimIsFactual(claim) && !reviewUnavailable && (judgmentStatus !== 'settled' || status !== '有直接依据');
   // The action is derived from this claim's own evidence relation. A global
   // "there are sources" flag is not enough: unrelated sources should not
@@ -2003,41 +1999,41 @@ function ReviewClaimCard({
     : null;
 
   return (
-    <article className="px-3 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <h5 className="min-w-0 flex-1 text-xs font-semibold leading-5 text-foreground">{claimText || '未命名声明'}</h5>
-        <span className={cn('shrink-0 rounded-full px-2 py-1 text-xs font-medium', statusClass)}>{status}</span>
-      </div>
-      {claim.reason ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，但本轮没有完成确认。' : claim.evidence?.resolver === 'captured-source-reconciler' ? '找到可对照资料，但还不能确认它支持这句话。' : claim.reason.includes('审核结果没有提供') ? '当前没有能直接对照的资料。' : claim.reason}</p> : null}
+    <Box component="article" sx={{ px: space.md, py: space.md }}>
+      <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.sm }}>
+        <Typography component="h5" sx={{ minWidth: 0, flex: 1, ...textSx.caption, ...textSx.semibold, color: 'text.primary' }}>{claimText || '未命名声明'}</Typography>
+        <Box component="span" sx={{ flexShrink: 0, display: 'inline-flex', borderRadius: 'var(--dr-radius-pill)', px: space.sm, py: space.xs, ...textSx.caption, ...textSx.medium, ...statusSx }}>{status}</Box>
+      </Box>
+      {claim.reason ? <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, ...textSx.muted }}>{citationRelationship && reviewUnavailable ? '已建立来源回链，但本轮没有完成确认。' : claim.evidence?.resolver === 'captured-source-reconciler' ? '找到可对照资料，但还不能确认它支持这句话。' : claim.reason.includes('审核结果没有提供') ? '当前没有能直接对照的资料。' : claim.reason}</Typography> : null}
       {judgmentStatus !== 'settled' ? (
-        <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+        <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, color: 'warning.main' }}>
           {judgmentStatus === 'disputed'
             ? '两次独立核对给出了不同判断，系统不会替你判定真伪。'
             : '这条声明已经被识别，但还没有形成可用的最终判断。'}
-        </p>
+        </Typography>
       ) : null}
-      <div className="mt-2 rounded border border-border/70 bg-background/70 px-3 py-2 text-xs leading-5">
-        <span className="font-medium text-foreground">可对照的原文：</span>
-        <span className="text-muted-foreground">{claim.evidence?.excerpt || '没有保存可核对摘录'}</span>
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      <Box component="div" sx={{ mt: space.sm, border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-small)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 70%, transparent)', px: space.md, py: space.sm, ...textSx.caption }}>
+        <Box component="span" sx={{ ...textSx.medium, color: 'text.primary' }}>可对照的原文：</Box>
+        <Box component="span" sx={textSx.muted}>{claim.evidence?.excerpt || '没有保存可核对摘录'}</Box>
+      </Box>
+      <Box component="div" sx={{ mt: space.sm, display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: space.lg, rowGap: space.xs, ...textSx.caption }}>
         {claim.evidence?.source_url ? (
-          <a className="inline-flex items-center gap-1 text-primary hover:underline" href={claim.evidence.source_url} target="_blank" rel="noreferrer noopener">
-            打开来源 <ExternalLink className="size-3" />
-          </a>
-        ) : <span className="text-muted-foreground">没有可打开的来源</span>}
-        {claim.evidence?.observed_at ? <span className="text-muted-foreground">观察时间：{claim.evidence.observed_at}</span> : null}
+          <MaterialLink component="a" href={claim.evidence.source_url} target="_blank" rel="noreferrer noopener" underline="none" sx={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>
+            打开来源 <ExternalLink size={12} />
+          </MaterialLink>
+        ) : <Box component="span" sx={textSx.muted}>没有可打开的来源</Box>}
+        {claim.evidence?.observed_at ? <Box component="span" sx={textSx.muted}>观察时间：{claim.evidence.observed_at}</Box> : null}
         {claim.evidence?.source_type ? (
-          <span className="text-muted-foreground">
+          <Box component="span" sx={textSx.muted}>
             来源类型：{classifySourceProvenance({ href: claim.evidence.source_url, type: claim.evidence.source_type }).label}
-          </span>
+          </Box>
         ) : null}
-        {claim.evidence?.published_at ? <span className="text-muted-foreground">发布时间：{claim.evidence.published_at}</span> : null}
-        {claim.evidence?.evidence_strength && claim.evidence.evidence_strength !== 'unknown' ? <span className="text-muted-foreground">证据强度：{claim.evidence.evidence_strength}</span> : null}
-      </div>
-      {claim.evidence?.counterexamples?.length ? <p className="mt-2 text-xs leading-5 text-[var(--dr-color-warning)]">反例/限制：{claim.evidence.counterexamples.join('；')}</p> : null}
+        {claim.evidence?.published_at ? <Box component="span" sx={textSx.muted}>发布时间：{claim.evidence.published_at}</Box> : null}
+        {claim.evidence?.evidence_strength && claim.evidence.evidence_strength !== 'unknown' ? <Box component="span" sx={textSx.muted}>证据强度：{claim.evidence.evidence_strength}</Box> : null}
+      </Box>
+      {claim.evidence?.counterexamples?.length ? <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, color: 'warning.main' }}>反例/限制：{claim.evidence.counterexamples.join('；')}</Typography> : null}
       {needsAction ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Box component="div" sx={{ mt: space.md, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
           {nextAction === 'reverify_current_sources' && canRequestVerification ? (
             <Button type="button" size="xs" variant="outline" onClick={() => onDecision?.(claim, 'request_verification')} disabled={decisionBusy}>
               {decisionBusy ? '排队中…' : '重新核对'}
@@ -2055,7 +2051,7 @@ function ReviewClaimCard({
           ) : null}
           {editHref ? (
             <Button asChild type="button" size="xs" variant="ghost">
-              <Link href={editHref}><PenLine className="size-3" />定位正文</Link>
+              <Link href={editHref}><PenLine size={12} />定位正文</Link>
             </Button>
           ) : null}
           {canAcceptUncertainty ? (
@@ -2064,18 +2060,18 @@ function ReviewClaimCard({
             </Button>
           ) : null}
           {nextAction === 'edit_claim' ? (
-            <span className="text-xs text-[var(--dr-color-danger)]">来源不一致；请修改表述或删除后重新检查</span>
+            <Typography component="span" sx={{ ...textSx.caption, ...textSx.danger }}>来源不一致；请修改表述或删除后重新检查</Typography>
           ) : risk === 'high' ? (
-            <span className="text-xs text-[var(--dr-color-danger)]">高风险项必须修改或补足证据</span>
+            <Typography component="span" sx={{ ...textSx.caption, ...textSx.danger }}>高风险项必须修改或补足证据</Typography>
           ) : status === '来源不一致' ? (
-            <span className="text-xs text-[var(--dr-color-danger)]">来源不一致，不能直接接受；请修改表述或删除</span>
+            <Typography component="span" sx={{ ...textSx.caption, ...textSx.danger }}>来源不一致，不能直接接受；请修改表述或删除</Typography>
           ) : (
-            <span className="text-xs text-muted-foreground">修改正文后需要重新确认</span>
+            <Typography component="span" sx={{ ...textSx.caption, ...textSx.muted }}>修改正文后需要重新确认</Typography>
           )}
-        </div>
+        </Box>
       ) : null}
       {status === '有直接依据' && !reviewUnavailable && onChallenge ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Box component="div" sx={{ mt: space.md, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
           <Button
             type="button"
             size="xs"
@@ -2085,11 +2081,11 @@ function ReviewClaimCard({
           >
             {decisionBusy ? '排队中…' : '证据不匹配？重新核对'}
           </Button>
-          <span className="text-xs text-muted-foreground">如果这条依据不对，可以要求重新确认。</span>
-        </div>
+          <Typography component="span" sx={{ ...textSx.caption, ...textSx.muted }}>如果这条依据不对，可以要求重新确认。</Typography>
+        </Box>
       ) : null}
       {evidenceTask ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, ...textSx.muted }}>
           {evidenceTask.status === 'queued' || evidenceTask.status === 'researching'
             ? '正在针对这条声明寻找新的直接来源；原研究稿暂不改变。'
             : evidenceTask.status === 'evidence_ready' || evidenceTask.status === 'review_queued'
@@ -2097,9 +2093,9 @@ function ReviewClaimCard({
               : evidenceTask.status === 'completed'
                 ? '定向补证和新一轮依据整理已完成，请查看更新后的证据关系。'
                 : '定向补证未完成，原研究稿没有改变。'}
-        </p>
+        </Typography>
       ) : null}
-    </article>
+    </Box>
   );
 }
 
@@ -2119,108 +2115,108 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
     ? reviewUnavailable ? '报告引用关系' : '结论与证据账本'
     : '按来源核查';
   return (
-    <section className="mt-5 overflow-hidden rounded-lg border border-primary/20 bg-primary/[0.025]" aria-label={ledgerTitle}>
-      <div className="border-b border-primary/10 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-semibold">{ledgerTitle}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
+    <Box component="section" sx={{ mt: space.xl, overflow: 'hidden', border: '1px solid color-mix(in srgb, var(--dr-color-primary) 20%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-primary) 2.5%, transparent)' }} aria-label={ledgerTitle}>
+      <Box component="div" sx={{ borderBottom: '1px solid color-mix(in srgb, var(--dr-color-primary) 10%, transparent)', px: space.lg, py: space.md }}>
+        <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.sm }}>
+          <Box component="div">
+            <Typography component="h3" sx={{ ...textSx.body, ...textSx.semibold }}>{ledgerTitle}</Typography>
+          <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }}>
               {claims.length > 0 && reviewUnavailable
                 ? '这里记录报告与来源的对应关系；本轮确认未完成，因此不把任何一条标记为已支持或存在冲突。'
                 : claims.length > 0
                 ? '逐条查看报告判断、保存的来源摘录和依据状态；有来源地址不代表结论已被支持。'
                 : '本轮没有建立“结论—来源”对应关系；下面只列出可供人工核查的已抓取正文，不把来源本身当作已支持结论。'}
-            </p>
-          </div>
+          </Typography>
+          </Box>
           {claims.length > 0 ? (
             reviewUnavailable ? (
-              <span className="rounded-full border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-1 text-xs text-[var(--dr-color-warning)]">
+              <Box component="span" sx={{ display: 'inline-flex', borderRadius: 'var(--dr-radius-pill)', border: '1px solid', borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)', px: space.sm, py: space.xs, ...textSx.caption, color: 'warning.main' }}>
                 {citationPending > 0
                   ? `已保留 ${citationPending} 条引用关系`
                   : factualClaimCount > 0
                     ? `${factualClaimCount} 条事实声明待核对`
                     : '语义核验未完成'}
-              </span>
+              </Box>
             ) : (
-              <div className="flex gap-2 text-xs tabular-nums">
-                <span className="rounded-full bg-[var(--dr-color-success-container)] px-2 py-1 text-[var(--dr-color-success)]">已支持 {counts.supported}</span>
-                <span className="rounded-full bg-[var(--dr-color-warning-container)] px-2 py-1 text-[var(--dr-color-warning)]">需要确认 {counts.unverified}</span>
-                <span className="rounded-full bg-[var(--dr-color-danger-container)] px-2 py-1 text-[var(--dr-color-danger)]">冲突 {counts.contradicted}</span>
-              </div>
+              <Box component="div" sx={{ display: 'flex', gap: space.sm, ...textSx.caption, fontVariantNumeric: 'tabular-nums' }}>
+                <Box component="span" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'var(--dr-color-success-container)', px: space.sm, py: space.xs, color: 'success.main' }}>已支持 {counts.supported}</Box>
+                <Box component="span" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'var(--dr-color-warning-container)', px: space.sm, py: space.xs, color: 'warning.main' }}>需要确认 {counts.unverified}</Box>
+                <Box component="span" sx={{ borderRadius: 'var(--dr-radius-pill)', bgcolor: 'var(--dr-color-danger-container)', px: space.sm, py: space.xs, color: 'error.main' }}>冲突 {counts.contradicted}</Box>
+              </Box>
             )
           ) : null}
-        </div>
-      </div>
+        </Box>
+      </Box>
       {claims.length === 0 ? (
-        <div className="px-4 py-3">
-          <p className="text-xs leading-5 text-muted-foreground">
+        <Box component="div" sx={{ px: space.lg, py: space.md }}>
+          <Typography component="p" sx={{ ...textSx.caption, ...textSx.muted }}>
             这通常表示依据整理超时、不可用，或历史任务没有保存逐条结果。请优先核对报告中的关键判断；“没有记录”不等于所有结论都已被证明。
-          </p>
+          </Typography>
           {inspectableSources.length > 0 ? (
-            <ul className="mt-3 grid gap-2 md:grid-cols-2" aria-label="可人工核查的来源">
+            <Box component="ul" sx={{ mt: space.md, mb: 0, pl: 0, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }, gap: space.sm, listStyle: 'none' }} aria-label="可人工核查的来源">
               {inspectableSources.map((source) => (
-                <li key={source.id} className="min-w-0 rounded-lg border border-border/70 bg-background/70 px-3 py-2">
+                <Box component="li" key={source.id} sx={{ minWidth: 0, border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 70%, transparent)', px: space.md, py: space.sm }}>
                   {(() => {
                     const provenance = classifySourceProvenance({ href: source.href, type: source.type, title: source.title });
                     const sourceText = [source.title, source.snippet].filter(Boolean).join('\n');
                     const externalInstruction = hasExternalInstructionSignal(sourceText);
                     return (
                       <>
-                  <div className="flex items-start justify-between gap-2">
+                  <Box component="div" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.sm }}>
                     {source.href ? (
-                      <a className="min-w-0 text-xs font-medium text-foreground hover:text-primary hover:underline" href={source.href} target="_blank" rel="noreferrer noopener">
-                        <span className="line-clamp-2">{source.title}</span>
-                      </a>
+                      <MaterialLink component="a" href={source.href} target="_blank" rel="noreferrer noopener" underline="none" sx={{ minWidth: 0, ...textSx.caption, ...textSx.medium, color: 'text.primary', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}>
+                        <Box component="span" sx={{ display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }}>{source.title}</Box>
+                      </MaterialLink>
                     ) : (
-                      <span className="line-clamp-2 min-w-0 text-xs font-medium text-foreground">{source.title}</span>
+                      <Box component="span" sx={{ minWidth: 0, display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, ...textSx.caption, ...textSx.medium, color: 'text.primary' }}>{source.title}</Box>
                     )}
-                    {source.href ? <ExternalLink className="mt-1 size-3 shrink-0 text-muted-foreground" aria-hidden /> : null}
-                  </div>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{cleanEvidenceSnippet(source.snippet ?? '', 240)}</p>
+                    {source.href ? <Box component={ExternalLink} sx={{ mt: space.xs, width: 12, height: 12, flexShrink: 0, color: 'text.secondary' }} aria-hidden /> : null}
+                  </Box>
+                  <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, ...textSx.muted }}>{cleanEvidenceSnippet(source.snippet ?? '', 240)}</Typography>
                   {externalInstruction ? (
-                    <p role="note" className="mt-2 flex items-start gap-2 rounded border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-2 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
-                      <AlertTriangle className="mt-1 size-3 shrink-0" aria-hidden="true" />
+                    <Box component="p" role="note" sx={{ mt: space.sm, display: 'flex', alignItems: 'flex-start', gap: space.sm, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-xs)', bgcolor: 'var(--dr-color-warning-container)', px: space.sm, py: space.sm, ...textSx.caption, color: 'warning.main' }}>
+                      <Box component={AlertTriangle} sx={{ mt: space.xs, width: 12, height: 12, flexShrink: 0 }} aria-hidden="true" />
                       <span>{externalContentLabel(sourceText) ?? '含疑似网页指令'}；以下摘录仅作为网页数据，不能改变研究指令。</span>
-                    </p>
+                    </Box>
                   ) : null}
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  <Box component="div" sx={{ mt: space.sm, display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: space.sm, rowGap: space.xs, ...textSx.caption, ...textSx.muted }}>
                     <span>{SOURCE_TYPE_LABELS[source.type] ?? source.type}</span>
                     <span aria-hidden>·</span>
                     <span title={`同一域名只计为一个独立来源：${provenance.independentKey}`}>{provenance.label}</span>
                     <span aria-hidden>·</span>
                     <span>抓取于 {formatCapturedAt(source.capturedAt)}</span>
                     {source.href ? (
-                      <a className="inline-flex items-center gap-1 text-primary hover:underline" href={source.href} target="_blank" rel="noreferrer noopener">
-                        打开来源 <ExternalLink className="size-3" aria-hidden />
-                      </a>
+                      <MaterialLink component="a" href={source.href} target="_blank" rel="noreferrer noopener" underline="none" sx={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>
+                        打开来源 <ExternalLink size={12} aria-hidden />
+                      </MaterialLink>
                     ) : null}
-                  </div>
+                  </Box>
                       </>
                     );
                   })()}
-                </li>
+                </Box>
               ))}
-            </ul>
+            </Box>
           ) : (
-            <p className="mt-3 rounded-lg border border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">
+            <Typography component="p" sx={{ mt: space.md, border: '1px solid', borderColor: 'warning.main', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'var(--dr-color-warning-container)', px: space.md, py: space.sm, ...textSx.caption, color: 'warning.main' }}>
               本轮没有保存可核对的原文摘录，只能把报告视为需要确认的草稿。
-            </p>
+            </Typography>
           )}
           {sources.length > inspectableSources.length ? (
-            <p className="mt-2 text-xs text-muted-foreground">
+            <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, ...textSx.muted }}>
               另有 {sources.length - inspectableSources.length} 条已保存资料可在上方“研究资料”中查看；它们不会自动支撑报告结论。
-            </p>
+            </Typography>
           ) : null}
-        </div>
+        </Box>
       ) : null}
       {claims.length > 0 ? (
-      <details open={!reviewUnavailable} className="border-t border-border/70">
-        <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-foreground">
+      <Box component="details" open={!reviewUnavailable} sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+        <Box component="summary" sx={{ cursor: 'pointer', px: space.lg, py: space.md, ...textSx.caption, ...textSx.medium, color: 'text.primary' }}>
           {reviewUnavailable
             ? `查看资料关系明细 · ${citationCount || claims.length} 条（完成后显示结论关系）`
             : `查看逐条依据 · ${claims.length} 条`}
-        </summary>
-      <div className="divide-y divide-border/70">
+        </Box>
+      <Box component="div" sx={{ '& > * + *': { borderTop: '1px solid', borderColor: 'divider' } }}>
         {claims.map((claim, index) => {
           const citationRelationship = claimIsCitationRelationship(claim);
             const nonFactualDisposition = !claimIsFactual(claim) && !citationRelationship;
@@ -2233,54 +2229,54 @@ function EvidenceLedger({ review, sources }: { review: ReviewDetails | null; sou
             : claimDisplayStatus(claim) === 'supported'
             ? '已支持'
             : claimDisplayStatus(claim) === 'contradicted' ? '存在冲突' : '需要确认';
-          const statusClass = status === '已支持' || status === '已建立引用'
-            ? 'bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]'
-            : status === '存在冲突' ? 'bg-[var(--dr-color-danger-container)] text-[var(--dr-color-danger)]'
-              : status === '非结论内容' ? 'bg-muted text-muted-foreground'
-              : 'bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]';
+          const claimStatusSx = status === '已支持' || status === '已建立引用'
+            ? { bgcolor: 'var(--dr-color-success-container)', color: 'success.main' }
+            : status === '存在冲突' ? { bgcolor: 'var(--dr-color-danger-container)', color: 'error.main' }
+              : status === '非结论内容' ? { bgcolor: 'action.selected', color: 'text.secondary' }
+              : { bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' };
           return (
-            <article key={`${claim.claim ?? 'claim'}-${index}`} className="px-4 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <h4 className="min-w-0 flex-1 text-sm font-medium">{claim.claim || '未命名声明'}</h4>
-                <span className={cn('shrink-0 rounded-full px-2 py-1 text-xs font-medium', statusClass)}>{status}</span>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span className="rounded-full border border-border px-2 py-1">{claimKindLabel(claim)}</span>
-                <span>{claimKindDescription(claim)}</span>
-              </div>
-              {claim.reason ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{citationRelationship && reviewUnavailable ? '已建立来源回链，尚未完成语义支持判断。' : claim.reason}</p> : null}
-              <div className="mt-2 rounded-lg border border-border/70 bg-background/70 px-3 py-2 text-xs leading-5">
-                <span className="font-medium text-foreground">来源摘录：</span>
-                <span className="text-muted-foreground">{claim.evidence?.excerpt || '没有保存原文摘录，因此不能把这条声明称为已支持。'}</span>
-              </div>
+            <Box component="article" key={`${claim.claim ?? 'claim'}-${index}`} sx={{ px: space.lg, py: space.md }}>
+              <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.sm }}>
+                <Typography component="h4" sx={{ minWidth: 0, flex: 1, ...textSx.body, ...textSx.medium }}>{claim.claim || '未命名声明'}</Typography>
+                <Box component="span" sx={{ flexShrink: 0, display: 'inline-flex', borderRadius: 'var(--dr-radius-pill)', px: space.sm, py: space.xs, ...textSx.caption, ...textSx.medium, ...claimStatusSx }}>{status}</Box>
+              </Box>
+              <Box component="div" sx={{ mt: space.sm, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm, ...textSx.caption, ...textSx.muted }}>
+                <Box component="span" sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-pill)', px: space.sm, py: space.xs }}>{claimKindLabel(claim)}</Box>
+                <Box component="span">{claimKindDescription(claim)}</Box>
+              </Box>
+              {claim.reason ? <Typography component="p" sx={{ mt: space.sm, ...textSx.caption, ...textSx.muted }}>{citationRelationship && reviewUnavailable ? '已建立来源回链，尚未完成语义支持判断。' : claim.reason}</Typography> : null}
+              <Box component="div" sx={{ mt: space.sm, border: '1px solid', borderColor: 'divider', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-surface) 70%, transparent)', px: space.md, py: space.sm, ...textSx.caption }}>
+                <Box component="span" sx={{ ...textSx.medium, color: 'text.primary' }}>来源摘录：</Box>
+                <Box component="span" sx={textSx.muted}>{claim.evidence?.excerpt || '没有保存原文摘录，因此不能把这条声明称为已支持。'}</Box>
+              </Box>
               {(() => {
                 const matchedSource = findEvidenceSource(claim, sources);
                 return matchedSource ? (
-                  <div className="mt-2 rounded-lg border border-primary/15 bg-primary/[0.03] px-3 py-2 text-xs leading-5">
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="font-medium text-foreground">来源：{matchedSource.title}</span>
-                      <span className="text-muted-foreground">{SOURCE_TYPE_LABELS[matchedSource.type] ?? matchedSource.type}</span>
-                      <span className="text-muted-foreground">抓取于 {formatCapturedAt(matchedSource.capturedAt)}</span>
-                    </div>
-                    {matchedSource.snippet ? <p className="mt-1 text-muted-foreground">{matchedSource.snippet}</p> : null}
-                  </div>
+                  <Box component="div" sx={{ mt: space.sm, border: '1px solid color-mix(in srgb, var(--dr-color-primary) 15%, transparent)', borderRadius: 'var(--dr-radius-medium)', bgcolor: 'color-mix(in srgb, var(--dr-color-primary) 3%, transparent)', px: space.md, py: space.sm, ...textSx.caption }}>
+                    <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: space.sm, rowGap: space.xs }}>
+                      <Box component="span" sx={{ ...textSx.medium, color: 'text.primary' }}>来源：{matchedSource.title}</Box>
+                      <Box component="span" sx={textSx.muted}>{SOURCE_TYPE_LABELS[matchedSource.type] ?? matchedSource.type}</Box>
+                      <Box component="span" sx={textSx.muted}>抓取于 {formatCapturedAt(matchedSource.capturedAt)}</Box>
+                    </Box>
+                    {matchedSource.snippet ? <Typography component="p" sx={{ mt: space.xs, ...textSx.muted }}>{matchedSource.snippet}</Typography> : null}
+                  </Box>
                 ) : null;
               })()}
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <Box component="div" sx={{ mt: space.sm, display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: space.lg, rowGap: space.xs, ...textSx.caption, ...textSx.muted }}>
                 {claim.evidence?.source_url ? (
-                  <a className="inline-flex items-center gap-1 text-primary hover:underline" href={claim.evidence.source_url} target="_blank" rel="noreferrer noopener">
-                    打开来源 <ExternalLink className="size-3" />
-                  </a>
-                ) : <span>没有可打开的来源地址</span>}
-                {claim.evidence?.observed_at ? <span>观察时间：{claim.evidence.observed_at}</span> : null}
-              </div>
-            </article>
+                  <MaterialLink component="a" href={claim.evidence.source_url} target="_blank" rel="noreferrer noopener" underline="none" sx={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, color: 'primary.main', '&:hover': { textDecoration: 'underline' } }}>
+                    打开来源 <ExternalLink size={12} />
+                  </MaterialLink>
+                ) : <Box component="span">没有可打开的来源地址</Box>}
+                {claim.evidence?.observed_at ? <Box component="span">观察时间：{claim.evidence.observed_at}</Box> : null}
+              </Box>
+            </Box>
           );
           })}
-      </div>
-      </details>
+      </Box>
+      </Box>
       ) : null}
-    </section>
+    </Box>
   );
 }
 
@@ -2431,44 +2427,45 @@ function TimelineStep({
   last?: boolean;
 }) {
   const Icon = step.icon;
-  const dotClass = {
-    done: 'border-[var(--dr-color-success)] bg-[var(--dr-color-success-container)] text-[var(--dr-color-success)]',
-    current: 'border-primary bg-primary text-primary-foreground shadow-[0_0_0_4px_hsl(var(--primary)/.12)]',
-    attention: 'border-[var(--dr-color-warning)] bg-[var(--dr-color-warning-container)] text-[var(--dr-color-warning)]',
-    error: 'border-[var(--dr-color-danger)] bg-[var(--dr-color-danger-container)] text-[var(--dr-color-danger)]',
-    waiting: 'border-border bg-card text-muted-foreground',
+  const dotSx = {
+    done: { borderColor: 'success.main', bgcolor: 'var(--dr-color-success-container)', color: 'success.main' },
+    current: { borderColor: 'primary.main', bgcolor: 'primary.main', color: 'primary.contrastText', boxShadow: '0 0 0 4px color-mix(in srgb, var(--dr-color-primary) 12%, transparent)' },
+    attention: { borderColor: 'warning.main', bgcolor: 'var(--dr-color-warning-container)', color: 'warning.main' },
+    error: { borderColor: 'error.main', bgcolor: 'var(--dr-color-danger-container)', color: 'error.main' },
+    waiting: { borderColor: 'divider', bgcolor: 'background.paper', color: 'text.secondary' },
   }[state];
   /* 三态 label 让屏幕阅读器读出当前步骤的状态(色弱/单视觉用户也能感知) */
   const stateLabel = { done: '已完成', current: '进行中', attention: '需处理', error: '失败', waiting: '等待' }[state];
   return (
-    <div className={cn('relative pb-5', last && 'pb-0')}>
-      <span
-        className={cn('absolute -left-[2.05rem] top-0 grid size-5 place-items-center rounded-full border-2', dotClass)}
+    <Box component="div" sx={{ position: 'relative', pb: last ? 0 : space.xl }}>
+      <Box
+        component="span"
+        sx={{ position: 'absolute', left: -32.8, top: 0, display: 'grid', width: 20, height: 20, placeItems: 'center', borderRadius: 'var(--dr-radius-pill)', border: '2px solid', ...dotSx }}
         role="img"
         aria-label={`${step.label}:${stateLabel}`}
       >
-        <Icon aria-hidden className="size-2.5" />
-      </span>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className={cn('text-sm font-medium', state === 'waiting' && 'text-muted-foreground')}>{step.label}</span>
-        <span className={cn('text-xs', state === 'current' ? 'text-primary' : state === 'attention' ? 'text-[var(--dr-color-warning)]' : state === 'error' ? 'text-[var(--dr-color-danger)]' : 'text-muted-foreground')}>
+        <Box component={Icon} aria-hidden sx={{ width: 10, height: 10 }} />
+      </Box>
+      <Box component="div" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: space.sm, rowGap: space.xs }}>
+        <Typography component="span" sx={{ ...textSx.body, ...textSx.medium, ...(state === 'waiting' ? textSx.muted : {}) }}>{step.label}</Typography>
+        <Typography component="span" sx={{ ...textSx.caption, color: state === 'current' ? 'primary.main' : state === 'attention' ? 'warning.main' : state === 'error' ? 'error.main' : 'text.secondary' }}>
           {STEP_LABELS[state]}
-        </span>
-        {count ? <span className="truncate text-xs text-muted-foreground" title={count}>{count}</span> : null}
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground" title={step.desc}>
+        </Typography>
+        {count ? <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...textSx.caption, ...textSx.muted }} title={count}>{count}</Box> : null}
+      </Box>
+      <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }} title={step.desc}>
         {step.desc}
-      </p>
-    </div>
+      </Typography>
+    </Box>
   );
 }
 
 function DetailRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex min-w-0 gap-2">
-      <span className="shrink-0 text-muted-foreground">{label}:</span>
-      <span className={cn('truncate', mono && 'font-mono tabular-nums')}>{value}</span>
-    </div>
+    <Box component="div" sx={{ display: 'flex', minWidth: 0, gap: space.sm }}>
+      <Box component="span" sx={{ flexShrink: 0, ...textSx.muted }}>{label}:</Box>
+      <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(mono ? { fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' } : {}) }}>{value}</Box>
+    </Box>
   );
 }
 
@@ -2507,30 +2504,32 @@ function JobStatusDisclosure({
   ];
 
   return (
-    <div className="border-t border-border">
-      <button
+    <Box component="div" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+      <ButtonBase
+        component="button"
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-controls="job-status-details"
-        className="flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2 text-left transition-colors duration-150 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        sx={{ display: 'flex', width: '100%', cursor: 'pointer', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, px: space.lg, py: space.sm, textAlign: 'left', transition: `background-color var(--dr-motion-fast)`, '&:hover': { bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 40%, transparent)' } }}
       >
-        <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-xs font-medium text-muted-foreground">
+        <Box component="span" sx={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: space.sm, whiteSpace: 'nowrap', ...textSx.caption, ...textSx.medium, ...textSx.muted }}>
           {open ? (
-            <ChevronDown className="size-3.5" aria-hidden />
+            <ChevronDown size={14} aria-hidden />
           ) : (
-            <ChevronRight className="size-3.5" aria-hidden />
+            <ChevronRight size={14} aria-hidden />
           )}
           更多信息
-        </span>
-        <span className="truncate font-mono text-xs text-muted-foreground">{summary}</span>
-      </button>
+        </Box>
+        <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace', ...textSx.caption, ...textSx.muted }}>{summary}</Box>
+      </ButtonBase>
       {open && (
-        <div
+        <Box
+          component="div"
           id="job-status-details"
           role="region"
           aria-label="更多信息"
-          className="grid gap-x-4 gap-y-2 border-t border-border bg-muted/40 px-4 py-3 text-xs sm:grid-cols-2 lg:grid-cols-3"
+          sx={{ display: 'grid', columnGap: space.xl, rowGap: space.sm, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'color-mix(in srgb, var(--dr-color-surface-container) 40%, transparent)', px: space.lg, py: space.md, gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(3, minmax(0, 1fr))' }, ...textSx.caption }}
         >
           <DetailRow label={completed ? '任务状态' : '正在处理'} value={completed ? '已完成' : stepLabel(s.currentStep)} />
           <DetailRow label="已保存来源" value={String(savedSourcesCount)} mono />
@@ -2547,8 +2546,8 @@ function JobStatusDisclosure({
           {s.costCents > 0 ? (
             <DetailRow label="本次费用" value={`$${(s.costCents / 100).toFixed(2)}`} mono />
           ) : null}
-        </div>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 }

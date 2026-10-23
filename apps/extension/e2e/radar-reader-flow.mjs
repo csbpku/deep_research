@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const baseUrl = (process.env.READER_PLATFORM_URL || 'http://localhost:3000').replace(/\/$/u, '');
 const response = await fetch(`${baseUrl}/api/radar?limit=20`);
@@ -50,7 +51,7 @@ async function seedProvider(page) {
   });
 }
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-radar-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-radar-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1360, height: 900 },

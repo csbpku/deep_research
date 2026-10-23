@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const directory = await mkdtemp('/private/tmp/reader-language-');
+const directory = await mkdtemp(join(tempDir(), 'reader-language-'));
 const requests = [];
 const extraParagraphs = Array.from({ length: 48 }, (_, i) => `<p>Section ${i + 1}: The queue preserves source context while each worker translates a complete paragraph.</p>`).join('');
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="180"><rect width="400" height="180" fill="white"/><text x="40" y="85" font-size="30">Queue → Workers</text></svg>';

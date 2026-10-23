@@ -40,11 +40,11 @@
   --reader-color-source-research-container: #f2eff7;
   --reader-color-source-shared: #35676d;
   --reader-color-source-shared-container: #eaf4f4;
-  --reader-color-topic-hot: #cb380b;
+  --reader-color-topic-hot: #b8320a;
   --reader-color-topic-hot-container: #fee0d7;
-  --reader-color-topic-warming: #bd6705;
+  --reader-color-topic-warming: #995304;
   --reader-color-topic-warming-container: #fee7cd;
-  --reader-color-topic-emerging: #1d8660;
+  --reader-color-topic-emerging: #187650;
   --reader-color-topic-emerging-container: #def8ee;
   --reader-color-tier-deep-read: #09709f;
   --reader-color-tier-skim: #805500;
@@ -86,6 +86,9 @@
   --reader-motion-standard: 180ms ease-out;
   --reader-color-inverse-surface: #20242c;
   --reader-color-inverse-text: #ffffff;
+  --reader-color-on-inverse-muted: #e2e5ea;
+  --reader-color-highlight: rgba(255,213,72,0.28);
+  --reader-color-highlight-border: rgba(184,129,0,0.68);
   --reader-color-scrim: rgba(32,36,44,0.72);
   --reader-color-primary-container-hover: #dce6fa;
   --reader-type-page-title: 24px;
@@ -97,36 +100,6 @@
   --reader-width-shell: 1280px;
   --reader-width-reading: 760px;
   --reader-width-content-list: 880px;
-
-  /* Semantic aliases shared by Markdown and isolated webpage controls. */
-  --ink: var(--reader-color-text);
-  --ink-soft: var(--reader-color-text-secondary);
-  --muted: var(--reader-color-text-muted);
-  --paper: var(--reader-color-surface);
-  --panel: var(--reader-color-surface-raised);
-  --faint: var(--reader-color-surface-container);
-  --composer-fill: var(--reader-color-surface-composer);
-  --line: var(--reader-color-outline);
-  --accent: var(--reader-color-primary);
-  --accent-soft: var(--reader-color-primary-container);
-  --amber: var(--reader-color-warning);
-  --amber-soft: var(--reader-color-warning-container);
-  --danger: var(--reader-color-danger);
-  --success: var(--reader-color-success);
-  --success-soft: var(--reader-color-success-container);
-  --answer-size: var(--reader-type-reading);
-  --answer-leading: var(--reader-line-height-reading);
-  --evidence-ink: var(--reader-color-evidence);
-  --evidence-fill: var(--reader-color-evidence-container);
-  --background-ink: var(--reader-color-background-context);
-  --background-fill: var(--reader-color-background-container);
-  --inference-ink: var(--reader-color-inference);
-  --inference-fill: var(--reader-color-inference-container);
-  --limitations-ink: var(--reader-color-limitations);
-  --limitations-fill: var(--reader-color-limitations-container);
-  --font: var(--reader-font-family);
-  --shape-small: var(--reader-radius-small);
-  --shape-medium: var(--reader-radius-medium);
-  --shape-large: var(--reader-radius-large);
-  --elevation-1: var(--reader-elevation-1);
+  --reader-size-reader-mark: 32px;
+  --reader-size-reader-header: 52px;
 }

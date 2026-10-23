@@ -16,7 +16,7 @@ describe('MarkdownContent links', () => {
 
     expect(html).toContain('href="https://example.com/paper"');
     expect(html).toContain('target="_blank"');
-    expect(html).toContain('text-primary');
+    expect(html).toContain('color:var(--dr-color-primary)');
   });
 
   it('keeps footnote references and back links in the current page', () => {
@@ -46,7 +46,8 @@ describe('MarkdownContent links', () => {
     expect(html).toContain('href="#bib-1"');
     expect(html).toContain('>1</a>');
     expect(html).toContain('aria-label="参考文献 1"');
-    expect(html).toContain('focus-visible:outline-2');
+    expect(html).toContain(':focus-visible{');
+    expect(html).toContain('outline:2px solid var(--dr-color-primary)');
     expect(html).toContain('id="bib-1"');
     expect(html).toContain('>DuckDB vs SQLite vs PostgreSQL</a>');
     expect(html).toContain(`href="${href}"`);
@@ -89,8 +90,8 @@ describe('MarkdownContent links', () => {
 
     expect(html).toContain('src="data:image/svg+xml;base64,PHN2Zy8+#A1.F12"');
     expect(html).toContain('alt="图形"');
-    expect(html).toContain('class="overflow-x-auto"');
-    expect(html).toContain('lg:max-w-full');
+    expect(html).toContain('overflow-x:auto');
+    expect(html).toContain('max-width:100%');
     expect(html).toContain('aria-label="在新标签页查看原图"');
     expect(html).not.toContain('data:image/png');
   });
@@ -321,7 +322,7 @@ $$
   it('keeps hash-prefixed code comments inside tilde fences', () => {
     const md = '~~~python\nfor result in results.objects:\n    # Weaviate reports the MaxSim score as a negated distance\n~~~';
     const html = renderToStaticMarkup(createElement(MarkdownContent, { content: md }));
-    expect(html).toContain('class="hljs language-python"');
+    expect(html).toMatch(/class="[^"]*\bhljs\b[^"]*\blanguage-python\b/);
     expect(html).not.toContain('<h1>Weaviate reports');
   });
 

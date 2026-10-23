@@ -121,7 +121,11 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
           <Box component="section" id="web-brief-summary" aria-labelledby="web-brief-summary-title" sx={{ scrollMarginTop: 3 }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'primary.main' }}><CheckCircle2 size={18} /><Typography id="web-brief-summary-title" component="h2" variant="fieldTitle">一页判断</Typography></Stack>
             <Paper variant="outlined" sx={{ mt: 1.5, p: { xs: 1.5, sm: 2 }, borderLeft: 3, borderLeftColor: 'primary.main', bgcolor: 'action.selected' }}>
-              {summaryText ? <MarkdownContent content={summaryText} compact className="max-w-none [&_p]:my-0 [&_ul]:my-2" /> : <Typography variant="body1">报告没有明确的摘要或结论章节，请继续阅读详细报告。</Typography>}
+              {summaryText ? (
+                <Box sx={{ maxWidth: 'none', '& p': { my: 0 }, '& ul': { my: 1 } }}>
+                  <MarkdownContent content={summaryText} compact />
+                </Box>
+              ) : <Typography variant="body1">报告没有明确的摘要或结论章节，请继续阅读详细报告。</Typography>}
             </Paper>
             <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
               {summary.explicit ? '这是报告中明确写出的摘要/结论；详细依据和限定条件见下方。' : '这是报告开头的有限摘录，不代表完整结论。'}
@@ -167,7 +171,9 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
               {articleSections.length > 0 ? articleSections.map((section, index) => (
                 <Box component="section" key={`${section.heading}-${index}`} id={`web-brief-section-${index}`} sx={{ scrollMarginTop: 3, ...(section.level === 1 && index > 0 ? { borderTop: 1, borderColor: 'divider', pt: 3 } : {}) }}>
                   <Typography component={section.level === 1 ? 'h2' : 'h3'} variant={section.level === 1 ? 'panelTitle' : 'listTitle'}>{section.heading}</Typography>
-                  <MarkdownContent content={section.body.join('\n').trim() || '本节暂无正文。'} compact className="mt-3 max-w-none [&_a]:text-primary [&_blockquote]:px-4 [&_table]:text-xs" />
+                  <Box sx={{ mt: 1.5, maxWidth: 'none', '& a': { color: 'primary.main' }, '& blockquote': { px: 2 }, '& table': { typography: 'metadata' } }}>
+                    <MarkdownContent content={section.body.join('\n').trim() || '本节暂无正文。'} compact />
+                  </Box>
                 </Box>
               )) : (
                 <Paper variant="outlined" sx={{ p: 2, borderStyle: 'dashed' }}>
@@ -214,7 +220,9 @@ export function ResearchWebBrief({ content, sources = [], title, reviewStatus, s
               <Box sx={{ mt: 3, pt: 2.5, borderTop: 1, borderColor: 'divider' }}>
                 <Typography variant="listTitle" component="h3">参考文献</Typography>
                 <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>正文中的编号引用可回到这里；来源标题链接会在新标签页打开原始页面。</Typography>
-                <MarkdownContent content={bibliography.body.join('\n').trim()} compact className="prose mt-3 max-w-none [&_ul]:my-0 [&_li]:my-1" />
+                <Box sx={{ mt: 1.5, maxWidth: 'none', '& ul': { my: 0 }, '& li': { my: 0.5 } }}>
+                  <MarkdownContent content={bibliography.body.join('\n').trim()} compact />
+                </Box>
               </Box>
             ) : null}
           </Box>

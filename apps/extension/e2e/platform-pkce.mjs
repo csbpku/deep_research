@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 // Platform mode is optional: the same package remains usable as an independent
 // reader, while this harness verifies the account-connected integration path.
@@ -234,7 +236,7 @@ const server = createServer(async (request, response) => {
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
 
 const extensionPath = process.env.READER_E2E_EXTENSION_PATH || new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testExtensionRoot = await mkdtemp('/private/tmp/deep-research-reader-pkce-extension-');
+const testExtensionRoot = await mkdtemp(join(tempDir(), 'deep-research-reader-pkce-extension-'));
 const testExtensionPath = `${testExtensionRoot}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
@@ -248,7 +250,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-pkce-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-pkce-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },

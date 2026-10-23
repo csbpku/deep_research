@@ -25,7 +25,7 @@ import {
   Typography,
 } from '@mui/material';
 import { AlertTriangle, ArrowLeftRight, CheckCircle2, Clock3, GitBranch, RefreshCw, Search } from 'lucide-react';
-import styles from '../admin.module.css';
+import { adminRootSx } from '../AdminMaterial';
 
 type UsageItem = {
   id: string;
@@ -104,7 +104,7 @@ export default function LlmUsageConsole() {
 
   if (usage.isLoading) {
     return (
-      <Box className={styles.adminRoot} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', xl: 'repeat(4, 1fr)' }, gap: 2 }}>
+      <Box sx={[adminRootSx, { display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', xl: 'repeat(4, 1fr)' }, gap: 2 }]}>
         {[0, 1, 2, 3].map((item) => <Skeleton key={item} variant="rounded" height={100} />)}
       </Box>
     );
@@ -112,7 +112,7 @@ export default function LlmUsageConsole() {
   if (usage.isError || !usage.data) {
     return (
       <Alert
-        className={styles.adminRoot}
+        sx={adminRootSx}
         severity="error"
         action={<Button color="inherit" size="small" onClick={() => void usage.refetch()}>重新读取</Button>}
       >
@@ -136,7 +136,7 @@ export default function LlmUsageConsole() {
     .slice(0, 5);
 
   return (
-    <Stack className={styles.adminRoot} component="section" sx={{ gap: 3 }}>
+    <Stack component="section" sx={[adminRootSx, { gap: 3 }]}>
       <Stack sx={{ flexDirection: { xs: 'column', sm: 'row' }, gap: 2, alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
         <Box>
           <Typography variant="h2">Token 消耗</Typography>

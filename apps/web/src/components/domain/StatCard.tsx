@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import Paper from '@mui/material/Paper';
+import type { SxProps, Theme } from '@mui/material/styles';
 import styles from './domain.module.css';
 
 /**
@@ -15,6 +16,7 @@ export function StatCard({
   hint,
   tone = 'default',
   className,
+  sx,
   variant = 'outlined',
   density = 'normal',
 }: {
@@ -23,12 +25,14 @@ export function StatCard({
   hint?: React.ReactNode;
   tone?: 'default' | 'primary' | 'muted';
   className?: string;
+  sx?: SxProps<Theme>;
   variant?: 'outlined' | 'grid';
   density?: 'normal' | 'compact' | 'dense';
 }) {
   return (
     <Paper component="div" variant="outlined" data-stat-tone={tone} data-stat-variant={variant} data-stat-density={density}
-      className={[styles.statCard, 'material-surface', className].filter(Boolean).join(' ')}>
+      className={[styles.statCard, 'material-surface', className].filter(Boolean).join(' ')}
+      sx={sx}>
       <div className={styles.statLabel}>
         {label}
       </div>

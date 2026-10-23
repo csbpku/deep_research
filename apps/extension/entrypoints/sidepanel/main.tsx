@@ -111,14 +111,18 @@ function ReaderPanel() {
           </div>
 
           <div className="chat-window">
+            {/* Page context sits above the conversation column. It is not part
+                of the transcript: keeping it in the scroll area squeezed the
+                empty state out of view and broke the centred first-run
+                layout. */}
+            <Box component="section" id="page-knowledge" className="hidden" aria-labelledby="page-knowledge-title" sx={{ mb: space.md, flex: 'none' }}>
+              <ReaderDisclosure id="page-knowledge-disclosure" label={<>{t("本页已保存")}<span id="page-knowledge-count" className="page-knowledge-count" /></>}>
+                <Typography id="page-knowledge-title" component="h3" variant="subtitle2" color="text.secondary" sx={{ mb: space.sm }}>{t("摘录与结论")}</Typography>
+                <div id="page-knowledge-list" />
+              </ReaderDisclosure>
+            </Box>
+            <ReaderDisclosure id="scope-details" className="source-scope-details hidden" label={t("正文范围说明")}><Alert id="scope-notice" className="notice hidden" role="status" aria-live="polite" icon={false} severity="info" /></ReaderDisclosure>
             <div id="chat-transcript" className="chat-transcript">
-              <Box component="section" id="page-knowledge" className="hidden" aria-labelledby="page-knowledge-title" sx={{ mb: space.md }}>
-                <ReaderDisclosure id="page-knowledge-disclosure" label={t("本页已保存")}>
-                  <Typography id="page-knowledge-title" component="h3" variant="subtitle2" color="text.secondary" sx={{ mb: space.sm }}>{t("摘录与结论")}</Typography>
-                  <div id="page-knowledge-list" />
-                </ReaderDisclosure>
-              </Box>
-              <ReaderDisclosure id="scope-details" className="source-scope-details hidden" label={t("正文范围说明")}><Alert id="scope-notice" className="notice hidden" role="status" aria-live="polite" icon={false} severity="info" /></ReaderDisclosure>
               <div id="conversation-empty" className="conversation-empty"><Typography component="h2" variant="h2">{t("一起读懂这篇文章")}</Typography><p>{t("直接提问，或先总结、翻译。选中原文后，可以只聊那一段。")}</p><div className="conversation-starters"><ReaderButton id="starter-summary" type="button" variant="outlined">{t("文章讲了什么？")}</ReaderButton></div></div>
               <div id="conversation-list" className="conversation-list" />
               <div id="pending-turn" className="pending-turn hidden" aria-busy="false">

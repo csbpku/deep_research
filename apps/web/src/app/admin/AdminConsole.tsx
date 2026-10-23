@@ -68,18 +68,17 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  adminRootSx,
 } from './AdminMaterial';
 import { AdminActionDialog, type AdminActionValues } from '@/components/admin/AdminActionDialog';
 import { AppButton } from '@/components/material/AppButton';
 import { AppDialog } from '@/components/material/AppDialog';
-import { cn } from '@/lib/utils';
 import { formatSourceType } from '@/lib/radar/source-labels';
 import { cleanResearchText } from '@/lib/research-markdown-cleanup';
 import { TopicProposalsTab } from '@/components/admin/TopicProposalsTab';
 import { AdminTopicActions } from '@/components/topics/AdminTopicActions';
 import LlmUsageConsole from './llm-usage/LlmUsageConsole';
 import { summarizeAdminBulkResults } from './admin-bulk-results';
-import styles from './admin.module.css';
 
 export const ADMIN_TAB_KEYS = [
   'dashboard',
@@ -337,7 +336,7 @@ interface AdminResearchListResponse {
 export default function AdminConsole() {
   const [tab, setTab] = useState<Tab>('dashboard');
   return (
-    <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 1280 }}>
+    <Box sx={[adminRootSx, { mx: 'auto', width: '100%', maxWidth: 1280 }]}>
       <Box component="header" sx={{ mb: 2.5 }}>
         <Typography variant="h1" component="h1" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <ShieldCheck size={20} aria-hidden="true" />
@@ -349,24 +348,24 @@ export default function AdminConsole() {
       </Box>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <TabsList className="w-full">
+        <TabsList sx={{"width":"100%"}}>
           {TABS.map((t) => {
             const Icon = t.icon;
             return (
-              <TabsTrigger key={t.key} value={t.key} icon={<Icon size={16} aria-hidden="true" />} className="shrink-0 whitespace-nowrap">
+              <TabsTrigger key={t.key} value={t.key} icon={<Icon size={16} aria-hidden="true" />} sx={{"flexShrink":0,"whiteSpace":"nowrap"}}>
                 {t.label}
               </TabsTrigger>
             );
           })}
         </TabsList>
-        <TabsContent value={tab} className="mt-3 space-y-3 focus-visible:outline-none">
+        <TabsContent value={tab} sx={{"mt":1.5,"& > :not(style) ~ :not(style)":{"marginTop":1.5}}}>
 
       <Box sx={{ mt: 2 }}>
         {tab === 'dashboard' && <DashboardTab />}
         {tab === 'radar' && <RadarGovernanceTab />}
         {tab === 'researches' && <ResearchesTab />}
         {tab === 'topics' && (
-          <div className="space-y-4">
+          <Box component="div" sx={{"& > :not(style) ~ :not(style)":{"marginTop":2}}}>
             <Paper variant="outlined" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, p: 2 }}>
               <div>
                 <Typography variant="subtitle2">主题运营</Typography>
@@ -377,7 +376,7 @@ export default function AdminConsole() {
               <AdminTopicActions />
             </Paper>
             <TopicProposalsTab />
-          </div>
+          </Box>
         )}
         {tab === 'shares' && <SharesTab />}
         {tab === 'comments' && <CommentsTab />}
@@ -403,33 +402,33 @@ function FilterPills<T extends string>({
   trailing?: React.ReactNode;
 }) {
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-1">
+    <Box component="div" sx={{"mb":1.5,"display":"flex","flexWrap":"wrap","alignItems":"center","gap":0.5}}>
       {options.map((o) => (
         <Button
           key={o.key}
           type="button"
           variant={value === o.key ? 'default' : 'outline'}
           size="xs"
-          className="rounded-full"
+          sx={{"borderRadius":"var(--dr-radius-pill)"}}
           onClick={() => onChange(o.key)}
         >
           {o.label}
         </Button>
       ))}
       {trailing ? (
-        <div className="ml-auto text-xs text-muted-foreground">{trailing}</div>
+        <Box component="div" sx={{"ml":"auto","fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>{trailing}</Box>
       ) : null}
-    </div>
+    </Box>
   );
 }
 
 function QueueSkeleton() {
   return (
-    <div className="grid gap-2">
+    <Box component="div" sx={{"display":"grid","gap":1}}>
       {[0, 1, 2].map((i) => (
-        <Skeleton key={i} className="h-16 w-full" />
+        <Skeleton key={i} sx={{"height":64,"width":"100%"}} />
       ))}
-    </div>
+    </Box>
   );
 }
 
@@ -573,43 +572,43 @@ function DashboardTab() {
 
   if (q.isLoading) {
     return (
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Box component="div" sx={{"display":"grid","gap":1.5,"@media (min-width:640px)":{"gridTemplateColumns":"repeat(2, minmax(0, 1fr))"},"@media (min-width:1280px)":{"gridTemplateColumns":"repeat(4, minmax(0, 1fr))"}}}>
         {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-20 w-full" />
+          <Skeleton key={i} sx={{"height":80,"width":"100%"}} />
         ))}
-      </div>
+      </Box>
     );
   }
   if (q.isError || !q.data) {
-    return <p className="text-sm text-destructive">{(q.error as Error)?.message ?? '加载失败'}</p>;
+    return <Box component="p" sx={{"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(q.error as Error)?.message ?? '加载失败'}</Box>;
   }
 
   const d = q.data;
 
   return (
     <div>
-      <section className="mb-4 overflow-hidden rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+      <Box component="section" sx={{"mb":2,"overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
+        <Box component="div" sx={{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5}}>
+          <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","justifyContent":"space-between","gap":1}}>
             <div>
-              <h2 className="flex items-center gap-2 text-base font-semibold">
-                <CircleAlert className="size-4 text-primary" />
+              <Box component="h2" sx={{"display":"flex","alignItems":"center","gap":1,"fontSize":"var(--dr-type-title-small)","fontWeight":"var(--dr-weight-semibold)"}}>
+                <Box component={CircleAlert} sx={{"width":16,"height":16,"color":"primary.main"}} />
                 异常优先
-              </h2>
-              <p className="mt-1 text-xs text-muted-foreground">先处理会阻塞内容质量和研究交付的事项。</p>
+              </Box>
+              <Box component="p" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>先处理会阻塞内容质量和研究交付的事项。</Box>
             </div>
-            <span className="text-xs text-muted-foreground">
+            <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
               仪表板每 5 秒刷新
-            </span>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3 xl:grid-cols-5">
+            </Box>
+          </Box>
+        </Box>
+        <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","gap":0.125,"backgroundColor":"divider","@media (min-width:640px)":{"gridTemplateColumns":"repeat(3, minmax(0, 1fr))"},"@media (min-width:1280px)":{"gridTemplateColumns":"repeat(5, minmax(0, 1fr))"}}}>
         <StatCard
           label={
-            <span className="inline-flex items-center gap-1">
-              <CircleAlert className="size-3" />
+            <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+              <Box component={CircleAlert} sx={{"width":12,"height":12}} />
               今日异常
-            </span>
+            </Box>
           }
           value={
             d.pendingReviews.total
@@ -624,10 +623,10 @@ function DashboardTab() {
         />
         <StatCard
           label={
-            <span className="inline-flex items-center gap-1">
-              <Timer className="size-3" />
+            <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+              <Box component={Timer} sx={{"width":12,"height":12}} />
               待处理
-            </span>
+            </Box>
           }
           value={d.pendingReviews.total}
           hint={
@@ -640,10 +639,10 @@ function DashboardTab() {
         />
         <StatCard
           label={
-            <span className="inline-flex items-center gap-1">
-              <RadarIcon className="size-3" />
+            <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+              <Box component={RadarIcon} sx={{"width":12,"height":12}} />
               雷达待治理
-            </span>
+            </Box>
           }
           value={d.radar.monitor.failedUniqueItems}
           hint={`待评分 ${d.radar.monitor.readingLevels.pending} · 待补全 ${d.radar.monitor.pendingEnrichment}`}
@@ -652,10 +651,10 @@ function DashboardTab() {
         />
         <StatCard
           label={
-            <span className="inline-flex items-center gap-1">
-              <Sparkles className="size-3" />
+            <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+              <Box component={Sparkles} sx={{"width":12,"height":12}} />
               AI 调研失败
-            </span>
+            </Box>
           }
           value={d.jobs.failedLast24h + d.jobs.failedImportJobs}
           hint={`过去 24h 提交 ${d.jobs.submittedLast24h}`}
@@ -664,25 +663,25 @@ function DashboardTab() {
         />
         <StatCard
           label={
-            <span className="inline-flex items-center gap-1">
-              <DollarSign className="size-3" />
+            <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+              <Box component={DollarSign} sx={{"width":12,"height":12}} />
               本月 AI 成本
-            </span>
+            </Box>
           }
           value={`$${d.cost.monthUsd}`}
           hint="用于观察成本异常，趋势见用量页"
-          variant="grid" density="compact" className="col-span-2 xl:col-span-1"
+          variant="grid" density="compact" sx={{"gridColumn":"span 2 / span 2","@media (min-width:1280px)":{"gridColumn":"span 1 / span 1"}}}
         />
-      </div>
-      </section>
+      </Box>
+      </Box>
 
-      <details className="group mb-4 rounded-lg border border-border bg-card/50">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-2"><Sparkles className="size-4 text-primary" />认知闭环 V2 · 近 7 天</span>
-          <ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
-        </summary>
-        <div className="border-t border-border p-3">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <Box data-admin-hover-group="true" component="details" sx={{"mb":2,"borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface) 50%, var(--dr-color-surface-container))"}}>
+        <Box component="summary" sx={{"display":"flex","cursor":"pointer","listStyle":"none","alignItems":"center","justifyContent":"space-between","gap":1.5,"px":2,"py":1.5,"fontSize":"var(--dr-type-body)","fontWeight":"var(--dr-weight-semibold)","&::-webkit-details-marker":{"display":"none"}}}>
+          <Box component="span" sx={{"display":"flex","alignItems":"center","gap":1}}><Box component={Sparkles} sx={{"width":16,"height":16,"color":"primary.main"}} />认知闭环 V2 · 近 7 天</Box>
+          <Box component={ChevronDown} sx={{"width":16,"height":16,"color":"text.secondary","transition":"transform var(--dr-motion-fast)","details[open] &":{"transform":"rotate(180deg)"}}} aria-hidden />
+        </Box>
+        <Box component="div" sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","p":1.5}}>
+        <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","gap":1,"@media (min-width:640px)":{"gridTemplateColumns":"repeat(3, minmax(0, 1fr))"},"@media (min-width:1024px)":{"gridTemplateColumns":"repeat(5, minmax(0, 1fr))"}}}>
           <StatCard
             label={<span>专题被关注</span>}
             value={d.cognitionLoop.topicFollowed}
@@ -724,190 +723,181 @@ function DashboardTab() {
             tone={d.cognitionLoop.researchContextReused > 0 ? 'primary' : 'default'}
             density="dense"
           />
-        </div>
-      </div>
-      </details>
+        </Box>
+      </Box>
+      </Box>
 
-      <details className="group mb-4 overflow-hidden rounded-lg border border-border bg-card">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-2"><RadarIcon className="size-4 text-muted-foreground" />雷达运行明细</span>
-          <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+      <Box data-admin-hover-group="true" component="details" sx={{"mb":2,"overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
+        <Box component="summary" sx={{"display":"flex","cursor":"pointer","listStyle":"none","alignItems":"center","justifyContent":"space-between","gap":1.5,"px":2,"py":1.5,"fontSize":"var(--dr-type-body)","fontWeight":"var(--dr-weight-semibold)","&::-webkit-details-marker":{"display":"none"}}}>
+          <Box component="span" sx={{"display":"flex","alignItems":"center","gap":1}}><Box component={RadarIcon} sx={{"width":16,"height":16,"color":"text.secondary"}} />雷达运行明细</Box>
+          <Box component="span" sx={{"display":"flex","alignItems":"center","gap":1,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-regular)","color":"text.secondary"}}>
             异常 {attentionCount} · 进入后查看逐源状态
-            <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
-          </span>
-        </summary>
-        <div className="border-t border-border p-3">
+            <Box component={ChevronDown} sx={{"width":16,"height":16,"transition":"transform var(--dr-motion-fast)","details[open] &":{"transform":"rotate(180deg)"}}} aria-hidden />
+          </Box>
+        </Box>
+        <Box component="div" sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","p":1.5}}>
       <RadarMonitorPanel monitor={d.radar.monitor} generatedAt={d.generatedAt} />
       <RadarScoringRules />
 
-      <section className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
+      <Box component="section" sx={{"overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
+        <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"flex-start","justifyContent":"space-between","gap":1.5,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5}}>
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="flex items-center gap-2 text-base font-semibold">
-                <RadarIcon className="size-4 text-muted-foreground" />
+            <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1}}>
+              <Box component="h2" sx={{"display":"flex","alignItems":"center","gap":1,"fontSize":"var(--dr-type-title-small)","fontWeight":"var(--dr-weight-semibold)"}}>
+                <Box component={RadarIcon} sx={{"width":16,"height":16,"color":"text.secondary"}} />
                 雷达同步
-              </h2>
+              </Box>
               <RadarHealthBadge
                 running={runSummary.running}
                 failed={runSummary.failed}
                 partial={runSummary.partial}
                 pending={runSummary.pendingScore + runSummary.pendingEnrichment}
               />
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
+            </Box>
+            <Box component="p" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
               同步、评分与内容补全的逐源运行状态
-            </p>
+            </Box>
           </div>
-          <div className="grid w-full grid-cols-2 items-end gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
-            <label className="col-span-2 grid gap-1 text-xs text-muted-foreground sm:col-span-1">
-              <span className="inline-flex items-center gap-1">
-                <CalendarDays className="size-3.5" />
+          <Box component="div" sx={{"display":"grid","width":"100%","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","alignItems":"flex-end","gap":1,"@media (min-width:640px)":{"display":"flex","width":"auto","flexWrap":"wrap","justifyContent":"flex-end"}}}>
+            <Box component="label" sx={{"gridColumn":"span 2 / span 2","display":"grid","gap":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary","@media (min-width:640px)":{"gridColumn":"span 1 / span 1"}}}>
+              <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+                <Box component={CalendarDays} sx={{"width":14,"height":14}} />
                 查看日期
-              </span>
+              </Box>
               <Input
                 type="date"
                 value={radarDate}
                 max={shanghaiDateValue()}
-                className="h-8 w-full text-xs sm:w-[148px]"
+                sx={{"height":32,"width":"100%","fontSize":"var(--dr-type-caption)","@media (min-width:640px)":{"width":148}}}
                 onChange={(event) => {
                   setRadarDate(event.target.value || shanghaiDateValue());
                   setRunFilter('all');
                 }}
               />
-            </label>
+            </Box>
             <Button
               type="button"
               size="sm"
-              className="w-full sm:w-auto"
+              sx={{"width":"100%","@media (min-width:640px)":{"width":"auto"}}}
               disabled={syncMut.isPending || syncInFlight}
               onClick={() => syncMut.mutate()}
             >
-              <RefreshCw className={cn('size-4', syncMut.isPending && 'animate-spin')} />
+              <Box component={RefreshCw} sx={[{"width":16,"height":16}, syncMut.isPending && {"animation":"adminSpin 1s linear infinite"}]} />
               启动今日同步
             </Button>
-          </div>
-        </div>
+          </Box>
+        </Box>
         {radarActionMessage ? (
-          <p className="border-b border-border px-4 py-2 text-xs text-muted-foreground" aria-live="polite">
+          <Box component="p" sx={{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}} aria-live="polite">
             {radarActionMessage}
-          </p>
+          </Box>
         ) : null}
         {syncInFlight ? (
-          <div
-            className="flex items-center gap-2 border-b border-status-running-fg/20 bg-status-running-bg/50 px-4 py-2 text-xs text-status-running-fg"
+          <Box component="div"
+            sx={{"display":"flex","alignItems":"center","gap":1,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"color-mix(in srgb, var(--dr-color-primary) 20%, var(--dr-color-outline))","backgroundColor":"color-mix(in srgb, var(--dr-color-primary-container) 50%, var(--dr-color-surface))","px":2,"py":1,"fontSize":"var(--dr-type-caption)","color":"primary.main"}}
             aria-live="polite"
           >
-            <LoaderCircle className="size-3.5 animate-spin" />
+            <Box component={LoaderCircle} sx={{"width":14,"height":14,"animation":"adminSpin 1s linear infinite"}} />
             当前同步正在运行，完成后会自动刷新候选和主题状态。
-          </div>
+          </Box>
         ) : null}
         {runsQ.isLoading ? (
-          <div className="grid gap-2 p-4">
-            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
-          </div>
+          <Box component="div" sx={{"display":"grid","gap":1,"p":2}}>
+            {[0, 1, 2].map((i) => <Skeleton key={i} sx={{"height":48,"width":"100%"}} />)}
+          </Box>
         ) : runsQ.isError ? (
-          <p className="p-4 text-sm text-destructive">{(runsQ.error as Error).message}</p>
+          <Box component="p" sx={{"p":2,"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(runsQ.error as Error).message}</Box>
         ) : latestRuns.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">该日期暂无同步记录</p>
+          <Box component="p" sx={{"p":2,"fontSize":"var(--dr-type-body)","color":"text.secondary"}}>该日期暂无同步记录</Box>
         ) : (
           <>
-            <div className="grid grid-cols-2 border-b border-border bg-muted/20 sm:grid-cols-3 xl:grid-cols-6">
+            <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface))","@media (min-width:640px)":{"gridTemplateColumns":"repeat(3, minmax(0, 1fr))"},"@media (min-width:1280px)":{"gridTemplateColumns":"repeat(6, minmax(0, 1fr))"}}}>
               <RadarMetric label="信息源" value={latestRuns.length} />
               <RadarMetric label="完成" value={runSummary.completed} tone="success" />
               <RadarMetric label="当前异常" value={attentionCount} tone={attentionCount > 0 ? 'danger' : 'default'} />
               <RadarMetric label="今日新增" value={`+${dailyNew}`} tone="success" />
               <RadarMetric label="待评分" value={runSummary.pendingScore} tone={runSummary.pendingScore > 0 ? 'warning' : 'default'} />
               <RadarMetric label="待补全" value={runSummary.pendingEnrichment} tone={runSummary.pendingEnrichment > 0 ? 'warning' : 'default'} />
-            </div>
+            </Box>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
-              <div className="inline-flex overflow-hidden rounded-lg border border-border bg-background">
+            <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","justifyContent":"space-between","gap":1,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1}}>
+              <Box component="div" sx={{"display":"inline-flex","overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
                 {([
                   ['all', `全部 ${latestRuns.length}`],
                   ['attention', `异常 ${attentionCount}`],
                     ['new', `有新增 ${displayRuns.filter((run) => run.totalNew > 0).length}`],
                 ] as const).map(([key, label]) => (
-                  <button
+                  <Box component="button"
                     key={key}
                     type="button"
                     aria-pressed={runFilter === key}
-                    className={cn(
-                      'h-7 border-r border-border px-3 text-xs transition-colors last:border-r-0',
-                      runFilter === key
-                        ? 'bg-foreground font-medium text-background'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                    )}
+                    sx={[{"height":28,"borderRight":"1px solid var(--dr-color-outline)","borderColor":"divider","px":1.5,"fontSize":"var(--dr-type-caption)","transition":"color, background-color, border-color var(--dr-motion-fast)","&:last-of-type":{"borderRightWidth":0}}, runFilter === key ? {"backgroundColor":"text.primary","fontWeight":"var(--dr-weight-medium)","color":"background.paper"} : {"color":"text.secondary","&:hover":{"backgroundColor":"action.hover","color":"text.primary"}}]}
                     onClick={() => setRunFilter(key)}
                   >
                     {label}
-                  </button>
+                  </Box>
                 ))}
-              </div>
-              <span className="text-xs text-muted-foreground">
+              </Box>
+              <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
                 {visibleRuns.length} 个结果 · 每个来源显示最近一次运行
                 {recoveredCount > 0 ? ` · ${recoveredCount} 个来源已恢复` : ''}
-              </span>
-            </div>
+              </Box>
+            </Box>
 
-            <div className="hidden overflow-x-auto md:block">
-              <table className="w-full min-w-[980px] text-left text-xs">
-                <thead className="border-b border-border bg-muted/10 text-muted-foreground">
+            <Box component="div" sx={{"display":"none","overflowX":"auto","@media (min-width:768px)":{"display":"block"}}}>
+              <Box component="table" sx={{"width":"100%","minWidth":980,"textAlign":"left","fontSize":"var(--dr-type-caption)"}}>
+                <Box component="thead" sx={{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 10%, var(--dr-color-surface))","color":"text.secondary"}}>
                   <tr>
-                    <th className="px-4 py-2 font-medium">信息源</th>
-                    <th className="px-3 py-2 font-medium">状态</th>
-                    <th className="px-3 py-2 font-medium">同步结果</th>
-                    <th className="px-3 py-2 font-medium">后处理</th>
-                    <th className="px-4 py-2 font-medium">耗时 / 问题</th>
-                    <th className="px-3 py-2 font-medium">操作</th>
+                    <Box component="th" sx={{"px":2,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>信息源</Box>
+                    <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>状态</Box>
+                    <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>同步结果</Box>
+                    <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>后处理</Box>
+                    <Box component="th" sx={{"px":2,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>耗时 / 问题</Box>
+                    <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>操作</Box>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
+                </Box>
+                <Box component="tbody" sx={{"& > :not(:last-child)":{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"var(--dr-color-outline)"}}}>
                   {visibleRuns.map((run) => (
                     <Fragment key={run.sourceId}>
-                      <tr
-                        className={cn(
-                          'align-middle transition-colors hover:bg-muted/20',
-                          run.status === 'failed' && 'bg-destructive/[0.035]',
-                          run.status === 'partial' && styles.warningSurface,
-                        )}
+                      <Box component="tr"
+                        sx={[{"verticalAlign":"middle","transition":"color, background-color, border-color var(--dr-motion-fast)","&:hover":{"backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface))"}}, run.status === 'failed' && {"backgroundColor":"color-mix(in srgb, var(--dr-color-danger) 4%, var(--dr-color-surface))"}, run.status === 'partial' && {"backgroundColor":"var(--dr-color-warning-container)"}]}
                       >
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-foreground">{run.sourceName}</div>
-                        <div className="mt-1 flex items-center gap-2 text-muted-foreground">
+                      <Box component="td" sx={{"px":2,"py":1.5}}>
+                        <Box component="div" sx={{"fontWeight":"var(--dr-weight-medium)","color":"text.primary"}}>{run.sourceName}</Box>
+                        <Box component="div" sx={{"mt":0.5,"display":"flex","alignItems":"center","gap":1,"color":"text.secondary"}}>
                           <span>{formatSourceType(run.sourceType).short}</span>
                           <span aria-hidden="true">·</span>
                           <span>{run.triggeredBy === 'cron' ? '定时' : '手动'}</span>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
+                        </Box>
+                      </Box>
+                      <Box component="td" sx={{"px":1.5,"py":1.5}}>
                         <SyncStatusBadge status={run.status} />
                         {run.recovered ? (
-                          <div className={cn('mt-1 text-xs font-medium', styles.successText)}>
+                          <Box component="div" sx={[{"mt":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)"}, {"color":"success.main"}]}>
                             已恢复 · 历史失败 {run.historicalFailureCount} 次
-                          </div>
+                          </Box>
                         ) : run.attemptCount > 1 ? (
-                          <div className="mt-1 text-xs text-muted-foreground">
+                          <Box component="div" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
                             第 {run.attemptCount} 次运行
-                          </div>
+                          </Box>
                         ) : null}
-                        <div className="mt-1 font-mono text-xs tabular-nums text-muted-foreground">
+                        <Box component="div" sx={{"mt":0.5,"fontFamily":"monospace","fontSize":"var(--dr-type-caption)","fontVariantNumeric":"tabular-nums","color":"text.secondary"}}>
                           {formatRunTime(run.completedAt ?? run.createdAt)}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="font-mono tabular-nums text-foreground">
+                        </Box>
+                      </Box>
+                      <Box component="td" sx={{"px":1.5,"py":1.5}}>
+                        <Box component="div" sx={{"fontFamily":"monospace","fontVariantNumeric":"tabular-nums","color":"text.primary"}}>
                           {run.totalFetched}
-                          <span className="ml-1 font-sans text-muted-foreground">抓取</span>
-                          <span className={cn('ml-2', styles.successText)}>+{run.totalNew}</span>
-                        </div>
+                          <Box component="span" sx={{"ml":0.5,"fontFamily":"var(--dr-font-family)","color":"text.secondary"}}>抓取</Box>
+                          <Box component="span" sx={[{"ml":1}, {"color":"success.main"}]}>+{run.totalNew}</Box>
+                        </Box>
                         {run.totalFailed > 0 ? (
-                          <div className="mt-1 text-destructive">失败 {run.totalFailed}</div>
+                          <Box component="div" sx={{"mt":0.5,"color":"error.main"}}>失败 {run.totalFailed}</Box>
                         ) : (
-                          <div className="mt-1 text-muted-foreground">跳过 {run.totalSkipped}</div>
+                          <Box component="div" sx={{"mt":0.5,"color":"text.secondary"}}>跳过 {run.totalSkipped}</Box>
                         )}
-                      </td>
-                      <td className="w-[210px] px-3 py-3">
+                      </Box>
+                      <Box component="td" sx={{"width":210,"px":1.5,"py":1.5}}>
                         <PipelineMetric
                           label="评分"
                           completed={run.scoredCount}
@@ -920,18 +910,18 @@ function DashboardTab() {
                           total={run.candidateCount}
                           pending={run.pendingEnrichmentCount}
                         />
-                      </td>
-                      <td className="max-w-[240px] px-4 py-3 text-muted-foreground">
-                        <div className="font-mono tabular-nums">{formatElapsed(run.elapsedMs)}</div>
+                      </Box>
+                      <Box component="td" sx={{"maxWidth":240,"px":2,"py":1.5,"color":"text.secondary"}}>
+                        <Box component="div" sx={{"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>{formatElapsed(run.elapsedMs)}</Box>
                         {run.errorCode ? (
-                          <div className="mt-1 whitespace-normal break-words text-xs text-destructive">
+                          <Box component="div" sx={{"mt":0.5,"whiteSpace":"normal","overflowWrap":"anywhere","fontSize":"var(--dr-type-caption)","color":"error.main"}}>
                             <code>{run.errorCode}</code>
-                            {run.errorMessage ? <div className="mt-1 font-sans">{run.errorMessage}</div> : null}
-                          </div>
+                            {run.errorMessage ? <Box component="div" sx={{"mt":0.5,"fontFamily":"var(--dr-font-family)"}}>{run.errorMessage}</Box> : null}
+                          </Box>
                         ) : null}
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-1">
+                      </Box>
+                      <Box component="td" sx={{"px":1.5,"py":1.5}}>
+                        <Box component="div" sx={{"display":"flex","alignItems":"center","gap":0.5}}>
                           <Button
                             type="button"
                             variant="outline"
@@ -941,7 +931,7 @@ function DashboardTab() {
                             disabled={retrySourceMut.isPending || syncMut.isPending || syncInFlight}
                             onClick={() => retrySourceMut.mutate(run.id)}
                           >
-                            <Play className="size-3.5" />
+                            <Box component={Play} sx={{"width":14,"height":14}} />
                             重跑
                           </Button>
                           {run.totalFailed > 0 ? (
@@ -953,74 +943,70 @@ function DashboardTab() {
                               aria-label={`查看${run.sourceName}失败条目`}
                               onClick={() => setFailureRunId(failureRunId === run.id ? null : run.id)}
                             >
-                              <FileWarning className="size-3.5" />
+                              <Box component={FileWarning} sx={{"width":14,"height":14}} />
                             </Button>
                           ) : null}
-                        </div>
-                      </td>
-                      </tr>
+                        </Box>
+                      </Box>
+                      </Box>
                       {failureRunId === run.id ? (
                         <tr>
-                          <td colSpan={6} className="p-0">
+                          <Box component="td" colSpan={6} sx={{"p":0}}>
                             <RunFailureDetails runId={run.id} sourceName={run.sourceName} />
-                          </td>
+                          </Box>
                         </tr>
                       ) : null}
                     </Fragment>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </Box>
+              </Box>
+            </Box>
 
-            <div className="divide-y divide-border md:hidden">
+            <Box component="div" sx={{"& > :not(:last-child)":{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"var(--dr-color-outline)"},"@media (min-width:768px)":{"display":"none"}}}>
               {visibleRuns.map((run) => (
-                <div
+                <Box component="div"
                   key={run.sourceId}
-                  className={cn(
-                    'px-4 py-3',
-                    run.status === 'failed' && 'bg-destructive/[0.035]',
-                    run.status === 'partial' && styles.warningSurface,
-                  )}
+                  sx={[{"px":2,"py":1.5}, run.status === 'failed' && {"backgroundColor":"color-mix(in srgb, var(--dr-color-danger) 4%, var(--dr-color-surface))"}, run.status === 'partial' && {"backgroundColor":"var(--dr-color-warning-container)"}]}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-foreground">{run.sourceName}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
+                  <Box component="div" sx={{"display":"flex","alignItems":"flex-start","justifyContent":"space-between","gap":1.5}}>
+                    <Box component="div" sx={{"minWidth":0}}>
+                      <Box component="div" sx={{"overflow":"hidden","textOverflow":"ellipsis","whiteSpace":"nowrap","fontSize":"var(--dr-type-body)","fontWeight":"var(--dr-weight-medium)","color":"text.primary"}}>{run.sourceName}</Box>
+                      <Box component="div" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
                         {formatSourceType(run.sourceType).short} · {run.triggeredBy === 'cron' ? '定时' : '手动'} · {formatRunTime(run.completedAt ?? run.createdAt)}
-                      </div>
-                    </div>
-                    <div className="text-right">
+                      </Box>
+                    </Box>
+                    <Box component="div" sx={{"textAlign":"right"}}>
                       <SyncStatusBadge status={run.status} />
                       {run.recovered ? (
-                        <div className={cn('mt-1 text-xs font-medium', styles.successText)}>
+                        <Box component="div" sx={[{"mt":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)"}, {"color":"success.main"}]}>
                           已恢复 · 失败 {run.historicalFailureCount} 次
-                        </div>
+                        </Box>
                       ) : null}
-                    </div>
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+                    </Box>
+                  </Box>
+                  <Box component="div" sx={{"mt":1.5,"display":"grid","gridTemplateColumns":"repeat(3, minmax(0, 1fr))","gap":1.5,"fontSize":"var(--dr-type-caption)"}}>
                     <div>
-                      <div className="text-muted-foreground">同步</div>
-                      <div className="mt-1 font-mono tabular-nums">
-                        {run.totalFetched} / <span className={styles.successText}>+{run.totalNew}</span>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">评分</div>
-                      <div className="mt-1 font-mono tabular-nums">{stageCount(run.scoredCount, run.candidateCount)}</div>
+                      <Box component="div" sx={{"color":"text.secondary"}}>同步</Box>
+                      <Box component="div" sx={{"mt":0.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>
+                        {run.totalFetched} / <Box component="span" sx={{"color":"success.main"}}>+{run.totalNew}</Box>
+                      </Box>
                     </div>
                     <div>
-                      <div className="text-muted-foreground">补全</div>
-                      <div className="mt-1 font-mono tabular-nums">{stageCount(run.enrichedCount, run.candidateCount)}</div>
+                      <Box component="div" sx={{"color":"text.secondary"}}>评分</Box>
+                      <Box component="div" sx={{"mt":0.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>{stageCount(run.scoredCount, run.candidateCount)}</Box>
                     </div>
-                  </div>
+                    <div>
+                      <Box component="div" sx={{"color":"text.secondary"}}>补全</Box>
+                      <Box component="div" sx={{"mt":0.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>{stageCount(run.enrichedCount, run.candidateCount)}</Box>
+                    </div>
+                  </Box>
                   {run.errorCode ? (
-                    <div className="mt-2 break-words text-xs text-destructive">
+                    <Box component="div" sx={{"mt":1,"overflowWrap":"anywhere","fontSize":"var(--dr-type-caption)","color":"error.main"}}>
                       <code>{run.errorCode}</code>
-                      {run.errorMessage ? <div className="mt-1 text-xs">{run.errorMessage}</div> : null}
-                    </div>
+                      {run.errorMessage ? <Box component="div" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)"}}>{run.errorMessage}</Box> : null}
+                    </Box>
                   ) : null}
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <Box component="div" sx={{"mt":1,"display":"flex","flexWrap":"wrap","gap":1}}>
                     <Button
                       type="button"
                       variant="outline"
@@ -1042,20 +1028,20 @@ function DashboardTab() {
                         查看失败条目
                       </Button>
                     ) : null}
-                  </div>
+                  </Box>
                   {failureRunId === run.id ? <RunFailureDetails runId={run.id} sourceName={run.sourceName} /> : null}
-                </div>
+                </Box>
               ))}
-            </div>
+            </Box>
           </>
         )}
-      </section>
-        </div>
-      </details>
+      </Box>
+        </Box>
+      </Box>
 
-      <p className="mt-4 text-xs text-muted-foreground">
-        数据生成时间：{new Date(d.generatedAt).toLocaleString('zh-CN')} · 每 30s 自动刷新
-      </p>
+      <Box component="p" sx={{"mt":2,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
+        数据生成时间：{new Date(d.generatedAt).toLocaleString('zh-CN')} · 仪表板每 5 秒、逐源明细每 30 秒自动刷新
+      </Box>
     </div>
   );
 }
@@ -1077,42 +1063,37 @@ function RadarMonitorPanel({
   const maxScore = Math.max(1, ...monitor.scoreDistribution.map((bucket) => bucket.count));
 
   return (
-    <section className="mb-4 overflow-hidden rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
+    <Box component="section" sx={{"mb":2,"overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
+      <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"flex-start","justifyContent":"space-between","gap":1.5,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5}}>
         <div>
-          <div className="flex items-center gap-2">
-            <h2 className="flex items-center gap-2 text-base font-semibold">
-              <Activity className="size-4 text-muted-foreground" />
+          <Box component="div" sx={{"display":"flex","alignItems":"center","gap":1}}>
+            <Box component="h2" sx={{"display":"flex","alignItems":"center","gap":1,"fontSize":"var(--dr-type-title-small)","fontWeight":"var(--dr-weight-semibold)"}}>
+              <Box component={Activity} sx={{"width":16,"height":16,"color":"text.secondary"}} />
               雷达实时监控
-            </h2>
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium',
-                monitor.active
-                  ? 'bg-status-running-bg text-status-running-fg'
-                  : 'bg-status-succeeded-bg text-status-succeeded-fg',
-              )}
+            </Box>
+            <Box component="span"
+              sx={[{"display":"inline-flex","alignItems":"center","gap":0.5,"borderRadius":"var(--dr-radius-pill)","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)"}, monitor.active ? {"backgroundColor":"var(--dr-color-primary-container)","color":"primary.main"} : {"backgroundColor":"var(--dr-color-success-container)","color":"success.main"}]}
             >
-              <span className={cn('size-1.5 rounded-full bg-current', monitor.active && 'animate-pulse')} />
+              <Box component="span" sx={[{"width":6,"height":6,"borderRadius":"var(--dr-radius-pill)","backgroundColor":"currentColor"}, monitor.active && {"animation":"adminPulse 1.5s ease-in-out infinite"}]} />
               {monitor.active ? '同步进行中' : '当前无运行任务'}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
+            </Box>
+          </Box>
+          <Box component="p" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
             今日 {monitor.date} · 数据更新时间 {new Date(generatedAt).toLocaleTimeString('zh-CN', { hour12: false })}
-          </p>
+          </Box>
         </div>
         {monitor.activeSources.length > 0 ? (
-          <div className="flex max-w-full flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+          <Box component="div" sx={{"display":"flex","maxWidth":"100%","flexWrap":"wrap","alignItems":"center","justifyContent":"flex-end","gap":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
             <span>正在处理：</span>
             {monitor.activeSources.slice(0, 4).map((source) => (
               <Badge key={`${source.name}-${source.startedAt}`} variant="secondary">{source.name}</Badge>
             ))}
             {monitor.activeSources.length > 4 ? <span>+{monitor.activeSources.length - 4}</span> : null}
-          </div>
+          </Box>
         ) : null}
-      </div>
+      </Box>
 
-      <div className="grid grid-cols-2 border-b border-border bg-muted/20 sm:grid-cols-3 xl:grid-cols-6">
+      <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface))","@media (min-width:640px)":{"gridTemplateColumns":"repeat(3, minmax(0, 1fr))"},"@media (min-width:1280px)":{"gridTemplateColumns":"repeat(6, minmax(0, 1fr))"}}}>
         <RadarMetric label="来源数" value={monitor.latest.total} />
         <RadarMetric label="完成" value={monitor.latest.completed} tone="success" />
         <RadarMetric
@@ -1123,103 +1104,102 @@ function RadarMonitorPanel({
         <RadarMetric label="今日写入" value={`+${monitor.runs.new}`} tone="success" />
         <RadarMetric label="今日可见" value={monitor.visibleToday} />
         <RadarMetric label="失败候选" value={monitor.failedUniqueItems} tone={monitor.failedUniqueItems > 0 ? 'danger' : 'default'} />
-      </div>
+      </Box>
 
-      <div className="border-b border-border px-4 py-3">
-        <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-          <span className="font-semibold">今日同步进度</span>
-          <span className="text-muted-foreground">
+      <Box component="div" sx={{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5}}>
+        <Box component="div" sx={{"mb":1,"display":"flex","alignItems":"center","justifyContent":"space-between","gap":1,"fontSize":"var(--dr-type-caption)"}}>
+          <Box component="span" sx={{"fontWeight":"var(--dr-weight-semibold)"}}>今日同步进度</Box>
+          <Box component="span" sx={{"color":"text.secondary"}}>
             {completedRuns}/{monitor.latest.total} 个来源已结束 · {monitor.runs.total} 次运行
-          </span>
-        </div>
-        <div className="h-2 overflow-hidden rounded bg-muted">
-          <div
-            className={cn('h-full bg-status-succeeded-fg transition-all', monitor.active && 'bg-status-running-fg')}
-            style={{ width: `${runProgress}%` }}
+          </Box>
+        </Box>
+        <Box component="div" sx={{"height":8,"overflow":"hidden","borderRadius":"var(--dr-radius-xs)","backgroundColor":"action.hover"}}>
+          <Box component="div"
+            sx={[{"height":"100%","width":`${runProgress}%`,"backgroundColor":"success.main","transition":"all var(--dr-motion-fast)"}, monitor.active && {"backgroundColor":"primary.main"}]}
           />
-        </div>
-        <p className="mt-2 text-xs text-muted-foreground">
+        </Box>
+        <Box component="p" sx={{"mt":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
           {monitor.latest.completed} 个完成
           {monitor.latest.partial > 0 ? ` · ${monitor.latest.partial} 个部分完成` : ''}
           {monitor.latest.failed > 0 ? ` · ${monitor.latest.failed} 个失败` : ''}
           {monitor.runs.fetched > 0 ? ` · 最近一轮抓取 ${monitor.runs.fetched} 条，跳过 ${monitor.runs.skipped} 条` : ''}
-        </p>
-      </div>
+        </Box>
+      </Box>
 
-      <details className="group border-t border-border">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+      <Box data-admin-hover-group="true" component="details" sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider"}}>
+        <Box component="summary" sx={{"display":"flex","cursor":"pointer","listStyle":"none","alignItems":"center","justifyContent":"space-between","gap":1.5,"px":2,"py":1.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-semibold)","&::-webkit-details-marker":{"display":"none"}}}>
           <span>查看详细分布与异常原因</span>
-          <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+          <Box component="span" sx={{"display":"flex","alignItems":"center","gap":1,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-regular)","color":"text.secondary"}}>
             {levelTotal} 条内容 · {monitor.runs.failures.length} 类失败
-            <ChevronDown className="size-4 transition-transform group-open:rotate-180" aria-hidden />
-          </span>
-        </summary>
+            <Box component={ChevronDown} sx={{"width":16,"height":16,"transition":"transform var(--dr-motion-fast)","details[open] &":{"transform":"rotate(180deg)"}}} aria-hidden />
+          </Box>
+        </Box>
         <div>
-          <div className="grid gap-0 divide-y divide-border border-t border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          <Box component="div" sx={{"display":"grid","gap":0,"& > :not(:last-child)":{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"var(--dr-color-outline)"},"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","@media (min-width:1024px)":{"gridTemplateColumns":"repeat(2, minmax(0, 1fr))","& > :not(:last-child)":{"borderBottomWidth":0}}}}>
             <RadarMonitorSection title="阅读等级分布" hint={`${levelTotal} 条今日写入内容`}>
-              <div className="space-y-2">
+              <Box component="div" sx={{"& > :not(style) ~ :not(style)":{"marginTop":1}}}>
                 {([
-                  ['精读', monitor.readingLevels.collection + monitor.readingLevels.deep_read, 'bg-tier-deep-read'],
-                  ['速读', monitor.readingLevels.skim, 'bg-tier-skim'],
-                  ['不推荐', monitor.readingLevels.noise, 'bg-tier-noise'],
-                  ['待评分', monitor.readingLevels.pending, 'bg-muted-foreground'],
+                  ['精读', monitor.readingLevels.collection + monitor.readingLevels.deep_read, 'var(--dr-color-tier-deep-read)'],
+                  ['速读', monitor.readingLevels.skim, 'var(--dr-color-tier-skim)'],
+                  ['不推荐', monitor.readingLevels.noise, 'var(--dr-color-tier-noise)'],
+                  ['待评分', monitor.readingLevels.pending, 'var(--dr-color-text-secondary)'],
                 ] as const).map(([label, count, color]) => (
-                  <div key={label} className="grid grid-cols-[68px_1fr_30px] items-center gap-2 text-xs">
-                    <span className="text-muted-foreground">{label}</span>
-                    <div className="h-1.5 overflow-hidden rounded bg-muted">
-                      <div className={cn('h-full', color)} style={{ width: `${(count / maxLevel) * 100}%` }} />
-                    </div>
-                    <span className="text-right font-mono tabular-nums">{count}</span>
-                  </div>
+                  <Box component="div" key={label} sx={{"display":"grid","gridTemplateColumns":"68px 1fr 30px","alignItems":"center","gap":1,"fontSize":"var(--dr-type-caption)"}}>
+                    <Box component="span" sx={{"color":"text.secondary"}}>{label}</Box>
+                    <Box component="div" sx={{"height":6,"overflow":"hidden","borderRadius":"var(--dr-radius-xs)","backgroundColor":"action.hover"}}>
+                      <Box component="div" sx={{ height: '100%', backgroundColor: color, width: `${(count / maxLevel) * 100}%` }} />
+                    </Box>
+                    <Box component="span" sx={{"textAlign":"right","fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>{count}</Box>
+                  </Box>
                 ))}
-              </div>
+              </Box>
             </RadarMonitorSection>
 
             <RadarMonitorSection title="评分分布" hint={`${scoreTotal} 条今日写入内容`}>
-              <div className="space-y-2">
+              <Box component="div" sx={{"& > :not(style) ~ :not(style)":{"marginTop":1}}}>
                 {monitor.scoreDistribution.map((bucket) => (
-                  <div key={bucket.label} className="grid grid-cols-[52px_1fr_30px] items-center gap-2 text-xs">
-                    <span className="text-muted-foreground">{bucket.label}</span>
-                    <div className="h-1.5 overflow-hidden rounded bg-muted">
-                      <div className="h-full bg-[var(--dr-color-primary)]" style={{ width: `${(bucket.count / maxScore) * 100}%` }} />
-                    </div>
-                    <span className="text-right font-mono tabular-nums">{bucket.count}</span>
-                  </div>
+                  <Box component="div" key={bucket.label} sx={{"display":"grid","gridTemplateColumns":"52px 1fr 30px","alignItems":"center","gap":1,"fontSize":"var(--dr-type-caption)"}}>
+                    <Box component="span" sx={{"color":"text.secondary"}}>{bucket.label}</Box>
+                    <Box component="div" sx={{"height":6,"overflow":"hidden","borderRadius":"var(--dr-radius-xs)","backgroundColor":"action.hover"}}>
+                      <Box component="div" sx={{"height":"100%","width":`${(bucket.count / maxScore) * 100}%`,"backgroundColor":"var(--dr-color-primary)"}} />
+                    </Box>
+                    <Box component="span" sx={{"textAlign":"right","fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>{bucket.count}</Box>
+                  </Box>
                 ))}
-              </div>
+              </Box>
             </RadarMonitorSection>
-          </div>
+          </Box>
 
-          <div className="grid gap-0 divide-y divide-border border-t border-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          <Box component="div" sx={{"display":"grid","gap":0,"& > :not(:last-child)":{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"var(--dr-color-outline)"},"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","@media (min-width:1024px)":{"gridTemplateColumns":"repeat(2, minmax(0, 1fr))","& > :not(:last-child)":{"borderBottomWidth":0}}}}>
             <RadarMonitorSection title="今日跳过原因（canonicalUrl 去重）">
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>规则噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.ruleNoise}</strong></span>
-                <span>评分噪声 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.distilledNoise}</strong></span>
-                <span>不可评估 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.unassessable}</strong></span>
-                <span>硬否决 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.hardVeto}</strong></span>
-                <span>抓取失败 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.contentFetchFailed}</strong></span>
-                <span>内容不足 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.lowQuality}</strong></span>
-                <span>待评分 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.pendingScore}</strong></span>
-                <span>其他 <strong className="font-mono text-foreground">{monitor.governance.skipReasons.other}</strong></span>
-              </div>
+              <Box component="div" sx={{"display":"flex","flexWrap":"wrap","columnGap":2,"rowGap":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
+                <span>规则噪声 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.ruleNoise}</Box></span>
+                <span>评分噪声 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.distilledNoise}</Box></span>
+                <span>不可评估 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.unassessable}</Box></span>
+                <span>硬否决 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.hardVeto}</Box></span>
+                <span>抓取失败 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.contentFetchFailed}</Box></span>
+                <span>内容不足 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.lowQuality}</Box></span>
+                <span>待评分 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.pendingScore}</Box></span>
+                <span>其他 <Box component="strong" sx={{"fontFamily":"monospace","color":"text.primary"}}>{monitor.governance.skipReasons.other}</Box></span>
+              </Box>
             </RadarMonitorSection>
             <RadarMonitorSection title="失败原因">
               {monitor.runs.failures.length === 0 ? (
-                <p className="text-xs text-muted-foreground">今天暂无失败来源。</p>
+                <Box component="p" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>今天暂无失败来源。</Box>
               ) : (
-                <div className="flex flex-wrap gap-2">
+                <Box component="div" sx={{"display":"flex","flexWrap":"wrap","gap":1}}>
                   {monitor.runs.failures.slice(0, 6).map((failure) => (
-                    <Badge key={failure.code} variant="outline" className="text-destructive">
+                    <Badge key={failure.code} variant="outline" sx={{"color":"error.main"}}>
                       {failure.code} · {failure.count}
                     </Badge>
                   ))}
-                </div>
+                </Box>
               )}
             </RadarMonitorSection>
-          </div>
+          </Box>
         </div>
-      </details>
-    </section>
+      </Box>
+    </Box>
   );
 }
 
@@ -1233,67 +1213,67 @@ function RadarMonitorSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-w-0 px-4 py-3">
-      <div className="mb-3 flex items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
-      </div>
+    <Box component="div" sx={{"minWidth":0,"px":2,"py":1.5}}>
+      <Box component="div" sx={{"mb":1.5,"display":"flex","alignItems":"baseline","justifyContent":"space-between","gap":1}}>
+        <Box component="h3" sx={{"fontSize":"var(--dr-type-body)","fontWeight":"var(--dr-weight-semibold)"}}>{title}</Box>
+        {hint ? <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>{hint}</Box> : null}
+      </Box>
       {children}
-    </div>
+    </Box>
   );
 }
 
 function RadarScoringRules() {
   return (
-    <details className="group mb-4 overflow-hidden rounded-lg border border-border bg-card">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
+    <Box data-admin-hover-group="true" component="details" sx={{"mb":2,"overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
+      <Box component="summary" sx={{"display":"flex","cursor":"pointer","listStyle":"none","alignItems":"center","justifyContent":"space-between","gap":1.5,"px":2,"py":1.5,"&::-webkit-details-marker":{"display":"none"}}}>
         <div>
-          <h2 className="text-base font-semibold">评分与阅读等级规则</h2>
-          <p className="mt-1 text-xs text-muted-foreground">7 个评分维度 · 3 个来源 profile</p>
+          <Box component="h2" sx={{"fontSize":"var(--dr-type-title-small)","fontWeight":"var(--dr-weight-semibold)"}}>评分与阅读等级规则</Box>
+          <Box component="p" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>7 个评分维度 · 3 个来源 profile</Box>
         </div>
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
-      </summary>
-      <div className="border-t border-border px-4 py-3">
-        <p className="text-xs leading-5 text-muted-foreground">
+        <Box component={ChevronDown} sx={{"width":16,"height":16,"flexShrink":0,"color":"text.secondary","transition":"transform var(--dr-motion-fast)","details[open] &":{"transform":"rotate(180deg)"}}} aria-hidden />
+      </Box>
+      <Box component="div" sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5}}>
+        <Box component="p" sx={{"fontSize":"var(--dr-type-caption)","lineHeight":"20px","color":"text.secondary"}}>
           总分为 7 个维度的加权分数（0–100）。等级按经相关性、适用范围和证据校准后的等级分判断。原收藏级已并入精读；所有内容统一在原站阅读。
-        </p>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-left text-xs">
-          <thead className="border-b border-border bg-muted/20 text-muted-foreground">
+        </Box>
+      </Box>
+      <Box component="div" sx={{"overflowX":"auto"}}>
+        <Box component="table" sx={{"width":"100%","minWidth":560,"textAlign":"left","fontSize":"var(--dr-type-caption)"}}>
+          <Box component="thead" sx={{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface))","color":"text.secondary"}}>
             <tr>
-              <th className="px-4 py-2 font-medium">评分 profile</th>
-              <th className="px-3 py-2 font-medium">精读</th>
-              <th className="px-3 py-2 font-medium">速读</th>
-              <th className="px-3 py-2 font-medium">不推荐</th>
+              <Box component="th" sx={{"px":2,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>评分 profile</Box>
+              <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>精读</Box>
+              <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>速读</Box>
+              <Box component="th" sx={{"px":1.5,"py":1,"fontWeight":"var(--dr-weight-medium)"}}>不推荐</Box>
             </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
+          </Box>
+          <Box component="tbody" sx={{"& > :not(:last-child)":{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"var(--dr-color-outline)"}}}>
             <tr>
-              <td className="px-4 py-3 font-medium">工程内容 / GitHub</td>
-              <td className="px-3 py-3 font-mono tabular-nums">≥ 55</td>
-              <td className="px-3 py-3 font-mono tabular-nums">38–54.99</td>
-              <td className="px-3 py-3 font-mono tabular-nums">&lt; 38</td>
-            </tr>
-            <tr>
-              <td className="px-4 py-3 font-medium">研究论文 / arXiv</td>
-              <td className="px-3 py-3 font-mono tabular-nums">≥ 60</td>
-              <td className="px-3 py-3 font-mono tabular-nums">42–59.99</td>
-              <td className="px-3 py-3 font-mono tabular-nums">&lt; 42</td>
+              <Box component="td" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>工程内容 / GitHub</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>≥ 55</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>38–54.99</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>&lt; 38</Box>
             </tr>
             <tr>
-              <td className="px-4 py-3 font-medium">行业新闻 / 产品动态</td>
-              <td className="px-3 py-3 font-mono tabular-nums">≥ 52</td>
-              <td className="px-3 py-3 font-mono tabular-nums">38–51.99</td>
-              <td className="px-3 py-3 font-mono tabular-nums">&lt; 38</td>
+              <Box component="td" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>研究论文 / arXiv</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>≥ 60</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>42–59.99</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>&lt; 42</Box>
             </tr>
-          </tbody>
-        </table>
-      </div>
-      <div className="border-t border-border px-4 py-3 text-xs leading-5 text-muted-foreground">
+            <tr>
+              <Box component="td" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>行业新闻 / 产品动态</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>≥ 52</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>38–51.99</Box>
+              <Box component="td" sx={{"px":1.5,"py":1.5,"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>&lt; 38</Box>
+            </tr>
+          </Box>
+        </Box>
+      </Box>
+      <Box component="div" sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5,"fontSize":"var(--dr-type-caption)","lineHeight":"20px","color":"text.secondary"}}>
         评分维度：信息增量、分析深度、可行动性、事实可信度、时效性、表达质量、综合信号。实际分级还会应用相关性、论文可迁移性、风险和疑似搬运等规则。
-      </div>
-    </details>
+      </Box>
+    </Box>
   );
 }
 
@@ -1310,33 +1290,33 @@ function RunFailureDetails({ runId, sourceName }: { runId: string; sourceName: s
     },
   });
   return (
-    <div className="border-t border-border bg-destructive/[0.025] px-4 py-3">
-      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-destructive">
-        <FileWarning className="size-3.5" />
+    <Box component="div" sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-danger) 3%, var(--dr-color-surface))","px":2,"py":1.5}}>
+      <Box component="div" sx={{"mb":1,"display":"flex","alignItems":"center","gap":1,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-semibold)","color":"error.main"}}>
+        <Box component={FileWarning} sx={{"width":14,"height":14}} />
         {sourceName} · 失败条目
-      </div>
-      {q.isLoading ? <Skeleton className="h-10 w-full" /> : null}
-      {q.isError ? <p className="text-xs text-destructive">{(q.error as Error).message}</p> : null}
-      <div className="grid gap-2">
+      </Box>
+      {q.isLoading ? <Skeleton sx={{"height":40,"width":"100%"}} /> : null}
+      {q.isError ? <Box component="p" sx={{"fontSize":"var(--dr-type-caption)","color":"error.main"}}>{(q.error as Error).message}</Box> : null}
+      <Box component="div" sx={{"display":"grid","gap":1}}>
         {(q.data?.items ?? []).map((item) => (
-          <div key={item.id} className="flex items-start justify-between gap-3 rounded border border-destructive/20 bg-background p-3 text-xs">
-            <div className="min-w-0">
-              <div className="font-medium">{item.title}</div>
-              <div className="mt-1 text-muted-foreground">
+          <Box component="div" key={item.id} sx={{"display":"flex","alignItems":"flex-start","justifyContent":"space-between","gap":1.5,"borderRadius":"var(--dr-radius-xs)","border":"1px solid var(--dr-color-outline)","borderColor":"color-mix(in srgb, var(--dr-color-danger) 20%, var(--dr-color-outline))","backgroundColor":"background.paper","p":1.5,"fontSize":"var(--dr-type-caption)"}}>
+            <Box component="div" sx={{"minWidth":0}}>
+              <Box component="div" sx={{"fontWeight":"var(--dr-weight-medium)"}}>{item.title}</Box>
+              <Box component="div" sx={{"mt":0.5,"color":"text.secondary"}}>
                 {item.reasonCode} · {item.errorType ?? 'unknown'} · {item.errorDomain ?? 'unknown'}
-              </div>
-              {item.reasonMessage ? <div className="mt-1 break-words text-destructive">{item.reasonMessage}</div> : null}
-            </div>
-            <a href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" className="shrink-0 text-muted-foreground hover:text-foreground">
-              <ExternalLink className="size-3.5" />
-            </a>
-          </div>
+              </Box>
+              {item.reasonMessage ? <Box component="div" sx={{"mt":0.5,"overflowWrap":"anywhere","color":"error.main"}}>{item.reasonMessage}</Box> : null}
+            </Box>
+            <Box component="a" href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" sx={{"flexShrink":0,"color":"text.secondary","&:hover":{"color":"text.primary"}}}>
+              <Box component={ExternalLink} sx={{"width":14,"height":14}} />
+            </Box>
+          </Box>
         ))}
-      </div>
+      </Box>
       {!q.isLoading && !q.isError && (q.data?.items.length ?? 0) === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无逐条失败记录。历史运行未持久化失败候选。</p>
+        <Box component="p" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>暂无逐条失败记录。历史运行未持久化失败候选。</Box>
       ) : null}
-    </div>
+    </Box>
   );
 }
 
@@ -1494,13 +1474,13 @@ function RadarGovernanceTab() {
   }
 
   return (
-    <div className="space-y-4">
+    <Box component="div" sx={{"& > :not(style) ~ :not(style)":{"marginTop":2}}}>
       <PageHeader
         title="雷达治理"
         description="查看不推荐、待评分和其他未进入雷达展示的内容，定位来源级失败，并把有价值的内容提升回雷达。"
       />
 
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+      <Box component="div" sx={{"display":"grid","gridTemplateColumns":"repeat(2, minmax(0, 1fr))","gap":1,"@media (min-width:1024px)":{"gridTemplateColumns":"repeat(5, minmax(0, 1fr))"}}}>
         <GovernanceMetric
           label="待治理 canonical"
           value={counts?.filteredPending ?? '—'}
@@ -1531,15 +1511,15 @@ function RadarGovernanceTab() {
           tone={q.data?.failureRate.withinTarget ? 'success' : 'danger'}
           icon={<Activity />}
         />
-      </div>
+      </Box>
       {q.data ? (
-        <p className="-mt-2 text-xs text-muted-foreground">
+        <Box component="p" sx={{"mt":-1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
           去重口径：{q.data.failureRate.failed} 个未恢复失败 / {q.data.failureRate.attempted} 个唯一尝试，目标 &lt; 1%
-        </p>
+        </Box>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/[0.035] px-3 py-3">
-        <span className="mr-1 text-xs font-semibold">优先队列</span>
+      <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1,"borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"color-mix(in srgb, var(--dr-color-primary) 20%, var(--dr-color-outline))","backgroundColor":"color-mix(in srgb, var(--dr-color-primary) 4%, var(--dr-color-surface))","px":1.5,"py":1.5}}>
+        <Box component="span" sx={{"mr":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-semibold)"}}>优先队列</Box>
         <Button
           type="button"
           size="xs"
@@ -1567,14 +1547,14 @@ function RadarGovernanceTab() {
           <Activity />
           低置信度
         </Button>
-        <span className="text-xs text-muted-foreground">
+        <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
           先处理失败、待评分和不可评估内容，再看普通噪声。
-        </span>
-      </div>
+        </Box>
+      </Box>
 
-      <section className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div className="inline-flex rounded-lg border border-border bg-muted/30 p-1">
+      <Box component="section" sx={{"overflow":"hidden","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper"}}>
+        <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","justifyContent":"space-between","gap":1.5,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","px":2,"py":1.5}}>
+          <Box component="div" sx={{"display":"inline-flex","borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 30%, var(--dr-color-surface))","p":0.5}}>
             {([
               ['filtered', '待治理内容', counts?.filteredPending ?? 0],
               ['failed', '失败条目', counts?.failedPending ?? 0],
@@ -1594,23 +1574,20 @@ function RadarGovernanceTab() {
                 }}
               >
                 {label}
-                <span className={cn(
-                  'rounded-full px-2 py-1 font-mono text-xs',
-                  kind === nextKind ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
-                )}>
+                <Box component="span" sx={[{"borderRadius":"var(--dr-radius-pill)","px":1,"py":0.5,"fontFamily":"monospace","fontSize":"var(--dr-type-caption)"}, kind === nextKind ? {"backgroundColor":"var(--dr-color-primary-container)","color":"primary.main"} : {"backgroundColor":"action.hover","color":"text.secondary"}]}>
                   {count}
-                </span>
+                </Box>
               </Button>
             ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="sr-only" htmlFor="radar-governance-date">诊断日期</label>
+          </Box>
+          <Box component="div" sx={{"display":"flex","alignItems":"center","gap":1}}>
+            <Box component="label" sx={{"position":"absolute","width":1,"height":1,"padding":0,"margin":-1,"overflow":"hidden","clip":"rect(0, 0, 0, 0)","whiteSpace":"nowrap","border":0}} htmlFor="radar-governance-date">诊断日期</Box>
             <Input
               id="radar-governance-date"
               type="date"
               value={date === 'all' ? '' : date}
               onChange={(event) => { setDate(event.target.value || 'all'); setPage(1); }}
-              className="h-8 w-36 text-xs"
+              sx={{"height":32,"width":144,"fontSize":"var(--dr-type-caption)"}}
             />
             <Button
               type="button"
@@ -1620,9 +1597,9 @@ function RadarGovernanceTab() {
             >
               全部日期
             </Button>
-            <label className="sr-only" htmlFor="radar-governance-status">记录状态</label>
+            <Box component="label" sx={{"position":"absolute","width":1,"height":1,"padding":0,"margin":-1,"overflow":"hidden","clip":"rect(0, 0, 0, 0)","whiteSpace":"nowrap","border":0}} htmlFor="radar-governance-status">记录状态</Box>
             <Select value={status} onValueChange={(value) => { setStatus(value as typeof status); setPage(1); }}>
-              <SelectTrigger id="radar-governance-status" className="h-8 w-32 text-xs">
+              <SelectTrigger id="radar-governance-status" sx={{"height":32,"width":128,"fontSize":"var(--dr-type-caption)"}}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1633,7 +1610,7 @@ function RadarGovernanceTab() {
               </SelectContent>
             </Select>
             <Select value={sourceType} onValueChange={(value) => { setSourceType(value); setPage(1); }}>
-              <SelectTrigger className="h-8 w-36 text-xs" aria-label="来源筛选">
+              <SelectTrigger sx={{"height":32,"width":144,"fontSize":"var(--dr-type-caption)"}} aria-label="来源筛选">
                 <SelectValue placeholder="全部来源" />
               </SelectTrigger>
               <SelectContent>
@@ -1648,7 +1625,7 @@ function RadarGovernanceTab() {
               </SelectContent>
             </Select>
             <Select value={reasonCode} onValueChange={(value) => { setReasonCode(value); setPage(1); }}>
-              <SelectTrigger className="h-8 w-36 text-xs" aria-label="原因筛选">
+              <SelectTrigger sx={{"height":32,"width":144,"fontSize":"var(--dr-type-caption)"}} aria-label="原因筛选">
                 <SelectValue placeholder="全部原因" />
               </SelectTrigger>
               <SelectContent>
@@ -1664,7 +1641,7 @@ function RadarGovernanceTab() {
               </SelectContent>
             </Select>
             <Select value={sort} onValueChange={(value) => { setSort(value); setPage(1); }}>
-              <SelectTrigger className="h-8 w-32 text-xs" aria-label="排序方式">
+              <SelectTrigger sx={{"height":32,"width":128,"fontSize":"var(--dr-type-caption)"}} aria-label="排序方式">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1677,7 +1654,7 @@ function RadarGovernanceTab() {
               </SelectContent>
             </Select>
             <Select value={perPage} onValueChange={(value) => { setPerPage(value as typeof perPage); setPage(1); }}>
-              <SelectTrigger className="h-8 w-24 text-xs" aria-label="每页条数">
+              <SelectTrigger sx={{"height":32,"width":96,"fontSize":"var(--dr-type-caption)"}} aria-label="每页条数">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1687,30 +1664,30 @@ function RadarGovernanceTab() {
                 <SelectItem value="all">全部</SelectItem>
               </SelectContent>
             </Select>
-            <span className="text-xs text-muted-foreground">
+            <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
               {q.isLoading ? '加载中…' : `${q.data?.items.length ?? 0} / ${q.data?.total ?? 0} 条`}
-            </span>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/10 px-4 py-2">
-          <SearchIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+            </Box>
+          </Box>
+        </Box>
+        <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 10%, var(--dr-color-surface))","px":2,"py":1}}>
+          <Box component={SearchIcon} sx={{"width":16,"height":16,"color":"text.secondary"}} aria-hidden="true" />
           <Input
             value={query}
             onChange={(event) => { setQuery(event.target.value); setPage(1); }}
             placeholder="搜索标题、URL 或失败信息"
             aria-label="搜索治理条目"
-            className="h-8 min-w-56 max-w-md text-xs"
+            sx={{"height":32,"minWidth":224,"maxWidth":448,"fontSize":"var(--dr-type-caption)"}}
           />
-          <span className="text-xs text-muted-foreground">筛选结果按 canonicalUrl 去重</span>
-        </div>
+          <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>筛选结果按 canonicalUrl 去重</Box>
+        </Box>
         {actionMessage ? (
           <Alert severity={actionTone} role={actionTone === 'error' ? 'alert' : 'status'} sx={{ borderRadius: 0 }}>
             {actionMessage}
           </Alert>
         ) : null}
         {kind === 'filtered' && status === 'pending' && visiblePendingIds.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/10 px-4 py-2 text-xs">
-            <label className="inline-flex cursor-pointer items-center gap-2 font-medium">
+          <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 10%, var(--dr-color-surface))","px":2,"py":1,"fontSize":"var(--dr-type-caption)"}}>
+            <Box component="label" sx={{"display":"inline-flex","cursor":"pointer","alignItems":"center","gap":1,"fontWeight":"var(--dr-weight-medium)"}}>
               <Checkbox
                 size="small"
                 checked={allVisibleSelected}
@@ -1718,10 +1695,10 @@ function RadarGovernanceTab() {
                 aria-label="全选当前页待治理内容"
               />
               全选当前页
-            </label>
+            </Box>
             {selectedIds.length > 0 ? (
               <>
-                <span className="text-muted-foreground">已选 {selectedIds.length} 条</span>
+                <Box component="span" sx={{"color":"text.secondary"}}>已选 {selectedIds.length} 条</Box>
                 <Button
                   type="button"
                   size="xs"
@@ -1743,16 +1720,16 @@ function RadarGovernanceTab() {
                 </Button>
               </>
             ) : (
-              <span className="text-muted-foreground">批量提升或忽略当前页内容</span>
+              <Box component="span" sx={{"color":"text.secondary"}}>批量提升或忽略当前页内容</Box>
             )}
-          </div>
+          </Box>
         ) : null}
       {q.isLoading ? <QueueSkeleton /> : null}
-      {q.isError ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : null}
-      <div className="divide-y divide-border">
+      {q.isError ? <Box component="p" sx={{"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(q.error as Error).message}</Box> : null}
+      <Box component="div" sx={{"& > :not(:last-child)":{"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"var(--dr-color-outline)"}}}>
         {(q.data?.items ?? []).map((item) => (
-          <div key={item.id} className="group px-4 py-4 transition-colors hover:bg-muted/20">
-            <div className="flex items-start gap-3">
+          <Box data-admin-hover-group="true" component="div" key={item.id} sx={{"px":2,"py":2,"transition":"color, background-color, border-color var(--dr-motion-fast)","&:hover":{"backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface))"}}}>
+            <Box component="div" sx={{"display":"flex","alignItems":"flex-start","gap":1.5}}>
               {kind === 'filtered' && item.status === 'pending' ? (
                 <Checkbox
                   size="small"
@@ -1762,32 +1739,29 @@ function RadarGovernanceTab() {
                   sx={{ mt: -0.5 }}
                 />
               ) : null}
-              <span
-                className={cn(
-                  'mt-2 size-2 shrink-0 rounded-full',
-                  item.kind === 'failed' ? 'bg-status-failed-fg' : 'bg-tier-noise',
-                )}
+              <Box component="span"
+                sx={[{"mt":1,"width":8,"height":8,"flexShrink":0,"borderRadius":"var(--dr-radius-pill)"}, item.kind === 'failed' ? {"backgroundColor":"error.main"} : {"backgroundColor":"var(--dr-color-tier-noise)"}]}
                 aria-hidden="true"
               />
-              <div className="min-w-0 flex-1">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-medium leading-snug">{item.title}</h3>
+              <Box component="div" sx={{"minWidth":0,"flex":"1 1 0%"}}>
+              <Box component="div" sx={{"display":"flex","alignItems":"flex-start","justifyContent":"space-between","gap":1.5}}>
+                <Box component="div" sx={{"minWidth":0}}>
+                  <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1}}>
+                    <Box component="h3" sx={{"fontWeight":"var(--dr-weight-medium)","lineHeight":"var(--dr-line-height-heading)"}}>{item.title}</Box>
                     <Badge variant="outline">{item.source.name}</Badge>
                     {item.distilledTier ? <Badge variant="secondary">{readingTierLabel(item.distilledTier)}</Badge> : null}
                     {item.resolved ? <Badge variant="secondary">已恢复</Badge> : null}
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <code className={cn(item.kind === 'failed' && 'text-destructive')}>{item.reasonCode}</code>
+                  </Box>
+                  <Box component="div" sx={{"mt":1,"display":"flex","flexWrap":"wrap","alignItems":"center","columnGap":1,"rowGap":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
+                    <Box component="code" sx={item.kind === 'failed' ? {"color":"error.main"} : undefined}>{item.reasonCode}</Box>
                     <span aria-hidden="true">·</span>
                     <span>{new Date(item.createdAt).toLocaleString('zh-CN')}</span>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <a href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" className="rounded p-2 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100">
-                    <ExternalLink className="size-4" />
-                  </a>
+                  </Box>
+                </Box>
+                <Box component="div" sx={{"display":"flex","flexShrink":0,"alignItems":"center","gap":0.5}}>
+                  <Box component="a" href={item.url} target="_blank" rel="noreferrer" title="打开原文" aria-label="打开原文" sx={{"borderRadius":"var(--dr-radius-xs)","p":1,"color":"text.secondary","opacity":0.7,"&:hover":{"backgroundColor":"action.hover","color":"text.primary"},"[data-admin-hover-group]:hover &":{"opacity":1}}}>
+                    <Box component={ExternalLink} sx={{"width":16,"height":16}} />
+                  </Box>
                   {kind === 'filtered' && item.status === 'pending' ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -1798,7 +1772,7 @@ function RadarGovernanceTab() {
                           disabled={actionMut.isPending}
                           aria-label={`打开治理操作：${item.title}`}
                           title="更多治理操作"
-                          className="text-muted-foreground hover:text-foreground"
+                          sx={{"color":"text.secondary","&:hover":{"color":"text.primary"}}}
                         >
                           <MoreHorizontal />
                         </Button>
@@ -1813,7 +1787,7 @@ function RadarGovernanceTab() {
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           disabled={actionMut.isPending}
-                          className="text-muted-foreground"
+                          sx={{"color":"text.secondary"}}
                           onSelect={() => actionMut.mutate({ id: item.id, action: 'dismiss' })}
                         >
                           <EyeOff />
@@ -1822,29 +1796,29 @@ function RadarGovernanceTab() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   ) : null}
-                </div>
-              </div>
+                </Box>
+              </Box>
               {item.reasonMessage ? (
-                <p className={cn('mt-2 text-xs', item.kind === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+                <Box component="p" sx={[{"mt":1,"fontSize":"var(--dr-type-caption)"}, item.kind === 'failed' ? {"color":"error.main"} : {"color":"text.secondary"}]}>
                   {item.reasonMessage}
-                </p>
+                </Box>
               ) : null}
               {item.body ? (
-                <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                <Box component="p" sx={{"mt":1,"display":"-webkit-box","WebkitBoxOrient":"vertical","WebkitLineClamp":2,"overflow":"hidden","fontSize":"var(--dr-type-body)","lineHeight":"var(--dr-line-height-body)","color":"text.secondary"}}>
                   {governancePreview(item.body)}
-                </p>
+                </Box>
               ) : null}
               {item.kind === 'failed' && item.errorType ? (
-                <p className="mt-2 inline-flex items-center gap-1 text-xs text-destructive">
-                  <FileWarning className="size-3.5" />
+                <Box component="p" sx={{"mt":1,"display":"inline-flex","alignItems":"center","gap":0.5,"fontSize":"var(--dr-type-caption)","color":"error.main"}}>
+                  <Box component={FileWarning} sx={{"width":14,"height":14}} />
                   {item.errorType} · {item.errorDomain ?? 'unknown'}
-                </p>
+                </Box>
               ) : null}
-              </div>
-            </div>
-          </div>
+              </Box>
+            </Box>
+          </Box>
         ))}
-      </div>
+      </Box>
       {!q.isLoading && !q.isError && (q.data?.items.length ?? 0) === 0 ? (
         <EmptyState
           title={kind === 'filtered' ? '暂无待治理内容' : '暂无失败条目'}
@@ -1865,7 +1839,7 @@ function RadarGovernanceTab() {
       {q.data && q.data.totalPages > 1 ? (
         <Pagination page={q.data.page} totalPages={q.data.totalPages} onPageChange={setPage} disabled={q.isFetching} />
       ) : null}
-      </section>
+      </Box>
       <AppDialog
         open={confirmingBulkDismiss}
         onClose={() => setConfirmingBulkDismiss(false)}
@@ -1890,7 +1864,7 @@ function RadarGovernanceTab() {
           </>
         )}
       />
-    </div>
+    </Box>
   );
 }
 
@@ -1916,18 +1890,18 @@ function GovernanceMetric({
   tone: 'warning' | 'danger' | 'success' | 'muted';
   icon: React.ReactNode;
 }) {
-  const color = {
-    warning: 'text-status-partial-fg bg-status-partial-bg',
-    danger: 'text-status-failed-fg bg-status-failed-bg',
-    success: 'text-status-succeeded-fg bg-status-succeeded-bg',
-    muted: 'text-muted-foreground bg-muted',
+  const toneSx = {
+    warning: { color: 'warning.main', backgroundColor: 'var(--dr-color-warning-container)' },
+    danger: { color: 'error.main', backgroundColor: 'var(--dr-color-danger-container)' },
+    success: { color: 'success.main', backgroundColor: 'var(--dr-color-success-container)' },
+    muted: { color: 'text.secondary', backgroundColor: 'action.hover' },
   }[tone];
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+    <Box component="div" sx={{"borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"background.paper","p":1.5}}>
+      <Box component="div" sx={{"display":"flex","alignItems":"center","justifyContent":"space-between","gap":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
         <span>{label}</span>
-        <span className={cn('inline-flex size-6 items-center justify-center rounded', color)}>{icon}</span>
-      </div>
+        <Box component="span" sx={[{ display: 'inline-flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: 'var(--dr-radius-xs)' }, toneSx]}>{icon}</Box>
+      </Box>
       <Typography
         component="div"
         variant="h2"
@@ -1935,7 +1909,7 @@ function GovernanceMetric({
       >
         {value}
       </Typography>
-    </div>
+    </Box>
   );
 }
 
@@ -1981,33 +1955,33 @@ function RadarHealthBadge({
 }) {
   if (running > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-running-bg px-2 py-1 text-xs font-medium text-status-running-fg">
-        <Activity className="size-3" />
+      <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5,"borderRadius":"var(--dr-radius-pill)","backgroundColor":"var(--dr-color-primary-container)","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)","color":"primary.main"}}>
+        <Box component={Activity} sx={{"width":12,"height":12}} />
         同步中
-      </span>
+      </Box>
     );
   }
   if (failed > 0 || partial > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-failed-bg px-2 py-1 text-xs font-medium text-status-failed-fg">
-        <AlertTriangle className="size-3" />
+      <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5,"borderRadius":"var(--dr-radius-pill)","backgroundColor":"var(--dr-color-danger-container)","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)","color":"error.main"}}>
+        <Box component={AlertTriangle} sx={{"width":12,"height":12}} />
         有异常
-      </span>
+      </Box>
     );
   }
   if (pending > 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-status-partial-bg px-2 py-1 text-xs font-medium text-status-partial-fg">
-        <Activity className="size-3" />
+      <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5,"borderRadius":"var(--dr-radius-pill)","backgroundColor":"var(--dr-color-warning-container)","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)","color":"warning.main"}}>
+        <Box component={Activity} sx={{"width":12,"height":12}} />
         后处理中
-      </span>
+      </Box>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-status-succeeded-bg px-2 py-1 text-xs font-medium text-status-succeeded-fg">
-      <CheckCircle2 className="size-3" />
+    <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5,"borderRadius":"var(--dr-radius-pill)","backgroundColor":"var(--dr-color-success-container)","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)","color":"success.main"}}>
+      <Box component={CheckCircle2} sx={{"width":12,"height":12}} />
       已完成
-    </span>
+    </Box>
   );
 }
 
@@ -2021,20 +1995,14 @@ function RadarMetric({
   tone?: 'default' | 'success' | 'warning' | 'danger';
 }) {
   return (
-    <div className="px-4 py-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div
-        className={cn(
-          'mt-1 font-mono text-lg font-semibold tabular-nums',
-          tone === 'default' && 'text-foreground',
-          tone === 'success' && styles.successText,
-          tone === 'warning' && styles.warningText,
-          tone === 'danger' && 'text-destructive',
-        )}
+    <Box component="div" sx={{"px":2,"py":1.5}}>
+      <Box component="div" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>{label}</Box>
+      <Box component="div"
+        sx={[{"mt":0.5,"fontFamily":"monospace","fontSize":"var(--dr-type-title-compact)","fontWeight":"var(--dr-weight-semibold)","fontVariantNumeric":"tabular-nums"}, tone === 'default' && {"color":"text.primary"}, tone === 'success' && {"color":"success.main"}, tone === 'warning' && {"color":"warning.main"}, tone === 'danger' && {"color":"error.main"}]}
       >
         {value}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
 
@@ -2051,18 +2019,14 @@ function PipelineMetric({
 }) {
   const complete = total > 0 && pending === 0;
   return (
-    <div className="flex items-center justify-start gap-2 py-1">
-      <span className="text-muted-foreground">{label}</span>
-      <span
-        className={cn(
-          'font-mono tabular-nums',
-          complete && styles.successText,
-          pending > 0 && styles.warningText,
-        )}
+    <Box component="div" sx={{"display":"flex","alignItems":"center","justifyContent":"flex-start","gap":1,"py":0.5}}>
+      <Box component="span" sx={{"color":"text.secondary"}}>{label}</Box>
+      <Box component="span"
+        sx={[{"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}, complete && {"color":"success.main"}, pending > 0 && {"color":"warning.main"}]}
       >
         {stageCount(completed, total)}
-      </span>
-    </div>
+      </Box>
+    </Box>
   );
 }
 
@@ -2082,24 +2046,24 @@ export function shanghaiDateValue(value: Date = new Date()): string {
 function SyncStatusBadge({ status }: { status: string }) {
   const s = syncStatusStyle(status);
   return (
-    <span className={cn('rounded-full px-2 py-1 text-xs font-medium', s.className)}>
+    <Box component="span" sx={[{ borderRadius: 'var(--dr-radius-pill)', px: 1, py: 0.5, fontSize: 'var(--dr-type-caption)', fontWeight: 'var(--dr-weight-medium)' }, s.sx]}>
       {s.label}
-    </span>
+    </Box>
   );
 }
 
 /**
- * Pure helper：雷达同步状态 → 中文 label + token 化配色 class。
+ * Pure helper：雷达同步状态 → 中文 label + 共享 token 配色。
  * 导出供单测使用（项目未装 @testing-library/react，只测纯函数）。
  */
-export function syncStatusStyle(status: string): { label: string; className: string } {
-  const map: Record<string, { label: string; className: string }> = {
-    running: { label: '运行中', className: 'bg-status-running-bg text-status-running-fg' },
-    completed: { label: '完成', className: 'bg-status-succeeded-bg text-status-succeeded-fg' },
-    partial: { label: '部分', className: 'bg-status-partial-bg text-status-partial-fg' },
-    failed: { label: '失败', className: 'bg-status-failed-bg text-status-failed-fg' },
+export function syncStatusStyle(status: string) {
+  const map = {
+    running: { label: '运行中', sx: { backgroundColor: 'var(--dr-color-primary-container)', color: 'primary.main' } },
+    completed: { label: '完成', sx: { backgroundColor: 'var(--dr-color-success-container)', color: 'success.main' } },
+    partial: { label: '部分', sx: { backgroundColor: 'var(--dr-color-warning-container)', color: 'warning.main' } },
+    failed: { label: '失败', sx: { backgroundColor: 'var(--dr-color-danger-container)', color: 'error.main' } },
   };
-  return map[status] ?? { label: status, className: 'bg-muted text-muted-foreground' };
+  return map[status as keyof typeof map] ?? { label: status, sx: { backgroundColor: 'action.hover', color: 'text.secondary' } };
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -2160,53 +2124,53 @@ function SharesTab() {
       />
 
       {q.isLoading && <QueueSkeleton />}
-      {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
+      {q.isError && <Box component="p" sx={{"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(q.error as Error).message}</Box>}
 
-      <ul className="grid list-none gap-3 p-0">
+      <Box component="ul" sx={{"display":"grid","listStyle":"none","gap":1.5,"p":0}}>
         {(q.data?.items ?? []).map((it) => (
           <li key={it.id}>
-            <Card className="transition-colors duration-200 hover:border-primary/40">
-              <CardContent className="p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <h3 className="text-base font-semibold">
-                  <a
+            <Card sx={{"transition":"color, background-color, border-color var(--dr-motion-fast)","transitionDuration":"200ms","&:hover":{"borderColor":"color-mix(in srgb, var(--dr-color-primary) 40%, var(--dr-color-outline))"}}}>
+              <CardContent sx={{"p":2}}>
+            <Box component="div" sx={{"display":"flex","alignItems":"flex-start","justifyContent":"space-between","gap":1.5}}>
+              <Box component="div" sx={{"minWidth":0,"flex":"1 1 0%"}}>
+                <Box component="h3" sx={{"fontSize":"var(--dr-type-title-small)","fontWeight":"var(--dr-weight-semibold)"}}>
+                  <Box component="a"
                     href={it.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="hover:text-primary hover:underline"
+                    sx={{"&:hover":{"color":"primary.main","textDecoration":"underline"}}}
                   >
                     {it.fetchedTitle ?? it.url}
-                  </a>
-                </h3>
-                <p className="mt-1 text-xs text-muted-foreground">
+                  </Box>
+                </Box>
+                <Box component="p" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
                   分享人：{it.submitter.name}（{it.submitter.email}） ·{' '}
                   {new Date(it.createdAt).toLocaleString('zh-CN')}
-                </p>
+                </Box>
                 {it.userNote && (
-                  <p className="mt-2 flex items-start gap-2 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
-                    <MessageSquare className="mt-1 size-3 shrink-0" />
+                  <Box component="p" sx={{"mt":1,"display":"flex","alignItems":"flex-start","gap":1,"borderRadius":"var(--dr-radius-xs)","backgroundColor":"action.hover","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
+                    <Box component={MessageSquare} sx={{"mt":0.5,"width":12,"height":12,"flexShrink":0}} />
                     {it.userNote}
-                  </p>
+                  </Box>
                 )}
                 {it.summaryText && (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-xs text-primary">查看 AI 摘要</summary>
-                    <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+                  <Box component="details" sx={{"mt":1}}>
+                    <Box component="summary" sx={{"cursor":"pointer","fontSize":"var(--dr-type-caption)","color":"primary.main"}}>查看 AI 摘要</Box>
+                    <Box component="p" sx={{"mt":0.5,"whiteSpace":"pre-wrap","fontSize":"var(--dr-type-caption)","lineHeight":"var(--dr-line-height-body)","color":"text.secondary"}}>
                       {it.summaryText.slice(0, 500)}
                       {it.summaryText.length > 500 && '…'}
-                    </p>
-                  </details>
+                    </Box>
+                  </Box>
                 )}
                 {it.fetchErrorCode && (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-destructive">
-                    <AlertTriangle className="size-3" />
+                  <Box component="p" sx={{"mt":0.5,"display":"flex","alignItems":"center","gap":0.5,"fontSize":"var(--dr-type-caption)","color":"error.main"}}>
+                    <Box component={AlertTriangle} sx={{"width":12,"height":12}} />
                     抓取失败：{it.fetchErrorCode}
-                  </p>
+                  </Box>
                 )}
-              </div>
+              </Box>
               {status === 'pending' && (
-                <div className="flex shrink-0 flex-col gap-2">
+                <Box component="div" sx={{"display":"flex","flexShrink":0,"flexDirection":"column","gap":1}}>
                   <Button
                     type="button"
                     size="xs"
@@ -2220,33 +2184,33 @@ function SharesTab() {
                     type="button"
                     variant="outline"
                     size="xs"
-                    className="text-destructive"
+                    sx={{"color":"error.main"}}
                     disabled={reviewMut.isPending}
                     onClick={() => setRejectingShare({ id: it.id, title: it.fetchedTitle ?? it.url })}
                   >
                     <X />
                     拒绝
                   </Button>
-                </div>
+                </Box>
               )}
-            </div>
+            </Box>
               </CardContent>
             </Card>
           </li>
         ))}
-      </ul>
+      </Box>
 
       {reviewMut.isError && (
-        <p className="mt-2 text-xs text-destructive">
+        <Box component="p" sx={{"mt":1,"fontSize":"var(--dr-type-caption)","color":"error.main"}}>
           操作失败：{(reviewMut.error as Error).message}
-        </p>
+        </Box>
       )}
 
       <AdminActionDialog
         open={!!rejectingShare}
         onOpenChange={(o) => !o && setRejectingShare(null)}
         title="拒绝分享"
-        description={rejectingShare ? <>分享：<strong className="font-medium text-foreground">{rejectingShare.title}</strong></> : undefined}
+        description={rejectingShare ? <>分享：<Box component="strong" sx={{"fontWeight":"var(--dr-weight-medium)","color":"text.primary"}}>{rejectingShare.title}</Box></> : undefined}
         fields={[
           { kind: 'textarea', id: 'reason', label: '拒绝原因', required: true, rows: 3, placeholder: '例如：与平台主题无关 / 内容质量不足' },
         ]}
@@ -2338,47 +2302,47 @@ function CommentsTab() {
       />
 
       {q.isLoading && <QueueSkeleton />}
-      {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
+      {q.isError && <Box component="p" sx={{"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(q.error as Error).message}</Box>}
 
-      <ul className="grid list-none gap-3 p-0">
+      <Box component="ul" sx={{"display":"grid","listStyle":"none","gap":1.5,"p":0}}>
         {(q.data?.items ?? []).map((it) => (
           <li key={it.id}>
-            <Card className="transition-colors duration-200 hover:border-primary/40">
-              <CardContent className="p-4">
-                <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-              <strong className="font-medium text-foreground">{it.author.name}</strong>（
+            <Card sx={{"transition":"color, background-color, border-color var(--dr-motion-fast)","transitionDuration":"200ms","&:hover":{"borderColor":"color-mix(in srgb, var(--dr-color-primary) 40%, var(--dr-color-outline))"}}}>
+              <CardContent sx={{"p":2}}>
+                <Box component="p" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","columnGap":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
+              <Box component="strong" sx={{"fontWeight":"var(--dr-weight-medium)","color":"text.primary"}}>{it.author.name}</Box>（
               {it.author.email}） · {new Date(it.createdAt).toLocaleString('zh-CN')} ·
-              <span className="inline-flex items-center gap-1">
-                <Sparkles className="size-3" />
+              <Box component="span" sx={{"display":"inline-flex","alignItems":"center","gap":0.5}}>
+                <Box component={Sparkles} sx={{"width":12,"height":12}} />
                 {it.starCount}
-              </span>
+              </Box>
               {it.targetType === 'summary' && it.summary && (
                 <>
                   · 来自摘要:
-                  <Link href={`/radar/${it.summary.id}`} className="text-primary hover:underline">
+                  <Box component={Link} href={`/radar/${it.summary.id}`} sx={{"color":"primary.main","&:hover":{"textDecoration":"underline"}}}>
                     {it.summary.title}
-                  </Link>
+                  </Box>
                 </>
               )}
               {it.targetType === 'research' && it.research && (
                 <>
                   · 来自调研库:
-                  <Link
+                  <Box component={Link}
                     href={`/researches/${it.research.id}`}
-                    className="text-primary hover:underline"
+                    sx={{"color":"primary.main","&:hover":{"textDecoration":"underline"}}}
                   >
                     {it.research.title}
-                  </Link>
+                  </Box>
                 </>
               )}
-            </p>
+            </Box>
 
-            <blockquote className="my-2 rounded-r border-l-2 border-l-primary bg-muted/50 px-3 py-2 text-sm leading-relaxed">
+            <Box component="blockquote" sx={{"my":1,"borderRadius":"0 var(--dr-radius-xs) var(--dr-radius-xs) 0","borderLeft":"2px solid var(--dr-color-outline)","borderLeftColor":"var(--dr-color-primary)","backgroundColor":"var(--dr-color-surface-container)","px":1.5,"py":1,"fontSize":"var(--dr-type-body)","lineHeight":"var(--dr-line-height-body)"}}>
               {it.body}
-            </blockquote>
+            </Box>
 
             {it.promoteStatus === 'nominated' && (
-              <div className="flex gap-2">
+              <Box component="div" sx={{"display":"flex","gap":1}}>
                 <Button
                   type="button"
                   size="xs"
@@ -2392,29 +2356,29 @@ function CommentsTab() {
                   type="button"
                   variant="outline"
                   size="xs"
-                  className="text-destructive"
+                  sx={{"color":"error.main"}}
                   disabled={dismissMut.isPending}
                   onClick={() => setDismissingComment({ id: it.id, excerpt: it.body.slice(0, 80) })}
                 >
                   <X />
                   拒绝
                 </Button>
-              </div>
+              </Box>
             )}
             {it.promoteStatus === 'approved' && (
-              <p className="flex items-center gap-1 text-xs text-status-succeeded-fg">
-                <CheckCircle2 className="size-3.5" />
+              <Box component="p" sx={{"display":"flex","alignItems":"center","gap":0.5,"fontSize":"var(--dr-type-caption)","color":"success.main"}}>
+                <Box component={CheckCircle2} sx={{"width":14,"height":14}} />
                 已提炼为知识卡片
-              </p>
+              </Box>
             )}
             {it.promoteStatus === 'rejected' && (
-              <p className="text-xs text-muted-foreground">已拒绝</p>
+              <Box component="p" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>已拒绝</Box>
             )}
               </CardContent>
             </Card>
           </li>
         ))}
-      </ul>
+      </Box>
 
       <AdminActionDialog
         open={!!promotingComment}
@@ -2440,7 +2404,7 @@ function CommentsTab() {
         open={!!dismissingComment}
         onOpenChange={(o) => !o && setDismissingComment(null)}
         title="拒绝评论提名"
-        description={dismissingComment ? <>评论原文：<span className="text-foreground">{dismissingComment.excerpt}{dismissingComment.excerpt.length === 80 ? '…' : ''}</span></> : undefined}
+        description={dismissingComment ? <>评论原文：<Box component="span" sx={{"color":"text.primary"}}>{dismissingComment.excerpt}{dismissingComment.excerpt.length === 80 ? '…' : ''}</Box></> : undefined}
         fields={[
           { kind: 'textarea', id: 'reason', label: '拒绝原因', required: true, rows: 3, placeholder: '例如：与精华主题不符' },
         ]}
@@ -2551,30 +2515,30 @@ function ResearchesTab() {
         trailing={`共 ${q.data?.total ?? '?'} 条`}
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <form
-          className="flex min-w-[220px] flex-1 gap-2 sm:max-w-md"
+      <Box component="div" sx={{"mb":1.5,"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1}}>
+        <Box component="form"
+          sx={{"display":"flex","minWidth":220,"flex":"1 1 0%","gap":1,"@media (min-width:640px)":{"maxWidth":448}}}
           onSubmit={(e) => {
             e.preventDefault();
             setAppliedQuery(searchText.trim());
             setPage(1);
           }}
         >
-          <div className="relative flex-1">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Box component="div" sx={{"position":"relative","flex":"1 1 0%"}}>
+            <Box component={SearchIcon} sx={{"pointerEvents":"none","position":"absolute","left":12,"top":"50%","width":16,"height":16,"transform":"translateY(-50%)","color":"text.secondary"}} />
             <Input
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="搜索标题、正文或标签…"
             aria-label="搜索研究库"
-              className="pl-9"
+              sx={{"pl":4.5}}
             />
-          </div>
-          <Button type="submit" size="sm" variant="outline" className="shrink-0">
+          </Box>
+          <Button type="submit" size="sm" variant="outline" sx={{"flexShrink":0}}>
             <SearchIcon />
             搜索
           </Button>
-        </form>
+        </Box>
 
         <Select
           value={type}
@@ -2583,7 +2547,7 @@ function ResearchesTab() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-36" aria-label="内容类型">
+          <SelectTrigger sx={{"width":144}} aria-label="内容类型">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -2594,10 +2558,10 @@ function ResearchesTab() {
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </Box>
 
       {q.isLoading && <QueueSkeleton />}
-      {q.isError && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
+      {q.isError && <Box component="p" sx={{"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(q.error as Error).message}</Box>}
 
       {q.data && q.data.items.length === 0 && (
         <EmptyState
@@ -2610,48 +2574,48 @@ function ResearchesTab() {
         />
       )}
 
-      <ul className="grid list-none gap-3 p-0">
+      <Box component="ul" sx={{"display":"grid","listStyle":"none","gap":1.5,"p":0}}>
         {(q.data?.items ?? []).map((item) => (
           <li key={item.id}>
-            <Card className="transition-colors duration-200 hover:border-primary/40">
-              <CardContent className="p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Card sx={{"transition":"color, background-color, border-color var(--dr-motion-fast)","transitionDuration":"200ms","&:hover":{"borderColor":"color-mix(in srgb, var(--dr-color-primary) 40%, var(--dr-color-outline))"}}}>
+              <CardContent sx={{"p":2}}>
+                <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"flex-start","justifyContent":"space-between","gap":1.5}}>
+                  <Box component="div" sx={{"minWidth":0,"flex":"1 1 0%"}}>
+                    <Box component="div" sx={{"mb":1,"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1}}>
                       <StatusBadge kind="method" value={item.creationMethod} />
                       <StatusBadge kind="research" value={item.status} />
-                      <span className="text-xs text-muted-foreground">
+                      <Box component="span" sx={{"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
                         {item.type === 'research' ? '研究报告' : '知识卡片'}
-                      </span>
+                      </Box>
                       {item.featuredAt && (
-                        <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium', styles.warningBadge)}>
-                          <Star className="size-3" />
+                        <Box component="span" sx={[{"display":"inline-flex","alignItems":"center","gap":0.5,"borderRadius":"var(--dr-radius-pill)","border":"1px solid var(--dr-color-outline)","px":1,"py":0.5,"fontSize":"var(--dr-type-caption)","fontWeight":"var(--dr-weight-medium)"}, {"borderColor":"warning.main","backgroundColor":"var(--dr-color-warning-container)","color":"warning.main"}]}>
+                          <Box component={Star} sx={{"width":12,"height":12}} />
                           精华
-                        </span>
+                        </Box>
                       )}
-                    </div>
+                    </Box>
 
-                    <Link
+                    <Box component={Link}
                       href={`/researches/${item.id}`}
-                      className="rounded text-sm font-semibold leading-snug tracking-normal hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      sx={{"borderRadius":"var(--dr-radius-xs)","fontSize":"var(--dr-type-body)","fontWeight":"var(--dr-weight-semibold)","lineHeight":"var(--dr-line-height-heading)","letterSpacing":0,"&:hover":{"color":"primary.main","textDecoration":"underline"}}}
                     >
                       {item.title}
-                    </Link>
+                    </Box>
 
-                    <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                    <Box component="p" sx={{"mt":0.5,"display":"-webkit-box","WebkitBoxOrient":"vertical","WebkitLineClamp":2,"overflow":"hidden","fontSize":"var(--dr-type-caption)","lineHeight":"var(--dr-line-height-body)","color":"text.secondary"}}>
                       {adminExcerpt(item.body, 160)}
-                    </p>
+                    </Box>
 
-                    <p className="mt-2 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                    <Box component="p" sx={{"mt":1,"display":"flex","flexWrap":"wrap","alignItems":"center","columnGap":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
                       <span>作者：{item.author.name}</span>
-                      <span className="font-mono tabular-nums">
+                      <Box component="span" sx={{"fontFamily":"monospace","fontVariantNumeric":"tabular-nums"}}>
                         {new Date(item.publishedAt ?? item.createdAt).toLocaleDateString('zh-CN')}
-                      </span>
-                    </p>
-                  </div>
+                      </Box>
+                    </Box>
+                  </Box>
 
-                  <div className="flex shrink-0 flex-col items-end gap-2">
-                    <div className="flex gap-2">
+                  <Box component="div" sx={{"display":"flex","flexShrink":0,"flexDirection":"column","alignItems":"flex-end","gap":1}}>
+                    <Box component="div" sx={{"display":"flex","gap":1}}>
                       <Button asChild size="xs" variant="outline" aria-label="查看">
                         <Link href={`/researches/${item.id}`}>
                           <Eye />
@@ -2666,7 +2630,7 @@ function ResearchesTab() {
                           </Link>
                         </Button>
                       )}
-                    </div>
+                    </Box>
                     {item.status === 'published' && (
                       <Button
                         type="button"
@@ -2694,7 +2658,7 @@ function ResearchesTab() {
                           })
                         }
                       >
-                        <Star className={item.featuredAt ? 'fill-current' : undefined} />
+                        <Box component={Star} sx={item.featuredAt ? {"fill":"currentColor"} : {}} />
                         {item.featuredAt ? '取消精华' : '设为精华'}
                       </Button>
                     )}
@@ -2712,18 +2676,18 @@ function ResearchesTab() {
                         恢复
                       </Button>
                     )}
-                  </div>
-                </div>
+                  </Box>
+                </Box>
               </CardContent>
             </Card>
           </li>
         ))}
-      </ul>
+      </Box>
 
       {(actionMut.isError || featureMut.isError) && (
-        <p className="mt-2 text-xs text-destructive" role="alert">
+        <Box component="p" sx={{"mt":1,"fontSize":"var(--dr-type-caption)","color":"error.main"}} role="alert">
           操作失败：{((actionMut.error ?? featureMut.error) as Error).message}
-        </p>
+        </Box>
       )}
 
       <Pagination
@@ -2744,7 +2708,7 @@ function ResearchesTab() {
                 ? '归档后仅 admin 可见，普通成员将无法访问。'
                 : '恢复后重新对全部成员可见。'}
               <br />
-              调研：<strong className="font-medium text-foreground">{confirming.title}</strong>
+              调研：<Box component="strong" sx={{"fontWeight":"var(--dr-weight-medium)","color":"text.primary"}}>{confirming.title}</Box>
             </>
           ) : undefined
         }
@@ -2854,12 +2818,12 @@ function UsersTab() {
   });
 
   if (q.isLoading) return <QueueSkeleton />;
-  if (q.isError) return <p className="text-sm text-destructive">{(q.error as Error).message}</p>;
+  if (q.isError) return <Box component="p" sx={{"fontSize":"var(--dr-type-body)","color":"error.main"}}>{(q.error as Error).message}</Box>;
   const items = q.data?.items ?? [];
   return (
     <div>
-      <form
-        className="mb-4 flex flex-col gap-2 border-b border-border pb-4 sm:flex-row sm:items-end"
+      <Box component="form"
+        sx={{"mb":2,"display":"flex","flexDirection":"column","gap":1,"borderBottom":"1px solid var(--dr-color-outline)","borderColor":"divider","pb":2,"@media (min-width:640px)":{"flexDirection":"row","alignItems":"flex-end"}}}
         onSubmit={(event) => {
           event.preventDefault();
           setActionError(null);
@@ -2867,11 +2831,11 @@ function UsersTab() {
           inviteMut.mutate(inviteEmail);
         }}
       >
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">Beta 注册白名单</p>
-          <p className="mt-1 text-xs text-muted-foreground">添加后，该邮箱可通过密码注册或 OAuth 首次登录。</p>
+        <Box component="div" sx={{"minWidth":0,"flex":"1 1 0%"}}>
+          <Box component="p" sx={{"fontSize":"var(--dr-type-body)","fontWeight":"var(--dr-weight-medium)"}}>Beta 注册白名单</Box>
+          <Box component="p" sx={{"mt":0.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>添加后，该邮箱可通过密码注册或 OAuth 首次登录。</Box>
           <Input
-            className="mt-2 max-w-md"
+            sx={{"mt":1,"maxWidth":448}}
             type="email"
             value={inviteEmail}
             onChange={(event) => setInviteEmail(event.target.value)}
@@ -2880,44 +2844,45 @@ function UsersTab() {
             required
             disabled={inviteMut.isPending}
           />
-        </div>
+        </Box>
         <Button type="submit" variant="outline" disabled={inviteMut.isPending || !inviteEmail.trim()}>
-          <UserPlus className="size-4" aria-hidden />
+          <Box component={UserPlus} sx={{"width":16,"height":16}} aria-hidden />
           {inviteMut.isPending ? '添加中…' : '添加邮箱'}
         </Button>
-      </form>
+      </Box>
       {actionError ? (
-        <p className="mb-2 text-xs text-destructive" role="alert">操作失败：{actionError}</p>
+        <Box component="p" sx={{"mb":1,"fontSize":"var(--dr-type-caption)","color":"error.main"}} role="alert">操作失败：{actionError}</Box>
       ) : null}
-      {inviteNotice ? <p className="mb-2 text-xs text-muted-foreground" role="status">{inviteNotice}</p> : null}
+      {inviteNotice ? <Box component="p" sx={{"mb":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}} role="status">{inviteNotice}</Box> : null}
       {items.length === 0 ? (
         <EmptyState title="还没有成员" description="先添加一个允许注册的邮箱。" />
       ) : <Card>
-        <CardContent className="p-0">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+        <CardContent sx={{"p":0}}>
+          <Box role="region" aria-label="成员列表" tabIndex={0} sx={{ overflowX: 'auto' }}>
+          <Box component="table" sx={{ width: '100%', minWidth: 880, fontSize: 'var(--dr-type-body)', '& th, & td': { whiteSpace: 'nowrap' } }}>
+            <Box component="thead" sx={{"backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 40%, var(--dr-color-surface))","textAlign":"left","fontSize":"var(--dr-type-caption)","textTransform":"uppercase","letterSpacing":"0.025em","color":"text.secondary"}}>
               <tr>
-                <th className="px-4 py-3 font-medium">姓名</th>
-                <th className="px-4 py-3 font-medium">邮箱</th>
-                <th className="px-4 py-3 font-medium">角色</th>
-                <th className="px-4 py-3 font-medium">状态</th>
-                <th className="px-4 py-3 font-medium">加入时间</th>
-                <th className="px-4 py-3 font-medium text-right">操作</th>
+                <Box component="th" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>姓名</Box>
+                <Box component="th" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>邮箱</Box>
+                <Box component="th" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>角色</Box>
+                <Box component="th" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>状态</Box>
+                <Box component="th" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)"}}>加入时间</Box>
+                <Box component="th" sx={{"px":2,"py":1.5,"fontWeight":"var(--dr-weight-medium)","textAlign":"right"}}>操作</Box>
               </tr>
-            </thead>
+            </Box>
             <tbody>
               {items.map((u) => {
                 const isAdmin = u.role === 'admin';
                 const isDisabled = !!u.disabledAt;
                 return (
-                  <tr key={u.id} className="border-t border-border transition-colors hover:bg-muted/30">
-                    <td className="px-4 py-3">{u.name || '—'}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{u.email}</td>
-                    <td className="px-4 py-3"><Badge variant={isAdmin ? 'destructive' : 'secondary'}>{isAdmin ? '管理员' : '成员'}</Badge></td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{isDisabled ? '已禁用' : '正常'}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString('zh-CN')}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
+                  <Box component="tr" key={u.id} sx={{"borderTop":"1px solid var(--dr-color-outline)","borderColor":"divider","transition":"color, background-color, border-color var(--dr-motion-fast)","&:hover":{"backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 30%, var(--dr-color-surface))"}}}>
+                    <Box component="td" sx={{"px":2,"py":1.5}}>{u.name || '—'}</Box>
+                    <Box component="td" sx={{"px":2,"py":1.5,"fontFamily":"monospace","fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>{u.email}</Box>
+                    <Box component="td" sx={{"px":2,"py":1.5}}><Badge variant={isAdmin ? 'destructive' : 'secondary'}>{isAdmin ? '管理员' : '成员'}</Badge></Box>
+                    <Box component="td" sx={{"px":2,"py":1.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>{isDisabled ? '已禁用' : '正常'}</Box>
+                    <Box component="td" sx={{"px":2,"py":1.5,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>{new Date(u.createdAt).toLocaleDateString('zh-CN')}</Box>
+                    <Box component="td" sx={{"px":2,"py":1.5}}>
+                      <Box component="div" sx={{"display":"flex","justifyContent":"flex-end","gap":1}}>
                         <Button
                           type="button"
                           size="xs"
@@ -2925,7 +2890,7 @@ function UsersTab() {
                           disabled={updateMut.isPending || (isAdmin && !isDisabled)}
                           onClick={() => updateMut.mutate({ id: u.id, body: { role: 'admin' } })}
                         >
-                          <ShieldCheck className="size-3" />
+                          <Box component={ShieldCheck} sx={{"width":12,"height":12}} />
                           设为管理员
                         </Button>
                         <Button
@@ -2952,25 +2917,26 @@ function UsersTab() {
                             type="button"
                             size="xs"
                             variant="outline"
-                            className="text-destructive"
+                            sx={{"color":"error.main"}}
                             disabled={updateMut.isPending}
                             onClick={() => updateMut.mutate({ id: u.id, body: { disabled: true } })}
                           >
                             禁用
                           </Button>
                         )}
-                      </div>
-                    </td>
-                  </tr>
+                      </Box>
+                    </Box>
+                  </Box>
                 );
               })}
             </tbody>
-          </table>
+          </Box>
+          </Box>
         </CardContent>
       </Card>}
-      <p className="mt-2 text-xs text-muted-foreground">
+      <Box component="p" sx={{"mt":1,"fontSize":"var(--dr-type-caption)","color":"text.secondary"}}>
         所有变更落 admin_actions 审计日志；最后一个 active admin 不能降级或禁用。
-      </p>
+      </Box>
     </div>
   );
 }
