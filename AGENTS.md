@@ -61,5 +61,6 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - 默认生产 Compose 包含 PostgreSQL、Web、AI engine、内网 AnythingLLM 和 nginx；真实 Chromium 页面审核属于可选 `browser-review` profile，不进入默认 GHCR 发布。个人 AnythingLLM 索引独立于共享讨论 workspace，默认关闭；生产配置与凭据只留在 VPS `.env`。
 - 本地运行：`launchd` 模板（`infra/launchd/`）支持常驻 AI engine（uvicorn 直接运行，无 `--reload`）和 Next.js 服务。
 - **收口门禁**：以本次实际验证为准；内部证据写入本地忽略的 `docs/PROJECT_STATUS.md`，不要把历史记录或未重跑的数量写成新基线。
+- **CI 与部署分档**：`scripts/ci-changed-paths.sh` 把改动分为 `documentation`（跳过重量 CI 与发布）、`ci-only`（跑完整 CI，但跳过镜像构建、Reader Beta 发布与 VPS 部署）和 `deployable`（全跑）。CI 脚手架改动属于 `ci-only`；镜像实际 COPY 的文件（`scripts/docker-entrypoint-web.sh`、`infra/*.Dockerfile`）属于 `deployable`。`main` 的 required checks 已包含 `CI gate`，它是防"skipped 被当成绿灯"的硬门槛。Playwright 系统依赖走 `scripts/install-playwright-deps.sh`，`.deb` 缓存在 `/var/cache/apt/playwright` 并由 CI 持久化，避免 Ubuntu 镜像源限流拖垮 E2E。
 - **已移除/废弃**：`apps/web/src/app/api/admin/radar/[id]/select/route.ts`（逐条选入日报接口已移除；当前雷达由自动排序与 Admin 负向治理处理）。
 - **Next 构建目录**：开发环境默认使用 `apps/web/.next-dev`，production/隔离构建默认使用 `.next`；`NEXT_DIST_DIR` 仍可覆盖输出目录。`.next-*` 是本地构建残留，未经确认不要删除。

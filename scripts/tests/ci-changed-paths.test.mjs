@@ -68,9 +68,87 @@ const BASE_FILES = [
   ['apps/extension/BETA_CHECKLIST.md', '# checklist\n'],
 ];
 
+/** Classify a change and return the scope reported by the detector. */
+function scope(dir, base, changed) {
+  for (const [path, content] of changed) {
+    const target = resolve(dir, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  }
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-m', 'change']);
+  const head = git(dir, ['rev-parse', 'HEAD']).trim();
+  return execFileSync(detector, ['--scope', base, head], { cwd: dir, encoding: 'utf8' }).trim();
+}
+
 test('a docs-only change is classified as documentation', () => {
   withRepo(BASE_FILES, ({ dir, base }) => {
     assert.equal(classify(dir, base, [['docs/contracts/api.md', '# contract v2\n']]), 0);
+  });
+});
+
+test('a documentation change reports the documentation scope', () => {
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    assert.equal(scope(dir, base, [['docs/contracts/api.md', '# contract v2\n']]), 'documentation');
+    assert.equal(scope(dir, base, [['README.md', '# base v2\n']]), 'documentation');
+  });
+});
+
+test('a CI tooling change reports the ci-only scope', () => {
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    assert.equal(scope(dir, base, [['.github/workflows/ci.yml', 'name: CI\n']]), 'ci-only');
+    assert.equal(scope(dir, base, [['scripts/ci-changed-paths.sh', '#!/usr/bin/env bash\n']]), 'ci-only');
+    assert.equal(scope(dir, base, [['scripts/tests/ci-changed-paths.test.mjs', '// test\n']]), 'ci-only');
+  });
+});
+
+test('the Playwright dependency tooling reports the ci-only scope', () => {
+  // These files decide how the browser jobs obtain their system packages.
+  // They are verified by the heavy suites, but no image copies them, so a
+  // change to them does not have to rebuild or redeploy production.
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    assert.equal(scope(dir, base, [['scripts/install-playwright-deps.sh', '#!/usr/bin/env bash\n']]), 'ci-only');
+    assert.equal(scope(dir, base, [['scripts/playwright-deps-packages.mjs', '// printer\n']]), 'ci-only');
+    assert.equal(
+      scope(dir, base, [['scripts/tests/playwright-deps-packages.test.mjs', '// test\n']]),
+      'ci-only',
+    );
+  });
+});
+
+test('a CI tooling change still has to run the heavy suites', () => {
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    // The exit code stays non-zero, so the heavy jobs are not skipped.
+    assert.equal(classify(dir, base, [['.github/workflows/ci.yml', 'name: CI\n']]), 1);
+  });
+});
+
+test('a source change reports the deployable scope', () => {
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    assert.equal(
+      scope(dir, base, [['apps/web/src/app/page.tsx', 'export default function Page() { return 1; }\n']]),
+      'deployable',
+    );
+  });
+});
+
+test('a change that mixes CI tooling and source is deployable', () => {
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    assert.equal(
+      scope(dir, base, [
+        ['.github/workflows/ci.yml', 'name: CI\n'],
+        ['apps/web/src/app/page.tsx', 'export default function Page() { return 1; }\n'],
+      ]),
+      'deployable',
+    );
+  });
+});
+
+test('a deployment script that ships in an image is deployable', () => {
+  withRepo(BASE_FILES, ({ dir, base }) => {
+    // The web image copies this script, so a change to it changes the image.
+    assert.equal(scope(dir, base, [['scripts/docker-entrypoint-web.sh', '#!/bin/sh\n']]), 'deployable');
+    assert.equal(scope(dir, base, [['infra/web.Dockerfile', 'FROM node:22\n']]), 'deployable');
   });
 });
 

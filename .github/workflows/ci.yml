@@ -45,6 +45,14 @@ jobs:
         if: hashFiles('scripts/ci-changed-paths.sh') != ''
         run: node --test scripts/tests/ci-changed-paths.test.mjs
 
+      - name: Test the Playwright dependency installer
+        # The installer decides how the browser system packages are obtained.
+        # If its package list drifts away from the installed Playwright, the
+        # browser would miss fonts and libraries, so it is checked on every
+        # run.
+        if: hashFiles('scripts/playwright-deps-packages.mjs') != ''
+        run: node --test scripts/tests/playwright-deps-packages.test.mjs
+
       - name: Detect documentation-only changes
         id: detect
         shell: bash
@@ -139,6 +147,11 @@ jobs:
         run: pnpm -r typecheck
       - name: Workspace unit tests
         run: pnpm test
+      - name: Test the Playwright dependency installer
+        # This job has the workspace dependencies installed, so the suite
+        # runs for real here. The change detection job only checks that the
+        # script is syntactically valid.
+        run: node --test scripts/tests/playwright-deps-packages.test.mjs
       - name: Web build smoke
         run: pnpm --filter @deep-research/web build
         timeout-minutes: 5
@@ -149,7 +162,11 @@ jobs:
     needs: changes
     if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The browser system dependencies are installed from a cached apt archive,
+    # but a cold cache still has to reach the Ubuntu mirror. The budget
+    # covers the worst observed cold start (11m12s of downloads) plus the
+    # E2E suite itself (~4m) plus the surrounding setup.
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -262,10 +279,24 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: playwright-${{ runner.os }}-
 
+      - name: Cache the Playwright system dependency archive
+        # The .deb files for the browser system dependencies are persisted
+        # separately from the browser binaries. Installing them from the
+        # cache keeps a throttled Ubuntu mirror from deciding how long this
+        # job takes.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (Node 24)
+        with:
+          path: /var/cache/apt/playwright
+          key: playwright-deps-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-deps-${{ runner.os }}-
+
       - name: Install Playwright browsers and OS dependencies
-        # The cache contains browser binaries, not apt libraries or CJK fonts.
-        # --with-deps must run on every fresh runner, including cache hits.
-        run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
+        # The browser binaries come from the Playwright cache, the system
+        # packages from the apt archive cache. Both have to be installed on
+        # every fresh runner; the caches only remove the downloads.
+        run: |
+          pnpm --filter @deep-research/web exec playwright install chromium
+          scripts/install-playwright-deps.sh
 
       - name: Playwright E2E
         run: pnpm --filter @deep-research/web test:e2e
@@ -309,7 +340,9 @@ jobs:
     needs: changes
     if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Same reasoning as the web E2E job: the cold cache has to survive a
+    # throttled mirror.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -358,8 +391,18 @@ jobs:
         run: pnpm --filter @deep-research/web exec tsx scripts/seed-mui-browser.ts
       - name: Build production fixture service
         run: pnpm --filter @deep-research/web build
+      - name: Cache the Playwright system dependency archive
+        # See the web E2E job for the rationale: the .deb files are cached so
+        # a throttled Ubuntu mirror cannot decide how long this job takes.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (Node 24)
+        with:
+          path: /var/cache/apt/playwright
+          key: playwright-deps-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-deps-${{ runner.os }}-
       - name: Install Playwright Chromium
-        run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
+        run: |
+          pnpm --filter @deep-research/web exec playwright install chromium
+          scripts/install-playwright-deps.sh
       - name: Start production fixture service
         run: |
           pnpm --filter @deep-research/web exec next start --hostname 127.0.0.1 --port 3188 > "$RUNNER_TEMP/mui-web.log" 2>&1 &
@@ -468,7 +511,9 @@ jobs:
     needs: changes
     if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Same reasoning as the web E2E job: the cold cache has to survive a
+    # throttled mirror.
+    timeout-minutes: 30
 
     env:
       # The extension talks to a local fixture over loopback, so the E2E
@@ -493,10 +538,21 @@ jobs:
       - name: Build the extension
         run: pnpm --filter @deep-research/reader-extension build
 
+      - name: Cache the Playwright system dependency archive
+        # See the web E2E job for the rationale: the .deb files are cached so
+        # a throttled Ubuntu mirror cannot decide how long this job takes.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (Node 24)
+        with:
+          path: /var/cache/apt/playwright
+          key: playwright-deps-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-deps-${{ runner.os }}-
+
       # The extension requires a real Chromium build: Firefox cannot load
       # MV3 extensions and the headless shell cannot run them either.
       - name: Install Chromium for extension E2E
-        run: pnpm --filter @deep-research/web exec playwright install --with-deps chromium
+        run: |
+          pnpm --filter @deep-research/web exec playwright install chromium
+          scripts/install-playwright-deps.sh
 
       - name: Resolve the Chromium binary for extension E2E
         id: chrome
