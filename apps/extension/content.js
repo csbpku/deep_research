@@ -886,7 +886,10 @@
     toolbarHost.dataset.deepResearchToolbar = 'true';
     toolbarHost.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(window.innerWidth - 330, rect.left))}px;top:${Math.max(8, rect.top - 46)}px;`;
     applyReaderDesignTokens(toolbarHost);
-    const shadow = readerShadow(toolbarHost, { mode: 'closed' });
+    // Same reasoning as the dock: the selection toolbar exposes real
+    // actions, so it must stay reachable from assistive technology on every
+    // Chromium build.
+    const shadow = readerShadow(toolbarHost, { mode: 'open' });
     shadow.innerHTML = localizedMarkup(`
       <style>:host{all:initial}div{display:flex;gap:var(--reader-space-1);max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:6px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-medium);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);font:var(--reader-type-label)/1.4 var(--reader-font-family)}button{min-height:36px;border:0;border-radius:var(--reader-radius-small);background:transparent;color:var(--reader-color-text-secondary);padding:6px 10px;font:inherit;cursor:pointer;white-space:nowrap;transition:background-color var(--reader-motion-fast),color var(--reader-motion-fast)}button:hover{background:var(--reader-color-primary-container);color:var(--reader-color-primary)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}</style>
       <div role="toolbar" aria-label="Deep Research 阅读操作">
@@ -910,7 +913,13 @@
     readerDockHost.dataset.deepResearchDock = 'true';
     readerDockHost.style.cssText = 'position:fixed;z-index:2147483645;right:10px;top:55%;transform:translateY(-50%);';
     applyReaderDesignTokens(readerDockHost);
-    const shadow = readerShadow(readerDockHost, { mode: 'closed' });
+    // The dock is a first-class interactive surface (summarize, translate,
+    // open chat). A closed shadow root hid those buttons from assistive
+    // technology on Chromium builds that do not expose closed-shadow
+    // internals in the accessibility tree, so screen-reader users could not
+    // reach them. The host page still cannot target the controls: the host
+    // element carries no layout styles and the shadow resets `all:initial`.
+    const shadow = readerShadow(readerDockHost, { mode: 'open' });
     shadow.innerHTML = localizedMarkup(`
       <style>
         :host{all:initial}
@@ -948,7 +957,9 @@
       readerStatusHost.dataset.deepResearchStatus = 'true';
       readerStatusHost.style.cssText = 'position:fixed;z-index:2147483646;right:64px;top:55%;transform:translateY(-50%);pointer-events:none;';
       applyReaderDesignTokens(readerStatusHost);
-      const shadow = readerShadow(readerStatusHost, { mode: 'closed' });
+      // The status strip announces translation progress, so its live region
+      // has to be visible to assistive technology on every Chromium build.
+      const shadow = readerShadow(readerStatusHost, { mode: 'open' });
       shadow.innerHTML = `
         <style>
           :host{all:initial}
