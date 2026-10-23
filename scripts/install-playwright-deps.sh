@@ -85,7 +85,9 @@ if [ "$mode" = "suffix" ]; then
 fi
 
 # Read the package list straight out of the installed Playwright, so it
-# always matches the browser build that is going to run.
+# always matches the browser build that is going to run. The list is the
+# entry for the platform that actually runs, so the package names are the
+# ones that exist on that release.
 packages=()
 while IFS= read -r package; do
   [ -n "$package" ] || continue
