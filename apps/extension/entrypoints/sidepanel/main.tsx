@@ -116,7 +116,7 @@ function ReaderPanel() {
                 empty state out of view and broke the centred first-run
                 layout. */}
             <Box component="section" id="page-knowledge" className="hidden" aria-labelledby="page-knowledge-title" sx={{ mb: space.md, flex: 'none' }}>
-              <ReaderDisclosure id="page-knowledge-disclosure" label={t("本页已保存")}>
+              <ReaderDisclosure id="page-knowledge-disclosure" label={<>{t("本页已保存")}<span id="page-knowledge-count" className="page-knowledge-count" /></>}>
                 <Typography id="page-knowledge-title" component="h3" variant="subtitle2" color="text.secondary" sx={{ mb: space.sm }}>{t("摘录与结论")}</Typography>
                 <div id="page-knowledge-list" />
               </ReaderDisclosure>

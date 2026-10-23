@@ -354,6 +354,12 @@ function setupWorkspaceLayout() {
 
 function show(el, visible = true) {
   if (!el) return;
+  // React owns the class list of these regions and rewrites it whenever it
+  // re-renders (an MUI Accordion does so on every expand). Toggling `hidden`
+  // directly would therefore be undone by the next render, which silently
+  // hid the page-scope warning from readers. Keep the controller's decision
+  // in a data attribute and drive the class from CSS.
+  el.dataset.readerVisible = visible ? 'true' : 'false';
   el.classList.toggle('hidden', !visible);
   if (el.id === 'discussion-section') {
     $('page-view')?.classList.toggle('has-discussion', visible);
@@ -837,7 +843,10 @@ function applyRadarEntryContext(context) {
 function persistJobPatch(job, patch) {
   if (!job?.id) return;
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
-  void readerStore.saveJob(job);
+  // Merge instead of replacing the record: a mirror patch such as
+  // `appliedTextIds` must never roll the worker-owned terminal status back to
+  // `running` when it lands after the job finished.
+  void readerStore.patchJob(job.id, patch, job);
 }
 
 function translationCoverageWarning(context) {
@@ -939,7 +948,14 @@ async function resumeSession(context) {
       if (!preserveSelection) discussionScope = !session.stale && ['selection', 'page', 'image'].includes(session.discussionScope)
         ? session.discussionScope
         : 'page';
-      if (session.image?.id) imageContext = { ...context, image: session.image, restored: true };
+      // A restored session only remembers which diagram was discussed, never
+      // its bytes. Replacing the live image with that record would drop the
+      // raster data and make "解读图示" fail with unreadable image bytes.
+      // Keep the freshly selected image and only fall back to the session
+      // record when the page has no live image at all.
+      if (session.image?.id && !imageContext?.image) {
+        imageContext = { ...context, image: session.image, restored: true };
+      }
       renderPage();
       if (!preserveSelection) sendToPage({ type: 'deep-research:restore-progress', scrollY: session.scrollY, anchor: restoredSelection });
       if (!session.stale && session.pendingEvidenceAnchor?.quote) {
@@ -1408,7 +1424,6 @@ async function openKnowledgeUrl(value) {
 function renderPageKnowledge(items) {
   const host = $('page-knowledge-list');
   if (!host) return;
-  const wasVisible = !$('page-knowledge')?.classList.contains('hidden');
   renderMaterialRecords(host, items.map(item => {
     const text = String(item.note || item.aiAnswer || item.quote || item.anchor?.quote || '').trim();
     const date = new Date(item.updatedAt || item.createdAt || '');
@@ -1434,10 +1449,14 @@ function renderPageKnowledge(items) {
     };
   }));
   show($('page-knowledge'), items.length > 0);
-  // The saved-knowledge card stays collapsed. Expanding it automatically
-  // pushed the conversation column (and its centred empty state) out of the
-  // visible area, and the card can hold several records.
-  if (items.length && !wasVisible && $('page-knowledge-disclosure')) $('page-knowledge-disclosure').open = false;
+  // A panel this narrow cannot hold both the records and the centred
+  // first-run empty state: an expanded card measured 273px against the 198px
+  // the empty state needs. The card therefore opens collapsed and the count
+  // on its label is what makes recall visible. The disclosure is left alone
+  // after that: forcing `open` here also undid a reader's own expansion, and
+  // a collapsed card hides the record actions that make recall useful.
+  const count = $('page-knowledge-count');
+  if (count) count.textContent = items.length ? ` · ${items.length}` : '';
 }
 
 async function updatePageKnowledge({ refresh = false } = {}) {

@@ -54,3 +54,4 @@ button, summary { cursor:pointer }
 .response-more { margin-top: var(--reader-space-3); }
 .response-more > summary { min-height: var(--reader-control-height); padding-block: 7px; color: var(--reader-color-text-secondary); font-size:var(--reader-type-label); font-weight:var(--reader-weight-semibold); }
 .response-more-summary { margin-left: var(--reader-space-2); color: var(--reader-color-text-muted); font-size:var(--reader-type-micro); font-weight: var(--reader-weight-regular); }
+.page-knowledge-count { margin-left: 2px; color: var(--reader-color-text-muted); font-size:var(--reader-type-micro); font-weight: var(--reader-weight-regular); }

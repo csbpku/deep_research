@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir, tempPath } from './temp-paths.mjs';
+import { configureProvider, translateWholeArticle } from './panel-actions.mjs';
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const fixturePath = new URL('./fixture.html', import.meta.url);
@@ -65,14 +66,10 @@ try {
   }, activation.tabId);
   await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom', { force: true });
-  await panel.locator('#provider-url').fill('http://127.0.0.1:8800/v1');
-  await panel.locator('#provider-model').fill('fake-reader');
-  await panel.locator('#provider-key').fill('test-key');
-  await panel.locator('#save-settings').click();
+  await configureProvider(panel, { url: 'http://127.0.0.1:8800/v1', model: 'fake-reader', key: 'test-key' });
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#close-settings').click();
-  await panel.locator('#translate-all').click();
+  await translateWholeArticle(panel);
   await panel.waitForFunction(() => document.querySelector('#text-progress-value')?.textContent !== '0 / 0', null, { timeout: 10_000 });
 
   // The worker owns the requests now; closing the panel must not cancel them.
@@ -104,7 +101,13 @@ try {
   await serviceWorker.evaluate(async (tabId) => {
     await chrome.tabs.sendMessage(tabId, { type: 'deep-research:request-page' });
   }, activation.tabId);
-  await reopened.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('上次全文翻译已完成'), null, { timeout: 10_000 });
+  // A completed job is history: the panel shows its state in the task
+  // summary instead of replaying a success banner on every reopen.
+  await reopened.waitForFunction(() => {
+    const summary = document.querySelector('#translation-summary-text')?.textContent || '';
+    const notice = document.querySelector('#notice')?.textContent || '';
+    return summary.includes('本页已有译文') || notice.includes('上次全文翻译已完成');
+  }, null, { timeout: 10_000 });
   await fixture.waitForTimeout(500);
   await reopened.bringToFront();
   const requestCountAfterReopen = (await readFile(requestLogPath, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).length;
@@ -123,21 +126,34 @@ try {
   // quote fails safely, and a stale content hash is rejected instead of
   // jumping to a merely similar paragraph.
   const exactQuote = await fixture.locator('#target').innerText();
+  // The background only forwards page messages from the active tab, so the
+  // article has to be in front when the anchor request is sent.
+  await fixture.bringToFront();
   await serviceWorker.evaluate(async ({ tabId, quote }) => {
     await chrome.tabs.sendMessage(tabId, { type: 'deep-research:focus-anchor', anchor: { quote } });
   }, { tabId: activation.tabId, quote: exactQuote });
-  await reopened.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('已回到原文证据'), null, { timeout: 5_000 });
+  try {
+    await reopened.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('已回到原文证据'), null, { timeout: 5_000 });
+  } catch (error) {
+    const diagnostic = await reopened.evaluate(() => ({
+      notice: document.querySelector('#notice')?.textContent || '',
+      summary: document.querySelector('#translation-summary-text')?.textContent || '',
+    }));
+    throw new Error(`原文定位断言失败：${JSON.stringify(diagnostic)}; ${error.message}`);
+  }
   await fixture.evaluate((quote) => {
     const duplicate = document.createElement('p');
     duplicate.id = 'duplicate-evidence-target';
     duplicate.textContent = quote;
     document.querySelector('article')?.append(duplicate);
   }, exactQuote);
+  await fixture.bringToFront();
   await serviceWorker.evaluate(async ({ tabId, quote }) => {
     await chrome.tabs.sendMessage(tabId, { type: 'deep-research:focus-anchor', anchor: { quote } });
   }, { tabId: activation.tabId, quote: exactQuote });
   await reopened.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('多个可能位置'), null, { timeout: 5_000 });
   await fixture.evaluate(() => document.querySelector('#duplicate-evidence-target')?.remove());
+  await fixture.bringToFront();
   await serviceWorker.evaluate(async ({ tabId, quote }) => {
     await chrome.tabs.sendMessage(tabId, { type: 'deep-research:focus-anchor', anchor: { quote, contentHash: 'stale-content-hash' } });
   }, { tabId: activation.tabId, quote: exactQuote });

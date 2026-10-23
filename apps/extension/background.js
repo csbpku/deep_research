@@ -96,6 +96,20 @@ function patchJob(job, patch) {
   return job;
 }
 
+/**
+ * Commit a terminal job state before it is announced.
+ *
+ * `patchJob` persists in the background, so a panel that reopened right after
+ * the completion event could still read the previous `running` record and
+ * start the whole translation a second time. The terminal write has to be
+ * durable before the event leaves the worker.
+ */
+async function commitJob(job, patch) {
+  Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+  await readerStore.saveJob(job);
+  return job;
+}
+
 function summarizeFailure(item, kind) {
   return {
     id: item.id,
@@ -255,7 +269,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
       ...(boundedContext.taskWarnings || []),
       ...imageTranslations.filter((item) => item.noText || item.keptOriginal || item.sourceWarning || (item.fallbackText && item.note)).map((item) => `图片 ${item.id}: ${[item.sourceWarning, item.noText ? '未发现可可靠读取的文字' : '', item.keptOriginal ? '图片文字为技术标识符，保留原文' : '', item.note].filter(Boolean).join('；')}`),
     ];
-    patchJob(job, {
+    await commitJob(job, {
       status: failures.length ? 'completed_with_errors' : 'completed',
       textDone: Math.max(Number(job.textDone) || 0, job.processedTextIds.length),
       textTotal: boundedContext.full ? blocks.length : Math.max(Number(job.textTotal) || 0, new Set([...job.processedTextIds, ...blockIds]).size),
@@ -273,7 +287,7 @@ async function executeTranslationJob({ jobId, tabId, context, reapply = false })
   } catch (error) {
     const recoverForNewPage = Boolean(translationJobs.get(jobId)?.preserveForRecovery);
     const cancelled = error instanceof DOMException && error.name === 'AbortError';
-    patchJob(job, {
+    await commitJob(job, {
       status: recoverForNewPage ? 'queued' : (cancelled ? 'cancelled' : 'failed'),
       error: recoverForNewPage ? '原网页标签页已关闭，重新打开同一页面后将继续翻译' : (error instanceof Error ? error.message : '全文翻译失败'),
       tabId: undefined,

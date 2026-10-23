@@ -119,6 +119,10 @@ async function checkModeCardLayout(language) {
 try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const id = new URL(worker.url()).host;
+  // The injected controls follow the browser UI language, which differs
+  // between a developer's macOS session and a Linux CI runner. Pin it so
+  // the label assertions below describe one fixed product state.
+  await worker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   const article = await context.newPage(); await article.goto(`${origin}/article`);
   page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));

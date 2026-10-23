@@ -16,7 +16,13 @@
   function updateReaderLocale(value) {
     const language = value === 'system' || !value ? navigator.language : value;
     readerLocale = /^zh(?:-|$)/iu.test(language) ? 'zh-CN' : 'en';
-    const sourceKey = text => Object.keys(READER_EN_MESSAGES).find(key => READER_EN_MESSAGES[key] === text) || text;
+    // Fall back to the English value only for attributes that were not
+    // rendered through localizedMarkup() and therefore have no known key.
+    const sourceKey = text => (
+      Object.prototype.hasOwnProperty.call(READER_EN_MESSAGES, text)
+        ? text
+        : Object.keys(READER_EN_MESSAGES).find(key => READER_EN_MESSAGES[key] === text) || text
+    );
     for (const shadow of readerUiRoots) {
       if (!shadow.host.isConnected) { readerUiRoots.delete(shadow); continue; }
       // Only extension controls are translated. Article and model text are
@@ -31,9 +37,15 @@
         readerUiMessages.set(node, key);
         node.textContent = t(key);
       }
-      shadow.querySelectorAll('[title],[aria-label]').forEach(element => {
-        for (const attribute of ['title', 'aria-label']) {
-          if (element.hasAttribute(attribute)) element.setAttribute(attribute, t(sourceKey(element.getAttribute(attribute))));
+      shadow.querySelectorAll('[title],[aria-label],[data-tooltip]').forEach(element => {
+        for (const attribute of ['title', 'aria-label', 'data-tooltip']) {
+          if (!element.hasAttribute(attribute)) continue;
+          const remembered = readerUiRememberedKey(element, attribute);
+          const current = element.getAttribute(attribute);
+          const key = remembered && (current === remembered || current === READER_EN_MESSAGES[remembered])
+            ? remembered
+            : sourceKey(current);
+          element.setAttribute(attribute, t(key));
         }
       });
     }
@@ -42,6 +54,23 @@
     const shadow = host.attachShadow(options);
     readerUiRoots.add(shadow);
     return shadow;
+  }
+  /**
+   * Read the message key that produced a localized attribute.
+   *
+   * Several Chinese labels share one English translation (翻译本页 and
+   * 全文翻译 both render as "Translate article"), so reversing an English
+   * string back to a key is ambiguous and used to swap one visible label
+   * for a different one. The source key travels with the markup instead.
+   */
+  function readerUiRememberedKey(element, attribute) {
+    const marker = element.getAttribute(`data-reader-label-${attribute}`);
+    if (!marker) return null;
+    try {
+      return decodeURIComponent(marker);
+    } catch {
+      return null;
+    }
   }
   chrome.storage.local.get('readerUiLanguage').then(stored => {
     updateReaderLocale(stored.readerUiLanguage);
@@ -57,7 +86,19 @@
   }
   function localizedMarkup(markup) {
     return markup.replace(/>([^<>]*[\u3400-\u9fff][^<>]*)</gu, (_, text) => `>${t(text)}<`)
-      .replace(/(aria-label|title|placeholder)="([^"]*)"/gu, (_, attribute, text) => `${attribute}="${t(text)}"`);
+      .replace(/(aria-label|title|placeholder|data-tooltip)="([^"]*)"/gu, (_, attribute, text) => (
+        // Keep the Chinese source key next to the rendered value so a later
+        // locale switch can restore the same label. Several Chinese labels
+        // share one English translation, so reversing the English text back
+        // to a key is ambiguous and used to swap one visible label for a
+        // different one.
+        //
+        // One element can carry several localized attributes (a dock button
+        // has both `aria-label` and `title`). HTML keeps only the first
+        // occurrence of a repeated attribute, so every attribute gets its
+        // own marker instead of sharing one slot.
+        `${attribute}="${t(text)}" data-reader-label-${attribute}="${encodeURIComponent(text)}"`
+      ));
   }
   function applyReaderDesignTokens(element) {
     element.dataset.deepResearchDesignHost = 'true';
@@ -1323,8 +1364,14 @@
       // cannot arrive afterward and replace the image discussion context.
       window.getSelection()?.removeAllRanges();
       const isSvg = image.tagName?.toLowerCase() === 'svg';
-      const width = Number(image.naturalWidth || image.width || image.getBoundingClientRect().width || 0);
-      const height = Number(image.naturalHeight || image.height || image.getBoundingClientRect().height || 0);
+      // An inline SVG has no `naturalWidth` and its `width` attribute is often
+      // absent or a unit string, so `Number(...)` produced NaN and the
+      // rasterizer produced a broken image. Fall back to the viewBox and
+      // then the rendered box.
+      const viewBox = image.viewBox?.baseVal;
+      const rect = image.getBoundingClientRect();
+      const width = Math.round(Number(image.naturalWidth || image.width?.baseVal?.value || image.width || viewBox?.width || rect.width || 0) || 0);
+      const height = Math.round(Number(image.naturalHeight || image.height?.baseVal?.value || image.height || viewBox?.height || rect.height || 0) || 0);
       const rawDataUrl = isSvg ? readSvgDataUrl(image) : isLikelyAnimatedImage(image) ? null : readImageDataUrl(image);
       const dataUrl = isSvg ? await rasterizeSvgDataUrl(rawDataUrl, width, height) : rawDataUrl;
       const modelScale = width && height ? Math.min(1, 2400 / Math.max(width, height)) : 1;

@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir, tempPath } from './temp-paths.mjs';
+import { configureProvider as configureProviderFields, translateWholeArticle } from './panel-actions.mjs';
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const fixturePath = new URL('./fixture.html', import.meta.url);
@@ -107,11 +108,7 @@ async function activatePage(worker, fixture) {
 
 async function configureProvider(panel) {
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom', { force: true });
-  await panel.locator('#provider-url').fill(`http://127.0.0.1:${providerPort}/v1`);
-  await panel.locator('#provider-model').fill('fake-reader');
-  await panel.locator('#provider-key').fill('test-key');
-  await panel.locator('#save-settings').click();
+  await configureProviderFields(panel, { url: `http://127.0.0.1:${providerPort}/v1`, model: 'fake-reader', key: 'test-key' });
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#close-settings').click();
 }
@@ -132,7 +129,7 @@ try {
   await activatePage(firstWorker, firstFixture);
   await firstPanel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
   await configureProvider(firstPanel);
-  await firstPanel.locator('#translate-all').click();
+  await translateWholeArticle(firstPanel);
   const runningState = await waitFor(async () => {
     const state = await readLocalState(firstPanel);
     const job = state.jobs.find((item) => ['queued', 'running'].includes(item.status));

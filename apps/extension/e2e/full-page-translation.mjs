@@ -175,6 +175,10 @@ const context = await chromium.launchPersistentContext(tempPath(`deep-research-r
 try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
+  // The panel text follows the browser UI language, which differs between a
+  // developer's macOS session and a Linux CI runner. Pin it so the notice
+  // assertions below describe one fixed product state.
+  await worker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   const fixture = await context.newPage();
   await fixture.goto(targetUrl || `http://127.0.0.1:${fixturePort}/article`, { waitUntil: 'domcontentloaded' });
   if (targetUrl) {

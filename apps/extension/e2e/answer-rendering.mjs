@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { join } from 'node:path';
 import { tempDir, tempPath } from './temp-paths.mjs';
+import { configureProvider } from './panel-actions.mjs';
 
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const fixtureServer = createServer(async (_request, response) => {
@@ -94,17 +95,28 @@ try {
   });
 
   const panel = await context.newPage();
-  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
+  // The panel binds to the article through `sourceTab`; without it the panel
+  // watches the extension page itself and never receives the selection.
+  const articleTabId = await worker.evaluate(async (port) => {
+    const [tab] = await chrome.tabs.query({ url: `http://127.0.0.1:${port}/fixture.html` });
+    return tab?.id ?? null;
+  }, fixturePort);
+  if (!articleTabId) throw new Error('fixture tab is not available');
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html?sourceTab=${articleTabId}`, { waitUntil: 'domcontentloaded' });
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true', null, { timeout: 10_000 });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom', { force: true });
-  await panel.locator('#provider-url').fill(`http://127.0.0.1:${providerServer.address().port}/v1`);
-  await panel.locator('#provider-model').fill('answer-rendering-fixture');
-  await panel.locator('#provider-key').fill('local-only-test-key');
-  await panel.locator('#save-settings').click();
+  await configureProvider(panel, {
+    url: `http://127.0.0.1:${providerServer.address().port}/v1`,
+    model: 'answer-rendering-fixture',
+    key: 'local-only-test-key',
+  });
   await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('模型配置已保存'), null, { timeout: 10_000 });
   await panel.locator('#close-settings').click();
 
+  // The worker only forwards page messages from the active tab of the
+  // article's window, so the article has to be in front when the selection
+  // is made.
+  await article.bringToFront();
   await article.evaluate(() => {
     const node = document.querySelector('#target');
     if (!node) throw new Error('fixture paragraph is missing');
@@ -116,7 +128,9 @@ try {
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
-  await panel.locator('#ask-selection').click();
+  // The selection toolbar no longer has a dedicated "ask" button: the
+  // composer always carries the current scope, so a question is asked by
+  // typing into the shared input.
   await panel.locator('#question-input').fill('Why does cancellation matter?');
   await panel.locator('#send-question').click();
   await panel.locator('#reader-evidence-1').waitFor({ state: 'visible', timeout: 10_000 });
@@ -132,8 +146,9 @@ try {
     citation: document.querySelector('#answer-output [data-reader-citation]')?.getAttribute('href') || '',
     evidenceText: document.querySelector('#reader-evidence-1')?.innerText || '',
     evidenceLink: document.querySelector('#reader-evidence-1')?.getAttribute('href') || '',
-    evidenceLabel: document.querySelector('#answer-evidence .answer-label')?.textContent || '',
-    claimTitle: document.querySelector('#reader-evidence-1 .evidence-claim')?.getAttribute('title') || '',
+    evidenceLabel: document.querySelector('#answer-evidence .response-section-label')?.textContent || '',
+    // The claim is shown as visible text under the quote, not as a tooltip.
+    claimText: document.querySelector('#reader-evidence-1 .evidence-claim')?.textContent || '',
     transcript: (() => {
       const transcript = document.querySelector('#chat-transcript');
       const card = document.querySelector('#reader-evidence-1')?.getBoundingClientRect();
@@ -147,8 +162,8 @@ try {
     })(),
   }));
   if (rendered.headings.length !== 4 || rendered.listItems < 3 || !rendered.citation.startsWith('http://127.0.0.1:')
-    || !rendered.evidenceText.includes('定位原文') || !rendered.evidenceLink.startsWith('http://127.0.0.1:')
-    || !rendered.evidenceLabel.includes('1') || rendered.claimTitle.length !== 150
+    || !rendered.evidenceText.includes('在网页中定位') || !rendered.evidenceLink.startsWith('http://127.0.0.1:')
+    || !rendered.evidenceLabel.includes('1') || rendered.claimText.length !== 150
     || !rendered.transcript.evidenceWithinView) {
     throw new Error(`answer formatting/citation acceptance failed: ${JSON.stringify(rendered)}`);
   }
@@ -156,7 +171,8 @@ try {
   await panel.evaluate(() => document.querySelector('#conversation-list [data-reader-citation="1"]')?.click());
   await panel.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('已回到原文证据'), null, { timeout: 5_000 });
   const sourceOutline = await article.locator('#target').evaluate((node) => getComputedStyle(node).outline);
-  if (!sourceOutline.includes('rgb(49, 95, 232)')) throw new Error(`citation did not focus the original source: ${sourceOutline}`);
+  // The reader highlights the source with the shared primary token.
+  if (!sourceOutline.includes('rgb(64, 92, 157)')) throw new Error(`citation did not focus the original source: ${sourceOutline}`);
   await article.bringToFront();
   await worker.evaluate(async (url) => {
     const [tab] = await chrome.tabs.query({ url });

@@ -128,6 +128,9 @@ try {
     return tab.id;
   });
   await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
+  // The scope warning lives inside a collapsed disclosure, so the panel has
+  // to open it before the notice is visible.
+  await panel.locator('#scope-details .MuiAccordionSummary-root').click();
   await panel.locator('#scope-notice').waitFor({ state: 'visible', timeout: 10_000 });
   if (!(await panel.locator('#scope-notice').innerText()).includes('跨域 iframe')) throw new Error('跨域 iframe 范围限制没有显示');
   await panel.locator('#settings-button').click();

@@ -715,5 +715,13 @@
   "网络来源 · 搜索摘要": "Web sources · Search excerpts",
   "联网搜索暂不可用，本次依据原文回答，未核实最新网络信息。": "Web search was unavailable. This answer uses the original page; current web information was not verified.",
   "可联网核实最新信息": "Enable to check current information",
-  "独立模式需要搜索站点权限，请重新开启联网补充以授权。": "Standalone mode needs search-site permission. Turn web search on again to grant access."
+  "独立模式需要搜索站点权限，请重新开启联网补充以授权。": "Standalone mode needs search-site permission. Turn web search on again to grant access.",
+  "研究库": "Library",
+  "本地收藏": "Saved locally",
+  "标注 · {0}": "Annotation · {0}",
+  "技术文章快捷入口": "Article quick actions",
+  "打开聊天": "Open chat",
+  "打开 Deep Research Reader 聊天侧栏": "Open the Deep Research Reader chat sidebar",
+  "关闭选段翻译": "Close selection translation",
+  "放大查看原图": "Enlarge image"
 }
