@@ -5,7 +5,7 @@
 ## 已准备的文件
 
 - `listing-zh-CN.md`：商店名称、简介、详细介绍和分发建议。
-- `listing-en.md`：英文商店介绍，与中文说明保持相同功能和使用限制。
+- 英文商店介绍尚未准备，当前条目以 `listing-zh-CN.md` 为准；若后续要上英文页面，需按中文说明逐条对照并保持功能与使用限制一致。
 - `privacy-fields.md`：单一用途、逐项权限理由和数据披露草稿。
 - `reviewer-instructions.md`：可复制到私有 Test instructions 的审核操作说明；提交前按实际访问依赖选择说明，测试凭据可选，受限平台的访问方式另行准备。
 - `../../apps/extension/RELEASE_NOTES.md`：按版本记录用户可见变更和商店提交状态；每次提升版本号时先在此落一条记录。
