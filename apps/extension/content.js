@@ -914,11 +914,10 @@
     readerDockHost.style.cssText = 'position:fixed;z-index:2147483645;right:10px;top:55%;transform:translateY(-50%);';
     applyReaderDesignTokens(readerDockHost);
     // The dock is a first-class interactive surface (summarize, translate,
-    // open chat). A closed shadow root hid those buttons from assistive
-    // technology on Chromium builds that do not expose closed-shadow
-    // internals in the accessibility tree, so screen-reader users could not
-    // reach them. The host page still cannot target the controls: the host
-    // element carries no layout styles and the shadow resets `all:initial`.
+    // open chat). A closed shadow root kept those buttons out of the
+    // accessibility tree, so assistive technology could not reach them.
+    // The host page still cannot target the controls: the host element
+    // carries no layout styles and the shadow resets `all:initial`.
     const shadow = readerShadow(readerDockHost, { mode: 'open' });
     shadow.innerHTML = localizedMarkup(`
       <style>

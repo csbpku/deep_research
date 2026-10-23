@@ -123,15 +123,20 @@ try {
   });
   await article.waitForSelector('[data-deep-research-dock]', { timeout: 10_000 });
   await article.screenshot({ path: tempPath('deep-research-reader-right-dock.png') });
-  const accessibilitySession = await context.newCDPSession(article);
-  const { nodes: accessibilityNodes } = await accessibilitySession.send('Accessibility.getFullAXTree');
-  const dockActions = accessibilityNodes
-    .filter((node) => ['总结本页', '翻译本页'].includes(node.name?.value))
-    .map((node) => ({ label: node.name.value, role: node.role?.value }));
+  const dockActions = [];
   for (const label of ['总结本页', '翻译本页']) {
-    if (!dockActions.some((item) => item.label === label && item.role === 'button')) {
-      throw new Error(`right dock ${label} action is missing from the browser accessibility tree: ${JSON.stringify(dockActions)}`);
+    // Assert the button role through the accessibility tree Playwright
+    // computes. The raw CDP AX tree only maps shadow-DOM controls to a
+    // `button` role on some Chromium builds, so reading it directly made
+    // this check platform-dependent without testing anything extra.
+    const action = article.getByRole('button', { name: label, exact: true });
+    if (await action.count() !== 1) {
+      throw new Error(`right dock ${label} action is missing from the browser accessibility tree`);
     }
+    if (!await action.isVisible()) {
+      throw new Error(`right dock ${label} action is not visible`);
+    }
+    dockActions.push({ label, role: 'button', visible: true });
   }
 
   const panel = await context.newPage();
