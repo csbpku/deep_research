@@ -31,12 +31,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  adminRootSx,
 } from '../AdminMaterial';
 import type { RadarFeedbackType } from '@deep-research/shared/states';
 import { SOURCE_TYPE_FILTER_OPTIONS } from '@/lib/radar/source-labels';
 import type { DistilledScore } from '@deep-research/shared/schemas';
 import { summarizeAdminBulkResults } from '../admin-bulk-results';
-import styles from '../admin.module.css';
 
 interface RadarCandidateListItem {
   id: string;
@@ -226,7 +226,7 @@ export default function AdminRadarClient() {
   }
 
   return (
-    <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 1280 }}>
+    <Box sx={[adminRootSx, { mx: 'auto', width: '100%', maxWidth: 1280 }]}>
       <PageHeader
         title="Admin · 雷达治理"
         description="按需巡检和屏蔽无关内容，或从高价值信号创建调研；雷达内容无需逐条审批。"
@@ -243,7 +243,7 @@ export default function AdminRadarClient() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-32" aria-label="状态">
+          <SelectTrigger sx={{"width":128}} aria-label="状态">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -262,7 +262,7 @@ export default function AdminRadarClient() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-32" aria-label="来源">
+          <SelectTrigger sx={{"width":128}} aria-label="来源">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -279,7 +279,7 @@ export default function AdminRadarClient() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-36" aria-label="优先队列">
+          <SelectTrigger sx={{"width":144}} aria-label="优先队列">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -309,20 +309,20 @@ export default function AdminRadarClient() {
       ) : null}
 
       {query.isLoading ? (
-        <div className="grid gap-3">
+        <Box component="div" sx={{"display":"grid","gap":1.5}}>
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-28 w-full" />
+            <Skeleton key={i} sx={{"height":112,"width":"100%"}} />
           ))}
-        </div>
+        </Box>
       ) : query.isError ? (
         <EmptyState title="加载失败" description={String((query.error as Error).message)} />
       ) : items.length === 0 ? (
         <EmptyState title="暂无内容" description={`当前状态 ${status} 下没有雷达条目。`} />
       ) : (
-        <div className="space-y-2">
+        <Box component="div" sx={{"& > :not(style) ~ :not(style)":{"marginTop":1}}}>
           {actionableItems.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs">
-              <label className="inline-flex cursor-pointer items-center gap-2 font-medium">
+            <Box component="div" sx={{"display":"flex","flexWrap":"wrap","alignItems":"center","gap":1,"borderRadius":"var(--dr-radius-small)","border":"1px solid var(--dr-color-outline)","borderColor":"divider","backgroundColor":"color-mix(in srgb, var(--dr-color-surface-container) 20%, var(--dr-color-surface))","px":1.5,"py":1,"fontSize":"var(--dr-type-caption)"}}>
+              <Box component="label" sx={{"display":"inline-flex","cursor":"pointer","alignItems":"center","gap":1,"fontWeight":"var(--dr-weight-medium)"}}>
                 <Checkbox
                   size="small"
                   checked={allVisibleSelected}
@@ -330,10 +330,10 @@ export default function AdminRadarClient() {
                   aria-label="全选当前页可治理内容"
                 />
                 全选当前页
-              </label>
+              </Box>
               {selectedIds.length > 0 ? (
                 <>
-                  <span className="text-muted-foreground">已选 {selectedIds.length} 条</span>
+                  <Box component="span" sx={{"color":"text.secondary"}}>已选 {selectedIds.length} 条</Box>
                   {selectedStatus === 'candidate' ? (
                     <Button
                       type="button"
@@ -358,13 +358,13 @@ export default function AdminRadarClient() {
                   )}
                 </>
               ) : (
-                <span className="text-muted-foreground">批量屏蔽或恢复当前页内容</span>
+                <Box component="span" sx={{"color":"text.secondary"}}>批量屏蔽或恢复当前页内容</Box>
               )}
-            </div>
+            </Box>
           ) : null}
-          <div className="grid gap-3">
+          <Box component="div" sx={{"display":"grid","gap":1.5}}>
           {items.map((it) => (
-            <div key={it.id} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-2">
+            <Box component="div" key={it.id} sx={{"display":"grid","minWidth":0,"gridTemplateColumns":"auto minmax(0,1fr)","alignItems":"flex-start","gap":1}}>
               {it.status === 'candidate' || it.status === 'rejected' ? (
                 <Checkbox
                   size="small"
@@ -374,7 +374,7 @@ export default function AdminRadarClient() {
                   sx={{ mt: 1.5 }}
                 />
               ) : (
-                <span aria-hidden="true" className="size-3.5 shrink-0" />
+                <Box component="span" aria-hidden="true" sx={{"width":14,"height":14,"flexShrink":0}} />
               )}
               <RadarCandidateCard
                 candidate={it}
@@ -393,10 +393,10 @@ export default function AdminRadarClient() {
                   />
                 }
               />
-            </div>
+            </Box>
           ))}
-          </div>
-        </div>
+          </Box>
+        </Box>
       )}
 
       <Pagination
@@ -410,7 +410,7 @@ export default function AdminRadarClient() {
         open={!!dismissing}
         onOpenChange={(o) => !o && setDismissing(null)}
         title="屏蔽该雷达条目？"
-        description={dismissing ? <>条目：<strong className="font-medium text-foreground">{dismissing.title}</strong>。屏蔽后不会再出现在默认雷达，仍可在「已屏蔽」状态下恢复或审计。</> : undefined}
+        description={dismissing ? <>条目：<Box component="strong" sx={{"fontWeight":"var(--dr-weight-medium)","color":"text.primary"}}>{dismissing.title}</Box>。屏蔽后不会再出现在默认雷达，仍可在「已屏蔽」状态下恢复或审计。</> : undefined}
         fields={[
           { kind: 'static', id: 'note', label: '说明', value: '该操作会写入 admin_actions 审计日志，已有评论和引用不会被物理删除。' },
         ]}
@@ -472,7 +472,7 @@ function RadarAdminActions({
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="text-muted-foreground hover:text-foreground"
+          sx={{"color":"text.secondary","&:hover":{"color":"text.primary"}}}
           aria-label="打开雷达治理操作"
           title="更多操作"
           disabled={disabled}
@@ -486,7 +486,7 @@ function RadarAdminActions({
           创建 AI 调研
         </DropdownMenuItem>
         {status === 'candidate' ? (
-          <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={onDismiss}>
+          <DropdownMenuItem sx={{"color":"error.main","&:focus":{"color":"error.main"}}} onSelect={onDismiss}>
             <X />
             屏蔽
           </DropdownMenuItem>

@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { cn } from '@/lib/utils';
+import Box, { type BoxProps } from '@mui/material/Box';
 
 /**
  * MetaRow —— 详情页的「作者 · 日期 · 计数」元信息行。
@@ -9,19 +9,30 @@ import { cn } from '@/lib/utils';
 export function MetaRow({
   className,
   children,
+  sx,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+}: React.HTMLAttributes<HTMLDivElement> & Pick<BoxProps<'div'>, 'sx'>) {
   return (
-    <div
-      className={cn(
-        'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground',
-        '[&_svg]:size-3.5 [&_svg]:shrink-0',
-        className,
-      )}
+    <Box
+      component="div"
+      className={className}
+      sx={[
+        {
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          columnGap: 'var(--dr-space-3)',
+          rowGap: 'var(--dr-space-1)',
+          color: 'text.secondary',
+          typography: 'metadata',
+          '& svg': { width: 14, height: 14, flexShrink: 0 },
+        },
+        ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+      ]}
       {...props}
     >
       {children}
-    </div>
+    </Box>
   );
 }
 
@@ -31,17 +42,31 @@ export function MetaItem({
   children,
   mono = false,
   className,
+  sx,
 }: {
   icon?: React.ReactNode;
   children: React.ReactNode;
   /** ID / 数值类用等宽字体 */
   mono?: boolean;
   className?: string;
+  sx?: BoxProps<'span'>['sx'];
 }) {
   return (
-    <span className={cn('inline-flex items-center gap-1', mono && 'font-mono', className)}>
+    <Box
+      component="span"
+      className={className}
+      sx={[
+        {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--dr-space-1)',
+          ...(mono ? { fontFamily: 'monospace' } : {}),
+        },
+        ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+      ]}
+    >
       {icon}
       {children}
-    </span>
+    </Box>
   );
 }

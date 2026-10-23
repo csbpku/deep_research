@@ -110,12 +110,37 @@ const context = await chromium.launchPersistentContext(profilePath, {
 });
 
 try {
+  // The composer replaced the old standalone "translate all" button with a
+  // scope-aware action. Every full-page translation below must run from the
+  // "整篇" scope so the composer does not translate a selection instead. The
+  // scope switcher only renders when a selection or image alternative
+  // exists, so it stays untouched when the page scope is already active.
+  const translateWholePage = async () => {
+    const scopePage = panel.locator('#scope-page');
+    if (await scopePage.isVisible()) await scopePage.click();
+    await panel.locator('#chat-translate').click();
+  };
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
   const fixture = await context.newPage();
   await fixture.goto(`http://127.0.0.1:${fixturePort}/fixture.html`, { waitUntil: 'domcontentloaded' });
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
+  // Record every runtime message the panel receives so a dropped
+  // translation-complete event can be told apart from an ignored one.
+  await panel.evaluate(() => {
+    window.__readerMessages = [];
+    chrome.runtime.onMessage.addListener((message) => {
+      window.__readerMessages.push({
+        at: Date.now(),
+        type: message?.type,
+        jobId: message?.jobId,
+        cancelled: message?.cancelled,
+        status: message?.job?.status,
+        error: message?.job?.error,
+      });
+    });
+  });
   await fixture.bringToFront();
   await worker.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -127,6 +152,7 @@ try {
   await panel.locator('#settings-button').click();
   await panel.locator('#provider-kind').selectOption('custom', { force: true });
   await panel.locator('#provider-url').fill(`http://127.0.0.1:${providerPort}/v1`);
+  await panel.locator('#manual-model-settings .MuiAccordionSummary-root').click();
   await panel.locator('#provider-model').fill('controls-reader');
   await panel.locator('#provider-key').fill('local-test-key');
   if (!await panel.getByText('卸载扩展前请先导出需要保留的阅读成果').isVisible()) {
@@ -178,7 +204,7 @@ try {
 
   // First let one item fail, then prove that the visible single-item retry
   // removes only that failure without rerunning the whole document.
-  await panel.locator('#translate-all').click();
+  await translateWholePage();
   try {
     await panel.locator('#translation-failures').waitFor({ state: 'visible', timeout: 60_000 });
   } catch (error) {
@@ -196,7 +222,10 @@ try {
   if (!failureText.includes('重试')) throw new Error(`失败项没有显示重试入口：${failureText}`);
   await panel.locator('.translation-retry').first().click();
   try {
-    await panel.waitForFunction(() => !document.querySelector('#translation-failures')?.textContent?.includes('需要处理'), null, { timeout: 30_000 });
+    // The failure list renders one row per item. The previous assertion looked
+    // for a phrase the extension never renders, so it passed without proving
+    // anything.
+    await panel.waitForFunction(() => !document.querySelector('#translation-failures .translation-failure-row'), null, { timeout: 30_000 });
   } catch (error) {
     console.error(JSON.stringify({
       failureText,
@@ -218,22 +247,65 @@ try {
 
   // Pause leaves any completed overlays in place and allows a cached
   // continuation.
-  await panel.locator('#translate-all').click();
+  await translateWholePage();
   await panel.locator('#pause-translation').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#pause-translation').click();
-  await panel.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('翻译已暂停'), null, { timeout: 10_000 });
-  const pausedVisible = await panel.locator('#cancel-translation').isVisible();
-  if (pausedVisible) throw new Error('暂停后取消按钮仍保持处理中状态');
+  try {
+    await panel.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('翻译已暂停'), null, { timeout: 10_000 });
+  } catch (error) {
+    const workerJobs = await worker.evaluate(async () => {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('deep-research-reader');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const jobs = await new Promise((resolve, reject) => {
+        const tx = db.transaction('jobs', 'readonly');
+        const request = tx.objectStore('jobs').getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      return jobs.map((job) => ({ id: job.id, status: job.status, error: job.error, textDone: job.textDone, textTotal: job.textTotal, failed: (job.failedItems || []).length }));
+    }).catch((probeError) => ({ probeError: String(probeError) }));
+    console.error(JSON.stringify({
+      phase: 'pause',
+      notice: await panel.locator('#notice').innerText().catch(() => ''),
+      summary: await panel.locator('#translation-summary-text').innerText().catch(() => ''),
+      pauseVisible: await panel.locator('#pause-translation').isVisible().catch(() => false),
+      cancelVisible: await panel.locator('#cancel-translation').isVisible().catch(() => false),
+      workerJobs,
+      panelMessages: await panel.evaluate(() => window.__readerMessages || []),
+      activeJobId: await panel.evaluate(() => document.querySelector('#translation-summary')?.dataset?.jobId || null),
+      body: (await panel.locator('body').innerText().catch(() => '')).slice(-1500),
+    }, null, 2));
+    throw error;
+  }
+  // A paused task keeps "继续", "恢复原文" and "取消" available: the user can
+  // resume, drop the applied translations, or abandon the task entirely. What
+  // must not happen is the task still reporting itself as running.
+  const pauseLabel = (await panel.locator('#pause-translation').innerText()).trim();
+  if (pauseLabel !== '继续') throw new Error(`暂停后没有提供继续入口：${pauseLabel}`);
+  const pausedSummary = (await panel.locator('#translation-summary-text').innerText()).trim();
+  if (!pausedSummary.includes('已暂停')) throw new Error(`暂停后任务状态没有收敛：${pausedSummary}`);
+  const pausedRestoreVisible = await panel.locator('#restore-page').isVisible();
+  const pausedApplied = await fixture.locator('[data-deep-research-translation]').count();
+  if (pausedApplied > 0 && !pausedRestoreVisible) {
+    throw new Error(`暂停后已有 ${pausedApplied} 段译文，但没有恢复原文入口`);
+  }
 
   await panel.locator('#settings-button').click();
   await panel.locator('#clear-cache').click();
   await panel.locator('#close-settings').click();
-  await panel.locator('#restore-page').click();
-  await fixture.waitForSelector('[data-deep-research-translation]', { state: 'detached', timeout: 10_000 });
+  // A paused task may not have applied any translation yet, so the restore
+  // affordance is only present when the page really carries translations.
+  if (await panel.locator('#restore-page').isVisible()) {
+    await panel.locator('#restore-page').click();
+    await fixture.waitForSelector('[data-deep-research-translation]', { state: 'detached', timeout: 10_000 });
+  }
 
   // Cancellation is distinct from restoring the source: it stops future work
   // while leaving already applied results in the page.
-  await panel.locator('#translate-all').click();
+  await translateWholePage();
   await panel.locator('#cancel-translation').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#cancel-translation').click();
   await panel.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('翻译已取消'), null, { timeout: 10_000 });
@@ -289,12 +361,13 @@ try {
     throw new Error('译文放大没有生效');
   }
   await fixture.locator('[data-deep-research-selection-translation] .expand').click();
-  await panel.locator('#open-page-chat').click();
-  await panel.locator('#expand-chat').click();
-  if (!await panel.locator('#page-view').evaluate((element) => element.classList.contains('chat-expanded'))) {
-    throw new Error('聊天放大没有生效');
-  }
-  await panel.locator('#expand-chat').click();
+  // The standalone "open chat" button was replaced by the composer, which
+  // opens the discussion workspace on demand. Asking a question is the
+  // current way in.
+  await panel.locator('#chat-summary').click();
+  await panel.locator('#discussion-section').waitFor({ state: 'visible', timeout: 10_000 });
+  const discussionContext = (await panel.locator('#discussion-context').innerText()).trim();
+  if (!discussionContext) throw new Error('讨论区没有显示当前回答依据');
   await panel.locator('#restore-page').click();
   await fixture.waitForSelector('[data-deep-research-selection-translation]', { state: 'detached', timeout: 10_000 });
 

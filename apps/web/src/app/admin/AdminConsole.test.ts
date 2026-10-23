@@ -4,13 +4,11 @@
 // pure helper（syncStatusStyle）。组件渲染层由 P0 真实 API + 浏览器 E2E 覆盖。
 //
 // 覆盖：
-//   - 4 个已知 status：running / completed / partial / failed → 中文 label + 配色 class
+//   - 4 个已知 status：running / completed / partial / failed → 中文 label + MUI sx 配色
 //   - 未知 status：fallback 到 status 字面 + 中性色
 //   - 状态 → 状态映射稳定性（同输入同输出）
 //
-// UI 重设计后：配色从裸 hex 改为 Tailwind token class
-// （bg-status-*-bg / text-status-*-fg），深浅色由 CSS 变量自动切换，
-// 所以断言从 { bg, fg } 十六进制改为 className 字符串。
+// 状态配色统一来自共享设计 token，不依赖 Tailwind 类。
 
 import { describe, expect, it } from 'vitest';
 import { ADMIN_TAB_KEYS, shanghaiDateValue, syncStatusStyle } from './AdminConsole';
@@ -20,7 +18,7 @@ describe('syncStatusStyle', () => {
     const s = syncStatusStyle('running');
     expect(s).toEqual({
       label: '运行中',
-      className: 'bg-status-running-bg text-status-running-fg',
+      sx: { backgroundColor: 'var(--dr-color-primary-container)', color: 'primary.main' },
     });
   });
 
@@ -28,7 +26,7 @@ describe('syncStatusStyle', () => {
     const s = syncStatusStyle('completed');
     expect(s).toEqual({
       label: '完成',
-      className: 'bg-status-succeeded-bg text-status-succeeded-fg',
+      sx: { backgroundColor: 'var(--dr-color-success-container)', color: 'success.main' },
     });
   });
 
@@ -36,7 +34,7 @@ describe('syncStatusStyle', () => {
     const s = syncStatusStyle('partial');
     expect(s).toEqual({
       label: '部分',
-      className: 'bg-status-partial-bg text-status-partial-fg',
+      sx: { backgroundColor: 'var(--dr-color-warning-container)', color: 'warning.main' },
     });
   });
 
@@ -44,26 +42,26 @@ describe('syncStatusStyle', () => {
     const s = syncStatusStyle('failed');
     expect(s).toEqual({
       label: '失败',
-      className: 'bg-status-failed-bg text-status-failed-fg',
+      sx: { backgroundColor: 'var(--dr-color-danger-container)', color: 'error.main' },
     });
   });
 
   it('returns fallback badge (neutral) for unknown status', () => {
     const s = syncStatusStyle('mystery-state');
     expect(s.label).toBe('mystery-state');
-    expect(s.className).toBe('bg-muted text-muted-foreground');
+    expect(s.sx).toEqual({ backgroundColor: 'action.hover', color: 'text.secondary' });
   });
 
   it('returns fallback for empty status', () => {
     const s = syncStatusStyle('');
     expect(s.label).toBe('');
-    expect(s.className).toBe('bg-muted text-muted-foreground');
+    expect(s.sx).toEqual({ backgroundColor: 'action.hover', color: 'text.secondary' });
   });
 
   it('never returns a raw hex color (tokens only)', () => {
     // 守护：配色必须走 token class，不能回退到裸 hex。
     for (const status of ['running', 'completed', 'partial', 'failed', 'unknown']) {
-      expect(syncStatusStyle(status).className).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+      expect(JSON.stringify(syncStatusStyle(status).sx)).not.toMatch(/#[0-9a-fA-F]{3,8}/);
     }
   });
 

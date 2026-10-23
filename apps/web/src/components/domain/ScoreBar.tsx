@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { cn } from '@/lib/utils';
+import Box, { type BoxProps } from '@mui/material/Box';
 
 /**
  * Distilled score 的 tier 视觉映射 —— 单一事实来源。
@@ -13,26 +13,6 @@ export const TIER_LABELS: Record<string, string> = {
   noise: '不推荐',
 };
 
-/** tier → 文字色 / 描边色 / 填充色 三件套（token 化，深浅色自动切换） */
-export const TIER_CLASSES: Record<string, { text: string; border: string; fill: string }> = {
-  deep_read: {
-    text: 'text-tier-deep-read',
-    border: 'border-tier-deep-read',
-    fill: 'bg-tier-deep-read',
-  },
-  skim: { text: 'text-tier-skim', border: 'border-tier-skim', fill: 'bg-tier-skim' },
-  collection: {
-    text: 'text-tier-collection',
-    border: 'border-tier-collection',
-    fill: 'bg-tier-collection',
-  },
-  noise: { text: 'text-tier-noise', border: 'border-tier-noise', fill: 'bg-tier-noise' },
-};
-
-export function tierClasses(tier: string) {
-  return TIER_CLASSES[tier === 'collection' ? 'deep_read' : tier] ?? TIER_CLASSES.deep_read;
-}
-
 /** MUI consumers use domain colors directly, without Tailwind presentation. */
 export function readingTierColor(tier: string | null | undefined): string {
   const key = tier === 'collection' ? 'deep_read' : tier;
@@ -40,6 +20,14 @@ export function readingTierColor(tier: string | null | undefined): string {
     : key === 'skim' ? '--dr-color-tier-skim'
       : key === 'noise' ? '--dr-color-tier-noise' : null;
   return token ? `var(${token})` : 'var(--dr-color-text-secondary)';
+}
+
+function scoreTierColor(tier: string): string {
+  const normalizedTier = tier === 'collection' ? 'deep_read' : tier;
+  const token = normalizedTier === 'skim' ? '--dr-color-tier-skim'
+    : normalizedTier === 'noise' ? '--dr-color-tier-noise'
+      : '--dr-color-tier-deep-read';
+  return `var(${token})`;
 }
 
 /**
@@ -52,21 +40,30 @@ export function ScoreBar({
   max = 3,
   tier = 'deep_read',
   className,
+  sx,
 }: {
   label: string;
   value: number;
   max?: number;
   tier?: string;
   className?: string;
+  sx?: BoxProps<'div'>['sx'];
 }) {
-  const { fill } = tierClasses(tier);
+  const tierColor = scoreTierColor(tier);
   const segments = Array.from({ length: max + 1 }, (_, i) => i);
 
   return (
-    <div className={cn('space-y-1', className)}>
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div
-        className="flex gap-0.5"
+    <Box
+      className={className}
+      sx={[
+        { display: 'flex', flexDirection: 'column', gap: 'var(--dr-space-1)' },
+        ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+      ]}
+    >
+      <Box component="div" sx={{ color: 'text.secondary', typography: 'metadata' }}>{label}</Box>
+      <Box
+        component="div"
+        sx={{ display: 'flex', gap: '2px' }}
         role="meter"
         aria-label={label}
         aria-valuenow={value}
@@ -74,13 +71,19 @@ export function ScoreBar({
         aria-valuemax={max}
       >
         {segments.map((i) => (
-          <span
+          <Box
+            component="span"
             key={i}
-            className={cn('h-1 w-4 rounded-sm', i <= value ? fill : 'bg-tier-track')}
+            sx={{
+              width: 16,
+              height: 4,
+              borderRadius: '2px',
+              bgcolor: i <= value ? tierColor : 'var(--dr-color-tier-track)',
+            }}
           />
         ))}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
 
@@ -91,22 +94,38 @@ export function ScoreDial({
   total,
   tier,
   size = 'default',
+  sx,
 }: {
   total: number;
   tier: string;
   size?: 'default' | 'compact';
+  sx?: BoxProps<'div'>['sx'];
 }) {
-  const { text, border } = tierClasses(tier);
+  const tierColor = scoreTierColor(tier);
+  const dimension = size === 'compact' ? 32 : 48;
   return (
-    <div
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded-full font-mono font-bold tabular-nums',
-        border,
-        text,
-        size === 'compact' ? 'size-8 border-2 text-xs' : 'size-12 border-[3px] text-lg',
-      )}
+    <Box
+      component="div"
+      sx={[
+        {
+          display: 'flex',
+          width: dimension,
+          height: dimension,
+          flexShrink: 0,
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: `${size === 'compact' ? 2 : 3}px solid ${tierColor}`,
+          borderRadius: '50%',
+          color: tierColor,
+          fontFamily: 'monospace',
+          fontWeight: 'var(--dr-weight-bold)',
+          fontVariantNumeric: 'tabular-nums',
+          fontSize: size === 'compact' ? 'var(--dr-type-caption)' : 'var(--dr-type-title-small)',
+        },
+        ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+      ]}
     >
       {total}
-    </div>
+    </Box>
   );
 }

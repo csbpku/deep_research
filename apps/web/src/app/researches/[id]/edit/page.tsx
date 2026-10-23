@@ -176,6 +176,18 @@ const OUTLINE_WIDTH_KEY = 'research-editor-outline-width';
 const TOOLS_WIDTH_KEY = 'research-editor-tools-width';
 const OUTLINE_COLLAPSED_KEY = 'research-editor-outline-collapsed';
 const TOOLS_COLLAPSED_KEY = 'research-editor-tools-collapsed';
+const visuallyHiddenSx = {
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  padding: 0,
+  margin: '-1px',
+  overflow: 'hidden',
+  clip: 'rect(0, 0, 0, 0)',
+  clipPath: 'inset(50%)',
+  whiteSpace: 'nowrap',
+  border: 0,
+} as const;
 
 function clampOutlineWidth(value: number): number {
   return Math.min(320, Math.max(150, value));
@@ -986,7 +998,7 @@ export default function EditorPage() {
         }}>
           <Paper variant="outlined" sx={{ position: 'sticky', top: 2, p: outlineCollapsed ? 0.75 : 1.5, bgcolor: 'background.paper', borderColor: 'divider' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-              {!outlineCollapsed ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Typography variant="control" component="p" sx={{ fontWeight: 600 }}>文章结构</Typography><Typography variant="metadata" color="text.secondary">{outline.length} 节</Typography></Box> : <span className="sr-only">文章结构已收起</span>}
+              {!outlineCollapsed ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><Typography variant="control" component="p" sx={{ fontWeight: 600 }}>文章结构</Typography><Typography variant="metadata" color="text.secondary">{outline.length} 节</Typography></Box> : <Box component="span" sx={visuallyHiddenSx}>文章结构已收起</Box>}
               <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { xs: 'none', xl: 'inline-flex' } }} onClick={() => setOutlineCollapsed((collapsed) => !collapsed)} aria-label={outlineCollapsed ? '展开文章结构' : '收起文章结构'} title={outlineCollapsed ? '展开文章结构' : '收起文章结构'}>{outlineCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}</Button>
               {outlineOpen ? <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { xl: 'none' } }} onClick={() => setOutlineOpen(false)} aria-label="关闭文章大纲"><X /></Button> : null}
             </Box>
@@ -1012,7 +1024,7 @@ export default function EditorPage() {
                     }}
                   >
                     <Box component="span" aria-hidden="true" sx={{ display: 'inline-block', flex: '0 0 auto', width: outlineCollapsed ? 8 : 6, height: outlineCollapsed ? 8 : 6, mr: outlineCollapsed ? 0 : 1, borderRadius: '50%', bgcolor: item.id === outlineTarget ? 'text.primary' : 'text.disabled' }} />
-                    {!outlineCollapsed ? item.text : <span className="sr-only">{item.text}</span>}
+                    {!outlineCollapsed ? item.text : <Box component="span" sx={visuallyHiddenSx}>{item.text}</Box>}
                   </Button>
                 ))}
               </Box>
@@ -1040,7 +1052,7 @@ export default function EditorPage() {
         </Box>
         <Paper component="section" variant="outlined" sx={{ minWidth: 0, overflow: 'hidden', borderColor: 'divider', bgcolor: 'background.paper', boxShadow: 'var(--dr-elevation-1)' }}>
           <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 2.5, py: 1.5 }}>
-            <label htmlFor="edit-title" className="sr-only">标题</label>
+            <Box component="label" htmlFor="edit-title" sx={visuallyHiddenSx}>标题</Box>
             <Input
               id="edit-title"
               value={title}
@@ -1108,7 +1120,7 @@ export default function EditorPage() {
           <Box sx={view === 'split' ? { display: 'grid', gridTemplateColumns: { xl: 'repeat(2, minmax(0, 1fr))' } } : undefined}>
             {view !== 'preview' && (
               <div>
-                <label htmlFor="edit-body" className="sr-only">正文 Markdown</label>
+                <Box component="label" htmlFor="edit-body" sx={visuallyHiddenSx}>正文 Markdown</Box>
                 <Textarea
                   ref={bodyRef}
                   id="edit-body"
@@ -1192,7 +1204,7 @@ export default function EditorPage() {
           <Paper variant="outlined" sx={{ display: 'flex', maxHeight: 'calc(100vh - 7rem)', minHeight: toolsCollapsed ? 0 : 420, flexDirection: 'column', overflow: 'hidden', borderColor: 'divider', bgcolor: 'background.paper', boxShadow: { xs: 'var(--dr-elevation-1)', lg: 'none' } }}>
             <Box sx={{ p: toolsCollapsed ? 0.75 : 1.5, pb: toolsCollapsed ? 0.75 : 0, borderBottom: 1, borderColor: 'divider' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: toolsCollapsed ? 'center' : 'space-between', px: toolsCollapsed ? 0 : 0.5, pb: toolsCollapsed ? 0 : 1 }}>
-                {!toolsCollapsed ? <Typography variant="control" component="p" sx={{ fontWeight: 600 }}>研究工具</Typography> : <span className="sr-only">研究工具已收起</span>}
+                {!toolsCollapsed ? <Typography variant="control" component="p" sx={{ fontWeight: 600 }}>研究工具</Typography> : <Box component="span" sx={visuallyHiddenSx}>研究工具已收起</Box>}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   {!toolsCollapsed ? <Typography variant="metadata" color="text.secondary">{outline.length} 节</Typography> : null}
                   <Button type="button" variant="ghost" size="icon-sm" sx={{ display: { xs: 'none', xl: 'inline-flex' } }} onClick={() => setToolsCollapsed((collapsed) => !collapsed)} aria-label={toolsCollapsed ? '展开研究工具' : '收起研究工具'} title={toolsCollapsed ? '展开研究工具' : '收起研究工具'}>{toolsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</Button>

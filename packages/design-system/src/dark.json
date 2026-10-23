@@ -51,6 +51,9 @@
   "color-tier-track": "#384353",
   "color-inverse-surface": "#eef1f6",
   "color-inverse-text": "#20242c",
+  "color-on-inverse-muted": "#4a515c",
+  "color-highlight": "rgba(255,213,72,0.24)",
+  "color-highlight-border": "rgba(226,199,128,0.68)",
   "color-scrim": "rgba(0,0,0,0.64)",
   "elevation-1": "0 1px 3px #00000033",
   "elevation-2": "0 8px 28px #00000066"

@@ -24,6 +24,10 @@ const roots = new WeakMap<Element, Root>();
 function render(host: Element, content: React.ReactNode) {
   let root = roots.get(host);
   if (!root) { root = createRoot(host); roots.set(host, root); }
+  // Each region is its own React root, and React context does not cross root
+  // boundaries, so the theme has to be provided again here. The Reader theme
+  // carries no colour schemes, so this provider never writes a `light`/`dark`
+  // class onto <html>: the two providers cannot disagree about a palette.
   flushSync(() => root.render(<ThemeProvider theme={readerTheme}>{content}</ThemeProvider>));
 }
 export function MaterialMarkdown({ text, className, bind }: { text: string; className?: string; bind?: (element: HTMLElement) => void }) {

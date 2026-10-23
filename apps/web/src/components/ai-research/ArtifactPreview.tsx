@@ -12,6 +12,7 @@ import Stack from '@mui/material/Stack';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
 
 function splitSlides(content: string): string[] {
   const normalized = content.replace(/\r\n?/gu, '\n').trim();
@@ -218,13 +219,19 @@ export function ArtifactPreview({ content }: { content: string }) {
                 <Typography variant="metadata" sx={{ fontFamily: 'monospace', letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--dr-color-tier-skim)' }}>{slideKicker(currentSlide, current)}</Typography>
                 <Typography component="h2" variant="h2" sx={{ mt: 1.5, maxWidth: 768, color: 'inherit', overflowWrap: 'anywhere' }}>{slideTitle(currentSlide, current)}</Typography>
                 <Box data-slide-scroll sx={{ mt: 1, maxHeight: '42%', maxWidth: 800, overflowY: 'auto', pr: 1.5, typography: 'reading', color: 'var(--dr-color-inverse-text)', opacity: 0.82, fontSize: { xs: 'var(--dr-type-body)', sm: 'var(--dr-type-title-small)', lg: 'var(--dr-type-title-compact)' } }}>
-                  {stageContent.lead ? <MarkdownContent content={stageContent.lead} compact className="[&_p]:my-0 [&_strong]:text-tier-skim" /> : null}
+                  {stageContent.lead ? (
+                    <Box sx={{ '& p': { my: 0 }, '& strong': { color: 'var(--dr-color-tier-skim)' } }}>
+                      <MarkdownContent content={stageContent.lead} compact />
+                    </Box>
+                  ) : null}
                   {stageContent.bullets.length > 0 ? (
                     <Stack component="ul" spacing={1.25} sx={{ mt: 1.5, mb: 0, pl: 0, listStyle: 'none' }}>
                       {stageContent.bullets.map((bullet, index) => (
                         <Stack component="li" key={`${index}-${bullet.slice(0, 32)}`} direction="row" spacing={1.25} sx={{ alignItems: 'baseline' }}>
                           <Box component="span" aria-hidden sx={{ width: 6, height: 6, mt: '0.65em', flexShrink: 0, borderRadius: '50%', bgcolor: 'var(--dr-color-tier-skim)' }} />
-                          <Box sx={{ minWidth: 0 }}><MarkdownContent content={bullet} compact className="[&_p]:my-0 [&_strong]:text-tier-skim" /></Box>
+                          <Box sx={{ minWidth: 0, '& p': { my: 0 }, '& strong': { color: 'var(--dr-color-tier-skim)' } }}>
+                            <MarkdownContent content={bullet} compact />
+                          </Box>
                         </Stack>
                       ))}
                     </Stack>
@@ -235,7 +242,15 @@ export function ArtifactPreview({ content }: { content: string }) {
                     </Typography>
                   ) : null}
                   {!stageContent.lead && stageContent.bullets.length === 0 ? (
-                    <MarkdownContent content={slideBody(currentSlide)} compact className="[&_h1]:hidden [&_h2]:hidden [&_h3]:hidden [&_p]:my-1 [&_ul]:my-2 [&_li]:my-1 [&_strong]:text-tier-skim" />
+                    <Box sx={{
+                      '& h1, & h2, & h3': { display: 'none' },
+                      '& p': { my: space.xs },
+                      '& ul': { my: space.sm },
+                      '& li': { my: space.xs },
+                      '& strong': { color: 'var(--dr-color-tier-skim)' },
+                    }}>
+                      <MarkdownContent content={slideBody(currentSlide)} compact />
+                    </Box>
                   ) : null}
                 </Box>
               </Stack>

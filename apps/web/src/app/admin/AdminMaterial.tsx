@@ -19,7 +19,6 @@ import {
   type ElementType,
   type MouseEvent,
   type MouseEventHandler,
-  type CSSProperties,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
@@ -37,12 +36,25 @@ import MuiSkeleton, { type SkeletonProps } from '@mui/material/Skeleton';
 import Tab from '@mui/material/Tab';
 import MuiTabs from '@mui/material/Tabs';
 import Box from '@mui/material/Box';
+import type { SxProps, Theme } from '@mui/material/styles';
 import { AppTextField } from '@/components/material/AppTextField';
 
 type ButtonVariant = 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
 type ButtonSize = 'default' | 'sm' | 'xs' | 'icon-sm';
 
-export type ButtonProps = Omit<MuiButtonProps, 'variant' | 'size' | 'color'> & {
+export const adminRootSx = {
+  color: 'text.primary',
+  fontFamily: 'var(--dr-font-family)',
+  lineHeight: 'var(--dr-line-height-body, 1.6)',
+  '@keyframes adminSpin': { to: { transform: 'rotate(360deg)' } },
+  '@keyframes adminPulse': { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.5 } },
+  '& :is(button,a,input,textarea,select,[tabindex]):focus-visible': {
+    outline: '2px solid var(--dr-color-primary)',
+    outlineOffset: '2px',
+  },
+};
+
+export type ButtonProps = Omit<MuiButtonProps, 'variant' | 'size' | 'color' | 'className'> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
   asChild?: boolean;
@@ -80,7 +92,6 @@ export function Button({
     return (
       <IconButton
         aria-label={props['aria-label']}
-        className={props.className}
         color={variant === 'destructive' ? 'error' : 'inherit'}
         disabled={props.disabled}
         onClick={props.onClick as MouseEventHandler<HTMLButtonElement> | undefined}
@@ -127,8 +138,7 @@ export function Skeleton(props: SkeletonProps) {
 
 type SelectTriggerProps = {
   id?: string;
-  className?: string;
-  style?: CSSProperties;
+  sx?: SxProps<Theme>;
   'aria-label'?: string;
   children?: ReactNode;
 };
@@ -151,7 +161,7 @@ export function Select({
   const placeholder = valueSlot?.props.placeholder ?? '';
 
   return (
-    <FormControl className={trigger?.props.className} style={trigger?.props.style} size="small" variant="outlined">
+    <FormControl size="small" variant="outlined" sx={trigger?.props.sx}>
       <MuiSelect
         aria-label={trigger?.props['aria-label']}
         displayEmpty
@@ -219,19 +229,18 @@ export function Tabs({
   return <TabsContext.Provider value={{ value, onValueChange }}>{children}</TabsContext.Provider>;
 }
 
-export function TabsList({ children, className }: { children: ReactNode; className?: string }) {
+export function TabsList({ children, sx }: { children: ReactNode; sx?: SxProps<Theme> }) {
   const context = useContext(TabsContext);
   if (!context) return null;
   return (
     <MuiTabs
       aria-label="Admin 模块"
-      className={className}
       onChange={(_event, value: string) => context.onValueChange(value)}
       allowScrollButtonsMobile
       scrollButtons="auto"
       value={context.value}
       variant="scrollable"
-      sx={{ minHeight: 40, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minWidth: 'auto', px: 1.5 } }}
+      sx={[{ minHeight: 40, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minWidth: 'auto', px: 1.5 } }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
     >
       {children}
     </MuiTabs>
@@ -249,39 +258,38 @@ export function TabsTrigger({ value, children, ...props }: TabsTriggerProps) {
   return <Tab {...props} id={`admin-tab-${value}`} aria-controls={`admin-panel-${value}`} value={value} iconPosition="start" label={children} />;
 }
 
-export function TabsContent({ value, children, className }: { value: string; children: ReactNode; className?: string }) {
+export function TabsContent({ value, children, sx }: { value: string; children: ReactNode; sx?: SxProps<Theme> }) {
   const context = useContext(TabsContext);
   if (!context || value !== context.value) return null;
   return (
-    <Box id={`admin-panel-${value}`} role="tabpanel" aria-labelledby={`admin-tab-${value}`} className={className} tabIndex={0}>
+    <Box id={`admin-panel-${value}`} role="tabpanel" aria-labelledby={`admin-tab-${value}`} sx={sx} tabIndex={0}>
       {children}
     </Box>
   );
 }
 
-export function Card({ children, className, ...props }: ComponentProps<typeof MuiCard>) {
-  return <MuiCard {...props} className={className} variant="outlined">{children}</MuiCard>;
+export function Card({ children, ...props }: Omit<ComponentProps<typeof MuiCard>, 'className'>) {
+  return <MuiCard {...props} variant="outlined">{children}</MuiCard>;
 }
-export function CardContent({ children, className, ...props }: ComponentProps<typeof MuiCardContent>) {
-  return <MuiCardContent {...props} className={className}>{children}</MuiCardContent>;
+export function CardContent({ children, ...props }: Omit<ComponentProps<typeof MuiCardContent>, 'className'>) {
+  return <MuiCardContent {...props}>{children}</MuiCardContent>;
 }
 
 export function Badge({
   children,
   variant = 'secondary',
-  className,
+  sx,
 }: Omit<ChipProps, 'label' | 'children' | 'variant' | 'color'> & {
   children: ReactNode;
   variant?: 'secondary' | 'outline' | 'destructive';
 }) {
   return (
     <MuiChip
-      className={className}
       color={variant === 'destructive' ? 'error' : 'default'}
       label={children}
       size="small"
       variant={variant === 'outline' ? 'outlined' : 'filled'}
-      sx={variant === 'secondary' ? { backgroundColor: 'action.selected', color: 'text.secondary' } : undefined}
+      sx={[variant === 'secondary' ? { backgroundColor: 'action.selected', color: 'text.secondary' } : {}, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
     />
   );
 }
@@ -340,18 +348,18 @@ export function DropdownMenuItem({
   children,
   onSelect,
   disabled,
-  className,
+  sx,
 }: {
   children: ReactNode;
   onSelect?: () => void;
   disabled?: boolean;
-  className?: string;
+  sx?: SxProps<Theme>;
 }) {
   const context = useContext(DropdownContext);
   return (
     <MenuItem
-      className={className}
       disabled={disabled}
+      sx={sx}
       onClick={() => {
         context?.setAnchorEl(null);
         onSelect?.();

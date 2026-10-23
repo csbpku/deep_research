@@ -14,7 +14,9 @@ if (!contentSource.includes(tokenPlaceholder)) {
   throw new Error('content.js is missing the design token placeholder');
 }
 const english = JSON.parse(await readFile(resolve(root, 'locales/en.json'), 'utf8'));
-await writeFile(resolve(publicDir, 'content.js'), contentSource.replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(tokens)};`).replace('const READER_EN_MESSAGES = {};', `const READER_EN_MESSAGES = ${JSON.stringify(english)};`));
+await writeFile(resolve(publicDir, 'content.js'), contentSource
+  .replace(tokenPlaceholder, `const READER_DESIGN_TOKENS = ${JSON.stringify(tokens)};`)
+  .replace('const READER_EN_MESSAGES = {};', `const READER_EN_MESSAGES = ${JSON.stringify(english)};`));
 await copyFile(resolve(root, 'reader-platform-bridge.js'), resolve(publicDir, 'reader-platform-bridge.js'));
 for (const locale of ['en', 'zh_CN']) {
   const localeDir = resolve(publicDir, '_locales', locale);

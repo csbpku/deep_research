@@ -3,14 +3,14 @@ import { redirect } from 'next/navigation';
 import { Alert, Box, Button, Stack, Typography } from '@mui/material';
 import { getCurrentUser } from '@/lib/auth/session';
 import LlmUsageConsole from './LlmUsageConsole';
-import styles from '../admin.module.css';
+import { adminRootSx } from '../AdminMaterial';
 
 export default async function AdminLlmUsagePage() {
   const user = await getCurrentUser();
   if (!user) redirect('/signin?callbackUrl=/admin/llm-usage');
   if (user.role !== 'admin') {
     return (
-      <Box className={styles.adminRoot} sx={{ mx: 'auto', width: '100%', maxWidth: 760 }}>
+      <Box sx={[adminRootSx, { mx: 'auto', width: '100%', maxWidth: 760 }]}>
         <Typography variant="h1" component="h1">Admin</Typography>
         <Alert severity="error" sx={{ mt: 2 }}>
           <Typography variant="subtitle2" component="div">403 — 需要管理员权限</Typography>
@@ -20,7 +20,7 @@ export default async function AdminLlmUsagePage() {
     );
   }
   return (
-    <Box className={styles.adminRoot} component="div" sx={{ mx: 'auto', width: '100%', maxWidth: 1280, px: { xs: 2, sm: 3 }, py: 4 }}>
+    <Box component="div" sx={[adminRootSx, { mx: 'auto', width: '100%', maxWidth: 1280, px: { xs: 2, sm: 3 }, py: 4 }]}>
       <Stack sx={{ mb: 3, flexDirection: { xs: 'column', sm: 'row' }, gap: 2, alignItems: { sm: 'center' }, justifyContent: 'space-between' }}>
         <Box>
           <Typography variant="h1" component="h1">LLM 用量审计</Typography>

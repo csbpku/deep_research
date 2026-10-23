@@ -38,7 +38,8 @@
     "typecheck": "wxt prepare && tsc --noEmit -p tsconfig.json",
     "e2e:platform-image": "node e2e/platform-image-answer.mjs",
     "e2e:translation-language": "node e2e/translation-language.mjs",
-    "e2e:web-search": "node e2e/web-search.mjs"
+    "e2e:web-search": "node e2e/web-search.mjs",
+    "e2e:palette": "node e2e/color-scheme.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

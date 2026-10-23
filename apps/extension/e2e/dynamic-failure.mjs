@@ -155,7 +155,9 @@ try {
     if (!failureText.includes('FAIL_DYNAMIC_ONCE')) throw new Error(`动态更新后失败列表丢失原失败项：${failureText}`);
     recovery = 'manual-retry';
     await panel.locator('.translation-retry').first().click();
-    await panel.waitForFunction(() => !document.querySelector('#translation-failures')?.textContent?.includes('需要处理'), null, { timeout: 30_000 });
+    // Assert on the rendered rows: the phrase this used to check for is not
+    // part of the extension's copy, so the old condition never failed.
+    await panel.waitForFunction(() => !document.querySelector('#translation-failures .translation-failure-row'), null, { timeout: 30_000 });
   } else {
     await page.waitForFunction(() => Boolean(document.querySelector('#fail-block')?.nextElementSibling?.hasAttribute('data-deep-research-translation')), null, { timeout: 30_000 });
   }

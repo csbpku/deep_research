@@ -1104,7 +1104,11 @@ function renderConversation() {
     onCopyError: () => setNotice(t("浏览器没有开放剪贴板权限，请手动选择回答复制。")),
   });
   show(list, messages.length > 0);
-  show($('conversation-empty'), messages.length === 0 && !discussionRunning);
+  syncConversationEmptyState(messages.length === 0);
+}
+
+function syncConversationEmptyState(noMessages = discussionHistory.every((item) => !item || !['user', 'assistant'].includes(item.role) || !String(item.content || '').trim())) {
+  show($('conversation-empty'), noMessages && !discussionRunning);
 }
 
 function renderEmptyState() {
@@ -1430,7 +1434,10 @@ function renderPageKnowledge(items) {
     };
   }));
   show($('page-knowledge'), items.length > 0);
-  if (items.length && !wasVisible && $('page-knowledge-disclosure')) $('page-knowledge-disclosure').open = true;
+  // The saved-knowledge card stays collapsed. Expanding it automatically
+  // pushed the conversation column (and its centred empty state) out of the
+  // visible area, and the card can hold several records.
+  if (items.length && !wasVisible && $('page-knowledge-disclosure')) $('page-knowledge-disclosure').open = false;
 }
 
 async function updatePageKnowledge({ refresh = false } = {}) {
@@ -3451,14 +3458,22 @@ chrome.runtime.onMessage.addListener((message) => {
     if (Number.isInteger(message.tabId)) activeTabId = message.tabId;
     void processDocument(message.context, activeTranslationRun);
   }
-  if (message.type === 'deep-research:translation-progress' && message.jobId === activeJobRecord?.id && !retryingTranslationId) {
+  if (message.type === 'deep-research:translation-progress' && message.jobId === activeJobRecord?.id) {
     activeJobRecord = { ...activeJobRecord, ...(message.progress || {}) };
     failedTranslationItems = Array.isArray(activeJobRecord.failedItems) ? activeJobRecord.failedItems : failedTranslationItems;
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
   }
-  if (message.type === 'deep-research:translation-complete' && message.jobId === activeJobRecord?.id && !retryingTranslationId) {
+  // The terminal event of the page-level job must always be applied. A
+  // single-item retry is a separate, panel-local request; dropping the page
+  // job's completion would leave the task stuck in "translating" forever and
+  // hide the finished result behind a stale spinner.
+  if (message.type === 'deep-research:translation-complete' && message.jobId === activeJobRecord?.id) {
     activeJobRecord = { ...activeJobRecord, ...(message.job || {}) };
-    failedTranslationItems = Array.isArray(message.failures) ? message.failures : (activeJobRecord.failedItems || []);
+    const reportedFailures = Array.isArray(message.failures) ? message.failures : (activeJobRecord.failedItems || []);
+    const retryingItem = retryingTranslationId ? failedTranslationItems.find((item) => item.id === retryingTranslationId) : null;
+    failedTranslationItems = retryingItem && !reportedFailures.some((item) => item.id === retryingTranslationId)
+      ? [...reportedFailures, retryingItem]
+      : reportedFailures;
     translationRunning = false;
     translationPaused = Boolean(message.cancelled && translationPaused);
     renderProgress(activeJobRecord.textDone || 0, activeJobRecord.textTotal || 0, activeJobRecord.imageDone || 0, activeJobRecord.imageTotal || 0);
@@ -3508,6 +3523,30 @@ chrome.runtime.onMessage.addListener((message) => {
     renderDiscussionContext('image', 'explain', imageContext || pageContext);
   }
   if (message.type === 'deep-research:selection-action') handleSelectionAction(message);
+  if (message.type === 'deep-research:translations-applied') {
+    // The service worker applies translations to the page directly, so the
+    // panel never sees the per-block results it would get from its own
+    // executor. Without this the panel believes the page has no
+    // translations, and "restore the source" never appears.
+    const appliedIds = Array.isArray(message.appliedIds) ? message.appliedIds : [];
+    if (appliedIds.length) {
+      appliedIds.forEach((id) => translatedTextIds.add(id));
+      if (pageContext) pageContext.translatedBlockIds = [...new Set([...(pageContext.translatedBlockIds || []), ...appliedIds])];
+      if (activeJobRecord) persistJobPatch(activeJobRecord, { appliedTextIds: mergeProcessedIds(activeJobRecord.appliedTextIds || [], appliedIds) });
+    }
+    renderProgress();
+  }
+  if (message.type === 'deep-research:image-translations-applied') {
+    // Image translations are applied to the page by the worker as well, so
+    // the panel has to learn about them to keep the restore affordance and
+    // the progress summary in step with the document.
+    const appliedIds = Array.isArray(message.appliedIds) ? message.appliedIds : [];
+    if (appliedIds.length) {
+      appliedIds.forEach((id) => translatedImageIds.add(id));
+      if (pageContext) pageContext.translatedImageIds = [...new Set([...(pageContext.translatedImageIds || []), ...appliedIds])];
+    }
+    renderProgress();
+  }
   if (message.type === 'deep-research:page-action') {
     const pendingWrite = chrome.storage.session?.remove?.('readerPendingPageAction');
     pendingWrite?.catch?.(() => {});

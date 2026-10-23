@@ -39,11 +39,11 @@
   --dr-color-source-research-container: #f2eff7;
   --dr-color-source-shared: #35676d;
   --dr-color-source-shared-container: #eaf4f4;
-  --dr-color-topic-hot: #cb380b;
+  --dr-color-topic-hot: #b8320a;
   --dr-color-topic-hot-container: #fee0d7;
-  --dr-color-topic-warming: #bd6705;
+  --dr-color-topic-warming: #995304;
   --dr-color-topic-warming-container: #fee7cd;
-  --dr-color-topic-emerging: #1d8660;
+  --dr-color-topic-emerging: #187650;
   --dr-color-topic-emerging-container: #def8ee;
   --dr-color-tier-deep-read: #09709f;
   --dr-color-tier-skim: #805500;
@@ -85,6 +85,9 @@
   --dr-motion-standard: 180ms ease-out;
   --dr-color-inverse-surface: #20242c;
   --dr-color-inverse-text: #ffffff;
+  --dr-color-on-inverse-muted: #e2e5ea;
+  --dr-color-highlight: rgba(255,213,72,0.28);
+  --dr-color-highlight-border: rgba(184,129,0,0.68);
   --dr-color-scrim: rgba(32,36,44,0.72);
   --dr-color-primary-container-hover: #dce6fa;
   --dr-type-page-title: 24px;
@@ -96,6 +99,8 @@
   --dr-width-shell: 1280px;
   --dr-width-reading: 760px;
   --dr-width-content-list: 880px;
+  --dr-size-reader-mark: 32px;
+  --dr-size-reader-header: 52px;
 }
 :root.dark {
   --dr-color-text: #eef1f6;
@@ -150,6 +155,9 @@
   --dr-color-tier-track: #384353;
   --dr-color-inverse-surface: #eef1f6;
   --dr-color-inverse-text: #20242c;
+  --dr-color-on-inverse-muted: #4a515c;
+  --dr-color-highlight: rgba(255,213,72,0.24);
+  --dr-color-highlight-border: rgba(226,199,128,0.68);
   --dr-color-scrim: rgba(0,0,0,0.64);
   --dr-elevation-1: 0 1px 3px #00000033;
   --dr-elevation-2: 0 8px 28px #00000066;

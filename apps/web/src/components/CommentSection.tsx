@@ -338,8 +338,8 @@ function CommentRow({
       minWidth: 0, paddingBlock: space.md, borderBottom: 1, borderColor: 'divider',
       '&:last-of-type': { borderBottom: 0 },
       '@media (min-width:640px) and (hover:hover) and (pointer:fine)': {
-        '& .comment-actions': { opacity: 0, transition: 'opacity var(--dr-motion-fast)' },
-        '&:hover .comment-actions, &:focus-within .comment-actions': { opacity: 1 },
+        '& [data-comment-actions]': { opacity: 0, transition: 'opacity var(--dr-motion-fast)' },
+        '&:hover [data-comment-actions], &:focus-within [data-comment-actions]': { opacity: 1 },
       },
     }}>
       <Stack direction="row" spacing={space.sm} sx={{ alignItems: 'flex-start' }}>
@@ -371,7 +371,7 @@ function CommentRow({
             </Box>
           ) : null}
 
-          <Box className="comment-actions" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.xs, marginTop: space.xs }}>
+          <Box data-comment-actions sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.xs, marginTop: space.xs }}>
             <Button
               type="button"
               variant="text"
@@ -581,9 +581,8 @@ function CommentInput({
           open={mentionOpen}
           anchorEl={inputRef.current}
           placement="bottom-start"
-          style={{ width: inputRef.current?.getBoundingClientRect().width }}
           modifiers={[{ name: 'flip' }, { name: 'preventOverflow', options: { padding: 8 } }]}
-          sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+          sx={(theme) => ({ zIndex: theme.zIndex.tooltip, width: inputRef.current?.getBoundingClientRect().width })}
         >
           <Paper component="div" variant="outlined" role="listbox" aria-label="选择要提及的成员" aria-multiselectable="true" sx={{ maxHeight: '14rem', overflowY: 'auto', padding: space.xs, boxShadow: tokens['elevation-2'] }}>
             {membersQuery.isLoading ? <Typography role="status" variant="metadata" color="text.secondary" sx={{ padding: space.sm }}>正在查找成员…</Typography> : null}
