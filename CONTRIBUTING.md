@@ -28,13 +28,23 @@ gh pr create --base main --head codex/radar-filter-fix
 ```
 
 4. PR 说明具体变化、验证结果和部署影响；报告分支名、提交 SHA、PR 链接和 CI 状态。无权限或 CI 失败时明确报告，不能把本地提交称为已推送或已发布。
-5. 合并前确保 PR 基于最新 `main`、无未解决冲突，且四项 CI 均成功：Web 类型/单测/构建、通用 Web Playwright E2E、专用测试库上的 MUI production E2E、Python 质量与 E2E。禁止绕过失败检查或强推覆盖他人提交。
+5. 合并前确保 PR 基于最新 `main`、无未解决冲突，且四项 CI 均成功：Web 类型/单测/构建、通用 Web Playwright E2E、专用测试库上的 MUI production E2E、Python 质量与 E2E。禁止绕过失败检查或强推覆盖他人提交。纯文档改动会跳过这四项重任务，判定见下文。
 
 ## 合并与部署
 
 `main` 的 push CI 成功后会自动触发 Deploy，构建 Web 和 AI engine 的 commit-SHA 镜像并部署 VPS。因此，合并 `main` 同时具有发布影响，需要用户明确授权合并/发布。用户已授权本次合并与发布后，继续执行到生产验证完成，不重复请求确认。
 
-例外：当本次合并改动的每个路径都是文档（`docs/**` 或 `*.md`，例如 `RELEASE_NOTES.md`、`AGENTS.md`），Deploy 会判定为无可发布变更，跳过镜像构建、Reader Beta 发布和 VPS 部署，并在 job summary 里说明跳过原因。此时不需要发布授权；跳过不是失败，工作流仍然是成功状态。
+例外：当本次合并改动的每个路径都是文档（`docs/**` 或 `*.md`，例如 `RELEASE_NOTES.md`、`AGENTS.md`），CI 会跳过类型检查、单测和全部 E2E 套件，Deploy 会跳过镜像构建、Reader Beta 发布和 VPS 部署，并在 job summary 里说明跳过原因。此时不需要发布授权；跳过不是失败，工作流仍然是成功状态。
+
+判定由 `scripts/ci-changed-paths.sh` 统一负责，CI 与 Deploy 共用同一套规则：
+
+- 退出码 0 表示纯文档，可以跳过重量 CI 与发布流程。
+- 退出码 1 表示可发布改动，必须跑完整流程。
+- 退出码 2 表示判定失败（diff 失败、基准提交缺失等），按可发布处理，绝不误跳过发布。
+- 会被打进发布产物的 Markdown 不算文档：Reader Beta 包会原样复制 `apps/extension/{PRIVACY,BETA_INSTALL,COMPATIBILITY,BETA_CHECKLIST}.md`，改动它们必须走完整发布流程。
+- 用 `git diff --no-renames` 比较，所以把源码文件改名到 `docs/` 下仍算代码改动。
+
+判定逻辑本身有测试：`node --test scripts/tests/ci-changed-paths.test.mjs`，CI 每次运行都会执行。
 
 正常路径为：任务分支 → PR → CI 通过 → 获授权合并 `main` → main CI → Actions Deploy → 生产验证。推送功能分支、PR 创建、CI 通过、PR 已合并、已部署、真实用户路径通过是不同状态，应分别报告。
 

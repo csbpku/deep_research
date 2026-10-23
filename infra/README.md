@@ -97,6 +97,8 @@ CI 和 Deploy 的执行机固定为 `ubuntu-24.04`，不跟随 `ubuntu-latest` �
 
 Playwright 缓存只保存浏览器二进制，不包含 apt 系统库和中文字体。通用 E2E 即使命中缓存，也执行 `playwright install --with-deps chromium`，让新 runner 的字体和依赖与冷缓存安装一致。
 
+纯文档改动（每个路径都是 `docs/**` 或 `*.md`）不重建镜像、不重启生产。CI 与 Deploy 共用 `scripts/ci-changed-paths.sh` 判定：CI 跳过类型检查、单测和全部 E2E 套件，Deploy 跳过镜像构建、Reader Beta 发布和 VPS 部署；判定失败时按可发布处理。打进 Reader Beta 包的 Markdown（`apps/extension/{PRIVACY,BETA_INSTALL,COMPATIBILITY,BETA_CHECKLIST}.md`）属于产物，改动它们仍走完整发布流程。
+
 `.github/workflows/deploy.yml` 在 `CI` 成功后执行以下步骤：
 
 1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。

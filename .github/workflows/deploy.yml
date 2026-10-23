@@ -74,24 +74,15 @@ jobs:
             echo "No base commit to compare against: deploying $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # --no-renames keeps the source path of a rename in the list, so
-          # moving a source file into docs/ is still treated as a code change.
-          if ! changed_text="$(git diff --no-renames --name-only "$base" "$SOURCE_SHA" 2>/dev/null)"; then
+          if ! changed_text="$(scripts/ci-changed-paths.sh --list "$base" "$SOURCE_SHA" 2>/dev/null)"; then
             echo "deployable=true" >> "$GITHUB_OUTPUT"
             echo "Could not diff $base..$SOURCE_SHA: deploying to stay safe." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          count=0
-          documentation_only=true
           paths=""
           while IFS= read -r path; do
             [ -n "$path" ] || continue
-            count=$((count + 1))
             paths="${paths}- \`${path}\`"$'\n'
-            case "$path" in
-              docs/*|*.md) ;;
-              *) documentation_only=false ;;
-            esac
           done <<< "$changed_text"
           {
             echo "### Deploy gate for \`${SOURCE_SHA}\`"
@@ -100,7 +91,7 @@ jobs:
             printf '%s' "$paths"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$count" -eq 0 ] || [ "$documentation_only" = true ]; then
+          if scripts/ci-changed-paths.sh "$base" "$SOURCE_SHA"; then
             echo "deployable=false" >> "$GITHUB_OUTPUT"
             echo "Documentation-only change: skipping the image build, the Reader Beta release and the VPS deployment." >> "$GITHUB_STEP_SUMMARY"
           else

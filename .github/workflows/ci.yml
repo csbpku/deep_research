@@ -12,9 +12,108 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decide whether this change touches anything that the heavy jobs below
+  # actually verify. A documentation-only change cannot break the type
+  # checker, the unit tests, the Playwright suites or the Python gate, so
+  # running them is pure noise. The decision is made inside a job that always
+  # runs: a workflow-level path filter would leave the required checks
+  # permanently pending and block every merge.
+  changes:
+    name: Detect documentation-only changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The detector diffs against the base commit, so the whole history
+          # has to be present in the checkout. The default pull_request
+          # checkout is the merge ref, whose second parent is the branch
+          # head, so the head SHA stays reachable for the diff.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Test the change detector
+        # The detector decides whether the heavy jobs run at all, so its own
+        # behaviour has to be verified on every run, including on
+        # documentation-only changes.
+        if: hashFiles('scripts/ci-changed-paths.sh') != ''
+        run: node --test scripts/tests/ci-changed-paths.test.mjs
+
+      - name: Detect documentation-only changes
+        id: detect
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          head="$PUSH_SHA"
+          base=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            head="$PR_HEAD_SHA"
+            if ! base="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null)"; then
+              base=""
+            fi
+          else
+            # A push to main is a merge commit whose first parent is the
+            # previous main; a direct push has its parent there too.
+            base="$(git rev-parse --verify --quiet "${PUSH_SHA}^1" 2>/dev/null || true)"
+          fi
+
+          if [ ! -x scripts/ci-changed-paths.sh ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "The change detector is not available in this commit: running the full CI suite." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ -z "$base" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "No base commit to compare against: running the full CI suite." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! paths="$(scripts/ci-changed-paths.sh --list "$base" "$head" 2>/dev/null)"; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "Could not diff ${base}..${head}: running the full CI suite." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "### CI scope for \`${head}\`"
+            echo
+            echo "Changed paths since \`${base}\`:"
+            while IFS= read -r path; do
+              [ -n "$path" ] || continue
+              echo "- \`${path}\`"
+            done <<< "$paths"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if scripts/ci-changed-paths.sh "$base" "$head"; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only change: skipping the type check, the unit tests and the E2E suites." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "Deployable change detected: running the full CI suite." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   # Pin the runner image instead of following ubuntu-latest OS migrations.
   web-unit:
     name: web (typecheck + unit + build smoke)
+    needs: changes
+    # A skipped job counts as a successful check, so the skip condition must
+    # only apply when the detector actually succeeded. If the detector job
+    # failed or was cancelled, the heavy jobs have to run.
+    if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     env:
       # next build 在收集 page data 时校验 env；用 fake 值满足校验
@@ -47,6 +146,8 @@ jobs:
 
   web-e2e:
     name: web (Playwright E2E)
+    needs: changes
+    if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -205,6 +306,8 @@ jobs:
 
   web-mui-e2e:
     name: web (isolated MUI E2E)
+    needs: changes
+    if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -290,6 +393,8 @@ jobs:
 
   python-e2e:
     name: python (pytest -m e2e)
+    needs: changes
+    if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -360,6 +465,8 @@ jobs:
 
   reader-e2e:
     name: reader (extension E2E)
+    needs: changes
+    if: ${{ always() && !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -418,3 +525,43 @@ jobs:
           CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
         run: pnpm --filter @deep-research/reader-extension e2e:full-page-translation
         timeout-minutes: 8
+
+  # The required checks above are the four heavy suites. A skipped job counts
+  # as a successful check, so on their own they would let a broken
+  # documentation-only run look green. This gate always runs and fails the
+  # workflow unless either the change was classified as documentation or every
+  # heavy suite actually succeeded.
+  ci-gate:
+    name: CI gate
+    needs: [changes, web-unit, web-e2e, web-mui-e2e, python-e2e, reader-e2e]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify the CI scope decision
+        shell: bash
+        env:
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          WEB_UNIT: ${{ needs.web-unit.result }}
+          WEB_E2E: ${{ needs.web-e2e.result }}
+          WEB_MUI_E2E: ${{ needs.web-mui-e2e.result }}
+          PYTHON_E2E: ${{ needs.python-e2e.result }}
+          READER_E2E: ${{ needs.reader-e2e.result }}
+        run: |
+          set -euo pipefail
+          if [ "$DOCS_ONLY" = "true" ]; then
+            echo "Documentation-only change: the heavy suites were skipped by design."
+            exit 0
+          fi
+          failed=0
+          for suite in WEB_UNIT WEB_E2E WEB_MUI_E2E PYTHON_E2E READER_E2E; do
+            result="${!suite}"
+            if [ "$result" != "success" ]; then
+              echo "::error::$suite did not succeed (result: $result)" >&2
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "The change was not classified as documentation-only, so every heavy suite has to pass." >&2
+            exit 1
+          fi
+          echo "All heavy suites passed."
