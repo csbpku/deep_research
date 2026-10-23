@@ -34,6 +34,8 @@ gh pr create --base main --head codex/radar-filter-fix
 
 `main` 的 push CI 成功后会自动触发 Deploy，构建 Web 和 AI engine 的 commit-SHA 镜像并部署 VPS。因此，合并 `main` 同时具有发布影响，需要用户明确授权合并/发布。用户已授权本次合并与发布后，继续执行到生产验证完成，不重复请求确认。
 
+例外：当本次合并改动的每个路径都是文档（`docs/**` 或 `*.md`，例如 `RELEASE_NOTES.md`、`AGENTS.md`），Deploy 会判定为无可发布变更，跳过镜像构建、Reader Beta 发布和 VPS 部署，并在 job summary 里说明跳过原因。此时不需要发布授权；跳过不是失败，工作流仍然是成功状态。
+
 正常路径为：任务分支 → PR → CI 通过 → 获授权合并 `main` → main CI → Actions Deploy → 生产验证。推送功能分支、PR 创建、CI 通过、PR 已合并、已部署、真实用户路径通过是不同状态，应分别报告。
 
 生产检查至少确认部署镜像/marker 对应目标 SHA、Web 和 AI 服务健康、公开健康检查与内部接口隔离，以及本次改动对应的真实用户路径。部署与回滚操作见 [`infra/README.md`](./infra/README.md)。Chrome 扩展商店发布是单独流程，后端发布不代表商店版本已更新。

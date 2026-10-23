@@ -19,8 +19,8 @@ env:
   SOURCE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  publish-images:
-    name: Build and publish GHCR images
+  changes:
+    name: Detect deployable changes
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' &&
@@ -28,6 +28,82 @@ jobs:
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      deployable: ${{ steps.detect.outputs.deployable }}
+    steps:
+      - name: Check out tested commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          # The gate diffs the merge against its first parent, so the parent
+          # commit has to be present in the checkout.
+          fetch-depth: 0
+
+      - name: Detect deployable changes
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A documentation-only merge changes no image and no extension
+          # package, so rebuilding the images and restarting production is
+          # pure noise. Everything else keeps the previous behaviour, and any
+          # uncertainty resolves to "deploy".
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            echo "Manual deployment requested: building and deploying $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! parent="$(git rev-parse --verify --quiet "${SOURCE_SHA}^")"; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            echo "No parent commit to compare against: deploying $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! changed_text="$(git diff --name-only "$parent" "$SOURCE_SHA" 2>/dev/null)"; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            echo "Could not diff $parent..$SOURCE_SHA: deploying to stay safe." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          count=0
+          documentation_only=true
+          paths=""
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            count=$((count + 1))
+            paths="${paths}- \`${path}\`"$'\n'
+            case "$path" in
+              docs/*|*.md) ;;
+              *) documentation_only=false ;;
+            esac
+          done <<< "$changed_text"
+          {
+            echo "### Deploy gate for \`${SOURCE_SHA}\`"
+            echo
+            echo "Changed paths since \`${parent}\`:"
+            printf '%s' "$paths"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -eq 0 ] || [ "$documentation_only" = true ]; then
+            echo "deployable=false" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only change: skipping the image build, the Reader Beta release and the VPS deployment." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            echo "Deployable change detected: building and deploying $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish-images:
+    name: Build and publish GHCR images
+    if: >-
+      needs.changes.outputs.deployable == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    needs: changes
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -115,13 +191,14 @@ jobs:
   publish-reader-beta:
     name: Publish Reader Beta release
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
-    needs: publish-images
+      needs.changes.outputs.deployable == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    needs: [changes, publish-images]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -266,13 +343,14 @@ jobs:
   deploy:
     name: Deploy tested images to VPS
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
-    needs: [publish-images, publish-reader-beta]
+      needs.changes.outputs.deployable == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
+    needs: [changes, publish-images, publish-reader-beta]
     runs-on: ubuntu-24.04
     environment:
       name: production
