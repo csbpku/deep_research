@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 if (process.env.READER_LIVE !== '1') {
   console.log('Skipped: set READER_LIVE=1 and READER_LIVE_MODEL to run a real model request.');
@@ -8,7 +10,7 @@ if (process.env.READER_LIVE !== '1') {
 }
 assert.ok(process.env.READER_LIVE_MODEL, 'Select the live test model explicitly with READER_LIVE_MODEL');
 
-const artifacts = await mkdtemp('/private/tmp/reader-live-provider-configuration-');
+const artifacts = await mkdtemp(join(tempDir(), 'reader-live-provider-configuration-'));
 const extension = `${artifacts}/extension`;
 await cp(new URL('../.output/chrome-mv3/', import.meta.url).pathname, extension, { recursive: true });
 const manifest = JSON.parse(await readFile(`${extension}/manifest.json`, 'utf8'));

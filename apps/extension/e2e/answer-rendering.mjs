@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const fixtureServer = createServer(async (_request, response) => {
@@ -50,7 +52,7 @@ await new Promise((resolve, reject) => {
 });
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testRoot = await mkdtemp('/private/tmp/deep-research-reader-answer-');
+const testRoot = await mkdtemp(join(tempDir(), 'deep-research-reader-answer-'));
 const testExtensionPath = `${testRoot}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const manifestPath = `${testExtensionPath}/manifest.json`;
@@ -65,7 +67,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-answer-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-answer-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
@@ -161,8 +163,8 @@ try {
     if (tab?.id) await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
   }, article.url());
   await panel.waitForFunction(() => document.querySelector('#page-context-status')?.textContent === '正文已读取', null, { timeout: 10_000 });
-  await panel.screenshot({ path: '/private/tmp/deep-research-reader-answer-rendering.png', fullPage: true });
-  console.log(JSON.stringify({ ok: true, extensionId, rendered, screenshot: '/private/tmp/deep-research-reader-answer-rendering.png' }, null, 2));
+  await panel.screenshot({ path: tempPath('deep-research-reader-answer-rendering.png'), fullPage: true });
+  console.log(JSON.stringify({ ok: true, extensionId, rendered, screenshot: tempPath('deep-research-reader-answer-rendering.png') }, null, 2));
 } finally {
   await context.close().catch(() => {});
   await new Promise((resolve) => providerServer.close(resolve));

@@ -4,10 +4,12 @@ import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 // Test-only copies and fresh profiles: never install into the user's browser
 // or alter the production build. Every application endpoint is a local mock.
-const directory = await mkdtemp('/private/tmp/reader-knowledge-return-');
+const directory = await mkdtemp(join(tempDir(), 'reader-knowledge-return-'));
 const builtExtension = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const executablePath = process.env.CHROME_FOR_TESTING || [
   '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',

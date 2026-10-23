@@ -14,8 +14,10 @@ import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import tokens from '../../../packages/design-system/src/tokens.json' with { type: 'json' };
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const artifacts = await mkdtemp('/private/tmp/reader-palette-');
+const artifacts = await mkdtemp(join(tempDir(), 'reader-palette-'));
 const server = createServer((request, response) => {
   response.setHeader('content-type', 'text/html; charset=utf-8');
   response.end('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Palette fixture</title></head><body><article><h1>Palette fixture</h1><p id="target">The Reader controls follow the shared palette.</p></article></body></html>');

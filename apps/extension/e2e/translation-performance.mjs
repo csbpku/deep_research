@@ -6,10 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { readFile, mkdtemp, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const compareRef = process.env.READER_COMPARE_REF || '';
 const articleUrl = process.env.READER_PERF_ARTICLE_URL || '';
-const directory = await mkdtemp('/private/tmp/reader-translation-performance-');
+const directory = await mkdtemp(join(tempDir(), 'reader-translation-performance-'));
 const metrics = new Map();
 const server = createServer(async (req, res) => {
   try {

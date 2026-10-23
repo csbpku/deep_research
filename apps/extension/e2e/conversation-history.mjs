@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const port = 8892;
 const fixturePath = new URL('./fixture.html', import.meta.url);
@@ -30,13 +32,13 @@ const executablePath = process.env.CHROME_FOR_TESTING
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testExtensionPath = `${await mkdtemp('/private/tmp/deep-research-reader-history-extension-')}/extension`;
+const testExtensionPath = `${await mkdtemp(join(tempDir(), 'deep-research-reader-history-extension-'))}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
 const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
 testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), `http://127.0.0.1:${port}/*`])];
 await writeFile(testManifestPath, JSON.stringify(testManifest));
-const profilePath = `/private/tmp/deep-research-reader-history-${Date.now()}`;
+const profilePath = tempPath(`deep-research-reader-history-${Date.now()}`);
 const context = await chromium.launchPersistentContext(profilePath, {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',

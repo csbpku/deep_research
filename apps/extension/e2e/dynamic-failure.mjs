@@ -2,8 +2,10 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const extensionPath = await mkdtemp('/private/tmp/reader-dynamic-extension-');
+const extensionPath = await mkdtemp(join(tempDir(), 'reader-dynamic-extension-'));
 await cp(new URL('../.output/chrome-mv3', import.meta.url).pathname, extensionPath, { recursive: true });
 const manifestPath = `${extensionPath}/manifest.json`;
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
@@ -97,7 +99,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-dynamic-failure-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-dynamic-failure-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },

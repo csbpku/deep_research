@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 if (process.env.READER_LIVE !== '1' || !process.env.READER_LIVE_MODEL) throw new Error('Use READER_LIVE=1 and select READER_LIVE_MODEL explicitly.');
-const artifacts = await mkdtemp('/private/tmp/reader-live-reading-audit-');
+const artifacts = await mkdtemp(join(tempDir(), 'reader-live-reading-audit-'));
 const extension = `${artifacts}/extension`;
 await cp(new URL('../.output/chrome-mv3', import.meta.url).pathname, extension, { recursive: true });
 const manifest = JSON.parse(await readFile(`${extension}/manifest.json`, 'utf8'));

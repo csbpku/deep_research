@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const targetUrl = process.env.READER_TARGET_URL || '';
@@ -12,7 +14,7 @@ const liveApiKey = String(process.env.READER_LIVE_API_KEY || '').trim();
 if (liveProvider && (!liveBaseUrl || !liveApiKey)) {
   throw new Error('真实模型验收需要 READER_LIVE_BASE_URL 和 READER_LIVE_API_KEY');
 }
-const testExtensionRoot = await mkdtemp('/private/tmp/deep-research-reader-full-page-');
+const testExtensionRoot = await mkdtemp(join(tempDir(), 'deep-research-reader-full-page-'));
 const testExtensionPath = `${testExtensionRoot}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
@@ -157,7 +159,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-coverage-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-coverage-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
@@ -295,16 +297,16 @@ try {
       throw new Error(`真实原文全文翻译覆盖断言失败：${JSON.stringify({ liveResult, tableCoverage, notice })}`);
     }
     await fixture.evaluate(() => window.scrollTo(0, 0));
-    await fixture.screenshot({ path: '/private/tmp/deep-research-reader-live-translation-top.png' });
+    await fixture.screenshot({ path: tempPath('deep-research-reader-live-translation-top.png') });
     await fixture.evaluate(() => [...document.querySelectorAll('[data-deep-research-block]')]
       .find((node) => (node.innerText || node.textContent || '').includes('How to measure it'))
       ?.scrollIntoView({ block: 'center' }));
-    await fixture.screenshot({ path: '/private/tmp/deep-research-reader-live-translation-table.png' });
+    await fixture.screenshot({ path: tempPath('deep-research-reader-live-translation-table.png') });
     await fixture.evaluate(() => [...document.querySelectorAll('[data-deep-research-translation]')].at(-1)?.scrollIntoView({ block: 'end' }));
-    await fixture.screenshot({ path: '/private/tmp/deep-research-reader-live-translation-bottom.png' });
+    await fixture.screenshot({ path: tempPath('deep-research-reader-live-translation-bottom.png') });
       await panel.locator('#restore-page').click();
     await fixture.waitForFunction(() => document.querySelectorAll('[data-deep-research-translation]').length === 0, null, { timeout: 15_000 });
-    console.log(JSON.stringify({ extensionId, targetUrl, model: process.env.READER_LIVE_MODEL, settingsNotice: await panel.locator('#settings-notice').textContent(), notice, translationElapsedMs, liveRequestMetrics, ...liveResult, translationSamples, tableCoverage, tableSamples, screenshots: ['/private/tmp/deep-research-reader-live-translation-top.png', '/private/tmp/deep-research-reader-live-translation-table.png', '/private/tmp/deep-research-reader-live-translation-bottom.png'], restoredTranslations: 0 }, null, 2));
+    console.log(JSON.stringify({ extensionId, targetUrl, model: process.env.READER_LIVE_MODEL, settingsNotice: await panel.locator('#settings-notice').textContent(), notice, translationElapsedMs, liveRequestMetrics, ...liveResult, translationSamples, tableCoverage, tableSamples, screenshots: [tempPath('deep-research-reader-live-translation-top.png'), tempPath('deep-research-reader-live-translation-table.png'), tempPath('deep-research-reader-live-translation-bottom.png')], restoredTranslations: 0 }, null, 2));
     process.exitCode = 0;
   } else {
   const result = await fixture.evaluate(() => ({

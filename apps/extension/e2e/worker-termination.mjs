@@ -3,13 +3,14 @@ import { readFile, readFile as readTextFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const fixturePort = 8768;
 const providerPort = 8802;
-const profilePath = `/private/tmp/deep-research-reader-worker-restart-${Date.now()}`;
-const requestLogPath = `/private/tmp/deep-research-reader-worker-requests-${Date.now()}.jsonl`;
+const profilePath = tempPath(`deep-research-reader-worker-restart-${Date.now()}`);
+const requestLogPath = tempPath(`deep-research-reader-worker-requests-${Date.now()}.jsonl`);
 const stableFixtureHtml = (await readFile(fixturePath, 'utf8')).replace(/<script>[\s\S]*?<\/script>/u, '');
 
 const fixtureServer = createServer(async (_request, response) => {

@@ -2,9 +2,11 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const builtExtensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testRoot = await mkdtemp('/private/tmp/deep-research-reader-smoke-');
+const testRoot = await mkdtemp(join(tempDir(), 'deep-research-reader-smoke-'));
 const extensionPath = `${testRoot}/extension`;
 await cp(builtExtensionPath, extensionPath, { recursive: true });
 const testManifestPath = `${extensionPath}/manifest.json`;
@@ -34,7 +36,7 @@ if (fixtureUrl === defaultFixtureUrl) {
     fixtureServer.listen(8765, '127.0.0.1', resolve);
   });
 }
-const profilePath = process.env.READER_E2E_PROFILE || `/private/tmp/deep-research-reader-e2e-${Date.now()}`;
+const profilePath = process.env.READER_E2E_PROFILE || tempPath(`deep-research-reader-e2e-${Date.now()}`);
 const executablePath = process.env.CHROME_FOR_TESTING
   || [
     '/Users/shaobo.chen/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',

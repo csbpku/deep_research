@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
 const fixturePath = new URL('./fixture.html', import.meta.url);
@@ -101,7 +102,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const profilePath = `/private/tmp/deep-research-reader-controls-${Date.now()}`;
+const profilePath = tempPath(`deep-research-reader-controls-${Date.now()}`);
 const context = await chromium.launchPersistentContext(profilePath, {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',

@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const pageKinds = [
   ...Array.from({ length: 6 }, (_, index) => ({ kind: 'article', host: 'reader.local', path: `/article-${index + 1}`, imageCount: 2 })),
@@ -55,7 +57,7 @@ const provider = spawn(process.execPath, [new URL('./fake-openai.mjs', import.me
 await new Promise((resolve) => setTimeout(resolve, 300));
 
 const extensionSourcePath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testExtensionPath = `${await mkdtemp('/private/tmp/deep-research-reader-matrix-extension-')}/extension`;
+const testExtensionPath = `${await mkdtemp(join(tempDir(), 'deep-research-reader-matrix-extension-'))}/extension`;
 await cp(extensionSourcePath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
 const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
@@ -73,7 +75,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-matrix-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-matrix-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
