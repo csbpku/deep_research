@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, cp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const root = await mkdtemp('/private/tmp/reader-web-search-');
+const root = await mkdtemp(join(tempDir(), 'reader-web-search-'));
 let searches = 0; let searchMode = 'searched'; let answers = []; let standalonePlans = 0; const networkRequests = [];
 const source = { title: 'Official library release notes', url: 'https://example.org/releases', snippet: 'The latest release adds a bounded queue.' };
 const server = createServer(async (req, res) => {

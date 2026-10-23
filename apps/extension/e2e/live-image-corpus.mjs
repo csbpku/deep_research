@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 // Collect only public, already-rendered image URLs from the same page classes
 // used by the live compatibility matrix.  The corpus contains metadata and
@@ -86,7 +87,7 @@ try {
 }
 
 const outputPath = process.env.READER_IMAGE_CORPUS_OUTPUT
-  || `/private/tmp/deep-research-reader-image-corpus-${Date.now()}.json`;
+  || tempPath(`deep-research-reader-image-corpus-${Date.now()}.json`);
 await writeFile(outputPath, JSON.stringify({ generatedAt: new Date().toISOString(), count: candidates.length, items: candidates }, null, 2));
 console.log(JSON.stringify({ outputPath, count: candidates.length, pages: new Set(candidates.map((item) => item.pageUrl)).size }, null, 2));
 if (candidates.length < 30) process.exitCode = 2;

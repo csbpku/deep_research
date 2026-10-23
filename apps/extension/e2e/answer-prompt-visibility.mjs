@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 let releaseAnswer;
 let received;
@@ -29,7 +31,7 @@ const server = createServer(async (request, response) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
-const root = await mkdtemp('/private/tmp/reader-prompt-visibility-');
+const root = await mkdtemp(join(tempDir(), 'reader-prompt-visibility-'));
 await cp(new URL('../.output/chrome-mv3', import.meta.url).pathname, `${root}/extension`, { recursive: true });
 const manifest = JSON.parse(await readFile(`${root}/extension/manifest.json`, 'utf8'));
 manifest.host_permissions = [...new Set([...(manifest.host_permissions || []), 'http://127.0.0.1/*'])];
@@ -82,7 +84,7 @@ try {
   assert.equal(await panel.locator('#pending-question').innerText(), '总结本页');
   assert.equal(await panel.locator('#question-input').inputValue(), nextDraft);
   assert.ok(!(await panel.locator('body').innerText()).includes('严格按 Markdown'));
-  await panel.screenshot({ path: '/private/tmp/reader-summary-recovery-026.png' });
+  await panel.screenshot({ path: tempPath('reader-summary-recovery-026.png') });
   releaseAnswer();
   await panel.locator('#conversation-list').filter({ hasText: 'The article explains bounded queues.' }).waitFor();
   assert.ok(!(await panel.locator('#conversation-list').innerText()).includes('严格按 Markdown'));
@@ -107,14 +109,14 @@ try {
   await legacyFailure('Why is capacity bounded?', 'Why is capacity bounded?');
   assert.equal(await panel.locator('#question-input').inputValue(), 'Why is capacity bounded?', 'a real typed question remains retryable');
   console.log(JSON.stringify({ summaryLabelAfterReload: '总结本页', modelInstructionsHidden: true, typedDraftPreserved: true,
-    legacyPromptRemoved: true, realQuestionRestored: true, screenshot: '/private/tmp/reader-summary-recovery-026.png' }));
+    legacyPromptRemoved: true, realQuestionRestored: true, screenshot: tempPath('reader-summary-recovery-026.png') }));
 } catch (error) {
   const panels = context.pages().filter(page => page.url().includes('sidepanel.html'));
   for (const page of panels) {
     console.error('Reader failure state:', await page.evaluate(() => ({ notice: document.querySelector('#notice')?.textContent,
       pending: document.querySelector('#pending-question')?.textContent, draft: document.querySelector('#question-input')?.value,
       settings: document.querySelector('#settings-view')?.className, page: document.querySelector('#page-view')?.className })));
-    await page.screenshot({ path: '/private/tmp/reader-prompt-failure.png' });
+    await page.screenshot({ path: tempPath('reader-prompt-failure.png') });
   }
   throw error;
 } finally {

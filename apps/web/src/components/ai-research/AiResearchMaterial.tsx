@@ -54,7 +54,7 @@ export function AiResearchButton({
   return <Button {...muiProps as ButtonProps}>{asChild && child ? childProps.children as React.ReactNode : children}</Button>;
 }
 
-export type AiResearchTextareaProps = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange' | 'onKeyDown'> & {
+export type AiResearchTextareaProps = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'onChange' | 'onKeyDown' | 'style'> & {
   onChange?: TextareaHTMLAttributes<HTMLTextAreaElement>['onChange'];
   onKeyDown?: TextareaHTMLAttributes<HTMLTextAreaElement>['onKeyDown'];
   sx?: SxProps<Theme>;
@@ -76,7 +76,6 @@ export const AiResearchTextarea = forwardRef<HTMLTextAreaElement, AiResearchText
     readOnly,
     required,
     rows = 3,
-    style,
     sx,
     value,
     ...inputProps
@@ -108,7 +107,6 @@ export const AiResearchTextarea = forwardRef<HTMLTextAreaElement, AiResearchText
         required={required}
         rows={rows}
         inputProps={nativeInputProps}
-        style={style}
         sx={fieldSx}
         value={value}
       />

@@ -7,6 +7,11 @@ export const domainPalettes = {
   danger: ['danger', 'danger-container'],
   inference: ['inference', 'inference-container'],
   context: ['background-context', 'background-container'],
+  // Topic heat is its own meaning, not a severity: a hot topic is not an
+  // error. The dedicated tokens keep it readable next to status badges.
+  topicHot: ['topic-hot', 'topic-hot-container'],
+  topicWarming: ['topic-warming', 'topic-warming-container'],
+  topicEmerging: ['topic-emerging', 'topic-emerging-container'],
 } as const;
 
 export type DomainPalette = keyof typeof domainPalettes;

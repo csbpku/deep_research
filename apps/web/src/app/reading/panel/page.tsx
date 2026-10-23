@@ -2,6 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Bookmark, Check, Languages, Loader2, MessageCircle, Send, Sparkles, X } from 'lucide-react';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import CircularProgress from '@mui/material/CircularProgress';
+import IconButton from '@mui/material/IconButton';
+import Paper from '@mui/material/Paper';
+import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+import Typography from '@mui/material/Typography';
+import { space } from '@deep-research/design-system';
 
 type Anchor = {
   quote: string;
@@ -430,113 +442,338 @@ export default function ReadingPanelPage() {
   const title = useMemo(() => context?.title || '打开一个网页后开始阅读', [context?.title]);
 
   return (
-    <div className="reader-panel material-surface min-h-[calc(100dvh-8rem)] bg-[var(--dr-color-surface-container)] text-[var(--dr-color-text)]">
-      <div className="mx-auto w-full max-w-2xl px-4 py-5 sm:px-6">
-        <div className="mb-5 flex items-start justify-between gap-3">
-          <div>
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--dr-color-primary)]"><BookOpen className="h-3.5 w-3.5" /> Deep Research Reader</div>
-            <h1 className="text-lg font-semibold leading-snug">{title}</h1>
-            {context && <p className="mt-1 truncate text-xs text-[var(--dr-color-text-secondary)]">{safeHostname(context.url)} · {scopeLabel}</p>}
-          </div>
-          <div className="flex items-center gap-1">
-            {tokenPresent && <button aria-label="断开并撤销阅读令牌" disabled={disconnecting} className="rounded-md px-2 py-1 text-xs text-[var(--dr-color-text-secondary)] hover:bg-[var(--dr-color-surface)] disabled:opacity-50" onClick={() => void disconnectReader()}>{disconnecting ? '断开中…' : '断开账号'}</button>}
-            <button aria-label="关闭侧栏" className="rounded-md p-2 text-[var(--dr-color-text-secondary)] hover:bg-[var(--dr-color-surface)]" onClick={() => panelMessage({ type: 'deep-research:close' })}><X className="h-4 w-4" /></button>
-          </div>
-        </div>
+    <Box
+      className="material-surface"
+      sx={{
+        minHeight: 'calc(100dvh - 8rem)',
+        bgcolor: 'background.default',
+        color: 'text.primary',
+        fontFamily: 'var(--dr-font-family)',
+        fontSize: 'var(--dr-type-body)',
+        lineHeight: 'var(--dr-line-height-body)',
+      }}
+    >
+      <Box sx={{ width: '100%', maxWidth: '42rem', mx: 'auto', px: { xs: space.lg, sm: space.section }, py: space.xl }}>
+        <Stack direction="row" spacing={space.md} sx={{ mb: space.xl, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" spacing={space.sm} sx={{ mb: space.sm, alignItems: 'center', color: 'primary.main' }}>
+              <BookOpen size={14} aria-hidden />
+              <Typography component="span" variant="caption" sx={{ fontWeight: 'var(--dr-weight-semibold)', letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Deep Research Reader
+              </Typography>
+            </Stack>
+            <Typography component="h1" variant="panelTitle">{title}</Typography>
+            {context && (
+              <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', mt: space.xs }}>
+                {safeHostname(context.url)} · {scopeLabel}
+              </Typography>
+            )}
+          </Box>
+          <Stack direction="row" spacing={space.xs} sx={{ flexShrink: 0, alignItems: 'center' }}>
+            {tokenPresent && (
+              <Button size="small" variant="text" color="secondary" disabled={disconnecting} onClick={() => void disconnectReader()}>
+                {disconnecting ? '断开中…' : '断开账号'}
+              </Button>
+            )}
+            <IconButton aria-label="关闭侧栏" size="small" onClick={() => panelMessage({ type: 'deep-research:close' })}>
+              <X size={16} />
+            </IconButton>
+          </Stack>
+        </Stack>
 
         {!context ? (
-          <div className="rounded-xl border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface)] p-6 text-sm text-[var(--dr-color-text-secondary)] shadow-[var(--dr-elevation-1)]">
-            <Sparkles className="mb-3 h-5 w-5 text-[var(--dr-color-primary)]" />
-            点击浏览器工具栏的 Deep Research，再在网页中选择一段文字。插件只会在你发起操作时读取当前页面。
-            <button className="mt-4 block rounded-lg bg-[var(--dr-color-primary)] px-3 py-2 text-xs font-medium text-[var(--dr-color-on-primary)]" onClick={() => panelMessage({ type: 'deep-research:connect' })}>连接 Deep Research 账号</button>
-          </div>
+          <Paper variant="outlined" sx={{ p: space.section }}>
+            <Sparkles size={20} aria-hidden />
+            <Typography variant="body2" color="text.secondary">
+              点击浏览器工具栏的 Deep Research，再在网页中选择一段文字。插件只会在你发起操作时读取当前页面。
+            </Typography>
+            <Button variant="contained" sx={{ mt: space.lg }} onClick={() => panelMessage({ type: 'deep-research:connect' })}>
+              连接 Deep Research 账号
+            </Button>
+          </Paper>
         ) : (
           <>
-            <section className="rounded-xl border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface)] p-4 shadow-[var(--dr-elevation-1)]">
-              <div className="mb-2 flex items-center justify-between text-xs font-medium text-[var(--dr-color-text-secondary)]"><span>原文摘录</span><span>{context.selection ? '已锚定' : '页面上下文'}</span></div>
-              <blockquote className="border-l-2 border-[var(--dr-color-primary)] pl-3 text-sm leading-6 text-[var(--dr-color-text-secondary)]">{displayQuote}</blockquote>
-              {context.translationDetected && <p role="status" className="mt-3 rounded-md bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-warning)]">检测到页面已有其他翻译插件内容。为避免重复翻译，已暂停本插件的双语插入；请选择一个翻译器继续。</p>}
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button className="reader-action" disabled={Boolean(busy) || Boolean(context.translationDetected)} onClick={translateVisibleBlocks}><Languages className="h-3.5 w-3.5" /> {bilingualEnabled ? '继续翻译视口' : '开启双语'}</button>
-                {bilingualEnabled && <button className="reader-action" disabled={Boolean(busy)} onClick={() => setBilingualPaused((paused) => !paused)}><Languages className="h-3.5 w-3.5" /> {bilingualPaused ? '继续处理' : '暂停双语'}</button>}
-                <button className="reader-action" disabled={Boolean(busy)} onClick={() => panelMessage({ type: 'deep-research:restore-translations' })}><X className="h-3.5 w-3.5" /> 恢复原文</button>
-                <button className="reader-action" disabled={Boolean(busy)} onClick={() => callAnswer('explain')}><Sparkles className="h-3.5 w-3.5" /> 解读</button>
-                <button className="reader-action" disabled={Boolean(busy)} onClick={() => document.getElementById('reader-prompt')?.focus()}><MessageCircle className="h-3.5 w-3.5" /> 追问</button>
-              </div>
-              {translationFailures.length > 0 && <div className="mt-3 flex items-center justify-between gap-3 rounded-md bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs text-[var(--dr-color-warning)]"><span>{translationFailures.length} 段翻译失败</span><button className="font-medium underline" onClick={() => { const failedIds = [...translationFailures]; setBilingualPaused(true); setTranslatedBlockIds((previous) => { const next = new Set(previous); failedIds.forEach((id) => next.delete(id)); return next; }); void translatePage(failedIds, translationSelectionOnly).finally(() => setBilingualPaused(false)); }}>重试失败段落</button></div>}
-            </section>
+            <Paper variant="outlined" sx={{ p: space.lg }}>
+              <Stack direction="row" sx={{ mb: space.sm, justifyContent: 'space-between' }}>
+                <Typography variant="control" color="text.secondary">原文摘录</Typography>
+                <Typography variant="caption" color="text.secondary">{context.selection ? '已锚定' : '页面上下文'}</Typography>
+              </Stack>
+              <Box
+                component="blockquote"
+                sx={{ borderLeft: 2, borderColor: 'primary.main', pl: space.md, color: 'text.secondary', lineHeight: 'var(--dr-line-height-reading)' }}
+              >
+                {displayQuote}
+              </Box>
+              {context.translationDetected && (
+                <Alert severity="warning" sx={{ mt: space.md }}>
+                  检测到页面已有其他翻译插件内容。为避免重复翻译，已暂停本插件的双语插入；请选择一个翻译器继续。
+                </Alert>
+              )}
+              <Stack direction="row" useFlexGap spacing={space.sm} sx={{ mt: space.lg, flexWrap: 'wrap' }}>
+                <ReaderAction disabled={Boolean(busy) || Boolean(context.translationDetected)} onClick={translateVisibleBlocks}>
+                  <Languages size={14} aria-hidden />
+                  {bilingualEnabled ? '继续翻译视口' : '开启双语'}
+                </ReaderAction>
+                {bilingualEnabled && (
+                  <ReaderAction disabled={Boolean(busy)} onClick={() => setBilingualPaused((paused) => !paused)}>
+                    <Languages size={14} aria-hidden />
+                    {bilingualPaused ? '继续处理' : '暂停双语'}
+                  </ReaderAction>
+                )}
+                <ReaderAction disabled={Boolean(busy)} onClick={() => panelMessage({ type: 'deep-research:restore-translations' })}>
+                  <X size={14} aria-hidden />
+                  恢复原文
+                </ReaderAction>
+                <ReaderAction disabled={Boolean(busy)} onClick={() => callAnswer('explain')}>
+                  <Sparkles size={14} aria-hidden />
+                  解读
+                </ReaderAction>
+                <ReaderAction disabled={Boolean(busy)} onClick={() => document.getElementById('reader-prompt')?.focus()}>
+                  <MessageCircle size={14} aria-hidden />
+                  追问
+                </ReaderAction>
+              </Stack>
+              {translationFailures.length > 0 && (
+                <Alert
+                  severity="warning"
+                  action={(
+                    <Button
+                      size="small"
+                      color="inherit"
+                      onClick={() => {
+                        const failedIds = [...translationFailures];
+                        setBilingualPaused(true);
+                        setTranslatedBlockIds((previous) => {
+                          const next = new Set(previous);
+                          failedIds.forEach((id) => next.delete(id));
+                          return next;
+                        });
+                        void translatePage(failedIds, translationSelectionOnly).finally(() => setBilingualPaused(false));
+                      }}
+                    >
+                      重试失败段落
+                    </Button>
+                  )}
+                  sx={{ mt: space.md }}
+                >
+                  {translationFailures.length} 段翻译失败
+                </Alert>
+              )}
+            </Paper>
 
-            <section className="mt-4 rounded-xl border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface)] p-4 shadow-[var(--dr-elevation-1)]">
-              <div className="mb-3 flex items-center justify-between gap-2"><div className="flex items-center gap-2 text-sm font-semibold"><MessageCircle className="h-4 w-4 text-[var(--dr-color-primary)]" /> 围绕原文讨论</div>{context.selection && <div className="flex rounded-md border border-[var(--dr-color-outline)] p-0.5 text-xs" role="group" aria-label="讨论范围"><button className={`rounded px-2 py-1 ${discussionScope === 'selection' ? 'bg-[var(--dr-color-primary-container)] text-[var(--dr-color-primary)]' : 'text-[var(--dr-color-text-secondary)]'}`} onClick={() => setDiscussionScope('selection')}>当前选段</button><button className={`rounded px-2 py-1 ${discussionScope === 'page' ? 'bg-[var(--dr-color-primary-container)] text-[var(--dr-color-primary)]' : 'text-[var(--dr-color-text-secondary)]'}`} onClick={() => setDiscussionScope('page')}>问整页</button></div>}</div>
-              <p className="mb-3 text-xs leading-5 text-[var(--dr-color-text-muted)]">本轮范围：{discussionScope === 'page' || !context.selection ? '当前页面（已提取正文）' : '当前选段 + 所在小节'} · 回答会把原文证据与一般背景分开说明</p>
-              {sourceNotice && <p className="mb-3 rounded-md bg-[var(--dr-color-surface-container)] px-3 py-2 text-xs leading-5 text-[var(--dr-color-text-secondary)]">{sourceNotice}</p>}
-              {anchorNotice && <p role="status" className="mb-3 rounded-md bg-[var(--dr-color-warning-container)] px-3 py-2 text-xs text-[var(--dr-color-warning)]">{anchorNotice}</p>}
-              {answer && <div className="mb-4 whitespace-pre-wrap rounded-lg bg-[var(--dr-color-evidence-container)] p-3 text-sm leading-6"><div>{answer}</div>{context.selection && <button className="mt-3 text-xs font-medium text-[var(--dr-color-primary)] underline" onClick={() => panelMessage({ type: 'deep-research:focus-anchor', anchor: context.selection })}>回到原文证据</button>}</div>}
+            <Paper variant="outlined" sx={{ mt: space.lg, p: space.lg }}>
+              <Stack direction="row" spacing={space.sm} sx={{ mb: space.md, alignItems: 'center', justifyContent: 'space-between' }}>
+                <Stack direction="row" spacing={space.sm} sx={{ alignItems: 'center' }}>
+                  <MessageCircle size={16} aria-hidden />
+                  <Typography component="h2" variant="listTitle">围绕原文讨论</Typography>
+                </Stack>
+                {context.selection && (
+                  <ToggleButtonGroup
+                    exclusive
+                    size="small"
+                    value={discussionScope}
+                    onChange={(_event, value: 'selection' | 'page' | null) => { if (value) setDiscussionScope(value); }}
+                    aria-label="讨论范围"
+                  >
+                    <ToggleButton value="selection">当前选段</ToggleButton>
+                    <ToggleButton value="page">问整页</ToggleButton>
+                  </ToggleButtonGroup>
+                )}
+              </Stack>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: space.md }}>
+                本轮范围：{discussionScope === 'page' || !context.selection ? '当前页面（已提取正文）' : '当前选段 + 所在小节'} · 回答会把原文证据与一般背景分开说明
+              </Typography>
+              {sourceNotice && (
+                <Alert severity="info" sx={{ mb: space.md }}>{sourceNotice}</Alert>
+              )}
+              {anchorNotice && (
+                <Alert severity="warning" sx={{ mb: space.md }}>{anchorNotice}</Alert>
+              )}
+              {answer && (
+                <Box sx={{ mb: space.lg, p: space.md, borderRadius: 'var(--dr-radius-small)', bgcolor: 'var(--dr-color-evidence-container)' }}>
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{answer}</Typography>
+                  {context.selection && (
+                    <Button
+                      size="small"
+                      variant="text"
+                      sx={{ mt: space.md, px: 0, minHeight: 'auto' }}
+                      onClick={() => panelMessage({ type: 'deep-research:focus-anchor', anchor: context.selection })}
+                    >
+                      回到原文证据
+                    </Button>
+                  )}
+                </Box>
+              )}
               {readingAnswer && (readingAnswer.evidence?.length || readingAnswer.background || readingAnswer.inference || readingAnswer.limitations?.length || readingAnswer.warnings?.length) ? (
-                <div className="mb-4 space-y-3 text-xs leading-5">
-                  {readingAnswer.evidence?.length ? <div><div className="mb-1 font-semibold text-[var(--dr-color-text)]">原文证据</div><div className="space-y-1.5">{readingAnswer.evidence.map((item, index) => <button key={`${item.quote}-${index}`} className="block w-full rounded-md border border-[var(--dr-color-outline)] bg-[var(--dr-color-evidence-container)] px-3 py-2 text-left hover:border-[var(--dr-color-primary)]" onClick={() => item.anchor && panelMessage({ type: 'deep-research:focus-anchor', anchor: item.anchor })}><span className="block text-[var(--dr-color-text)]">“{item.quote}”</span>{item.claim && <span className="mt-1 block text-[var(--dr-color-text-muted)]">{item.claim}</span>}</button>)}</div></div> : null}
-                  {readingAnswer.background ? <div className="border-t border-[var(--dr-color-outline)] pt-2"><div className="font-semibold text-[var(--dr-color-text)]">必要背景</div><p className="mt-1 whitespace-pre-wrap">{readingAnswer.background}</p></div> : null}
-                  {readingAnswer.inference ? <div className="border-t border-[var(--dr-color-outline)] pt-2"><div className="font-semibold text-[var(--dr-color-text)]">AI 推断</div><p className="mt-1 whitespace-pre-wrap">{readingAnswer.inference}</p></div> : null}
-                  {readingAnswer.limitations?.length ? <div className="border-t border-[var(--dr-color-outline)] pt-2"><div className="font-semibold text-[var(--dr-color-text)]">适用条件与未知项</div><ul className="mt-1 list-disc pl-4">{readingAnswer.limitations.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div> : null}
-                  {readingAnswer.warnings?.length ? <div className="rounded-md bg-[var(--dr-color-warning-container)] px-3 py-2 text-[var(--dr-color-warning)]">{readingAnswer.warnings.join('；')}</div> : null}
-                </div>
+                <Stack spacing={space.md} sx={{ mb: space.lg }}>
+                  {readingAnswer.evidence?.length ? (
+                    <Box>
+                      <Typography variant="control" sx={{ display: 'block', mb: space.xs, fontWeight: 'var(--dr-weight-semibold)' }}>原文证据</Typography>
+                      <Stack spacing={space.sm}>
+                        {readingAnswer.evidence.map((item, index) => (
+                          <Paper
+                            key={`${item.quote}-${index}`}
+                            variant="outlined"
+                            component="button"
+                            type="button"
+                            onClick={() => item.anchor && panelMessage({ type: 'deep-research:focus-anchor', anchor: item.anchor })}
+                            sx={{
+                              display: 'block', width: '100%', p: space.md, textAlign: 'left', cursor: 'pointer',
+                              borderColor: 'var(--dr-color-outline)', bgcolor: 'var(--dr-color-evidence-container)',
+                              '&:hover': { borderColor: 'primary.main' },
+                            }}
+                          >
+                            <Typography variant="body2" component="span" sx={{ display: 'block' }}>“{item.quote}”</Typography>
+                            {item.claim && <Typography variant="caption" color="text.secondary" component="span" sx={{ display: 'block', mt: space.xs }}>{item.claim}</Typography>}
+                          </Paper>
+                        ))}
+                      </Stack>
+                    </Box>
+                  ) : null}
+                  {readingAnswer.background ? (
+                    <Box sx={{ pt: space.sm, borderTop: 1, borderColor: 'divider' }}>
+                      <Typography variant="control" sx={{ display: 'block', fontWeight: 'var(--dr-weight-semibold)' }}>必要背景</Typography>
+                      <Typography variant="body2" sx={{ mt: space.xs, whiteSpace: 'pre-wrap' }}>{readingAnswer.background}</Typography>
+                    </Box>
+                  ) : null}
+                  {readingAnswer.inference ? (
+                    <Box sx={{ pt: space.sm, borderTop: 1, borderColor: 'divider' }}>
+                      <Typography variant="control" sx={{ display: 'block', fontWeight: 'var(--dr-weight-semibold)' }}>AI 推断</Typography>
+                      <Typography variant="body2" sx={{ mt: space.xs, whiteSpace: 'pre-wrap' }}>{readingAnswer.inference}</Typography>
+                    </Box>
+                  ) : null}
+                  {readingAnswer.limitations?.length ? (
+                    <Box sx={{ pt: space.sm, borderTop: 1, borderColor: 'divider' }}>
+                      <Typography variant="control" sx={{ display: 'block', fontWeight: 'var(--dr-weight-semibold)' }}>适用条件与未知项</Typography>
+                      <Box component="ul" sx={{ mt: space.xs, pl: space.lg, listStyle: 'disc' }}>
+                        {readingAnswer.limitations.map((item, index) => (
+                          <Typography component="li" variant="body2" key={`${item}-${index}`}>{item}</Typography>
+                        ))}
+                      </Box>
+                    </Box>
+                  ) : null}
+                  {readingAnswer.warnings?.length ? (
+                    <Alert severity="warning">{readingAnswer.warnings.join('；')}</Alert>
+                  ) : null}
+                </Stack>
               ) : null}
-              <div className="flex gap-2">
-                <input id="reader-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && canAsk) void callAnswer('ask'); }} placeholder="例如：这对系统设计有什么影响？" className="min-w-0 flex-1 rounded-lg border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface-composer)] px-3 py-2 text-sm outline-none focus:border-[var(--dr-color-primary)] focus:ring-2 focus:ring-[var(--dr-color-primary-container)]" />
-                <button aria-label="发送问题" disabled={!canAsk} onClick={() => void callAnswer('ask')} className="rounded-lg bg-[var(--dr-color-primary)] px-3 text-[var(--dr-color-on-primary)] disabled:cursor-not-allowed disabled:opacity-40"><Send className="h-4 w-4" /></button>
-              </div>
-              {busy && <div className="mt-3 flex items-center gap-2 text-xs text-[var(--dr-color-text-secondary)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在处理当前{busy === 'translate' ? '页面翻译' : busy === 'explain' ? 'AI 解读' : '问题'}…<button className="ml-auto underline" onClick={() => activeRequest.current?.abort()}>停止</button></div>}
-              {error && <div role="alert" className="mt-3 flex items-center justify-between gap-3 text-xs text-[var(--dr-color-danger)]"><span>{error}</span><button className="shrink-0 underline" onClick={() => panelMessage({ type: 'deep-research:connect' })}>连接账号</button></div>}
-            </section>
+              <Stack direction="row" spacing={space.sm} sx={{ alignItems: 'stretch' }}>
+                <TextField
+                  id="reader-prompt"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' && canAsk) void callAnswer('ask'); }}
+                  placeholder="例如：这对系统设计有什么影响？"
+                  size="small"
+                  fullWidth
+                  sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'var(--dr-color-surface-composer)' } }}
+                />
+                <IconButton
+                  aria-label="发送问题"
+                  disabled={!canAsk}
+                  color="primary"
+                  onClick={() => void callAnswer('ask')}
+                  sx={{ borderRadius: 'var(--dr-radius-small)' }}
+                >
+                  <Send size={16} />
+                </IconButton>
+              </Stack>
+              {busy && (
+                <Stack direction="row" spacing={space.sm} sx={{ mt: space.md, alignItems: 'center' }}>
+                  <CircularProgress size={14} aria-hidden />
+                  <Typography variant="caption" color="text.secondary">
+                    正在处理当前{busy === 'translate' ? '页面翻译' : busy === 'explain' ? 'AI 解读' : '问题'}…
+                  </Typography>
+                  <Button size="small" variant="text" sx={{ ml: 'auto', minHeight: 'auto', px: 0 }} onClick={() => activeRequest.current?.abort()}>
+                    停止
+                  </Button>
+                </Stack>
+              )}
+              {error && (
+                <Alert
+                  severity="error"
+                  action={<Button size="small" color="inherit" onClick={() => panelMessage({ type: 'deep-research:connect' })}>连接账号</Button>}
+                  sx={{ mt: space.md }}
+                >
+                  {error}
+                </Alert>
+              )}
+            </Paper>
 
-            <section className="mt-4 rounded-xl border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface)] p-4 shadow-[var(--dr-elevation-1)]">
-              <div className="mb-3 flex items-center gap-2 text-sm font-semibold"><Bookmark className="h-4 w-4 text-[var(--dr-color-primary)]" /> 保存阅读成果</div>
-              <label className="mb-2 block text-xs font-medium text-[var(--dr-color-text-secondary)]" htmlFor="reader-quote">摘录（可编辑）</label>
-              <textarea id="reader-quote" value={quoteOverride} onChange={(event) => setQuoteOverride(event.target.value)} className="mb-3 min-h-20 w-full resize-y rounded-lg border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface-composer)] px-3 py-2 text-sm leading-6 outline-none focus:border-[var(--dr-color-primary)] focus:ring-2 focus:ring-[var(--dr-color-primary-container)]" />
-              {context.selection && quoteOverride.trim() !== context.selection.quote.trim() && <p className="-mt-1 mb-3 text-xs leading-5 text-[var(--dr-color-warning)]">摘录已编辑；保存后不附带精确原文锚点。</p>}
-              <label className="mb-2 block text-xs font-medium text-[var(--dr-color-text-secondary)]" htmlFor="reader-note">我的笔记</label>
-              <textarea id="reader-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="补充你的判断、疑问或适用条件…" className="min-h-20 w-full resize-y rounded-lg border border-[var(--dr-color-outline)] bg-[var(--dr-color-surface-composer)] px-3 py-2 text-sm outline-none focus:border-[var(--dr-color-primary)] focus:ring-2 focus:ring-[var(--dr-color-primary-container)]" />
-              <div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs leading-5 text-[var(--dr-color-text-muted)]">只保存你确认的摘录、笔记和 AI 结论；不会自动保存整篇网页。</p><button onClick={() => void saveResult()} disabled={Boolean(busy) || Boolean(saved)} className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[var(--dr-color-primary)] px-3 py-2 text-xs font-medium text-[var(--dr-color-on-primary)] disabled:opacity-50">{saved ? <Check className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />} {saved ? '已保存草稿' : '保存到研究库'}</button></div>
-            </section>
+            <Paper variant="outlined" sx={{ mt: space.lg, p: space.lg }}>
+              <Stack direction="row" spacing={space.sm} sx={{ mb: space.md, alignItems: 'center' }}>
+                <Bookmark size={16} aria-hidden />
+                <Typography component="h2" variant="listTitle">保存阅读成果</Typography>
+              </Stack>
+              <TextField
+                id="reader-quote"
+                label="摘录（可编辑）"
+                value={quoteOverride}
+                onChange={(event) => setQuoteOverride(event.target.value)}
+                multiline
+                minRows={4}
+                fullWidth
+                sx={{ mb: space.md, '& .MuiOutlinedInput-root': { bgcolor: 'var(--dr-color-surface-composer)' } }}
+              />
+              {context.selection && quoteOverride.trim() !== context.selection.quote.trim() && (
+                <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: -space.sm, mb: space.md }}>
+                  摘录已编辑；保存后不附带精确原文锚点。
+                </Typography>
+              )}
+              <TextField
+                id="reader-note"
+                label="我的笔记"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="补充你的判断、疑问或适用条件…"
+                multiline
+                minRows={4}
+                fullWidth
+                sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'var(--dr-color-surface-composer)' } }}
+              />
+              <Stack direction="row" spacing={space.md} sx={{ mt: space.md, alignItems: 'center', justifyContent: 'space-between' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
+                  只保存你确认的摘录、笔记和 AI 结论；不会自动保存整篇网页。
+                </Typography>
+                <Button
+                  variant="contained"
+                  disabled={Boolean(busy) || Boolean(saved)}
+                  startIcon={saved ? <Check size={14} /> : <Bookmark size={14} />}
+                  onClick={() => void saveResult()}
+                  sx={{ flexShrink: 0 }}
+                >
+                  {saved ? '已保存草稿' : '保存到研究库'}
+                </Button>
+              </Stack>
+            </Paper>
           </>
         )}
-      </div>
+      </Box>
       <style>{`
-        .reader-panel {
-          font-family: var(--dr-font-family);
-          font-size: var(--dr-type-body);
-          line-height: var(--dr-line-height-body);
-        }
-        .reader-panel :is(button, input, textarea) { font-family: inherit; }
-        .reader-panel button, .reader-panel input { min-height: var(--dr-control-height); }
-        .reader-panel button[aria-label] { min-width: var(--dr-control-height); }
-        .reader-panel :is(button, input, textarea):focus-visible {
-          outline: 2px solid var(--dr-color-primary);
-          outline-offset: 2px;
-        }
-        .reader-action {
-          display: inline-flex;
-          align-items: center;
-          gap: var(--dr-space-1);
-          border: 1px solid var(--dr-color-outline);
-          border-radius: var(--dr-radius-small);
-          padding: var(--dr-space-2) var(--dr-space-3);
-          font-size: var(--dr-type-label);
-          font-weight: var(--dr-weight-medium);
-          color: var(--dr-color-text-secondary);
-          background: var(--dr-color-surface);
-          transition: background-color var(--dr-motion-fast), border-color var(--dr-motion-fast), color var(--dr-motion-fast);
-        }
-        .reader-action:hover { border-color: var(--dr-color-primary); color: var(--dr-color-primary); }
-        .reader-action:disabled { opacity: .45; cursor: not-allowed; }
-        @media (pointer: coarse) {
-          .reader-panel button, .reader-panel input { min-height: var(--dr-touch-target); }
-          .reader-panel button[aria-label] { min-width: var(--dr-touch-target); }
-        }
         html.reader-embedded header { display: none; }
         html.reader-embedded main { padding: 0 !important; }
       `}</style>
-    </div>
+    </Box>
+  );
+}
+
+/**
+ * A secondary reading action. It carries the same outline treatment as the
+ * shared button skin so the panel never grows a second control style.
+ */
+function ReaderAction({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) {
+  return (
+    <Button
+      size="small"
+      variant="outlined"
+      color="secondary"
+      disabled={disabled}
+      onClick={onClick}
+      startIcon={null}
+      sx={{ gap: space.xs }}
+    >
+      {children}
+    </Button>
   );
 }
 

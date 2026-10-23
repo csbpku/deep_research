@@ -2,8 +2,10 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const extensionPath = await mkdtemp('/private/tmp/reader-dynamic-extension-');
+const extensionPath = await mkdtemp(join(tempDir(), 'reader-dynamic-extension-'));
 await cp(new URL('../.output/chrome-mv3', import.meta.url).pathname, extensionPath, { recursive: true });
 const manifestPath = `${extensionPath}/manifest.json`;
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
@@ -97,7 +99,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-dynamic-failure-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-dynamic-failure-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
@@ -126,6 +128,9 @@ try {
     return tab.id;
   });
   await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
+  // The scope warning lives inside a collapsed disclosure, so the panel has
+  // to open it before the notice is visible.
+  await panel.locator('#scope-details .MuiAccordionSummary-root').click();
   await panel.locator('#scope-notice').waitFor({ state: 'visible', timeout: 10_000 });
   if (!(await panel.locator('#scope-notice').innerText()).includes('跨域 iframe')) throw new Error('跨域 iframe 范围限制没有显示');
   await panel.locator('#settings-button').click();
@@ -155,7 +160,9 @@ try {
     if (!failureText.includes('FAIL_DYNAMIC_ONCE')) throw new Error(`动态更新后失败列表丢失原失败项：${failureText}`);
     recovery = 'manual-retry';
     await panel.locator('.translation-retry').first().click();
-    await panel.waitForFunction(() => !document.querySelector('#translation-failures')?.textContent?.includes('需要处理'), null, { timeout: 30_000 });
+    // Assert on the rendered rows: the phrase this used to check for is not
+    // part of the extension's copy, so the old condition never failed.
+    await panel.waitForFunction(() => !document.querySelector('#translation-failures .translation-failure-row'), null, { timeout: 30_000 });
   } else {
     await page.waitForFunction(() => Boolean(document.querySelector('#fail-block')?.nextElementSibling?.hasAttribute('data-deep-research-translation')), null, { timeout: 30_000 });
   }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { dark, darkOverrides, light, hexToHsl, renderLegacyBridge } from '../scripts/css.mjs';
+import { dark, darkOverrides, light } from '../scripts/css.mjs';
 
 function luminance(hex) {
   return [1, 3, 5].map((offset, i) => {
@@ -35,30 +35,18 @@ for (const [name, tokens] of [['light', light], ['dark', dark]]) {
         assert.ok(contrast(fg, bg) >= 4.5, `${name}: reading tier ${tier} label on ${bg}`);
       }
     }
+    for (const tier of ['hot', 'warming', 'emerging']) {
+      const fg = tokens[`color-topic-${tier}`];
+      const bg = tokens[`color-topic-${tier}-container`];
+      assert.ok(contrast(fg, bg) >= 4.5, `${name}: topic ${tier} label on its container`);
+    }
+    for (const tone of ['text-muted', 'inference', 'evidence', 'success', 'warning']) {
+      assert.ok(contrast(tokens[`color-${tone}`], tokens['color-surface-container']) >= 4.5, `${name}: syntax ${tone} on code background`);
+    }
   });
 }
 test('dark mode explicitly defines every color instead of inheriting light values', () => {
   for (const key of Object.keys(light).filter(key => key.startsWith('color-'))) assert.ok(key in darkOverrides, key);
-});
-test('legacy conversion preserves valid HSL tuples and does not use hex in hsl()', () => {
-  assert.equal(hexToHsl('#ffffff'), '0 0% 100%');
-  assert.equal(hexToHsl('#000000'), '0 0% 0%');
-  assert.equal(hexToHsl('#ff0000'), '0 100% 50%');
-  assert.throws(() => hexToHsl('white'));
-  assert.doesNotMatch(renderLegacyBridge(), /--(?:primary|background): #/);
-});
-test('legacy reading-tier classes are generated from the shared semantic tokens', () => {
-  const bridge = renderLegacyBridge();
-  for (const [legacy, token] of [
-    ['tier-deep-read', 'color-tier-deep-read'],
-    ['tier-collection', 'color-tier-deep-read'],
-    ['tier-skim', 'color-tier-skim'],
-    ['tier-noise', 'color-tier-noise'],
-    ['score-track', 'color-tier-track'],
-  ]) {
-    assert.ok(bridge.includes(`--${legacy}: ${hexToHsl(light[token])};`), `light ${legacy}`);
-    assert.ok(bridge.includes(`--${legacy}: ${hexToHsl(dark[token])};`), `dark ${legacy}`);
-  }
 });
 test('Web and Reader generated styles match the shared source', () => {
   execFileSync(process.execPath, [new URL('../scripts/generate.mjs', import.meta.url).pathname, '--check']);

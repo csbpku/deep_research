@@ -94,7 +94,7 @@ export function ResearchOutputViews({ content, artifactType, sources = [], evide
       ) : null}
       <Box role="tabpanel" aria-label={tabs.find((tab) => tab.value === active)?.label ?? '研究产物'}>
         {active === 'summary' ? <SummaryView summary={summary} sources={sources} /> : null}
-        {active === 'report' ? <MarkdownPreview source={content} compactCitations citationSources={sources} className="max-h-none overflow-visible lg:max-h-[720px] lg:overflow-y-auto" /> : null}
+        {active === 'report' ? <ScrollableMarkdownPreview source={content} compactCitations citationSources={sources} desktopMaxHeight={720} /> : null}
         {active === 'outline' ? (
           outline.length > 0 ? (
           <Stack component="ol" spacing={1} sx={{ m: 0, pl: 3, borderLeft: 1, borderColor: 'divider' }}>
@@ -103,7 +103,7 @@ export function ResearchOutputViews({ content, artifactType, sources = [], evide
           ) : <EmptyDerivedView text="报告没有可识别的标题结构。" />
         ) : null}
         {active === 'tables' ? (
-          tables.length > 0 ? <Stack spacing={3}>{tables.map((table, index) => <MarkdownPreview key={index} source={table} className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto" />)}</Stack>
+          tables.length > 0 ? <Stack spacing={3}>{tables.map((table, index) => <ScrollableMarkdownPreview key={index} source={table} desktopMaxHeight={400} />)}</Stack>
             : <EmptyDerivedView text="报告没有可直接展示的对比表。" />
         ) : null}
         {active === 'risks' ? <BulletView title="报告明确写出的风险与限制" items={risks} emptyText="报告没有明确的风险章节，不能据此推断无风险。" /> : null}
@@ -186,11 +186,11 @@ function SummaryView({ summary, sources }: { summary: SummaryDetails; sources: r
         <Typography variant="fieldTitle" component="h4">{summary.explicit ? '一页判断' : '报告摘录（非结论）'}</Typography>
       </Stack>
       {summary.text ? (
-        <MarkdownPreview
+        <ScrollableMarkdownPreview
           source={summary.text}
           compactCitations
           citationSources={sources}
-          className="max-h-none overflow-visible lg:max-h-[400px] lg:overflow-y-auto"
+          desktopMaxHeight={400}
         />
       ) : <EmptyDerivedView text="报告没有摘要或结论章节，请切换到阅读稿查看原文。" />}
       <Typography variant="metadata" color="text.secondary" sx={{ display: 'block', mt: 2, pt: 1.5, borderTop: 1, borderColor: 'divider' }}>
@@ -199,6 +199,28 @@ function SummaryView({ summary, sources }: { summary: SummaryDetails; sources: r
           : '这是报告开头的有限摘录，不代表完整结论；请切换到“阅读稿”核对原文、证据和限定条件。'}
       </Typography>
     </Paper>
+  );
+}
+
+type ScrollableMarkdownPreviewProps = React.ComponentProps<typeof MarkdownPreview> & {
+  desktopMaxHeight: number;
+};
+
+/** Keep markdown reading bounds in MUI sx while leaving the renderer API untouched. */
+function ScrollableMarkdownPreview({ desktopMaxHeight, ...previewProps }: ScrollableMarkdownPreviewProps) {
+  return (
+    <Box
+      sx={(theme) => ({
+        '& > .MuiBox-root': {
+          maxHeight: 'none',
+          overflow: 'visible',
+          bgcolor: 'background.paper',
+          [theme.breakpoints.up('lg')]: { maxHeight: desktopMaxHeight, overflowY: 'auto' },
+        },
+      })}
+    >
+      <MarkdownPreview {...previewProps} />
+    </Box>
   );
 }
 

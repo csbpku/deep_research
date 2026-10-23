@@ -16,7 +16,13 @@
   function updateReaderLocale(value) {
     const language = value === 'system' || !value ? navigator.language : value;
     readerLocale = /^zh(?:-|$)/iu.test(language) ? 'zh-CN' : 'en';
-    const sourceKey = text => Object.keys(READER_EN_MESSAGES).find(key => READER_EN_MESSAGES[key] === text) || text;
+    // Fall back to the English value only for attributes that were not
+    // rendered through localizedMarkup() and therefore have no known key.
+    const sourceKey = text => (
+      Object.prototype.hasOwnProperty.call(READER_EN_MESSAGES, text)
+        ? text
+        : Object.keys(READER_EN_MESSAGES).find(key => READER_EN_MESSAGES[key] === text) || text
+    );
     for (const shadow of readerUiRoots) {
       if (!shadow.host.isConnected) { readerUiRoots.delete(shadow); continue; }
       // Only extension controls are translated. Article and model text are
@@ -31,9 +37,15 @@
         readerUiMessages.set(node, key);
         node.textContent = t(key);
       }
-      shadow.querySelectorAll('[title],[aria-label]').forEach(element => {
-        for (const attribute of ['title', 'aria-label']) {
-          if (element.hasAttribute(attribute)) element.setAttribute(attribute, t(sourceKey(element.getAttribute(attribute))));
+      shadow.querySelectorAll('[title],[aria-label],[data-tooltip]').forEach(element => {
+        for (const attribute of ['title', 'aria-label', 'data-tooltip']) {
+          if (!element.hasAttribute(attribute)) continue;
+          const remembered = readerUiRememberedKey(element, attribute);
+          const current = element.getAttribute(attribute);
+          const key = remembered && (current === remembered || current === READER_EN_MESSAGES[remembered])
+            ? remembered
+            : sourceKey(current);
+          element.setAttribute(attribute, t(key));
         }
       });
     }
@@ -42,6 +54,23 @@
     const shadow = host.attachShadow(options);
     readerUiRoots.add(shadow);
     return shadow;
+  }
+  /**
+   * Read the message key that produced a localized attribute.
+   *
+   * Several Chinese labels share one English translation (翻译本页 and
+   * 全文翻译 both render as "Translate article"), so reversing an English
+   * string back to a key is ambiguous and used to swap one visible label
+   * for a different one. The source key travels with the markup instead.
+   */
+  function readerUiRememberedKey(element, attribute) {
+    const marker = element.getAttribute(`data-reader-label-${attribute}`);
+    if (!marker) return null;
+    try {
+      return decodeURIComponent(marker);
+    } catch {
+      return null;
+    }
   }
   chrome.storage.local.get('readerUiLanguage').then(stored => {
     updateReaderLocale(stored.readerUiLanguage);
@@ -57,14 +86,36 @@
   }
   function localizedMarkup(markup) {
     return markup.replace(/>([^<>]*[\u3400-\u9fff][^<>]*)</gu, (_, text) => `>${t(text)}<`)
-      .replace(/(aria-label|title|placeholder)="([^"]*)"/gu, (_, attribute, text) => `${attribute}="${t(text)}"`);
+      .replace(/(aria-label|title|placeholder|data-tooltip)="([^"]*)"/gu, (_, attribute, text) => (
+        // Keep the Chinese source key next to the rendered value so a later
+        // locale switch can restore the same label. Several Chinese labels
+        // share one English translation, so reversing the English text back
+        // to a key is ambiguous and used to swap one visible label for a
+        // different one.
+        //
+        // One element can carry several localized attributes (a dock button
+        // has both `aria-label` and `title`). HTML keeps only the first
+        // occurrence of a repeated attribute, so every attribute gets its
+        // own marker instead of sharing one slot.
+        `${attribute}="${t(text)}" data-reader-label-${attribute}="${encodeURIComponent(text)}"`
+      ));
   }
   function applyReaderDesignTokens(element) {
+    element.dataset.deepResearchDesignHost = 'true';
+    // The shadow stylesheets start from `all:initial`, which resets the
+    // native scheme. The Reader renders one palette, so the host states it
+    // explicitly: scrollbars, carets and form controls stay readable instead
+    // of inheriting a dark page's scheme.
+    element.style.colorScheme = 'light';
     Object.entries(READER_DESIGN_TOKENS).forEach(([name, value]) => {
       element.style.setProperty(`--reader-${name}`, value);
     });
   }
-  const readerToken = (name, fallback) => READER_DESIGN_TOKENS[name] || fallback;
+  // The injected controls live in a shadow root on someone else's page, so
+  // the shared token values are read directly from the generated source. The
+  // value always comes from the shared token file — never a second literal.
+  // The values are injected at build time from packages/design-system.
+  const readerToken = (name) => READER_DESIGN_TOKENS[name] || 'currentColor';
 
   // An extension update can leave closed-shadow hosts in the page after the
   // previous isolated world is invalidated. Remove only transient controls;
@@ -876,7 +927,10 @@
     toolbarHost.dataset.deepResearchToolbar = 'true';
     toolbarHost.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(window.innerWidth - 330, rect.left))}px;top:${Math.max(8, rect.top - 46)}px;`;
     applyReaderDesignTokens(toolbarHost);
-    const shadow = readerShadow(toolbarHost, { mode: 'closed' });
+    // Same reasoning as the dock: the selection toolbar exposes real
+    // actions, so it must stay reachable from assistive technology on every
+    // Chromium build.
+    const shadow = readerShadow(toolbarHost, { mode: 'open' });
     shadow.innerHTML = localizedMarkup(`
       <style>:host{all:initial}div{display:flex;gap:var(--reader-space-1);max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:6px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-medium);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);font:var(--reader-type-label)/1.4 var(--reader-font-family)}button{min-height:36px;border:0;border-radius:var(--reader-radius-small);background:transparent;color:var(--reader-color-text-secondary);padding:6px 10px;font:inherit;cursor:pointer;white-space:nowrap;transition:background-color var(--reader-motion-fast),color var(--reader-motion-fast)}button:hover{background:var(--reader-color-primary-container);color:var(--reader-color-primary)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}</style>
       <div role="toolbar" aria-label="Deep Research 阅读操作">
@@ -900,7 +954,12 @@
     readerDockHost.dataset.deepResearchDock = 'true';
     readerDockHost.style.cssText = 'position:fixed;z-index:2147483645;right:10px;top:55%;transform:translateY(-50%);';
     applyReaderDesignTokens(readerDockHost);
-    const shadow = readerShadow(readerDockHost, { mode: 'closed' });
+    // The dock is a first-class interactive surface (summarize, translate,
+    // open chat). A closed shadow root kept those buttons out of the
+    // accessibility tree, so assistive technology could not reach them.
+    // The host page still cannot target the controls: the host element
+    // carries no layout styles and the shadow resets `all:initial`.
+    const shadow = readerShadow(readerDockHost, { mode: 'open' });
     shadow.innerHTML = localizedMarkup(`
       <style>
         :host{all:initial}
@@ -938,7 +997,9 @@
       readerStatusHost.dataset.deepResearchStatus = 'true';
       readerStatusHost.style.cssText = 'position:fixed;z-index:2147483646;right:64px;top:55%;transform:translateY(-50%);pointer-events:none;';
       applyReaderDesignTokens(readerStatusHost);
-      const shadow = readerShadow(readerStatusHost, { mode: 'closed' });
+      // The status strip announces translation progress, so its live region
+      // has to be visible to assistive technology on every Chromium build.
+      const shadow = readerShadow(readerStatusHost, { mode: 'open' });
       shadow.innerHTML = `
         <style>
           :host{all:initial}
@@ -946,7 +1007,7 @@
           .status.visible{opacity:1;transform:translateX(0)}
           .status.ready{background:var(--reader-color-success);border-color:var(--reader-color-success-container)}
           .status.error{background:var(--reader-color-danger);border-color:var(--reader-color-danger-container)}
-          .detail{display:block;margin-top:2px;color:rgba(255,255,255,.78);font-weight:500;font-size:var(--reader-type-caption)}
+          .detail{display:block;margin-top:2px;color:var(--reader-color-on-inverse-muted);font-weight:500;font-size:var(--reader-type-caption)}
           @media(prefers-reduced-motion:reduce){.status{transition:none}}
         </style>
         <div class="status" role="status"><span class="label"></span><span class="detail"></span></div>`;
@@ -1012,7 +1073,7 @@
     applyReaderDesignTokens(popup);
     const shadow = readerShadow(popup, { mode: 'open' });
     shadow.innerHTML = localizedMarkup(`<style>
-      :host{all:initial;color-scheme:light}
+      :host{all:initial}
       *{box-sizing:border-box}
       .panel{display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-large);background:var(--reader-color-surface-raised);color:var(--reader-color-text);box-shadow:var(--reader-elevation-2);font:var(--reader-type-body)/var(--reader-line-height-body) var(--reader-font-family)}
       header{display:flex;align-items:center;flex:none;gap:var(--reader-space-1);padding:6px 8px;border-bottom:1px solid var(--reader-color-outline);font-size:var(--reader-type-label)}
@@ -1197,7 +1258,7 @@
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const previousOutline = target.style.outline;
     const previousOffset = target.style.outlineOffset;
-    target.style.outline = `2px solid ${READER_DESIGN_TOKENS['color-primary'] || '#405c9d'}`;
+    target.style.outline = `2px solid ${readerToken('color-primary')}`;
     target.style.outlineOffset = '3px';
     window.setTimeout(() => {
       target.style.outline = previousOutline;
@@ -1241,12 +1302,13 @@
     const host = document.createElement('span');
     host.dataset.deepResearchAnnotationHighlight = annotation.id;
     host.style.cssText = 'position:fixed;inset:0;z-index:2147483645;pointer-events:none;';
+    applyReaderDesignTokens(host);
     const update = () => {
       host.textContent = '';
       Array.from(resolved.range.getClientRects()).forEach((rect) => {
         if (!rect.width || !rect.height) return;
         const mark = document.createElement('span');
-        mark.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;background:rgba(255,213,72,.28);border-bottom:2px solid rgba(184,129,0,.68);border-radius:2px;`;
+        mark.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;background:var(--reader-color-highlight);border-bottom:2px solid var(--reader-color-highlight-border);border-radius:2px;`;
         host.appendChild(mark);
       });
     };
@@ -1278,7 +1340,7 @@
         .frame{position:relative;display:flex;max-width:min(94vw,1400px);max-height:92vh;align-items:center;justify-content:center;padding:var(--reader-space-3);border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-medium);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);cursor:default}
         .frame img,.frame svg{display:block;max-width:88vw;max-height:86vh;width:auto;height:auto;object-fit:contain}
         .close{position:absolute;right:8px;top:8px;width:40px;height:40px;border:1px solid var(--reader-color-outline-strong);border-radius:var(--reader-radius-small);background:var(--reader-color-surface-raised);color:var(--reader-color-text);font-size:var(--reader-type-title-compact);line-height:1;cursor:pointer}
-        .hint{position:absolute;left:12px;bottom:8px;color:rgba(255,255,255,.7);font-size:var(--reader-type-caption)}
+        .hint{position:absolute;left:12px;bottom:8px;color:var(--reader-color-on-inverse-muted);font-size:var(--reader-type-caption)}
       </style>
       <div class="backdrop" role="dialog" aria-label="放大查看原图"><div class="frame"><button class="close" type="button" aria-label="关闭">×</button><span class="hint">点击背景或按 Esc 关闭</span></div></div>`);
     const frame = shadow.querySelector('.frame');
@@ -1302,8 +1364,14 @@
       // cannot arrive afterward and replace the image discussion context.
       window.getSelection()?.removeAllRanges();
       const isSvg = image.tagName?.toLowerCase() === 'svg';
-      const width = Number(image.naturalWidth || image.width || image.getBoundingClientRect().width || 0);
-      const height = Number(image.naturalHeight || image.height || image.getBoundingClientRect().height || 0);
+      // An inline SVG has no `naturalWidth` and its `width` attribute is often
+      // absent or a unit string, so `Number(...)` produced NaN and the
+      // rasterizer produced a broken image. Fall back to the viewBox and
+      // then the rendered box.
+      const viewBox = image.viewBox?.baseVal;
+      const rect = image.getBoundingClientRect();
+      const width = Math.round(Number(image.naturalWidth || image.width?.baseVal?.value || image.width || viewBox?.width || rect.width || 0) || 0);
+      const height = Math.round(Number(image.naturalHeight || image.height?.baseVal?.value || image.height || viewBox?.height || rect.height || 0) || 0);
       const rawDataUrl = isSvg ? readSvgDataUrl(image) : isLikelyAnimatedImage(image) ? null : readImageDataUrl(image);
       const dataUrl = isSvg ? await rasterizeSvgDataUrl(rawDataUrl, width, height) : rawDataUrl;
       const modelScale = width && height ? Math.min(1, 2400 / Math.max(width, height)) : 1;
@@ -1546,16 +1614,16 @@
         const sourceLine = sourceText ? document.createElement('span') : null;
         if (sourceLine) {
           sourceLine.textContent = t("原文  {0}", sourceText.slice(0, 120));
-          sourceLine.style.cssText = `display:block;margin-bottom:3px;color:${readerToken('color-warning', '#80631f')};font:500 var(--reader-type-caption)/1.35 var(--reader-font-family);`;
+          sourceLine.style.cssText = 'display:block;margin-bottom:3px;color:var(--reader-color-warning);font:500 var(--reader-type-caption)/1.35 var(--reader-font-family);';
           label.appendChild(sourceLine);
         }
         const translationLine = document.createElement('span');
         translationLine.textContent = translatedText;
-        translationLine.style.cssText = `display:block;color:${readerToken('color-image-translation', '#60491d')};font:600 var(--reader-type-caption)/1.4 var(--reader-font-family);`;
+        translationLine.style.cssText = 'display:block;color:var(--reader-color-image-translation);font:600 var(--reader-type-caption)/1.4 var(--reader-font-family);';
         label.appendChild(translationLine);
         const sideText = sourceText ? t("原文 {0}\n{1}", sourceText.slice(0, 120), translatedText) : translatedText;
         const sideHeight = Math.min(180, Math.max(42, 28 + (Math.ceil(sideText.length / 24) * 16)));
-        label.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${sideWidth}px;min-height:${sideHeight}px;box-sizing:border-box;padding:6px 8px;border:1px solid ${readerToken('color-warning', '#80631f')};border-radius:var(--reader-radius-small);background:${readerToken('color-image-translation-container', '#fff9e2')};color:${readerToken('color-image-translation', '#60491d')};white-space:normal;overflow-wrap:anywhere;box-shadow:var(--reader-elevation-1);`;
+        label.style.cssText = 'position:absolute;left:' + left + 'px;top:' + top + 'px;width:' + sideWidth + 'px;min-height:' + sideHeight + 'px;box-sizing:border-box;padding:6px 8px;border:1px solid var(--reader-color-warning);border-radius:var(--reader-radius-small);background:var(--reader-color-image-translation-container);color:var(--reader-color-image-translation);white-space:normal;overflow-wrap:anywhere;box-shadow:var(--reader-elevation-1);';
         sideLayer.appendChild(label);
       });
       if (belowImageHeight) {
@@ -1577,7 +1645,7 @@
       fallback = document.createElement('div');
       fallback.dataset.deepResearchImageFallback = imageId;
       fallback.textContent = t("旁侧译文：{0}", safeFallback);
-      fallback.style.cssText = `position:relative;z-index:2;margin-top:var(--reader-space-2);padding:7px 9px;border-left:3px solid ${readerToken('color-warning', '#80631f')};border-radius:var(--reader-radius-xs);background:var(--reader-color-warning-container);color:var(--reader-color-warning);font:var(--reader-type-label)/1.55 var(--reader-font-family);white-space:pre-wrap;`;
+      fallback.style.cssText = 'position:relative;z-index:2;margin-top:var(--reader-space-2);padding:7px 9px;border-left:3px solid var(--reader-color-warning);border-radius:var(--reader-radius-xs);background:var(--reader-color-warning-container);color:var(--reader-color-warning);font:var(--reader-type-label)/1.55 var(--reader-font-family);white-space:pre-wrap;';
       wrapper.appendChild(fallback);
     }
     addImageControls(wrapper, image, layer, fallback, sideLayer);
@@ -1814,10 +1882,14 @@
     if (message?.type === 'deep-research:apply-image-translations') {
       const translations = Array.isArray(message.translations) ? message.translations : [];
       let appliedCount = 0;
+      const appliedIds = [];
       translations.forEach((translation) => {
-        if (applyImageTranslation(translation.id, translation.regions, translation.confidence, translation.fallbackText, translation.fallbackRegions)) appliedCount += 1;
+        if (applyImageTranslation(translation.id, translation.regions, translation.confidence, translation.fallbackText, translation.fallbackRegions)) {
+          appliedCount += 1;
+          appliedIds.push(translation.id);
+        }
       });
-      send({ type: 'deep-research:image-translations-applied', count: appliedCount });
+      send({ type: 'deep-research:image-translations-applied', count: appliedCount, appliedIds });
     }
     if (message?.type === 'deep-research:restore-translations') {
       selectedParagraphId = null;

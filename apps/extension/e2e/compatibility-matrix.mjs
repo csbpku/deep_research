@@ -3,6 +3,9 @@ import { spawn } from 'node:child_process';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
+import { configureProvider, translateWholeArticle } from './panel-actions.mjs';
 
 const pageKinds = [
   ...Array.from({ length: 6 }, (_, index) => ({ kind: 'article', host: 'reader.local', path: `/article-${index + 1}`, imageCount: 2 })),
@@ -55,7 +58,7 @@ const provider = spawn(process.execPath, [new URL('./fake-openai.mjs', import.me
 await new Promise((resolve) => setTimeout(resolve, 300));
 
 const extensionSourcePath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testExtensionPath = `${await mkdtemp('/private/tmp/deep-research-reader-matrix-extension-')}/extension`;
+const testExtensionPath = `${await mkdtemp(join(tempDir(), 'deep-research-reader-matrix-extension-'))}/extension`;
 await cp(extensionSourcePath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
 const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
@@ -73,7 +76,7 @@ const executablePath = process.env.CHROME_FOR_TESTING
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ].find(existsSync);
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
-const context = await chromium.launchPersistentContext(`/private/tmp/deep-research-reader-matrix-${Date.now()}`, {
+const context = await chromium.launchPersistentContext(tempPath(`deep-research-reader-matrix-${Date.now()}`), {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
   viewport: { width: 1280, height: 900 },
@@ -94,11 +97,7 @@ try {
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom', { force: true });
-  await panel.locator('#provider-url').fill('http://127.0.0.1:8801/v1');
-  await panel.locator('#provider-model').fill('fake-reader');
-  await panel.locator('#provider-key').fill('test-key');
-  await panel.locator('#save-settings').click();
+  await configureProvider(panel, { url: 'http://127.0.0.1:8801/v1', model: 'fake-reader', key: 'test-key' });
   await panel.locator('#settings-notice').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#close-settings').click();
 
@@ -114,7 +113,7 @@ try {
       await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
     });
     await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
-    await panel.locator('#translate-all').click();
+    await translateWholeArticle(panel);
     try {
       await panel.locator('#notice').filter({ hasText: '全文翻译完成' }).waitFor({ state: 'visible', timeout: 30_000 });
     } catch (error) {
@@ -180,7 +179,7 @@ try {
       target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     });
     await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
-    await panel.locator('#explain-selection').click();
+    await panel.locator('#chat-summary').click();
     await panel.locator('#answer-evidence .evidence-item').waitFor({ state: 'visible', timeout: 20_000 });
     await panel.locator('#answer-evidence .evidence-item').first().click();
     await page.waitForFunction(() => Boolean(document.querySelector('#evidence-target')?.style.outline), null, { timeout: 5_000 });

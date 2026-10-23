@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
 const contentScript = new URL('../content.js', import.meta.url).pathname;
 const executablePath = process.env.CHROME_FOR_TESTING
@@ -81,7 +82,7 @@ const state = await page.evaluate(() => {
     side: side.map((node) => ({ text: node.textContent, outside: (() => { const rect = node.getBoundingClientRect(); return Boolean(source && (rect.left >= source.right || rect.right <= source.left || rect.top >= source.bottom || rect.bottom <= source.top)); })() })),
   };
 });
-await page.screenshot({ path: '/private/tmp/deep-research-reader-image-position.png', fullPage: true });
+await page.screenshot({ path: tempPath('deep-research-reader-image-position.png'), fullPage: true });
 console.log(JSON.stringify(state, null, 2));
 if (!state.verticalWriting || !state.verticalLabelFits || state.overlays !== 3 || !state.side.every((item) => item.outside)) {
   throw new Error(`image translation layout failed: ${JSON.stringify(state)}`);

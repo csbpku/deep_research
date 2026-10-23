@@ -3,14 +3,23 @@ import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { chromium } from '../../../apps/web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
+import { configureProvider } from './panel-actions.mjs';
 
 const port = 8892;
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const fakeProvider = new URL('./fake-openai.mjs', import.meta.url).pathname;
+// This test restores a chat session and expects the reader to recognise the
+// very same page version. The shared fixture appends a paragraph a moment
+// after load, so the fingerprint taken while selecting a passage can differ
+// from the one taken when the panel resumes. Strip the timer so the page is
+// deterministic; dynamic content has its own coverage in the matrix test.
+const fixtureHtml = (await readFile(fixturePath, 'utf8')).replace(/<script>[\s\S]*?<\/script>/u, '');
 const fixtureServer = createServer(async (request, response) => {
   if (request.url === '/fixture.html') {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(await readFile(fixturePath));
+    response.end(fixtureHtml);
     return;
   }
   response.writeHead(404);
@@ -30,13 +39,13 @@ const executablePath = process.env.CHROME_FOR_TESTING
 if (!executablePath) throw new Error('找不到 Chrome，请设置 CHROME_FOR_TESTING');
 
 const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
-const testExtensionPath = `${await mkdtemp('/private/tmp/deep-research-reader-history-extension-')}/extension`;
+const testExtensionPath = `${await mkdtemp(join(tempDir(), 'deep-research-reader-history-extension-'))}/extension`;
 await cp(extensionPath, testExtensionPath, { recursive: true });
 const testManifestPath = `${testExtensionPath}/manifest.json`;
 const testManifest = JSON.parse(await readFile(testManifestPath, 'utf8'));
 testManifest.host_permissions = [...new Set([...(testManifest.host_permissions || []), `http://127.0.0.1:${port}/*`])];
 await writeFile(testManifestPath, JSON.stringify(testManifest));
-const profilePath = `/private/tmp/deep-research-reader-history-${Date.now()}`;
+const profilePath = tempPath(`deep-research-reader-history-${Date.now()}`);
 const context = await chromium.launchPersistentContext(profilePath, {
   executablePath,
   headless: process.env.READER_HEADLESS === '1',
@@ -64,7 +73,15 @@ try {
   });
 
   const panel = await context.newPage();
-  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
+  // The panel binds to the article through `sourceTab`. Opening it without
+  // that binding leaves the panel looking at the extension page itself,
+  // which reports "当前页面不支持阅读".
+  const articleTabId = await serviceWorker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ url: 'http://127.0.0.1:8892/*' });
+    return tab?.id ?? null;
+  });
+  if (!articleTabId) throw new Error('fixture tab is not available');
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html?sourceTab=${articleTabId}`, { waitUntil: 'domcontentloaded' });
   await panel.locator('#settings-button').waitFor({ state: 'visible', timeout: 10_000 });
   await serviceWorker.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ url: 'http://127.0.0.1:8892/*' });
@@ -84,21 +101,34 @@ try {
     await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
   });
   await panel.locator('#settings-button').click();
-  await panel.locator('#provider-kind').selectOption('custom', { force: true });
-  await panel.locator('#provider-url').fill('http://127.0.0.1:8799/v1');
-  await panel.locator('#provider-model').fill('fake-reader');
-  await panel.locator('#provider-key').fill('test-key');
-  await panel.locator('#save-settings').click();
+  await configureProvider(panel, { url: 'http://127.0.0.1:8799/v1', model: 'fake-reader', key: 'test-key' });
   await panel.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('已保存'), null, { timeout: 10_000 });
   await panel.locator('#close-settings').click();
-  if (await panel.locator('#discussion-section').isVisible()) {
-    throw new Error('页面初始状态不应展示空聊天窗口');
+  // The side panel and the article share one window in a real browser, so
+  // the article stays the active tab and the background keeps forwarding its
+  // context. Opening the panel as a separate tab in automation breaks that
+  // assumption, so bring the article back to the front before the panel
+  // asks for page context.
+  await article.bringToFront();
+  await serviceWorker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ url: 'http://127.0.0.1:8892/*' });
+    if (!tab?.id) throw new Error('fixture tab is not available');
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  });
+  await panel.locator('#page-view').waitFor({ state: 'visible', timeout: 10_000 });
+  // The chat panel is always present; the first-run state is an empty
+  // transcript with one starter action instead of a hidden window.
+  if (!(await panel.locator('#conversation-empty').isVisible())) {
+    const diagnostic = await panel.evaluate(() => ({
+      empty: Boolean(document.querySelector('#conversation-empty')?.offsetHeight),
+      starter: Boolean(document.querySelector('#starter-summary')?.offsetHeight),
+      pageView: Boolean(document.querySelector('#page-view')?.offsetHeight),
+      body: document.body.innerText.slice(0, 400),
+    }));
+    throw new Error(`页面初始状态缺少空会话提示：${JSON.stringify(diagnostic)}`);
   }
-  if (!(await panel.locator('#open-page-chat').isVisible())) {
-    throw new Error('页面初始状态缺少“问整页”入口');
-  }
-  if (!(await panel.locator('#quick-summary').isVisible())) {
-    throw new Error('页面初始状态缺少独立的“全文总结”入口');
+  if (!(await panel.locator('#starter-summary').isVisible())) {
+    throw new Error('页面初始状态缺少“文章讲了什么？”入口');
   }
 
   const selectedQuote = await article.evaluate(() => {
@@ -113,16 +143,13 @@ try {
     return (node.textContent || '').trim();
   });
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
-  if (await panel.locator('#discussion-section').isVisible()) {
-    throw new Error('仅选中原文时不应自动展开空聊天窗口');
-  }
-
-  await panel.locator('#explain-selection').click();
-  await panel.locator('#discussion-section').waitFor({ state: 'visible', timeout: 5_000 });
-  await panel.locator('.conversation-message.assistant').waitFor({ state: 'visible', timeout: 10_000 });
+  // The chat panel stays open; a selection adds a scope chip and the
+  // selection card instead of replacing the transcript.
   if (!(await panel.locator('#scope-selection').isVisible())) {
     throw new Error('选段讨论没有显示“当前选段”范围切换');
   }
+  await panel.locator('#chat-summary').click();
+  await panel.locator('#conversation-list .conversation-message.assistant').waitFor({ state: 'visible', timeout: 10_000 });
   await panel.locator('#scope-page').click();
   if ((await panel.locator('#discussion-context').innerText()) !== '整页正文 · 提问') {
     throw new Error('范围切换到整页后上下文标签不正确');
@@ -131,16 +158,18 @@ try {
   if ((await panel.locator('#discussion-context').innerText()) !== '当前选段 · 提问') {
     throw new Error('范围切换回选段后上下文标签不正确');
   }
-  await panel.locator('#ask-selection').click();
   await panel.locator('#question-input').fill('如果队列容量很小，会有什么取舍？');
   await panel.locator('#send-question').click();
-  await panel.locator('.conversation-message.assistant').nth(1).waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#conversation-list .conversation-message.assistant').nth(1).waitFor({ state: 'visible', timeout: 10_000 });
 
+  // A page action is delivered to the active tab's content script, so the
+  // article has to be in front.
+  await article.bringToFront();
   await serviceWorker.evaluate(async () => {
     await chrome.runtime.sendMessage({ type: 'deep-research:page-action', action: 'summary' });
   });
   try {
-    await panel.locator('.conversation-message.assistant').nth(2).waitFor({ state: 'visible', timeout: 10_000 });
+    await panel.locator('#conversation-list .conversation-message.assistant').nth(2).waitFor({ state: 'visible', timeout: 10_000 });
   } catch (error) {
     console.error(JSON.stringify(await panel.evaluate(() => ({
       notice: document.querySelector('#notice')?.textContent || '',
@@ -171,7 +200,7 @@ try {
   const history = panel;
   const pageCountBeforeHistory = context.pages().length;
   await history.locator('#open-history-header').click();
-  await history.waitForURL(new RegExp(`chrome-extension://${extensionId}/reading-history\\.html\\?surface=sidepanel$`));
+  await history.waitForURL(new RegExp(`chrome-extension://${extensionId}/reading-history\\.html\\?surface=sidepanel`));
   if (context.pages().length !== pageCountBeforeHistory) {
     throw new Error('打开聊天记录不应创建新的浏览器标签页');
   }
@@ -231,9 +260,13 @@ try {
 
   await article.bringToFront();
   await history.locator('#continue-history-detail').evaluate((node) => node.click());
-  await history.waitForURL(`chrome-extension://${extensionId}/sidepanel.html`);
+  // The panel keeps the article binding, so the URL carries `sourceTab`.
+  await history.waitForURL(new RegExp(`chrome-extension://${extensionId}/sidepanel\\.html`));
   await history.locator('#discussion-section').waitFor({ state: 'visible', timeout: 10_000 });
 
+  if (!(await history.locator('#scope-selection').isVisible())) {
+    throw new Error('resumed chat lost the selection scope');
+  }
   await history.locator('#scope-selection').click();
   await article.evaluate(() => {
     const paragraph = document.querySelector('#target');
@@ -253,7 +286,10 @@ try {
     throw error;
   }
   const afterContentChange = await history.evaluate(() => ({
-    messages: document.querySelectorAll('.conversation-message').length,
+    // `#pending-turn` keeps a hidden user/assistant placeholder in the DOM
+    // for the in-flight turn, so the transcript has to be counted inside
+    // `#conversation-list`.
+    messages: document.querySelectorAll('#conversation-list .conversation-message').length,
     scope: document.querySelector('#discussion-context')?.textContent || '',
     evidenceCount: document.querySelectorAll('#answer-evidence .evidence-item').length,
     warning: document.querySelector('#answer-warnings')?.textContent || '',
@@ -266,8 +302,8 @@ try {
   }
   await history.locator('#question-input').fill('结合更新后的正文继续回答。');
   await history.locator('#send-question').click();
-  await history.locator('.conversation-message.assistant').nth(3).waitFor({ state: 'visible', timeout: 10_000 });
-  if (await history.locator('.conversation-message').count() !== 8) {
+  await history.locator('#conversation-list .conversation-message.assistant').nth(3).waitFor({ state: 'visible', timeout: 10_000 });
+  if (await history.locator('#conversation-list .conversation-message').count() !== 8) {
     throw new Error('the reader could not continue the preserved conversation after a page version change');
   }
 

@@ -2,9 +2,10 @@
 
 import { useEffect, useRef } from 'react';
 import React from 'react';
+import Box from '@mui/material/Box';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import MarkdownContent from './MarkdownContent';
-import { cn } from '@/lib/utils';
 import { compactResearchCitations, type ResearchCitationSource } from '@/lib/research-citations';
 
 interface TextSelection {
@@ -16,7 +17,7 @@ interface TextSelection {
 interface Props {
   source: string;
   onTextSelect?: (selection: TextSelection | null) => void;
-  className?: string;
+  sx?: SxProps<Theme>;
   compactCitations?: boolean;
   citationSources?: readonly ResearchCitationSource[];
 }
@@ -29,7 +30,7 @@ interface Props {
  * The wrapper only owns the bounded preview surface and optional selection
  * reporting used by future citation/annotation flows.
  */
-export function MarkdownPreview({ source, onTextSelect, className, compactCitations = false, citationSources = [] }: Props) {
+export function MarkdownPreview({ source, onTextSelect, sx, compactCitations = false, citationSources = [] }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const displaySource = compactCitations ? compactResearchCitations(source, citationSources) : source;
 
@@ -70,19 +71,39 @@ export function MarkdownPreview({ source, onTextSelect, className, compactCitati
   }, [onTextSelect, source]);
 
   return (
-    <div
+    <Box
       ref={ref}
-      className={cn(
-        'max-h-[400px] overflow-y-auto rounded-lg border border-border bg-card p-4 text-[13px] leading-relaxed',
-        className,
-      )}
+      sx={[
+        {
+          maxHeight: '400px',
+          overflowY: 'auto',
+          border: '1px solid var(--dr-color-outline)',
+          borderRadius: 'var(--dr-radius-small)',
+          backgroundColor: 'var(--dr-color-surface)',
+          p: 'var(--dr-space-4)',
+          fontSize: 'var(--dr-type-label)',
+          lineHeight: 'var(--dr-line-height-body)',
+        },
+        ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
+      ]}
     >
       {compactCitations && displaySource !== source ? (
-        <p role="note" className="mb-4 border-b border-border/70 pb-3 text-xs leading-5 text-muted-foreground">
+        <Box
+          component="p"
+          role="note"
+          sx={{
+            mb: 'var(--dr-space-4)',
+            borderBottom: '1px solid color-mix(in srgb, var(--dr-color-outline) 70%, transparent)',
+            pb: 'var(--dr-space-3)',
+            fontSize: 'var(--dr-type-caption)',
+            lineHeight: 'var(--dr-line-height-body)',
+            color: 'var(--dr-color-text-muted)',
+          }}
+        >
           正文引用已折叠为编号；点击编号可跳到文末参考文献，悬停或聚焦可预览来源。
-        </p>
+        </Box>
       ) : null}
       <MarkdownContent content={displaySource} compact />
-    </div>
+    </Box>
   );
 }

@@ -22,6 +22,13 @@ COPY packages/design-system packages/design-system
 
 RUN pnpm install --config.node-linker=hoisted --filter '@deep-research/web...' --filter '@deep-research/shared' \
     --frozen-lockfile
+# The hoisted linker also gives the design-system workspace package its own
+# copy of `@mui/material`. TypeScript then treats the app's copy and the theme
+# package's copy as two different modules, so the shared theme's
+# `declare module '@mui/material/Typography'` augmentation never reaches the
+# app and `next build` fails on the custom `metadata`/`listTitle` variants.
+# Dropping the duplicate makes every package resolve the one hoisted copy.
+RUN rm -rf packages/design-system/node_modules
 
 # ──────────────────────────── Stage 2: build ───────────────────────────
 FROM deps AS build

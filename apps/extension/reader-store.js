@@ -458,6 +458,30 @@ export const readerStore = {
   async saveJob(job) {
     return put('jobs', { ...job, updatedAt: new Date().toISOString() });
   },
+  /**
+   * Merge a partial update onto the stored job inside one readwrite
+   * transaction.
+   *
+   * The side panel mirrors service-worker progress by patching fields it owns
+   * (`appliedTextIds` and friends) while the worker owns `status`. Writing the
+   * whole in-memory snapshot from the panel can land after the worker's
+   * terminal write and resurrect the job as `running`, so a panel patch never
+   * replaces fields it did not explicitly set.
+   */
+  async patchJob(id, patch, fallback = null) {
+    if (!id) return null;
+    const merge = (existing) => ({ ...(existing || fallback || {}), ...patch, id, updatedAt: new Date().toISOString() });
+    try {
+      return await withStore('jobs', 'readwrite', async (objectStore) => {
+        if (!objectStore) return fallbackSet('jobs', merge(fallbackGet('jobs', id)));
+        const next = merge(await requestToPromise(objectStore.get(id)));
+        await requestToPromise(objectStore.put(next));
+        return next;
+      });
+    } catch {
+      return fallbackSet('jobs', merge(fallbackGet('jobs', id)));
+    }
+  },
   async getJob(id) {
     return get('jobs', id);
   },

@@ -68,9 +68,9 @@ const RESEARCH_TYPE_TONES: Record<string, Tone> = {
 
 /** topic tier —— 主题热度，不与 score tier 共享语义色 */
 const TOPIC_TIER_TONES: Record<string, Tone> = {
-  hot: { palette: 'danger', label: '热门' },
-  warming: { palette: 'warning', label: '升温中' },
-  emerging: { palette: 'evidence', label: '新出现' },
+  hot: { palette: 'topicHot', label: '热门' },
+  warming: { palette: 'topicWarming', label: '升温中' },
+  emerging: { palette: 'topicEmerging', label: '新出现' },
 };
 
 /** radar issues —— 雷达详情页内的事件/问题徽章 */

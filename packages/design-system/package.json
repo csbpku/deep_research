@@ -7,7 +7,6 @@
     ".": "./src/tokens.ts",
     "./tokens.json": "./src/tokens.json",
     "./tokens.css": "./generated/tokens.css",
-    "./legacy-bridge.css": "./generated/legacy-bridge.css",
     "./theme": "./src/theme.ts"
   },
   "scripts": {

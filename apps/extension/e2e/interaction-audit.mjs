@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { join } from 'node:path';
+import { tempDir, tempPath } from './temp-paths.mjs';
 
-const artifacts = await mkdtemp('/private/tmp/reader-interaction-audit-');
+const artifacts = await mkdtemp(join(tempDir(), 'reader-interaction-audit-'));
 const requests = [];
 let failTranslations = false;
 const source = 'A bounded queue protects memory and gives workers time to finish their current tasks.';
@@ -117,6 +119,10 @@ async function checkModeCardLayout(language) {
 try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const id = new URL(worker.url()).host;
+  // The injected controls follow the browser UI language, which differs
+  // between a developer's macOS session and a Linux CI runner. Pin it so
+  // the label assertions below describe one fixed product state.
+  await worker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   const article = await context.newPage(); await article.goto(`${origin}/article`);
   page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
@@ -439,9 +445,13 @@ try {
   await article.waitForFunction(() => document.querySelector('[data-deep-research-translation-for]')?.style.display !== 'none');
   await worker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'en' }));
   await paragraphControl.locator('button').filter({ hasText: 'Show paragraph source' }).waitFor();
-  const articleAccessibility = await context.newCDPSession(article);
-  const englishDock = (await articleAccessibility.send('Accessibility.getFullAXTree')).nodes;
-  assert.ok(englishDock.some(node => node.role?.value === 'button' && node.name?.value === 'Summarize article'), 'existing webpage dock switches UI language');
+  // The dock labels are translated in place, so the English label must
+  // become a visible button again. Use the computed accessibility tree
+  // instead of the raw CDP tree, which does not map shadow-DOM controls to
+  // a `button` role on every Chromium build.
+  const englishDockAction = article.getByRole('button', { name: 'Summarize article', exact: true });
+  assert.equal(await englishDockAction.count(), 1, 'existing webpage dock switches UI language');
+  assert.ok(await englishDockAction.isVisible(), 'existing webpage dock stays visible in English');
   await worker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   await paragraphControl.locator('button').filter({ hasText: '查看这一段原文' }).waitFor();
   assert.equal(await page.locator('#return-answer').count(), 0, 'source locating belongs to specific citations');
