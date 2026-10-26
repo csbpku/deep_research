@@ -61,7 +61,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
     // Ten theme/viewport combinations include full axe scans and cold dev
     // navigations on CI; this is deliberately broader than one UI interaction.
     test.setTimeout(90_000);
-    await page.route('https://example.com/research**', route => route.fulfill({
+    await page.context().route('https://example.com/research**', route => route.fulfill({
       contentType: 'text/html', body: '<main><h1>Original article fixture</h1></main>',
     }));
     const score = {
@@ -103,14 +103,22 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
 
         const sourceButton = page.getByRole('button', { name: '打开原文' });
         await sourceButton.click();
-        await expect(page).toHaveURL(/https:\/\/example\.com\/research\?/u);
-        const sourceUrl = new URL(page.url());
+        const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
+        await expect(prompt).toBeVisible();
+        await expect(prompt.locator('..')).toHaveCSS('opacity', '1');
+        expect((await new AxeBuilder({ page }).include('.MuiDialog-root').analyze()).violations).toEqual([]);
+        const sourcePromise = page.waitForEvent('popup');
+        await prompt.getByRole('link', { name: '已安装，打开原文' }).click();
+        const sourcePage = await sourcePromise;
+        await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research\?/u);
+        const sourceUrl = new URL(sourcePage.url());
         expect(sourceUrl.searchParams.get('deep-research-summary')).toBe(id);
         expect(sourceUrl.searchParams.get('deep-research-platform')).toBe(new URL(testInfo.project.use.baseURL!).origin);
-        await expect(page.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
-        expect((await new AxeBuilder({ page }).include('main').analyze()).violations).toEqual([]);
-        await page.goBack();
-        await expect(sourceButton).toBeVisible();
+        await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
+        await sourcePage.close();
+        await page.keyboard.press('Escape');
+        await expect(prompt).not.toBeVisible();
+        await expect(sourceButton).toBeFocused();
 
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         expect((await new AxeBuilder({ page }).include('#main-content').analyze()).violations).toEqual([]);
@@ -409,21 +417,63 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
     await expect(trigger).toBeFocused();
   });
 
-  test('opening the source works without installing Reader and preserves its radar identity', async ({ page }) => {
-    await page.route('https://example.com/research**', route => route.fulfill({
-      contentType: 'text/html', body: '<main><h1>Original article fixture</h1></main>',
-    }));
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/radar?date=all');
-    const title = page.getByRole('link', { name: candidate.title, exact: true });
-    await title.click();
-    const preview = page.getByRole('dialog', { name: '文章概览', exact: true });
-    const open = preview.getByRole('button', { name: '打开原文', exact: true });
-    await open.click();
-    await expect(page).toHaveURL(/https:\/\/example\.com\/research\?/u);
-    expect(new URL(page.url()).searchParams.get('deep-research-summary')).toBe(id);
-    await expect(page.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
-  });
+  for (const width of [1440, 390]) {
+    test(`source confirmation preserves the ${width}px preview and its radar identity`, async ({ page }) => {
+      await page.context().route('https://example.com/research**', route => route.fulfill({
+        contentType: 'text/html', body: '<main><h1>Original article fixture</h1></main>',
+      }));
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto('/radar?date=all');
+      const title = page.getByRole('link', { name: candidate.title, exact: true });
+      await title.click();
+      const preview = page.getByRole(width >= 1024 ? 'complementary' : 'dialog', { name: '文章概览', exact: true }).filter({ visible: true });
+      const open = preview.getByRole('button', { name: '打开原文', exact: true });
+      await open.click();
+      const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
+      await expect(prompt).toBeVisible();
+      const sourcePromise = page.waitForEvent('popup');
+      await prompt.getByRole('link', { name: '已安装，打开原文' }).click();
+      const sourcePage = await sourcePromise;
+      await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research\?/u);
+      expect(new URL(sourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
+      await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
+      await sourcePage.close();
+      await page.keyboard.press('Escape');
+      await expect(preview).toBeVisible();
+      await expect(open).toBeFocused();
+    });
+  }
+
+  for (const width of [1440, 320]) {
+    test(`${width}px: store opens separately and returning after installation opens the same article`, async ({ page }, testInfo) => {
+      const storeUrl = 'https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl';
+      await page.context().route(storeUrl, route => route.fulfill({ contentType: 'text/html', body: '<h1>Reader store fixture</h1>' }));
+      await page.context().route('https://example.com/research**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Original article fixture</h1>' }));
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/radar/${id}`);
+      const platformUrl = page.url();
+      await page.getByRole('button', { name: '打开原文', exact: true }).click();
+      const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
+      await expect(prompt).toBeVisible();
+      const storePromise = page.waitForEvent('popup');
+      await prompt.getByRole('link', { name: '未安装，前往商店' }).click();
+      const store = await storePromise;
+      await expect(store).toHaveURL(storeUrl);
+      await expect(page).toHaveURL(platformUrl);
+      await expect(prompt.getByRole('link', { name: '安装完成，打开原文' })).toBeVisible();
+      await expect(prompt.locator('..')).toHaveCSS('opacity', '1');
+      expect(await prompt.locator('[data-reader-launch-source]').count()).toBe(1);
+      expect(await prompt.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`reader-install-return-${width}.png`) });
+      await store.close();
+      const sourcePromise = page.waitForEvent('popup');
+      await prompt.getByRole('link', { name: '安装完成，打开原文' }).click();
+      const sourcePage = await sourcePromise;
+      await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
+      expect(new URL(sourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
+      await expect(page).toHaveURL(platformUrl);
+    });
+  }
 
   for (const theme of ['light', 'dark'] as const) {
     test(`${theme}: cold load, no overflow at migration breakpoints, and no axe exemptions`, async ({ page }) => {

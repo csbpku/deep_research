@@ -31,6 +31,7 @@ describe('RadarPreviewPanel', () => {
     expect(html).not.toContain('line-clamp-6');
     expect(html).toContain('为什么值得看');
     expect(html).toContain('打开原文');
+    expect(html).not.toContain('data-reader-launch-source=');
     expect(html).toContain('深入调研');
     expect(html).not.toContain('查看完整详情');
     expect(html).not.toContain('评分详情');

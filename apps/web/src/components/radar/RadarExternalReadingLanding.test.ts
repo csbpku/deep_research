@@ -52,10 +52,8 @@ describe('RadarExternalReadingLanding', () => {
     }));
 
     expect(html).toContain('安装 Reader');
-    expect(html).toContain('chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl');
-    expect(html).toContain('data-reader-launch-source=');
-    expect(html).not.toContain('先确认你已安装 Reader');
-    expect(html).toContain('deep-research-source=radar');
+    // Only the confirmation inside the dialog may be intercepted by Reader.
+    expect(html).not.toContain('data-reader-launch-source=');
     expect(html).toContain('AI 摘要');
     expect(html).toContain('同步时临时读取原文生成摘要和评分；全文不保存在本站');
     expect(html).toContain('A concise AI interpretation.');

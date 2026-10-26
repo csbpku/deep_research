@@ -113,7 +113,7 @@ Beta 白名单分发由仓库的 Deploy 工作流统一发布：CI 成功后，�
 必须同步提升 `package.json`、`manifest.json` 和 WXT manifest 的版本；扩展源码变更但未升版
 会让工作流失败。已有版本不会被覆盖，修订必须使用新版本号。
 
-用户从平台点击“打开原文”：已安装 Reader 时打开原文并唤起原生侧栏；未安装或无法唤起时直接进入 [Chrome Web Store](https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl)。旧 `/reading/install` 链接保留为商店跳转，不再展示 ZIP 下载引导。`package:beta` 和受保护的旧下载 API 仅保留为维护／兼容能力，不作为正常安装入口。
+用户从平台点击“打开原文”后，先弹窗询问是否已安装 Reader。只有确认“已安装，打开原文”的链接才由扩展接管，打开原文并唤起原生侧栏；没有兼容扩展时，该链接仍在新标签页打开原文。选择未安装会在新标签页打开 [Chrome Web Store](https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl)，本站保留弹窗及“安装完成，打开原文”入口。商店页面不能添加动态的原文返回链接，安装后需回到原标签页继续。扩展接管后若无法唤起 Reader，仍使用其既有商店兜底。旧 `/reading/install` 链接保留为商店跳转，不再展示 ZIP 下载引导。`package:beta` 和受保护的旧下载 API 仅保留为维护／兼容能力，不作为正常安装入口。
 
 WXT 会在构建时生成 Manifest V3 的 service worker、content script、side panel 和授权回调页。源码目录中的静态 Alpha 文件只作为迁移兼容层同步进构建，不应直接作为发布包加载。
 

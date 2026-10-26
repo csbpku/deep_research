@@ -22,6 +22,7 @@ import { TIER_LABELS, readingTierColor } from '@/components/domain/ScoreBar';
 import { zreadRepositoryUrl } from './radar-repository';
 import { RadarSourceChip } from './RadarSourceChip';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
+import { ReaderSourcePrompt } from './ReaderSourcePrompt';
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -42,6 +43,7 @@ export function RadarPreviewPanel({
   className?: string;
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
+  const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -134,9 +136,6 @@ export function RadarPreviewPanel({
     ? zreadRepositoryUrl(detail.url)
     : null;
   const readerUrl = externalReaderUrl(detail.url, detail.id, platformOrigin);
-  const openSource = () => {
-    window.location.assign(readerUrl);
-  };
 
   return (
     <Box ref={panelRef} component="aside" data-radar-knowledge-id={detail.id} className={className} aria-label="文章概览" sx={{
@@ -191,7 +190,7 @@ export function RadarPreviewPanel({
       <Box component="footer" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, borderTop: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0 }}>
         <RadarKnowledgeActions key={detail.id} detail={detail} />
         {sourceUrlAvailable ? (
-          <AppButton type="button" variant="contained" data-reader-launch-source={readerUrl} onClick={openSource} sx={{ flex: '1 0 auto' }}>
+          <AppButton type="button" variant="contained" onClick={() => setSourcePromptOpen(true)} sx={{ flex: '1 0 auto' }}>
             {zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}{zreadUrl ? '打开 GitHub' : '打开原文'}
           </AppButton>
         ) : null}
@@ -200,6 +199,7 @@ export function RadarPreviewPanel({
         ) : null}
         <AppButton component={Link} href={`/ai-research?seed=${encodeURIComponent(detail.id)}`} prefetch={false} variant="outlined" sx={{ flex: '1 0 auto' }}><Sparkles aria-hidden />深入调研</AppButton>
       </Box>
+      <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} />
     </Box>
   );
 }
