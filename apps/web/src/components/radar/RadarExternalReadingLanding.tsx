@@ -29,8 +29,8 @@ import {
 import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
 import { AppButton } from '@/components/material/AppButton';
 import { zreadRepositoryUrl } from './radar-repository';
-import { getReaderInstallHref } from '@/lib/reader-install';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
+import { ReaderSourcePrompt } from './ReaderSourcePrompt';
 
 export interface ExternalReadingDetail {
   id: string;
@@ -135,6 +135,7 @@ export function RadarExternalReadingLanding({
   backHref?: string;
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
+  const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
 
   useEffect(() => {
     setPlatformOrigin(window.location.origin);
@@ -155,9 +156,6 @@ export function RadarExternalReadingLanding({
   const tags = cleanRadarTags(detail.tags);
   const publishedLabel = formatRadarDetailDate(detail.publishedAt);
   const displayTitle = decodeRadarTextEntities(detail.title);
-  const openSource = () => {
-    window.location.assign(readerUrl);
-  };
 
   return (
     <Box data-radar-knowledge-id={detail.id} sx={{ display: 'flex', minHeight: 0, flex: 1, flexDirection: 'column', overflowY: 'auto', overflowWrap: 'anywhere', bgcolor: 'background.default' }}>
@@ -175,8 +173,7 @@ export function RadarExternalReadingLanding({
           {sourceUrlAvailable ? (
             <AppButton
               type="button" variant="contained"
-              data-reader-launch-source={readerUrl}
-              onClick={openSource}
+              onClick={() => setSourcePromptOpen(true)}
               startIcon={zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}
             >
               <span>{zreadUrl ? '打开 GitHub' : '打开原文'}</span>
@@ -285,12 +282,13 @@ export function RadarExternalReadingLanding({
                 在来源网站继续阅读、保存和同步；只有你明确保存时才会上传内容。
               </Typography>
             </Box>
-            <AppButton component={Link} href={getReaderInstallHref(readerUrl)} variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}>
+            <AppButton type="button" onClick={() => setSourcePromptOpen(true)} variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}>
               安装 Reader
             </AppButton>
           </Box>
         </Box>
       </Box>
+      <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} />
     </Box>
   );
 }

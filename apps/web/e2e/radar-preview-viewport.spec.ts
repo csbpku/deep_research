@@ -24,7 +24,20 @@ async function setup(page: Page) {
   await page.route(`**/api/radar/${id}?*`, route => route.fulfill({ json: candidate }));
   await page.route('**/api/knowledge/related?*', route => route.fulfill({ json: { items: [] } }));
   await page.route('**/api/ai-research/jobs?*', route => route.fulfill({ json: { items: [], total: 0 } }));
-  await page.route(`${source}**`, route => route.fulfill({ contentType: 'text/html', body: '<main><h1>Original article</h1></main>' }));
+  await page.context().route(`${source}**`, route => route.fulfill({ contentType: 'text/html', body: '<main><h1>Original article</h1></main>' }));
+}
+
+async function confirmSource(page: Page) {
+  const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
+  await expect(prompt).toBeVisible();
+  const sourcePromise = page.waitForEvent('popup');
+  await prompt.getByRole('link', { name: '已安装，打开原文' }).click();
+  const sourcePage = await sourcePromise;
+  await expect(sourcePage.getByRole('heading', { name: 'Original article' })).toBeVisible();
+  expect(new URL(sourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
+  await sourcePage.close();
+  await page.keyboard.press('Escape');
+  await expect(prompt).not.toBeVisible();
 }
 
 async function controlsFit(page: Page) {
@@ -64,8 +77,7 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
     const button = page.getByRole('button', { name: '打开原文', exact: true });
     const bounds = (await button.boundingBox())!;
     await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-    await expect(page).toHaveURL(new RegExp('^https://example\\.com/preview-scroll-fixture'));
-    await page.goBack();
+    await confirmSource(page);
     await expect(page.getByRole('button', { name: '关闭预览', exact: true })).toBeVisible();
     await expect(page.locator('.MuiDrawer-root.MuiModal-root')).toHaveCount(0);
     await page.getByRole('button', { name: '关闭预览', exact: true }).click();
@@ -127,8 +139,7 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
       const bounds = (await button.boundingBox())!;
       // A coordinate click cannot auto-scroll the document to conceal clipping.
       await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      await expect(page).toHaveURL(new RegExp(`^${source.replaceAll('.', '\\.')}\\?`));
-      await expect(page.getByRole('heading', { name: 'Original article' })).toBeVisible();
+      await confirmSource(page);
     });
   }
 
@@ -146,6 +157,6 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
     await page.screenshot({ path: testInfo.outputPath('preview-mobile.png') });
     const bounds = (await button.boundingBox())!;
     await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-    await expect(page.getByRole('heading', { name: 'Original article' })).toBeVisible();
+    await confirmSource(page);
   });
 });
