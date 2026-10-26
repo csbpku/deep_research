@@ -57,7 +57,7 @@ describe('AI research conversation flow', () => {
     },
   );
 
-  it.each(['帮我调研一下', '帮我调研一下这个', '帮我调研一下这个问题', '我想学习一下', '请研究', '这个', '？', '跳过'])(
+  it.each(['帮我调研一下', '帮我调研一下这个', '帮我调研一下这个问题', '我想学习一下', '请研究', '这个', '？', '跳过', '你好', '谢谢', '好的', '还没想好', 'hello'])(
     'still asks for an object when one is missing: %s',
     (input) => {
       expect(isResearchQuestionSpecific(input)).toBe(false);

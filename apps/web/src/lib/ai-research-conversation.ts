@@ -29,6 +29,7 @@ export function isStartResearchIntent(value: string): boolean {
 
 export function isResearchQuestionSpecific(value: string): boolean {
   if (isSkipResponse(value) || isStartResearchIntent(value)) return false;
+  if (/^(?:你好|您好|谢谢|好的|收到|明白了|随便|不知道|还没想好|ok|hello|hi)$/iu.test(compact(value, 200))) return false;
   let subject = compact(value, 200);
   // Remove request scaffolding, not product names: a named object need not
   // contain a research keyword or satisfy an arbitrary sentence length.
