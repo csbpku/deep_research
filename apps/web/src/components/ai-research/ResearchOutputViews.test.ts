@@ -62,6 +62,23 @@ describe('ResearchOutputViews', () => {
     });
   });
 
+  it('includes nested summary sections without consuming the next peer section', () => {
+    const report = [
+      '# Grok Bot', '## 决策摘要', '', '### 学习概览', '',
+      '先区分聊天助手和任务代理。', '', '### 推荐入门顺序', '',
+      '1. 从只读资料开始。', '## 关键发现', '', '不要把本节当作摘要。',
+    ].join('\n');
+    const summary = extractDecisionSummaryDetails(report);
+    expect(summary.explicit).toBe(true);
+    expect(summary.text).toContain('先区分聊天助手和任务代理。');
+    expect(summary.text).toContain('从只读资料开始。');
+    expect(summary.text).not.toContain('不要把本节当作摘要');
+    const html = renderToStaticMarkup(createElement(ResearchOutputViews, {
+      content: report, artifactType: 'markdown', presentationType: 'web',
+    }));
+    expect(html).not.toContain('报告没有明确的摘要或结论章节');
+  });
+
   it('compacts source-backed links in the default decision summary', () => {
     const href = 'https://builder.ai2sql.io/blog/duckdb-vs-sqlite-vs-postgresql';
     const html = renderToStaticMarkup(createElement(ResearchOutputViews, {
