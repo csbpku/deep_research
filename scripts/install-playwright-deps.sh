@@ -132,3 +132,18 @@ if ! "${sudo_cmd[@]}" apt-get install "${apt_options[@]}" --no-download "${packa
 fi
 
 echo "Playwright system dependencies installed."
+
+# apt leaves two entries behind that the CI cache cannot archive: the lock
+# file and the `partial` directory it downloads into. Both are owned by
+# root and are not readable by the user that runs `actions/cache`, so the
+# tar step fails with "Cannot open: Permission denied" and the archive is
+# never saved. Without this the cache misses on every run and the Ubuntu
+# mirror keeps deciding how long the E2E jobs take.
+#
+# Removing them also keeps the archive limited to the .deb files, which is
+# all the cache is for.
+"${sudo_cmd[@]}" rm -rf "${APT_ARCHIVE_DIR}/lock" "${APT_ARCHIVE_DIR}/partial"
+
+# The archive is written by apt as root. The cache step reads it as the
+# runner user, so the files have to be readable by everyone.
+"${sudo_cmd[@]}" chmod -R a+rX "$APT_ARCHIVE_DIR"

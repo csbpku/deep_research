@@ -157,3 +157,22 @@ describe('the installer prints the same packages as the package printer', () => 
     readPackages().sort(),
   );
 });
+
+describe('the archive directory is left in a state the CI cache can archive', () => {
+  // `actions/cache` packs the directory as the runner user, not as root.
+  // apt writes its lock file and its `partial` download directory as root,
+  // so the tar step failed with "Cannot open: Permission denied" and the
+  // archive was never saved: the cache missed on every run and the Ubuntu
+  // mirror kept deciding how long the E2E jobs took.
+  const source = readFileSync(installer, 'utf8');
+  assert.match(
+    source,
+    /rm -rf "\$\{APT_ARCHIVE_DIR\}\/lock" "\$\{APT_ARCHIVE_DIR\}\/partial"/,
+    'the apt lock and the partial download directory must be removed',
+  );
+  assert.match(
+    source,
+    /chmod -R a\+rX "\$APT_ARCHIVE_DIR"/,
+    'the archive must stay readable for the cache step',
+  );
+});
