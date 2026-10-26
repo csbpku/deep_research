@@ -359,7 +359,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
         : await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
           SELECT s.id FROM summaries s
           WHERE s.source = 'daily' AND s."syncRunId" IS NOT NULL
-            AND s.status IN (${Prisma.join(scoreValidationStatuses)})
+            AND s.status::text IN (${Prisma.join(scoreValidationStatuses)})
             AND s."distilledTier" IN (${Prisma.join(scoreValidationTiers)})
             AND s."distilledScore" IS NOT NULL
             ${dateFrom ? Prisma.sql`AND s."createdAt" >= ${dateFrom}` : Prisma.empty}

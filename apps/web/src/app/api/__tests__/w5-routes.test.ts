@@ -303,7 +303,7 @@ describe('GET /api/radar', () => {
       sql: string;
       values: unknown[];
     };
-    expect(scoreQuery.sql).toContain('s.status IN');
+    expect(scoreQuery.sql).toContain('s.status::text IN');
     expect(scoreQuery.sql).toContain('s."distilledTier" IN');
     expect(scoreQuery.sql).toContain('s."createdAt" >=');
     expect(scoreQuery.values).toEqual(expect.arrayContaining([
