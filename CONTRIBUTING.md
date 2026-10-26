@@ -46,6 +46,8 @@ gh pr create --base main --head codex/radar-filter-fix
 
 判定逻辑本身有测试：`node --test scripts/tests/ci-changed-paths.test.mjs`，CI 每次运行都会执行。
 
+CI 与发布脚手架的改动（`.github/workflows/**`、`.github/actions/**`、`scripts/ci-*`、`scripts/tests/ci-*`、`scripts/install-playwright-deps.sh`、`scripts/playwright-deps-packages.mjs`、`scripts/tests/playwright-deps-packages.test.mjs`）单独成一档：这类改动必须跑完整 CI 验证，但没有改动任何镜像或扩展包，所以 Deploy 会跳过镜像构建、Reader Beta 发布和 VPS 部署。镜像实际 COPY 的文件（例如 `scripts/docker-entrypoint-web.sh`、`infra/*.Dockerfile`）不在此列，改动它们仍走完整发布流程。用 `scripts/ci-changed-paths.sh --scope <base> <head>` 可以直接读出档位：`documentation`、`ci-only` 或 `deployable`。
+
 正常路径为：任务分支 → PR → CI 通过 → 获授权合并 `main` → main CI → Actions Deploy → 生产验证。推送功能分支、PR 创建、CI 通过、PR 已合并、已部署、真实用户路径通过是不同状态，应分别报告。
 
 生产检查至少确认部署镜像/marker 对应目标 SHA、Web 和 AI 服务健康、公开健康检查与内部接口隔离，以及本次改动对应的真实用户路径。部署与回滚操作见 [`infra/README.md`](./infra/README.md)。Chrome 扩展商店发布是单独流程，后端发布不代表商店版本已更新。
