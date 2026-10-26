@@ -244,6 +244,8 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousConversationIdRef = useRef<string | null>(conversationId ?? null);
+  const loadedConversationIdRef = useRef<string | null>(null);
+  const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   function resetForNewConversation() {
     setPhase('understand');
@@ -268,6 +270,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     setBrief(null);
     setActiveJobId(null);
     setError(null);
+    loadedConversationIdRef.current = null;
   }
 
   // 页面 URL 变化（例如点侧栏恢复对话）时同步当前会话。
@@ -287,7 +290,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
 
   // 恢复持久化对话：先加载消息，再回放规划状态。
   useEffect(() => {
-    if (!currentConversationId) return;
+    if (!currentConversationId || loadedConversationIdRef.current === currentConversationId) return;
     let cancelled = false;
     setHydrating(true);
     void fetch(`/api/ai-research/conversations/${encodeURIComponent(currentConversationId)}`, { cache: 'no-store' })
@@ -303,6 +306,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           content: message.content,
         }));
         setMessages(restored);
+        loadedConversationIdRef.current = conversation.id;
         const state = replayState(restored);
         setTopic(state.topic);
         setContext(state.context);
@@ -370,16 +374,23 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
 
   async function persistMessages(entries: Array<{ role: Message['role']; content: string }>) {
     if (!currentConversationId || entries.length === 0) return;
-    try {
-      const response = await fetch(`/api/ai-research/conversations/${encodeURIComponent(currentConversationId)}/messages`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: entries }),
-      });
-      if (!response.ok) throw new Error(`persist failed: ${response.status}`);
-    } catch (err) {
-      if (typeof console !== 'undefined') console.warn('[ai-research] persist messages failed', err);
-    }
+    const targetId = currentConversationId;
+    persistenceQueueRef.current = persistenceQueueRef.current.then(async () => {
+      try {
+        const response = await fetch(`/api/ai-research/conversations/${encodeURIComponent(targetId)}/messages`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ messages: entries }),
+        });
+        if (!response.ok) throw new Error(`persist failed: ${response.status}`);
+      } catch (err) {
+        if (typeof console !== 'undefined') console.warn('[ai-research] persist messages failed', err);
+        if (currentConversationIdRef.current === targetId) {
+          setError('对话保存失败，本次内容仍保留在当前页面，请暂勿刷新。');
+        }
+      }
+    });
+    await persistenceQueueRef.current;
   }
 
   async function createConversation(title: string, currentMessages: Message[]) {
@@ -395,6 +406,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       });
       if (!response.ok) throw await toApiHttpError(response, '对话创建失败');
       const conversation = await response.json() as AiResearchConversationDetail;
+      loadedConversationIdRef.current = conversation.id;
       currentConversationIdRef.current = conversation.id;
       setCurrentConversationId(conversation.id);
       setMessages(conversation.messages.map((message) => ({
@@ -428,7 +440,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     setPhase(turn.next.phase);
     const assistantMessage = pushMessage('assistant', turn.reply);
 
-    if (!currentConversationId && messages.length <= 2) {
+    if (!currentConversationId) {
       void createConversation(trimmed, [...messages, userMessage, assistantMessage]);
     } else {
       void persistMessages([
@@ -473,7 +485,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   }
 
   async function submit(extraMessages: Message[] = []) {
-    if (submitting || activeJobId) return;
+    if (submitting || activeJobId || conversationCreating || hydrating) return;
     if (topic.trim().length < 2) {
       setError('先告诉我至少 2 个字的研究主题。');
       return;
@@ -639,14 +651,14 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                   <AiResearchBrief
                     question={topic}
                     context={context}
-                    topicHint={brief?.primaryTopicId ?? topicIdQuery ?? undefined}
+                    topicHint={topicIdQuery ?? undefined}
                     startAction={(
                       <Button
                         type="button"
                         size="sm"
                         aria-label="开始调研"
                         onClick={() => void submit()}
-                        disabled={submitting || scopeIncomplete || sourceSelectionIncomplete}
+                        disabled={submitting || conversationCreating || hydrating || scopeIncomplete || sourceSelectionIncomplete}
                       >
                         {submitting ? <CircularProgress size={16} thickness={5} aria-hidden /> : <Send size={16} />}
                         {submitting ? '启动中…' : '开始研究'}
@@ -739,16 +751,16 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                     ? '补充决策背景，或回复“跳过”'
                     : '继续补充调研要求，或输入“开始调研”'}
               rows={3}
-              maxLength={2_000}
+              maxLength={20_000}
               aria-label="AI 调研对话输入"
-              disabled={submitting || hydrating || !!activeJobId}
+              disabled={submitting || conversationCreating || hydrating || !!activeJobId}
               sx={{ '& .MuiOutlinedInput-root': { minHeight: 92, bgcolor: 'transparent', boxShadow: 'none', '& fieldset': { border: 0 } }, '& textarea': { resize: 'none' } }}
             />
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, px: 1.5, pb: 1.5 }}>
               <Typography component="span" variant="metadata" color="text.secondary">
-                {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/2000`}
+                {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/20000`}
               </Typography>
-              <Button type="submit" size="sm" disabled={!input.trim() || submitting || hydrating || !!activeJobId} aria-label="发送消息（AI 调研）">
+              <Button type="submit" size="sm" disabled={!input.trim() || submitting || conversationCreating || hydrating || !!activeJobId} aria-label="发送消息（AI 调研）">
                 <Send size={14} />
                 发送
               </Button>

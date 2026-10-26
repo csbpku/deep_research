@@ -59,15 +59,17 @@ const SourceRefUuid = (literal: 'favorite' | 'research' | 'summary') => z.object
 });
 
 /** 提交 AI 调研任务（架构 §十三） */
+export const RESEARCH_INPUT_MAX_CHARS = 20_000;
+
 const AiResearchConversationMessage = z.object({
   id: z.string().max(160),
   role: z.enum(['user', 'assistant']),
-  content: z.string().max(4000),
+  content: z.string().max(32_000),
 });
 
 export const CreateAiJobInput = z.object({
-  topic: z.string().min(2).max(200),
-  context: z.string().max(2000).optional(),                    // 用户手填上下文
+  topic: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS),
+  context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   reportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).default('research_report'),
   // P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE.
   // brief  = ~500 words / 5 URLs  (default for summary_brief)
@@ -523,7 +525,8 @@ export const DEFAULT_RESEARCH_DECISION_DIMENSIONS = [
 
 export const ResearchBriefSchema = z.object({
   objective: ResearchObjectiveSchema,
-  question: z.string().min(2).max(2000),
+  question: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS),
+  context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   scope: ResearchScopeSchema,
   constraints: z.array(z.string().min(1).max(240)).max(20).default([]),
   questionsToAnswer: z.array(z.string().min(1).max(240)).max(20).default([]),
@@ -557,10 +560,10 @@ export type ResearchPlan = z.infer<typeof ResearchPlanSchema>;
 
 /** v2 入参：兼容 v1，老客户端可用旧字段。 */
 export const CreateAiJobInputV2 = z.object({
-  topic: z.string().min(2).max(200).optional(),
+  topic: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS).optional(),
   // v2 以 brief 为准，但允许保留旧 topic/context/reportType 等以便老调用不变。
   brief: ResearchBriefSchema.optional(),
-  context: z.string().max(2000).optional(),
+  context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   reportType: z.enum(['research_report', 'summary_brief', 'slides', 'web_brief']).default('research_report'),
   reportLength: z.enum(['brief', 'standard', 'deep']).default('standard'),
   sourcePolicy: z.enum(['prefer_user_sources', 'only_user_sources']).default('prefer_user_sources'),

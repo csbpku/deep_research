@@ -174,8 +174,8 @@ describe('CreateAiJobInput validation', async () => {
     expect(r.success).toBe(false);
   });
 
-  it('rejects topic > 200 chars', () => {
-    const r = CreateAiJobInput.safeParse({ topic: 'X'.repeat(201) });
+  it('rejects topic > 20000 chars', () => {
+    const r = CreateAiJobInput.safeParse({ topic: 'X'.repeat(20001) });
     expect(r.success).toBe(false);
   });
 
@@ -187,10 +187,10 @@ describe('CreateAiJobInput validation', async () => {
     expect(r.success).toBe(false);
   });
 
-  it('accepts context up to 2000 chars', () => {
+  it('accepts context up to 20000 chars', () => {
     const r = CreateAiJobInput.safeParse({
       topic: 'OK',
-      context: 'C'.repeat(2000),
+      context: 'C'.repeat(20000),
     });
     expect(r.success).toBe(true);
   });
@@ -201,10 +201,10 @@ describe('CreateAiJobInput validation', async () => {
     if (r.success) expect(r.data.reportType).toBe('slides');
   });
 
-  it('rejects context > 2000 chars', () => {
+  it('rejects context > 20000 chars explicitly', () => {
     const r = CreateAiJobInput.safeParse({
       topic: 'OK',
-      context: 'C'.repeat(2001),
+      context: 'C'.repeat(20001),
     });
     expect(r.success).toBe(false);
   });

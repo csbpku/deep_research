@@ -392,6 +392,7 @@ async def generate_text(
     request_id: str | None = None,
     budget_user_id: str | None = None,
     single_attempt: bool = False,
+    retry_attempts: int | None = None,
 ) -> TextGenerationResult:
     """Generate text with explicit retry -> fallback ordering.
 
@@ -400,10 +401,16 @@ async def generate_text(
     caller; deterministic degradation remains a business-level decision.
     Budgeted maintenance can request one provider attempt without transport
     retries or fallback, so every paid attempt is reserved by its caller.
+    A stage with its own deadline can override same-route retries while
+    preserving the configured fallback route.
     """
     primary_spec = _llm_spec(tier, llm_spec)
     fallback_spec = None if single_attempt else _fallback_spec(primary_spec)
-    retry_count = 0 if single_attempt else max(0, int(os.environ.get("LLM_RETRY_ATTEMPTS", "1")))
+    retry_count = 0 if single_attempt else max(
+        0,
+        retry_attempts if retry_attempts is not None
+        else int(os.environ.get("LLM_RETRY_ATTEMPTS", "1")),
+    )
     routes = [primary_spec]
     if fallback_spec:
         routes.append(fallback_spec)

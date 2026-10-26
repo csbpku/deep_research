@@ -16,6 +16,7 @@ import {
   streamChatEngine,
 } from '../../../../../../../lib/chat-bff';
 import { loadResearchReportForJob } from '../../../../../../../lib/research-chat-bff';
+import { appendResearchMessages } from '../../../../../../../lib/ai-research-message-store';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const FollowUpInput = z.object({
@@ -73,28 +74,18 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   }
   const followUpIntent = input.intent;
 
-  await prisma.aiResearchConversationMessage.create({
-    data: {
-      conversationId,
-      role: 'user',
-      content: input.content,
-      intent: followUpIntent,
-    },
-  });
+  await appendResearchMessages(conversationId, [{
+    role: 'user',
+    content: input.content,
+    intent: followUpIntent,
+  }]);
 
   async function persistAssistantMessage(content: string): Promise<string> {
-    const created = await prisma.aiResearchConversationMessage.create({
-      data: {
-        conversationId,
-        role: 'assistant',
-        content: content.slice(0, 100_000),
-        intent: followUpIntent,
-      },
-    });
-    await prisma.aiResearchConversation.update({
-      where: { id: conversationId },
-      data: { updatedAt: new Date() },
-    });
+    const [created] = await appendResearchMessages(conversationId, [{
+      role: 'assistant',
+      content: content.slice(0, 100_000),
+      intent: followUpIntent,
+    }]);
     return created.id;
   }
 

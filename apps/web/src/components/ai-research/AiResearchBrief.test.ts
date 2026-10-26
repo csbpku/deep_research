@@ -95,7 +95,7 @@ describe('AI research context selection', () => {
 
   it('propagates the topic hint to planning and automatic/manual context requests', () => {
     expect(buildResearchPlanInput('RAG', '  official docs  ', 'topic-id')).toEqual({
-      question: 'RAG', constraints: ['official docs'], topicHint: 'topic-id',
+      question: 'RAG', context: 'official docs', topicHint: 'topic-id',
     });
     const automatic = new URL(buildPersonalContextUrl('GraphRAG 成本', 'topic-id'), 'http://test');
     expect(automatic.searchParams.get('q')).toBe('GraphRAG 成本');
@@ -105,6 +105,14 @@ describe('AI research context selection', () => {
     const manual = new URL(buildPersonalContextUrl('GraphRAG', 'topic-id', true), 'http://test');
     expect(manual.searchParams.get('manual')).toBe('1');
     expect(manual.searchParams.get('semantic')).toBe('1');
+  });
+
+  it('does not clip questions or accumulated background during planning', () => {
+    const question = 'Grok Bot '.repeat(500);
+    const context = 'Long detailed requirements. '.repeat(300);
+    expect(buildResearchPlanInput(question, context)).toEqual({
+      question: question.trim(), context: context.trim(),
+    });
   });
 
   it('preserves explicitly selected refs through suggestion refreshes without adopting new results', () => {

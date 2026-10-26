@@ -15,6 +15,7 @@ import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
 import {
   DEFAULT_RESEARCH_DECISION_DIMENSIONS,
+  RESEARCH_INPUT_MAX_CHARS,
   ResearchScopeSchema,
   type ResearchBrief,
   type ResearchPlan,
@@ -25,7 +26,8 @@ import { recordProductEvent } from '@/lib/product-events';
 import { extractPersonalContextKeywords, findPersonalContext } from '@/lib/personal-context-relevance';
 
 const PlanInput = z.object({
-  question: z.string().min(2).max(2000),
+  question: z.string().min(2).max(RESEARCH_INPUT_MAX_CHARS),
+  context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   constraints: z.array(z.string().min(1).max(240)).max(20).optional(),
   questionsToAnswer: z.array(z.string().min(1).max(240)).max(20).optional(),
   scope: ResearchScopeSchema.optional(),
@@ -135,7 +137,8 @@ function questionToBrief(
 ): ResearchBrief {
   return {
     objective,
-    question: question.slice(0, 2000),
+    question,
+    context: partial.context,
     scope: partial.scope ?? ResearchScopeSchema.parse({}),
     constraints: partial.constraints ?? [],
     questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective),
@@ -269,6 +272,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
 
   const brief = questionToBrief(question, objective, primary, {
     constraints: body.constraints,
+    context: body.context,
     questionsToAnswer: body.questionsToAnswer,
     scope: body.scope,
     outputType: body.outputType,

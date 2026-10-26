@@ -29,7 +29,7 @@ class JobLease:
 
     The `expires_at` is computed by the store using
     `WORKER_LEASE_SECONDS`; AI research stores raise it to at least
-    `DEEP_RESEARCH_TIMEOUT_SECONDS + 120` (currently 1920s by default).
+    `DEEP_RESEARCH_TIMEOUT_SECONDS + 120` (currently 2820s by default).
     Active jobs renew it every 15s, while a restarted worker can reclaim an
     orphan after the lease expires.
     """

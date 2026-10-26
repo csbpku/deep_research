@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { AlertTriangle, Check, CheckCircle2, Clock3, ExternalLink } from 'lucide-react';
 import NextLink from 'next/link';
 
@@ -16,7 +16,7 @@ import { StatusBadge } from '@/components/domain/StatusBadge';
 import { AiResearchButton as Button } from '@/components/ai-research/AiResearchMaterial';
 import Skeleton from '@mui/material/Skeleton';
 import Typography from '@mui/material/Typography';
-import { toApiHttpError } from '@/lib/errors/api-error';
+import { ApiHttpError, toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi, friendlyMessage } from '@/lib/errors/friendly';
 import { progressPct } from '@/lib/ai-progress';
 import { researchUserStatus } from '@/lib/research-user-status';
@@ -185,7 +185,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
     );
   }
 
-  if (query.isError || !query.data) {
+  if (!query.data || (query.isError && query.error instanceof ApiHttpError && [401, 403, 404].includes(query.error.status))) {
     return (
       <Paper component="section" variant="outlined" role="alert" sx={{ p: 2, borderColor: 'error.main', bgcolor: 'var(--dr-color-danger-container)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'body2', fontWeight: 500, color: 'error.main' }}>
@@ -262,6 +262,11 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
       </Box>
 
       <Box sx={{ display: 'grid', gap: 2, p: 2 }}>
+        {query.isError ? (
+          <Typography role="status" variant="metadata" color="warning.main">
+            进度更新暂时中断，正在重试；以下保留最近一次状态。
+          </Typography>
+        ) : null}
         <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} />
 
         {reviewUnavailable ? (

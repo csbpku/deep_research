@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   conversationFindUnique: vi.fn(),
   conversationUpdate: vi.fn(),
+  conversationCreate: vi.fn(),
+  messageCreate: vi.fn(),
+  messageFindFirst: vi.fn(),
+  transaction: vi.fn(),
   jobFindUnique: vi.fn(),
 }));
 
@@ -21,10 +25,13 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 vi.mock('@/lib/db', () => ({
   prisma: {
+    $transaction: mocks.transaction,
     aiResearchConversation: {
       findUnique: mocks.conversationFindUnique,
       update: mocks.conversationUpdate,
+      create: mocks.conversationCreate,
     },
+    aiResearchConversationMessage: { create: mocks.messageCreate, findFirst: mocks.messageFindFirst },
     aiResearchJob: {
       findUnique: mocks.jobFindUnique,
     },
@@ -48,9 +55,40 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.requireUser.mockResolvedValue({ id: USER_ID, role: 'member' });
   mocks.conversationUpdate.mockResolvedValue({});
+  mocks.messageFindFirst.mockResolvedValue(null);
+  mocks.messageCreate.mockImplementation(async ({ data }) => data);
+  mocks.transaction.mockImplementation(async (run) => run({
+    aiResearchConversation: { update: mocks.conversationUpdate },
+    aiResearchConversationMessage: { create: mocks.messageCreate, findFirst: mocks.messageFindFirst },
+  }));
 });
 
 describe('POST /api/ai-research/conversations', () => {
+  it('assigns strictly increasing timestamps to the initial transcript', async () => {
+    mocks.conversationCreate.mockImplementation(async ({ data }) => ({
+      id: CONVERSATION_ID, jobId: null, title: data.title, status: 'active',
+      createdAt: new Date(), updatedAt: new Date(), _count: { messages: 3 },
+      messages: data.messages.create.map((message: object, index: number) => ({
+        id: String(3 - index), ...message,
+      })),
+    }));
+    const res = await createConversation(request('/api/ai-research/conversations', {
+      title: 'Grok Bot',
+      messages: [
+        { role: 'assistant', content: 'Welcome' },
+        { role: 'user', content: 'Grok Bot' },
+        { role: 'assistant', content: 'Ready' },
+      ],
+    }));
+    expect(res.status).toBe(201);
+    const payload = await res.json();
+    expect(payload.messages.map((message: { content: string }) => message.content))
+      .toEqual(['Welcome', 'Grok Bot', 'Ready']);
+    const inserted = mocks.conversationCreate.mock.calls[0]![0].data.messages.create;
+    expect(inserted[0].createdAt.getTime()).toBeLessThan(inserted[1].createdAt.getTime());
+    expect(inserted[1].createdAt.getTime()).toBeLessThan(inserted[2].createdAt.getTime());
+  });
+
   it('rejects an empty title', async () => {
     const res = await createConversation(request('/api/ai-research/conversations', { title: '  ' }));
     const payload = await res.json();
@@ -102,17 +140,11 @@ describe('POST /api/ai-research/conversations/[id]/messages', () => {
     expect(res.status).toBe(200);
     const payload = await res.json();
     expect(payload.messages).toHaveLength(2);
-    expect(mocks.conversationUpdate).toHaveBeenCalledWith({
-      where: { id: CONVERSATION_ID },
-      data: {
-        messages: {
-          create: [
-            { role: 'user', content: '研究 GraphRAG' },
-            { role: 'assistant', content: '请补充背景' },
-          ],
-        },
-      },
+    expect(mocks.messageCreate).toHaveBeenNthCalledWith(1, {
+      data: { conversationId: CONVERSATION_ID, role: 'user', content: '研究 GraphRAG', createdAt: expect.any(Date) },
     });
+    expect(mocks.messageCreate.mock.calls[1]![0].data.createdAt.getTime())
+      .toBeGreaterThan(mocks.messageCreate.mock.calls[0]![0].data.createdAt.getTime());
   });
 });
 

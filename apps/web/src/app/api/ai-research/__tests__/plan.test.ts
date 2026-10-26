@@ -50,6 +50,16 @@ afterEach(() => {
 });
 
 describe('POST /api/ai-research/plan', () => {
+  it('preserves the complete question and accumulated context', async () => {
+    const question = '学习 Grok Bot。' + '需要研究的细节。'.repeat(500);
+    const context = '已有背景。'.repeat(1000) + '最新补充要求';
+    const res = await planPost(buildReq({ question, context }) as never, ctx());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.brief.question).toBe(question);
+    expect(body.brief.context).toBe(context);
+  });
+
   it('认证请求', async () => {
     const unauthorized = new NextResponse(JSON.stringify({ code: 'AUTH_NOT_AUTHENTICATED' }), { status: 401 });
     mocks.requireUser.mockResolvedValueOnce(unauthorized);

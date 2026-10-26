@@ -11,6 +11,7 @@ import { prisma } from '../../../../../../lib/db';
 import { toApiErrorResponse } from '../../../../../../lib/errors';
 import { withRequestId } from '../../../../../../lib/log';
 import { publicAiResearchMessage } from '../../../../../../lib/ai-research-chat';
+import { appendResearchMessages } from '../../../../../../lib/ai-research-message-store';
 
 const IdParam = z.object({ id: z.string().uuid() });
 const AppendMessagesInput = z
@@ -57,17 +58,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
 
-  await prisma.aiResearchConversation.update({
-    where: { id: parsed.data.id },
-    data: {
-      messages: {
-        create: input.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      },
-    },
-  });
+  await appendResearchMessages(parsed.data.id, input.messages);
 
   const conversation = await prisma.aiResearchConversation.findUnique({
     where: { id: parsed.data.id },

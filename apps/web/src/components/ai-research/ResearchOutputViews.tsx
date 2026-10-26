@@ -295,12 +295,21 @@ export function extractDecisionSummary(content: string): string | null {
 
 export function extractDecisionSummaryDetails(content: string): SummaryDetails {
   const sections = extractSections(content);
-  const preferred = sections.find((section) => /摘要|执行摘要|核心判断|结论|recommendation|summary|conclusion/iu.test(section.heading));
+  const preferredIndex = sections.findIndex((section) => /摘要|执行摘要|核心判断|结论|recommendation|summary|conclusion/iu.test(section.heading));
+  const preferred = sections[preferredIndex];
   // 没有明确摘要/结论时，只展示报告的开头摘录，而不是把整篇报告
   // 塞进“一页判断”。没有证据支持时，视图不应制造一个看似完整的结论。
   const fallback = sections.find((section) => section.body.some((line) => line.trim()))?.body
     ?? content.split(/\r?\n/u);
-  const body = preferred?.body ?? fallback;
+  const body = preferred ? [...preferred.body] : fallback;
+  // The flat section ledger assigns nested text to its own heading. Include
+  // those descendants, but never consume the next peer section as a summary.
+  if (preferred) {
+    for (const section of sections.slice(preferredIndex + 1)) {
+      if (section.level <= preferred.level) break;
+      body.push('', `${'#'.repeat(section.level)} ${section.heading}`, ...section.body);
+    }
+  }
   const cleanedLines = body
     .map((line) => line.replace(/^\s*[-*+]\s+/u, '').trim())
     .filter((line) => line && !/^[-*_]{3,}$/u.test(line))

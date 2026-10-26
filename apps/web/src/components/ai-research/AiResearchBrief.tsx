@@ -449,14 +449,14 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
 
   return (
     <Paper component="div" variant="outlined" sx={{ overflow: 'hidden', borderColor: 'primary.main', fontSize: 'var(--dr-type-caption)' }}>
-      <Box component="header" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
+      <Box component="header" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box>
           <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'primary.main' }}>
             <BookOpenCheck size={14} /> 研究方案
           </Box>
           <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>确认要回答什么、参考哪些资料和需要什么产出；启动后设置会锁定。</Typography>
         </Box>
-        <Box sx={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', flexShrink: 0, alignSelf: { xs: 'flex-end', sm: 'auto' }, alignItems: 'center', gap: 1 }}>
           <Chip size="small" color="primary" variant="outlined" label={OBJECTIVE_LABELS[objective]} />
           {startAction}
         </Box>
@@ -888,8 +888,8 @@ export function buildPersonalContextUrl(query: string, topicHint?: string, manua
 
 export function buildResearchPlanInput(question: string, context: string, topicHint?: string) {
   return {
-    question: question.slice(0, 2000),
-    ...(context.trim() ? { constraints: [context.trim().slice(0, 240)] } : {}),
+    question: question.trim(),
+    ...(context.trim() ? { context: context.trim() } : {}),
     ...(topicHint ? { topicHint } : {}),
   };
 }
