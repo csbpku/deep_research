@@ -7,6 +7,24 @@ import {
 } from './ai-research-conversation';
 
 describe('AI research conversation flow', () => {
+  it('preserves long questions and new requirements past the former limits', () => {
+    const question = '学习 Grok Bot。\n' + '保留原理和实践要求。'.repeat(300);
+    const first = advanceResearchConversation({ topic: '', context: '', phase: 'understand' }, question);
+    expect(first.next.topic).toBe(question);
+    const context = '已有背景。'.repeat(500);
+    const addition = '务必保留本次新增的部署和安全要求。';
+    const next = advanceResearchConversation({ ...first.next, context }, addition);
+    expect(next.next.context).toBe(`${context}\n${addition}`);
+  });
+
+  it('explicitly rejects excess context instead of claiming it was included', () => {
+    const state = { topic: 'Grok Bot', context: 'x'.repeat(19990), phase: 'ready' as const };
+    const next = advanceResearchConversation(state, 'additional requirements');
+    expect(next.next).toBe(state);
+    expect(next.reply).toContain('尚未纳入');
+    expect(next.reply).not.toContain('已补充');
+  });
+
   it('asks a targeted follow-up when the question is ambiguous', () => {
     const turn = advanceResearchConversation(
       { topic: '', context: '', phase: 'understand' },

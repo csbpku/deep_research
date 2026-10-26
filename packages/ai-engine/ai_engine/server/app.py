@@ -1716,7 +1716,7 @@ class SubmitAiJobBody(BaseModel):
     job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     requester_id: str = Field(default="00000000-0000-0000-0000-000000000001")
     topic: str = Field(min_length=2, max_length=200)
-    context: str | None = Field(default=None, max_length=20000)
+    context: str | None = Field(default=None, max_length=128000)
     report_type: ReportType = Field(default="research_report")
     # P1.8: reportLength scales gpt-researcher's TOTAL_WORDS / MAX_URLS_TO_SCRAPE
     # (deep preset allows up to 48 captured web sources).
@@ -3354,8 +3354,8 @@ async def submit_ai_job(
     # double-charge. The check and the enqueue run as one atomic store call
     # (see JobStore.enqueue_with_quota) and exclude this job's own
     # BFF-precreated row, so the effective limit is exactly BUDGET_USER_DAILY.
-    user_limit = int(os.environ.get("BUDGET_USER_DAILY", "5"))
-    team_limit = int(os.environ.get("BUDGET_TEAM_DAILY", "20"))
+    user_limit = int(os.environ.get("BUDGET_USER_DAILY", "0"))
+    team_limit = int(os.environ.get("BUDGET_TEAM_DAILY", "0"))
 
     # 1. Persist the snapshot so subsequent GET can find it.
     snapshot = make_job_snapshot(

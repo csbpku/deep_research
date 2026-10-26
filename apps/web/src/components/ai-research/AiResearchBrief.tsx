@@ -888,8 +888,8 @@ export function buildPersonalContextUrl(query: string, topicHint?: string, manua
 
 export function buildResearchPlanInput(question: string, context: string, topicHint?: string) {
   return {
-    question: question.slice(0, 2000),
-    ...(context.trim() ? { constraints: [context.trim().slice(0, 240)] } : {}),
+    question: question.trim(),
+    ...(context.trim() ? { context: context.trim() } : {}),
     ...(topicHint ? { topicHint } : {}),
   };
 }

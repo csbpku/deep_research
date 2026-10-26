@@ -60,8 +60,8 @@ def test_clip_db_text_keeps_source_excerpt_within_schema_limit() -> None:
 
 
 def test_deep_research_gets_a_longer_budget_than_standard_runs() -> None:
-    assert _resolve_worker_timeout("standard", {}) == 300
-    assert _resolve_worker_timeout("deep", {}) == 1200
+    assert _resolve_worker_timeout("standard", {}) == 1200
+    assert _resolve_worker_timeout("deep", {}) == 2700
     assert _resolve_worker_timeout("deep", {"DEEP_RESEARCH_TIMEOUT_SECONDS": "900"}) == 900
 
 
@@ -73,7 +73,7 @@ def test_deep_timeout_has_precedence_when_both_budgets_are_configured() -> None:
             "DEEP_RESEARCH_TIMEOUT_SECONDS": "1200",
         },
     ) == 1200
-    assert _resolve_worker_timeout("deep", {"WORKER_JOB_TIMEOUT_SECONDS": "invalid"}) == 300
+    assert _resolve_worker_timeout("deep", {"WORKER_JOB_TIMEOUT_SECONDS": "invalid"}) == 1200
 
 
 def test_db_ai_lease_covers_deep_budget_with_recovery_margin(monkeypatch: pytest.MonkeyPatch) -> None:

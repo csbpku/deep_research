@@ -21,6 +21,7 @@ import type { NextRequest } from 'next/server';
 import {
   CreateAiJobInput,
   CreateAiJobInputV2,
+  ResearchBriefSchema,
   type ResearchBrief,
   type ResearchScope,
 } from '@deep-research/shared/schemas';
@@ -173,7 +174,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     v1 = parsed.data;
   }
 
-  const topic = briefFallbackTopic(v2?.brief, v1?.topic);
+  const topic = briefFallbackTopic(v2?.brief, v1?.topic ?? v2?.topic);
   const reportType = v2?.reportType ?? v1?.reportType ?? 'research_report';
   const reportLength = v2?.reportLength ?? v1?.reportLength ?? (reportType === 'summary_brief' ? 'brief' : 'deep');
   const maxUrlsToScrape = v2?.maxUrlsToScrape ?? v1?.maxUrlsToScrape ?? null;
@@ -190,8 +191,10 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
           [...v2.brief.contextRefs, ...sourceRefs].map((ref) => [`${ref.type}:${ref.value}`, ref]),
         ).values()),
       }
-    : null;
-  const context = v2?.context ?? v1?.context ?? null;
+    : ResearchBriefSchema.parse({
+        objective, question: v1?.topic ?? v2?.topic, sourcePolicy, contextRefs: sourceRefs,
+      });
+  const context = v2?.context ?? v1?.context ?? brief.context ?? null;
   const idempotencyKey = v2?.idempotencyKey ?? v1?.idempotencyKey ?? null;
   const conversationId = v2?.conversationId ?? v1?.conversationId ?? null;
   const conversation = v2?.conversation ?? v1?.conversation ?? [];
@@ -206,7 +209,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       data: {
         requesterId: u.id,
         topic,
-        context,
+        context: context?.slice(0, 2000),
         reportType,
         // Keep the persisted artifact contract aligned with the requested
         // output. The engine may finish after this BFF-created row exists;
@@ -217,7 +220,9 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
         maxUrlsToScrape,
         sourcePolicy,
         objective,
-        brief: brief ?? undefined,
+        // The legacy varchar fields remain display summaries. The JSON
+        // checkpoint carries the complete input across DB queue acquisition.
+        brief: { ...brief, context: context ?? undefined, _engineContext: engineContext },
         primaryTopicId,
         sourceRefs: sourceRefs,
         partialSources: [],

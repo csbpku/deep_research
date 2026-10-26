@@ -619,9 +619,9 @@ async def append_message(
     if body.role != AI_CHAT_ROLE["USER"]:
         raise _http_error("VALIDATION_FAILED", "只接受 user 角色消息")
 
-    user_quota = int(os.environ.get("BUDGET_USER_DAILY", "5"))
+    user_quota = int(os.environ.get("BUDGET_USER_DAILY", "0"))
     used = await _count_user_messages_today(pool, body.user_id)
-    if used >= user_quota:
+    if user_quota > 0 and used >= user_quota:
         raise _http_error(
             "AI_QUOTA_EXCEEDED",
             "个人今日 AI 追问配额已用完",
@@ -1019,9 +1019,9 @@ async def append_message_stream(
     if body.role != AI_CHAT_ROLE["USER"]:
         raise _http_error("VALIDATION_FAILED", "只接受 user 角色消息")
 
-    user_quota = int(os.environ.get("BUDGET_USER_DAILY", "5"))
+    user_quota = int(os.environ.get("BUDGET_USER_DAILY", "0"))
     used = await _count_user_messages_today(pool, body.user_id)
-    if used >= user_quota:
+    if user_quota > 0 and used >= user_quota:
         raise _http_error(
             "AI_QUOTA_EXCEEDED",
             "个人今日 AI 追问配额已用完",

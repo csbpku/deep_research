@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from dataclasses import replace
@@ -170,6 +171,63 @@ class TestDbJobStoreIntegration:
 
     All tests tagged @pytest.mark.requires_db — CI 未配 DB 时自动跳过。
     """
+
+    async def test_full_context_survives_precreated_row_and_queue_acquisition(self) -> None:
+        store = await _new_store()
+        try:
+            uid = await _prepare_user(store)
+            snapshot = replace(await _snapshot(uid), context="Full requirements " * 1000 + "FINAL REQUIREMENT")
+            await store.enqueue(replace(snapshot, context="legacy display context"))
+            async with store.pool.connection() as conn:
+                await conn.execute(
+                    'UPDATE ai_research_jobs SET brief = %s::jsonb WHERE id = %s',
+                    (json.dumps({"objective": "learn", "question": "Grok Bot"}), snapshot.job_id),
+                )
+                await conn.commit()
+            await store.enqueue(snapshot)
+            acquired = await store.acquire_next_job("context-worker")
+            assert acquired is not None
+            lease, actual = acquired
+            assert actual.context == snapshot.context
+            view = await store.get_row(snapshot.job_id)
+            assert view is not None and view.snapshot.context == snapshot.context
+            async with store.pool.connection() as conn:
+                row = await (await conn.execute(
+                    'SELECT context, brief FROM ai_research_jobs WHERE id = %s', (snapshot.job_id,),
+                )).fetchone()
+                assert row is not None and row["context"] == "legacy display context"
+                assert row["brief"]["objective"] == "learn"
+
+            snippet = "Inspectable grounded page content. " * 300
+            await store.record_progress(
+                lease, current_step="write", token_in=0, token_out=0, cost_cents=0,
+                sources=[AdapterSource(
+                    source_ref={"type": "url", "value": "https://example.com/long"},
+                    canonical_key="https://example.com/long", title="Long evidence",
+                    snippet=snippet, evidence_status="fetched", score=0.9, step_captured="search",
+                )],
+            )
+            view = await store.get_row(snapshot.job_id)
+            assert view is not None and view.last_sources[0]["snippet"] == snippet
+            async with store.pool.connection() as conn:
+                row = await (await conn.execute(
+                    'SELECT length(snippet) AS n FROM ai_research_sources WHERE "jobId" = %s',
+                    (snapshot.job_id,),
+                )).fetchone()
+                assert row is not None and row["n"] == 2000
+        finally:
+            await store.close()
+
+    async def test_zero_disables_daily_quotas_without_disabling_positive_limits(self) -> None:
+        store = await _new_store()
+        try:
+            uid = await _prepare_user(store)
+            for _ in range(6):
+                assert await store.enqueue_with_quota(await _snapshot(uid), user_limit=0, team_limit=0) is None
+            blocked = await store.enqueue_with_quota(await _snapshot(uid), user_limit=5, team_limit=20)
+            assert blocked is not None and blocked.scope == "user"
+        finally:
+            await store.close()
 
     async def test_enqueue_and_acquire(self) -> None:
         """核心验证:enqueue 写 DB,acquire 读回并更新状态。

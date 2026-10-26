@@ -542,7 +542,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     reportType: up.report_type ?? null,
     reportLength: job.reportLength ?? 'standard',
     sourcePolicy: job.sourcePolicy,
-    context: job.context,
+    context: parsedBrief.success ? parsedBrief.data.context ?? job.context : job.context,
     sourceRefs: storedSourceRefs,
     brief: parsedBrief.success ? parsedBrief.data : null,
     outputText: up.output_text ?? null,

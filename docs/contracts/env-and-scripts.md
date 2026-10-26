@@ -15,8 +15,8 @@
 | 变量 | 类型 | 说明 |
 |---|---|---|
 | `DATABASE_URL` | postgresql URL | 两服务同源；Tavily pool 由 ai-engine 独占；web 走 Prisma client |
-| `BUDGET_TEAM_DAILY` | int | 架构 §九 风险 4：团队 20 次/日；缺省 20 |
-| `BUDGET_USER_DAILY` | int | 5 次/日；缺省 5 |
+| `BUDGET_TEAM_DAILY` | int | 团队每日任务次数；缺省 `0` 表示关闭应用次数配额，正数仍启用；不改变供应商配额 |
+| `BUDGET_USER_DAILY` | int | 个人每日任务/追问次数；缺省 `0` 表示关闭应用次数配额，正数仍启用 |
 | `NODE_ENV` | enum: dev/prod/test | 仅 apps/web 用；ai-engine 不需要 |
 | `LOG_LEVEL` | enum: debug/info/warn/error | 两服务一致 |
 
@@ -84,9 +84,15 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `RENDER_REVIEW_TOKEN` | secret | render-review sidecar 的共享令牌（请求头 `x-render-review-token`）；缺失则 sidecar 拒绝启动，默认复用 `INTERNAL_SERVICE_TOKEN` | 同 `INTERNAL_SERVICE_TOKEN` |
 | `RENDER_REVIEW_ALLOWED_BASE_URLS` | list | sidecar 允许打开的 baseUrl 来源白名单 | `http://web:3000` |
 | `WORKER_MAX_RETRIES` | int | attempts 上限；有效值被 clamp 到 `0–3`（DB CHECK 约束 `attempts` ≤ 3，超过会使 reaper 的 requeue UPDATE 失败；`DbJobStore` 对超限值记 warning 并按 3 处理） | `3`（有效最大值也是 `3`） |
-| `DEEP_RESEARCH_TIMEOUT_SECONDS` | int | deep job 总预算；覆盖普通 worker 超时，需包含检索、写作和事实审核 | `1200`（代码与 compose 一致） |
+| `WORKER_JOB_TIMEOUT_SECONDS` | int | 普通研究任务总预算；允许完整写作与恢复，不提高并发 | `1200` |
+| `DEEP_RESEARCH_TIMEOUT_SECONDS` | int | deep job 总预算；覆盖普通 worker 超时，需包含检索、写作和事实审核 | `2700`（代码与 compose 一致） |
 | `DEEP_RESEARCH_COLLECTION_TIMEOUT_SECONDS` | int | deep job 检索/证据树预算；到达后使用已有证据进入写作 | `900` |
-| `DEEP_REPORT_WRITE_TIMEOUT_SECONDS` | int | deep 研究稿写作阶段独立超时 | `180` |
+| `DEEP_REPORT_WRITE_TIMEOUT_SECONDS` | int | 研究稿主写作阶段总预算（30–1200 秒）；扣除 5 秒收尾后，按不同主备模型分配单次等待时间，不再固定截断在 75 秒；同规格不自动重试 | `360` |
+| `REPORT_RECOVERY_TIMEOUT_SECONDS` | int | 已有证据恢复写稿的共享总预算（30–1200 秒），最多两次，输出截断时增加 token 预算而非强制摘要 | `420` |
+| `REPORT_WRITER_MAX_TOKENS` | int / 空 | 主稿和恢复稿的初始输出预算（1024–32768）；空值按 brief/standard/deep 分别取 4096/8192/16384；恢复重写可加倍至 32768。供应商和模型上限仍然有效 | 空 |
+| `REPORT_EVIDENCE_EXCERPT_CHARS` | int | 写稿时每来源摘录预算，范围 120–12000；同时受总预算公平分配 | `4000` |
+| `REPORT_EVIDENCE_MAX_CHARS` | int | 写稿证据包总字符预算（24000–500000），先保留全部来源引用，再分配摘录，不因顺序丢掉后部来源 | `120000` |
+| `REPORT_WRITER_REASONING_EFFORT` | `low` / `high` | MiniMax M3.1 主写稿的思考档位，与 heavy 凭据独立；不改变正文输出预算或强制压缩篇幅；研究检索/规划档位不受影响 | `low` |
 | `FACT_REVIEW_TIMEOUT_SECONDS` | int | 独立事实审核单次尝试超时，范围 30–600 秒 | `180` |
 | `URL_FETCH_MAX_BYTES` | int | 单次抓取大小上限（字节） | `2097152`（2MB） |
 | `URL_FETCH_TIMEOUT_SECONDS` | int | 单次抓取超时 | `10` |

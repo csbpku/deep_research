@@ -124,6 +124,32 @@ async def test_generate_does_not_call_provider_when_budget_is_exhausted(
         await generate_text(user_prompt="question", llm_spec="openai:test-model")
 
 
+async def test_stage_retry_override_preserves_a_distinct_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setenv("FALLBACK_LLM", "openai:backup")
+    monkeypatch.setenv("LLM_RETRY_ATTEMPTS", "3")
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_SECONDS", "0")
+
+    async def provider(**kwargs: object) -> TextGenerationResult:
+        spec = str(kwargs["llm_spec"])
+        calls.append(spec)
+        if spec == "openai:primary":
+            raise TimeoutError("primary read timeout")
+        return TextGenerationResult("complete report", 10, 20, "backup", "backup", "openai")
+
+    async def ignore_audit(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("ai_engine.llm.client._generate_text_once", provider)
+    monkeypatch.setattr("ai_engine.llm.client.record_llm_usage", ignore_audit)
+    result = await generate_text(
+        llm_spec="openai:primary", user_prompt="long report",
+        retry_attempts=0, operation="test.stage-deadline",
+    )
+    assert result.text == "complete report"
+    assert calls == ["openai:primary", "openai:backup"]
+
+
 async def test_generate_text_uses_anthropic_compatible_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

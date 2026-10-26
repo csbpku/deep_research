@@ -25,6 +25,7 @@ vi.mock('@/components/material/AppDrawer', () => ({
 import { RecentResearchArtifacts } from './RecentResearchArtifacts';
 import { AiResearchConversationSidebar } from './AiResearchConversationSidebar';
 import { AiResearchTaskHistory } from './AiResearchTaskHistory';
+import { InlineAiResearchStatus } from './InlineAiResearchStatus';
 
 interface QueryOptions {
   queryFn: () => Promise<unknown>;
@@ -164,4 +165,28 @@ it('keeps the task detail path in the login callback', () => {
   mocks.pathname = '/ai-research/job-1';
   failWith(new ApiHttpError({}, 401, 'Unauthorized'));
   expect(render(h(AiResearchTaskHistory))).toContain('callbackUrl=%2Fai-research%2Fjob-1');
+});
+
+describe('inline research progress during a background read failure', () => {
+  const data = {
+    jobId: 'job-1', topic: 'Grok Bot research', status: 'running', finalStatus: null,
+    currentStep: 'write', sourcesCount: 48, partialSourcesCount: 48, failedSourcesCount: 0,
+    draftResearchId: null, reportType: 'research_report', outputText: null,
+    errorCode: null, errorMessage: null, artifact: null, sources: [],
+  };
+
+  it('keeps the last successful snapshot visible on a transient error', () => {
+    mocks.query.mockReturnValue({ data, isLoading: false, isError: true, error: new Error('temporary read timeout') });
+    const html = render(h(InlineAiResearchStatus, { jobId: data.jobId }));
+    expect(html).toContain('Grok Bot research');
+    expect(html).toContain('最近一次状态');
+    expect(html).not.toContain('调研状态暂时不可读');
+  });
+
+  it.each([401, 403, 404])('does not retain cached content after access is denied (%s)', (status) => {
+    mocks.query.mockReturnValue({ data, isLoading: false, isError: true, error: new ApiHttpError({}, status, 'denied') });
+    const html = render(h(InlineAiResearchStatus, { jobId: data.jobId }));
+    expect(html).not.toContain('Grok Bot research');
+    expect(html).toContain('调研状态暂时不可读');
+  });
 });

@@ -1,3 +1,5 @@
+import { RESEARCH_INPUT_MAX_CHARS } from '@deep-research/shared/schemas';
+
 export type ResearchConversationPhase = 'understand' | 'refine' | 'ready';
 
 export interface ResearchConversationState {
@@ -49,9 +51,12 @@ export function advanceResearchConversation(
   state: ResearchConversationState,
   userInput: string,
 ): ResearchConversationTurn {
-  const value = compact(userInput, 2_000);
-  const currentTopic = compact(state.topic, 200);
-  const currentContext = compact(state.context, 2_000);
+  const value = userInput.trim();
+  const currentTopic = state.topic.trim();
+  const currentContext = state.context.trim();
+  if (value.length > RESEARCH_INPUT_MAX_CHARS) {
+    return { next: state, reply: '单条需求超过 20000 字，尚未纳入研究计划，请精简后重发。', canStart: currentTopic.length >= 2 };
+  }
 
   if (!currentTopic || state.phase === 'understand') {
     if (!isResearchQuestionSpecific(value)) {
@@ -63,7 +68,7 @@ export function advanceResearchConversation(
     }
 
     return {
-      next: { topic: value.slice(0, 200), context: currentContext, phase: 'ready' },
+      next: { topic: value, context: currentContext, phase: 'ready' },
       reply: /(学习|了解|入门|认识)/u.test(value)
         ? `我会围绕「${topicLabel(value)}」整理概念、主要用途、工作原理和入门路径。可以直接开始；如果这个名称对应多个项目，可补充官网或项目链接以限定范围。`
         : `研究主题已明确为「${topicLabel(value)}」。可以直接开始，也可以补充关注的问题、现有背景或约束。`,
@@ -79,10 +84,11 @@ export function advanceResearchConversation(
     };
   }
 
+  const nextContext = currentContext ? `${currentContext}\n${value}` : value;
+  if (nextContext.length > RESEARCH_INPUT_MAX_CHARS) {
+    return { next: state, reply: '累计背景超过 20000 字，本条尚未纳入研究计划。请精简补充内容；已有需求仍然保留。', canStart: true };
+  }
   if (state.phase === 'refine') {
-    const nextContext = currentContext
-      ? `${currentContext}\n${value}`.slice(0, 2_000)
-      : value;
     return {
       next: { topic: currentTopic, context: nextContext, phase: 'ready' },
       reply: '这些背景已纳入研究计划。请检查下方的研究方式、资料来源和交付形式；准备好后即可开始。',
@@ -90,9 +96,6 @@ export function advanceResearchConversation(
     };
   }
 
-  const nextContext = currentContext
-    ? `${currentContext}\n${value}`.slice(0, 2_000)
-    : value;
   return {
     next: { topic: currentTopic, context: nextContext, phase: 'ready' },
     reply: '已补充到研究计划。你可以继续补充要求，或直接开始调研。',

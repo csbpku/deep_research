@@ -103,7 +103,7 @@ def _resolve_worker_timeout(report_length: str, env: Mapping[str, str] | None = 
     A deep run has a bounded research tree plus report writing and evidence
     review. The old global five-minute budget routinely expired after the
     search tree had finished, which discarded useful work at the publication
-    boundary. Keep the normal budget unchanged, give deep runs a calibrated
+    boundary. Give writing and recovery a useful budget, with a longer deep
     default, and retain an explicit operator override for local/test runs.
     """
     values = os.environ if env is None else env
@@ -124,15 +124,15 @@ def _resolve_worker_timeout(report_length: str, env: Mapping[str, str] | None = 
         # Prefer its explicit budget, then fall back to the generic worker
         # setting for backwards-compatible deployments.
         if values.get("DEEP_RESEARCH_TIMEOUT_SECONDS") is not None:
-            deep_default = positive_int("WORKER_JOB_TIMEOUT_SECONDS", 1200)
+            deep_default = positive_int("WORKER_JOB_TIMEOUT_SECONDS", 2700)
             return positive_int("DEEP_RESEARCH_TIMEOUT_SECONDS", deep_default)
         if values.get("WORKER_JOB_TIMEOUT_SECONDS") is not None:
-            return positive_int("WORKER_JOB_TIMEOUT_SECONDS", 300)
-        return 1200
+            return positive_int("WORKER_JOB_TIMEOUT_SECONDS", 1200)
+        return 2700
     global_default = values.get("WORKER_JOB_TIMEOUT_SECONDS")
     if global_default is not None:
-        return positive_int("WORKER_JOB_TIMEOUT_SECONDS", 300)
-    return 300
+        return positive_int("WORKER_JOB_TIMEOUT_SECONDS", 1200)
+    return 1200
 
 
 async def run_once(

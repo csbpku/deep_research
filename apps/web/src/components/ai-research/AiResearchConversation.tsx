@@ -751,14 +751,14 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                     ? '补充决策背景，或回复“跳过”'
                     : '继续补充调研要求，或输入“开始调研”'}
               rows={3}
-              maxLength={2_000}
+              maxLength={20_000}
               aria-label="AI 调研对话输入"
               disabled={submitting || conversationCreating || hydrating || !!activeJobId}
               sx={{ '& .MuiOutlinedInput-root': { minHeight: 92, bgcolor: 'transparent', boxShadow: 'none', '& fieldset': { border: 0 } }, '& textarea': { resize: 'none' } }}
             />
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, px: 1.5, pb: 1.5 }}>
               <Typography component="span" variant="metadata" color="text.secondary">
-                {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/2000`}
+                {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/20000`}
               </Typography>
               <Button type="submit" size="sm" disabled={!input.trim() || submitting || conversationCreating || hydrating || !!activeJobId} aria-label="发送消息（AI 调研）">
                 <Send size={14} />

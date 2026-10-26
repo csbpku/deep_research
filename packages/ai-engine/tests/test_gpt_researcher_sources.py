@@ -230,7 +230,7 @@ def test_report_narrative_check_rejects_a_long_evidence_digest() -> None:
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [(None, 180), ("15", 30), ("900", 600), ("invalid", 180)],
+    [(None, 360), ("15", 30), ("900", 900), ("9999", 1200), ("invalid", 360)],
 )
 def test_report_writer_timeout_is_bounded(
     monkeypatch: pytest.MonkeyPatch,

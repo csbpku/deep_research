@@ -146,6 +146,9 @@ def _row_to_snapshot(row: dict[str, object]) -> JobSnapshot:
             })
     context_val = row.get("context")
     context_str: str | None = context_val if isinstance(context_val, str) else None
+    brief = row.get("brief")
+    if isinstance(brief, dict) and isinstance(brief.get("_engineContext"), str):
+        context_str = brief["_engineContext"]
     cur_step_val = row.get("currentStep")
     cur_step_str: AiJobStep | None = cast(AiJobStep, str(cur_step_val)) if isinstance(cur_step_val, str) else None
     max_urls_val = row.get("maxUrlsToScrape")
@@ -265,9 +268,9 @@ class DbJobStore(JobStore):
         # reviewing. Keep 120s for the worker to persist its terminal state.
         if table_name == AI_TABLE and not explicit_lease_seconds:
             try:
-                deep_budget = int(os.environ.get("DEEP_RESEARCH_TIMEOUT_SECONDS", "1200"))
+                deep_budget = int(os.environ.get("DEEP_RESEARCH_TIMEOUT_SECONDS", "2700"))
             except (TypeError, ValueError):
-                deep_budget = 1200
+                deep_budget = 2700
             deep_budget = max(1, deep_budget)
             self._lease_seconds = max(configured_lease_seconds, deep_budget + 120)
         else:
@@ -585,11 +588,11 @@ class DbJobStore(JobStore):
                     )
                 ).fetchone()
                 user_used = int(cast(dict[str, Any], row)["cnt"]) if row else 0
-                if user_used >= user_limit:
+                if user_limit > 0 and user_used >= user_limit:
                     return QuotaExceeded("user", user_used, user_limit)
                 row = await (await conn.execute(base, (snapshot.job_id,))).fetchone()
                 team_used = int(cast(dict[str, Any], row)["cnt"]) if row else 0
-                if team_used >= team_limit:
+                if team_limit > 0 and team_used >= team_limit:
                     return QuotaExceeded("team", team_used, team_limit)
                 await conn.execute(sql, params)
         return None
@@ -623,8 +626,8 @@ class DbJobStore(JobStore):
                 f"INSERT INTO {t} "
                 f'("id", "requesterId", "topic", "context", "reportType", "artifactType", "sourcePolicy", '
                 f'"reportLength", "maxUrlsToScrape", "status", "currentStep", "attempts", "idempotencyKey", "sourceRefs", '
-                f'"partialSources", "failedSources", "updatedAt") '
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, now()) "
+                f'"partialSources", "failedSources", "brief", "updatedAt") '
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, now()) "
                 # The Web BFF creates the row before forwarding the request.
                 # Update only the resolved refs on that conflict, in the same
                 # transaction as enqueue, so the DB worker cannot acquire the
@@ -638,13 +641,14 @@ class DbJobStore(JobStore):
                 f'"artifactType" = EXCLUDED."artifactType", '
                 f'"reportLength" = EXCLUDED."reportLength", '
                 f'"maxUrlsToScrape" = EXCLUDED."maxUrlsToScrape", '
-                f'"sourceRefs" = EXCLUDED."sourceRefs"'
+                f'"sourceRefs" = EXCLUDED."sourceRefs", '
+                f'"brief" = COALESCE({t}."brief", \'{{}}\'::jsonb) || EXCLUDED."brief"'
             )
             ai_params: tuple[object, ...] = (
                 snapshot.job_id,
                 snapshot.requester_id,
                 snapshot.topic,
-                snapshot.context,
+                _clip_db_text(snapshot.context, 2000),
                 snapshot.report_type,
                 "slides" if snapshot.report_type == "slides" else "markdown",
                 snapshot.source_policy,
@@ -657,6 +661,7 @@ class DbJobStore(JobStore):
                 json.dumps(list(snapshot.source_refs)),
                 json.dumps([]),
                 json.dumps([]),
+                json.dumps({"_engineContext": snapshot.context}),
             )
             params = ai_params
         return sql, params
@@ -700,7 +705,7 @@ class DbJobStore(JobStore):
         t = f'"{self._table_name}"'
         sql = (
             f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
-            f"j.\"reportType\", j.\"sourcePolicy\", j.\"reportLength\", j.\"maxUrlsToScrape\", "
+            f"j.\"reportType\", j.\"brief\", j.\"sourcePolicy\", j.\"reportLength\", j.\"maxUrlsToScrape\", "
             f"j.\"status\", j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", j.\"sourceRefs\" "
             f"FROM {t} j "
             f"WHERE j.\"requesterId\" = %s AND j.\"idempotencyKey\" = %s "
@@ -769,7 +774,7 @@ class DbJobStore(JobStore):
         else:
             returning_cols = (
                 'j."id", j."requesterId", j."topic", j."context", j."reportType", '
-                'j."sourcePolicy", j."reportLength", j."maxUrlsToScrape", '
+                'j."sourcePolicy", j."brief", j."reportLength", j."maxUrlsToScrape", '
                 'j."status", j."currentStep", j."attempts", '
                 'j."idempotencyKey", j."sourceRefs"'
             )
@@ -884,18 +889,23 @@ class DbJobStore(JobStore):
             source for source in sources
             if source.evidence_status == "fetched" and (source.snippet or "").strip()
         ]
-        sources_json = json.dumps(
+        source_payloads = [
+            {
+                "source_ref": s.source_ref,
+                "canonical_key": s.canonical_key[:512],
+                "title": _clip_db_text(s.title, 300),
+                "snippet": _clip_db_text(s.snippet, 12000),
+                "score": s.score,
+                "step_captured": s.step_captured,
+                "is_accessible": s.is_accessible,
+            }
+            for s in source_items
+        ]
+        sources_json = json.dumps(source_payloads, ensure_ascii=False)
+        column_sources_json = json.dumps(
             [
-                {
-                    "source_ref": s.source_ref,
-                    "canonical_key": s.canonical_key[:512],
-                    "title": _clip_db_text(s.title, 300),
-                    "snippet": _clip_db_text(s.snippet, 2000),
-                    "score": s.score,
-                    "step_captured": s.step_captured,
-                    "is_accessible": s.is_accessible,
-                }
-                for s in source_items
+                {**payload, "snippet": _clip_db_text(source.snippet, 2000)}
+                for payload, source in zip(source_payloads, source_items, strict=True)
             ],
             ensure_ascii=False,
         )
@@ -940,7 +950,7 @@ class DbJobStore(JobStore):
                         '  "snippet" = EXCLUDED."snippet", '
                         '  "score" = EXCLUDED."score", '
                         '  "stepCaptured" = EXCLUDED."stepCaptured"',
-                        (lease.job_id, sources_json),
+                        (lease.job_id, column_sources_json),
                     )
                 if prune_sources:
                     if source_items:
@@ -1571,7 +1581,7 @@ class DbJobStore(JobStore):
         else:
             sql = (
                 f'SELECT "id", "requesterId", "topic", "context", "reportType", '
-                f'       "sourcePolicy", "reportLength", "maxUrlsToScrape", "status", "currentStep", "attempts", '
+                f'       "sourcePolicy", "brief", "reportLength", "maxUrlsToScrape", "status", "currentStep", "attempts", '
                 f'       "idempotencyKey", "sourceRefs", "partialSources", "failedSources", '
                 f'       "tokenInputTotal", "tokenOutputTotal", "costCents", '
                 f'       "errorCode", "errorMessage", "errorDetails", "reviewDetails", "startedAt", "createdAt", '
@@ -1672,7 +1682,7 @@ class DbJobStore(JobStore):
             params.extend(status_filter)
         sql = (
             f"SELECT j.\"id\", j.\"requesterId\", j.\"topic\", j.\"context\", "
-            f"       j.\"reportType\", j.\"sourcePolicy\", j.\"status\", "
+            f"       j.\"reportType\", j.\"brief\", j.\"sourcePolicy\", j.\"status\", "
             f"       j.\"reportLength\", j.\"maxUrlsToScrape\", j.\"currentStep\", j.\"attempts\", j.\"idempotencyKey\", "
             f"       j.\"sourceRefs\", j.\"partialSources\", j.\"failedSources\", "
             f"       j.\"tokenInputTotal\", j.\"tokenOutputTotal\", j.\"costCents\", "

@@ -103,12 +103,12 @@ class JobStore:
         user_used = await self.count_submissions_today(
             requester_id=snapshot.requester_id, exclude_job_id=snapshot.job_id
         )
-        if user_used >= user_limit:
+        if user_limit > 0 and user_used >= user_limit:
             return QuotaExceeded("user", user_used, user_limit)
         team_used = await self.count_submissions_today(
             team_scope=True, exclude_job_id=snapshot.job_id
         )
-        if team_used >= team_limit:
+        if team_limit > 0 and team_used >= team_limit:
             return QuotaExceeded("team", team_used, team_limit)
         await self.enqueue(snapshot)
         return None

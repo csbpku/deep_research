@@ -47,6 +47,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const conversationId = randomUUID();
     const topicId = randomUUID();
     const question = '我想学习一下grok bot';
+    const background = '先解释工作原理。\n' + '需要官方原文和可运行示例。'.repeat(200) + '\n最后务必保留安全边界。';
     let planCalls = 0;
     let contextCalls = 0;
     let appendCalls = 0;
@@ -130,7 +131,8 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     expect(contextCalls).toBe(1);
     await expect(focus).toHaveValue('先讲概念，再给入门示例');
     const composer = page.getByRole('textbox', { name: 'AI 调研对话输入' });
-    await composer.fill('先解释工作原理');
+    await composer.fill(background);
+    await expect(composer).toHaveValue(background);
     await page.getByRole('button', { name: '发送消息（AI 调研）' }).click();
     await expect.poll(() => appendCalls).toBe(1);
     await composer.fill('再给使用示例');
@@ -145,11 +147,13 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     await expect.poll(() => submitted?.primaryTopicId).toBe(topicId);
     expect((submitted?.brief as { questionsToAnswer: string[] }).questionsToAnswer)
       .toEqual(['先讲概念，再给入门示例']);
+    expect(submitted?.context).toBe(`${background}\n再给使用示例`);
+    expect((submitted?.context as string).length).toBeGreaterThan(2000);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.reload();
     await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
     await assertOrder();
     const restored = await chat.innerText();
-    expect(restored.indexOf('先解释工作原理')).toBeLessThan(restored.indexOf('再给使用示例'));
+    expect(restored.indexOf('最后务必保留安全边界')).toBeLessThan(restored.indexOf('再给使用示例'));
   });
 }
