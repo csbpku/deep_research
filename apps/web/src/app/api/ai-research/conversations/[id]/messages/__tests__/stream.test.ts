@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   conversationUpdate: vi.fn(),
   streamChatEngine: vi.fn(),
   loadResearchReportForJob: vi.fn(),
+  messageFindFirst: vi.fn(),
+  transaction: vi.fn(),
 }));
 
 vi.mock('@/lib/api-handler', async (importOriginal) => ({
@@ -22,11 +24,12 @@ vi.mock('@/lib/api-handler', async (importOriginal) => ({
 vi.mock('@/lib/auth/session', () => ({ requireUser: mocks.requireUser }));
 vi.mock('@/lib/db', () => ({
   prisma: {
+    $transaction: mocks.transaction,
     aiResearchConversation: {
       findUnique: mocks.conversationFindUnique,
       update: mocks.conversationUpdate,
     },
-    aiResearchConversationMessage: { create: mocks.messageCreate },
+    aiResearchConversationMessage: { create: mocks.messageCreate, findFirst: mocks.messageFindFirst },
   },
 }));
 vi.mock('@/lib/chat-bff', async (importOriginal) => ({
@@ -82,6 +85,11 @@ beforeEach(() => {
     .mockResolvedValueOnce({ id: USER_MESSAGE_ID })
     .mockResolvedValueOnce({ id: ASSISTANT_MESSAGE_ID });
   mocks.conversationUpdate.mockResolvedValue({ id: CONVERSATION_ID });
+  mocks.messageFindFirst.mockResolvedValue(null);
+  mocks.transaction.mockImplementation(async (run) => run({
+    aiResearchConversation: { update: mocks.conversationUpdate },
+    aiResearchConversationMessage: { create: mocks.messageCreate, findFirst: mocks.messageFindFirst },
+  }));
   mocks.streamChatEngine.mockResolvedValue(sseResponse(
     'event: start\ndata: {"ok":true}\n\n'
       + 'event: delta\ndata: "补充"\n\n'
@@ -105,6 +113,7 @@ describe('POST /api/ai-research/conversations/[id]/messages/stream', () => {
         role: 'user',
         content: '请补充证据',
         intent: 'revise',
+        createdAt: expect.any(Date),
       },
     });
     expect(mocks.messageCreate).toHaveBeenNthCalledWith(2, {
@@ -113,11 +122,13 @@ describe('POST /api/ai-research/conversations/[id]/messages/stream', () => {
         role: 'assistant',
         content: '补充结论',
         intent: 'revise',
+        createdAt: expect.any(Date),
       },
     });
     expect(mocks.conversationUpdate).toHaveBeenCalledWith({
       where: { id: CONVERSATION_ID },
       data: { updatedAt: expect.any(Date) },
+      select: { id: true },
     });
     expect(mocks.streamChatEngine).toHaveBeenCalledWith(
       'http://ai-engine.test/api/ai-research/chat/follow-up',

@@ -28,11 +28,15 @@ export function isStartResearchIntent(value: string): boolean {
 }
 
 export function isResearchQuestionSpecific(value: string): boolean {
-  const topic = compact(value, 200);
-  if (topic.length < 8) return false;
-
-  return /[？?]/u.test(topic)
-    || /(研究|调研|是否|怎么|如何|为什么|能否|应不应该|该不该|对比|比较|选型|评估|方案|架构|实现|迁移|优化|风险|成本|性能|技术|系统|平台|模型|框架|数据库|协议|工具)/u.test(topic);
+  if (isSkipResponse(value) || isStartResearchIntent(value)) return false;
+  let subject = compact(value, 200);
+  // Remove request scaffolding, not product names: a named object need not
+  // contain a research keyword or satisfy an arbitrary sentence length.
+  const prefix = /^(?:请|麻烦|能不能|可以|你能|帮我|给我|我想|我要|我希望|想要|想|调研对象(?:就是|是)|研究对象(?:就是|是)|学习|了解|认识|研究|调研|一下|一些|个|关于)\s*/u;
+  while (prefix.test(subject)) subject = subject.replace(prefix, '');
+  subject = subject.replace(/[啊呀吧吗呢。！!？?\s]+$/gu, '');
+  return /[\p{L}\p{N}]{2}/u.test(subject.replace(/\s+/gu, ''))
+    && !/^(?:(?:这个|那个|这些|那些|某个)?(?:技术|系统|工具|问题|东西|内容|相关资料|资料)?|它|什么|一下|一些|帮忙|帮个忙)$/u.test(subject);
 }
 
 function topicLabel(topic: string): string {
@@ -58,21 +62,23 @@ export function advanceResearchConversation(
     }
 
     return {
-      next: { topic: value.slice(0, 200), context: currentContext, phase: 'refine' },
-      reply: `我理解你的问题是「${topicLabel(value)}」。这份调研将支持什么决策、受哪些约束影响？例如现有方案、团队规模、预算、上线时间。没有额外背景可以回复“跳过”。`,
+      next: { topic: value.slice(0, 200), context: currentContext, phase: 'ready' },
+      reply: /(学习|了解|入门|认识)/u.test(value)
+        ? `我会围绕「${topicLabel(value)}」整理概念、主要用途、工作原理和入门路径。可以直接开始；如果这个名称对应多个项目，可补充官网或项目链接以限定范围。`
+        : `研究主题已明确为「${topicLabel(value)}」。可以直接开始，也可以补充关注的问题、现有背景或约束。`,
+      canStart: true,
+    };
+  }
+
+  if (isSkipResponse(value)) {
+    return {
+      next: { topic: currentTopic, context: currentContext, phase: 'ready' },
+      reply: '好的，我会以当前问题为主线展开调研。你可以直接开始，也可以在下方确认研究方式、资料来源和交付形式。',
       canStart: true,
     };
   }
 
   if (state.phase === 'refine') {
-    if (isSkipResponse(value)) {
-      return {
-        next: { topic: currentTopic, context: currentContext, phase: 'ready' },
-        reply: '好的，我会以当前问题为主线展开调研。你可以直接开始，也可以在下方确认研究方式、资料来源和交付形式。',
-        canStart: true,
-      };
-    }
-
     const nextContext = currentContext
       ? `${currentContext}\n${value}`.slice(0, 2_000)
       : value;

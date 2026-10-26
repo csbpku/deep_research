@@ -3426,6 +3426,18 @@ async def _write_report_with_bounded_client(
             extra={"timeout_seconds": budget, "request_timeout_seconds": request_timeout},
         )
         return ""
+    except Exception as exc:
+        if not is_retryable_llm_error(exc) or _has_quota_cause(exc):
+            raise
+        # SDK timeouts are not asyncio.TimeoutError. Keep the collected
+        # evidence and reach the bounded recovery writer instead of restarting
+        # the whole research tree or replacing this error with INTERNAL.
+        logger.warning(
+            "ai-engine.research.report_writer_unavailable: %s",
+            sanitize_llm_error(exc),
+            extra={"request_id": request_id},
+        )
+        return ""
     return result.text.strip()
 
 
@@ -4511,17 +4523,18 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                                 job.research_progress = {
                                     **job.research_progress,
                                     "reportWriteFallback": {
-                                        "reason": "timeout",
+                                        "reason": "timeout_or_unavailable",
                                         "timeoutSeconds": _report_write_timeout_seconds(),
                                         "recoveredFromCapturedEvidence": True,
                                     },
                                     "state": "analyzing",
-                                    "currentFocus": "报告写作响应超时，正在根据已抓取证据重写",
+                                    "currentFocus": "报告写作暂不可用，正在根据已抓取证据重写",
                                 }
                 except Exception as exc:
                     if (
                         not used_fallback
                         and fallback_spec
+                        and fallback_spec != smart_llm
                         and is_retryable_llm_error(exc)
                     ):
                         provider, _, model = smart_llm.partition(":")
@@ -4533,7 +4546,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                                 requested_model=model or smart_llm,
                                 fallback_model=fallback_spec,
                                 status="failed",
-                                error_kind="quota",
+                                error_kind=type(exc).__name__,
                                 error_message=sanitize_llm_error(exc),
                                 latency_ms=int((time.monotonic() - started_at) * 1000),
                             )
@@ -4845,6 +4858,11 @@ class GptResearcherAdapter(ResearchEngineAdapter):
             # gpt-researcher wraps provider connection failures in a generic
             # RuntimeError. Keep the terminal state retryable and explain the
             # action to the user; never surface a misleading INTERNAL error.
+            logger.warning(
+                "ai-engine.research.failed: %s",
+                sanitize_llm_error(exc),
+                extra={"request_id": job.request.request_id},
+            )
             if isinstance(exc, TokenBudgetUnavailable):
                 await self._mark_failed(
                     job,

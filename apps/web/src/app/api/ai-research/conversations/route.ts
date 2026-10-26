@@ -13,6 +13,7 @@ import { prisma } from '../../../../lib/db';
 import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import { publicAiResearchMessage } from '../../../../lib/ai-research-chat';
+import { orderedResearchMessages } from '../../../../lib/ai-research-message-store';
 
 const CreateConversationInput = z.object({
   title: z.string().trim().min(1, '标题不能为空').max(200, '标题最多 200 字'),
@@ -82,10 +83,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
       title: input.title,
       messages: input.messages?.length
         ? {
-            create: input.messages.map((message) => ({
-              role: message.role,
-              content: message.content,
-            })),
+            create: orderedResearchMessages(input.messages),
           }
         : undefined,
     },

@@ -1,7 +1,7 @@
 'use client';
 
 import { AlertTriangle, Radar } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 import type { DeepResearchProgress } from '@/lib/ai-progress';
 import Box from '@mui/material/Box';
@@ -403,8 +403,10 @@ export function DeepResearchProgressCard({
         <Typography component="p" variant="metadata" sx={{ mt: 1, lineHeight: 1.6, color: 'warning.main' }}>
           {reportWriteFallback.reason === 'timeout'
             ? `主报告写作超过 ${reportWriteFallback.timeoutSeconds ?? 180} 秒，`
-            : '主报告写作未返回有效正文，'}
-          已根据本轮实际抓取的证据重写；若仍缺少结论，会明确标记为需要确认。
+            : reportWriteFallback.reason === 'timeout_or_unavailable'
+              ? '主报告写作超时或暂不可用，'
+              : '主报告写作未返回有效正文，'}
+          已尝试根据本轮实际抓取的证据重写；是否生成研究正文，以最终结果为准。
         </Typography>
       ) : null}
       {retrievalDegraded ? (
