@@ -257,6 +257,23 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     { createdAt: 'desc' },
   ];
 
+  // The score-validity query only needs to inspect rows that can survive the
+  // list's top-level status, quality, and date filters. In particular, the
+  // default Radar view is limited to recent deep-read entries; scanning every
+  // historical summary for each request needlessly revalidates rows that
+  // cannot appear on the requested page.
+  const scoreValidationTiers = qualityValues.includes('all')
+    ? ['collection', 'deep_read', 'skim']
+    : [...new Set(qualityValues.flatMap((value) => {
+      if (value === 'valuable' || value === 'collection' || value === 'deep_read') {
+        return ['collection', 'deep_read'];
+      }
+      return value === 'skim' ? ['skim'] : [];
+    }))];
+  const scoreValidationStatuses = status
+    ? [status]
+    : [SUMMARY_STATUS.CANDIDATE, SUMMARY_STATUS.PUBLISHED];
+
   const read = (db: Pick<Prisma.TransactionClient, 'summary'>, scopedWhere: Prisma.SummaryWhereInput) => Promise.all([
     db.summary.findMany({
       where: scopedWhere,
@@ -337,13 +354,17 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   // share a snapshot so concurrent sync cannot make the filters disagree.
   const [rawItems, totalResult] = u?.role !== 'admin' || !status
     ? await prisma.$transaction(async (tx) => {
-      const invalid = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-        SELECT s.id FROM summaries s
-        WHERE s.source = 'daily' AND s."syncRunId" IS NOT NULL
-          AND s."distilledTier" IN ('collection', 'deep_read', 'skim')
-          AND s."distilledScore" IS NOT NULL
-          AND NOT (${Prisma.raw(RADAR_PUBLIC_SCORE_SQL)})
-      `);
+      const invalid = scoreValidationTiers.length === 0
+        ? []
+        : await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+          SELECT s.id FROM summaries s
+          WHERE s.source = 'daily' AND s."syncRunId" IS NOT NULL
+            AND s.status::text IN (${Prisma.join(scoreValidationStatuses)})
+            AND s."distilledTier" IN (${Prisma.join(scoreValidationTiers)})
+            AND s."distilledScore" IS NOT NULL
+            ${dateFrom ? Prisma.sql`AND s."createdAt" >= ${dateFrom}` : Prisma.empty}
+            AND NOT (${Prisma.raw(RADAR_PUBLIC_SCORE_SQL)})
+        `);
       return read(tx, invalid.length
         ? { AND: [where, { NOT: { id: { in: invalid.map(row => row.id) } } }] }
         : where);

@@ -292,6 +292,39 @@ describe('GET /api/radar', () => {
     expect(mocks.summaryFindMany.mock.calls[0][0]).toMatchObject({ skip: 20, take: 20 });
   });
 
+  it('scopes score validation to the requested status, quality, and date range', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+    const dateFrom = '2026-10-19T00:00:00.000Z';
+
+    await radarList(new Request(`http://localhost/api/radar?dateFrom=${dateFrom}&quality=deep_read`) as never);
+
+    const scoreQuery = mocks.summaryQueryRaw.mock.calls[0][0] as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(scoreQuery.sql).toContain('s.status::text IN');
+    expect(scoreQuery.sql).toContain('s."distilledTier" IN');
+    expect(scoreQuery.sql).toContain('s."createdAt" >=');
+    expect(scoreQuery.values).toEqual(expect.arrayContaining([
+      'candidate',
+      'published',
+      'collection',
+      'deep_read',
+      new Date(dateFrom),
+    ]));
+  });
+
+  it('skips score validation when the selected quality cannot contain public scored rows', async () => {
+    mocks.summaryFindMany.mockResolvedValue([]);
+    mocks.summaryCount.mockResolvedValue(0);
+
+    const response = await radarList(new Request('http://localhost/api/radar?quality=pending') as never);
+
+    expect(response.status).toBe(200);
+    expect(mocks.summaryQueryRaw).not.toHaveBeenCalled();
+  });
+
   it('keeps invalid scores available in the explicit Admin governance queue', async () => {
     mocks.getCurrentUser.mockResolvedValueOnce(ADMIN);
     mocks.summaryFindMany.mockResolvedValue([]);
