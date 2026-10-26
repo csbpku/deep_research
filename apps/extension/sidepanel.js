@@ -154,8 +154,11 @@ async function refreshComposerModels() {
     const models = await discoverModels(connection, { signal: controller.signal });
     if (controller.signal.aborted || !sameModelConnection(connection, provider) || readingMode !== 'local') return;
     composerModelCache = { connection, models, fetchedAt: Date.now() };
+    // The menu can be filtered while the list is loading, so the status has
+    // to reflect the current search term. Writing the generic hint here
+    // overwrote the "no matching model" state that the filter had already
+    // rendered, and the E2E audit caught the race.
     renderComposerModelOptions();
-    $('composer-model-status').textContent = t("切换用于下一次提问；当前回答继续使用原模型。");
   } catch (error) {
     if (controller.signal.aborted) return;
     $('composer-model-status').textContent = t("{0}。可继续使用当前模型，或打开连接设置。", error.message || '模型列表暂不可用');
@@ -179,7 +182,7 @@ function toggleComposerModelMenu() {
   show($('composer-model-menu'), true); $('composer-model').setAttribute('aria-expanded', 'true');
   $('composer-model-search').focus();
   if (!sameModelConnection(composerModelCache?.connection, provider) || Date.now() - composerModelCache.fetchedAt > 60_000) void refreshComposerModels();
-  else $('composer-model-status').textContent = t("切换用于下一次提问；当前回答继续使用原模型。");
+  else renderComposerModelOptions();
 }
 function switchQuestionDraft(url = '') {
   if (url === draftPageUrl) return;

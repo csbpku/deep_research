@@ -675,3 +675,39 @@ test('platform translation keeps at most six requests in flight', async () => {
 
   assert.equal(peak, 6, 'platform translation saturates the engine semaphore without exceeding it');
 });
+
+test('a model list that resolves after the search filter keeps the filtered status', async () => {
+  const elements = {
+    'composer-model-search': { value: 'no-matching-model' },
+    'composer-model-status': { textContent: '' },
+    'composer-model-options': { innerHTML: '' },
+  };
+  let releaseModels;
+  const modelsPending = new Promise(resolve => { releaseModels = resolve; });
+  const rendered = [];
+  const sandbox = {
+    AbortController,
+    readingMode: 'local',
+    provider: { baseUrl: 'http://localhost:11434', model: 'local-test-chat', apiKey: '', providerKind: 'openai' },
+    composerModelCache: null,
+    composerModelController: null,
+    $: id => elements[id] || null,
+    show: () => {},
+    t,
+    providerReady: () => true,
+    sameModelConnection: (a, b) => Boolean(a && b && a.baseUrl === b.baseUrl && a.apiKey === b.apiKey && a.providerKind === b.providerKind),
+    discoverModels: () => modelsPending,
+    renderMaterialOptions: (host, options, selected) => { rendered.push({ options: options.map(item => item.id), selected }); },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'function closeComposerModelMenu(', 'async function chooseComposerModel('), sandbox);
+
+  const pending = vm.runInContext("refreshComposerModels()", sandbox);
+  assert.equal(elements['composer-model-status'].textContent, '正在读取模型列表…');
+  releaseModels([{ id: 'local-test-chat-alt', label: 'local-test-chat-alt' }]);
+  await pending;
+
+  assert.equal(rendered.length, 1, 'the resolved model list is rendered once');
+  assert.equal(rendered[0].options.length, 0, 'the current search term still filters every option out');
+  assert.equal(elements['composer-model-status'].textContent, '没有匹配的模型。', 'the filtered status survives the model list refresh');
+});
