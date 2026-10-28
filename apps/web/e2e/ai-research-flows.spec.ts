@@ -53,6 +53,7 @@ test.describe('AI Research detail (UI polish)', () => {
 
 test.describe('AI Research parent (UI polish)', () => {
   test('starting a research stays in the conversation workspace', async ({ page }) => {
+    await loginWithCredentials(page.context().request, { email: 'member@e2e.local', role: 'member' });
     await page.route('**/api/ai-research', (route) => {
       if (route.request().method() === 'POST') {
         return route.fulfill({
@@ -78,6 +79,9 @@ test.describe('AI Research parent (UI polish)', () => {
           failedSourcesCount: 0,
           draftResearchId: null,
           reportType: 'research_report',
+          reportLength: 'deep',
+          sourcePolicy: 'prefer_user_sources',
+          sourceRefs: [],
           outputText: null,
           errorCode: null,
           errorMessage: null,
@@ -92,7 +96,7 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     await page.getByRole('button', { name: '开始调研' }).click();
-    await expect(page).toHaveURL(/\/ai-research$/);
+    await expect(page).toHaveURL(/\/ai-research\?conversation=[0-9a-f-]+$/);
     await expect(page.getByRole('region', { name: '本次研究收据' })).toContainText('本次研究已提交');
   });
 
@@ -172,7 +176,7 @@ test.describe('AI Research parent (UI polish)', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test('form error alert has retry button', async ({ page }) => {
+  test('uncertain submission requires checking history before retry', async ({ page }) => {
     // 拦截 POST 返回 500
     await page.route('**/api/ai-research', (route) => {
       if (route.request().method() === 'POST') {
@@ -191,10 +195,13 @@ test.describe('AI Research parent (UI polish)', () => {
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
     await page.getByRole('button', { name: '开始调研' }).click();
-    // 错误 alert 应有「重试」按钮
-    const alert = page.getByRole('alert').filter({ hasText: /请求失败|提交失败|AI 调研服务/ }).first();
+    const alert = page.getByRole('region', { name: 'AI 调研对话' }).getByRole('alert');
     await expect(alert).toBeVisible();
-    await expect(alert.getByRole('button', { name: '重试' })).toBeVisible();
+    await expect(alert.getByRole('link', { name: /先查看任务历史/ })).toBeVisible();
+    const start = page.getByRole('button', { name: '开始调研', exact: true });
+    await expect(start).toBeDisabled();
+    await alert.getByRole('button', { name: '已核对历史，允许重新提交' }).click();
+    await expect(start).toBeEnabled();
   });
 
   test('conversation confirms source policy and output type', async ({ page }) => {
@@ -205,8 +212,12 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
-    await expect(page.getByRole('button', { name: /研究稿.*完整调研、引用和可编辑草稿/u })).toBeVisible();
-    await expect(page.getByRole('button', { name: /网页搜索 \+ 已选资料/u })).toBeVisible();
+    const output = page.getByRole('radiogroup', { name: '交付什么' });
+    await expect(output.getByRole('radio', { name: /研究稿.*完整论证与引用/u })).toBeChecked();
+    const sources = page.getByRole('radiogroup', { name: '参考什么' });
+    await expect(sources.getByRole('radio', { name: /网页搜索 \+ 已选资料/u })).toBeChecked();
+    await sources.getByRole('radio', { name: /仅使用已选资料/u }).check();
+    await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('仅使用已选资料');
   });
 
   test('research artifact card defaults to markdown research draft', async ({ page }) => {
@@ -216,7 +227,9 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.getByRole('button', { name: '发送消息' }).click();
     await input.fill('无');
     await page.getByRole('button', { name: '发送消息' }).click();
-    await expect(page.getByText('完整调研、引用和可编辑草稿')).toBeVisible();
+    const output = page.getByRole('radiogroup', { name: '交付什么' });
+    await expect(output.getByRole('radio', { name: /研究稿.*完整论证与引用/u })).toBeChecked();
+    await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('本次将生成 研究稿');
   });
 
   test('slides artifact is rendered once as a bounded outline', async ({ page }) => {
@@ -275,7 +288,10 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.goto(`/ai-research/${jobId}`);
     await expect(page.getByText('Slides 提纲已生成，可继续编辑或追问。')).toBeVisible();
     await expect(page.getByLabel('Slides 提纲预览')).toHaveCount(1);
-    await expect(page.getByText('3 页', { exact: true })).toBeVisible();
+    await expect(page.getByText('1 / 3 页', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '跳到第 3 页' }).click();
+    await expect(page.getByText('3 / 3 页', { exact: true })).toBeVisible();
+    await expect(page.getByRole('group', { name: '演示第 3 页：行动' })).toBeVisible();
     await expect(page.getByRole('link', { name: '编辑 Slides 提纲' })).toBeVisible();
   });
 
@@ -727,13 +743,14 @@ test.describe('AI Research parent (UI polish)', () => {
     }));
     await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
     await page.goto(`/ai-research/${jobId}`);
-    await expect(page.getByRole('heading', { name: '快速判断已生成，但未找到资料' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '仅模型摘录' })).toBeVisible();
+    await expect(page.getByText('本轮仅模型摘录，不做完整检索或逐条核验；未保存可核对资料，不能作为已验证的研究结论。')).toBeVisible();
     await expect(page.getByText('无证据', { exact: true })).toBeVisible();
-    await expect(page.getByText('仅模型摘录', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status')).toContainText('无证据 · 仅模型摘录');
     // 研究步骤默认收在“查看研究详情”里；先展开再断言摘要步骤。
     await page.getByText('查看研究详情', { exact: true }).click();
     await expect(page.getByText('生成摘要', { exact: true })).toBeVisible();
-    await expect(page.getByText('本轮未保存可核对资料')).toBeVisible();
+    await expect(page.getByRole('region', { name: '快速判断结果' })).toContainText('仅模型摘录 · 未保存可核对资料');
     await expect(page.getByText('100%', { exact: true })).toHaveCount(0);
   });
 });
