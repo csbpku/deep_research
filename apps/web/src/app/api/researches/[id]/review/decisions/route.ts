@@ -56,6 +56,7 @@ const researchSelect = {
   sourceAiJob: {
     select: {
       id: true,
+      partialSources: true,
       brief: true,
       sourcePolicy: true,
       aiResearchSources: {
@@ -259,6 +260,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         sourceAiJob: {
           select: {
             id: true,
+            partialSources: true,
             brief: true,
             sourcePolicy: true,
             aiResearchSources: {
@@ -374,7 +376,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       // actionable while no worker can pick it up.
       const queuedAt = new Date();
       const queuedId = randomUUID();
-      const sourceSnapshotHash = hashCanonicalSourceSnapshot(freshResearch.researchSources);
+      const sourceSnapshotHash = hashCanonicalSourceSnapshot(freshResearch.researchSources, freshResearch.sourceAiJob?.partialSources);
       const queuedDetails = {
         phase: 'queued',
         sourceSnapshotFormat: 'canonical-v1',

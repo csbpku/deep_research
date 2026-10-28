@@ -113,14 +113,7 @@ def _snapshot_digest(sources: Iterable[AdapterSource]) -> str:
     ).hexdigest()
 
 
-def _validated_review_sources(
-    short_snapshot: object, long_snapshot: object, snapshot_hash: object,
-) -> tuple[AdapterSource, ...] | None:
-    """Match the exact current short or mixed evidence set against the run."""
-    short = _review_sources(short_snapshot)
-    long = _review_sources(long_snapshot)
-    if not isinstance(snapshot_hash, str):
-        return None
+def _mixed_review_sources(short: tuple[AdapterSource, ...], long: tuple[AdapterSource, ...]) -> list[AdapterSource]:
     by_key: dict[str, AdapterSource] = {}
     duplicate_keys: set[str] = set()
     for source in long:
@@ -138,6 +131,18 @@ def _validated_review_sources(
             combined.append(saved)
         else:
             combined.append(preview)
+    return combined
+
+
+def _validated_review_sources(
+    short_snapshot: object, long_snapshot: object, snapshot_hash: object,
+) -> tuple[AdapterSource, ...] | None:
+    """Match the exact current short or mixed evidence set against the run."""
+    short = _review_sources(short_snapshot)
+    long = _review_sources(long_snapshot)
+    if not isinstance(snapshot_hash, str):
+        return None
+    combined = _mixed_review_sources(short, long)
     if _snapshot_digest(combined) == snapshot_hash:
         return tuple(combined)
     if _snapshot_digest(short) == snapshot_hash:

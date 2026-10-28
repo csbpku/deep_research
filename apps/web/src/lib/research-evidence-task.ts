@@ -28,8 +28,8 @@ export type ResearchEvidenceTaskView = {
   completedAt: string | null;
 };
 
-export function hashResearchSourceSnapshot(sources: SourceSnapshotRow[]): string {
-  return hashCanonicalSourceSnapshot(sources);
+export function hashResearchSourceSnapshot(sources: SourceSnapshotRow[], partial?: unknown): string {
+  return hashCanonicalSourceSnapshot(sources, partial);
 }
 
 function asTaskView(task: {
@@ -106,7 +106,7 @@ export async function reconcileResearchEvidenceTask(
           risks: true,
           tags: true,
           status: true,
-          sourceAiJob: { select: { id: true } },
+          sourceAiJob: { select: { id: true, partialSources: true } },
           reviewRuns: {
             where: { executionStatus: 'completed' },
             orderBy: { createdAt: 'desc' },
@@ -236,7 +236,7 @@ export async function reconcileResearchEvidenceTask(
             risks: true,
             tags: true,
             status: true,
-            sourceAiJob: { select: { id: true } },
+            sourceAiJob: { select: { id: true, partialSources: true } },
             reviewRuns: {
               where: { executionStatus: 'completed' },
               orderBy: { createdAt: 'desc' },
@@ -309,7 +309,7 @@ export async function reconcileResearchEvidenceTask(
       orderBy: { createdAt: 'asc' },
       select: { sourceRef: true, canonicalKey: true, title: true, description: true },
     });
-    const sourceSnapshotHash = hashResearchSourceSnapshot(sourceLedger);
+    const sourceSnapshotHash = hashResearchSourceSnapshot(sourceLedger, fresh.research.sourceAiJob?.partialSources);
     const activeRun = await tx.researchReviewRun.findFirst({
       where: { researchId: fresh.researchId, executionStatus: { in: ['queued', 'reviewing'] } },
       select: { id: true },
