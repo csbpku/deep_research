@@ -144,3 +144,25 @@ it('honors a requested five-page outline and preserves all sections', () => {
   expect(deck.match(/^## Slide \d+:/gm)).toHaveLength(5);
   for (let i = 1; i <= 7; i++) expect(deck).toContain(`Evidence ${i}.`);
 });
+
+
+it('keeps numbered slide boundaries and places references outside the deck', () => {
+  const pages = ['封面', 'gather', 'TaskGroup', '边界', '结论'].map((label, index) => `## Slide ${index + 1}: ${label}\n\n正文${index + 1}`).join('\n\n');
+  const report = `# 文稿标题\n\n开场背景\n\n${pages}\n\n## 参考文献\n\n- [来源](https://example.test/doc)`;
+  const deck = renderSlidesArtifactContent(report, '用5页说明');
+  expect(deck.match(/^## Slide /gmu)).toHaveLength(5);
+  expect(deck.startsWith('## Slide 1: 封面')).toBe(true);
+  expect(deck.split('## Slide 2:')[0]).toContain('# 文稿标题');
+  expect(deck.split('## Slide 2:')[1].split('## Slide 3:')[0]).toContain('正文2');
+  expect(deck.split('## Slide 3:')[1].split('## Slide 4:')[0]).toContain('正文3');
+  expect(deck.endsWith('## 参考文献\n\n- [来源](https://example.test/doc)')).toBe(true);
+  expect(renderSlidesArtifactContent(deck, '用5页说明')).toBe(deck);
+});
+
+it('keeps overflowing numbered page content and moves reference slides to an appendix', () => {
+  const pages = Array.from({ length: 7 }, (_, index) => `## Slide ${index + 1}: 标题${index + 1}\n\n正文${index + 1}`).join('\n\n');
+  const deck = renderSlidesArtifactContent(`# 文稿标题\n\n${pages}\n\n## Slide 8: 参考文献\n\n- 来源A`, '用5页说明');
+  expect(deck.match(/^## Slide /gmu)).toHaveLength(5);
+  for (let i = 1; i <= 7; i += 1) { expect(deck).toContain(`标题${i}`); expect(deck).toContain(`正文${i}`); }
+  expect(deck.endsWith('## 参考文献\n\n- 来源A')).toBe(true);
+});
