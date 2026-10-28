@@ -112,6 +112,10 @@ async function layoutReport(page, name) {
 try {
   const serviceWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(serviceWorker.url()).host;
+  // This test drives a regular extension tab as its panel. Keep Chrome from
+  // opening a second native reader that also consumes the dock action.
+  // Native panel opening is covered by ui-regressions.test.mjs.
+  await serviceWorker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
   // The injected controls follow the browser UI language, which differs
   // between a developer's macOS session and a Linux CI runner. Pin it so
   // the label assertions below describe one fixed product state.
@@ -186,6 +190,24 @@ try {
   if (!summaryGuidance.includes('全文总结尚未开始') || !summaryGuidance.includes('模型服务')) {
     throw new Error(`dock summary click did not explain local model setup: ${summaryGuidance}`);
   }
+  // A newly opened native panel and ordinary article updates both re-report
+  // context. That refresh must retain the reason settings were opened.
+  await panel.evaluate(() => {
+    window.contextRefreshed = new Promise(resolve => {
+      const listener = message => {
+        if (message.type !== 'deep-research:page-context') return;
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve();
+      };
+      chrome.runtime.onMessage.addListener(listener);
+    });
+  });
+  await serviceWorker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  });
+  await panel.evaluate(() => window.contextRefreshed);
+  await panel.waitForFunction(() => document.querySelector('#mode-guidance')?.textContent?.includes('全文总结尚未开始'));
   await panel.locator('#close-settings').click();
   const localAvailability = await panel.locator('#ai-availability-banner').innerText();
   if (!localAvailability.includes('独立模式尚未配置模型') || await panel.locator('#ai-availability-action').innerText() !== '配置模型') {

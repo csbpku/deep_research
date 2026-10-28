@@ -15,6 +15,28 @@ const panel = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const content = readFileSync(new URL('./content.js', import.meta.url), 'utf8');
 function extract(source, start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 
+test('page status refresh retains action-specific model setup guidance until configured', () => {
+  const nodes = {};
+  const sandbox = {
+    $: id => nodes[id] ||= { classList: { remove() {}, add() {}, toggle() {} }, setAttribute() {} },
+    readingMode: 'local', platformConnected: false, lastSavedInsight: null, insightSyncFailed: false,
+    contextUrl: () => '', provider: {}, providerReady: () => sandbox.ready,
+    textModelReady: () => sandbox.ready, ready: false,
+    show() {}, setStatus() {}, updateAiAvailabilityBanner() {},
+    showSettings() { sandbox.updateReadingModeUi(); },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, "let modelSetupAction = '';", 'async function setReadingMode(')
+    + extract(panel, 'function showModelSetupGuidance(', 'function showReading('), sandbox);
+  vm.runInContext("showModelSetupGuidance('全文总结')", sandbox);
+  assert.match(nodes['mode-guidance'].textContent, /全文总结尚未开始/);
+  vm.runInContext('updateReadingModeUi()', sandbox);
+  assert.match(nodes['mode-guidance'].textContent, /全文总结尚未开始/);
+  sandbox.ready = true;
+  vm.runInContext('updateReadingModeUi()', sandbox);
+  assert.equal(vm.runInContext('modelSetupAction', sandbox), '');
+});
+
 test('selection explain waits for panel initialization and runs exactly once', () => {
   const calls = [];
   const removed = [];

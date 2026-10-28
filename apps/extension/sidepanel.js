@@ -547,7 +547,9 @@ function updateAiAvailabilityBanner() {
   action.textContent = platform ? t("连接平台") : t("配置模型");
 }
 
+let modelSetupAction = '';
 function updateReadingModeUi() {
+  if (textModelReady()) modelSetupAction = '';
   const platform = readingMode === 'platform';
   $('mode-local')?.setAttribute('aria-pressed', String(!platform));
   $('mode-platform')?.setAttribute('aria-pressed', String(platform));
@@ -581,7 +583,9 @@ function updateReadingModeUi() {
   const guidance = $('mode-guidance');
   if (guidance) {
     guidance.classList.remove('is-warning', 'is-connected');
-    if (platform && platformConnected) {
+    if (modelSetupAction) {
+      renderModelSetupGuidance(modelSetupAction);
+    } else if (platform && platformConnected) {
       guidance.textContent = t("平台模式已连接。问答、总结、全文翻译和图片文字翻译使用调研平台 AI Engine；图片仅在你发起图示问答或翻译时由浏览器读取并上传字节，不会让服务器抓取图片地址。");
       guidance.classList.add('is-connected');
       show(guidance, true);
@@ -603,6 +607,7 @@ function updateReadingModeUi() {
 }
 
 async function setReadingMode(mode) {
+  modelSetupAction = '';
   readingMode = mode === 'platform' ? 'platform' : 'local';
   await syncSearchPermissions();
   updateReadingModeUi();
@@ -3221,7 +3226,11 @@ function showSettings() {
 }
 
 function showModelSetupGuidance(action) {
+  modelSetupAction = action;
   showSettings();
+}
+
+function renderModelSetupGuidance(action) {
   const guidance = $('mode-guidance');
   if (!guidance) return;
   const nextStep = readingMode === 'platform'
@@ -3235,6 +3244,7 @@ function showModelSetupGuidance(action) {
 }
 
 function showReading() {
+  modelSetupAction = '';
   closeProviderPicker();
   clearTimeout(modelDiscoveryTimer);
   modelDiscoveryController?.abort();
