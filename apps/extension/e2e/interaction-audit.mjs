@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { chromium, expect } from '../../web/node_modules/@playwright/test/index.mjs';
 import { join } from 'node:path';
 import { tempDir, tempPath } from './temp-paths.mjs';
 
 const artifacts = await mkdtemp(join(tempDir(), 'reader-interaction-audit-'));
 const requests = [];
 let failTranslations = false;
+let translationGate = null;
+let releaseTranslationResponses = () => {};
+function holdTranslationResponses() {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  translationGate = gate;
+  releaseTranslationResponses = () => { if (translationGate === gate) translationGate = null; release(); };
+  return releaseTranslationResponses;
+}
+const translationRequestCount = () => requests.filter(request => /翻译编辑|技术文档翻译器|图片翻译器/u.test(String(request.messages?.[0]?.content))).length;
 const source = 'A bounded queue protects memory and gives workers time to finish their current tasks.';
 const server = createServer(async (req, res) => {
   res.setHeader('access-control-allow-origin', '*');
@@ -23,6 +33,8 @@ const server = createServer(async (req, res) => {
   const input = JSON.parse(raw || '{}'); requests.push(input);
   const system = String(input.messages?.[0]?.content || '');
   const user = String(input.messages?.at(-1)?.content || '');
+  if (translationGate && /翻译编辑|技术文档翻译器|图片翻译器/u.test(system)) await translationGate;
+  if (res.destroyed) return;
   if (failTranslations && system.includes('翻译编辑')) { res.writeHead(400); res.end('{"error":{"message":"audit translation failure"}}'); return; }
   let text = JSON.stringify({ answer: '## Queue safety\n\nA bounded **queue** limits pending work.\n\n- Memory stays bounded.\n- Workers continue.', evidence: [{ quote: source, claim: 'Bounded memory' }], background: '', inference: '', limitations: [] });
   if (system.includes('视觉能力检查器')) text = 'READER_VISION_CHECK';
@@ -63,6 +75,17 @@ const context = await chromium.launchPersistentContext(`${artifacts}/profile`, {
 const checks = [];
 const errors = [];
 let page;
+async function clearTranslationCache() {
+  await page.locator('#settings-button').click();
+  await page.locator('#clear-cache').click();
+  await page.waitForFunction(async () => {
+    const db = await new Promise(resolve => { const request = indexedDB.open('deep-research-reader'); request.onsuccess = () => resolve(request.result); });
+    try {
+      return await new Promise(resolve => { const request = db.transaction('cache').objectStore('cache').count(); request.onsuccess = () => resolve(request.result === 0); });
+    } finally { db.close(); }
+  });
+  await page.locator('#close-settings').click();
+}
 async function checkMaterialSurface(surface) {
   const report = await page.evaluate(() => {
     const visible = element => { const s = getComputedStyle(element); const r = element.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
@@ -448,13 +471,14 @@ try {
 
   await page.locator('#close-settings').click();
   await page.locator('#scope-page').click();
-  const translationsBeforePause = requests.filter(r => String(r.messages?.[0]?.content).includes('翻译编辑')).length;
+  const translationsBeforePause = translationRequestCount();
+  const releasePausedTranslation = holdTranslationResponses();
   await menuAction('#chat-translate');
-  for (let i = 0; i < 60 && requests.filter(r => String(r.messages?.[0]?.content).includes('翻译编辑')).length === translationsBeforePause; i++) await new Promise(resolve => setTimeout(resolve, 50));
-  assert.ok(requests.filter(r => String(r.messages?.[0]?.content).includes('翻译编辑')).length > translationsBeforePause, '暂停测试必须等待本次全文翻译请求开始');
+  await expect.poll(translationRequestCount, { timeout: 10_000 }).toBeGreaterThan(translationsBeforePause);
   await page.locator('#pause-translation').waitFor();
   await page.locator('#pause-translation').click();
   await page.locator('#notice').filter({ hasText: '已暂停' }).waitFor();
+  releasePausedTranslation();
   await page.waitForTimeout(400);
   assert.equal(await page.locator('#pause-translation').isVisible(), true, '暂停完成后继续按钮应持续可见');
   await page.locator('#pause-translation').click();
@@ -535,10 +559,14 @@ try {
   await page.locator('#translation-summary').waitFor({ state: 'hidden' });
   checks.push('翻译暂停、继续和恢复原文，任务控制随状态显示与收起');
 
-  await page.locator('#settings-button').click(); await page.locator('#clear-cache').click(); await page.locator('#close-settings').click();
+  await clearTranslationCache();
+  const translationsBeforeCancel = translationRequestCount();
+  const releaseCancelledTranslation = holdTranslationResponses();
   await menuAction('#chat-translate');
+  await expect.poll(translationRequestCount, { timeout: 10_000 }).toBeGreaterThan(translationsBeforeCancel);
   await page.locator('#cancel-translation').click();
   await page.locator('#notice').filter({ hasText: '已取消' }).waitFor();
+  releaseCancelledTranslation();
   await page.locator('#cancel-translation').waitFor({ state: 'hidden' });
   await page.locator('#pause-translation').waitFor({ state: 'hidden' });
   // Cancellation retains completed translations. A finished-content card
@@ -549,15 +577,7 @@ try {
   // Failure recovery must make a fresh provider request, rather than reuse
   // the completed content/cache that cancellation intentionally preserved.
   if (await page.locator('#restore-page').isVisible()) await menuAction('#restore-page');
-  await page.locator('#settings-button').click();
-  await page.locator('#clear-cache').click();
-  await page.waitForFunction(async () => {
-    const db = await new Promise(resolve => { const request = indexedDB.open('deep-research-reader'); request.onsuccess = () => resolve(request.result); });
-    try {
-      return await new Promise(resolve => { const request = db.transaction('cache').objectStore('cache').count(); request.onsuccess = () => resolve(request.result === 0); });
-    } finally { db.close(); }
-  });
-  await page.locator('#close-settings').click();
+  await clearTranslationCache();
   failTranslations = true;
   await menuAction('#chat-translate');
   await page.locator('#translation-summary[data-state="error"]').waitFor();
@@ -744,4 +764,4 @@ try {
 } catch (error) {
   if (page) await page.screenshot({ path: `${artifacts}/failure.png` }).catch(() => {});
   console.error(JSON.stringify({ artifacts, checks, errors })); throw error;
-} finally { await context.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+} finally { releaseTranslationResponses(); await context.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
