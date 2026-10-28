@@ -148,6 +148,7 @@
   let toolbarHost = null;
   let readerDockHost = null;
   let readerStatusHost = null;
+  let readerStatusRevision = 0;
   const annotationHighlights = new Map();
   let refreshTimer = 0;
   let viewportTimer = 0;
@@ -983,18 +984,37 @@
         <button type="button" data-action="open" data-tooltip="打开聊天" aria-label="打开聊天" title="打开 Deep Research Reader 聊天侧栏"><span class="glyph">R</span></button>
       </div>`);
     shadow.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
+      if (button.dataset.action === 'open') { openChatPanel(); return; }
       if (button.dataset.action === 'summary') setReaderStatus(t("正在读取正文并生成全文总结…"), 'loading');
       if (button.dataset.action === 'translate') setReaderStatus(t("正在读取正文，准备全文翻译…"), 'loading');
-      if (button.dataset.action === 'open') setReaderStatus(t("正在打开聊天侧栏…"), 'loading');
       chrome.runtime.sendMessage({
-        type: button.dataset.action === 'open' ? 'deep-research:open-panel' : 'deep-research:page-action',
-        ...(button.dataset.action === 'open' ? {} : { action: button.dataset.action }),
+        type: 'deep-research:page-action', action: button.dataset.action,
       }).catch(() => {});
     }));
     document.documentElement.appendChild(readerDockHost);
   }
 
+  function openChatPanel() {
+    const revision = setReaderStatus(t("正在打开聊天侧栏…"), 'loading');
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      // Opening can finish after another click starts translation or chat.
+      // Only replace the feedback belonging to this particular open request.
+      if (readerStatusRevision !== revision) return;
+      setReaderStatus(result?.ok ? t("聊天侧栏已打开")
+        : t("未能打开聊天侧栏，请点击浏览器工具栏的 Reader 图标重试。"), result?.ok ? 'ready' : 'error');
+    };
+    const timer = window.setTimeout(() => finish({ ok: false }), 5000);
+    try {
+      chrome.runtime.sendMessage({ type: 'deep-research:open-panel' }).then(finish).catch(() => finish({ ok: false }));
+    } catch { finish({ ok: false }); }
+  }
+
   function setReaderStatus(label, tone = 'loading', detail = '') {
+    const revision = ++readerStatusRevision;
     if (!readerStatusHost?.isConnected) {
       readerStatusHost = document.createElement('div');
       readerStatusHost.dataset.deepResearchStatus = 'true';
@@ -1018,7 +1038,7 @@
       document.documentElement.appendChild(readerStatusHost);
     }
     const status = readerStatusHost.__statusElement;
-    if (!status) return;
+    if (!status) return revision;
     status.classList.remove('ready', 'error');
     if (tone === 'ready' || tone === 'error') status.classList.add(tone);
     status.querySelector('.label').textContent = label;
@@ -1028,6 +1048,7 @@
     if (tone !== 'loading') {
       readerStatusHost.__hideTimer = window.setTimeout(() => status.classList.remove('visible'), 2600);
     }
+    return revision;
   }
 
   function send(payload) {

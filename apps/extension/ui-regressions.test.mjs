@@ -116,6 +116,67 @@ test('selection actions open the native side panel without awaiting its promise'
   assert.equal(opened, 1);
 });
 
+test('dock open feedback finishes on success, failure or timeout without replacing newer progress', async () => {
+  for (const outcome of ['success', 'failure', 'reject', 'throw', 'timeout', 'newer-task']) {
+    const statuses = [];
+    const timers = new Map();
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    const sandbox = {
+      readerStatusRevision: 0,
+      setReaderStatus(label, tone) { statuses.push({ label, tone }); return ++sandbox.readerStatusRevision; },
+      window: { setTimeout(callback, delay) { timers.set(delay, callback); return delay; }, clearTimeout(id) { timers.delete(id); } },
+      chrome: { runtime: { sendMessage() {
+        if (outcome === 'throw') throw new Error('extension unavailable');
+        if (outcome === 'reject') return Promise.reject(new Error('worker unavailable'));
+        return pending;
+      } } },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(content, '  function openChatPanel(', '  function setReaderStatus('), sandbox);
+    vm.runInContext('openChatPanel()', sandbox);
+    assert.equal(statuses[0].tone, 'loading');
+    if (outcome === 'timeout') timers.get(5000)();
+    if (outcome === 'newer-task') sandbox.setReaderStatus('Translation in progress', 'loading');
+    resolve({ ok: outcome === 'success' || outcome === 'newer-task' });
+    await new Promise(done => setImmediate(done));
+    assert.equal(timers.size, 0);
+    assert.equal(statuses.length, 2);
+    if (outcome === 'newer-task') assert.equal(statuses.at(-1).label, 'Translation in progress');
+    else assert.equal(statuses.at(-1).tone, outcome === 'success' ? 'ready' : 'error');
+  }
+});
+
+test('open-panel replies reflect Chrome completion and bound pending promises', async () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const handler = extract(background, "  if (message?.type === 'deep-research:open-panel')", "  if (message?.type === 'deep-research:activate-current-page')");
+  for (const outcome of ['success', 'reject', 'throw', 'timeout']) {
+    const replies = [];
+    const timers = new Map();
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    const sandbox = {
+      message: { type: 'deep-research:open-panel' }, sender: { tab: { id: 12, windowId: 7 } },
+      sendResponse: result => replies.push(result), activateTabForReading() {},
+      setTimeout(callback, delay) { timers.set(delay, callback); return delay; }, clearTimeout(id) { timers.delete(id); },
+      chrome: { sidePanel: { open({ windowId }) {
+        assert.equal(windowId, 7);
+        if (outcome === 'throw') throw new Error('gesture expired');
+        if (outcome === 'reject') return Promise.reject(new Error('gesture expired'));
+        return pending;
+      } } },
+    };
+    vm.createContext(sandbox);
+    assert.equal(vm.runInContext(`(function () { ${handler} })()`, sandbox), true);
+    if (outcome === 'timeout') timers.get(4000)();
+    resolve();
+    await new Promise(done => setImmediate(done));
+    assert.equal(timers.size, 0);
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].ok, outcome === 'success');
+  }
+});
+
 test('platform output-limit failures retain their cause and either request-id spelling', () => {
   const source = readFileSync(new URL('./platform-answer.js', import.meta.url), 'utf8');
   const sandbox = {};

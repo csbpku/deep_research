@@ -147,6 +147,22 @@ try {
     dockActions.push({ label, role: 'button', visible: true });
   }
 
+  // Keep the native opener stubbed, but click the real page dock and let the
+  // service worker/content-script response channel handle every outcome.
+  for (const outcome of ['success', 'reject', 'timeout']) {
+    await serviceWorker.evaluate(mode => {
+      chrome.sidePanel.open = mode === 'success' ? async () => {}
+        : mode === 'reject' ? async () => { throw new Error('fixture panel rejection'); }
+          : () => new Promise(() => {});
+    }, outcome);
+    await article.getByRole('button', { name: '打开聊天', exact: true }).click();
+    const status = article.locator('[data-deep-research-status] .status');
+    await status.locator('.label').filter({ hasText: outcome === 'success' ? '聊天侧栏已打开' : '未能打开聊天侧栏' }).waitFor({ timeout: 7000 });
+    await status.evaluate(node => { if (!node.classList.contains('visible')) throw new Error('open-panel feedback was not shown'); });
+    await article.waitForFunction(() => !document.querySelector('[data-deep-research-status]')?.shadowRoot?.querySelector('.status')?.classList.contains('visible'), null, { timeout: 5000 });
+  }
+  await serviceWorker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
+
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
   await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true', null, { timeout: 10_000 });

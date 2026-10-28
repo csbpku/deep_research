@@ -1,4 +1,6 @@
 {
+  "聊天侧栏已打开": "Chat sidebar opened",
+  "未能打开聊天侧栏，请点击浏览器工具栏的 Reader 图标重试。": "Could not open the chat sidebar. Click the Reader icon in the browser toolbar to retry.",
   "清除模型选择": "Clear model selection",
   "展开模型列表": "Open model list",
   "收起模型列表": "Close model list",
