@@ -240,6 +240,15 @@ function mountBrief(initialProps: BriefProps) {
   flush();
   return {
     flush,
+    clickButton(label: string) {
+      function find(node: ReactNode): (() => void) | undefined {
+        if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
+        if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return;
+        if (node.props.children === label && node.props.onClick) return node.props.onClick;
+        return find(node.props.children);
+      }
+      const click = find(output); if (!click) throw new Error(`Button ${label} not found`); click(); flush();
+    },
     update(next: Partial<BriefProps>) { props = { ...props, ...next }; flush(); },
     suggestions() {
       const found = findSuggestions(output);
@@ -302,6 +311,18 @@ describe('AI research brief client request races', () => {
     private: true, confirmedKnowledge: true,
     sourceRefs: [{ type: 'research' as const, value: 'confirmed-1', required: false }],
   };
+
+  it('drops hidden comparison requirements when changing from comparison to learning', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) {
+      const plan = planResponse('GraphRAG retrieval costs');
+      respond(request, request.url.endsWith('/plan') ? { ...plan, brief: { ...plan.brief, objective: 'decide', comparisonOptions: ['A', 'B'], decisionDimensions: ['成本'] } } : { items: [] });
+    }
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.clickButton('系统学习');
+    expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ objective: 'learn', comparisonOptions: [], decisionDimensions: [] });
+  });
 
   it('debounces both endpoints and propagates the latest topicHint even when only the hint changes', async () => {
     const { brief, requests } = setup();
