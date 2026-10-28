@@ -70,7 +70,7 @@ interface PlanResponse {
 }
 
 interface PersonalContextItem {
-  kind: 'research' | 'knowledge' | 'issue' | 'bookmark';
+  kind: 'research' | 'knowledge' | 'issue' | 'bookmark' | 'legacy';
   id: string;
   title: string;
   snippet: string;
@@ -99,6 +99,9 @@ export interface BriefValue {
   objective: Objective;
   primaryTopicId?: string;
   suggestedContextIds: string[];
+  selectedContextItems?: PersonalContextItem[];
+  legacyContextSelection?: { ids: string[]; refs: ContextSourceRef[] } | null;
+  contextSelectionIncomplete?: boolean;
   assistantMessage: string;
   scopeValid?: boolean;
   decisionNeedsConfirmation?: boolean;
@@ -130,8 +133,15 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
   const [state, setState] = useState<FetchState>({ status: 'idle' });
-  const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>(initialBrief?.suggestedContextIds ?? []);
-  const [selectedContextItems, setSelectedContextItems] = useState<PersonalContextItem[]>([]);
+  const initialIds = initialBrief?.suggestedContextIds ?? [];
+  const initialLegacy = initialBrief?.legacyContextSelection ?? (!initialBrief?.selectedContextItems && initialIds.length
+    ? { ids: initialIds, refs: initialBrief?.brief?.contextRefs ?? [] } : null);
+  const restoredItems = initialBrief?.selectedContextItems ?? initialIds.map((id) => ({
+    kind: 'legacy' as const, id, title: `旧草稿已选资料 (${id})`, snippet: '旧草稿未保存资料名称；保留原有引用。', sourceRefs: [],
+  }));
+  const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>(initialIds);
+  const [selectedContextItems, setSelectedContextItems] = useState<PersonalContextItem[]>(restoredItems);
+  const legacySelectionRef = useRef(initialLegacy);
   const [focusText, setFocusText] = useState(initialBrief?.brief?.questionsToAnswer.join('\n') ?? '');
   const [comparisonText, setComparisonText] = useState(initialBrief?.brief?.comparisonOptions.join('\n') ?? '');
   const [objective, setObjective] = useState<Objective>(initialBrief?.objective ?? 'investigate');
@@ -143,7 +153,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
   const [contextSearchItems, setContextSearchItems] = useState<PersonalContextItem[]>([]);
   const [contextSearchLoading, setContextSearchLoading] = useState(false);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
-  const selectionRef = useRef<PersonalContextItem[]>([]);
+  const selectionRef = useRef<PersonalContextItem[]>(restoredItems);
   const editedBriefRef = useRef<BriefValue | null>(initialBrief ?? null);
   const focusTouchedRef = useRef(!!initialBrief?.brief?.questionsToAnswer.length);
   const decisionDimensionsRef = useRef<string[]>(initialBrief?.objective === 'decide' ? initialBrief.brief?.decisionDimensions ?? [] : []);
@@ -251,6 +261,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
           objective: data.brief.objective,
           primaryTopicId: data.brief.primaryTopicId ?? topicHint,
           suggestedContextIds: selectedIds,
+          selectedContextItems: selected,
           assistantMessage: data.assistantMessage,
           scopeValid: true,
           brief: {
@@ -357,16 +368,24 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     nextRetrievalNotes?: string;
     selectedIds?: string[];
   } = {}) {
+    const legacy = legacySelectionRef.current;
+    const legacyRemaining = legacy?.ids.filter((id) => selectedIds.includes(id)) ?? [];
+    const legacyIncomplete = !!legacy && legacyRemaining.length > 0 && legacyRemaining.length !== legacy.ids.length;
+    const retainedLegacy = legacyRemaining.length ? legacy : null;
+    const selected = selectionRef.current.filter((item) => selectedIds.includes(item.id));
+    const selectedRefs = idsToContextRefs(selectedIds, [], selected);
+    const combinedRefs = Array.from(new Map([...(retainedLegacy?.refs ?? []), ...selectedRefs].map((ref) => [`${ref.type}:${ref.value}`, ref])).values()).slice(0, 10);
     if (!plan) {
       const next: BriefValue = {
         objective, primaryTopicId: topicHint, suggestedContextIds: selectedIds,
+        selectedContextItems: selected, legacyContextSelection: retainedLegacy, contextSelectionIncomplete: legacyIncomplete,
         assistantMessage: '', scopeValid: true,
         brief: {
           objective, primaryTopicId: topicHint, question: trimmed,
           constraints: context.trim() ? [context.trim()] : [], questionsToAnswer: [],
           comparisonOptions: [], decisionDimensions: [], successCriteria: [],
           sourcePolicy: 'prefer_user_sources', outputType: 'markdown', scope: emptyScope(),
-          contextRefs: idsToContextRefs(selectedIds, editedBriefRef.current?.brief?.contextRefs ?? [], availableContext),
+          contextRefs: combinedRefs,
         },
       };
       editedBriefRef.current = next;
@@ -394,6 +413,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       objective: nextObjective,
       primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
       suggestedContextIds: ids,
+      selectedContextItems: selected, legacyContextSelection: retainedLegacy, contextSelectionIncomplete: legacyIncomplete,
       assistantMessage: plan!.assistantMessage,
       scopeValid: validScope,
       decisionNeedsConfirmation: nextObjective === 'decide' && (comparisonOptions.length < 2 || decisionDimensions.length === 0),
@@ -420,7 +440,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
         },
         primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
         outputType: plan!.brief.outputType ?? 'markdown',
-        contextRefs: idsToContextRefs(ids, editedBriefRef.current?.brief?.contextRefs ?? plan!.brief.contextRefs ?? [], availableContext),
+        contextRefs: combinedRefs,
       },
     };
     editedBriefRef.current = next;
@@ -449,6 +469,9 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       }
     }
     const next = Array.from(set);
+    if (legacySelectionRef.current && !legacySelectionRef.current.ids.some((legacyId) => set.has(legacyId))) {
+      legacySelectionRef.current = null;
+    }
     setSelectedContextItems(selectionRef.current);
     setAcceptedContextIds(next);
     publishPlan({ selectedIds: next });
@@ -601,6 +624,12 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
               <Button type="button" size="small" aria-label={`取消选择：${item.title}`} onClick={() => toggleContext(item.id)} sx={{ flexShrink: 0 }}>移除</Button>
             </Box>
           ))}
+        </Box>
+      ) : null}
+      {legacySelectionRef.current && acceptedContextIds.some((id) => legacySelectionRef.current?.ids.includes(id)) &&
+       legacySelectionRef.current.ids.some((id) => !acceptedContextIds.includes(id)) ? (
+        <Box role="alert" sx={{ typography: 'metadata', color: 'warning.main', mt: 1 }}>
+          旧草稿没有保存资料与来源的对应关系。请取消其余旧资料，再重新选择需要的资料。
         </Box>
       ) : null}
       <Box component="details" sx={{ borderTop: 1, borderColor: 'divider' }}>
@@ -848,7 +877,8 @@ function splitPlanItems(value: string, includeComma = false): string[] {
   return value.split(separator).map((item) => item.trim()).filter(Boolean).slice(0, 20);
 }
 
-function contextKindLabel(kind: 'research' | 'knowledge' | 'issue' | 'bookmark'): string {
+function contextKindLabel(kind: 'research' | 'knowledge' | 'issue' | 'bookmark' | 'legacy'): string {
+  if (kind === 'legacy') return '旧草稿资料';
   if (kind === 'research') return '历史研究';
   if (kind === 'knowledge') return '知识库';
   if (kind === 'bookmark') return '收藏';

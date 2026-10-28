@@ -53,6 +53,30 @@ function isDraft(value: unknown): value is ResearchDraft {
   if (!v.brief || typeof v.brief !== 'object' || Array.isArray(v.brief)) return false;
   const b = v.brief as Record<string, unknown>;
   const detail = b.brief as Record<string, unknown> | undefined;
+  const validRefs = (value: unknown): boolean => Array.isArray(value) && value.length <= 10 && value.every((ref: unknown) => {
+    if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return false;
+    const item = ref as Record<string, unknown>;
+    return ['url', 'favorite', 'research', 'summary'].includes(String(item.type)) &&
+      typeof item.value === 'string' && item.value.length <= 2048 && typeof item.required === 'boolean';
+  });
+  if (b.selectedContextItems !== undefined && (!Array.isArray(b.selectedContextItems) || b.selectedContextItems.length > 10 ||
+    !b.selectedContextItems.every((entry: unknown) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+      const item = entry as Record<string, unknown>;
+      return ['research', 'knowledge', 'issue', 'bookmark', 'legacy'].includes(String(item.kind)) &&
+        typeof item.id === 'string' && item.id.length <= 200 && typeof item.title === 'string' && item.title.length <= 2000 &&
+        typeof item.snippet === 'string' && item.snippet.length <= 5000 &&
+        (item.sourceRefs === undefined || validRefs(item.sourceRefs)) &&
+        ['private', 'semanticMatch', 'confirmedKnowledge', 'isExcerpt', 'topicMatch'].every((key) => item[key] === undefined || typeof item[key] === 'boolean') &&
+        (item.status === undefined || typeof item.status === 'string') &&
+        (item.updatedAt === undefined || item.updatedAt === null || typeof item.updatedAt === 'string');
+    }))) return false;
+  if (b.legacyContextSelection !== undefined && b.legacyContextSelection !== null) {
+    if (typeof b.legacyContextSelection !== 'object' || Array.isArray(b.legacyContextSelection)) return false;
+    const legacy = b.legacyContextSelection as Record<string, unknown>;
+    if (!Array.isArray(legacy.ids) || legacy.ids.length > 10 || !legacy.ids.every((id) => typeof id === 'string') || !validRefs(legacy.refs)) return false;
+  }
+  if (b.contextSelectionIncomplete !== undefined && typeof b.contextSelectionIncomplete !== 'boolean') return false;
   return ResearchBriefSchema.safeParse(detail).success && detail?.objective === b.objective &&
     ['explore', 'learn', 'investigate', 'decide'].includes(String(b.objective)) &&
     typeof b.assistantMessage === 'string' && Array.isArray(b.suggestedContextIds) &&

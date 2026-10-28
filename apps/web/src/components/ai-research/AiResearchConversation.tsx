@@ -567,6 +567,11 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       setError('先告诉我至少 2 个字的研究主题。');
       return;
     }
+    if (brief?.contextSelectionIncomplete) {
+      setErrorKind('validation');
+      setError('旧草稿的部分资料无法确认对应来源，请取消其余旧资料后重新选择。');
+      return;
+    }
     const effectiveSourceRefs = mergeSourceRefs(sourceRefs, brief?.brief?.contextRefs ?? [], sourcePolicy);
     if (sourcePolicy === 'only_user_sources' && effectiveSourceRefs.length === 0) {
       setErrorKind('validation');
@@ -761,7 +766,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                         size="sm"
                         aria-label="开始调研"
                         onClick={() => void submit()}
-                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete}
+                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete || brief?.contextSelectionIncomplete}
                       >
                         {submitting ? <CircularProgress size={16} thickness={5} aria-hidden /> : <Send size={16} />}
                         {submitting ? '启动中…' : '开始研究'}

@@ -331,7 +331,7 @@ describe('AI research brief client request races', () => {
       { kind: 'issue' as const, id: 'issue-id', title: '专题', snippet: '', sourceRefs: [{ type: 'summary' as const, value: 'summary-id', required: false }] },
       { kind: 'bookmark' as const, id: 'bookmark-id', title: '收藏', snippet: '', sourceRefs: [{ type: 'research' as const, value: 'research-id', required: false }] },
     ];
-    const refs = selected.flatMap((item) => item.sourceRefs);
+    const refs = [...selected[0]!.sourceRefs, ...selected[1]!.sourceRefs];
     const initialBrief = { objective: 'investigate' as const, suggestedContextIds: selected.map((item) => item.id), assistantMessage: 'Ready', scopeValid: true,
       ...(version === 'mapped' ? { selectedContextItems: selected } : {}),
       brief: { objective: 'investigate' as const, question, constraints: [], questionsToAnswer: ['旧重点'], comparisonOptions: [], decisionDimensions: [], successCriteria: [], sourcePolicy: 'prefer_user_sources' as const, outputType: 'markdown' as const,
