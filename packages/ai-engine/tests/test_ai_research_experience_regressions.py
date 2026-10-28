@@ -333,3 +333,21 @@ def test_review_uses_mixed_matching_and_changed_sources() -> None:
     assert [source.snippet for source in db_store._review_sources_for_run(previews, prior, "invalid")] == [
         source.snippet for source in (short_original, updated, new_source)
     ]
+
+
+def test_relevant_api_captures_semantic_parent_section() -> None:
+    html = (
+        '<html><body><section id="task-groups"><h2>Task Groups</h2>'
+        '<dl><dt id="asyncio.TaskGroup">class asyncio.TaskGroup</dt><dd>Tasks are awaited.</dd></dl>'
+        "<p>A task failing with an exception other than CancelledError cancels siblings.</p>"
+        "<p>Those exceptions are combined in an ExceptionGroup.</p></section>"
+        '<section id="running-concurrently"><h2>Running tasks concurrently</h2>'
+        '<dl><dt id="asyncio.gather">asyncio.gather(*aws, return_exceptions=False)</dt>'
+        "<dd>Other tasks continue when the first exception is propagated.</dd></dl></section></body></html>"
+    )
+    excerpt = ai_source_urls.select_relevant_user_source_sections(
+        html, "Compare asyncio.TaskGroup and asyncio.gather"
+    )
+    assert excerpt is not None
+    assert "cancels siblings" in excerpt and "ExceptionGroup" in excerpt
+    assert "return_exceptions=False" in excerpt
