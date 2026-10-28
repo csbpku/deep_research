@@ -196,7 +196,6 @@ test('platform stream rejects truncated and missing completion instead of saving
     let emitted = false;
     const sandbox = {
       readingAnswerText: (text) => text, TextDecoder, scope: 'page', sourceContext: { url: 'https://a.test', title: 'Article', body: 'Source' }, discussionHistory: [], platformUrl: 'https://platform.test',
-      platformContext: (c) => c,
       chrome: { storage: { local: { get: async () => ({ readerToken: 'test' }) } } },
       fetch: async () => ({ ok: true, body: { getReader: () => ({ read: async () => {
         if (emitted) return { done: true };

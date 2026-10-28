@@ -1,7 +1,6 @@
 import { SEARCH_ORIGINS } from './web-search.js';
 import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecords, renderMaterialOptions, renderMaterialFollowups, renderMaterialFailures } from './components/material-runtime.tsx';
-import { t, localizedMarkup, getUiLanguage, setUiLanguage } from './i18n.js';
-import { platformAnswerErrorMessage } from './platform-answer.js';
+import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
 import { readerStore } from './reader-store.js';
@@ -13,9 +12,7 @@ import {
   isLocalProvider,
   translationContext,
   translationBatches,
-  explainSelection,
   readingAnswerText,
-  explainImage,
   boundTaskContext,
   buildAnnotationUrl,
   loadProvider,
@@ -1921,20 +1918,6 @@ async function syncCurrentSession({ quiet = false } = {}) {
     if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, t("平台令牌已失效，请重新连接"));
     if (!quiet) setNotice(error instanceof Error ? error.message : t("阅读会话同步失败"));
   }
-}
-
-function platformContext(context, scope) {
-  const body = String(context?.body || '');
-  const selection = scope === 'selection' ? context?.selection : undefined;
-  return {
-    url: context.url,
-    title: String(context.title || t("当前网页")).slice(0, 300),
-    language: currentReadingLanguage(),
-    scope,
-    body,
-    ...(typeof context.section === 'string' && context.section ? { section: context.section } : {}),
-    ...(selection ? { selection } : {}),
-  };
 }
 
 
