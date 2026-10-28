@@ -68,8 +68,8 @@ async function checkMaterialSurface(surface) {
     const visible = element => { const s = getComputedStyle(element); const r = element.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
     return {
       buttons: [...document.querySelectorAll('button')].filter(visible).filter(el => !el.classList.contains('MuiButtonBase-root')).map(el => el.id || el.innerText),
-      fields: [...document.querySelectorAll('input,textarea,select')].filter(visible).filter(el => el.type !== 'file' && !el.closest('.MuiInputBase-root')).map(el => el.id),
-      fonts: [...document.querySelectorAll('button,input,textarea,select')].filter(visible).filter(el => getComputedStyle(el).fontFamily !== getComputedStyle(document.body).fontFamily).map(el => el.id),
+      fields: [...document.querySelectorAll('input,textarea,select')].filter(visible).filter(el => el.type !== 'file' && !el.closest('.MuiInputBase-root,.MuiCheckbox-root')).map(el => el.id),
+      fonts: [...document.querySelectorAll('button,input,textarea,select')].filter(visible).filter(el => el.type !== 'checkbox' && getComputedStyle(el).fontFamily !== getComputedStyle(document.body).fontFamily).map(el => el.id),
     };
   });
   assert.deepEqual(report, { buttons: [], fields: [], fonts: [] }, `${surface}: visible controls use actual MUI components and the shared font`);
@@ -299,6 +299,29 @@ try {
   checks.push('空白禁发、Shift+Enter 换行、Ctrl+Enter 发送');
 
   await selection();
+  const previousViewport = page.viewportSize();
+  for (const height of [500, 600]) {
+    await page.setViewportSize({ width: 360, height });
+    await page.locator('#composer-resize').press('Home');
+    const compact = await heightOfInput();
+    await page.locator('#composer-resize').press('End');
+    assert.ok(await heightOfInput() > compact + 16, `${height}px: 选段模式输入框仍可展开`);
+    const geometry = await page.evaluate(() => ({
+      sendBottom: document.querySelector('#send-question').getBoundingClientRect().bottom,
+      transcriptHeight: document.querySelector('#chat-transcript').clientHeight,
+      height: innerHeight,
+    }));
+    assert.ok(geometry.sendBottom <= geometry.height, '发送按钮保持在窗口内');
+    assert.ok(geometry.transcriptHeight >= 60, '聊天区仍可滚动阅读');
+    await page.locator('#composer-resize').press('Home');
+    const grip = await page.locator('#composer-resize').boundingBox();
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down(); await page.mouse.move(grip.x + grip.width / 2, grip.y - 80, { steps: 8 }); await page.mouse.up();
+    assert.ok(await heightOfInput() > compact + 16, '选段模式拖动能改变真实高度');
+    await page.locator('#composer-resize').press('Home');
+  }
+  await page.setViewportSize(previousViewport);
+  checks.push('500px 和 600px 小窗口选段模式可拖动、键盘缩放，发送按钮保持可见');
   const quoteStyle = await page.locator('#chat-selection-quote').evaluate(el => ({
     color: getComputedStyle(el).color,
     background: getComputedStyle(el).backgroundColor,
@@ -307,7 +330,7 @@ try {
   assert.notEqual(quoteStyle.background, 'rgb(49, 89, 201)', '选段预览不应使用遮字的纯蓝底色');
   assert.equal(await page.locator('#chat-tools-menu').count(), 0, '预设问题不再包装为工具菜单');
   assert.deepEqual(await page.locator('.composer-tools > button').allTextContents(), ['总结', '翻译', '中文']);
-  for (const selector of ['#copy-chat-selection', '#annotate-selection', '#save-selection']) {
+  for (const selector of ['#copy-chat-selection', '#save-selection']) {
     assert.equal(await page.locator(selector).isVisible(), true, '选段操作应直接出现在原文预览旁');
   }
   await page.screenshot({ path: `${artifacts}/selection-context-actions.png` });
@@ -347,27 +370,60 @@ try {
   await article.waitForFunction(() => !window.getSelection()?.toString() && !document.querySelector('[data-deep-research-toolbar]'));
   checks.push('选段预览展开、清除选段和范围切换');
 
+  const auditSelectionPopup = async () => {
+  if (await page.locator('#restore-page').isVisible()) await page.locator('#restore-page').click();
+  await selection();
+  await article.keyboard.press('Alt+Shift+t');
+  const translation = article.locator('[data-deep-research-selection-translation]');
+  await translation.waitFor();
+  const inspectTranslation = () => translation.evaluate(host => ({
+    token: host.style.getPropertyValue('--reader-color-surface-raised'),
+    background: getComputedStyle(host.shadowRoot.querySelector('.panel')).backgroundColor,
+    opacity: getComputedStyle(host.shadowRoot.querySelector('.panel')).opacity,
+  }));
+  const normal = await inspectTranslation();
+  assert.ok(normal.token);
+  assert.notEqual(normal.background, 'rgba(0, 0, 0, 0)');
+  assert.equal(normal.opacity, '1');
+  await translation.locator('.expand').click();
+  assert.deepEqual(await inspectTranslation(), normal, '放大时保留同一组主题颜色');
+  await translation.locator('.expand').click();
+  assert.deepEqual(await inspectTranslation(), normal, '恢复尺寸后仍为不透明背景');
+  await article.screenshot({ path: `${artifacts}/selection-translation-opacity.png` });
+  await translation.locator('.close').click();
+  checks.push('选段翻译浮窗初始、放大、恢复尺寸均保留不透明主题背景');
+  };
+
   await selection();
   await menuAction('#save-selection');
+  await page.locator('#save-dialog').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#annotate-selection').count(), 0, '选段只保留一个保存入口');
+  assert.equal(await page.locator('#save-highlight').isChecked(), true);
   await page.locator('#save-quote').fill('');
   await page.locator('#confirm-save').click();
   await page.locator('#save-notice').filter({ hasText: '原文摘录' }).waitFor();
   await page.locator('#save-quote').fill(source);
+  await page.locator('#save-highlight').check();
   await page.locator('#save-note').fill('audit note');
   await page.locator('#confirm-save').dblclick();
   await page.locator('#save-dialog').waitFor({ state: 'hidden' });
   assert.equal((await data()).insights.length, 1, '快速连点保存只能创建一张收藏卡');
-  checks.push('收藏必填校验与连点防重复');
+  await article.locator('[data-deep-research-annotation-highlight] span').first().waitFor();
+  assert.equal((await data()).annotations.length, 0, '高亮由同一条保存记录生成，不重复创建标注');
+  checks.push('统一保存必填校验、连点防重复及原文高亮');
 
   await selection();
-  await menuAction('#annotate-selection');
-  assert.equal(await page.locator('#annotation-note').evaluate(el => el === document.activeElement), true);
-  await page.locator('#annotation-note').fill('audit annotation');
-  await page.locator('#confirm-annotation').dblclick();
-  await page.locator('#annotation-dialog').waitFor({ state: 'hidden' });
-  assert.equal((await data()).annotations.length, 1, '快速连点标注只能创建一条标注');
-  await article.locator('[data-deep-research-annotation-highlight] span').first().waitFor();
-  checks.push('标注自动聚焦、连点防重复和原文高亮');
+  await menuAction('#save-selection');
+  await page.locator('#save-dialog').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#save-note').inputValue(), 'audit note', '再次保存相同选段会编辑原记录');
+  await page.locator('#save-note').fill('audit updated note');
+  await page.locator('#save-highlight').uncheck();
+  await page.locator('#confirm-save').dblclick();
+  await page.locator('#save-dialog').waitFor({ state: 'hidden' });
+  assert.equal((await data()).insights.length, 1);
+  assert.equal((await data()).insights[0].note, 'audit updated note');
+  await article.locator('[data-deep-research-annotation-highlight]').waitFor({ state: 'detached' });
+  checks.push('统一保存复用同一记录、保留笔记并可关闭原文高亮');
 
   await page.locator('#settings-button').click();
   await page.locator('#import-file').setInputFiles({ name: 'invalid.json', mimeType: 'application/json', buffer: Buffer.from('{"version":999}') });
@@ -379,7 +435,7 @@ try {
   await page.locator('#export-data').click();
   const download = await downloadPromise; await download.saveAs(`${artifacts}/export.json`);
   const exportedFile = JSON.parse(await readFile(`${artifacts}/export.json`, 'utf8'));
-  assert.equal(exportedFile.insights.length, 1); assert.equal(exportedFile.annotations.length, 1);
+  assert.equal(exportedFile.insights.length, 1); assert.equal(exportedFile.annotations.length, 0);
   page.once('dialog', d => d.dismiss()); await page.locator('#clear-data').click();
   assert.equal((await data()).insights.length, 1);
   page.once('dialog', d => d.accept()); await page.locator('#clear-data').click();
@@ -387,13 +443,15 @@ try {
   assert.equal((await data()).insights.length, 0);
   await page.locator('#import-file').setInputFiles(`${artifacts}/export.json`);
   await page.locator('#settings-notice').filter({ hasText: '数据已导入' }).waitFor();
-  assert.equal((await data()).insights.length, 1); assert.equal((await data()).annotations.length, 1);
+  assert.equal((await data()).insights.length, 1); assert.equal((await data()).annotations.length, 0);
   checks.push('无效导入反馈、重复选文件、导出、取消清空和导入恢复');
 
   await page.locator('#close-settings').click();
+  await page.locator('#scope-page').click();
+  const translationsBeforePause = requests.filter(r => String(r.messages?.[0]?.content).includes('翻译编辑')).length;
   await menuAction('#chat-translate');
-  for (let i = 0; i < 60 && !requests.some(r => String(r.messages?.[0]?.content).includes('翻译编辑')); i++) await new Promise(resolve => setTimeout(resolve, 50));
-  assert.ok(requests.some(r => String(r.messages?.[0]?.content).includes('翻译编辑')), '暂停测试必须等待真实翻译请求开始');
+  for (let i = 0; i < 60 && requests.filter(r => String(r.messages?.[0]?.content).includes('翻译编辑')).length === translationsBeforePause; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(requests.filter(r => String(r.messages?.[0]?.content).includes('翻译编辑')).length > translationsBeforePause, '暂停测试必须等待本次全文翻译请求开始');
   await page.locator('#pause-translation').waitFor();
   await page.locator('#pause-translation').click();
   await page.locator('#notice').filter({ hasText: '已暂停' }).waitFor();
@@ -501,7 +559,8 @@ try {
   assert.equal(await page.locator('#library-list .session-row').count(), 0, '收藏页不应混入自动阅读历史');
   await page.locator('#library-list').filter({ hasText: source }).waitFor();
   await page.locator('#library-list [data-action="edit"]').first().click();
-  assert.equal(await page.locator('#save-note').inputValue(), 'audit note');
+  await page.locator('#save-dialog').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#save-note').inputValue(), 'audit updated note');
   await page.locator('#cancel-save').click();
   await page.locator('#nav-chat').click();
   assert.equal(new URL(page.url()).searchParams.has('view'), false, '切回聊天同步移除收藏页深链参数');
@@ -636,6 +695,32 @@ try {
   await page.waitForFunction(count => document.querySelectorAll('#conversation-list > article').length === count + 2, messageCount);
   assert.equal(await page.locator('#conversation-list > article.user').last().innerText(), followupText);
   checks.push('追问建议只有一个分组边框，问题为无边框44px点击行，点击后正常生成新一轮对话');
+  await auditSelectionPopup();
+  const legacySource = (await data()).insights[0];
+  await worker.evaluate(async source => {
+    const db = await new Promise(resolve => { const request = indexedDB.open('deep-research-reader'); request.onsuccess = () => resolve(request.result); });
+    try {
+      const transaction = db.transaction('annotations', 'readwrite');
+      transaction.objectStore('annotations').put({ id: 'legacy-browser-annotation', document: source.document, anchor: source.anchor, note: 'Legacy note', createdAt: new Date().toISOString() });
+      await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error); });
+    } finally { db.close(); }
+  }, legacySource);
+  await page.locator('#nav-library').click();
+  const legacyRow = page.locator('#library-list .annotation-row');
+  await legacyRow.waitFor();
+  await legacyRow.locator('[data-action="edit"]').click();
+  assert.equal(await page.locator('#save-note').inputValue(), 'Legacy note');
+  assert.equal(await page.locator('#save-highlight').isChecked(), true);
+  await checkMaterialSurface('unified save options');
+  await page.locator('#save-note').fill('Updated legacy note');
+  await page.locator('#confirm-save').click();
+  await page.locator('#save-dialog').waitFor({ state: 'hidden' });
+  const migrated = await data();
+  assert.equal(migrated.annotations.length, 0);
+  assert.equal(migrated.insights.length, 2, '保留原收藏和旧标注的独立身份');
+  assert.equal(migrated.insights.find(item => item.id === 'legacy-browser-annotation').note, 'Updated legacy note');
+  await page.screenshot({ path: `${artifacts}/unified-saved-records.png` });
+  checks.push('旧标注通过统一保存界面编辑，原子迁移保留身份和笔记，不重复生成标注');
   await writeFile(`${artifacts}/report.json`, JSON.stringify({ version: manifest.version, checks, errors, artifacts }, null, 2));
   console.log(JSON.stringify({ pass: true, version: manifest.version, checks, artifacts }, null, 2));
 } catch (error) {

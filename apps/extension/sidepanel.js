@@ -118,7 +118,8 @@ let lastSavedInsight = null;
 let insightSyncFailed = false;
 let editingInsight = null;
 let pendingInsightSource = null;
-let editingAnnotation = null;
+let saveDialogGeneration = 0;
+let saveOptions = {};
 let pendingAnnotationHighlightId = null;
 let activeSessionTitle = '';
 let sessionSaveQueue = Promise.resolve();
@@ -263,6 +264,7 @@ function setupWorkspaceLayout() {
     $('chat-selection-card').classList.toggle('expanded', expanded);
     $('toggle-chat-selection').setAttribute('aria-expanded', String(expanded));
     $('toggle-chat-selection').textContent = expanded ? t("收起") : t("展开");
+    fitComposerInput();
   });
   document.addEventListener('pointerdown', event => {
     if (!$('composer-model-menu')?.contains(event.target) && !$('composer-model')?.contains(event.target)) closeComposerModelMenu();
@@ -300,11 +302,13 @@ function setupWorkspaceLayout() {
     const area = composer?.parentElement;
     if (!composer?.getClientRects().length || !area?.clientHeight) return Math.max(60, limit);
     const overhead = Math.max(0, composer.getBoundingClientRect().height - input.getBoundingClientRect().height);
+    const preview = ['chat-selection-card', 'image-section'].map($).find(node => node?.getClientRects().length);
+    const compressible = preview ? Math.max(0, preview.getBoundingClientRect().height - 32) : 0;
     const style = getComputedStyle(composer);
     const margin = (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
     // Leave a readable transcript and keep Send inside the panel even when
     // selection/image context consumes part of the composer.
-    return Math.max(60, Math.min(limit, area.clientHeight - overhead - margin - 60));
+    return Math.max(60, Math.min(limit, area.clientHeight - overhead + compressible - margin - 60));
   };
   const updateSizeControl = height => {
     const toggle = $('composer-size-toggle');
@@ -785,19 +789,7 @@ function ensureSaveDialog() {
     if (!dialog || dialog.dataset.readerActionsBound === 'true') return dialog;
     dialog.dataset.readerActionsBound = 'true';
     dialog.querySelector('#confirm-save')?.addEventListener('click', () => void submitReadingForm('confirm-save', 'save-notice', confirmSaveInsight));
-    dialog.querySelector('#cancel-save')?.addEventListener('click', () => { editingInsight = null; pendingInsightSource = null; showReading(); });
-    return dialog;
-  };
-  return bindActions(section);
-}
-
-function ensureAnnotationDialog() {
-  let section = $('annotation-dialog');
-  const bindActions = (dialog) => {
-    if (!dialog || dialog.dataset.readerActionsBound === 'true') return dialog;
-    dialog.dataset.readerActionsBound = 'true';
-    dialog.querySelector('#confirm-annotation')?.addEventListener('click', () => void submitReadingForm('confirm-annotation', 'annotation-notice', confirmAnnotation));
-    dialog.querySelector('#cancel-annotation')?.addEventListener('click', () => { editingAnnotation = null; showReading(); });
+    dialog.querySelector('#cancel-save')?.addEventListener('click', () => { saveDialogGeneration += 1; editingInsight = null; pendingInsightSource = null; showReading(); });
     return dialog;
   };
   return bindActions(section);
@@ -1256,7 +1248,7 @@ function latestAnswerSource() {
 
 function renderPage() {
   void updatePageKnowledge();
-  if (['settings-view', 'save-dialog', 'annotation-dialog'].some((id) => {
+  if (['settings-view', 'save-dialog'].some((id) => {
     const view = $(id);
     return view && !view.classList.contains('hidden');
   })) return;
@@ -1409,18 +1401,19 @@ async function updateLibrary() {
   if (historyButton) historyButton.textContent = t("聊天记录");
   const records = [
     ...insights.slice(0, 12).map(insight => ({ key: insight.id, className: 'insight-row', title: insight.title || insight.quote,
-      detail: insight.quote, tags: insight.tags, meta: new Date(insight.createdAt).toLocaleString(), actions: [
+      detail: insight.quote, answer: insight.note?.slice(0, 400), tags: insight.tags, meta: new Date(insight.createdAt).toLocaleString(), actions: [
         { label: t("编辑"), action: 'edit', run: () => openSaveDialog(insight) },
-        { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteInsight(insight.id); await updateLibrary(); } },
+        { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteInsight(insight.id); await applyAnnotationsForContext(pageContext || documentContext); await updateLibrary(); } },
       ] })),
-    ...annotations.slice(0, 12).map(annotation => ({ key: annotation.id, className: 'insight-row annotation-row',
+    ...annotations.filter(annotation => !annotation.insightId).slice(0, 12).map(annotation => ({ key: annotation.id, className: 'insight-row annotation-row',
       title: annotation.note || annotation.document?.title || t("未命名标注"), detail: annotation.anchor?.quote,
       meta: t("标注 · {0}", new Date(annotation.updatedAt || annotation.createdAt).toLocaleString()), actions: [
+        { label: t("编辑"), action: 'edit', run: () => void openAnnotationDialog(annotation) },
         { label: t("回到原文"), action: 'focus', run: async () => { try { await chrome.tabs.create({ url: buildAnnotationUrl(annotation.document.url, annotation.anchor), active: true }); } catch { setNotice(t("无法打开原文，请复制来源地址后重试。")); } } },
         { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteAnnotation(annotation.id); if (readerStore.pageKey(contextUrl()) === readerStore.pageKey(annotation.document.url)) sendToPage({ type: 'deep-research:clear-annotations' }); await updateLibrary(); } },
       ] })),
   ];
-  renderMaterialRecords(list, records, t("还没有收藏。点击选段旁的“保存摘录”或回答下方的“保存结论”，确认后才会加入这里。聊天记录自动保存在“历史”中。"));
+  renderMaterialRecords(list, records, t("还没有收藏。点击选段旁的“保存”或回答下方的“保存结论”，确认后才会加入这里。聊天记录自动保存在“历史”中。"));
 }
 
 async function openKnowledgeUrl(value) {
@@ -3018,87 +3011,65 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
 }
 
 function openAnnotationDialog(annotation = null) {
-  const source = annotation || (selectionContext?.selection?.quote ? {
-    document: {
-      url: selectionContext.url,
-      title: selectionContext.title,
-      version: selectionContext.contentHash || selectionContext.version || selectionContext.selection.contentHash || null,
-    },
-    anchor: selectionContext.selection,
-    note: '',
-  } : null);
-  if (!source?.anchor?.quote) { setNotice(t("先在原网页选择一段正文。")); return; }
-  editingAnnotation = annotation;
-  const dialog = ensureAnnotationDialog();
-  show($('page-view'), false);
-  show($('empty-view'), false);
-  show($('settings-view'), false);
-  show(ensureSaveDialog(), false);
-  show(dialog, true);
-  $('annotation-source-title').textContent = source.document?.title || selectionContext?.title || t("当前页面");
-  $('annotation-quote').value = source.anchor.quote;
-  $('annotation-note').value = source.note || '';
-  $('annotation-notice').textContent = '';
-  show($('annotation-notice'), false);
-  $('annotation-note').focus();
+  return openSaveDialog(annotation ? {
+    ...annotation, url: annotation.document.url, title: annotation.document.title,
+    quote: annotation.anchor.quote, highlight: true, legacyAnnotationId: annotation.id,
+  } : null, { selectionOnly: true, highlight: true });
 }
 
-async function confirmAnnotation() {
-  const anchor = editingAnnotation?.anchor || selectionContext?.selection;
-  const context = selectionContext || documentContext || pageContext;
-  const note = $('annotation-note').value.trim();
-  if (!anchor?.quote || !context?.url) { setNotice(t("当前原文锚点已失效，请重新选择。"), $('annotation-notice')); return; }
-  const version = context.contentHash || context.version || anchor.contentHash || null;
-  if (!version) { setNotice(t("当前页面还没有稳定版本指纹，请等待正文提取后重试。"), $('annotation-notice')); return; }
-  const saved = await readerStore.saveAnnotation({
-    ...(editingAnnotation || {}),
-    id: editingAnnotation?.id,
-    document: { url: context.url, title: context.title || t("未命名页面"), version },
-    anchor: { ...anchor, contentHash: anchor.contentHash || version },
-    note,
-  });
-  editingAnnotation = null;
-  pendingAnnotationHighlightId = saved.id;
-  sendToPage({ type: 'deep-research:apply-annotation', annotation: saved });
-  showReading();
-  setNotice(t("标注已保存，正在原文中定位高亮。"));
-  await updateLibrary();
+function updateSaveOptions(options = saveOptions) {
+  saveOptions = options;
+  window.dispatchEvent(new CustomEvent('reader:save-options-state', { detail: saveOptions }));
+  show($('save-ai-answer-field'), Boolean(saveOptions.includeAI));
+  $('confirm-save').textContent = saveOptions.sync ? t("保存到调研平台") : t("保存到本地阅读库");
 }
 
-function openSaveDialog(insight = null) {
-  const source = insight || latestAnswerSource() || (selectionContext?.selection?.quote ? {
+async function openSaveDialog(insight = null, options = {}) {
+  const generation = ++saveDialogGeneration;
+  const selected = selectionContext?.selection?.quote ? {
     title: selectionContext.title,
     url: selectionContext.url,
     document: { url: selectionContext.url, title: selectionContext.title, version: selectionContext.contentHash || selectionContext.version || selectionContext.selection.contentHash || null },
     quote: selectionContext.selection.quote,
     note: '',
-    aiAnswer: latestAnswer,
+    aiAnswer: latestAnswerContext?.url === selectionContext.url && latestAnswerContext?.selection?.quote === selectionContext.selection.quote ? latestAnswer : '',
     anchor: selectionContext.selection,
     tags: [],
-  } : null);
+  } : null;
+  let source = insight || (options.selectionOnly ? selected : latestAnswerSource() || selected);
   if (!source) { setNotice(t("先生成回答，或在原网页选择一段正文。")); return; }
-  editingInsight = insight;
-  pendingInsightSource = insight ? { ...insight } : readerStore.captureInsightSource(source, {
+  source = insight ? { ...insight } : readerStore.captureInsightSource(source, {
     url: contextUrl(), radarSummaryId: currentRadarSummaryId(),
   });
+  if (!insight) {
+    insight = await readerStore.findInsightForSource(source);
+    if (generation !== saveDialogGeneration) return;
+    if (insight) source = { ...insight, aiAnswer: options.selectionOnly ? insight.aiAnswer || source.aiAnswer : source.aiAnswer || insight.aiAnswer };
+  }
+  editingInsight = insight;
+  pendingInsightSource = source;
   const dialog = ensureSaveDialog();
   show($('page-view'), false);
   show($('empty-view'), false);
   show($('settings-view'), false);
-  show(ensureAnnotationDialog(), false);
   show(dialog, true);
   const destination = platformModeReady()
-    ? t("确认后保存到调研平台研究库。")
+    ? t("平台已连接，可选择同步到研究库。")
     : readingMode === 'platform'
       ? t("平台尚未连接，本次会保存在浏览器本地。")
       : t("独立模式下保存在浏览器本地。");
-  $('save-mode-note').textContent = t("保存为可检索的阅读结论卡：原文摘录、笔记、AI 结论和标签；不会在原文添加高亮。{0}", destination);
-  $('confirm-save').textContent = platformModeReady() ? t("保存到调研平台") : t("保存到本地阅读库");
+  $('save-mode-note').textContent = t("摘录、笔记和高亮保存为同一条记录；AI 解读与研究库同步可按需选择。{0}", destination);
   $('save-source-title').textContent = source.title || source.document?.title || t("当前页面");
   $('save-quote').value = source.quote || '';
   $('save-note').value = source.note || '';
   $('save-ai-answer').value = source.aiAnswer || '';
   $('save-tags').value = Array.isArray(source.tags) ? source.tags.join(', ') : '';
+  const highlightAvailable = Boolean(source.anchor?.quote === source.quote && source.document?.version);
+  updateSaveOptions({
+    highlight: highlightAvailable && (options.highlight ?? (insight ? Boolean(source.highlight) : true)),
+    includeAI: Boolean(source.aiAnswer), sync: platformModeReady(),
+    highlightAvailable, aiAvailable: Boolean(source.aiAnswer), syncAvailable: platformModeReady(),
+  });
   $('save-notice').textContent = '';
   show($('save-notice'), false);
   if (source.fallbackWarning) setNotice(source.fallbackWarning, $('save-notice'));
@@ -3106,6 +3077,7 @@ function openSaveDialog(insight = null) {
 }
 
 async function confirmSaveInsight() {
+  const selectedOptions = { ...saveOptions };
   const connectionEvents = platformStateEvents;
   const quote = $('save-quote').value.trim();
   if (!quote) { setNotice(t("至少保留一段原文摘录。"), $('save-notice')); $('save-quote').focus(); return; }
@@ -3119,8 +3091,13 @@ async function confirmSaveInsight() {
     || source?.contentHash
     || source?.anchor?.contentHash
     || null;
+  if (selectedOptions.highlight && (!source?.anchor || source.anchor.quote !== quote || !sourceVersion)) {
+    setNotice(t("摘录已修改，请重新选择原文后再启用高亮。"), $('save-notice'));
+    return;
+  }
+  const { legacyAnnotationId, ...existing } = editingInsight || {};
   const saved = await readerStore.saveInsight({
-    ...(editingInsight || {}),
+    ...existing,
     id: editingInsight?.id,
     title,
     url,
@@ -3128,7 +3105,8 @@ async function confirmSaveInsight() {
     document: { url, title, version: sourceVersion },
     quote,
     note: $('save-note').value.trim(),
-    aiAnswer: $('save-ai-answer').value.trim(),
+    aiAnswer: selectedOptions.includeAI ? $('save-ai-answer').value.trim() : '',
+    highlight: Boolean(selectedOptions.highlight),
     tags,
     // Editing a quote invalidates its precise anchor. Keep the anchor only
     // when it is still byte-for-byte identical to the original selection.
@@ -3137,7 +3115,7 @@ async function confirmSaveInsight() {
       : source?.anchor && source.anchor.quote === quote
         ? source.anchor
         : undefined,
-  });
+  }, { legacyAnnotationId });
   lastSavedInsight = saved;
   insightSyncFailed = false;
   editingInsight = null;
@@ -3149,8 +3127,9 @@ async function confirmSaveInsight() {
   const token = await readPlatformToken();
   if (token && !platformConnected && !platformDisconnecting && connectionEvents === platformStateEvents) setPlatformConnected(true, t("已连接 · {0}", platformUrl));
   showReading();
+  await applyAnnotationsForContext(pageContext || documentContext);
   show($('sync-selection'), false);
-  if (platformModeReady()) {
+  if (selectedOptions.sync && platformModeReady()) {
     await syncInsight(saved);
   } else {
     setNotice(t("已保存到本地阅读库。"), $('notice'));
@@ -3159,7 +3138,7 @@ async function confirmSaveInsight() {
 }
 
 function saveInsight() {
-  openSaveDialog();
+  return openSaveDialog(null, { selectionOnly: true });
 }
 
 function currentActivationOrigin() {
@@ -3238,7 +3217,7 @@ function handleEmptyPrimary() {
 }
 
 function showSettings() {
-  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); updateReadingModeUi();
+  show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); updateReadingModeUi();
 }
 
 function showModelSetupGuidance(action) {
@@ -3265,7 +3244,7 @@ function showReading() {
   $('provider-key-toggle').setAttribute('aria-pressed', 'false');
   $('provider-key-toggle').setAttribute('aria-label', t("显示 API Key"));
   $('provider-key-toggle').title = t("显示 API Key");
-  show($('settings-view'), false); show(ensureSaveDialog(), false); show(ensureAnnotationDialog(), false); show($('reader-status-strip'), true); show($('settings-button'), true); $('settings-button').setAttribute('aria-pressed', 'false'); setWorkspaceView(document.querySelector('.shell').dataset.workspaceView || 'chat'); renderPage(); updateLibrary();
+  show($('settings-view'), false); show(ensureSaveDialog(), false); show($('reader-status-strip'), true); show($('settings-button'), true); $('settings-button').setAttribute('aria-pressed', 'false'); setWorkspaceView(document.querySelector('.shell').dataset.workspaceView || 'chat'); renderPage(); updateLibrary();
 }
 
 async function openHistoryPage() {
@@ -3737,8 +3716,13 @@ async function init() {
     renderProgress();
     sendToPage({ type: 'deep-research:restore-translations' });
   });
-  $('annotate-selection').addEventListener('click', () => void openAnnotationDialog());
   $('save-selection').addEventListener('click', () => void saveInsight());
+  window.addEventListener('reader:save-options-change', event => updateSaveOptions(event.detail));
+  $('save-quote').addEventListener('input', () => {
+    const source = editingInsight || pendingInsightSource;
+    const highlightAvailable = Boolean(source?.anchor?.quote === $('save-quote').value.trim() && source?.document?.version);
+    updateSaveOptions({ ...saveOptions, highlightAvailable, highlight: highlightAvailable && saveOptions.highlight });
+  });
   $('save-answer')?.addEventListener('click', () => void openSaveDialog());
   $('open-page-chat')?.addEventListener('click', () => openDiscussion('page', 'ask'));
   $('expand-chat')?.addEventListener('click', () => setChatExpanded(!$('page-view')?.classList.contains('chat-expanded')));

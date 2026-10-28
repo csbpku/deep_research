@@ -273,11 +273,12 @@ try {
   if (await panel.locator('#ask-page').count() !== 0 || await panel.locator('.selection-action-label').isVisible()) {
     throw new Error('选段工具仍重复展示聊天范围/整页提问入口。');
   }
-  await panel.locator('#annotate-selection').click();
-  await panel.locator('#annotation-dialog').waitFor({ state: 'visible', timeout: 5_000 });
-  await panel.locator('#annotation-note').fill('E2E annotation note');
-  await panel.locator('#confirm-annotation').click();
-  await panel.getByText('标注已保存，并已在原文高亮。').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#save-selection').click();
+  await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
+  await panel.locator('#save-note').fill('E2E annotation note');
+  await panel.locator('#save-highlight').check();
+  await panel.locator('#confirm-save').click();
+  await panel.locator('#save-dialog').waitFor({ state: 'hidden', timeout: 10_000 });
   const annotationHighlight = await article.waitForFunction(() => {
     const target = document.querySelector('#target')?.getBoundingClientRect();
     const marks = [...document.querySelectorAll('[data-deep-research-annotation-highlight] > span')];
@@ -302,8 +303,8 @@ try {
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
   const excerptCopy = await panel.locator('#save-mode-note').innerText();
-  if (!excerptCopy.includes('不会在原文添加高亮') || !excerptCopy.includes('阅读结论卡')) {
-    throw new Error(`excerpt action does not explain its distinction from an annotation: ${excerptCopy}`);
+  if (!excerptCopy.includes('同一条记录') || !excerptCopy.includes('按需选择')) {
+    throw new Error(`save action should explain unified records and optional features: ${excerptCopy}`);
   }
   await panel.locator('#cancel-save').click();
 

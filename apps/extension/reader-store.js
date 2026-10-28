@@ -253,6 +253,13 @@ function normalizeAnnotation(value, fallbackId = createUuidV4()) {
   };
 }
 
+function insightAnnotation(insight) {
+  if (insight.highlight !== true || !insight.document?.version || insight.anchor?.quote !== insight.quote) return null;
+  if (insight.anchor.contentHash && insight.anchor.contentHash !== insight.document.version) return null;
+  const annotation = normalizeAnnotation(insight);
+  return annotation ? { ...annotation, insightId: insight.id } : null;
+}
+
 export const readerStore = {
   pageKey,
   knowledgePageKey,
@@ -370,15 +377,46 @@ export const readerStore = {
     await put('settings', { id: settingId, value: syncKey, updatedAt: new Date().toISOString() });
     return syncKey;
   },
-  async saveInsight(insight) {
-    return put('insights', {
+  async findInsightForSource(source) {
+    if (!source.anchor?.quote || !source.document?.version) return null;
+    if (!Number.isInteger(source.anchor.startOffset) || !Number.isInteger(source.anchor.endOffset)) return null;
+    return (await all('insights')).find(item => (
+      knowledgePageKey(item.url) === knowledgePageKey(source.url)
+      && item.document?.version === source.document.version
+      && item.anchor?.quote === source.anchor.quote
+      && item.anchor.startOffset === source.anchor.startOffset
+      && item.anchor.endOffset === source.anchor.endOffset
+    )) || null;
+  },
+  async saveInsight(insight, { legacyAnnotationId } = {}) {
+    const record = {
       ...insight,
       radarSummaryId: normalizeRadarSummaryId(insight.radarSummaryId) || undefined,
       tags: Array.isArray(insight.tags) ? insight.tags.slice(0, 10) : [],
       id: insight.id || createUuidV4(),
       createdAt: insight.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    });
+    };
+    if (!legacyAnnotationId) return put('insights', record);
+    // Editing a legacy annotation moves it into the unified record in one
+    // transaction. A failed migration leaves the original annotation intact.
+    const database = await openDatabase();
+    if (!database) {
+      fallbackSet('insights', record);
+      fallbackRemove('annotations', legacyAnnotationId);
+      return record;
+    }
+    try {
+      const transaction = database.transaction(['insights', 'annotations'], 'readwrite');
+      transaction.objectStore('insights').put(record);
+      transaction.objectStore('annotations').delete(legacyAnnotationId);
+      await new Promise((resolve, reject) => {
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error || new Error('保存失败，请重试。'));
+        transaction.onabort = () => reject(transaction.error || new Error('保存失败，请重试。'));
+      });
+      return record;
+    } finally { database.close(); }
   },
   async linkInsightToPlatform(id, researchId, origin) {
     const normalizedId = normalizeRadarSummaryId(researchId);
@@ -450,7 +488,10 @@ export const readerStore = {
     return put('annotations', normalized);
   },
   async listAnnotations() {
-    return (await all('annotations')).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
+    const [legacy, insights] = await Promise.all([all('annotations'), all('insights')]);
+    const migratedIds = new Set(insights.map(item => item.id));
+    return [...legacy.filter(item => !migratedIds.has(item.id)), ...insights.map(insightAnnotation).filter(Boolean)]
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)));
   },
   async deleteAnnotation(id) {
     return remove('annotations', id);

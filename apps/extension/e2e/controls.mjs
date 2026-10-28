@@ -1,10 +1,15 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir, tempPath } from './temp-paths.mjs';
 
-const extensionPath = new URL('../.output/chrome-mv3', import.meta.url).pathname;
+const extensionPath = `${await mkdtemp(tempPath('reader-controls-extension-'))}/extension`;
+await cp(new URL('../.output/chrome-mv3', import.meta.url), extensionPath, { recursive: true });
+const manifestPath = `${extensionPath}/manifest.json`;
+const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+manifest.host_permissions = [...new Set([...(manifest.host_permissions || []), 'http://127.0.0.1/*'])];
+await writeFile(manifestPath, JSON.stringify(manifest));
 const fixturePath = new URL('./fixture.html', import.meta.url);
 const fixturePort = 8770;
 const providerPort = 8804;
@@ -384,9 +389,10 @@ try {
     node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await panel.locator('#selection-section').waitFor({ state: 'visible', timeout: 10_000 });
-  await panel.locator('#annotate-selection').click();
-  await panel.locator('#annotation-note').fill('可复用的原文标注');
-  await panel.locator('#confirm-annotation').click();
+  await panel.locator('#save-selection').click();
+  await panel.locator('#save-note').fill('可复用的原文标注');
+  await panel.locator('#save-highlight').check();
+  await panel.locator('#confirm-save').click();
   await fixture.waitForSelector('[data-deep-research-annotation-highlight] span', { timeout: 10_000 });
   const annotationState = await fixture.evaluate(() => ({
     hosts: document.querySelectorAll('[data-deep-research-annotation-highlight]').length,
@@ -395,7 +401,6 @@ try {
   if (annotationState.hosts !== 1 || annotationState.marks < 1) throw new Error(`标注没有在原文中高亮：${JSON.stringify(annotationState)}`);
   await panel.locator('#save-selection').click();
   await panel.locator('#save-note').fill('可复用的本地阅读判断');
-  await panel.locator('#save-ai-answer').fill('队列大小需要结合吞吐和延迟验证。');
   await panel.locator('#confirm-save').click();
   await panel.waitForFunction(() => document.querySelector('#library-list')?.textContent?.includes('Bounded queues'), null, { timeout: 10_000 });
 
@@ -410,7 +415,7 @@ try {
   if (JSON.stringify(exported).includes('local-test-key') || JSON.stringify(exported).includes('taskInputs')) {
     throw new Error('导出文件包含 API Key 或临时任务输入');
   }
-  if (!Array.isArray(exported.annotations) || exported.annotations.length !== 1) {
+  if (!Array.isArray(exported.annotations) || exported.annotations.length !== 0 || exported.insights.filter(item => item.highlight).length !== 1) {
     throw new Error(`导出文件没有包含标注：${JSON.stringify(Object.keys(exported))}`);
   }
   const savedInsight = exported.insights?.find((item) => item.quote?.startsWith('Bounded queues keep browser'));
@@ -423,7 +428,7 @@ try {
   await panel.waitForFunction(() => !document.querySelector('#library-list')?.textContent?.includes('Bounded queues'), null, { timeout: 10_000 });
   await panel.locator('#import-file').setInputFiles({ name: 'reader-export.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(exported)) });
   await panel.waitForFunction(() => document.querySelector('#library-list')?.textContent?.includes('Bounded queues'), null, { timeout: 10_000 });
-  await panel.waitForFunction(() => document.querySelector('#library-list')?.textContent?.includes('可复用的原文标注'), null, { timeout: 10_000 });
+  await panel.waitForFunction(() => document.querySelector('#library-list')?.textContent?.includes('可复用的本地阅读判断'), null, { timeout: 10_000 });
 
   // Reattach the imported annotation, then mutate the source paragraph. The
   // content hash must invalidate the old highlight instead of drawing it on

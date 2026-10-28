@@ -14,6 +14,7 @@ import { ReaderButton, ReaderTextField, ReaderSelect, ReaderDisclosure } from '.
 import { ReaderThemeProvider } from '../../components/reader-theme';
 import { TranslationLanguagePicker } from '../../components/translation-language-picker';
 import { ProviderSelector } from '../../components/provider-selector';
+import { ReadingSaveOptions } from '../../components/reading-save-options';
 
 /**
  * React owns the panel UI. The reading controller remains an imperative
@@ -183,8 +184,7 @@ function ReaderPanel() {
                 <blockquote id="chat-selection-quote" />
                 <div id="selection-section" className="selection-preview-actions">
                   <ReaderButton id="copy-chat-selection" type="button" variant="text">{t("复制选段")}</ReaderButton>
-                  <ReaderButton id="annotate-selection" type="button" title={t("在原网页高亮并添加笔记")} variant="text">{t("标注")}</ReaderButton>
-                  <ReaderButton id="save-selection" type="button" title={t("将选段存入阅读库")} variant="text">{t("保存摘录")}</ReaderButton>
+                  <ReaderButton id="save-selection" type="button" title={t("保存摘录、笔记并选择是否高亮")} variant="text">{t("保存")}</ReaderButton>
                   <ReaderButton id="toggle-chat-selection" type="button" aria-expanded="false" aria-controls="chat-selection-quote" variant="text">{t("展开")}</ReaderButton>
                 </div>
               </Paper>
@@ -276,23 +276,15 @@ function ReaderPanel() {
 
       <section id="save-dialog" className="setting-panel hidden">
         <div className="eyebrow">{t("保存阅读成果")}</div>
-        <Typography component="h2" variant="h2">{t("留下以后能复用的结论")}</Typography>
-        <p id="save-mode-note" className="small" style={{ marginTop: 8 }}>{t("保存为可检索的阅读结论卡，不会在原文添加高亮。")}</p>
+        <Typography component="h2" variant="h2">{t("保存摘录与笔记")}</Typography>
+        <p id="save-mode-note" className="small" style={{ marginTop: 8 }} />
         <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} /></div>
         <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
+        <ReadingSaveOptions />
+        <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
         <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
         <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
         <div className="actions"><ReaderButton id="confirm-save" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" variant="outlined">{t("取消")}</ReaderButton></div>
-      </section>
-
-      <section id="annotation-dialog" className="setting-panel hidden">
-        <div className="eyebrow">{t("原文标注")}</div><Typography component="h2" variant="h2">{t("给这段内容留下位置标记")}</Typography>
-        <p className="small">{t("保存后会按原文位置叠加高亮，并保留一条短笔记；不会创建阅读结论卡。仅在原文版本匹配时高亮，标注保存在浏览器本地。")}</p>
-        <div className="field"><label htmlFor="annotation-quote">{t("待标注原文")}</label><span id="annotation-source-title" className="small" /><ReaderTextField id="annotation-quote" multiline minRows={3} slotProps={{ htmlInput: { readOnly: true } }} /></div>
-        <div className="field"><label htmlFor="annotation-note">{t("标注笔记")}</label><ReaderTextField id="annotation-note" multiline minRows={3} placeholder={t("例如：这里是性能瓶颈的关键假设")} /></div>
-        <Alert id="annotation-notice" className="notice hidden" icon={false} severity="info" />
-        <div className="actions"><ReaderButton id="confirm-annotation" variant="contained">{t("保存标注并高亮")}</ReaderButton><ReaderButton id="cancel-annotation" variant="outlined">{t("取消")}</ReaderButton></div>
       </section>
 
       <div id="mode-data-note" className="footer">{t("独立模式：模型请求与阅读成果保存在本地，可导出或清除。")}</div>

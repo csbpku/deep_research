@@ -361,18 +361,19 @@ test('saving freezes radar and version at capture; editing never borrows the cur
       document: { url: visibleUrl, version: editing ? null : 'v1' },
       ...(editing === 'with-radar' ? { radarSummaryId: originalRadarId } : {}) };
     const sandbox = {
-      $, readingMode: 'local', editingInsight: null, pendingInsightSource: null, platformStateEvents: 0,
+      $, readingMode: 'local', editingInsight: null, pendingInsightSource: null, platformStateEvents: 0, saveDialogGeneration: 0, saveOptions: {}, pageContext: null, documentContext: null,
       platformConnected: false, platformDisconnecting: false, selectionContext: null,
       latestAnswerSource: () => original, currentRadarSummaryId: () => radarId, contextUrl: () => visibleUrl,
       normalizeRadarSummaryId: readerStore.normalizeRadarSummaryId,
       readerStore: { ...readerStore, saveInsight: async item => { saved.push(item); return { ...item, id: item.id || 'new-insight' }; } },
       ensureSaveDialog: () => ({}), ensureAnnotationDialog: () => ({}), show() {}, setNotice() {},
       platformModeReady: () => false, readPlatformToken: async () => '', showReading() {}, updateLibrary: async () => {},
+      updateSaveOptions: options => { sandbox.saveOptions = options; }, applyAnnotationsForContext: async () => {},
     };
     vm.createContext(sandbox);
-    vm.runInContext(extract(panel, 'function openSaveDialog(', 'function saveInsight('), sandbox);
+    vm.runInContext(extract(panel, 'async function openSaveDialog(', 'function saveInsight('), sandbox);
     sandbox.input = editing ? original : null;
-    vm.runInContext('openSaveDialog(input)', sandbox);
+    await vm.runInContext('openSaveDialog(input)', sandbox);
     visibleUrl = 'https://save-source.test/unrelated';
     sandbox.selectionContext = { url: visibleUrl, contentHash: 'unrelated-v9', selection: { quote: original.quote, contentHash: 'unrelated-v9' } };
     await vm.runInContext('confirmSaveInsight()', sandbox);

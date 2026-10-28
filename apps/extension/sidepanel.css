@@ -68,7 +68,9 @@ h1, h2, h3, p { margin:0 }
 .image-context-card .image-preview { margin-top:0 }
 .image-context-card .image-preview-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 @media (max-height: 600px) { .chat-selection-card { padding-block:var(--reader-space-1); margin-block:0px var(--reader-space-1) } .chat-selection-card:not(.expanded) blockquote { -webkit-line-clamp:1; max-height:18px } }
-.chat-composer { position:relative; flex:none; z-index:2; margin:0 var(--reader-space-3) var(--reader-space-3); padding:var(--reader-space-2) var(--reader-space-4) var(--reader-space-2) }
+.chat-composer { position:relative; display:flex; flex-direction:column; flex:none; max-height:calc(100% - 60px - var(--reader-space-3)); z-index:2; margin:0 var(--reader-space-3) var(--reader-space-3); padding:var(--reader-space-2) var(--reader-space-4) var(--reader-space-2) }
+.chat-composer > .chat-selection-card, .chat-composer > .image-context-card { flex:0 1 auto; min-height:32px; overflow:auto; overscroll-behavior:contain }
+.chat-composer > .composer-context-row, .chat-composer > .reader-composer-field, .chat-composer > .chat-composer-footer { flex-shrink:0 }
 .composer-resize { position:absolute; top:-14px; left:24px; right:0; height:24px; display:flex; justify-content:center; align-items:center; cursor:ns-resize; touch-action:none }
 .composer-resize span { width:40px; height:4px }
 .reader-composer-field textarea { overflow-y:auto !important; resize:none }

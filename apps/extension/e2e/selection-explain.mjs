@@ -4,10 +4,11 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
+import { chromium, expect } from '../../web/node_modules/@playwright/test/index.mjs';
 import { tempDir } from './temp-paths.mjs';
 
 const calls = [];
+const saves = [];
 let rejectNext = false;
 const server = createServer(async (request, response) => {
   response.setHeader('access-control-allow-origin', '*');
@@ -38,6 +39,14 @@ const server = createServer(async (request, response) => {
       answer: '有界队列与取消机制共同限制过期工作。', evidence: [{ quote: selection.quote, claim: '原文描述队列与取消机制。' }],
       background: '', inference: '', limitations: [], warnings: [],
     } })}\n\n`), 300);
+    return;
+  }
+  if (request.url === '/api/reading/save') {
+    let raw = '';
+    for await (const chunk of request) raw += chunk;
+    saves.push(JSON.parse(raw));
+    response.writeHead(201, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ ok: true, draft: { id: '10000000-0000-4000-8000-000000000001' } }));
     return;
   }
   response.writeHead(200, { 'content-type': 'application/json' });
@@ -91,6 +100,11 @@ try {
   }, origin);
   await panel.close();
   await article.bringToFront();
+  await worker.evaluate(() => {
+    chrome.runtime.onMessage.addListener(message => {
+      if (message.type === 'deep-research:from-page' && message.payload?.type === 'deep-research:selection') globalThis.readerSelectionTestContext = message.payload.context;
+    });
+  });
   await article.evaluate(() => {
     const range = document.createRange();
     range.setStartBefore(document.querySelector('#first'));
@@ -99,10 +113,8 @@ try {
     document.querySelector('#second').dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await article.locator('[data-deep-research-toolbar]').waitFor();
-  const selectedContext = await worker.evaluate(async tabId => {
-    const cached = await chrome.storage.session.get(`readerContext:${tabId}`);
-    return cached[`readerContext:${tabId}`].context;
-  }, tabId);
+  await expect.poll(() => worker.evaluate(() => Boolean(globalThis.readerSelectionTestContext?.selection?.quote))).toBe(true);
+  const selectedContext = await worker.evaluate(() => globalThis.readerSelectionTestContext);
   assert.ok(selectedContext.selection.quote.includes('\n\n'));
   // Replay the action into a cold panel while its persisted settings load.
   await worker.evaluate(async ({ tabId, context }) => {
@@ -137,6 +149,36 @@ try {
   assert.ok((await reopened.locator('#conversation-list').innerText()).includes('解释当前选段'));
   assert.equal(await reopened.locator('#question-input').inputValue(), '');
 
+  await reopened.locator('#save-selection').click();
+  await reopened.locator('#save-dialog').waitFor({ state: 'visible' });
+  assert.equal(await reopened.locator('#save-include-ai').isChecked(), true);
+  await reopened.locator('#save-include-ai').uncheck();
+  await reopened.locator('#save-sync').uncheck();
+  await reopened.locator('#save-note').fill('Only my note');
+  await reopened.screenshot({ path: join(root, 'unified-save-options.png'), fullPage: true });
+  await reopened.locator('#confirm-save').click();
+  await reopened.locator('#save-dialog').waitFor({ state: 'hidden' });
+  assert.equal(saves.length, 0, '关闭同步时仅保存在本地');
+  const records = () => reopened.evaluate(async () => {
+    const db = await new Promise(resolve => { const request = indexedDB.open('deep-research-reader'); request.onsuccess = () => resolve(request.result); });
+    try { return await new Promise(resolve => { const request = db.transaction('insights').objectStore('insights').getAll(); request.onsuccess = () => resolve(request.result); }); }
+    finally { db.close(); }
+  });
+  const firstRecord = (await records())[0];
+  assert.equal(firstRecord.aiAnswer, '');
+  assert.equal(firstRecord.highlight, true);
+  await reopened.locator('#save-selection').click();
+  await reopened.locator('#save-dialog').waitFor({ state: 'visible' });
+  assert.equal(await reopened.locator('#save-note').inputValue(), 'Only my note');
+  await reopened.locator('#save-include-ai').check();
+  await reopened.locator('#confirm-save').click();
+  await reopened.locator('#save-dialog').waitFor({ state: 'hidden' });
+  await reopened.waitForFunction(() => document.querySelector('#notice')?.textContent?.includes('已同步'));
+  assert.equal(saves.length, 1);
+  assert.equal(saves[0].idempotencyKey, firstRecord.id);
+  assert.equal(saves[0].aiAnswer, '有界队列与取消机制共同限制过期工作。');
+  assert.equal((await records()).length, 1, '高亮、笔记、AI 解读和同步共用同一记录');
+
   // A live toolbar click must also submit automatically; on failure its
   // generated question remains visible with a useful recovery message.
   rejectNext = true;
@@ -153,7 +195,7 @@ try {
   assert.equal(await reopened.locator('#conversation-list .conversation-message.user').count(), 2);
   const screenshot = join(root, 'selection-explain.png');
   await reopened.screenshot({ path: screenshot, fullPage: true });
-  console.log(JSON.stringify({ ok: true, requests: calls.length, coldPanelAutoExplain: true, crossParagraphAnchor: true, failedQuestionVisible: true, screenshot }));
+  console.log(JSON.stringify({ ok: true, requests: calls.length, coldPanelAutoExplain: true, crossParagraphAnchor: true, failedQuestionVisible: true, unifiedSaveOptions: true, platformSaves: saves.length, screenshot }));
 } finally {
   await browser.close();
   await new Promise(resolve => server.close(resolve));
