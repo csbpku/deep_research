@@ -29,6 +29,7 @@ import TextField from '@mui/material/TextField';
 import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import { friendlyMessage } from '@/lib/errors/friendly';
+import { inferDecisionDimensions } from '@/lib/research-plan-semantics';
 import type { ResearchScope, ResearchTimeRange } from '@deep-research/shared/schemas';
 
 type Objective = 'explore' | 'learn' | 'investigate' | 'decide';
@@ -100,6 +101,7 @@ export interface BriefValue {
   suggestedContextIds: string[];
   assistantMessage: string;
   scopeValid?: boolean;
+  decisionNeedsConfirmation?: boolean;
   brief?: {
     objective: Objective;
     question: string;
@@ -143,6 +145,8 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
   const selectionRef = useRef<PersonalContextItem[]>([]);
   const editedBriefRef = useRef<BriefValue | null>(initialBrief ?? null);
+  const focusTouchedRef = useRef(!!initialBrief?.brief?.questionsToAnswer.length);
+  const decisionDimensionsRef = useRef<string[]>(initialBrief?.objective === 'decide' ? initialBrief.brief?.decisionDimensions ?? [] : []);
   const callbacksRef = useRef({ onBriefReady, onPlanningChange });
   callbacksRef.current = { onBriefReady, onPlanningChange };
   const contextSearchQuery = getPersonalContextSearchQuery(contextPanelOpen, contextSearch, trimmed);
@@ -223,6 +227,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
         const data = (await response.json()) as PlanResponse;
         if (cancelled) return;
         setState({ status: 'ready', plan: data });
+        if (!editedBriefRef.current && data.brief.objective === 'decide') decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
         const edited = editedBriefRef.current;
         if (edited?.brief?.question === trimmed) {
           callbacksRef.current.onPlanningChange?.(false);
@@ -379,6 +384,10 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       .map((item) => item.trim())
       .filter(Boolean)
       .slice(0, 20);
+    const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText);
+    const decisionDimensions = nextObjective === 'decide'
+      ? decisionDimensionsRef.current.length ? decisionDimensionsRef.current : explicitDecisionDimensions
+      : [];
     const validScope = nextTimeRange !== 'custom'
       || (!!nextScopeFrom && !!nextScopeTo && nextScopeFrom <= nextScopeTo);
     const next: BriefValue = {
@@ -387,13 +396,14 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       suggestedContextIds: ids,
       assistantMessage: plan!.assistantMessage,
       scopeValid: validScope,
+      decisionNeedsConfirmation: nextObjective === 'decide' && (comparisonOptions.length < 2 || decisionDimensions.length === 0),
       brief: {
         objective: nextObjective,
         question: plan!.brief.question,
         constraints: plan!.brief.constraints ?? [],
         questionsToAnswer,
-        comparisonOptions,
-        decisionDimensions: plan!.brief.decisionDimensions ?? [],
+        comparisonOptions: nextObjective === 'decide' ? comparisonOptions : [],
+        decisionDimensions,
         successCriteria: plan!.brief.successCriteria ?? [],
         sourcePolicy: plan!.brief.sourcePolicy ?? 'prefer_user_sources',
         scope: {
@@ -415,6 +425,14 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     };
     editedBriefRef.current = next;
     onBriefReady?.(next);
+  }
+
+  function handleObjectiveChange(value: Objective) {
+    const nextFocus = value === 'decide' && objective !== 'decide' && !focusTouchedRef.current && plan?.brief.objective !== 'decide'
+      ? '' : focusText;
+    if (nextFocus !== focusText) setFocusText(nextFocus);
+    setObjective(value);
+    publishPlan({ nextObjective: value, nextFocusText: nextFocus });
   }
 
   function toggleContext(id: string) {
@@ -473,11 +491,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
           <Typography component="span" variant="metadata" color="text.secondary">AI 已根据问题整理，可调整</Typography>
         </Box>
 
-        <TextField select label="研究方式" value={objective} onChange={event => {
-          const value = event.target.value as Objective;
-          setObjective(value);
-          publishPlan({ nextObjective: value });
-        }} sx={{ width: { xs: '100%', sm: 200 } }}>
+        <TextField select label="研究方式" value={objective} onChange={event => handleObjectiveChange(event.target.value as Objective)} sx={{ width: { xs: '100%', sm: 200 } }}>
           {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map(value => <MenuItem key={value} value={value}>{OBJECTIVE_LABELS[value]}</MenuItem>)}
         </TextField>
 
@@ -539,6 +553,7 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
             value={focusText}
             onChange={(event) => {
               const next = event.target.value;
+              focusTouchedRef.current = true;
               setFocusText(next);
               publishPlan({ nextFocusText: next });
             }}
@@ -940,3 +955,4 @@ function _IGNORE_FUNCTION_REFERENCES_FOR_TSC() {
   // 帮助 tsc 接受 IGNORE_PREFIX 字段在部分构建配置下不被误读
   return IGNORE_PREFIX;
 }
+

@@ -7,6 +7,7 @@ export type ResearchDraft = {
   sourceUrls: string[];
   sourceDraft: string;
   input: string;
+  seed: { id: string; title: string; url: string; interpretation: string | null; body: string | null } | null;
   brief: BriefValue | null;
 };
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem'>;
@@ -40,6 +41,13 @@ function isDraft(value: unknown): value is ResearchDraft {
       !Array.isArray(v.sourceUrls) || v.sourceUrls.length > 10 ||
       !v.sourceUrls.every((url) => typeof url === 'string' && url.length <= 2048 && /^https?:\/\//iu.test(url)) ||
       typeof v.sourceDraft !== 'string' || v.sourceDraft.length > 2048 || typeof v.input !== 'string' || v.input.length > 20000) return false;
+  if (v.seed !== null && v.seed !== undefined) {
+    if (!v.seed || typeof v.seed !== 'object' || Array.isArray(v.seed)) return false;
+    const seed = v.seed as Record<string, unknown>;
+    if (typeof seed.id !== 'string' || typeof seed.title !== 'string' || typeof seed.url !== 'string' ||
+        !(seed.interpretation === null || typeof seed.interpretation === 'string') ||
+        !(seed.body === null || typeof seed.body === 'string')) return false;
+  }
   if (v.brief === null) return true;
   if (!v.brief || typeof v.brief !== 'object' || Array.isArray(v.brief)) return false;
   const b = v.brief as Record<string, unknown>;

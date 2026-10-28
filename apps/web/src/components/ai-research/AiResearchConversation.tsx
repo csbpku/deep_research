@@ -339,7 +339,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           if (draft) {
             setReportType(draft.reportType); setReportLength(draft.reportLength);
             setSourcePolicy(draft.sourcePolicy); setSourceUrls(draft.sourceUrls);
-            setSourceDraft(draft.sourceDraft); setInput(draft.input);
+            setSourceDraft(draft.sourceDraft); setInput(draft.input); setSeed(draft.seed ?? null);
             setBrief(draft.brief); setRestoredBrief(draft.brief);
           }
         }
@@ -358,10 +358,10 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     if (!ownerId || !currentConversationId || hydrating || activeJobId) return;
     try {
       setDraftStorageError(!writeResearchDraft(window.localStorage, ownerId, currentConversationId, {
-        reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, brief,
+        reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, seed, brief,
       }));
     } catch { setDraftStorageError(true); }
-  }, [ownerId, currentConversationId, hydrating, activeJobId, reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, brief]);
+  }, [ownerId, currentConversationId, hydrating, activeJobId, reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, seed, brief]);
 
   // 雷达种子预填只在还没有持久化对话时生效。
   useEffect(() => {
