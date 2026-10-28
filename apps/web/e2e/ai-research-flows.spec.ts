@@ -177,6 +177,7 @@ test.describe('AI Research parent (UI polish)', () => {
   });
 
   test('uncertain submission requires checking history before retry', async ({ page }) => {
+    await loginWithCredentials(page.context().request, { email: 'member@e2e.local', role: 'member' });
     // 拦截 POST 返回 500
     await page.route('**/api/ai-research', (route) => {
       if (route.request().method() === 'POST') {
