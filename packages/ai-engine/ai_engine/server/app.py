@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 from ai_engine.adapters.base import AdapterSource, ResearchEngineAdapter, build_adapter
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.contracts.errors import AdapterError, ERROR_CODES, HTTP_STATUS
+from ai_engine.evidence_reconciliation import research_revision_hash
 from ai_engine.contracts.states import (
     AI_JOB_STATUS,
     AI_JOB_STEP,
@@ -135,10 +136,10 @@ def _review_source_snapshot_hash(sources: tuple[AdapterSource, ...]) -> str:
     """
     payload = [
         {
-            "canonicalKey": source.canonical_key,
+            "canonicalKey": source.canonical_key[:512],
             "sourceRef": source.source_ref,
-            "title": source.title,
-            "snippet": source.snippet,
+            "title": _clip_db_text(source.title, 300),
+            "snippet": _clip_db_text(source.snippet, 12000),
         }
         for source in sorted(sources, key=lambda item: item.canonical_key)
     ]
@@ -3560,6 +3561,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
             new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"deep-research:ai-job:{snapshot.job_id}"))
             body = output_text.strip()
             origin_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            revision_sha256 = research_revision_hash({"title": snapshot.topic[:300], "body": body})
             sql = (
                 'INSERT INTO "researches" '
                 '("id", "type", "status", "title", "body", "authorId", "creationMethod", '
@@ -3639,7 +3641,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                                 review_id,
                                 new_id,
                                 snapshot.job_id,
-                                origin_sha256,
+                                revision_sha256,
                                 _review_source_snapshot_hash(sources),
                                 "fact-review-v1",
                                 json.dumps(

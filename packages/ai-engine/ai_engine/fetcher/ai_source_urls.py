@@ -174,8 +174,8 @@ async def _fetch_user_url(
         )
 
     # Markdown body — never store raw HTML in adapter source snippets.
-    body_md = _html_to_text(doc.content.decode("utf-8", errors="replace"))
-    snippet = body_md[:1000]
+    body_md = _extract_user_source_body(doc.content.decode("utf-8", errors="replace"), url)
+    snippet = body_md[:12000]
 
     title = _infer_title(doc, body_md)
     # Content SHA-256 is recorded by the W5 worker when inserting the
@@ -205,6 +205,19 @@ async def _fetch_user_url(
         fetched_doc=doc,
         error_code=None,
     )
+
+
+def _extract_user_source_body(html: str, url: str) -> str:
+    """Prefer the readable article, falling back to safe plain text."""
+    try:
+        from ai_engine.radar.structured_html import structured_html_to_markdown
+
+        body = structured_html_to_markdown(html, url)
+        if body.strip():
+            return body
+    except Exception:  # noqa: BLE001 - a malformed page must not break URL handling
+        pass
+    return _html_to_text(html)
 
 
 def _html_to_text(html: str) -> str:

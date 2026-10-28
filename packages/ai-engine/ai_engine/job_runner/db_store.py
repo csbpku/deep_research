@@ -22,6 +22,7 @@ W2 review 修正:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -99,6 +100,38 @@ def _review_sources(value: object) -> tuple[AdapterSource, ...]:
             )
         )
     return tuple(sources)
+
+
+def _review_sources_for_run(
+    short_snapshot: object, long_snapshot: object, snapshot_hash: object,
+) -> tuple[AdapterSource, ...]:
+    """Use a full job snapshot only when it is the review's exact evidence set.
+
+    Short research-source columns are editable. A changed preview or a hash
+    mismatch must never silently substitute a previous job's evidence.
+    """
+    short = _review_sources(short_snapshot)
+    long = _review_sources(long_snapshot)
+    if not long or not isinstance(snapshot_hash, str):
+        return short
+    payload = [
+        {"canonicalKey": source.canonical_key, "sourceRef": source.source_ref,
+         "title": source.title, "snippet": source.snippet}
+        for source in sorted(long, key=lambda item: item.canonical_key)
+    ]
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if digest != snapshot_hash or len(short) != len(long):
+        return short
+    short_by_key = {source.canonical_key: source for source in short}
+    for source in long:
+        preview = short_by_key.get(source.canonical_key)
+        if (preview is None or preview.source_ref != source.source_ref
+                or preview.title != _clip_db_text(source.title, 300)
+                or preview.snippet != _clip_db_text(source.snippet, 1000)):
+            return short
+    return long
 
 
 def _clip_db_text(value: str | None, limit: int) -> str | None:
@@ -1113,6 +1146,7 @@ class DbJobStore(JobStore):
             '    \'source_ref\', rs."sourceRef", \'canonical_key\', rs."canonicalKey", '
             '    \'title\', rs."title", \'snippet\', rs."description", \'step_captured\', \'search\')), \'[]\'::jsonb) '
             '   FROM "research_sources" rs WHERE rs."researchId" = r."id") AS "sourceSnapshot", '
+            '  j."partialSources" AS "jobSourceSnapshot", '
             '  j."id" AS "jobId", j."topic", j."reportType", j."reviewAttempts", '
             '  j."reviewDetails" AS "jobReviewDetails" '
             'FROM "research_review_runs" rr '
@@ -1209,7 +1243,7 @@ class DbJobStore(JobStore):
                 ReviewWorkItem(
                     job_id=str(raw["jobId"] or raw["reviewRunId"]), requester_id=str(raw["authorId"]),
                     topic=str(raw.get("topic") or raw["title"]), report_type=str(raw.get("reportType") or "research_report"),
-                    report="", sources=_review_sources(raw.get("sourceSnapshot")),
+                    report="", sources=_review_sources_for_run(raw.get("sourceSnapshot"), raw.get("jobSourceSnapshot"), raw.get("sourceSnapshotHash")),
                     draft_research_id=str(raw["researchId"]), attempts=attempt,
                     review_details=details,
                     review_run_id=run_id,
@@ -1228,7 +1262,7 @@ class DbJobStore(JobStore):
             topic=str(raw.get("topic") or raw["title"]),
             report_type=str(raw.get("reportType") or "research_report"),
             report=report,
-            sources=_review_sources(raw.get("sourceSnapshot")),
+            sources=_review_sources_for_run(raw.get("sourceSnapshot"), raw.get("jobSourceSnapshot"), raw.get("sourceSnapshotHash")),
             draft_research_id=str(raw["researchId"]),
             attempts=attempt,
             review_details=details,

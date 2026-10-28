@@ -273,7 +273,8 @@ def test_grounded_report_prompt_covers_generic_infrastructure_comparisons() -> N
     assert "## 分方案发现" in prompt
     assert "## 取舍与结论" in prompt
     assert "## 下一步行动" in prompt
-    assert "带宽或资源成本" in prompt
+    assert "带宽、回滚和磁盘空间" in prompt
+    assert "用户问题和研究方案中适用的决策维度" in prompt
 
 
 def test_slides_prompt_has_a_page_level_content_contract() -> None:

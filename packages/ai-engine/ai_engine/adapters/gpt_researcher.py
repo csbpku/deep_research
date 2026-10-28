@@ -3512,7 +3512,7 @@ def _format_evidence_packet(
     after generation.
     """
     if excerpt_chars is None:
-        excerpt_chars = _report_budget("REPORT_EVIDENCE_EXCERPT_CHARS", 4000, 120, 12000)
+        excerpt_chars = _report_budget("REPORT_EVIDENCE_EXCERPT_CHARS", 12000, 120, 12000)
     if max_chars is None:
         max_chars = _report_budget("REPORT_EVIDENCE_MAX_CHARS", 120000, 24000, 500000)
     lines: list[str] = []
@@ -3721,7 +3721,7 @@ def _report_output_contract(
             "这是一个明确的方案/路径对比。必须输出完整 Markdown 中文报告，并按以下顺序组织：\n"
             "1. `## 决策摘要`：先给出当前证据支持的选型结论；如果证据不足，明确写‘暂不能定案’以及缺什么；\n"
             "2. `## 研究范围与方法`：列出本轮实际覆盖的每个方案、资料边界和证据限制；\n"
-            "3. `## 对比矩阵`：逐项比较用户点名的方案，至少覆盖实现/部署、带宽或资源成本、回滚与恢复、磁盘/运维负担、可靠性和安全；每个单元格没有直接证据就写‘本轮未确认’；\n"
+            "3. `## 对比矩阵`：逐项比较用户点名的方案，使用用户问题和研究方案中适用的决策维度；每个单元格没有直接证据就写‘本轮未确认’；\n"
             "4. `## 分方案发现`：分别说明每个方案的事实、优势、限制和适用前提，不能用一方资料替代另一方；\n"
             "5. `## 取舍与结论`：把事实、基于事实的推断和建议分开，明确结论适用的前提；\n"
             "6. `## 证据覆盖与未确认项`：指出哪一方或哪一个关键维度没有可核对正文，不能把未查到当成没有；\n"
@@ -4560,6 +4560,14 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                                 "state": "analyzing",
                             }
                         report_progress = dict(job.research_progress)
+
+                    if job.request.report_type != "evidence_search" and _fetched_source_count(sources_for_report) == 0:
+                        async with job.lock:
+                            job.current_step = cast("AiJobStep", AI_JOB_STEP["SEARCH"])
+                        await self._mark_failed(
+                            job, "NO_SOURCES_FOUND", "调研未收集到任何可访问来源，已中止生成草稿"
+                        )
+                        return
 
                     # The recursive skill's context contains every branch's
                     # raw search material, including URL-only discoveries and
