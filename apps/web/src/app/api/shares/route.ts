@@ -18,9 +18,7 @@ import type { NextRequest } from 'next/server';
 import { prisma } from '../../../lib/db';
 import { apiHandler, parseBody } from '../../../lib/api-handler';
 import { requireUser } from '../../../lib/auth/session';
-import { toApiErrorResponse } from '../../../lib/errors';
 import { log, withRequestId } from '../../../lib/log';
-import { ERROR_CODES } from '@deep-research/shared/errors';
 
 /** BFF 校验：与 packages/shared/src/schemas.ts::ShareUrlInput 对齐 */
 import { z } from 'zod';

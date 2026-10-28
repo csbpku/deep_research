@@ -155,16 +155,3 @@ export function progressPct(s: ProgressInput): number {
   if (idx >= 0) return IN_FLIGHT_STEP_PROGRESS[idx] ?? 10;
   return 10;
 }
-
-/** 简短终态标签(详情页 header / 卡片 caption 用)。 */
-export function terminalCaption(s: ProgressInput): string {
-  if (s.finalStatus === 'succeeded') return '完成进度';
-  if (s.finalStatus === 'partial') return '部分完成';
-  if (s.finalStatus === 'failed') {
-    const idx = stepIndex(s.errorStage ?? s.currentStep ?? null);
-    if (idx >= 0) return `中止于第 ${idx + 1} 步`;
-    return '任务失败';
-  }
-  if (s.finalStatus === 'cancelled') return '任务已撤回';
-  return '完成进度';
-}

@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
-import { MarkdownPreview } from '@/components/MarkdownPreview';
 import {
   stepIndex as stepIndexShared,
   type DeepResearchProgress,
@@ -54,7 +53,6 @@ import {
   type AiReviewPhase,
 } from '@/lib/ai-review-ui';
 import {
-  decisionLabel,
   decisionResolvesClaim,
   getReviewPublicationGate,
   reviewCoverageStatus,
@@ -2489,19 +2487,6 @@ function JobStatusDisclosure({
   const stepSummary = completed ? ' · 已完成' : s.currentStep ? ` · 当前 ${stepLabel(s.currentStep)}` : '';
   const savedSourcesCount = s.savedSourcesCount ?? s.sourcesCount;
   const summary = `${elapsed} · ${savedSourcesCount} 条已保存资料${stepSummary}` + (s.costCents > 0 ? ` · $${(s.costCents / 100).toFixed(2)}` : '');
-
-  // dl 列表:每个数据单独 dt/dd + title,屏幕阅读器和鼠标 hover 都能看到完整字段
-  const summaryParts = [
-    { term: '已耗时', value: elapsed },
-    { term: '已保存来源', value: String(savedSourcesCount) },
-    { term: '运行时来源', value: `${s.partialSourcesCount}/${s.sourcesCount}` },
-    ...(completed
-      ? [{ term: '任务状态', value: '已完成' }]
-      : s.currentStep
-        ? [{ term: '当前步骤', value: stepLabel(s.currentStep) }]
-        : []),
-    ...(s.costCents > 0 ? [{ term: '成本', value: `$${(s.costCents / 100).toFixed(2)}` }] : []),
-  ];
 
   return (
     <Box component="div" sx={{ borderTop: '1px solid', borderColor: 'divider' }}>

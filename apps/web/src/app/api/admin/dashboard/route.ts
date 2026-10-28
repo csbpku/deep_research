@@ -10,7 +10,7 @@ import { requireAdmin } from '../../../../lib/auth/session';
 import { withRequestId } from '../../../../lib/log';
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
-  const _requestId = withRequestId(req.headers);
+  withRequestId(req.headers);
   const u = await requireAdmin(req);
   if (u instanceof NextResponse) return u;
 

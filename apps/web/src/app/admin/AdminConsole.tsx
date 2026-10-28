@@ -70,7 +70,7 @@ import {
   DropdownMenuTrigger,
   adminRootSx,
 } from './AdminMaterial';
-import { AdminActionDialog, type AdminActionValues } from '@/components/admin/AdminActionDialog';
+import { AdminActionDialog } from '@/components/admin/AdminActionDialog';
 import { AppButton } from '@/components/material/AppButton';
 import { AppDialog } from '@/components/material/AppDialog';
 import { formatSourceType } from '@/lib/radar/source-labels';

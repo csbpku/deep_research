@@ -126,15 +126,6 @@ def _parse_sitemap(
     return results
 
 
-def _is_relevant_url(url: str) -> bool:
-    """Check if a URL is a doc/guide/cookbook page worth fetching."""
-    if not any(p.search(url) for p in _INCLUDE_PATTERNS):
-        return False
-    if any(p.search(url) for p in _EXCLUDE_PATTERNS):
-        return False
-    return True
-
-
 async def check_updates(
     vendor: str = "claude",
     sitemap_url: str | None = None,

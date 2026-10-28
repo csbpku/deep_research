@@ -7,7 +7,7 @@
 // 命名与数据库字段对齐（Research / ContentImportJob）。
 
 import { z } from 'zod';
-import { RESEARCH_TYPE, CREATION_METHOD, RADAR_FEEDBACK_TYPE } from '@deep-research/shared/states';
+import { RESEARCH_TYPE, RADAR_FEEDBACK_TYPE } from '@deep-research/shared/states';
 
 // ──────────────────────────────────────────────────────────────────────
 // Research CRUD

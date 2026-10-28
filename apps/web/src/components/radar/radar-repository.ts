@@ -16,8 +16,3 @@ export function zreadRepositoryUrl(url: string): string | null {
     return null;
   }
 }
-
-/** Repo reading mode is intentionally limited to GitHub repositories. */
-export function isZreadRepository(url: string): boolean {
-  return zreadRepositoryUrl(url) !== null;
-}

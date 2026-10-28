@@ -8,8 +8,7 @@
 // 依赖隔离：不 import Prisma（BFF routes 涉 DB），改为 mock fetch + mock auth。
 // 这些是"纯 handler 行为"测试，不依赖真实 DB 数据。
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { NextResponse } from 'next/server';
+import { describe, expect, it } from 'vitest';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

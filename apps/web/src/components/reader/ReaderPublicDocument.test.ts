@@ -1,4 +1,3 @@
-import React from 'react';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup as render } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';

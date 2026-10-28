@@ -28,11 +28,8 @@ describe('requireRole', () => {
   it('returns 403 NextResponse when role does not match', () => {
     const r = requireRole(member, 'admin');
     expect(r).toBeInstanceOf(NextResponse);
-    // 强制类型为 NextResponse 后读 body
     if (r instanceof NextResponse) {
       expect(r.status).toBe(403);
-      const body = (r as unknown as { _body?: unknown })._body;
-      // Next.js Response body 是只读 iterator；用 status 校验即可
     }
   });
 });

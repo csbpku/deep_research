@@ -8,7 +8,6 @@ import type { NextRequest } from 'next/server';
 import { apiHandler } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/session';
-import { recordProductEvent } from '@/lib/product-events';
 import { collapseTopicIssues } from '@/lib/topics';
 
 type Filter = 'all' | 'hot' | 'warming' | 'emerging' | 'followed';

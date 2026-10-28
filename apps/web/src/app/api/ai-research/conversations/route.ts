@@ -30,7 +30,7 @@ const CreateConversationInput = z.object({
 }).strict();
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
-  const requestId = withRequestId(req.headers);
+  withRequestId(req.headers);
   const user = await requireUser(req);
   if (user instanceof NextResponse) return user;
 

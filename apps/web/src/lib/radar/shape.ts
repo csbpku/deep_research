@@ -476,16 +476,6 @@ export async function aggregateFeedbacks(
   return result;
 }
 
-/** 简单标签归一化（lowercase + trim + 去空）；不修改输入数组。 */
-export function normalizeTags(tags: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const t of tags) {
-    const trimmed = t.trim().toLowerCase();
-    if (trimmed.length > 0 && !out.includes(trimmed)) out.push(trimmed);
-  }
-  return out;
-}
-
 /** Normalize common identifier separators so `foo-bar`, `foo_bar`, and
  * `foo bar` are treated as the same search phrase. */
 export function normalizeRadarQuery(value: string): string {

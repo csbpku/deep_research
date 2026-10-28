@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states';
+import { SOURCE_POLICY } from './states';
 
 // Accept historical payloads while returning the current three-tier taxonomy.
 export const DistilledTierSchema = z.enum(['collection', 'deep_read', 'skim', 'noise'])

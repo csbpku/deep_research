@@ -13,7 +13,6 @@ import React, { useEffect, useMemo, useRef, useState, type ReactNode } from 'rea
 import NextLink from 'next/link';
 import {
   BookOpenCheck,
-  Loader2,
   Sparkles,
   Tag,
 } from 'lucide-react';
@@ -121,7 +120,6 @@ interface FetchState {
   authRequired?: boolean;
 }
 
-const IGNORE_PREFIX = '上下文暂忽略：';
 export function AiResearchBrief({ question, context, topicHint, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
@@ -936,9 +934,4 @@ export function PersonalContextSuggestions({
       {!loading && !visible.length ? <Typography component="p" variant="metadata" color="text.secondary">暂无相关资料，可在「已有资料」中按关键词搜索。</Typography> : null}
     </Box>
   );
-}
-
-function _IGNORE_FUNCTION_REFERENCES_FOR_TSC() {
-  // 帮助 tsc 接受 IGNORE_PREFIX 字段在部分构建配置下不被误读
-  return IGNORE_PREFIX;
 }
