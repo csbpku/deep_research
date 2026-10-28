@@ -148,3 +148,24 @@ def test_follow_up_ledger_includes_late_evidence_and_shares_a_bounded_budget() -
     output = _format_evidence_ledger(bounded.evidence)
     assert output.count("Z") == 120000
     assert "[evidence-source 32]" in output
+
+
+def test_follow_up_accepts_web_evidence_metadata_names() -> None:
+    from ai_engine.server.research_chat import FollowUpBody
+
+    body = FollowUpBody.model_validate(
+        {
+            "user_id": "u",
+            "question": "q",
+            "evidence": [
+                {
+                    "key": "k",
+                    "excerpt": "body",
+                    "capturedAt": "2026-10-28T00:00:00Z",
+                    "sourceType": "research",
+                }
+            ],
+        }
+    )
+    assert body.evidence[0].captured_at == "2026-10-28T00:00:00Z"
+    assert body.evidence[0].source_type == "research"
