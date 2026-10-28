@@ -80,7 +80,7 @@ describe('loadResearchReportForJob', () => {
 it('uses current draft sources, upgrades matching full evidence, and never revives deleted or changed sources', async () => {
   const date = new Date('2026-09-04T00:00:00Z');
   const key = 'https://example.com/docs'; const ref = { type: 'url', value: key };
-  const body = 'Relevant context. '.repeat(400) + ' ExceptionGroup and CancelledError differ; return_exceptions=False.';
+  const body = 'Relevant context. '.repeat(400) + ' ExceptionGroup and CancelledError differ; return_exceptions=False, *args and **kwargs.';
   const oldKey = 'https://example.com/deleted'; const oldRef = { type: 'url', value: oldKey };
   const changedKey = 'https://example.com/changed'; const changedRef = { type: 'url', value: changedKey };
   const partialSources = [
@@ -98,6 +98,7 @@ it('uses current draft sources, upgrades matching full evidence, and never reviv
   expect(result?.evidence.map((item) => item.key)).toEqual([key, changedKey]);
   expect(result?.evidence[0].excerpt).toContain('ExceptionGroup and CancelledError');
   expect(result?.evidence[0].excerpt).toContain('return_exceptions=False');
+  expect(result?.evidence[0].excerpt).toContain('*args and **kwargs');
   expect(result?.evidence[1].excerpt).toBe('Updated evidence');
   expect(result?.content).not.toContain('](https://example.com/deleted)');
 });

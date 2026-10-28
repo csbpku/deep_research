@@ -23,7 +23,7 @@ function clip(value: string | null, limit: number): string | null {
   if (value === null || Array.from(value).length <= limit) return value;
   return `${Array.from(value).slice(0, limit - 1).join('').trimEnd()}…`;
 }
-export function matchingCapturedSnapshot(preview: SourceSnapshotRow[], partial: unknown): CapturedSource[] | null {
+export function matchingCapturedSnapshot(preview: SourceSnapshotRow[], partial: unknown, previewLimit = 1000): CapturedSource[] | null {
   if (!Array.isArray(partial) || !partial.length || !preview.length) return null;
   const captured = new Map<string, CapturedSource>();
   const duplicates = new Set<string>();
@@ -44,7 +44,7 @@ export function matchingCapturedSnapshot(preview: SourceSnapshotRow[], partial: 
         !Object.keys(source.sourceRef).length || Object.values(source.sourceRef).some((v) => typeof v !== 'string' && typeof v !== 'boolean')) return null;
     const saved = captured.get(source.canonicalKey);
     const match = saved && stableSourceJson(source.sourceRef) === stableSourceJson(saved.sourceRef) &&
-      source.title === clip(saved.title, 300) && source.description === clip(saved.snippet, 1000);
+      source.title === clip(saved.title, 300) && source.description === clip(saved.snippet, previewLimit);
     if (match) upgraded = true;
     combined.push({ canonicalKey: source.canonicalKey, sourceRef: source.sourceRef as Record<string, string | boolean>,
       title: source.title, snippet: match ? saved.snippet : source.description });

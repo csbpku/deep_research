@@ -3,7 +3,8 @@
 import { prisma } from '@/lib/db';
 import { getWebEnv } from '@/lib/env';
 import { fetchAiEngine } from '@/lib/ai-bff/fetch-ai-engine';
-import { buildEvidenceDigest, cleanEvidenceSnippet, cleanResearchReportForReader } from '@/lib/research-report';
+import { buildEvidenceDigest, cleanResearchReportForReader } from '@/lib/research-report';
+import { matchingCapturedSnapshot } from '@/lib/research-source-snapshot';
 
 /**
  * A bounded, reader-visible evidence packet for follow-up questions.
@@ -22,7 +23,16 @@ export interface ResearchEvidencePacket {
 }
 
 const MAX_FOLLOW_UP_EVIDENCE = 32;
-const MAX_FOLLOW_UP_EXCERPT_CHARS = 1_200;
+const MAX_FOLLOW_UP_EXCERPT_CHARS = 12_000;
+const MAX_FOLLOW_UP_EVIDENCE_CHARS = 120_000;
+
+interface EvidenceSource {
+  sourceRef: unknown;
+  canonicalKey: string;
+  title: string | null;
+  snippet: string | null;
+  createdAt: Date;
+}
 
 interface UpstreamJobOut {
   job_id?: string;
@@ -60,13 +70,16 @@ export async function loadResearchReportForJob(
   if (!job) return null;
 
   let content = '';
+  // A linked draft's ledger is authoritative, including an empty ledger.
+  let draftSources: EvidenceSource[] | null = job.draftResearchId ? [] : null;
 
   if (job.draftResearchId) {
     const draft = await prisma.research.findUnique({
       where: { id: job.draftResearchId },
-      select: { body: true },
+      select: { body: true, researchSources: { select: { sourceRef: true, canonicalKey: true, title: true, description: true, createdAt: true }, orderBy: { createdAt: 'asc' } } },
     });
     content = draft?.body ?? '';
+    draftSources = draft?.researchSources?.map((source) => ({ ...source, snippet: source.description })) ?? [];
   }
 
   if (!content) content = job.outputText ?? '';
@@ -85,40 +98,45 @@ export async function loadResearchReportForJob(
       if (!content && upstream.body.draft_research_id) {
         const draft = await prisma.research.findUnique({
           where: { id: upstream.body.draft_research_id },
-          select: { body: true },
+          select: { body: true, researchSources: { select: { sourceRef: true, canonicalKey: true, title: true, description: true, createdAt: true }, orderBy: { createdAt: 'asc' } } },
         });
         content = draft?.body ?? '';
+        draftSources = draft?.researchSources?.map((source) => ({ ...source, snippet: source.description })) ?? [];
       }
     }
   }
 
-  // If writing stopped after evidence capture, follow-up questions should
-  // still have a grounded, inspectable context. The digest is intentionally
-  // read-only and says that it is not a conclusion; it does not invent a
-  // report merely to make the chat button available.
-  if (!content && job.aiResearchSources.length > 0) {
-    content = buildEvidenceDigest(
-      job.topic || 'AI 调研',
-      job.aiResearchSources.map((source) => ({
-        title: source.title || source.canonicalKey,
-        snippet: source.snippet,
-        href: sourceUrl(source.sourceRef, source.canonicalKey),
-        capturedAt: source.createdAt.toISOString(),
-      })),
-    ) ?? '';
+  const previewLimit = draftSources === null ? 2000 : 1000;
+  const sourceRows = draftSources ?? job.aiResearchSources;
+  const resolvedSources = sourceRows.map((source) => {
+    const match = matchingCapturedSnapshot([{ canonicalKey: source.canonicalKey, sourceRef: source.sourceRef,
+      title: source.title, description: source.snippet }], job.partialSources, previewLimit);
+    return { ...source, snippet: match?.[0]?.snippet ?? source.snippet };
+  });
+
+  // A failed writer may leave a useful evidence-only snapshot.
+  if (!content && resolvedSources.length > 0) {
+    content = buildEvidenceDigest(job.topic || 'AI 调研', resolvedSources.map((source) => ({
+      title: source.title || source.canonicalKey,
+      snippet: source.snippet,
+      href: sourceUrl(source.sourceRef, source.canonicalKey),
+      capturedAt: source.createdAt.toISOString(),
+    }))) ?? '';
   }
 
-  const evidence = job.aiResearchSources
-    .map((source) => toEvidencePacket(source))
-    .filter((source): source is ResearchEvidencePacket => source !== null)
+  const usable = resolvedSources
+    .filter((source) => Boolean(source.snippet?.trim()))
     .slice(0, MAX_FOLLOW_UP_EVIDENCE);
-
+  const perSource = Math.min(MAX_FOLLOW_UP_EXCERPT_CHARS,
+    Math.floor(MAX_FOLLOW_UP_EVIDENCE_CHARS / Math.max(1, usable.length)));
+  const evidence = usable.map((source) => toEvidencePacket(source, perSource))
+    .filter((source): source is ResearchEvidencePacket => source !== null);
   return {
     title: job.topic || 'AI 调研',
     content: cleanResearchReportForReader(
       content.slice(0, 512_000),
-      (job.aiResearchSources.length > 0
-        ? job.aiResearchSources.map((source) => sourceUrl(source.sourceRef, source.canonicalKey))
+      (draftSources !== null || job.aiResearchSources.length > 0
+        ? resolvedSources.map((source) => sourceUrl(source.sourceRef, source.canonicalKey))
         : legacySourceUrls(job.partialSources))
         .filter((href): href is string => href !== null),
     ),
@@ -126,18 +144,26 @@ export async function loadResearchReportForJob(
   };
 }
 
-function toEvidencePacket(source: {
-  sourceRef: unknown;
-  canonicalKey: string;
-  title: string | null;
-  snippet: string | null;
-  createdAt: Date;
-}): ResearchEvidencePacket | null {
-  const excerpt = cleanEvidenceSnippet(source.snippet ?? '', MAX_FOLLOW_UP_EXCERPT_CHARS);
+// Preserve underscores in API identifiers such as return_exceptions. This
+// text remains explicitly untrusted when it enters the research chat prompt.
+function cleanFollowUpEvidence(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
+    .replace(/<[^>]+>/gu, ' ')
+    .replace(/^\s{0,3}#{1,6}\s*/gmu, '')
+    .replace(/\*\*([^*\n]+)\*\*/gu, '$1')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function toEvidencePacket(source: EvidenceSource, limit: number): ResearchEvidencePacket | null {
+  const clean = cleanFollowUpEvidence(source.snippet ?? '');
+  const excerpt = Array.from(clean).slice(0, limit).join('');
   if (!excerpt) return null;
   return {
-    key: source.canonicalKey.slice(0, 512),
-    title: (source.title || source.canonicalKey).slice(0, 300),
+    key: Array.from(source.canonicalKey).slice(0, 512).join(''),
+    title: Array.from(source.title || source.canonicalKey).slice(0, 300).join(''),
     url: sourceUrl(source.sourceRef, source.canonicalKey),
     excerpt,
     capturedAt: source.createdAt.toISOString(),
