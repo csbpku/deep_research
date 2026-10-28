@@ -75,3 +75,47 @@ describe('loadResearchReportForJob', () => {
   });
 });
 
+
+
+it('uses current draft sources, upgrades matching full evidence, and never revives deleted or changed sources', async () => {
+  const date = new Date('2026-09-04T00:00:00Z');
+  const key = 'https://example.com/docs'; const ref = { type: 'url', value: key };
+  const body = 'Relevant context. '.repeat(400) + ' ExceptionGroup and CancelledError are distinct.';
+  const oldKey = 'https://example.com/deleted'; const oldRef = { type: 'url', value: oldKey };
+  const changedKey = 'https://example.com/changed'; const changedRef = { type: 'url', value: changedKey };
+  const partialSources = [
+    { canonical_key: key, source_ref: ref, title: 'Docs', snippet: body },
+    { canonical_key: oldKey, source_ref: oldRef, title: 'Deleted', snippet: 'Deleted old evidence' },
+    { canonical_key: changedKey, source_ref: changedRef, title: 'Changed', snippet: 'Stale original evidence' },
+  ];
+  mocks.jobFindUnique.mockResolvedValue({ id: 'job', topic: 'Asyncio', outputText: '', draftResearchId: 'draft', requesterId: 'user', partialSources,
+    aiResearchSources: [{ canonicalKey: oldKey, sourceRef: oldRef, title: 'Deleted', snippet: 'Deleted old evidence', createdAt: date }] });
+  mocks.researchFindUnique.mockResolvedValue({ body: '# 报告\n\n[删除的来源](https://example.com/deleted)', researchSources: [
+    { canonicalKey: key, sourceRef: ref, title: 'Docs', description: Array.from(body).slice(0, 999).join('').trimEnd() + '…', createdAt: date },
+    { canonicalKey: changedKey, sourceRef: changedRef, title: 'Changed', description: 'Updated evidence', createdAt: date },
+  ] });
+  const result = await loadResearchReportForJob('job', 'req');
+  expect(result?.evidence.map((item) => item.key)).toEqual([key, changedKey]);
+  expect(result?.evidence[0].excerpt).toContain('ExceptionGroup and CancelledError');
+  expect(result?.evidence[1].excerpt).toBe('Updated evidence');
+  expect(result?.content).not.toContain('](https://example.com/deleted)');
+});
+
+it('upgrades a matching 2000-character job preview when no draft exists', async () => {
+  const key = 'https://example.com/docs'; const ref = { type: 'url', value: key };
+  const body = 'Original text. '.repeat(350) + 'Late evidence marker';
+  mocks.jobFindUnique.mockResolvedValue({ id: 'job', topic: 'Topic', outputText: 'Report', draftResearchId: null, requesterId: 'user',
+    partialSources: [{ canonical_key: key, source_ref: ref, title: 'Docs', snippet: body }],
+    aiResearchSources: [{ canonicalKey: key, sourceRef: ref, title: 'Docs', snippet: Array.from(body).slice(0, 1999).join('').trimEnd() + '…', createdAt: new Date() }] });
+  const result = await loadResearchReportForJob('job', 'req');
+  expect(result?.evidence[0].excerpt).toContain('Late evidence marker');
+});
+
+it('fairly limits total follow-up evidence to 120000 characters', async () => {
+  const sources = Array.from({ length: 32 }, (_, i) => ({ canonicalKey: `https://example.com/${i}`, sourceRef: { type: 'url', value: `https://example.com/${i}` }, title: `Doc ${i}`, description: 'X'.repeat(12000), createdAt: new Date() }));
+  mocks.jobFindUnique.mockResolvedValue({ id: 'job', topic: 'Topic', outputText: '', draftResearchId: 'draft', requesterId: 'user', partialSources: [], aiResearchSources: [] });
+  mocks.researchFindUnique.mockResolvedValue({ body: 'Report', researchSources: sources });
+  const result = await loadResearchReportForJob('job', 'req');
+  expect(result?.evidence).toHaveLength(32);
+  expect(result?.evidence.map((source) => source.excerpt.length)).toEqual(Array(32).fill(3750));
+});

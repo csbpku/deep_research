@@ -42,18 +42,21 @@ def test_follow_up_streams_done_frame_with_report_grounding() -> None:
                     "source_type": "web",
                 }
             ],
-            "history": [{"role": "user", "content": "前期问题"}, {"role": "assistant", "content": "前期回答"}],
+            "history": [
+                {"role": "user", "content": "前期问题"},
+                {"role": "assistant", "content": "前期回答"},
+            ],
             "question": "再展开讲讲风险",
         },
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
 
-    assert 'event: start' in body
-    assert 'event: delta' in body
-    assert 'event: done' in body
+    assert "event: start" in body
+    assert "event: delta" in body
+    assert "event: done" in body
     assert '"content":' in body
-    assert 'event: error' not in body
+    assert "event: error" not in body
 
 
 def test_follow_up_rejects_empty_question() -> None:
@@ -112,7 +115,7 @@ def test_follow_up_uses_chat_mode_prompt_and_system_instructions() -> None:
     ) as response:
         body = "".join(response.iter_text())
 
-    assert 'event: error' not in body
+    assert "event: error" not in body
     assert adapter.captured is not None
     assert adapter.captured.request_id.startswith("chat-")
     assert "不要展示内部推理过程" in (adapter.captured.context or "")
@@ -125,3 +128,23 @@ def test_follow_up_uses_chat_mode_prompt_and_system_instructions() -> None:
 def test_clean_model_text_strips_closed_and_unclosed_think_blocks() -> None:
     assert _clean_model_text("<think>内部推理</think>\n这是最终回答。") == "这是最终回答。"
     assert _clean_model_text("<think>未闭合的推理") == ""
+
+
+def test_follow_up_ledger_includes_late_evidence_and_shares_a_bounded_budget() -> None:
+    from ai_engine.server.research_chat import FollowUpBody, _format_evidence_ledger
+
+    body = FollowUpBody(
+        user_id="u",
+        question="Explain cancellation",
+        evidence=[
+            {"key": "first", "excerpt": "X" * 5000 + " ExceptionGroup and CancelledError differ."},
+            {"key": "second", "excerpt": "Y" * 12000},
+        ],
+    )
+    ledger = _format_evidence_ledger(body.evidence)
+    assert "ExceptionGroup and CancelledError differ." in ledger
+    many = [dict(key=f"source-{i}", excerpt="Z" * 12000) for i in range(32)]
+    bounded = FollowUpBody(user_id="u", question="Compare", evidence=many)
+    output = _format_evidence_ledger(bounded.evidence)
+    assert output.count("Z") == 120000
+    assert "[evidence-source 32]" in output
