@@ -26,6 +26,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
 import TextField from '@mui/material/TextField';
+import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import type { ResearchScope, ResearchTimeRange } from '@deep-research/shared/schemas';
@@ -38,9 +39,9 @@ type ContextSourceRef = {
 };
 
 const OBJECTIVE_LABELS: Record<Objective, string> = {
-  explore: '快速概览',
+  explore: '主题概览',
   learn: '系统学习',
-  investigate: '深入调研',
+  investigate: '机制分析',
   decide: '决策对比',
 };
 
@@ -453,47 +454,32 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
     : '研究方案已准备好，可以直接开始。';
 
   return (
-    <Paper component="div" variant="outlined" sx={{ overflow: 'hidden', borderColor: 'primary.main', fontSize: 'var(--dr-type-caption)' }}>
+    <Paper component="div" variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', fontSize: 'var(--dr-type-label)' }}>
       <Box component="header" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box>
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'primary.main' }}>
-            <BookOpenCheck size={14} /> 研究方案
+          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'listTitle', fontWeight: 600, color: 'text.primary' }}>
+            <BookOpenCheck size={18} aria-hidden /> 研究方案
           </Box>
           <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>确认要回答什么、参考哪些资料和需要什么产出；启动后设置会锁定。</Typography>
         </Box>
         <Box sx={{ display: 'flex', flexShrink: 0, alignSelf: { xs: 'flex-end', sm: 'auto' }, alignItems: 'center', gap: 1 }}>
           <Chip size="small" color="primary" variant="outlined" label={OBJECTIVE_LABELS[objective]} />
-          {startAction}
         </Box>
       </Box>
 
-      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', gap: 1.5, px: 2, py: 2 }}>
+      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 3, px: { xs: 2, sm: 3 }, py: 3 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
-          <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>回答什么</Typography>
+          <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>研究什么</Typography>
           <Typography component="span" variant="metadata" color="text.secondary">AI 已根据问题整理，可调整</Typography>
         </Box>
 
-        <Box component="fieldset" sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0 }}>
-        <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>研究目标</Box>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map((value) => (
-            <Button
-              key={value}
-              type="button"
-              aria-pressed={objective === value}
-              size="small"
-              variant={objective === value ? 'contained' : 'outlined'}
-              onClick={() => {
-                setObjective(value);
-                publishPlan({ nextObjective: value });
-              }}
-              sx={{ minHeight: 32, borderRadius: 'var(--dr-radius-pill)', px: 1.5 }}
-            >
-              {OBJECTIVE_LABELS[value]}
-            </Button>
-          ))}
-        </Box>
-        </Box>
+        <TextField select label="研究方式" value={objective} onChange={event => {
+          const value = event.target.value as Objective;
+          setObjective(value);
+          publishPlan({ nextObjective: value });
+        }} sx={{ width: { xs: '100%', sm: 200 } }}>
+          {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map(value => <MenuItem key={value} value={value}>{OBJECTIVE_LABELS[value]}</MenuItem>)}
+        </TextField>
 
       <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
         {objectiveChanged
@@ -591,12 +577,15 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       ) : null}
       </Box>
 
+      <Box component="details" sx={{ borderTop: 1, borderColor: 'divider' }}>
+        <Box component="summary" sx={{ cursor: 'pointer', px: { xs: 2, sm: 3 }, py: 2, color: 'info.main', typography: 'body2', fontWeight: 600 }}>历史资料建议（可选） · 已选 {acceptedContextIds.length} 条</Box>
       <PersonalContextSuggestions
         items={availableContext}
         selectedIds={acceptedContextIds}
         loading={contextSearchLoading}
         onToggle={toggleContext}
       />
+      </Box>
 
       <Box component="section" aria-label="更多设置" sx={{ borderTop: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box sx={{ mb: 1 }}>
@@ -738,6 +727,10 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
           建议补充：{missingFields.map((field) => translateMissing(field)).join('、')}
         </Typography>
       ) : null}
+      <Box component="footer" sx={{ position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5, px: { xs: 2, sm: 3 }, py: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
+        <Typography variant="metadata" color="text.secondary">确认以上设置，启动后将锁定。</Typography>
+        {startAction}
+      </Box>
     </Paper>
   );
 }
@@ -758,11 +751,11 @@ function PlanningFallback({
   children?: ReactNode;
 }) {
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden', borderColor: 'primary.main', bgcolor: 'background.paper', typography: 'metadata' }}>
+    <Paper variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', bgcolor: 'background.paper', typography: 'metadata' }}>
       <Box component="header" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box>
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'primary.main' }}>
-            <BookOpenCheck size={14} /> 研究方案
+          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'listTitle', fontWeight: 600, color: 'text.primary' }}>
+            <BookOpenCheck size={18} aria-hidden /> 研究方案
           </Box>
           <Typography component="p" variant="metadata" sx={{ mt: 0.5, maxWidth: '36rem', lineHeight: 1.6, color: 'text.secondary' }}>
             {loading ? '研究方案正在生成；你可以先调整资料和产出，也可以直接开始。' : '研究方案暂时不可用；你仍可以按当前问题直接开始，完成后再补充方案。'}
@@ -770,12 +763,11 @@ function PlanningFallback({
         </Box>
         <Box sx={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 1 }}>
           <Chip size="small" color={loading ? 'default' : 'primary'} variant="outlined" label={loading ? '计划生成中' : '可直接开始'} />
-          {startAction}
         </Box>
       </Box>
-      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', gap: 1.5, px: 2, py: 2 }}>
+      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 3, px: { xs: 2, sm: 3 }, py: 3 }}>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
-            <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>回答什么</Typography>
+            <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>研究什么</Typography>
             <Typography component="span" variant="metadata" color="text.secondary">{loading ? '正在整理研究角度' : '当前问题仍可执行'}</Typography>
           </Box>
           {loading ? (
@@ -796,10 +788,11 @@ function PlanningFallback({
           )}
       </Box>
       {children ? (
-        <Box component="section" aria-label="资料与产出" sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'action.hover', px: 2, py: 2 }}>
+        <Box component="section" aria-label="资料与产出" sx={{ borderTop: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 3 }}>
           {children}
         </Box>
       ) : null}
+      <Box component="footer" sx={{ display: 'flex', justifyContent: 'flex-end', p: 2, borderTop: 1, borderColor: 'divider' }}>{startAction}</Box>
     </Paper>
   );
 }

@@ -35,7 +35,7 @@ for (const mode of ['light', 'dark'] as const) {
     await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('适用边界与工程代价');
     const output = page.getByRole('radiogroup', { name: '交付什么', exact: true });
     await expect(output.getByRole('radio')).toHaveCount(4);
-    await expect(output.getByRole('radio', { name: /研究稿/ })).toBeChecked();
+    await expect(output.getByRole('radio', { name: /^研究稿/ })).toBeChecked();
     await output.getByRole('radio', { name: /网页简报/ }).check();
     await expect(page.getByRole('region', { name: '启动配置摘要', exact: true })).toContainText('网页简报');
     const depth = page.getByRole('radiogroup', { name: '投入多少', exact: true });
