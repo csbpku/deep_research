@@ -193,6 +193,20 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.brief.decisionDimensions).not.toContain('磁盘与资源占用');
   });
 
+  it('respects the real acceptance request not to expand into unrelated operational topics', async () => {
+    for (const exclusion of [
+      '不展开无关的部署、磁盘或回滚',
+      '不延伸到部署、磁盘或回滚',
+      '不扩展到部署、磁盘或回滚',
+    ]) {
+      const res = await planPost(buildReq({
+        question: `【最终验收】比较 Python asyncio.gather 和 asyncio.TaskGroup 的异常传播与取消行为。仅使用指定官方文档，先给直接结论，再给行为对照及引用；控制在1000字内，${exclusion}。`,
+        context: '直接比较首个异常传播与其他任务是否取消；区分 return_exceptions 和用户取消。',
+      }) as never, ctx());
+      expect((await res.json()).brief.decisionDimensions).toEqual(['异常传播', '取消行为']);
+    }
+  });
+
   it('does not restore an explicitly excluded dimension through the fallback defaults', async () => {
     const res = await planPost(buildReq({ question: '比较 A 和 B，不讨论安全风险' }) as never, ctx());
     expect((await res.json()).brief.decisionDimensions).not.toContain('安全与风险');
