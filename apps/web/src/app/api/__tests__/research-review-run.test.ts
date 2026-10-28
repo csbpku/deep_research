@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const RESEARCH_ID = '22222222-2222-4222-8222-222222222222';
@@ -74,6 +75,22 @@ beforeEach(() => {
 });
 
 describe('version-scoped fact review runs', () => {
+
+  it('queues a manual review against the matching full captured evidence', async () => {
+    const body = '证据'.repeat(800);
+    const canonicalKey = 'https://example.com/docs';
+    const sourceRef = { type: 'url', value: canonicalKey };
+    const short = body.slice(0, 999).trimEnd() + '…';
+    mocks.researchFindUnique.mockResolvedValue({ ...draft(),
+      sourceAiJob: { id: JOB_ID, partialSources: [{ canonical_key: canonicalKey, source_ref: sourceRef, title: '官方文档', snippet: body }] },
+      researchSources: [{ canonicalKey, sourceRef, title: '官方文档', description: short }],
+    });
+    const response = await reviewPost(new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never, params(RESEARCH_ID));
+    expect(response.status).toBe(202);
+    const expected = createHash('sha256').update(JSON.stringify([{ canonicalKey, snippet: body, sourceRef, title: '官方文档' }]), 'utf8').digest('hex');
+    expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected }) }));
+  });
+
   it('queues a new run and returns 202 without waiting for the reviewer', async () => {
     const response = await reviewPost(
       new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never,
