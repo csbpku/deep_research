@@ -179,7 +179,7 @@ function ReaderPanel() {
               </div>
               <Paper component="div" variant="outlined" id="composer-model-menu" className="composer-model-menu hidden" role="dialog" aria-label={t("切换模型")}><label htmlFor="composer-model-search">{t("选择模型")}</label><ReaderTextField id="composer-model-search" type="search" placeholder={t("搜索模型…")} autoComplete="off"  /><div id="composer-model-options" className="composer-model-options" role="listbox" aria-label={t("可用模型")} /><div id="composer-model-status" className="small" role="status" /><div className="composer-model-actions"><ReaderButton id="composer-model-refresh" type="button" variant="text">{t("刷新列表")}</ReaderButton><ReaderButton id="composer-model-settings" type="button" variant="text">{t("连接设置")}</ReaderButton></div></Paper>
               <Paper component="div" variant="outlined" id="chat-selection-card" className="chat-selection-card hidden" aria-label={t("当前选中的原文")}>
-                <div className="selection-preview-heading"><ReaderButton id="clear-chat-selection" type="button" aria-label={t("清除选段，基于整篇")} title={t("清除选段，基于整篇")} variant="text">×</ReaderButton></div>
+                <div className="selection-preview-heading"><ReaderButton id="clear-chat-selection" type="button" aria-label={t("清除选段，基于整篇")} title={t("清除选段，基于整篇")} variant="text" control="icon" sx={{ width: 32, height: 32, minHeight: 32 }}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
                 <blockquote id="chat-selection-quote" />
                 <div id="selection-section" className="selection-preview-actions">
                   <ReaderButton id="copy-chat-selection" type="button" variant="text">{t("复制选段")}</ReaderButton>
@@ -196,13 +196,13 @@ function ReaderPanel() {
               <InputBase id="question-input" className="reader-composer-field" multiline inputComponent="textarea" rows={1} placeholder={t("问问这篇文章…")} sx={{ display: 'flex', width: '100%', padding: 0, '& textarea': { boxSizing: 'border-box' } }} />
               <div className="chat-composer-footer">
                 <div className="composer-tools">
-                  <ReaderButton id="chat-summary" type="button" title={t("总结当前整篇或选段")} variant="text"><ComposerIcon kind="summary" />{t("总结")}</ReaderButton>
-                  <ReaderButton id="chat-translate" type="button" title={t("翻译当前整篇或选段")} variant="text"><ComposerIcon kind="translate" />{t("翻译")}</ReaderButton>
+                  <ReaderButton id="chat-summary" type="button" title={t("总结当前整篇或选段")} variant="text" startIcon={<ComposerIcon kind="summary" />}>{t("总结")}</ReaderButton>
+                  <ReaderButton id="chat-translate" type="button" title={t("翻译当前整篇或选段")} variant="text" startIcon={<ComposerIcon kind="translate" />}>{t("翻译")}</ReaderButton>
                   <TranslationLanguagePicker />
                 </div>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm, flex: '1 1 0', minWidth: 0 }}>
                 <ReaderButton id="web-search-toggle" type="button" variant="text" aria-pressed="false" title={t("按需搜索公开网络；仅发送必要关键词，翻译和总结不联网。")}
-                  sx={{ '&[aria-pressed="true"]': { bgcolor: 'action.selected', color: 'primary.main' } }}>
+                  sx={{ gap: space.xs, '&[aria-pressed="true"]': { bgcolor: 'action.selected', color: 'primary.main' } }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></svg>
                   {t("联网补充")}
                 </ReaderButton>
@@ -218,7 +218,7 @@ function ReaderPanel() {
 
       <section id="settings-view" className="setting-panel hidden">
         <div className="settings-view-head">
-          <div><div className="eyebrow">{t("设置")}</div><Typography component="h2" variant="h2">{t("模型与数据")}</Typography></div>
+          <Typography component="h2" variant="h2">{t("模型与数据")}</Typography>
           <ReaderButton id="close-settings" type="button" variant="text">{t("返回聊天")}</ReaderButton>
         </div>
         <div className="mode-switch" role="group" aria-label={t("Reader 运行方式")}>

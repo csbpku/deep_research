@@ -397,10 +397,29 @@ try {
   await panel.locator('#close-history').click();
   await panel.waitForURL(url => url.pathname === '/sidepanel.html');
 
+  // Localized scope controls used to squeeze the model name down to a few
+  // pixels at 320px. Exercise the actual selection state in both languages.
+  const localizedLayouts = [];
+  for (const language of ['en', 'zh-CN']) {
+    await serviceWorker.evaluate(language => chrome.storage.local.set({ readerUiLanguage: language }), language);
+    await article.bringToFront();
+    await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+    for (const width of [320, 360, 420, 600]) {
+      await panel.setViewportSize({ width, height: 820 });
+      const layout = await layoutReport(panel, `chat-${language}-${width}`);
+      const model = await panel.locator('#composer-model-label').evaluate(element => ({ width: element.clientWidth, label: element.textContent }));
+      if (model.width < 60) throw new Error(`model name is unreadable beside the scope controls: ${JSON.stringify({ language, width, model })}`);
+      await panel.screenshot({ path: tempPath(`reader-polish-${language}-${width}.png`) });
+      localizedLayouts.push({ ...layout, model });
+    }
+  }
+
   console.log(JSON.stringify({
     ok: true,
     extensionId,
     states: [local320, platform360, article420, history320],
+    localizedLayouts,
     chatLayout,
     dockActions,
     annotationHighlight,

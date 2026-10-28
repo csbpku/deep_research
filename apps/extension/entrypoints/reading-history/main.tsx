@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
 import '../../history.css';
-import { ReaderHeader } from '../../components/reader-header';
+import { ComposerIcon, ReaderHeader } from '../../components/reader-header';
 import { ReaderButton, ReaderTextField, ReaderDisclosure } from '../../components/reader-controls';
 import { ReaderThemeProvider } from '../../components/reader-theme';
 
@@ -36,7 +36,7 @@ function HistoryPage() {
               <div className="history-section-kicker" id="history-section-kicker">{t("聊天会话")}</div>
               <Typography component="h2" variant="h2" id="history-section-title">{t("聊天会话")}</Typography>
             </div>
-            <div className="history-search"><ReaderTextField id="history-search-input" type="search" placeholder={t("页面标题、原文或问题")} slotProps={{ htmlInput: { 'aria-label': t("搜索页面或历史问题") } }} /><ReaderButton id="clear-history-search" control="icon" title={t("清除搜索")} aria-label={t("清除搜索")}>×</ReaderButton></div>
+            <div className="history-search"><ReaderTextField id="history-search-input" type="search" placeholder={t("页面标题、原文或问题")} slotProps={{ htmlInput: { 'aria-label': t("搜索页面或历史问题") } }} /><ReaderButton id="clear-history-search" control="icon" title={t("清除搜索")} aria-label={t("清除搜索")}><ComposerIcon kind="close" size={18} /></ReaderButton></div>
           </div>
           <div className="history-summary" role="status" aria-live="polite"><span id="history-summary-text">{t("正在读取本地数据…")}</span><span id="history-filter-text" /></div>
           <div id="history-list" className="history-list" />
