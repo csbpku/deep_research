@@ -53,6 +53,43 @@ beforeEach(() => {
 
 describe('GET /api/ai-research/[jobId] evidence workspace', () => {
 
+  it('does not present a quick-brief planning context as captured source evidence', async () => {
+    mocks.jobFindUnique.mockResolvedValue({
+      requesterId: USER_ID, context: '[用户确认的研究计划] only a plan', reportType: 'summary_brief',
+      reportLength: 'brief', sourcePolicy: 'prefer_user_sources', sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: `context:${JOB_ID}`, source_ref: { type: 'url', value: `context:${JOB_ID}` },
+        title: 'Model guidance', snippet: '[用户确认的研究计划] only a plan', step_captured: 'search' }],
+      updatedAt: new Date('2026-10-28T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [], _count: { aiResearchSources: 0 },
+    });
+    mocks.fetchAiEngine.mockResolvedValue({ ok: true, status: 200, body: {
+      job_id: JOB_ID, status: 'succeeded', final_status: 'succeeded', report_type: 'summary_brief',
+      topic: 'Quick direction', output_text: 'A model-only direction, not verified research.',
+      draft_research_id: null, sources_count: 1, partial_sources_count: 1,
+    } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+    expect(payload.capturedSourcesCount).toBe(0);
+    expect(payload.savedSourcesCount).toBe(0);
+    expect(payload.sources).toEqual([]);
+    expect(payload.artifact.content).toContain('A model-only direction');
+    expect(payload.draftResearchId).toBeNull();
+  });
+
+  it('keeps real URL evidence when synthetic planning context is also present', async () => {
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, reportType: 'summary_brief',
+      sourceRefs: [], brief: null, conversation: [], updatedAt: new Date('2026-10-28T00:00:00Z'), draftResearch: null,
+      partialSources: [
+        { canonical_key: `context:${JOB_ID}`, source_ref: { type: 'url', value: `context:${JOB_ID}` }, title: 'Plan', snippet: 'A user plan' },
+        { canonical_key: 'https://docs.python.org/3/library/asyncio-task.html', source_ref: { type: 'url', value: 'https://docs.python.org/3/library/asyncio-task.html' }, title: 'Official tasks', snippet: 'An actual captured paragraph.' },
+      ], aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+    expect(payload.capturedSourcesCount).toBe(1);
+    expect(payload.sources).toHaveLength(1);
+    expect(payload.sources[0].href).toBe('https://docs.python.org/3/library/asyncio-task.html');
+  });
+
   it('returns the matching bounded captured body for the owner and preserves short fallback', async () => {
     const longBody = 'captured evidence '.repeat(600);
     const preview = longBody.slice(0, 1999).trimEnd() + '…';
