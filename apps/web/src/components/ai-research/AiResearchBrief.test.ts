@@ -240,14 +240,14 @@ function mountBrief(initialProps: BriefProps) {
   flush();
   return {
     flush,
-    clickButton(label: string) {
-      function find(node: ReactNode): (() => void) | undefined {
+    changeObjective(value: string) {
+      function find(node: ReactNode): ((event: { target: { value: string } }) => void) | undefined {
         if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
-        if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return;
-        if (node.props.children === label && node.props.onClick) return node.props.onClick;
+        if (!isValidElement<{ children?: ReactNode; label?: string; select?: boolean; onChange?: (event: { target: { value: string } }) => void }>(node)) return;
+        if (node.props.label === '研究方式' && node.props.select) return node.props.onChange;
         return find(node.props.children);
       }
-      const click = find(output); if (!click) throw new Error(`Button ${label} not found`); click(); flush();
+      const change = find(output); if (!change) throw new Error('Research objective selector not found'); change({ target: { value } }); flush();
     },
     update(next: Partial<BriefProps>) { props = { ...props, ...next }; flush(); },
     suggestions() {
@@ -320,7 +320,7 @@ describe('AI research brief client request races', () => {
       respond(request, request.url.endsWith('/plan') ? { ...plan, brief: { ...plan.brief, objective: 'decide', comparisonOptions: ['A', 'B'], decisionDimensions: ['成本'] } } : { items: [] });
     }
     await vi.advanceTimersByTimeAsync(0); brief.flush();
-    brief.clickButton('系统学习');
+    brief.changeObjective('learn');
     expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ objective: 'learn', comparisonOptions: [], decisionDimensions: [] });
   });
 

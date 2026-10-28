@@ -592,6 +592,17 @@ export function AiResearchBrief({ question, context, topicHint, initialBrief, ch
       ) : null}
       </Box>
 
+      {acceptedContextIds.length > 0 ? (
+        <Box component="section" aria-label="已选历史资料" sx={{ borderTop: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 2, display: 'grid', gap: 1 }}>
+          <Typography variant="body2" sx={{ color: 'info.main', fontWeight: 600 }}>已选历史资料</Typography>
+          {availableContext.filter(item => acceptedContextIds.includes(item.id)).map(item => (
+            <Box key={item.id} sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+              <Typography variant="metadata" sx={{ overflowWrap: 'anywhere', minWidth: 0 }}>{item.title}</Typography>
+              <Button type="button" size="small" aria-label={`取消选择：${item.title}`} onClick={() => toggleContext(item.id)} sx={{ flexShrink: 0 }}>移除</Button>
+            </Box>
+          ))}
+        </Box>
+      ) : null}
       <Box component="details" sx={{ borderTop: 1, borderColor: 'divider' }}>
         <Box component="summary" sx={{ cursor: 'pointer', px: { xs: 2, sm: 3 }, py: 2, color: 'info.main', typography: 'body2', fontWeight: 600 }}>历史资料建议（可选） · 已选 {acceptedContextIds.length} 条</Box>
       <PersonalContextSuggestions
