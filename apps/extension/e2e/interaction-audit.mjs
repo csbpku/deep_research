@@ -539,7 +539,13 @@ try {
   await menuAction('#chat-translate');
   await page.locator('#cancel-translation').click();
   await page.locator('#notice').filter({ hasText: '已取消' }).waitFor();
-  await page.locator('#translation-summary').waitFor({ state: 'hidden' });
+  await page.locator('#cancel-translation').waitFor({ state: 'hidden' });
+  await page.locator('#pause-translation').waitFor({ state: 'hidden' });
+  // Cancellation retains completed translations. A finished-content card
+  // may remain when a batch wins the race with the click on a slower runner.
+  if (await page.locator('#translation-summary').isVisible()) {
+    assert.equal(await page.locator('#translation-summary').getAttribute('data-state'), 'completed');
+  }
   failTranslations = true;
   await menuAction('#chat-translate');
   await page.locator('#translation-summary[data-state="error"]').waitFor();
