@@ -6,7 +6,8 @@ const question = '比较 Playwright 和 Cypress 的工程取舍';
 
 async function mockWorkspace(page: import('@playwright/test').Page) {
   let messages: Array<Record<string, unknown>> = [];
-  const conversation = () => ({ id: conversationId, title: question, jobId: null, status: 'active', messages, messageCount: messages.length, createdAt: '2026-10-28T00:00:00Z', updatedAt: '2026-10-28T00:00:00Z' });
+  let jobId: string | null = null;
+  const conversation = () => ({ id: conversationId, userId: 'fixture-user', title: question, jobId, status: 'active', messages, messageCount: messages.length, createdAt: '2026-10-28T00:00:00Z', updatedAt: '2026-10-28T00:00:00Z' });
   await page.route('**/api/auth/session', route => route.fulfill({ json: { user: { id: 'fixture-user', email: 'fixture@e2e.local', name: '体验测试', role: 'member' }, expires: '2099-01-01' } }));
   await page.route('**/api/ai-research/jobs*', route => route.fulfill({ json: { items: [], total: 0 } }));
   await page.route('**/api/ai-research/conversations*', route => {
@@ -23,6 +24,7 @@ async function mockWorkspace(page: import('@playwright/test').Page) {
     brief: { question, objective: 'decide', questionsToAnswer: ['适用边界与工程代价'], comparisonOptions: ['Playwright', 'Cypress'], decisionDimensions: ['效果与适用范围', '安全与风险'], constraints: [], successCriteria: [], contextRefs: [], outputType: 'markdown', sourcePolicy: 'prefer_user_sources', scope: { timeRange: { preset: 'any' }, regions: [], technologyVersions: [], retrievalNotes: '' } },
   } }));
   await page.route('**/api/me/**', route => route.fulfill({ json: { items: [], count: 0, unreadCount: 0 } }));
+  return { bindJob: (id: string) => { jobId = id; } };
 }
 
 for (const mode of ['light', 'dark'] as const) {
@@ -56,6 +58,7 @@ for (const mode of ['light', 'dark'] as const) {
     await expect(page.getByRole('region', { name: '已选历史资料', exact: true })).toContainText('Python任务实践笔记');
     const issues = await new AxeBuilder({ page }).include('[aria-label="AI 调研对话"]').analyze();
     expect(issues.violations).toEqual([]);
+    await output.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`research-plan-${mode}.png`), fullPage: true });
   });
 }
@@ -73,3 +76,65 @@ for (const width of [320, 390, 768, 1024, 1440]) {
     await page.screenshot({ path: testInfo.outputPath(`research-start-${width}.png`), fullPage: true });
   });
 }
+
+
+test('edited output, effort, sources and focus survive refresh and late planning', async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto('/ai-research');
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+  const focus = page.getByRole('textbox', { name: '重点回答' });
+  await expect(focus).toHaveValue('适用边界与工程代价');
+  await page.getByRole('radio', { name: /^网页简报/ }).check();
+  await page.getByRole('radio', { name: /^单轮研究/ }).check();
+  await page.getByRole('radio', { name: /^仅使用已选资料/ }).check();
+  await page.getByRole('textbox', { name: '添加网页资料（可选）', exact: true }).fill('https://docs.python.org/3/library/asyncio-task.html');
+  await page.getByRole('button', { name: '添加网页资料', exact: true }).click();
+  await focus.fill('保留我明确编辑的取消行为问题');
+  await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('1 条已选资料');
+  await page.reload();
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toHaveValue('保留我明确编辑的取消行为问题');
+  await expect(page.getByRole('radio', { name: /^网页简报/ })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /^单轮研究/ })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /^仅使用已选资料/ })).toBeChecked();
+  await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('1 条已选资料');
+});
+
+test('message save failure never offers a research-submit retry', async ({ page }) => {
+  await mockWorkspace(page);
+  let saves = 0;
+  let submissions = 0;
+  await page.route('**/api/ai-research/conversations/*/messages', route => {
+    saves++;
+    return route.fulfill({ status: 503, json: { code: 'INTERNAL' } });
+  });
+  await page.route('**/api/ai-research', route => { submissions++; return route.fulfill({ status: 500, json: {} }); });
+  await page.goto('/ai-research');
+  const composer = page.getByRole('textbox', { name: 'AI 调研对话输入' });
+  await composer.fill(question);
+  await composer.press('Control+Enter');
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+  await composer.fill('补充官方证据要求');
+  await composer.press('Control+Enter');
+  await expect(page.getByRole('alert').filter({ hasText: '保存失败' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /重试/ })).toHaveCount(0);
+  await expect(composer).toBeEnabled();
+  await composer.fill('继续补充，但不启动研究');
+  await composer.press('Control+Enter');
+  await expect.poll(() => saves).toBeGreaterThan(1);
+  expect(submissions).toBe(0);
+});
+
+test('uncertain submission prevents accidental duplicate jobs', async ({ page }) => {
+  await mockWorkspace(page);
+  let submissions = 0;
+  await page.route('**/api/ai-research', route => { submissions++; return route.fulfill({ status: 503, json: { code: 'AI_ENGINE_UNAVAILABLE' } }); });
+  await page.goto('/ai-research');
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
+  await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+  await page.getByRole('button', { name: '开始调研', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeDisabled();
+  await expect(page.getByRole('link', { name: /任务历史/ })).toBeVisible();
+  expect(submissions).toBe(1);
+});
