@@ -85,3 +85,21 @@ test('slide keyboard shortcuts stay inside the preview', async ({ page }) => {
   await page.keyboard.press('Home');
   await expect(stage).toHaveAccessibleName(/^演示第 1 页/);
 });
+
+test('users can choose and retain slide style without changing the content', async ({ page }) => {
+  await mockSlides(page);
+  await page.goto(`/ai-research/${jobId}`);
+  const stage = page.locator('[data-slide-stage]');
+  await expect(stage).toHaveAttribute('data-slide-style', 'teaching');
+  const style = page.getByRole('combobox', { name: 'Slides 风格', exact: true });
+  await style.click();
+  await page.getByRole('option', { name: '编辑式研究', exact: true }).click();
+  await expect(stage).toHaveAttribute('data-slide-style', 'editorial');
+  await expect(stage).toContainText('失败后的其他任务，谁来收尾');
+  await page.reload();
+  await expect(stage).toHaveAttribute('data-slide-style', 'editorial');
+  await style.click();
+  await page.getByRole('option', { name: '精确技术', exact: true }).click();
+  await expect(stage).toHaveAttribute('data-slide-style', 'technical');
+  await expect(stage).toContainText('失败后的其他任务，谁来收尾');
+});
