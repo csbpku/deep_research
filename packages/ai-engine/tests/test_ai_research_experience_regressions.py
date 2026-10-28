@@ -418,3 +418,69 @@ async def test_changed_queued_evidence_is_marked_stale_before_claim(monkeypatch:
     assert await store.claim_next_review("worker") is None
     assert any("\"executionStatus\" = 'stale'" in sql for sql in calls)
     assert not any("\"executionStatus\" = 'reviewing'" in sql for sql in calls)
+
+
+@pytest.mark.asyncio
+async def test_changed_evidence_during_review_cannot_complete_as_current(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+    from ai_engine.job_runner.db_store import AI_TABLE
+    from ai_engine.job_runner.models import ReviewWorkItem
+
+    calls: list[tuple[str, object]] = []
+    current = {
+        "sourceSnapshot": [
+            {
+                "source_ref": {"type": "url", "value": "https://example.com"},
+                "canonical_key": "https://example.com",
+                "title": "Docs",
+                "snippet": "Changed after claim",
+                "step_captured": "search",
+            }
+        ],
+        "jobSourceSnapshot": [],
+    }
+
+    class Cursor:
+        rowcount = 1
+
+        async def fetchone(self):
+            return current
+
+    class Conn:
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+        async def execute(self, sql: str, params: Any = None):
+            calls.append((sql, params))
+            return Cursor()
+
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield Conn()
+
+    store = object.__new__(DbJobStore)
+    store._pool = Pool()  # type: ignore[assignment]
+    store._pool_open = True
+    store._table_name = AI_TABLE
+    monkeypatch.setattr(store, "open", AsyncMock())
+    work = ReviewWorkItem(
+        job_id="job",
+        requester_id="user",
+        topic="topic",
+        report_type="research_report",
+        report="body",
+        sources=(),
+        draft_research_id="research",
+        attempts=1,
+        review_details={"sourceSnapshotFormat": "canonical-v1"},
+        review_run_id="run",
+        source_snapshot_hash="old-hash",
+        claim_token="token",
+    )
+    await store.complete_review(work, {"status": "passed", "review_outcome": "clear"})
+    assert any("\"executionStatus\" = 'stale'" in sql for sql, _ in calls)
+    assert not any(isinstance(params, tuple) and params and params[0] == "completed" for _, params in calls)
