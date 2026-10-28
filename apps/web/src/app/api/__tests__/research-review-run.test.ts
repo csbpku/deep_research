@@ -88,7 +88,7 @@ describe('version-scoped fact review runs', () => {
     const response = await reviewPost(new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never, params(RESEARCH_ID));
     expect(response.status).toBe(202);
     const expected = createHash('sha256').update(JSON.stringify([{ canonicalKey, snippet: body, sourceRef, title: '官方文档' }]), 'utf8').digest('hex');
-    expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected }) }));
+    expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected, details: expect.objectContaining({ sourceSnapshotFormat: 'canonical-v1' }) }) }));
   });
 
   it('queues the same mixed evidence shown for an added and an edited source', async () => {

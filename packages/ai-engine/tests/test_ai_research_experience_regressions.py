@@ -83,6 +83,9 @@ async def test_draft_review_uses_full_revision_hash_not_body_origin_hash() -> No
     draft = next(params for sql, params in calls if 'INSERT INTO "researches"' in sql)
     review = next(params for sql, params in calls if 'INSERT INTO "research_review_runs"' in sql)
     assert draft[-1] == hashlib.sha256(body.encode()).hexdigest()
+    import json
+
+    assert json.loads(review[-1])["sourceSnapshotFormat"] == "canonical-v1"
     assert review[3] == research_revision_hash(
         {
             "title": snapshot.topic,
