@@ -321,6 +321,40 @@ describe('AI research brief client request races', () => {
     sourceRefs: [{ type: 'research' as const, value: 'confirmed-1', required: false }],
   };
 
+  it.each(['mapped', 'legacy'] as const)('retains selected issue/bookmark refs after %s draft restores without search results', async (version) => {
+    vi.useFakeTimers();
+    const requests: Array<{ url: string; response: ReturnType<typeof deferred<Response>> }> = [];
+    vi.stubGlobal('fetch', vi.fn((url: string) => { const response = deferred<Response>(); requests.push({ url, response }); return response.promise; }));
+    const ready = vi.fn();
+    const question = 'GraphRAG retrieval costs';
+    const selected = [
+      { kind: 'issue' as const, id: 'issue-id', title: '专题', snippet: '', sourceRefs: [{ type: 'summary' as const, value: 'summary-id', required: false }] },
+      { kind: 'bookmark' as const, id: 'bookmark-id', title: '收藏', snippet: '', sourceRefs: [{ type: 'research' as const, value: 'research-id', required: false }] },
+    ];
+    const refs = selected.flatMap((item) => item.sourceRefs);
+    const initialBrief = { objective: 'investigate' as const, suggestedContextIds: selected.map((item) => item.id), assistantMessage: 'Ready', scopeValid: true,
+      ...(version === 'mapped' ? { selectedContextItems: selected } : {}),
+      brief: { objective: 'investigate' as const, question, constraints: [], questionsToAnswer: ['旧重点'], comparisonOptions: [], decisionDimensions: [], successCriteria: [], sourcePolicy: 'prefer_user_sources' as const, outputType: 'markdown' as const,
+        scope: { timeRange: { preset: 'any' as const }, regions: [], technologyVersions: [], retrievalNotes: '' }, contextRefs: refs } };
+    mounted = mountBrief({ question, context: '', initialBrief, onBriefReady: ready });
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) respond(request, request.url.endsWith('/plan') ? planResponse(question) : { items: [] });
+    await vi.advanceTimersByTimeAsync(0); mounted.flush();
+    mounted.changeField('研究重点回答', '保留来源并改重点');
+    expect(ready.mock.calls.at(-1)![0].brief.contextRefs).toEqual(refs);
+    expect(mounted.suggestions().selectedIds).toEqual(['issue-id', 'bookmark-id']);
+    if (version === 'mapped') {
+      expect(mounted.suggestions().items.map((item) => item.id)).toEqual(['issue-id', 'bookmark-id']);
+      mounted.suggestions().onToggle('issue-id'); mounted.flush();
+      expect(ready.mock.calls.at(-1)![0].brief.contextRefs).toEqual([refs[1]]);
+    } else {
+      mounted.suggestions().onToggle('issue-id'); mounted.flush();
+      expect(ready.mock.calls.at(-1)![0].contextSelectionIncomplete).toBe(true);
+      mounted.suggestions().onToggle('bookmark-id'); mounted.flush();
+      expect(ready.mock.calls.at(-1)![0].brief.contextRefs).toEqual([]);
+    }
+  });
+
   it('drops hidden comparison requirements when changing from comparison to learning', async () => {
     const { brief, requests, ready } = setup();
     await vi.advanceTimersByTimeAsync(300);
