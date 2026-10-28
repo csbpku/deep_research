@@ -42,7 +42,7 @@ for (const mode of ['light', 'dark']) test(`${mode}: slides keep readable contra
   expect(contrast.length).toBeGreaterThan(0);
   for (const ratio of contrast) expect(ratio).toBeGreaterThanOrEqual(4.5);
   await expect(stage.getByText('Python asyncio 官方文档', { exact: true })).toHaveCount(0);
-  await expect(stage.getByRole('link', { name: /来源 1/ })).toBeVisible();
+  await expect(stage.getByRole('link', { name: /来源 1/ }).first()).toBeVisible();
   const issues = await new AxeBuilder({ page }).include('[aria-label="Slides 提纲预览"]').analyze();
   expect(issues.violations).toEqual([]);
   await stage.scrollIntoViewIfNeeded();
@@ -57,13 +57,14 @@ for (const width of [390, 1024, 1440]) test(`slides fit the reading surface at $
   const stage = page.locator('[data-slide-stage]');
   const overflow = await stage.evaluate(el => ({
     page: document.documentElement.scrollWidth, viewport: innerWidth,
+    over: Array.from(document.querySelectorAll('body *')).filter(e => e.getBoundingClientRect().right > innerWidth + 2).slice(0, 8).map(e => ({tag:e.tagName, label:e.getAttribute('aria-label'),class:e.className})),
     scrollingChildren: Array.from(el.querySelectorAll('*')).filter(child => {
       const style = getComputedStyle(child);
       return ['auto', 'scroll'].includes(style.overflowY) && child.scrollHeight > child.clientHeight + 1;
     }).length,
     height: el.scrollHeight, clientHeight: el.clientHeight,
   }));
-  expect(overflow.page).toBeLessThanOrEqual(overflow.viewport);
+  expect(overflow.page, JSON.stringify(overflow.over)).toBeLessThanOrEqual(overflow.viewport);
   expect(overflow.scrollingChildren).toBe(0);
   expect(overflow.height).toBeLessThanOrEqual(overflow.clientHeight + 1);
 });

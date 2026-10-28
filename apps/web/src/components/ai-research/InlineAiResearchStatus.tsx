@@ -261,7 +261,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         </Link>
       </Box>
 
-      <Box sx={{ display: 'grid', gap: 2, p: 2 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, gap: 2, p: 2 }}>
         {query.isError ? (
           <Typography role="status" variant="metadata" color="warning.main">
             进度更新暂时中断，正在重试；以下保留最近一次状态。

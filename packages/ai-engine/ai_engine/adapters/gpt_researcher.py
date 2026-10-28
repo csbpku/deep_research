@@ -3649,6 +3649,13 @@ def _report_output_contract(
     generic_comparison = _has_explicit_comparison(topic, context)
 
     if normalized_type == "slides":
+        from ai_engine.contracts.artifacts import extract_slide_limit
+
+        slide_count = extract_slide_limit(f"{topic or ''}\n{context or ''}", fallback=0)
+        page_instruction = (
+            f"总共 {slide_count} 页；封面和收尾页计入总页数，不额外增加参考文献页。\n"
+            if slide_count else ""
+        )
         comparison = official_comparison or generic_comparison
         comparison_hint = (
             "对于多产品比较，按产品和决策维度组织页面，确保每个产品都有单独的事实页；"
@@ -3662,7 +3669,7 @@ def _report_output_contract(
             "不要写长段落，不要把完整来源列表塞进页面。重要判断在对应要点末尾使用证据编号（如 [S2]）；"
             "没有直接证据就写‘本轮未确认’，不要用常识补全。最后一页必须是‘证据缺口与下一步’或等价标题，"
             "明确哪些结论仍需核验以及下一步动作。不要输出参考文献章节，系统会从证据账本补上。\n"
-            f"{comparison_hint}\n"
+            f"{comparison_hint}{page_instruction}\n"
         )
 
     if normalized_type == "web_brief":

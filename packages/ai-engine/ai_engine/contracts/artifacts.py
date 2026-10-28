@@ -37,6 +37,7 @@ def extract_slide_limit(text: str, fallback: int = DEFAULT_SLIDE_LIMIT) -> int:
         r"(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)?",
         r"(\d+)\s*(?:页|张)\s*(?:以内|上限)",
         r"(?:max(?:imum)?|up\s+to)\s*(\d+)\s*(?:slides?|pages?)",
+        r"(\d+)\s*(?:页|张|slides?\b|pages?\b)",
     )
     value: int | None = None
     for pattern in patterns:
