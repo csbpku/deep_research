@@ -4992,7 +4992,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         bounded so a small set is easy to reason about and a required source
         failure stops the job with an actionable error.
         """
-        from ai_engine.fetcher.ai_source_urls import _fetch_user_url
+        from ai_engine.fetcher.ai_source_urls import _fetch_user_url, select_relevant_user_source_sections
 
         fetched_urls = 0
         for ref in job.request.source_refs:
@@ -5024,7 +5024,15 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 continue
 
             if fetched.is_accessible and _usable_source_snippet(fetched.adapter_source.snippet):
-                job.sources = _merge_sources(job.sources, [fetched.adapter_source])
+                source = fetched.adapter_source
+                document = getattr(fetched, "fetched_doc", None)
+                if document is not None and "html" in document.content_type.lower():
+                    relevant = select_relevant_user_source_sections(
+                        document.content.decode("utf-8", errors="replace"), job.request.topic,
+                    )
+                    if relevant and _usable_source_snippet(relevant):
+                        source = replace(source, snippet=relevant)
+                job.sources = _merge_sources(job.sources, [source])
                 fetched_urls += 1
             elif ref.get("required") is True:
                 await self._mark_failed(

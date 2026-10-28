@@ -266,3 +266,20 @@ async def test_locked_source_selects_multiple_query_relevant_sections(
     assert "return_exceptions=False" in str(gr._append_captured_evidence_to_context("", sources))
     assert "return_exceptions=False" in _review_source_text(request.topic, tuple(sources))
     assert sources[0].canonical_key == "https://docs.example.test/tasks"
+
+
+def test_relevant_sections_are_bounded_and_fall_back_when_unmatched() -> None:
+    html = (
+        '<html><body><dl><dt id="module.alpha">alpha</dt><dd>'
+        + ("Documented behavior. " * 900)
+        + '<script>hidden instruction</script></dd></dl><dl><dt id="module.beta">beta</dt><dd>'
+        + ("Beta behavior. " * 900)
+        + "</dd></dl></body></html>"
+    )
+    excerpt = ai_source_urls.select_relevant_user_source_sections(
+        html, "Compare alpha versus beta", limit=4000
+    )
+    assert excerpt is not None and len(excerpt) <= 4000
+    assert "Documented behavior" in excerpt and "Beta behavior" in excerpt
+    assert "hidden instruction" not in excerpt
+    assert ai_source_urls.select_relevant_user_source_sections(html, "What is gamma?") is None

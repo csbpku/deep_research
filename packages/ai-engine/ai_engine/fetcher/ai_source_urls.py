@@ -220,6 +220,63 @@ def _extract_user_source_body(html: str, url: str) -> str:
     return _html_to_text(html)
 
 
+def select_relevant_user_source_sections(html: str, question: str, *, limit: int = 12000) -> str | None:
+    """Select bounded, real HTML sections named in the research question.
+
+    IDs and headings are used only as anchors; quoted text comes from the
+    selected document itself. If no reliable section exists, the caller keeps
+    the ordinary extracted body instead of fabricating evidence.
+    """
+    import re
+
+    from bs4 import BeautifulSoup
+    from bs4.element import Tag
+
+    tokens = {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_.-]{2,}", question)
+        if token.casefold() not in {"compare", "versus", "python", "the", "and", "for", "with"}
+    }
+    if not tokens or limit <= 0:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    sections: list[str] = []
+    seen: set[int] = set()
+    for node in soup.find_all(["dt", "h1", "h2", "h3", "h4"]):
+        if not isinstance(node, Tag):
+            continue
+        identifier = node.get("id")
+        label = identifier if isinstance(identifier, str) else node.get_text(" ", strip=True)
+        identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_.-]{2,}", label.casefold()))
+        aliases = identifiers | {part.rsplit(".", 1)[-1] for part in identifiers}
+        if not any(token in aliases or token.rsplit(".", 1)[-1] in aliases for token in tokens):
+            continue
+        parent = node.parent
+        if not isinstance(parent, Tag):
+            continue
+        # Sphinx API definitions are <dt> inside <dl>; headings typically
+        # live in a <section>. Do not consume an entire unstructured page.
+        if node.name == "dt" and parent.name == "dl":
+            section = parent
+        elif node.name and node.name.startswith("h") and parent.name in {"section", "article"}:
+            section = parent
+        else:
+            continue
+        if id(section) in seen:
+            continue
+        excerpt = _html_to_text(str(section)).strip()
+        if excerpt:
+            sections.append(excerpt)
+            seen.add(id(section))
+        if len(sections) >= 6:
+            break
+    if not sections:
+        return None
+    separator = "\n\n"
+    per_section = max(0, (limit - len(separator) * (len(sections) - 1)) // len(sections))
+    return separator.join(section[:per_section] for section in sections)[:limit]
+
+
 def _html_to_text(html: str) -> str:
     """Cheap HTML→text — same approach as share.html_to_markdown.
 
