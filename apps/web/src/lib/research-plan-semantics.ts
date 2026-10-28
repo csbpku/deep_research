@@ -5,7 +5,7 @@ const VAGUE_OPTION = /^(?:(?:现有|当前|更好|其他|另一个|另一|不同
 
 function cleanOption(value: string): string {
   return value
-    .replace(/^\s*(?:and\s+|和|与)/iu, '')
+    .replace(/^\s*and\s+/iu, '')
     // Scenario and requested comparison dimensions are not part of a name.
     .replace(/\s+(?:在|针对|面向|用于|for\b|in\b)\s*.+$/iu, '')
     .replace(/\s*的(?:工程取舍|研究过程|研究能力|产品能力|适用|异常|取消|优劣|区别|差异|选择|机制|行为|成本|性能).*/u, '')
@@ -14,9 +14,46 @@ function cleanOption(value: string): string {
     .trim();
 }
 
+function protectQuotedNames(value: string): { value: string; restore: (name: string) => string } {
+  let prefix = 'QRESEARCHNAMEX';
+  while (value.includes(prefix)) prefix += 'X';
+  const names: string[] = [];
+  const protectedValue = value.replace(/「[^」]+」|『[^』]+』|“[^”]+”|"[^"]+"|'[^']+'/gu, (match) => {
+    names.push(match.slice(1, -1));
+    return `${prefix}${names.length - 1}Q`;
+  });
+  const token = new RegExp(`${prefix}(\\d+)Q`, 'gu');
+  return {
+    value: protectedValue,
+    restore: (name) => name.replace(token, (_match, index: string) => names[Number(index)]!),
+  };
+}
+
+function splitNamedItems(value: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let index = 0;
+  while (index < value.length) {
+    const separator = value.slice(index).match(/^(?:、|\s*(?:以及|和|与|及)\s*|\s+(?:and|vs\.?|versus)\s+)/iu);
+    // A connector begins a new item only after an existing name. This keeps
+    // a product such as 和鲸 intact at the beginning of an item.
+    if (separator && current.trim()) {
+      parts.push(current.trim());
+      current = '';
+      index += separator[0].length;
+    } else {
+      current += value[index];
+      index += 1;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
 /** Extract only the named options; leave ambiguous questions for confirmation. */
 export function inferComparisonOptions(question: string): string[] {
-  const clauses = question.split(/[:：。！？!?；;\n]/u);
+  const quoted = protectQuotedNames(question);
+  const clauses = quoted.value.split(/[:：。！？!?；;\n]/u);
   // A leading "A vs B: compare costs" must not turn its cost list into options.
   const versus = clauses.find((clause) => /\s+(?:vs\.?|versus)\s+/iu.test(clause));
   const comparison = versus ?? clauses
@@ -29,9 +66,9 @@ export function inferComparisonOptions(question: string): string[] {
     .join('、')
     .replace(/\s+(?:在|针对|面向|用于|for\b|in\b)\s*.+$/iu, '')
     .replace(/\s*的(?:工程取舍|研究过程|研究能力|产品能力|适用|异常|取消|优劣|区别|差异|选择|机制|行为|成本|性能).*/u, '');
-  const options = Array.from(new Set(namedPart
-    .split(/、|\s*(?:以及|和|与|及)\s*|\s+(?:and|vs\.?|versus)\s+/iu)
+  const options = Array.from(new Set(splitNamedItems(namedPart)
     .map(cleanOption)
+    .map(quoted.restore)
     .filter(Boolean)));
   if (options.length < 2 || options.length > 8) return [];
   if (options.some((option) => option.length > 80 || VAGUE_OPTION.test(option) || INSTRUCTION.test(option))) return [];
@@ -53,10 +90,15 @@ const DIMENSION_SIGNALS: ReadonlyArray<readonly [string, RegExp]> = [
 
 /** Defaults are suggestions; operational gates are added only for requested topics. */
 export function inferDecisionDimensions(question: string, context = ''): string[] {
+  const exclusions: string[] = [];
   const relevant = `${question}\n${context}`.replace(
-    /(?:不(?:需要|讨论|考虑|关注|比较|涉及)|无需|不要)[^。；;\n]*/gu,
-    '',
+    /(?:不(?:需要|讨论|考虑|关注|比较|涉及)|无需|不要)(?!忽略|遗漏)[^。；;\n]*?(?=但是|但|不过|然而|同时|而且|并且|\bbut\b|\bhowever\b|[。；;\n]|$)/gu,
+    (excluded) => { exclusions.push(excluded); return ''; },
   );
   const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant)).map(([dimension]) => dimension);
-  return inferred.length > 0 ? inferred : [...DEFAULT_RESEARCH_DECISION_DIMENSIONS];
+  if (inferred.length > 0) return inferred;
+  const excludedDimensions = new Set(DIMENSION_SIGNALS
+    .filter(([, signal]) => exclusions.some((excluded) => signal.test(excluded)))
+    .map(([dimension]) => dimension));
+  return DEFAULT_RESEARCH_DECISION_DIMENSIONS.filter((dimension) => !excludedDimensions.has(dimension));
 }
