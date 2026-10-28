@@ -33,6 +33,7 @@ import {
   reviewCoverageStatus,
 } from '../../../../lib/research-review-decisions';
 import { evaluateResearchSufficiency } from '../../../../lib/research-sufficiency';
+import { isSyntheticResearchSource } from '../../../../lib/research-evidence-profile';
 
 const IdParam = z.object({ jobId: z.string().uuid() });
 const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
@@ -354,7 +355,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   const allEvidenceSources = [
     ...researchLedgerSources,
     ...jobEvidenceSources.filter((source) => !researchLedgerKeys.has(source.canonicalKey)),
-  ];
+  ].filter((source) => !isSyntheticResearchSource(source));
   const evidenceSources = allEvidenceSources.slice(0, 24);
   const savedSourcesCount = allEvidenceSources.length;
   const capturedSourcesCount = allEvidenceSources.filter((source) => Boolean(source.snippet?.trim())).length;

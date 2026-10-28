@@ -20,6 +20,7 @@ import { ApiHttpError, toApiHttpError } from '@/lib/errors/api-error';
 import { retryOnceAi, friendlyMessage } from '@/lib/errors/friendly';
 import { progressPct } from '@/lib/ai-progress';
 import { researchUserStatus } from '@/lib/research-user-status';
+import { capturedResearchSourceCount } from '@/lib/research-evidence-profile';
 import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
 import type { DeepResearchProgress } from '@/lib/ai-progress';
 
@@ -31,6 +32,7 @@ interface InlineJob {
   currentStep: string | null;
   sourcesCount: number;
   partialSourcesCount: number;
+  capturedSourcesCount?: number;
   failedSourcesCount: number;
   savedSourcesCount?: number;
   draftResearchId: string | null;
@@ -210,10 +212,8 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
   // before the durable source count catches up. Never fall back to
   // sourcesCount here: that is a discovered-page count, not proof that a
   // body was fetched and can be inspected.
-  const evidenceCount = Math.max(
-    job.partialSourcesCount ?? 0,
-    job.researchProgress?.sourcesCaptured ?? 0,
-  );
+  const evidenceCount = capturedResearchSourceCount(job);
+  const isBrief = job.reportType === 'summary_brief';
   const evidenceOnly = job.deliverableStatus === 'evidence_only';
   const userStatus = researchUserStatus({
     status,
@@ -267,7 +267,8 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
             进度更新暂时中断，正在重试；以下保留最近一次状态。
           </Typography>
         ) : null}
-        <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} />
+        {!isBrief ? <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} /> : null}
+        {isBrief ? <Typography variant="metadata" color="text.secondary">快速判断不做完整检索或逐条核验；{evidenceCount > 0 ? `已参考 ${evidenceCount} 条可核对资料。` : '仅模型摘录，未保存可核对资料。'}</Typography> : null}
 
         {reviewUnavailable ? (
           <Box sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }} role="status">
@@ -283,7 +284,7 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
 
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
           <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'divider', borderRadius: 999, bgcolor: 'background.paper', px: 1, py: 0.5, typography: 'metadata', color: 'text.secondary' }}>
-            已抓取正文 <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: 'text.primary' }}>{evidenceCount}</Box>
+            {isBrief ? '可核对资料' : '已抓取正文'} <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: 'text.primary' }}>{evidenceCount}</Box>
           </Box>
           {terminal && status === 'partial' && job.partialSourcesCount > 0 ? (
             <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'warning.main', borderRadius: 999, bgcolor: 'var(--dr-color-warning-container)', px: 1, py: 0.5, typography: 'metadata', color: 'warning.main' }}>

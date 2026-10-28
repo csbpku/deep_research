@@ -77,6 +77,7 @@ import {
   type ResearchSufficiency,
 } from '@/lib/research-sufficiency';
 import { classifySourceProvenance } from '@/lib/source-provenance';
+import { capturedResearchSourceCount } from '@/lib/research-evidence-profile';
 import { externalContentLabel, hasExternalInstructionSignal } from '@/lib/external-content-safety';
 import type { ResearchBrief, ResearchScope } from '@deep-research/shared/schemas';
 
@@ -586,11 +587,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
   // The durable research ledger is authoritative after claim-scoped evidence
   // tasks. Runtime progress is only a historical snapshot and may still say
   // "1 captured" after the ledger has grown to 12 sources.
-  const capturedSources = Math.max(
-    s.capturedSourcesCount ?? 0,
-    s.partialSourcesCount ?? 0,
-    s.researchProgress?.sourcesCaptured ?? 0,
-  );
+  const capturedSources = capturedResearchSourceCount(s);
   // Evidence-only / legacy jobs may not have a sufficiency snapshot, but the
   // source list still needs to communicate independent evidence clusters.
   // Derive the fallback from normalized provenance keys instead of showing a
@@ -625,12 +622,7 @@ function StatusBody({ s }: { s: AiJobStatus }) {
   // A brief can finish as a model-only answer when retrieval returns no
   // usable page. That is an execution result, not an evidence-backed
   // research result; keep the distinction visible at the point of reading.
-  const evidenceFreeBrief = isBrief
-    && isTerminal
-    && s.sources.length === 0
-    && s.sourcesCount === 0
-    && s.savedSourcesCount === 0
-    && capturedSources === 0;
+  const evidenceFreeBrief = isBrief && isTerminal && hasReaderReport && capturedSources === 0;
   // Research execution and fact review are separate lifecycles. Prefer the
   // version-scoped run whenever the legacy mirror and the durable run differ.
   const reviewExecutionStatus = s.reviewRun?.executionStatus
@@ -789,12 +781,14 @@ function StatusBody({ s }: { s: AiJobStatus }) {
             </Box>
             <Typography component="h2" variant="h2" sx={{ mt: space.md, letterSpacing: '-0.025em' }}>
               {isTerminal
-                ? evidenceOnly ? '资料已保留' : evidenceFreeBrief ? `${outputLabel}已生成，但未找到资料` : finalStatus === 'succeeded' ? reportNeedsReview ? `${outputLabel}已生成` : '研究完成' : '研究已结束'
+                ? evidenceOnly ? '资料已保留' : evidenceFreeBrief ? '仅模型摘录' : isBrief && hasReaderReport ? '快速判断已生成' : finalStatus === 'succeeded' ? reportNeedsReview ? `${outputLabel}已生成` : '研究完成' : '研究已结束'
                 : hasReaderReport ? `${outputLabel}已生成` : '正在建立证据链'}
             </Typography>
             <Typography component="p" variant="body2" sx={{ mt: space.xs, ...textSx.muted }} aria-live="polite" aria-atomic="true">
               {evidenceFreeBrief
-                ? '本轮没有保存可核对资料；下面的内容只是模型摘录，不能作为已验证的研究结论。'
+                ? '本轮仅模型摘录，不做完整检索或逐条核验；未保存可核对资料，不能作为已验证的研究结论。'
+                : isBrief
+                  ? '这是快速判断，不做完整检索或逐条核验；仅适合作为方向提示。'
                 : reviewInProgress
                 ? `${outputLabel}已整理，正在补充依据；完成后会自动更新。`
                 : !isTerminal && hasReaderReport
@@ -852,7 +846,9 @@ function StatusBody({ s }: { s: AiJobStatus }) {
               </Typography>
               <Typography component="h3" sx={{ mt: space.xs, ...textSx.titleCompact }}>{s.artifact.title}</Typography>
               <Typography component="p" sx={{ mt: space.xs, ...textSx.caption, ...textSx.muted }}>
-                {s.sources.length > 0
+                {evidenceFreeBrief
+                  ? `仅模型摘录 · 未保存可核对资料 · 第 ${s.artifact.version} 版`
+                  : s.sources.length > 0
                 ? `${s.sources.length < s.savedSourcesCount ? `已保存 ${s.savedSourcesCount} 条，当前展示最近 ${s.sources.length} 条` : `${s.savedSourcesCount} 条资料`} · ${capturedSources} 条有可核对正文 · 第 ${s.artifact.version} 版 · 可打开来源并核对原文`
                   : s.sourcesCount > 0
                     ? `运行时发现 ${s.sourcesCount} 条候选网页，但没有保存可核对正文 · 第 ${s.artifact.version} 版`
@@ -1280,7 +1276,7 @@ function deepResearchActivityLabel(s: AiJobStatus): string {
   const progress = s.researchProgress;
   const total = progress?.totalBranches ?? progress?.branchesTotal ?? 0;
   const completed = progress?.totalBranchesCompleted ?? progress?.branchesCompleted ?? 0;
-  const captured = Math.max(s.capturedSourcesCount ?? 0, s.partialSourcesCount ?? 0, progress?.sourcesCaptured ?? 0);
+  const captured = capturedResearchSourceCount(s);
   if (progress?.state === 'reviewing') {
     return `正在整理依据 · ${captured} 条可核对正文`;
   }
@@ -1358,11 +1354,7 @@ function checkpointGaps(s: AiJobStatus, isTerminal: boolean): string[] {
       s.savedSourcesCount ?? 0,
       s.researchProgress?.sourcesDiscovered ?? 0,
     );
-    const captured = Math.max(
-      s.capturedSourcesCount ?? 0,
-      s.partialSourcesCount ?? 0,
-      s.researchProgress?.sourcesCaptured ?? 0,
-    );
+    const captured = capturedResearchSourceCount(s);
     if (captured < discovered) {
       gaps.push(`还需核对 ${discovered - captured} 条检索线索，确认它们是否能支撑后续判断。`);
     } else {
@@ -2392,7 +2384,7 @@ function stepState(s: AiJobStatus, idx: number): StepState {
 function countForStep(s: AiJobStatus, stepKey: string, state: StepState): string | null {
   if (stepKey === 'search') {
     const saved = Math.max(s.savedSourcesCount ?? 0, s.sources?.length ?? 0);
-    const captured = Math.max(s.capturedSourcesCount ?? 0, s.partialSourcesCount ?? 0, s.researchProgress?.sourcesCaptured ?? 0);
+    const captured = capturedResearchSourceCount(s);
     if (saved > 0 && captured > 0 && captured !== saved) return `${saved} 条已保存 · ${captured} 条可核对正文`;
     if (saved > 0) return `${saved} 条已保存`;
     if (captured > 0) return `${captured} 条可核对正文`;
