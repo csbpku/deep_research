@@ -68,6 +68,19 @@ it.each([
   expect(readResearchDraft(storage, 'owner', 'chat')).toBeNull();
 });
 
+it('validates saved selected-source mappings while accepting old drafts', () => {
+  const storage = memoryStorage();
+  const mapped = { ...completeDraft, brief: { ...completeDraft.brief!, selectedContextItems: [{ kind: 'issue' as const, id: 'issue', title: '专题', snippet: '', sourceRefs: [{ type: 'summary' as const, value: '11111111-1111-4111-8111-111111111111', required: false }] }] } };
+  expect(writeResearchDraft(storage, 'owner', 'chat', mapped)).toBe(true);
+  expect(readResearchDraft(storage, 'owner', 'chat')).toEqual(mapped);
+  storage.setItem('ai-research-draft:v1:owner:chat', JSON.stringify({ ...mapped, brief: { ...mapped.brief, selectedContextItems: [{ kind: 'issue', id: 12 }] } }));
+  expect(readResearchDraft(storage, 'owner', 'chat')).toBeNull();
+  storage.setItem('ai-research-draft:v1:owner:chat', JSON.stringify({ ...mapped, brief: { ...mapped.brief, legacyContextSelection: { ids: ['x'], refs: [{ type: 'summary', value: 42 }] } } }));
+  expect(readResearchDraft(storage, 'owner', 'chat')).toBeNull();
+  expect(writeResearchDraft(storage, 'owner', 'chat', completeDraft)).toBe(true);
+  expect(readResearchDraft(storage, 'owner', 'chat')).toEqual(completeDraft);
+});
+
 it('handles unavailable storage, oversized data and missing identities without leaking a draft', () => {
   const storage = memoryStorage();
   expect(writeResearchDraft(storage, '', 'chat', completeDraft)).toBe(false);
