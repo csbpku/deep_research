@@ -232,6 +232,8 @@ Web entrypoint 和 setup 都会幂等补齐默认雷达源，并引导 bootstrap
 
 GitHub Actions 在 CI 通过后构建 Web 和 AI engine 的 Linux/amd64 镜像，推送不可变 commit SHA 标签；VPS 只拉取该 SHA，不在生产机重新构建。VPS `.env`、数据库卷、备份和日志不进入镜像。
 
+CI 保存同 SHA 的变更计划和已验证 Reader ZIP，Deploy 复用这两类产物。镜像并行构建，实际生产切换串行；部署文件先暂存，再与旧配置快照一起交给独立发布脚本处理。发布顺序、版本门禁和回滚边界以 [`infra/README.md`](../infra/README.md) 为准。
+
 发布后至少验证：
 
 ```bash
