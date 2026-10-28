@@ -231,6 +231,16 @@ function markPending(userId: string, conversationId: string): boolean {
     return window.localStorage.getItem(key) === 'pending';
   } catch { return false; }
 }
+// A completed marker lets a stale tab resume the existing job even after the
+// tab that submitted it has released its lock.
+function readSubmissionMarker(userId: string, conversationId: string): string | null | undefined {
+  try { return window.localStorage.getItem(pendingSubmissionKey(userId, conversationId)); }
+  catch { return undefined; }
+}
+function markSubmitted(userId: string, conversationId: string, jobId: string): void {
+  try { window.localStorage.setItem(pendingSubmissionKey(userId, conversationId), `job:${jobId}`); }
+  catch { /* Preserve the pending marker and require history verification. */ }
+}
 function readPending(userId: string, conversationId: string): boolean | null {
   try { return window.localStorage.getItem(pendingSubmissionKey(userId, conversationId)) !== null; }
   catch { return null; }
@@ -357,10 +367,15 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         setActiveJobId(conversation.jobId ?? null);
         const owner = conversation.userId ?? null;
         setOwnerId(owner);
-        if (owner && conversation.jobId) clearPending(owner, conversation.id);
+        if (owner && conversation.jobId) markSubmitted(owner, conversation.id, conversation.jobId);
         if (owner && !conversation.jobId) {
+          const marker = readSubmissionMarker(owner, conversation.id);
           const pending = readPending(owner, conversation.id);
-          if (pending !== false) {
+          if (marker?.startsWith('job:') && marker.length > 4) {
+            setActiveJobId(marker.slice(4));
+            setSubmissionUncertain(false);
+            setError(null); setErrorKind(null);
+          } else if (pending !== false) {
             setSubmissionUncertain(true);
             setErrorKind('submit');
             setError(pending === null ? '无法读取浏览器存储，暂时不能确认上次提交状态。请先查看任务历史。' : '上次提交结果尚未确认，请先查看任务历史。');
@@ -384,6 +399,30 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       });
     return () => { cancelled = true; };
   }, [currentConversationId]);
+
+  useEffect(() => {
+    if (!ownerId || !currentConversationId) return;
+    const key = pendingSubmissionKey(ownerId, currentConversationId);
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage || event.key !== key) return;
+      if (event.newValue?.startsWith('job:') && event.newValue.length > 4) {
+        setActiveJobId(event.newValue.slice(4));
+        setSubmissionUncertain(false);
+        setError(null);
+        setErrorKind(null);
+      } else if (event.newValue !== null) {
+        setSubmissionUncertain(true);
+        setErrorKind('submit');
+        setError('另一标签页的提交结果尚未确认，请先查看任务历史。');
+      } else {
+        setSubmissionUncertain(false);
+        setErrorKind((current) => current === 'submit' ? null : current);
+        setError((current) => current?.includes('提交结果尚未确认') ? null : current);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [ownerId, currentConversationId]);
 
   useEffect(() => {
     if (!ownerId || !currentConversationId || hydrating || activeJobId) return;
@@ -560,6 +599,27 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     setSourceDraft('');
   }
 
+  async function allowRetryAfterHistory() {
+    if (!ownerId || !currentConversationId || !navigator.locks?.request) {
+      setError('无法取得防重复提交锁，请使用支持 Web Locks 的浏览器后重试。');
+      return;
+    }
+    try {
+      await navigator.locks.request(pendingSubmissionKey(ownerId, currentConversationId), { ifAvailable: true }, (lock) => {
+        if (!lock) {
+          setError('另一标签页仍在提交，请等待结果后再核对历史。');
+          return;
+        }
+        const marker = readSubmissionMarker(ownerId, currentConversationId);
+        if (marker?.startsWith('job:') && marker.length > 4) {
+          setActiveJobId(marker.slice(4)); setSubmissionUncertain(false); setError(null); setErrorKind(null);
+        } else if (marker !== undefined && clearPending(ownerId, currentConversationId)) {
+          setSubmissionUncertain(false); setError(null); setErrorKind(null);
+        } else setError('无法更新浏览器存储，请允许本地存储后再试。');
+      });
+    } catch { setError('无法取得防重复提交锁，请刷新页面后重试。'); }
+  }
+
   async function submit(extraMessages: Message[] = []) {
     if (submitting || activeJobId || conversationCreating || hydrating || submissionUncertain) return;
     if (topic.trim().length < 2) {
@@ -603,76 +663,103 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       if (!created || !created.userId) { setSubmitting(false); return; }
       targetId = created.id; targetOwner = created.userId;
     }
-    if (!markPending(targetOwner, targetId)) {
-      setErrorKind('save');
-      setError('无法保存防重复提交状态。请允许此浏览器使用本地存储后再启动研究。');
+    const lockOwner = targetOwner;
+    const lockTarget = targetId;
+    if (!navigator.locks?.request) {
+      setErrorKind('validation');
+      setError('此浏览器无法安全防止重复提交，请使用支持 Web Locks 的浏览器后重试。');
       setSubmitting(false); return;
     }
-    setSubmissionUncertain(true);
-    const placeholder = pushMessage('assistant', '正在提交研究方案并启动调研…');
     try {
-      const conversationSnapshot = [...messages, ...extraMessages].map(({ id, role, content }) => ({ id, role, content }));
-      const submitBody = brief
-        ? {
-            brief: brief.brief
-              ? {
-                  ...brief.brief,
-                  question: brief.brief.question || topic.trim(),
-                  sourcePolicy: sourcePolicy as 'prefer_user_sources' | 'only_user_sources',
-                  outputType: (reportType === 'slides' ? 'slides' : reportType === 'web_brief' ? 'web' : 'markdown') as 'markdown' | 'slides' | 'web',
-                }
-              : undefined,
-            topic: topic.trim(),
-            context: context.trim() || undefined,
-            reportType,
-            reportLength: reportType === 'summary_brief' ? 'brief' : reportLength,
-            sourcePolicy,
-            sourceRefs: effectiveSourceRefs,
-            primaryTopicId: brief.primaryTopicId ?? topicIdQuery ?? undefined,
-            idempotencyKey: createUuid(),
-            conversationId: targetId,
-            conversation: conversationSnapshot,
-          }
-        : {
-            topic: topic.trim(),
-            context: context.trim() || undefined,
-            reportType,
-            reportLength: reportType === 'summary_brief' ? 'brief' : reportLength,
-            sourcePolicy,
-            sourceRefs: effectiveSourceRefs,
-            idempotencyKey: createUuid(),
-            conversationId: targetId,
-            conversation: conversationSnapshot,
-          };
+      await navigator.locks.request(pendingSubmissionKey(lockOwner, lockTarget), async () => {
+        const existing = readSubmissionMarker(lockOwner, lockTarget);
+        if (existing?.startsWith('job:') && existing.length > 4) {
+          setActiveJobId(existing.slice(4));
+          setSubmissionUncertain(false);
+          setError(null); setErrorKind(null);
+          return;
+        }
+        if (existing !== null) {
+          setSubmissionUncertain(true);
+          setErrorKind('submit');
+          setError(existing === undefined ? '无法读取浏览器存储，暂时不能确认上次提交状态。请先查看任务历史。' : '上次提交结果尚未确认，请先查看任务历史。');
+          return;
+        }
+        if (!markPending(lockOwner, lockTarget)) {
+          setErrorKind('save');
+          setError('无法保存防重复提交状态。请允许此浏览器使用本地存储后再启动研究。');
+          return;
+        }
+        setSubmissionUncertain(true);
+        const placeholder = pushMessage('assistant', '正在提交研究方案并启动调研…');
+        try {
+          const conversationSnapshot = [...messages, ...extraMessages].map(({ id, role, content }) => ({ id, role, content }));
+          const submitBody = brief
+            ? {
+                brief: brief.brief
+                  ? {
+                      ...brief.brief,
+                      question: brief.brief.question || topic.trim(),
+                      sourcePolicy: sourcePolicy as 'prefer_user_sources' | 'only_user_sources',
+                      outputType: (reportType === 'slides' ? 'slides' : reportType === 'web_brief' ? 'web' : 'markdown') as 'markdown' | 'slides' | 'web',
+                    }
+                  : undefined,
+                topic: topic.trim(),
+                context: context.trim() || undefined,
+                reportType,
+                reportLength: reportType === 'summary_brief' ? 'brief' : reportLength,
+                sourcePolicy,
+                sourceRefs: effectiveSourceRefs,
+                primaryTopicId: brief.primaryTopicId ?? topicIdQuery ?? undefined,
+                idempotencyKey: createUuid(),
+                conversationId: lockTarget,
+                conversation: conversationSnapshot,
+              }
+            : {
+                topic: topic.trim(),
+                context: context.trim() || undefined,
+                reportType,
+                reportLength: reportType === 'summary_brief' ? 'brief' : reportLength,
+                sourcePolicy,
+                sourceRefs: effectiveSourceRefs,
+                idempotencyKey: createUuid(),
+                conversationId: lockTarget,
+                conversation: conversationSnapshot,
+              };
 
-      const response = await fetch('/api/ai-research', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(submitBody),
+          const response = await fetch('/api/ai-research', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(submitBody),
+          });
+          if (!response.ok) {
+            const uncertain = response.status >= 500 || response.status === 408;
+            const cleared = !uncertain && clearPending(lockOwner, lockTarget);
+            setErrorKind(uncertain || !cleared ? 'submit' : 'validation');
+            if (cleared) setSubmissionUncertain(false);
+            setError(friendlyMessage(await toApiHttpError(response, '提交结果未确认'), '提交结果未确认，请先查看任务历史。'));
+            setMessages((current) => current.filter((message) => message.id !== placeholder.id));
+            return;
+          }
+          const body = await response.json() as { jobId: string };
+          markSubmitted(lockOwner, lockTarget, body.jobId);
+          writeLastSubmitted(body.jobId, topic.trim());
+          setActiveJobId(body.jobId);
+          const finalContent = '调研已启动。进度、来源和结果会持续显示在这里；完成后也可以在任务页继续追问。';
+          setMessages((current) => current.map((message) => (
+            message.id === placeholder.id ? { ...message, content: finalContent } : message
+          )));
+          void persistMessages([{ role: 'assistant', content: finalContent }]);
+        } catch (err) {
+          setErrorKind('submit');
+          setSubmissionUncertain(true);
+          setError(friendlyMessage(err, '提交结果未确认，请先查看任务历史。'));
+          setMessages((current) => current.filter((message) => message.id !== placeholder.id));
+        }
       });
-      if (!response.ok) {
-        const uncertain = response.status >= 500 || response.status === 408;
-        const cleared = !uncertain && clearPending(targetOwner, targetId);
-        setErrorKind(uncertain || !cleared ? 'submit' : 'validation');
-        if (cleared) setSubmissionUncertain(false);
-        setError(friendlyMessage(await toApiHttpError(response, '提交结果未确认'), '提交结果未确认，请先查看任务历史。')); 
-        setMessages((current) => current.filter((message) => message.id !== placeholder.id));
-        return;
-      }
-      const body = await response.json() as { jobId: string };
-      clearPending(targetOwner, targetId);
-      writeLastSubmitted(body.jobId, topic.trim());
-      setActiveJobId(body.jobId);
-      const finalContent = '调研已启动。进度、来源和结果会持续显示在这里；完成后也可以在任务页继续追问。';
-      setMessages((current) => current.map((message) => (
-        message.id === placeholder.id ? { ...message, content: finalContent } : message
-      )));
-      void persistMessages([{ role: 'assistant', content: finalContent }]);
-    } catch (err) {
-      setErrorKind('submit');
-      setSubmissionUncertain(true);
-      setError(friendlyMessage(err, '提交结果未确认，请先查看任务历史。'));
-      setMessages((current) => current.filter((message) => message.id !== placeholder.id));
+    } catch {
+      setErrorKind('validation');
+      setError('无法取得防重复提交锁，请刷新页面后重试。');
     } finally {
       setSubmitting(false);
     }
@@ -834,11 +921,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             <Box component="span" sx={{ flex: 1 }}>{error}</Box>
             {errorKind === 'submit' ? <>
               <Link component={NextLink} href="/ai-research?history=1">先查看任务历史，确认是否已启动</Link>
-              <Button type="button" variant="outline" size="xs" onClick={() => {
-                if (ownerId && currentConversationId && clearPending(ownerId, currentConversationId)) {
-                  setSubmissionUncertain(false); setError(null); setErrorKind(null);
-                } else setError('无法更新浏览器存储，请允许本地存储后再试。');
-              }}>已核对历史，允许重新提交</Button>
+              <Button type="button" variant="outline" size="xs" onClick={() => { void allowRetryAfterHistory(); }}>已核对历史，允许重新提交</Button>
             </> : null}
             {loginRequired ? (
               <Link component={NextLink} href="/signin?callbackUrl=%2Fai-research" underline="always" sx={{ typography: 'metadata', fontWeight: 500, textUnderlineOffset: 2 }}>
