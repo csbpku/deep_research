@@ -283,3 +283,53 @@ def test_relevant_sections_are_bounded_and_fall_back_when_unmatched() -> None:
     assert "Documented behavior" in excerpt and "Beta behavior" in excerpt
     assert "hidden instruction" not in excerpt
     assert ai_source_urls.select_relevant_user_source_sections(html, "What is gamma?") is None
+
+
+def test_review_uses_mixed_matching_and_changed_sources() -> None:
+    from dataclasses import replace
+    from ai_engine.job_runner import db_store
+    from ai_engine.server.app import _review_source_snapshot_hash
+
+    original = AdapterSource(
+        source_ref={"type": "url", "value": "https://example.com/docs"},
+        canonical_key="https://example.com/docs",
+        title="Docs",
+        snippet="long evidence " * 400,
+        score=1.0,
+        step_captured="search",
+    )
+    changed = replace(
+        original,
+        source_ref={"type": "url", "value": "https://example.com/edited"},
+        canonical_key="https://example.com/edited",
+        title="Changed",
+        snippet="Old evidence text",
+    )
+    new_source = replace(
+        original,
+        source_ref={"type": "url", "value": "https://example.com/new"},
+        canonical_key="https://example.com/new",
+        title="Added",
+        snippet="Added evidence text",
+    )
+    short_original = replace(original, snippet=db_store._clip_db_text(original.snippet, 1000))
+    updated = replace(changed, snippet="New evidence text")
+
+    def row(source: AdapterSource) -> dict[str, object]:
+        return {
+            "source_ref": source.source_ref,
+            "canonical_key": source.canonical_key,
+            "title": source.title,
+            "snippet": source.snippet,
+            "step_captured": "search",
+        }
+
+    previews = [row(short_original), row(updated), row(new_source)]
+    prior = [row(original), row(changed)]
+    expected = (original, updated, new_source)
+    digest = _review_source_snapshot_hash(expected)
+    loaded = db_store._review_sources_for_run(previews, prior, digest)
+    assert [source.snippet for source in loaded] == [source.snippet for source in expected]
+    assert [source.snippet for source in db_store._review_sources_for_run(previews, prior, "invalid")] == [
+        source.snippet for source in (short_original, updated, new_source)
+    ]

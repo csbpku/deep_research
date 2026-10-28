@@ -91,6 +91,30 @@ describe('version-scoped fact review runs', () => {
     expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected }) }));
   });
 
+  it('queues the same mixed evidence shown for an added and an edited source', async () => {
+    const key = 'https://example.com/docs'; const ref = { type: 'url', value: key };
+    const body = 'long evidence '.repeat(400);
+    const changedKey = 'https://example.com/edited'; const changedRef = { type: 'url', value: changedKey };
+    const addedKey = 'https://example.com/new'; const addedRef = { type: 'url', value: addedKey };
+    const sources = [
+      { canonicalKey: key, sourceRef: ref, title: 'Docs', description: body.slice(0, 999).trimEnd() + '…' },
+      { canonicalKey: changedKey, sourceRef: changedRef, title: 'Changed', description: 'New evidence text' },
+      { canonicalKey: addedKey, sourceRef: addedRef, title: 'Added', description: 'Added evidence text' },
+    ];
+    mocks.researchFindUnique.mockResolvedValue({ ...draft(), sourceAiJob: { id: JOB_ID, partialSources: [
+      { canonical_key: key, source_ref: ref, title: 'Docs', snippet: body },
+      { canonical_key: changedKey, source_ref: changedRef, title: 'Changed', snippet: 'Old evidence text' },
+    ] }, researchSources: sources });
+    const response = await reviewPost(new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never, params(RESEARCH_ID));
+    expect(response.status).toBe(202);
+    const expected = createHash('sha256').update(JSON.stringify([
+      { canonicalKey: key, snippet: body, sourceRef: ref, title: 'Docs' },
+      { canonicalKey: changedKey, snippet: 'New evidence text', sourceRef: changedRef, title: 'Changed' },
+      { canonicalKey: addedKey, snippet: 'Added evidence text', sourceRef: addedRef, title: 'Added' },
+    ]), 'utf8').digest('hex');
+    expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected }) }));
+  });
+
   it('queues a new run and returns 202 without waiting for the reviewer', async () => {
     const response = await reviewPost(
       new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never,
