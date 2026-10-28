@@ -305,7 +305,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
       const row = item as Record<string, unknown>;
       const key = typeof row.canonical_key === 'string' ? row.canonical_key : row.canonicalKey;
       if (typeof key === 'string' && typeof row.snippet === 'string' && row.snippet.trim()) {
-        capturedBodies.set(key, row.snippet.slice(0, 12_000));
+        capturedBodies.set(key, Array.from(row.snippet).slice(0, 12_000).join(''));
       }
     }
   }
