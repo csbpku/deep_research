@@ -169,3 +169,45 @@ def test_follow_up_accepts_web_evidence_metadata_names() -> None:
     )
     assert body.evidence[0].captured_at == "2026-10-28T00:00:00Z"
     assert body.evidence[0].source_type == "research"
+
+
+def test_follow_up_passes_late_current_evidence_to_adapter_without_search() -> None:
+    class CaptureAdapter(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.captured: ResearchRequest | None = None
+
+        async def submit(self, request: ResearchRequest) -> str:
+            self.captured = request
+            return await super().submit(request)
+
+    adapter = CaptureAdapter()
+    app = FastAPI()
+    app.include_router(router)
+    app.state.adapter = adapter
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/ai-research/chat/follow-up",
+        json={
+            "user_id": "u",
+            "report_title": "Asyncio",
+            "report_content": "Report",
+            "question": "单个任务取消与非取消异常分别如何处理？",
+            "evidence": [
+                {
+                    "key": "https://example.test/asyncio",
+                    "title": "Official",
+                    "sourceType": "url",
+                    "excerpt": "Documentation. " * 400
+                    + "A failure other than CancelledError cancels other tasks; exceptions form an ExceptionGroup.",
+                }
+            ],
+        },
+    ) as response:
+        assert response.status_code == 200
+        assert "event: done" in "".join(response.iter_text())
+    assert adapter.captured is not None
+    assert "A failure other than CancelledError" in (adapter.captured.context or "")
+    assert "ExceptionGroup" in (adapter.captured.context or "")
+    assert adapter.captured.source_refs == ()
