@@ -5,7 +5,7 @@ import base from './playwright.config';
 // Requires an explicitly started local web server; never seeds a database.
 export default defineConfig({
   ...base,
-  testMatch: ['**/ai-research-experience.spec.ts', '**/ai-research-uncertain.spec.ts', '**/ai-research-slides-experience.spec.ts', '**/ai-research-source-recovery.spec.ts'],
+  testMatch: ['**/ai-research-experience.spec.ts', '**/ai-research-uncertain.spec.ts', '**/ai-research-slides-experience.spec.ts', '**/ai-research-source-recovery.spec.ts', '**/ai-research-cross-tab.spec.ts'],
   testIgnore: [],
   globalSetup: undefined,
   webServer: undefined,
