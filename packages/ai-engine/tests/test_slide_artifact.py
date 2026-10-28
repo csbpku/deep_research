@@ -36,3 +36,11 @@ def test_render_slide_deck_clamps_unreasonable_page_limit() -> None:
     deck = render_artifact_content(report, "slides", "up to 99 slides")
 
     assert len(re.findall(r"(?m)^## Slide \d+:", deck)) == 12
+
+
+def test_render_slide_deck_honors_requested_five_pages() -> None:
+    report = "\n\n".join(f"## Slide {i}: Finding\n\nEvidence {i}." for i in range(1, 8))
+    deck = render_artifact_content(report, "slides", "用5页提纲说明异步任务差异")
+    assert len(re.findall(r"(?m)^## Slide \d+:", deck)) == 5
+    for i in range(1, 8):
+        assert f"Evidence {i}." in deck

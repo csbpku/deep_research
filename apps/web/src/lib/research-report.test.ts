@@ -136,3 +136,11 @@ describe('cleanEvidenceSnippet', () => {
     );
   });
 });
+
+it('honors a requested five-page outline and preserves all sections', () => {
+  const report = Array.from({ length: 7 }, (_, i) => `## Slide ${i + 1}: Finding\n\nEvidence ${i + 1}.`).join('\n\n');
+  expect(extractSlideLimit('用5页提纲说明异步任务差异')).toBe(5);
+  const deck = renderSlidesArtifactContent(report, '用5页提纲说明异步任务差异');
+  expect(deck.match(/^## Slide \d+:/gm)).toHaveLength(5);
+  for (let i = 1; i <= 7; i++) expect(deck).toContain(`Evidence ${i}.`);
+});
