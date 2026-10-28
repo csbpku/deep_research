@@ -19,7 +19,7 @@ import {
 } from './RadarExternalReadingLanding';
 import { formatRadarContentKind, formatSourceType } from '@/lib/radar/source-labels';
 import { TIER_LABELS, readingTierColor } from '@/components/domain/ScoreBar';
-import { zreadRepositoryUrl } from './radar-repository';
+import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
 import { RadarSourceChip } from './RadarSourceChip';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
@@ -125,14 +125,15 @@ export function RadarPreviewPanel({
 
   const sourceLabel = formatSourceType(detail.sourceType);
   const sourceName = detail.sourceName?.trim() || sourceLabel.short;
-  const contentLabel = formatRadarContentKind(detail.originalKind, detail.sourceType, detail.url);
+  const originalKind = effectiveOriginalKind(detail.originalKind, detail.url);
+  const contentLabel = formatRadarContentKind(originalKind, detail.sourceType, detail.url);
   const publishedLabel = formatRadarDetailDate(detail.publishedAt);
   const { lead, supportingExcerpt } = radarSummaryParts(detail);
   const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
   const tierLabel = tier ? (TIER_LABELS[tier] ?? tier) : '待判断';
   const tags = cleanRadarTags(detail.tags);
   const sourceUrlAvailable = isHttpUrl(detail.url);
-  const zreadUrl = detail.originalKind === 'github_repo'
+  const zreadUrl = originalKind === 'github_repo'
     ? zreadRepositoryUrl(detail.url)
     : null;
   const readerUrl = externalReaderUrl(detail.url, detail.id, platformOrigin);

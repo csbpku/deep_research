@@ -155,4 +155,49 @@ describe('RadarExternalReadingLanding', () => {
     expect(html).toContain('https://zread.ai/microsoft/markitdown');
     expect(html).not.toContain('>打开原文<');
   });
+
+  it('offers the Zread action for repository rows without a stored content kind', () => {
+    const html = renderToStaticMarkup(createElement(RadarExternalReadingLanding, {
+      detail: {
+        id: '22222222-2222-4222-8222-222222222222',
+        title: 'microsoft/markitdown',
+        excerpt: 'Repository summary.',
+        interpretation: 'A concise AI interpretation.',
+        scoreReason: null,
+        distilledScore: null,
+        tier: 'deep_read',
+        selectionReason: null,
+        url: 'https://github.com/microsoft/markitdown',
+        sourceType: 'github',
+        sourceName: 'GitHub',
+        originalKind: null,
+      },
+    }));
+
+    expect(html).toContain('打开 Zread');
+    expect(html).toContain('https://zread.ai/microsoft/markitdown');
+    expect(html).toContain('仓库');
+  });
+
+  it('keeps non-repository rows on the original-link path', () => {
+    const html = renderToStaticMarkup(createElement(RadarExternalReadingLanding, {
+      detail: {
+        id: '33333333-3333-4333-8333-333333333333',
+        title: 'An article',
+        excerpt: 'Article summary.',
+        interpretation: 'A concise AI interpretation.',
+        scoreReason: null,
+        distilledScore: null,
+        tier: 'deep_read',
+        selectionReason: null,
+        url: 'https://example.com/post',
+        sourceType: 'rss',
+        sourceName: 'RSS',
+        originalKind: null,
+      },
+    }));
+
+    expect(html).not.toContain('打开 Zread');
+    expect(html).toContain('打开原文');
+  });
 });
