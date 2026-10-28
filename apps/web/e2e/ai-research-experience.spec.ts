@@ -17,7 +17,7 @@ async function mockWorkspace(page: import('@playwright/test').Page) {
     return route.fulfill({ json: { items: [] } });
   });
   await page.route(`**/api/ai-research/conversations/${conversationId}`, route => route.fulfill({ json: conversation() }));
-  await page.route('**/api/ai-research/context?*', route => route.fulfill({ json: { items: [] } }));
+  await page.route('**/api/ai-research/context?*', route => route.fulfill({ json: { items: [{ kind: 'knowledge', id: 'f0500000-0000-4000-8000-000000000099', title: 'Python任务实践笔记', snippet: '可核查的任务取消观察。', private: true, confirmedKnowledge: true, sourceRefs: [{ type: 'research', value: 'f0500000-0000-4000-8000-000000000099', required: false }] }] } }));
   await page.route('**/api/ai-research/plan', route => route.fulfill({ json: {
     assistantMessage: '方案已准备好', ready: true, missingFields: [], suggestedTopics: [], suggestedContext: [],
     brief: { question, objective: 'decide', questionsToAnswer: ['适用边界与工程代价'], comparisonOptions: ['Playwright', 'Cypress'], decisionDimensions: ['效果与适用范围', '安全与风险'], constraints: [], successCriteria: [], contextRefs: [], outputType: 'markdown', sourcePolicy: 'prefer_user_sources', scope: { timeRange: { preset: 'any' }, regions: [], technologyVersions: [], retrievalNotes: '' } },
@@ -49,6 +49,11 @@ for (const mode of ['light', 'dark'] as const) {
     await expect(output.getByRole('radio', { name: /Slides 提纲/ })).toBeChecked();
     const sizes = await output.getByRole('radio').evaluateAll(elements => elements.map(e => e.closest('label')!.getBoundingClientRect().height));
     expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThan(2);
+    const suggestions = page.locator('summary').filter({ hasText: '历史资料建议（可选）' });
+    await suggestions.click();
+    await page.getByRole('checkbox', { name: '使用资料：Python任务实践笔记', exact: true }).check();
+    await suggestions.click();
+    await expect(page.getByRole('region', { name: '已选历史资料', exact: true })).toContainText('Python任务实践笔记');
     const issues = await new AxeBuilder({ page }).include('[aria-label="AI 调研对话"]').analyze();
     expect(issues.violations).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath(`research-plan-${mode}.png`), fullPage: true });
