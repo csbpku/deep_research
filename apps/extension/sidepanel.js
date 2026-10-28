@@ -58,6 +58,9 @@ let discussionScope = 'page';
 let discussionIntent = 'ask';
 let discussionOpen = false;
 let pendingAnswer = null;
+let failedQuestion = '';
+let selectionActionsReady = false;
+let queuedSelectionAction = null;
 let pendingPageAction = null;
 let discussionController = null;
 let discussionSubscription = null;
@@ -203,6 +206,7 @@ function detachCurrentAnswer() {
   discussionController = null;
   discussionRunning = false;
   pendingAnswer = null;
+  failedQuestion = '';
   renderPendingAnswer();
 }
 
@@ -1116,7 +1120,8 @@ function renderDiscussionFollowups(scope = activeDiscussionScope(), intent = dis
 function renderConversation() {
   const list = $('conversation-list');
   if (!list) return;
-  const messages = discussionHistory.filter(item => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
+  const messages = [...discussionHistory, ...(failedQuestion ? [{ role: 'user', content: failedQuestion }] : [])]
+    .filter(item => item && ['user', 'assistant'].includes(item.role) && String(item.content || '').trim());
   renderMaterialConversation(list, messages, {
     copy: true,
     bindLatest: element => bindCitationReferences(element, Array.isArray(latestStructuredAnswer?.evidence) ? latestStructuredAnswer.evidence : []),
@@ -1127,7 +1132,7 @@ function renderConversation() {
 }
 
 function syncConversationEmptyState(noMessages = discussionHistory.every((item) => !item || !['user', 'assistant'].includes(item.role) || !String(item.content || '').trim())) {
-  show($('conversation-empty'), noMessages && !discussionRunning);
+  show($('conversation-empty'), noMessages && !discussionRunning && !failedQuestion);
 }
 
 function renderEmptyState() {
@@ -2904,6 +2909,7 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     return;
   }
   setNotice('');
+  failedQuestion = '';
   discussionScope = scope;
   discussionIntent = normalizedIntent;
   if (scope === 'selection') sendToPage({ type: 'deep-research:clear-native-selection' });
@@ -2997,6 +3003,9 @@ async function explainOrAsk(question = '', scope = discussionScope, intent = dis
     renderPendingAnswer();
     renderPersistentComposer(scope);
     if (!$('question-input').value && submittedDraft) { $('question-input').value = submittedDraft; persistQuestionDraft(); }
+    // Keep the quick-action question visible even when no model answer was
+    // completed. Failed turns never enter the persisted model history.
+    failedQuestion = userMessage;
     latestAnswer = '';
     latestStructuredAnswer = null;
     latestAnswerContext = null;
@@ -3271,6 +3280,7 @@ async function openHistoryPage() {
 
 const consumedSelectionActions = new Set();
 function handleSelectionAction(message) {
+  if (!selectionActionsReady) { queuedSelectionAction = message; return; }
   if (message.actionId && consumedSelectionActions.has(message.actionId)) return;
   if (message.actionId) consumedSelectionActions.add(message.actionId);
   void chrome.storage.session.remove('readerPendingSelectionAction').catch(() => {});
@@ -3764,7 +3774,13 @@ async function init() {
   $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
   await updateLibrary();
   void restorePendingPageAction();
-  void restorePendingSelectionAction();
+  selectionActionsReady = true;
+  await restorePendingSelectionAction();
+  if (queuedSelectionAction) {
+    const action = queuedSelectionAction;
+    queuedSelectionAction = null;
+    handleSelectionAction(action);
+  }
   // The content script can report page context before React finishes loading
   // this controller. Re-request the active tab after all listeners are bound
   // so opening or recreating the side panel never leaves it blank.

@@ -693,7 +693,7 @@
 
   async function selectionContext() {
     const selection = window.getSelection();
-    const quote = clean(selection?.toString() || '');
+    let quote = clean(selection?.toString() || '');
     if (!quote || isTranslationNode(selection?.anchorNode) || isTranslationNode(selection?.focusNode)) return null;
     removeSelectionTranslation();
     const selectedElement = selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
@@ -704,6 +704,9 @@
     const quoteRange = findQuoteRange(page.body, quote);
     const startOffset = quoteRange?.start;
     const endOffset = quoteRange?.end;
+    // Offsets and quote must describe the same exact slice. A selection
+    // crossing paragraphs uses normalized whitespace only to find that slice.
+    if (quoteRange) quote = page.body.slice(startOffset, endOffset);
     const prefix = startOffset > 0 ? page.body.slice(Math.max(0, startOffset - 120), startOffset) : '';
     const suffix = endOffset !== undefined ? page.body.slice(endOffset, endOffset + 120) : '';
     const hash = await contentHash(page.body);

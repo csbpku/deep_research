@@ -15,6 +15,85 @@ const panel = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const content = readFileSync(new URL('./content.js', import.meta.url), 'utf8');
 function extract(source, start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 
+test('selection explain waits for panel initialization and runs exactly once', () => {
+  const calls = [];
+  const removed = [];
+  const sandbox = {
+    selectionActionsReady: false, queuedSelectionAction: null, interactionGeneration: 0,
+    pageContext: null, selectionContext: null,
+    chrome: { storage: { session: { remove: async key => removed.push(key) } } },
+    renderPage() {}, explainOrAsk: (...args) => calls.push(args),
+    message: { actionId: 'selection-action-1', action: 'explain', context: { url: 'https://article.test', selection: { quote: 'Selected text' } } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'const consumedSelectionActions =', 'async function restorePendingSelectionAction('), sandbox);
+  vm.runInContext('handleSelectionAction(message)', sandbox);
+  assert.equal(calls.length, 0);
+  assert.equal(removed.length, 0);
+  assert.equal(sandbox.queuedSelectionAction, sandbox.message);
+  sandbox.selectionActionsReady = true;
+  vm.runInContext('handleSelectionAction(queuedSelectionAction); handleSelectionAction(message)', sandbox);
+  assert.deepEqual(calls, [['', 'selection', 'explain']]);
+  assert.equal(removed.length, 1);
+});
+
+test('cross-paragraph selection retains the exact original slice for platform validation', async () => {
+  const body = 'First paragraph.\n\nSecond paragraph.';
+  const sandbox = {
+    window: { getSelection: () => ({ toString: () => body, rangeCount: 0 }) },
+    Node: { ELEMENT_NODE: 1 }, removeSelectionTranslation() {}, isTranslationNode: () => false,
+    pageContext: () => ({ body, url: 'https://article.test' }), contentHash: async () => 'a'.repeat(64),
+    selectorPathForSelection: () => null, sectionForSelection: () => body, sectionTitleForSelection: () => '',
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(content, '  function clean(', '  function stableNodeId(')
+    + extract(content, '  function findQuoteRange(', '  function extractBlocks(')
+    + extract(content, '  async function selectionContext(', '  function removeSelectionToolbar('), sandbox);
+  const result = await vm.runInContext('selectionContext()', sandbox);
+  assert.equal(result.selection.quote, body.slice(result.selection.startOffset, result.selection.endOffset));
+  assert.equal(result.selection.quote, body);
+});
+
+test('platform selection validation errors keep actionable context and request id', async () => {
+  const { platformAnswerErrorMessage } = await import('./platform-answer.js');
+  const message = platformAnswerErrorMessage({ code: 'VALIDATION_FAILED', message: '原文摘录与锚点位置不一致，请重新选择原文', requestId: 'request-anchor' }, 400);
+  assert.match(message, /重新选择原文/);
+  assert.match(message, /request-anchor/);
+  assert.doesNotMatch(message, /平台 AI 暂时无法完成/);
+  assert.match(platformAnswerErrorMessage({}, 401), /重新连接平台/);
+  assert.match(platformAnswerErrorMessage({ message: 'invalid_api_key' }, 401), /模型服务鉴权失败/);
+  assert.match(platformAnswerErrorMessage({ message: 'insufficient_balance' }, 400), /模型额度不足/);
+});
+
+test('a failed quick action retains its question in chat without adding model history', () => {
+  const rendered = [];
+  const nodes = {};
+  const sandbox = {
+    $: id => nodes[id] ||= {}, failedQuestion: '解释当前选段', discussionHistory: [], discussionRunning: false,
+    renderMaterialConversation: (_host, messages) => rendered.push(...messages),
+    show: (node, visible) => { node.visible = visible; },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'function renderConversation(', 'function renderEmptyState('), sandbox);
+  vm.runInContext('renderConversation()', sandbox);
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].content, '解释当前选段');
+  assert.equal(nodes['conversation-empty'].visible, false);
+  assert.equal(sandbox.discussionHistory.length, 0);
+});
+
+test('selection actions open the native side panel without awaiting its promise', () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const opener = extract(background, "    if (['deep-research:image-action'", '    // Inactive articles still emit');
+  let opened = 0;
+  vm.runInNewContext(opener, {
+    message: { payload: { type: 'deep-research:selection-action', action: 'explain' } },
+    sender: { tab: { windowId: 7 } },
+    chrome: { sidePanel: { open: ({ windowId }) => { assert.equal(windowId, 7); opened++; return new Promise(() => {}); } } },
+  });
+  assert.equal(opened, 1);
+});
+
 test('platform output-limit failures retain their cause and either request-id spelling', () => {
   const source = readFileSync(new URL('./platform-answer.js', import.meta.url), 'utf8');
   const sandbox = {};

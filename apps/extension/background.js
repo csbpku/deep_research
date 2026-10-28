@@ -736,7 +736,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // message no longer carries a toolbar user gesture.  The page context must
     // still be forwarded immediately; otherwise clicking a figure appears to
     // do nothing and the image discussion scope is lost.
-    if (message.payload?.type === 'deep-research:image-action' && sender.tab?.windowId !== undefined) {
+    if (['deep-research:image-action', 'deep-research:selection-action'].includes(message.payload?.type) && sender.tab?.windowId !== undefined) {
       try {
         chrome.sidePanel.open({ windowId: sender.tab.windowId }).catch(() => {});
       } catch {

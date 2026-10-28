@@ -96,7 +96,11 @@ export function platformAnswerErrorMessage(payload = {}, status = 0) {
     .join(' ');
   const requestId = typeof payload.request_id === 'string' ? payload.request_id : typeof payload.requestId === 'string' ? payload.requestId : '';
   let message = '平台 AI 暂时无法完成此请求，请稍后重试；如持续发生，请联系平台管理员。';
-  if (/AI_RESPONSE_TRUNCATED|truncated_response|finish_reason=length|输出达到长度上限|输出不完整/iu.test(detail)) {
+  if (/VALIDATION_FAILED/u.test(detail)) {
+    message = /原文|锚点|摘录/u.test(detail)
+      ? '所选原文无法准确定位，请回到网页重新选择原文后重试。'
+      : '选段或问题未通过平台校验，请缩短问题或重新选择原文后重试。';
+  } else if (/AI_RESPONSE_TRUNCATED|truncated_response|finish_reason=length|输出达到长度上限|输出不完整/iu.test(detail)) {
     message = '回答达到模型输出上限，本次未保存不完整结果。请重新生成，或缩小问题范围后重试。';
   } else if (status === 402 || /insufficient[_ ]balance|insufficient[_ ]quota|credit balance|AI_QUOTA_EXCEEDED/iu.test(detail)) {
     message = '平台模型额度不足，本次请求未完成。请联系平台管理员检查模型服务额度后重试。';
@@ -104,8 +108,12 @@ export function platformAnswerErrorMessage(payload = {}, status = 0) {
     message = '平台模型请求过于频繁，请稍后重试。';
   } else if (/invalid[_ ]api[_ ]key|authenticationerror|invalid api key/iu.test(detail)) {
     message = '平台模型服务鉴权失败。请联系平台管理员检查 AI Engine 配置。';
+  } else if (status === 401 || /UNAUTHENTICATED|READER_TOKEN_(?:INVALID|EXPIRED)/u.test(detail)) {
+    message = '平台连接已失效，请在设置中重新连接平台后重试。';
   } else if (/timed? ?out|timeout|deadline exceeded/iu.test(detail)) {
     message = '平台 AI 处理超时，请缩短问题范围后重试。';
+  } else if (status === 400 || status === 422) {
+    message = '选段或问题未通过平台校验，请缩短问题或重新选择原文后重试。';
   }
   return requestId ? `${message}（请求编号：${requestId}）` : message;
 }

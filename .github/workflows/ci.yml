@@ -582,6 +582,12 @@ jobs:
         run: pnpm --filter @deep-research/reader-extension e2e:full-page-translation
         timeout-minutes: 8
 
+      - name: Reader selection explanation E2E
+        env:
+          CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
+        run: pnpm --filter @deep-research/reader-extension e2e:selection-explain
+        timeout-minutes: 5
+
   # The required checks above are the four heavy suites. A skipped job counts
   # as a successful check, so on their own they would let a broken
   # documentation-only run look green. This gate always runs and fails the
