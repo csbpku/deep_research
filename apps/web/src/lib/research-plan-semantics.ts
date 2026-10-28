@@ -92,7 +92,7 @@ const DIMENSION_SIGNALS: ReadonlyArray<readonly [string, RegExp]> = [
 export function inferDecisionDimensions(question: string, context = ''): string[] {
   const exclusions: string[] = [];
   const relevant = `${question}\n${context}`.replace(
-    /(?:不(?:需要|讨论|考虑|关注|比较|涉及)|无需|不要)(?!忽略|遗漏)[^。；;\n]*?(?=但是|但|不过|然而|同时|而且|并且|\bbut\b|\bhowever\b|[。；;\n]|$)/gu,
+    /(?:不(?:需要|讨论|考虑|关注|比较|涉及|展开|延伸|扩展|涵盖|纳入)|无需|不要)(?!忽略|遗漏)[^。；;\n]*?(?=但是|但|不过|然而|同时|而且|并且|\bbut\b|\bhowever\b|[。；;\n]|$)/gu,
     (excluded) => { exclusions.push(excluded); return ''; },
   );
   const inferred = DIMENSION_SIGNALS.filter(([, signal]) => signal.test(relevant)).map(([dimension]) => dimension);
