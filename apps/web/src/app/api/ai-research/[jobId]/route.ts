@@ -298,22 +298,35 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   // captured ledger when sanitizing report links. A deep run can save more
   // than the 24 sources shown in the collapsed UI; hiding the older rows
   // must not turn their valid citations into “unverified” text.
-  const capturedBodies = new Map<string, string>();
+  // A matching URL alone is not proof that a later ledger row still refers to
+  // the original captured text. Upgrade only if its identity and short preview
+  // still match this job's snapshot; otherwise keep the authoritative row.
+  const capturedBodies = new Map<string, { sourceRef: unknown; title: string | null; snippet: string }>();
+  const duplicateKeys = new Set<string>();
   if (Array.isArray(job.partialSources)) {
     for (const item of job.partialSources) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
       const row = item as Record<string, unknown>;
       const key = typeof row.canonical_key === 'string' ? row.canonical_key : row.canonicalKey;
-      if (typeof key === 'string' && typeof row.snippet === 'string' && row.snippet.trim()) {
-        capturedBodies.set(key, Array.from(row.snippet).slice(0, 12_000).join(''));
-      }
+      const sourceRef = row.source_ref ?? row.sourceRef;
+      if (typeof key !== 'string' || !validCapturedSourceRef(sourceRef) ||
+          !(row.title === null || typeof row.title === 'string') ||
+          typeof row.snippet !== 'string' || !row.snippet.trim()) continue;
+      if (capturedBodies.has(key)) { capturedBodies.delete(key); duplicateKeys.add(key); continue; }
+      if (!duplicateKeys.has(key)) capturedBodies.set(key, { sourceRef, title: row.title, snippet: row.snippet });
     }
+  }
+  function capturedSnippet(source: { canonicalKey: string; sourceRef: unknown; title: string | null }, preview: string | null, limit: number): string | null {
+    const snapshot = capturedBodies.get(source.canonicalKey);
+    if (!snapshot || !sameCapturedSourceRef(source.sourceRef, snapshot.sourceRef) ||
+        source.title !== clipEvidenceText(snapshot.title, 300) || preview !== clipEvidenceText(snapshot.snippet, limit)) return preview;
+    return Array.from(snapshot.snippet).slice(0, 12_000).join('');
   }
   const jobEvidenceSources = job.aiResearchSources.length > 0
     ? job.aiResearchSources.map((source) => ({
         id: source.id,
         title: sourceDisplayTitle(source.title, source.sourceRef, source.canonicalKey),
-        snippet: capturedBodies.get(source.canonicalKey) ?? source.snippet,
+        snippet: capturedSnippet(source, source.snippet, 2000),
         score: source.score,
         sourceRef: source.sourceRef,
         canonicalKey: source.canonicalKey,
@@ -330,7 +343,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   const researchLedgerSources = draftResearch?.researchSources?.map((source) => ({
     id: source.id,
     title: sourceDisplayTitle(source.title, source.sourceRef, source.canonicalKey),
-    snippet: capturedBodies.get(source.canonicalKey) ?? source.description,
+    snippet: capturedSnippet(source, source.description, 1000),
     score: null,
     sourceRef: source.sourceRef,
     canonicalKey: source.canonicalKey,
@@ -707,4 +720,20 @@ function sourceDisplayTitle(title: unknown, sourceRef: unknown, canonicalKey: st
   } catch {
     return canonicalKey;
   }
+}
+
+
+function clipEvidenceText(value: string | null, limit: number): string | null {
+  if (value === null) return null;
+  const chars = Array.from(value);
+  return chars.length <= limit ? value : `${chars.slice(0, limit - 1).join('').trimEnd()}…`;
+}
+function validCapturedSourceRef(value: unknown): value is Record<string, string | boolean> {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0 &&
+    Object.values(value).every((item) => typeof item === 'string' || typeof item === 'boolean');
+}
+function sameCapturedSourceRef(a: unknown, b: unknown): boolean {
+  if (!validCapturedSourceRef(a) || !validCapturedSourceRef(b)) return false;
+  const keys = Object.keys(a).sort();
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && a[key] === b[key]);
 }

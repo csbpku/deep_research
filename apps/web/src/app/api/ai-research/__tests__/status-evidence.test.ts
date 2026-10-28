@@ -54,27 +54,28 @@ beforeEach(() => {
 describe('GET /api/ai-research/[jobId] evidence workspace', () => {
 
   it('returns the matching bounded captured body for the owner and preserves short fallback', async () => {
-    const longBody = 'captured evidence '.repeat(900);
+    const longBody = 'captured evidence '.repeat(600);
+    const preview = longBody.slice(0, 1999).trimEnd() + '…';
     mocks.jobFindUnique.mockResolvedValue({
       requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
-      partialSources: [{ canonicalKey: 'https://example.com/one', snippet: longBody }],
+      partialSources: [{ canonicalKey: 'https://example.com/one', sourceRef: { type: 'url', value: 'https://example.com/one' }, title: 'One', snippet: longBody }],
       updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
       aiResearchSources: [
-        { id: 'one', title: 'One', snippet: 'short', score: 1, sourceRef: { type: 'url', value: 'https://example.com/one' }, canonicalKey: 'https://example.com/one', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
+        { id: 'one', title: 'One', snippet: preview, score: 1, sourceRef: { type: 'url', value: 'https://example.com/one' }, canonicalKey: 'https://example.com/one', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
         { id: 'two', title: 'Two', snippet: 'fallback', score: 1, sourceRef: { type: 'url', value: 'https://example.com/two' }, canonicalKey: 'https://example.com/two', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
       ], _count: { aiResearchSources: 2 },
     });
     const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
     const payload = await response.json();
-    expect(payload.sources[0].snippet).toBe(longBody.slice(0, 12000));
+    expect(payload.sources[0].snippet).toBe(longBody);
     expect(payload.sources[1].snippet).toBe('fallback');
   });
 
   it('preserves a captured body of 9000 Unicode characters without cutting surrogate pairs', async () => {
     const body = '💡'.repeat(9000);
     mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
-      partialSources: [{ canonical_key: 'https://example.com/unicode', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
-      aiResearchSources: [{ id: 'one', title: 'One', snippet: 'short', score: 1, sourceRef: { type: 'url', value: 'https://example.com/unicode' }, canonicalKey: 'https://example.com/unicode', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
+      partialSources: [{ canonical_key: 'https://example.com/unicode', source_ref: { type: 'url', value: 'https://example.com/unicode' }, title: 'One', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [{ id: 'one', title: 'One', snippet: Array.from(body).slice(0, 1999).join('') + '…', score: 1, sourceRef: { type: 'url', value: 'https://example.com/unicode' }, canonicalKey: 'https://example.com/unicode', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
     const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
     expect((await response.json()).sources[0].snippet).toBe(body);
   });
@@ -89,6 +90,29 @@ describe('GET /api/ai-research/[jobId] evidence workspace', () => {
       aiResearchSources: [{ id: 'job-1', title: 'Docs', snippet: 'Old captured full text', score: 1, sourceRef, canonicalKey: key, stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
     const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
     expect((await response.json()).sources[0].snippet).toBe('New evidence text');
+  });
+
+  it('upgrades a research ledger only when snapshot identity and short preview match', async () => {
+    const key = 'https://example.com/docs'; const sourceRef = { type: 'url', value: key }; const body = '证据'.repeat(800);
+    const description = Array.from(body).slice(0, 999).join('') + '…';
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: sourceRef, title: 'Docs', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [{ id: 'ledger-1', sourceRef, canonicalKey: key, title: 'Docs', description, createdAt: new Date('2026-09-02T00:00:00Z') }] },
+      aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe(body);
+  });
+
+  it.each(['title', 'sourceRef'])('does not upgrade when %s no longer matches', async (field) => {
+    const key = 'https://example.com/docs'; const ref = { type: 'url', value: key }; const body = '正文'.repeat(700);
+    const description = Array.from(body).slice(0, 999).join('') + '…';
+    const ledger = { id: 'ledger-1', sourceRef: field === 'sourceRef' ? { type: 'url', value: 'https://example.com/new' } : ref,
+      canonicalKey: key, title: field === 'title' ? 'New title' : 'Docs', description, createdAt: new Date('2026-09-02T00:00:00Z') };
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: ref, title: 'Docs', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [ledger] }, aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe(description);
   });
 
   it('keeps execution success separate from insufficient research coverage', async () => {
