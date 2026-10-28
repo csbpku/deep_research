@@ -332,7 +332,7 @@ export function ResearchChatPanel({
                 </Typography>
                 {message.role === 'assistant' && message.content ? (
                   message.intent === 'action'
-                    ? <ActionItemsView content={message.content} />
+                    ? <ActionItemsView content={stripResearchCitationMarkers(message.content)} />
                     : <Box sx={{ mt: 0.5, typography: 'reading', overflowWrap: 'anywhere' }}><MarkdownContent content={stripResearchCitationMarkers(message.content)} compact /></Box>
                 ) : (
                   <Typography variant="reading" component="p" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
@@ -360,7 +360,7 @@ export function ResearchChatPanel({
                           </Paper>
                           <Paper variant="outlined" sx={{ p: 1.5, minWidth: 0, borderColor: 'primary.main', bgcolor: 'action.selected' }}>
                             <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 500 }}>将新增</Typography>
-                            <Typography variant="metadata" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>## 追问补充{`\n\n`}{message.content}</Typography>
+                            <Typography variant="metadata" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>## 追问补充{`\n\n`}{stripResearchCitationMarkers(message.content)}</Typography>
                           </Paper>
                         </Box>
                         {revisionError ? <Alert severity="error" role="alert" sx={{ mt: 1.5 }}>{revisionError}</Alert> : null}

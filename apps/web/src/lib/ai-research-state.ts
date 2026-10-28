@@ -29,7 +29,7 @@ export function formatResearchRelativeTime(iso: string | null, now = Date.now())
 
 /** Display-only protocol cleanup; source text and evidence records stay unchanged. */
 export function stripResearchCitationMarkers(content: string): string {
-  return content.replace(/\[\[\/?cite\]\]/giu, '');
+  return content.replace(/\[\[\/?cite\]\]/giu, '').replace(/\[\[\/?(?:c(?:i(?:t(?:e\]?)?)?)?)?$/iu, '');
 }
 
 function isDraft(value: unknown): value is ResearchDraft {
