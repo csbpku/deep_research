@@ -52,6 +52,24 @@ beforeEach(() => {
 });
 
 describe('GET /api/ai-research/[jobId] evidence workspace', () => {
+
+  it('returns the matching bounded captured body for the owner and preserves short fallback', async () => {
+    const longBody = 'captured evidence '.repeat(900);
+    mocks.jobFindUnique.mockResolvedValue({
+      requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonicalKey: 'https://example.com/one', snippet: longBody }],
+      updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [
+        { id: 'one', title: 'One', snippet: 'short', score: 1, sourceRef: { type: 'url', value: 'https://example.com/one' }, canonicalKey: 'https://example.com/one', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
+        { id: 'two', title: 'Two', snippet: 'fallback', score: 1, sourceRef: { type: 'url', value: 'https://example.com/two' }, canonicalKey: 'https://example.com/two', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
+      ], _count: { aiResearchSources: 2 },
+    });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+    expect(payload.sources[0].snippet).toBe(longBody.slice(0, 12000));
+    expect(payload.sources[1].snippet).toBe('fallback');
+  });
+
   it('keeps execution success separate from insufficient research coverage', async () => {
     mocks.jobFindUnique.mockResolvedValue({
       requesterId: USER_ID,
