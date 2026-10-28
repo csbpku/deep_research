@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatResearchRelativeTime, stripResearchCitationMarkers, readResearchDraft, writeResearchDraft } from './ai-research-state';
+import { type ResearchDraft, formatResearchRelativeTime, stripResearchCitationMarkers, readResearchDraft, writeResearchDraft } from './ai-research-state';
 
 const now = Date.parse('2026-10-28T00:00:00Z');
 const isoDaysAgo = (n: number) => new Date(now - n * 86400000).toISOString();
@@ -22,7 +22,7 @@ describe('research state utilities', () => {
   });
   it('isolates drafts by account and conversation, and tolerates invalid data', () => {
     const storage = memoryStorage();
-    const draft = { reportType: 'web_brief', reportLength: 'standard', sourcePolicy: 'prefer_user_sources', sourceUrls: ['https://example.com'], sourceDraft: '', brief: null } as const;
+    const draft = { reportType: 'web_brief', reportLength: 'standard', sourcePolicy: 'prefer_user_sources', sourceUrls: ['https://example.com'], sourceDraft: '', input: '', brief: null } satisfies ResearchDraft;
     expect(writeResearchDraft(storage, 'user-1', 'conversation-1', draft)).toBe(true);
     expect(readResearchDraft(storage, 'user-1', 'conversation-1')).toEqual(draft);
     expect(readResearchDraft(storage, 'user-2', 'conversation-1')).toBeNull();

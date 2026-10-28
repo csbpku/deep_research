@@ -44,6 +44,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   return NextResponse.json({
     items: conversations.map((conversation) => ({
       id: conversation.id,
+      userId: user.id,
       jobId: conversation.jobId,
       title: conversation.title,
       status: conversation.status,
@@ -96,6 +97,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   return NextResponse.json(
     {
       id: conversation.id,
+      userId: user.id,
       jobId: conversation.jobId,
       title: conversation.title,
       status: conversation.status,

@@ -86,6 +86,7 @@ interface BriefProps {
   question: string;
   context: string;
   topicHint?: string;
+  initialBrief?: BriefValue | null;
   children?: ReactNode;
   startAction?: ReactNode;
   onBriefReady?: (brief: BriefValue) => void;
@@ -122,24 +123,25 @@ interface FetchState {
 }
 
 const IGNORE_PREFIX = '上下文暂忽略：';
-export function AiResearchBrief({ question, context, topicHint, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
+export function AiResearchBrief({ question, context, topicHint, initialBrief, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
   const [state, setState] = useState<FetchState>({ status: 'idle' });
-  const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>([]);
+  const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>(initialBrief?.suggestedContextIds ?? []);
   const [selectedContextItems, setSelectedContextItems] = useState<PersonalContextItem[]>([]);
-  const [focusText, setFocusText] = useState('');
-  const [comparisonText, setComparisonText] = useState('');
-  const [objective, setObjective] = useState<Objective>('investigate');
-  const [timeRange, setTimeRange] = useState<ResearchTimeRange['preset']>('any');
-  const [scopeFrom, setScopeFrom] = useState('');
-  const [scopeTo, setScopeTo] = useState('');
-  const [retrievalNotes, setRetrievalNotes] = useState('');
+  const [focusText, setFocusText] = useState(initialBrief?.brief?.questionsToAnswer.join('\n') ?? '');
+  const [comparisonText, setComparisonText] = useState(initialBrief?.brief?.comparisonOptions.join('\n') ?? '');
+  const [objective, setObjective] = useState<Objective>(initialBrief?.objective ?? 'investigate');
+  const [timeRange, setTimeRange] = useState<ResearchTimeRange['preset']>(initialBrief?.brief?.scope.timeRange.preset ?? 'any');
+  const [scopeFrom, setScopeFrom] = useState(initialBrief?.brief?.scope.timeRange.from ?? '');
+  const [scopeTo, setScopeTo] = useState(initialBrief?.brief?.scope.timeRange.to ?? '');
+  const [retrievalNotes, setRetrievalNotes] = useState(initialBrief?.brief?.scope.retrievalNotes ?? '');
   const [contextSearch, setContextSearch] = useState('');
   const [contextSearchItems, setContextSearchItems] = useState<PersonalContextItem[]>([]);
   const [contextSearchLoading, setContextSearchLoading] = useState(false);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
   const selectionRef = useRef<PersonalContextItem[]>([]);
+  const editedBriefRef = useRef<BriefValue | null>(initialBrief ?? null);
   const callbacksRef = useRef({ onBriefReady, onPlanningChange });
   callbacksRef.current = { onBriefReady, onPlanningChange };
   const contextSearchQuery = getPersonalContextSearchQuery(contextPanelOpen, contextSearch, trimmed);
@@ -220,6 +222,12 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         const data = (await response.json()) as PlanResponse;
         if (cancelled) return;
         setState({ status: 'ready', plan: data });
+        const edited = editedBriefRef.current;
+        if (edited?.brief?.question === trimmed) {
+          callbacksRef.current.onPlanningChange?.(false);
+          callbacksRef.current.onBriefReady?.(edited);
+          return;
+        }
         setFocusText((data.brief.questionsToAnswer ?? []).join('\n'));
         setComparisonText((data.brief.comparisonOptions ?? []).join('\n'));
         setObjective(data.brief.objective);
@@ -344,7 +352,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     selectedIds?: string[];
   } = {}) {
     if (!plan) {
-      onBriefReady?.({
+      const next: BriefValue = {
         objective, primaryTopicId: topicHint, suggestedContextIds: selectedIds,
         assistantMessage: '', scopeValid: true,
         brief: {
@@ -352,19 +360,14 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
           constraints: context.trim() ? [context.trim()] : [], questionsToAnswer: [],
           comparisonOptions: [], decisionDimensions: [], successCriteria: [],
           sourcePolicy: 'prefer_user_sources', outputType: 'markdown', scope: emptyScope(),
-          contextRefs: idsToContextRefs(selectedIds, [], availableContext),
+          contextRefs: idsToContextRefs(selectedIds, editedBriefRef.current?.brief?.contextRefs ?? [], availableContext),
         },
-      });
+      };
+      editedBriefRef.current = next;
+      onBriefReady?.(next);
       return;
     }
-    const ids: string[] = [];
-    if (state.plan) {
-      for (const item of availableContext) {
-        if (selectedIds.includes(item.id)) {
-          ids.push(item.id);
-        }
-      }
-    }
+    const ids = selectedIds;
     const questionsToAnswer = nextFocusText
       .split(/\n|；|;/u)
       .map((item) => item.trim())
@@ -377,7 +380,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       .slice(0, 20);
     const validScope = nextTimeRange !== 'custom'
       || (!!nextScopeFrom && !!nextScopeTo && nextScopeFrom <= nextScopeTo);
-    onBriefReady?.({
+    const next: BriefValue = {
       objective: nextObjective,
       primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
       suggestedContextIds: ids,
@@ -406,9 +409,11 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         },
         primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
         outputType: plan!.brief.outputType ?? 'markdown',
-        contextRefs: idsToContextRefs(ids, plan!.brief.contextRefs ?? [], availableContext),
+        contextRefs: idsToContextRefs(ids, editedBriefRef.current?.brief?.contextRefs ?? plan!.brief.contextRefs ?? [], availableContext),
       },
-    });
+    };
+    editedBriefRef.current = next;
+    onBriefReady?.(next);
   }
 
   function toggleContext(id: string) {

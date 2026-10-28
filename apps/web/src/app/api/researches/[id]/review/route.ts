@@ -58,6 +58,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           id: true,
           brief: true,
           sourcePolicy: true,
+          partialSources: true,
           aiResearchSources: {
             orderBy: { createdAt: 'asc' },
             select: { canonicalKey: true, title: true, snippet: true },
@@ -89,7 +90,8 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
   const revisionHash = hashResearchRevision(research);
-  const sourceSnapshotHash = hashSourceSnapshot(research.researchSources);
+  const fullSnapshot = matchingCapturedSnapshot(research.researchSources, research.sourceAiJob?.partialSources);
+  const sourceSnapshotHash = fullSnapshot ? hashText(stableJson(fullSnapshot)) : hashSourceSnapshot(research.researchSources);
   const runId = randomUUID();
   const queuedAt = new Date();
   const parsedBrief = ResearchBriefSchema.safeParse(research.sourceAiJob?.brief);
@@ -275,4 +277,39 @@ function hashSourceSnapshot(sources: Array<{
     }))
     .sort((a, b) => a.canonicalKey.localeCompare(b.canonicalKey));
   return hashText(JSON.stringify(payload));
+}
+
+
+type PreviewSource = { sourceRef: unknown; canonicalKey: string; title: string | null; description: string | null };
+type CapturedSource = { canonicalKey: string; sourceRef: Record<string, string | boolean>; title: string | null; snippet: string | null };
+function codepointCompare(a: string, b: string): number {
+  const aa = Array.from(a, (x) => x.codePointAt(0)!); const bb = Array.from(b, (x) => x.codePointAt(0)!);
+  for (let i = 0; i < Math.min(aa.length, bb.length); i++) if (aa[i] !== bb[i]) return aa[i]! - bb[i]!;
+  return aa.length - bb.length;
+}
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => codepointCompare(a, b)).map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+function clip(value: string | null, limit: number): string | null {
+  if (value === null || Array.from(value).length <= limit) return value;
+  return `${Array.from(value).slice(0, limit - 1).join('').trimEnd()}…`;
+}
+function matchingCapturedSnapshot(preview: PreviewSource[], partial: unknown): CapturedSource[] | null {
+  if (!Array.isArray(partial) || partial.length !== preview.length || !partial.length) return null;
+  const captured: CapturedSource[] = [];
+  for (const item of partial) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const row = item as Record<string, unknown>;
+    const key = row.canonical_key ?? row.canonicalKey; const ref = row.source_ref ?? row.sourceRef;
+    if (typeof key !== 'string' || !ref || typeof ref !== 'object' || Array.isArray(ref) ||
+        !Object.keys(ref).length || Object.values(ref).some((v) => typeof v !== 'string' && typeof v !== 'boolean') ||
+        !(row.title === null || typeof row.title === 'string') || !(row.snippet === null || typeof row.snippet === 'string')) return null;
+    const title = row.title as string | null; const snippet = row.snippet as string | null;
+    const short = preview.find((source) => source.canonicalKey === key);
+    if (!short || stableJson(short.sourceRef) !== stableJson(ref) || short.title !== clip(title, 300) || short.description !== clip(snippet, 1000) || captured.some((source) => source.canonicalKey === key)) return null;
+    captured.push({ canonicalKey: key, sourceRef: ref as Record<string, string | boolean>, title, snippet });
+  }
+  return captured.sort((a, b) => codepointCompare(a.canonicalKey, b.canonicalKey));
 }

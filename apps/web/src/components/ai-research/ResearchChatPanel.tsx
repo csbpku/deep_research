@@ -1,5 +1,7 @@
 'use client';
 
+import { stripResearchCitationMarkers } from '@/lib/ai-research-state';
+
 import { useEffect, useRef, useState } from 'react';
 import { Bot, Check, Clipboard, Send, Sparkles, UserRound, X } from 'lucide-react';
 
@@ -331,10 +333,10 @@ export function ResearchChatPanel({
                 {message.role === 'assistant' && message.content ? (
                   message.intent === 'action'
                     ? <ActionItemsView content={message.content} />
-                    : <Box sx={{ mt: 0.5, typography: 'reading', overflowWrap: 'anywhere' }}><MarkdownContent content={message.content} compact /></Box>
+                    : <Box sx={{ mt: 0.5, typography: 'reading', overflowWrap: 'anywhere' }}><MarkdownContent content={stripResearchCitationMarkers(message.content)} compact /></Box>
                 ) : (
                   <Typography variant="reading" component="p" sx={{ mt: 0.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                    {message.content}
+                    {message.role === 'assistant' ? stripResearchCitationMarkers(message.content) : message.content}
                     {message.id.startsWith('streaming-') && message.content === '' && sending ? (
                       <CircularProgress size={12} sx={{ ml: 1, verticalAlign: 'middle' }} aria-label="正在生成回答" />
                     ) : null}

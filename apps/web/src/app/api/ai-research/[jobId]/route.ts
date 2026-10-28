@@ -112,6 +112,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
       requesterId: true,
       context: true,
       sourcePolicy: true,
+      reportType: true,
       reportLength: true,
       sourceRefs: true,
       brief: true,
@@ -297,11 +298,22 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   // captured ledger when sanitizing report links. A deep run can save more
   // than the 24 sources shown in the collapsed UI; hiding the older rows
   // must not turn their valid citations into “unverified” text.
+  const capturedBodies = new Map<string, string>();
+  if (Array.isArray(job.partialSources)) {
+    for (const item of job.partialSources) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const row = item as Record<string, unknown>;
+      const key = typeof row.canonical_key === 'string' ? row.canonical_key : row.canonicalKey;
+      if (typeof key === 'string' && typeof row.snippet === 'string' && row.snippet.trim()) {
+        capturedBodies.set(key, row.snippet.slice(0, 12_000));
+      }
+    }
+  }
   const jobEvidenceSources = job.aiResearchSources.length > 0
     ? job.aiResearchSources.map((source) => ({
         id: source.id,
         title: sourceDisplayTitle(source.title, source.sourceRef, source.canonicalKey),
-        snippet: source.snippet,
+        snippet: capturedBodies.get(source.canonicalKey) ?? source.snippet,
         score: source.score,
         sourceRef: source.sourceRef,
         canonicalKey: source.canonicalKey,
@@ -318,7 +330,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
   const researchLedgerSources = draftResearch?.researchSources?.map((source) => ({
     id: source.id,
     title: sourceDisplayTitle(source.title, source.sourceRef, source.canonicalKey),
-    snippet: source.description,
+    snippet: capturedBodies.get(source.canonicalKey) ?? source.description,
     score: null,
     sourceRef: source.sourceRef,
     canonicalKey: source.canonicalKey,
@@ -539,7 +551,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ jobId: string }>
     tokenOutputTotal: up.token_output_total ?? 0,
     costCents: up.cost_cents ?? 0,
     draftResearchId: up.draft_research_id ?? null,
-    reportType: up.report_type ?? null,
+    reportType: job.reportType ?? null,
     reportLength: job.reportLength ?? 'standard',
     sourcePolicy: job.sourcePolicy,
     context: parsedBrief.success ? parsedBrief.data.context ?? job.context : job.context,

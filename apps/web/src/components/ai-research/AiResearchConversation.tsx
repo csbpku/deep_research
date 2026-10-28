@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
+import { ResearchConfirmationControls } from './ResearchConfirmationControls';
+import { readResearchDraft, writeResearchDraft } from '@/lib/ai-research-state';
 import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearchStatus';
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
@@ -126,23 +128,30 @@ function StepStepper({ step }: { step: number }) {
   );
 }
 
-function ResearchRunReceipt({
-  jobId,
-  topic,
-  reportLength,
-  reportType,
-  sourcePolicy,
-  sourceCount,
-  selectedContextCount,
-}: {
-  jobId: string;
-  topic: string;
-  reportLength: ResearchLength;
-  reportType: ReportType;
-  sourcePolicy: SourcePolicy;
-  sourceCount: number;
-  selectedContextCount: number;
-}) {
+function ResearchRunReceipt({ jobId, topic }: { jobId: string; topic: string }) {
+  const [receipt, setReceipt] = useState<{ reportLength: ResearchLength; reportType: ReportType; sourcePolicy: SourcePolicy; sourceCount: number } | null>(null);
+  const [receiptError, setReceiptError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setReceipt(null); setReceiptError(false);
+    void fetch(`/api/ai-research/${encodeURIComponent(jobId)}`, { cache: 'no-store' })
+      .then(async (response) => { if (!response.ok) throw new Error('receipt unavailable'); return await response.json() as Record<string, unknown>; })
+      .then((data) => {
+        if (cancelled) return;
+        if (!['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType)) ||
+            !['brief', 'standard', 'deep'].includes(String(data.reportLength)) ||
+            !['prefer_user_sources', 'only_user_sources'].includes(String(data.sourcePolicy))) throw new Error('receipt incomplete');
+        setReceipt({ reportType: data.reportType as ReportType, reportLength: data.reportLength as ResearchLength,
+          sourcePolicy: data.sourcePolicy as SourcePolicy, sourceCount: Array.isArray(data.sourceRefs) ? data.sourceRefs.length : 0 });
+      }).catch(() => { if (!cancelled) setReceiptError(true); });
+    return () => { cancelled = true; };
+  }, [jobId, attempt]);
+  if (!receipt) return <Paper component="section" aria-label="本次研究收据" variant="outlined" sx={{ p: 2 }}>
+    {receiptError ? <>暂时无法确认启动配置。 <Button type="button" onClick={() => setAttempt((n) => n + 1)}>重新读取配置</Button></> : '正在读取已提交的研究配置…'}
+  </Paper>;
+  const { reportLength, reportType, sourcePolicy, sourceCount } = receipt;
+  const selectedContextCount = 0;
   const isDeep = reportLength === 'deep';
   const outputLabel = reportOptions.find((option) => option.value === reportType)?.label ?? '研究稿';
   const sourceLabel = sourcePolicy === 'only_user_sources'
@@ -163,13 +172,13 @@ function ResearchRunReceipt({
           <Typography component="h3" variant="body2" sx={{ mt: 0.5, display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, lineHeight: 1.6, fontWeight: 500 }}>{topic}</Typography>
         </Box>
           <Box component="span" sx={{ flexShrink: 0, border: 1, borderColor: 'primary.main', borderRadius: 999, bgcolor: 'background.default', px: 1, py: 0.5, typography: 'metadata', color: 'primary.main' }}>
-          {isDeep ? '多轮研究' : '单轮研究'}
+          {reportLength === 'brief' ? '快速判断' : isDeep ? '多轮研究' : '单轮研究'}
         </Box>
       </Box>
       <Box component="dl" sx={{ mt: 1.5, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1, typography: 'metadata' }}>
         <Box component="div" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1 }}>
           <Typography component="dt" variant="metadata" color="text.secondary">研究深度</Typography>
-          <Typography component="dd" variant="metadata" sx={{ mt: 0.5, ml: 0, fontWeight: 500 }}>{isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</Typography>
+          <Typography component="dd" variant="metadata" sx={{ mt: 0.5, ml: 0, fontWeight: 500 }}>{reportLength === 'brief' ? '快速判断，不进行完整检索' : isDeep ? '多轮覆盖，缺口再追查' : '先完成一轮检索'}</Typography>
         </Box>
         <Box component="div" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.default', px: 1.5, py: 1 }}>
           <Typography component="dt" variant="metadata" color="text.secondary">资料来源</Typography>
@@ -242,6 +251,11 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   const [brief, setBrief] = useState<BriefValue | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<'save' | 'submit' | 'restore' | 'validation' | null>(null);
+  const [ownerId, setOwnerId] = useState<string | null>(null);
+  const [restoredBrief, setRestoredBrief] = useState<BriefValue | null>(null);
+  const [draftStorageError, setDraftStorageError] = useState(false);
+  const [submissionUncertain, setSubmissionUncertain] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousConversationIdRef = useRef<string | null>(conversationId ?? null);
   const loadedConversationIdRef = useRef<string | null>(null);
@@ -268,6 +282,11 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     setConversationCreating(false);
     setPlanning(false);
     setBrief(null);
+    setRestoredBrief(null);
+    setOwnerId(null);
+    setDraftStorageError(false);
+    setSubmissionUncertain(false);
+    setErrorKind(null);
     setActiveJobId(null);
     setError(null);
     loadedConversationIdRef.current = null;
@@ -312,16 +331,37 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         setContext(state.context);
         setPhase(state.phase);
         setActiveJobId(conversation.jobId ?? null);
+        const owner = conversation.userId ?? null;
+        setOwnerId(owner);
+        if (owner && !conversation.jobId) {
+          let draft: ReturnType<typeof readResearchDraft> = null;
+          try { draft = readResearchDraft(window.localStorage, owner, conversation.id); } catch { setDraftStorageError(true); }
+          if (draft) {
+            setReportType(draft.reportType); setReportLength(draft.reportLength);
+            setSourcePolicy(draft.sourcePolicy); setSourceUrls(draft.sourceUrls);
+            setSourceDraft(draft.sourceDraft); setInput(draft.input);
+            setBrief(draft.brief); setRestoredBrief(draft.brief);
+          }
+        }
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(friendlyMessage(err, '对话恢复失败，可以继续在下方提问。'));
+        if (!cancelled) { setErrorKind('restore'); setError(friendlyMessage(err, '对话恢复失败，请重新打开此对话。')); }
       })
       .finally(() => {
         if (!cancelled) setHydrating(false);
       });
     return () => { cancelled = true; };
   }, [currentConversationId]);
+
+  useEffect(() => {
+    if (!ownerId || !currentConversationId || hydrating || activeJobId) return;
+    try {
+      setDraftStorageError(!writeResearchDraft(window.localStorage, ownerId, currentConversationId, {
+        reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, brief,
+      }));
+    } catch { setDraftStorageError(true); }
+  }, [ownerId, currentConversationId, hydrating, activeJobId, reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, brief]);
 
   // 雷达种子预填只在还没有持久化对话时生效。
   useEffect(() => {
@@ -386,6 +426,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       } catch (err) {
         if (typeof console !== 'undefined') console.warn('[ai-research] persist messages failed', err);
         if (currentConversationIdRef.current === targetId) {
+          setErrorKind('save');
           setError('对话保存失败，本次内容仍保留在当前页面，请暂勿刷新。');
         }
       }
@@ -407,6 +448,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       if (!response.ok) throw await toApiHttpError(response, '对话创建失败');
       const conversation = await response.json() as AiResearchConversationDetail;
       loadedConversationIdRef.current = conversation.id;
+      setOwnerId(conversation.userId ?? null);
       currentConversationIdRef.current = conversation.id;
       setCurrentConversationId(conversation.id);
       setMessages(conversation.messages.map((message) => ({
@@ -416,6 +458,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       })));
       router.replace(`/ai-research?conversation=${conversation.id}`, { scroll: false });
     } catch (err) {
+      setErrorKind('save');
       setError(friendlyMessage(err, '对话暂存失败，本次内容仍保留在当前页面。'));
     } finally {
       setConversationCreating(false);
@@ -485,23 +528,27 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   }
 
   async function submit(extraMessages: Message[] = []) {
-    if (submitting || activeJobId || conversationCreating || hydrating) return;
+    if (submitting || activeJobId || conversationCreating || hydrating || submissionUncertain) return;
     if (topic.trim().length < 2) {
+      setErrorKind('validation');
       setError('先告诉我至少 2 个字的研究主题。');
       return;
     }
     const effectiveSourceRefs = mergeSourceRefs(sourceRefs, brief?.brief?.contextRefs ?? [], sourcePolicy);
     if (sourcePolicy === 'only_user_sources' && effectiveSourceRefs.length === 0) {
+      setErrorKind('validation');
       setError('只使用指定资料时，至少需要一条雷达内容或网页资料。');
       return;
     }
     const selectedScope = brief?.brief?.scope;
     if (selectedScope?.timeRange.preset === 'custom') {
       if (!selectedScope.timeRange.from || !selectedScope.timeRange.to) {
+        setErrorKind('validation');
         setError('自定义时间范围需要同时填写开始和结束日期。');
         return;
       }
       if (selectedScope.timeRange.from > selectedScope.timeRange.to) {
+        setErrorKind('validation');
         setError('自定义时间范围的结束日期不能早于开始日期。');
         return;
       }
@@ -550,7 +597,9 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         body: JSON.stringify(submitBody),
       });
       if (!response.ok) {
-        setError(friendlyMessage(await toApiHttpError(response, '提交失败'), '提交失败，请稍后重试。'));
+        setErrorKind(response.status >= 500 ? 'submit' : 'validation');
+        if (response.status >= 500) setSubmissionUncertain(true);
+        setError(friendlyMessage(await toApiHttpError(response, '提交结果未确认'), '提交结果未确认，请先查看任务历史。')); 
         setMessages((current) => current.filter((message) => message.id !== placeholder.id));
         return;
       }
@@ -563,14 +612,15 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       )));
       void persistMessages([{ role: 'assistant', content: finalContent }]);
     } catch (err) {
-      setError(friendlyMessage(err, '提交失败，请稍后重试。'));
+      setErrorKind('submit');
+      setSubmissionUncertain(true);
+      setError(friendlyMessage(err, '提交结果未确认，请先查看任务历史。'));
       setMessages((current) => current.filter((message) => message.id !== placeholder.id));
     } finally {
       setSubmitting(false);
     }
   }
 
-  const canConfigure = phase !== 'understand';
   const scopeIncomplete = brief?.scopeValid === false;
   const sourceSelectionIncomplete = sourcePolicy === 'only_user_sources'
     && sourceRefs.length === 0
@@ -592,7 +642,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           </Box>
           <Box>
             <Typography variant="listTitle" component="h2">调研对话</Typography>
-            <Typography variant="metadata" color="text.secondary">对话会自动保存，刷新后仍可继续。</Typography>
+            <Typography variant="metadata" color="text.secondary">对话自动保存；方案草稿仅保存在当前浏览器。</Typography>
           </Box>
         </Box>
         <StepStepper step={stepIndex} />
@@ -601,7 +651,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       <Box sx={{ display: 'flex', minHeight: 0, flexDirection: 'column' }}>
         <Box
           ref={scrollRef}
-          sx={{ display: 'grid', minHeight: 320, flex: 1, gap: 2.5, overflowY: { xs: 'visible', lg: 'auto' }, maxHeight: { xs: 'none', lg: '70vh' }, px: { xs: 2.5, sm: 2.5 }, py: 2.5 }}
+          sx={{ minWidth: 0, gridTemplateColumns: 'minmax(0, 1fr)', display: 'grid', minHeight: 320, flex: 1, gap: 2.5, overflowY: { xs: 'visible', lg: activeJobId ? 'auto' : 'visible' }, maxHeight: { xs: 'none', lg: activeJobId ? '70vh' : 'none' }, px: { xs: 2.5, sm: 2.5 }, py: 2.5 }}
           aria-live="polite"
         >
           {hydrating ? (
@@ -628,7 +678,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               ))}
 
               {phase === 'understand' && messages.length === 1 ? (
-                <Box sx={{ ml: 5, pt: 0.5 }}>
+                <Box sx={{ ml: 5, minWidth: 0, pt: 0.5 }}>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                     {EXAMPLE_PROMPTS.map((example) => (
                       <Button
@@ -637,7 +687,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                         variant="outline"
                         size="xs"
                         onClick={() => processUserMessage(example)}
-                        sx={{ minHeight: 44, borderRadius: 999, borderColor: 'divider', bgcolor: 'background.paper', px: 1.5, py: 1, typography: 'metadata', color: 'text.secondary', transition: (theme) => theme.transitions.create(['background-color', 'border-color', 'color']), '&:hover': { borderColor: 'primary.main', bgcolor: 'action.selected', color: 'text.primary' } }}
+                        sx={{ minHeight: 44, borderRadius: 999, borderColor: 'divider', bgcolor: 'background.paper', px: 1.5, py: 1, maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere', typography: 'metadata', color: 'text.secondary', transition: (theme) => theme.transitions.create(['background-color', 'border-color', 'color']), '&:hover': { borderColor: 'primary.main', bgcolor: 'action.selected', color: 'text.primary' } }}
                       >
                         {example}
                       </Button>
@@ -647,8 +697,9 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               ) : null}
 
               {phase !== 'understand' && !activeJobId ? (
-                <Box sx={{ ml: 5 }}>
+                <Box sx={{ ml: 5, minWidth: 0 }}>
                   <AiResearchBrief
+                    initialBrief={restoredBrief}
                     question={topic}
                     context={context}
                     topicHint={topicIdQuery ?? undefined}
@@ -658,7 +709,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                         size="sm"
                         aria-label="开始调研"
                         onClick={() => void submit()}
-                        disabled={submitting || conversationCreating || hydrating || scopeIncomplete || sourceSelectionIncomplete}
+                        disabled={submitting || conversationCreating || hydrating || submissionUncertain || scopeIncomplete || sourceSelectionIncomplete}
                       >
                         {submitting ? <CircularProgress size={16} thickness={5} aria-hidden /> : <Send size={16} />}
                         {submitting ? '启动中…' : '开始研究'}
@@ -670,7 +721,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                       // Never let a previous question's brief be submitted
                       // while the new plan is still loading. Direct start
                       // intentionally falls back to the current topic.
-                      if (value) setBrief(null);
+                      if (value && restoredBrief?.brief?.question !== topic.trim()) setBrief(null);
                     }}
                   >
                     <ResearchConfirmationControls
@@ -712,11 +763,6 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                   <ResearchRunReceipt
                     jobId={activeJobId}
                     topic={topic}
-                    reportLength={reportLength}
-                    reportType={reportType}
-                    sourcePolicy={sourcePolicy}
-                    sourceCount={sourceRefs.length}
-                    selectedContextCount={brief?.suggestedContextIds.length ?? 0}
                   />
                   <InlineAiResearchStatus jobId={activeJobId} />
                 </Box>
@@ -725,10 +771,11 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           )}
         </Box>
 
+        {draftStorageError ? <Typography role="status" sx={{ mx: 2.5, mb: 1, typography: 'metadata' }}>此浏览器无法保存方案草稿，刷新后设置可能丢失。</Typography> : null}
         {error ? (
           <Box role="alert" sx={{ mx: 2.5, mb: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, border: 1, borderColor: 'error.main', borderRadius: 1, bgcolor: 'var(--dr-color-danger-container)', px: 1.5, py: 1, typography: 'body2', color: 'error.main' }}>
             <Box component="span" sx={{ flex: 1 }}>{error}</Box>
-            {canConfigure && !activeJobId ? <Button type="button" variant="outline" size="xs" onClick={() => void submit()}>重试</Button> : null}
+            {errorKind === 'submit' ? <Link component={NextLink} href="/ai-research?history=1">先查看任务历史，确认是否已启动</Link> : null}
             {loginRequired ? (
               <Link component={NextLink} href="/signin?callbackUrl=%2Fai-research" underline="always" sx={{ typography: 'metadata', fontWeight: 500, textUnderlineOffset: 2 }}>
                 登录后继续
@@ -772,232 +819,3 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   );
 }
 
-function ResearchConfirmationControls({
-  reportType,
-  reportLength,
-  sourcePolicy,
-  sourceRefs,
-  sourceUrls,
-  sourceDraft,
-  selectedContextCount,
-  seed,
-  submitting,
-  planning,
-  scopeIncomplete,
-  onReportTypeChange,
-  onReportLengthChange,
-  onSourcePolicyChange,
-  onSourceDraftChange,
-  onAddSource,
-  onRemoveSource,
-}: {
-  reportType: ReportType;
-  reportLength: ResearchLength;
-  sourcePolicy: SourcePolicy;
-  sourceRefs: ResearchSourceRef[];
-  sourceUrls: string[];
-  sourceDraft: string;
-  selectedContextCount: number;
-  seed: RadarSeed | null;
-  submitting: boolean;
-  planning: boolean;
-  scopeIncomplete: boolean;
-  onReportTypeChange: (value: ReportType) => void;
-  onReportLengthChange: (value: ResearchLength) => void;
-  onSourcePolicyChange: (value: SourcePolicy) => void;
-  onSourceDraftChange: (value: string) => void;
-  onAddSource: () => void;
-  onRemoveSource: (url: string) => void;
-}) {
-  const disabled = submitting;
-  const sourceSelectionIncomplete = sourcePolicy === 'only_user_sources'
-    && sourceRefs.length === 0
-    && selectedContextCount === 0;
-  return (
-    <Box sx={{ display: 'grid', gap: 2 }} aria-label="资料与产出">
-      <Box component="fieldset" disabled={disabled} sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0, '&:disabled': { opacity: 0.5 } }}>
-        <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>交付形式</Box>
-        <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>选择这次要生成的结果。</Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1 }}>
-          {durableReportOptions.map((option) => {
-            const Icon = option.icon;
-            const selected = reportType === option.value;
-            return (
-              <Button
-                key={option.value}
-                type="button"
-                variant={selected ? 'default' : 'outline'}
-                size="sm"
-                aria-pressed={selected}
-                onClick={() => onReportTypeChange(option.value)}
-                sx={{ height: 'auto', minHeight: 48, justifyContent: 'flex-start', whiteSpace: 'normal', px: 1.5, py: 1, textAlign: 'left' }}
-              >
-                <Icon size={14} />
-                <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
-                  <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>{option.label}</Typography>
-                  <Typography component="span" variant="metadata" color="text.secondary">{option.description}</Typography>
-                </Box>
-              </Button>
-              );
-            })}
-        </Box>
-        {quickJudgmentOption ? (() => {
-          const Icon = quickJudgmentOption.icon;
-          const selected = reportType === quickJudgmentOption.value;
-          return (
-            <Paper variant="outlined" sx={{ borderStyle: 'dashed', bgcolor: 'action.hover', px: 1.5, py: 1 }}>
-              <Typography component="p" variant="metadata" sx={{ fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'text.secondary' }}>只想先看方向？</Typography>
-              <Button
-                type="button"
-                variant={selected ? 'secondary' : 'ghost'}
-                size="sm"
-                aria-pressed={selected}
-                onClick={() => onReportTypeChange(quickJudgmentOption.value)}
-                sx={{ mt: 0.5, height: 'auto', width: '100%', justifyContent: 'flex-start', whiteSpace: 'normal', px: 1, py: 1, textAlign: 'left' }}
-              >
-                <Icon size={14} />
-                <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
-                  <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>{quickJudgmentOption.label}</Typography>
-                  <Typography component="span" variant="metadata" color="text.secondary">{quickJudgmentOption.description}；不会创建正式研究稿</Typography>
-                </Box>
-              </Button>
-            </Paper>
-          );
-        })() : null}
-      </Box>
-
-      {reportType !== 'summary_brief' ? (
-        <Box component="fieldset" disabled={disabled} sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0, '&:disabled': { opacity: 0.5 } }}>
-          <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>研究深度</Box>
-          <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
-            需要快速扫清方向，还是先覆盖多个角度，再根据证据缺口继续查？
-          </Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
-            <Button
-              type="button"
-              variant={reportLength === 'deep' ? 'secondary' : 'outline'}
-              size="sm"
-              aria-pressed={reportLength === 'deep'}
-              onClick={() => onReportLengthChange('deep')}
-              sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}
-            >
-              <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>多轮研究 · 推荐</Typography>
-                <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>先覆盖多个方向，再补查真实证据缺口；适合重要判断，耗时更长</Typography>
-              </Box>
-            </Button>
-            <Button
-              type="button"
-              variant={reportLength === 'standard' ? 'secondary' : 'outline'}
-              size="sm"
-              aria-pressed={reportLength === 'standard'}
-              onClick={() => onReportLengthChange('standard')}
-              sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}
-            >
-              <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>单轮研究</Typography>
-                <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>只做一轮检索，适合先扫清方向，不适合证据要求很高的决策</Typography>
-              </Box>
-            </Button>
-          </Box>
-          {reportLength === 'deep' && sourcePolicy !== 'only_user_sources' ? (
-            <Paper variant="outlined" sx={{ borderColor: 'primary.main', bgcolor: 'action.selected', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
-              <Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>这次会做：</Box>
-              拆分问题 → 并行检索 → 根据缺口补查 → 生成结果。
-              证据足够时会提前收敛，不会为了凑页数继续搜索。
-            </Paper>
-          ) : null}
-          {reportLength === 'deep' && sourcePolicy === 'only_user_sources' ? (
-            <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
-              当前只使用你提供的资料；不会扩展到网页做多轮检索。
-            </Typography>
-          ) : null}
-        </Box>
-      ) : null}
-
-      <Box component="fieldset" disabled={disabled} sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0, '&:disabled': { opacity: 0.5 } }}>
-        <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>资料来源</Box>
-        <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>决定 AI 可以参考哪些资料。</Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
-          <Button type="button" aria-pressed={sourcePolicy === 'prefer_user_sources'} variant={sourcePolicy === 'prefer_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('prefer_user_sources')} sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}>
-            <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>网页搜索 + 已选资料</Typography>
-              <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>搜索公开网页；你选中的资料也会一并纳入</Typography>
-            </Box>
-          </Button>
-          <Button type="button" aria-pressed={sourcePolicy === 'only_user_sources'} variant={sourcePolicy === 'only_user_sources' ? 'secondary' : 'outline'} size="sm" onClick={() => onSourcePolicyChange('only_user_sources')} sx={{ height: 'auto', justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}>
-            <Box component="span" sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <Typography component="span" variant="metadata" sx={{ fontWeight: 500 }}>仅使用已选资料</Typography>
-              <Typography component="span" variant="metadata" sx={{ fontWeight: 400, color: 'text.secondary' }}>不访问公开网页，只使用你添加的资料</Typography>
-            </Box>
-          </Button>
-        </Box>
-        <Paper variant="outlined" sx={{ bgcolor: 'action.hover', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'text.secondary' }}>
-          <Box component="span" sx={{ fontWeight: 500, color: 'text.primary' }}>已添加资料：</Box>
-          {sourceRefs.length > 0 ? `${sourceRefs.length} 条${seed ? '（含当前雷达内容）' : ''}` : '尚未添加'}
-          {selectedContextCount > 0 ? ` · ${selectedContextCount} 条已有资料` : ''}
-        </Paper>
-        <Box component="label" htmlFor="conversation-source-url" sx={{ display: 'grid', gap: 1 }}>
-          <Typography component="span" variant="metadata" color="text.secondary">添加网页资料（可选）</Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Input
-              id="conversation-source-url"
-              type="url"
-              value={sourceDraft}
-              onChange={(event) => onSourceDraftChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  onAddSource();
-                }
-              }}
-              placeholder="https://…"
-              sx={{ minWidth: 0, '& .MuiOutlinedInput-root': { height: 32, minHeight: 32 }, '& .MuiOutlinedInput-input': { py: 0.5, fontSize: 'var(--dr-type-caption)' } }}
-            />
-            <Button type="button" variant="outline" size="icon-sm" onClick={onAddSource} aria-label="添加网页资料">
-              <Link2 size={14} />
-            </Button>
-          </Box>
-        </Box>
-        {sourceUrls.length > 0 ? (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-            {sourceUrls.map((url) => (
-              <Button
-                key={url}
-                type="button"
-                variant="outline"
-                size="xs"
-                onClick={() => onRemoveSource(url)}
-                sx={{ display: 'inline-flex', maxWidth: '100%', minHeight: 32, alignItems: 'center', gap: 0.5, borderColor: 'divider', bgcolor: 'background.paper', px: 1, py: 0.5, typography: 'metadata', color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
-                title={`移除资料 ${url}`}
-              >
-                <Box component="span" sx={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</Box>
-                <X size={12} />
-              </Button>
-            ))}
-          </Box>
-        ) : null}
-      </Box>
-
-      {scopeIncomplete ? (
-        <Box component="p" role="alert" sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }}>
-          “优先资料时间”选择了自定义，请同时填写开始和结束日期后再启动。
-        </Box>
-      ) : null}
-
-      <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
-        {sourceSelectionIncomplete ? (
-          <Box component="p" role="alert" sx={{ mb: 1, border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1, typography: 'metadata', lineHeight: 1.6, color: 'warning.main' }}>
-            仅使用已选资料时，请先添加至少一条雷达内容、网页资料或已有资料。
-          </Box>
-        ) : null}
-        <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
-          {
-            sourceSelectionIncomplete
-              ? '添加资料后，“开始研究”按钮会恢复可用。'
-              : '这些选择会和上面的研究方案一起提交；点击“开始研究”后将锁定。'}
-        </Typography>
-      </Box>
-    </Box>
-  );
-}
