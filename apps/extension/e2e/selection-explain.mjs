@@ -71,9 +71,15 @@ const browser = await chromium.launchPersistentContext(join(root, 'profile'), {
   args: ['--enable-extensions', `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`, '--no-first-run', '--no-default-browser-check'],
 });
 
+let testedPanel;
 try {
   const worker = browser.serviceWorkers()[0] || await browser.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
+  // Playwright represents the side panel as a bound extension tab. Opening
+  // Chrome's native panel as well creates a second reader that can consume
+  // the same selection action and race this test for the answer worker.
+  // The native-opener call itself is covered by ui-regressions.test.mjs.
+  await worker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
   const article = await browser.newPage();
   await article.goto(`${origin}/article`);
   await article.bringToFront();
@@ -123,6 +129,7 @@ try {
     } });
   }, { tabId, context: selectedContext });
   const reopened = await browser.newPage();
+  testedPanel = reopened;
   await reopened.setViewportSize({ width: 420, height: 900 });
   await reopened.addInitScript(() => {
     const read = chrome.storage.local.get.bind(chrome.storage.local);
@@ -196,6 +203,16 @@ try {
   const screenshot = join(root, 'selection-explain.png');
   await reopened.screenshot({ path: screenshot, fullPage: true });
   console.log(JSON.stringify({ ok: true, requests: calls.length, coldPanelAutoExplain: true, crossParagraphAnchor: true, failedQuestionVisible: true, unifiedSaveOptions: true, platformSaves: saves.length, screenshot }));
+} catch (error) {
+  const state = testedPanel ? await testedPanel.evaluate(async () => {
+    const stored = await chrome.storage.session.get(null);
+    return {
+      notice: document.querySelector('#notice')?.textContent,
+      tasks: Object.entries(stored).filter(([key]) => key.startsWith('readerAnswer:')).map(([, task]) => ({ status: task.status, error: task.error })),
+    };
+  }).catch(() => null) : null;
+  console.error(JSON.stringify({ requests: calls.length, platformSaves: saves.length, state }));
+  throw error;
 } finally {
   await browser.close();
   await new Promise(resolve => server.close(resolve));
