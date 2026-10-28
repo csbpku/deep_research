@@ -43,3 +43,11 @@
 - `pnpm --filter @deep-research/web test src/app/api/ai-research/__tests__/plan.test.ts src/app/api/ai-research/__tests__/submit-rejected.test.ts src/lib/research-sufficiency.test.ts`：3 文件、49/49 通过。
 - `pnpm --filter @deep-research/web typecheck`：通过。
 - AiResearchBrief 的目标切换状态清理与所选历史资料可见性由父集成工作流处理，本分支未修改 UI。
+
+## 最终真实 LLM 验收反馈：排除范围
+
+隔离验收任务 `bde1c6b4-79d2-4d23-bb2b-dc36c8d1fee0` 的只读查询确认：虽然用户写了“不展开无关的部署、磁盘或回滚”，持久化 brief 仍含这三项运维维度。根因是排除用语只覆盖“不讨论”等表达，遗漏“不展开”。
+
+- RED `440515f`：用真实完整提问及焦点做 plan API 回归，1 失败、29 通过；实际多出磁盘、部署和回滚三维。
+- GREEN `13c8cb6`：识别“不展开 / 不延伸 / 不扩展 / 不涵盖 / 不纳入”等排除表达。原回归连同 submission/sufficiency 共50/50通过。
+- 未修改隔离数据库；历史任务保留原确认配置，新的验收需重新生成方案，不能把沿用旧5维配置的重跑当作新方案验证。
