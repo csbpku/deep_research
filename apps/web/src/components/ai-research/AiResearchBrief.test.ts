@@ -249,6 +249,15 @@ function mountBrief(initialProps: BriefProps) {
       }
       const change = find(output); if (!change) throw new Error('Research objective selector not found'); change({ target: { value } }); flush();
     },
+    changeField(label: string, value: string) {
+      function find(node: ReactNode): ((event: { target: { value: string } }) => void) | undefined {
+        if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
+        if (!isValidElement<{ children?: ReactNode; 'aria-label'?: string; onChange?: (event: { target: { value: string } }) => void }>(node)) return;
+        if (node.props['aria-label'] === label && node.props.onChange) return node.props.onChange;
+        return find(node.props.children);
+      }
+      const change = find(output); if (!change) throw new Error(`Field ${label} not found`); change({ target: { value } }); flush();
+    },
     update(next: Partial<BriefProps>) { props = { ...props, ...next }; flush(); },
     suggestions() {
       const found = findSuggestions(output);
@@ -322,6 +331,16 @@ describe('AI research brief client request races', () => {
     await vi.advanceTimersByTimeAsync(0); brief.flush();
     brief.changeObjective('learn');
     expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ objective: 'learn', comparisonOptions: [], decisionDimensions: [] });
+  });
+
+  it('keeps an explicitly edited question when switching to decision research', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) respond(request, request.url.endsWith('/plan') ? planResponse('GraphRAG retrieval costs') : { items: [] });
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.changeField('研究重点回答', '核对性能与成本');
+    brief.clickButton('决策对比');
+    expect(ready.mock.calls.at(-1)![0].brief.questionsToAnswer).toEqual(['核对性能与成本']);
   });
 
   it('debounces both endpoints and propagates the latest topicHint even when only the hint changes', async () => {
