@@ -36,3 +36,49 @@ describe('research state utilities', () => {
     expect(writeResearchDraft({ ...storage, setItem: () => { throw new Error('blocked'); } }, 'user-1', 'conversation-1', draft)).toBe(false);
   });
 });
+
+const completeDraft: ResearchDraft = {
+  reportType: 'web_brief', reportLength: 'standard', sourcePolicy: 'only_user_sources', sourceUrls: ['https://example.com'], sourceDraft: '', input: '尚未发送的问题', seed: null,
+  brief: { objective: 'decide', assistantMessage: '方案已准备好', suggestedContextIds: [], brief: {
+    objective: 'decide', question: '比较 A 和 B', constraints: [], questionsToAnswer: ['比较异常与取消'], comparisonOptions: ['A', 'B'], decisionDimensions: ['异常传播'], successCriteria: [],
+    sourcePolicy: 'only_user_sources', scope: { timeRange: { preset: 'any' }, regions: [], technologyVersions: [], retrievalNotes: '' }, outputType: 'web', contextRefs: [],
+  } },
+};
+
+it('restores the complete editable brief without losing its explicit source boundary', () => {
+  const storage = memoryStorage();
+  expect(writeResearchDraft(storage, 'owner', 'chat', completeDraft)).toBe(true);
+  expect(readResearchDraft(storage, 'owner', 'chat')).toEqual(completeDraft);
+});
+
+it.each([
+  null, [], 42, { ...completeDraft, reportType: 'unknown' }, { ...completeDraft, reportLength: 'quick' },
+  { ...completeDraft, sourcePolicy: 'unrestricted' }, { ...completeDraft, sourceUrls: Array(11).fill('https://example.com') },
+  { ...completeDraft, sourceUrls: ['ftp://example.com'] }, { ...completeDraft, sourceDraft: 42 },
+  { ...completeDraft, input: 'x'.repeat(20001) }, { ...completeDraft, seed: [] }, { ...completeDraft, brief: [] },
+  { ...completeDraft, brief: {} },
+  { ...completeDraft, brief: { ...completeDraft.brief, brief: { ...completeDraft.brief!.brief, scope: { timeRange: { preset: 'any' }, regions: [], technologyVersions: [], retrievalNotes: 42 } } } },
+  { ...completeDraft, brief: { ...completeDraft.brief, objective: 'learn', brief: { ...completeDraft.brief!.brief, objective: 'decide' } } },
+  { ...completeDraft, brief: { ...completeDraft.brief, brief: { ...completeDraft.brief!.brief, questionsToAnswer: 'broken' } } },
+  { ...completeDraft, brief: { ...completeDraft.brief, brief: { ...completeDraft.brief!.brief, contextRefs: [{ type: 'url', value: 42 }] } } },
+  { ...completeDraft, brief: { ...completeDraft.brief, brief: { ...completeDraft.brief!.brief, scope: { timeRange: { preset: 'forever' } } } } },
+])('ignores malformed or unsupported stored configuration %#', (corrupt) => {
+  const storage = memoryStorage();
+  storage.setItem('ai-research-draft:v1:owner:chat', JSON.stringify(corrupt));
+  expect(readResearchDraft(storage, 'owner', 'chat')).toBeNull();
+});
+
+it('handles unavailable storage, oversized data and missing identities without leaking a draft', () => {
+  const storage = memoryStorage();
+  expect(writeResearchDraft(storage, '', 'chat', completeDraft)).toBe(false);
+  expect(readResearchDraft(storage, 'owner', '')).toBeNull();
+  expect(readResearchDraft({ ...storage, getItem: () => { throw new Error('storage blocked'); } }, 'owner', 'chat')).toBeNull();
+  storage.setItem('ai-research-draft:v1:owner:chat', 'x'.repeat(100001));
+  expect(readResearchDraft(storage, 'owner', 'chat')).toBeNull();
+});
+
+it('formats the short time boundaries and absent timestamps', () => {
+  expect(formatResearchRelativeTime(null, now)).toBe('时间未知');
+  expect(formatResearchRelativeTime(new Date(now - 30 * 60_000).toISOString(), now)).toBe('30 分钟前');
+  expect(formatResearchRelativeTime(new Date(now - 3 * 60 * 60_000).toISOString(), now)).toBe('3 小时前');
+});
