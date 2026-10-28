@@ -55,3 +55,26 @@ def test_canonical_source_hash_matches_web_unicode_vector() -> None:
         },
     ]
     assert source_snapshot_hash(rows) == "15d7ce403e96c052eeaad46f85e1fbc2feb523cb87ebba124cfffcb27473cc08"
+
+
+def test_claim_evidence_hash_keeps_matching_original_full_text() -> None:
+    original = "source evidence " * 400
+    key = "https://example.com/original"
+    ref = {"type": "url", "value": key}
+    ledger = [
+        {
+            "canonicalKey": key,
+            "sourceRef": ref,
+            "title": "Original",
+            "description": original[:999].rstrip() + "…",
+        },
+        {
+            "canonicalKey": "https://example.com/new",
+            "sourceRef": {"type": "url", "value": "https://example.com/new"},
+            "title": "New",
+            "description": "New evidence",
+        },
+    ]
+    partial = [{"canonical_key": key, "source_ref": ref, "title": "Original", "snippet": original}]
+    expected = source_snapshot_hash([{**ledger[0], "description": original}, ledger[1]])
+    assert source_snapshot_hash(ledger, partial) == expected
