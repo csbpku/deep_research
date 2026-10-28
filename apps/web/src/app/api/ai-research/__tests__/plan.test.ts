@@ -104,6 +104,82 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.missingFields).not.toContain('comparisonOptions');
   });
 
+  it('keeps scenario and requested advice out of the real Playwright comparison options', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 Playwright 和 Cypress 在小型 TypeScript 团队端到端测试中的选择，给出适用边界与建议',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual(['Playwright', 'Cypress']);
+    expect(body.ready).toBe(true);
+  });
+
+  it('extracts compact Chinese and English comparison names without swallowing requirements', async () => {
+    for (const question of [
+      '比较Playwright和Cypress的工程取舍，给出建议',
+      'Compare Playwright and Cypress for a small TypeScript team, provide trade-offs.',
+    ]) {
+      const res = await planPost(buildReq({ question }) as never, ctx());
+      expect((await res.json()).brief.comparisonOptions).toEqual(['Playwright', 'Cypress']);
+    }
+  });
+
+  it('asks for named comparison options instead of treating vague instructions as products', async () => {
+    const res = await planPost(buildReq({ question: '比较现有方案与更好的实现，给出适用边界与建议' }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual([]);
+    expect(body.missingFields).toContain('comparisonOptions');
+    expect(body.ready).toBe(false);
+    expect(body.assistantMessage).toContain('对比对象');
+    expect(body.assistantMessage).not.toContain('comparisonOptions');
+  });
+
+  it('uses the requested runtime behaviours rather than imposing operational comparison dimensions', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 asyncio.gather 和 asyncio.TaskGroup 的异常传播和取消行为差异，说明适用边界',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual(['asyncio.gather', 'asyncio.TaskGroup']);
+    expect(body.brief.decisionDimensions).toEqual(expect.arrayContaining(['异常传播', '取消行为']));
+    expect(body.brief.decisionDimensions).not.toEqual(expect.arrayContaining(['磁盘与资源占用']));
+    expect(body.brief.decisionDimensions).not.toContain('部署与构建');
+    expect(body.brief.decisionDimensions).not.toContain('回滚与恢复');
+    expect(body.brief.decisionDimensions).not.toContain('网络/性能实测');
+    expect(body.plan.steps.find((step: { title: string }) => step.title === '对比关键维度').detail).toContain('异常传播');
+  });
+
+  it('retains the operational evidence requirements when the question explicitly requests them', async () => {
+    const res = await planPost(buildReq({
+      question: 'GHCR 固定 SHA 镜像 vs VPS 本地构建：比较带宽、回滚和磁盘空间',
+    }) as never, ctx());
+    expect((await res.json()).brief.decisionDimensions).toEqual(expect.arrayContaining([
+      '网络/性能实测', '磁盘与资源占用', '部署与构建', '回滚与恢复',
+    ]));
+  });
+
+  it('does not infer dimensions that the user explicitly excludes', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 asyncio.gather 和 asyncio.TaskGroup 的异常传播；不讨论部署、磁盘和回滚',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.decisionDimensions).toContain('异常传播');
+    expect(body.brief.decisionDimensions).not.toContain('部署与构建');
+    expect(body.brief.decisionDimensions).not.toContain('磁盘与资源占用');
+    expect(body.brief.decisionDimensions).not.toContain('回滚与恢复');
+  });
+
+  it('preserves explicitly supplied comparison options and dimensions, including an empty dimension list', async () => {
+    for (const decisionDimensions of [['异常传播'], []]) {
+      const res = await planPost(buildReq({
+        question: '比较 Playwright 和 Cypress 的工程取舍',
+        comparisonOptions: ['Explicit A', 'Explicit B'],
+        decisionDimensions,
+      }) as never, ctx());
+      const body = await res.json();
+      expect(body.brief.comparisonOptions).toEqual(['Explicit A', 'Explicit B']);
+      expect(body.brief.decisionDimensions).toEqual(decisionDimensions);
+    }
+  });
+
   it('推断学习类问题为 learn', async () => {
     const res = await planPost(buildReq({ question: 'GraphRAG 怎么上手？' }) as never, ctx());
     const body = await res.json();

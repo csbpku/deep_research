@@ -78,6 +78,13 @@ describe('research scope schema', () => {
     }).success).toBe(true);
   });
 
+  it('does not make operational measurements a default requirement for every research brief', () => {
+    const brief = ResearchBriefSchema.parse({ objective: 'decide', question: '比较两个异步 API' });
+    expect(brief.decisionDimensions).not.toContain('部署与构建');
+    expect(brief.decisionDimensions).not.toContain('磁盘与资源占用');
+    expect(brief.decisionDimensions).not.toContain('回滚与恢复');
+  });
+
   it('keeps the scope inside a research brief', () => {
     const result = ResearchBriefSchema.safeParse({
       objective: 'decide',
