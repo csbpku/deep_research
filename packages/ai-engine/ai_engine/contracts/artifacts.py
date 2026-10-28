@@ -34,7 +34,7 @@ class ResearchArtifact(TypedDict):
 def extract_slide_limit(text: str, fallback: int = DEFAULT_SLIDE_LIMIT) -> int:
     """Read a user-declared slide/page limit and clamp it to a usable range."""
     patterns = (
-        r"(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)?",
+        r"(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)",
         r"(\d+)\s*(?:页|张)\s*(?:以内|上限)",
         r"(?:max(?:imum)?|up\s+to)\s*(\d+)\s*(?:slides?|pages?)",
         r"(\d+)\s*(?:页|张|slides?\b|pages?\b)",

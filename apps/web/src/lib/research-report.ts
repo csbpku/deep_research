@@ -132,7 +132,7 @@ interface SlideSection {
 /** Infer an explicit page constraint from the user's request or saved brief. */
 export function extractSlideLimit(text: string, fallback = DEFAULT_SLIDE_LIMIT): number {
   const source = String(text ?? '');
-  const match = source.match(/(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)?/u)
+  const match = source.match(/(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)/u)
     ?? source.match(/(\d+)\s*(?:页|张)\s*(?:以内|上限)/u)
     ?? source.match(/(?:max(?:imum)?|up\s+to)\s*(\d+)\s*(?:slides?|pages?)/iu)
     ?? source.match(/(\d+)\s*(?:页|张|slides?\b|pages?\b)/iu);
