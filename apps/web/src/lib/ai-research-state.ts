@@ -1,3 +1,4 @@
+import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 import type { BriefValue } from '@/components/ai-research/AiResearchBrief';
 
 export type ResearchDraft = {
@@ -52,7 +53,8 @@ function isDraft(value: unknown): value is ResearchDraft {
   if (!v.brief || typeof v.brief !== 'object' || Array.isArray(v.brief)) return false;
   const b = v.brief as Record<string, unknown>;
   const detail = b.brief as Record<string, unknown> | undefined;
-  return ['explore', 'learn', 'investigate', 'decide'].includes(String(b.objective)) &&
+  return ResearchBriefSchema.safeParse(detail).success && detail?.objective === b.objective &&
+    ['explore', 'learn', 'investigate', 'decide'].includes(String(b.objective)) &&
     typeof b.assistantMessage === 'string' && Array.isArray(b.suggestedContextIds) &&
     b.suggestedContextIds.every((id) => typeof id === 'string') &&
     !!detail && typeof detail === 'object' && typeof detail.question === 'string' &&
