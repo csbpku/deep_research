@@ -35,3 +35,11 @@
 `@vitest/coverage-v8` 未安装，本分支未为覆盖率修改锁文件，不声明数值覆盖率。真实浏览器与全量 Web 验收由父集成分支执行。
 
 比较对象使用保守规则，无法可靠识别的表达仍要求人工确认；不承诺任意自然语言命名实体识别。目标枚举保持原兼容值，展示文案改为“主题概览 / 机制分析”。当前 Python 无 ResearchBrief/decisionDimensions 的 schema 镜像；写手模板对维度的使用由并行后端工作流处理。
+
+## 独立审查后的第二轮 TDD
+
+- RED checkpoint `5675f8e`：新增引号名称（含 and、逗号、冒号）、“和鲸”首字、负向范围后的正向性能需求、排除项不能被默认恢复、不要忽略的语义及非决策目标的比较继承回归。实际运行 plan + submit-rejected：6 失败、29 通过，失败均命中新增保证。
+- GREEN checkpoint `2542c74`：引号保护及逐项分隔保留名称；排除范围在转折分句结束，默认值过滤明确排除项；提交给引擎的“必须比较”只用于 decide。参数化提交测试每次提供独立 Response，避免同一响应体重复读取。
+- `pnpm --filter @deep-research/web test src/app/api/ai-research/__tests__/plan.test.ts src/app/api/ai-research/__tests__/submit-rejected.test.ts src/lib/research-sufficiency.test.ts`：3 文件、49/49 通过。
+- `pnpm --filter @deep-research/web typecheck`：通过。
+- AiResearchBrief 的目标切换状态清理与所选历史资料可见性由父集成工作流处理，本分支未修改 UI。
