@@ -187,6 +187,13 @@ test('keyboard reaches and edits every confirmation group before starting', asyn
     }
     await expect(target).toBeFocused();
   };
+  const objective = page.getByRole('combobox', { name: '研究方式' });
+  await tabTo(objective);
+  await page.keyboard.press('Space');
+  await expect(page.getByRole('listbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(objective).toBeFocused();
   const focus = page.getByRole('textbox', { name: '重点回答' });
   await tabTo(focus);
   await page.keyboard.press('ControlOrMeta+A');
