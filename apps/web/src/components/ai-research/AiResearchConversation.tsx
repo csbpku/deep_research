@@ -219,6 +219,30 @@ function replayState(messages: Message[]): { topic: string; context: string; pha
   return state;
 }
 
+// Synchronous durable marker: set before sending so a reload or lost response
+// cannot silently make a second, chargeable request available.
+function pendingSubmissionKey(userId: string, conversationId: string): string {
+  return `ai-research-pending:v1:${userId}:${conversationId}`;
+}
+function markPending(userId: string, conversationId: string): boolean {
+  try {
+    const key = pendingSubmissionKey(userId, conversationId);
+    window.localStorage.setItem(key, 'pending');
+    return window.localStorage.getItem(key) === 'pending';
+  } catch { return false; }
+}
+function readPending(userId: string, conversationId: string): boolean | null {
+  try { return window.localStorage.getItem(pendingSubmissionKey(userId, conversationId)) !== null; }
+  catch { return null; }
+}
+function clearPending(userId: string, conversationId: string): boolean {
+  try {
+    const key = pendingSubmissionKey(userId, conversationId);
+    window.localStorage.removeItem(key);
+    return window.localStorage.getItem(key) === null;
+  } catch { return false; }
+}
+
 export function AiResearchConversation({ conversationId }: { conversationId?: string | null }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -333,7 +357,14 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         setActiveJobId(conversation.jobId ?? null);
         const owner = conversation.userId ?? null;
         setOwnerId(owner);
+        if (owner && conversation.jobId) clearPending(owner, conversation.id);
         if (owner && !conversation.jobId) {
+          const pending = readPending(owner, conversation.id);
+          if (pending !== false) {
+            setSubmissionUncertain(true);
+            setErrorKind('submit');
+            setError(pending === null ? '无法读取浏览器存储，暂时不能确认上次提交状态。请先查看任务历史。' : '上次提交结果尚未确认，请先查看任务历史。');
+          }
           let draft: ReturnType<typeof readResearchDraft> = null;
           try { draft = readResearchDraft(window.localStorage, owner, conversation.id); } catch { setDraftStorageError(true); }
           if (draft) {
@@ -343,7 +374,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             setBrief(draft.brief); setRestoredBrief(draft.brief);
           }
         }
-        setError(null);
+        if (conversation.jobId || !owner || readPending(owner, conversation.id) === false) setError(null);
       })
       .catch((err: unknown) => {
         if (!cancelled) { setErrorKind('restore'); setError(friendlyMessage(err, '对话恢复失败，请重新打开此对话。')); }
@@ -434,7 +465,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     await persistenceQueueRef.current;
   }
 
-  async function createConversation(title: string, currentMessages: Message[]) {
+  async function createConversation(title: string, currentMessages: Message[]): Promise<AiResearchConversationDetail | null> {
     setConversationCreating(true);
     try {
       const response = await fetch('/api/ai-research/conversations', {
@@ -457,9 +488,11 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         content: message.content,
       })));
       router.replace(`/ai-research?conversation=${conversation.id}`, { scroll: false });
+      return conversation;
     } catch (err) {
       setErrorKind('save');
       setError(friendlyMessage(err, '对话暂存失败，本次内容仍保留在当前页面。'));
+      return null;
     } finally {
       setConversationCreating(false);
     }
@@ -555,6 +588,22 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     }
     setError(null);
     setSubmitting(true);
+    let targetId = currentConversationId;
+    let targetOwner = ownerId;
+    if (!targetId || !targetOwner) {
+      if (targetId) {
+        setErrorKind('save'); setError('无法确认当前账户，请重新打开对话后再试。'); setSubmitting(false); return;
+      }
+      const created = await createConversation(topic.trim(), [...messages, ...extraMessages]);
+      if (!created || !created.userId) { setSubmitting(false); return; }
+      targetId = created.id; targetOwner = created.userId;
+    }
+    if (!markPending(targetOwner, targetId)) {
+      setErrorKind('save');
+      setError('无法保存防重复提交状态。请允许此浏览器使用本地存储后再启动研究。');
+      setSubmitting(false); return;
+    }
+    setSubmissionUncertain(true);
     const placeholder = pushMessage('assistant', '正在提交研究方案并启动调研…');
     try {
       const conversationSnapshot = [...messages, ...extraMessages].map(({ id, role, content }) => ({ id, role, content }));
@@ -576,7 +625,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             sourceRefs: effectiveSourceRefs,
             primaryTopicId: brief.primaryTopicId ?? topicIdQuery ?? undefined,
             idempotencyKey: createUuid(),
-            conversationId: currentConversationId ?? undefined,
+            conversationId: targetId,
             conversation: conversationSnapshot,
           }
         : {
@@ -587,7 +636,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             sourcePolicy,
             sourceRefs: effectiveSourceRefs,
             idempotencyKey: createUuid(),
-            conversationId: currentConversationId ?? undefined,
+            conversationId: targetId,
             conversation: conversationSnapshot,
           };
 
@@ -597,13 +646,16 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         body: JSON.stringify(submitBody),
       });
       if (!response.ok) {
-        setErrorKind(response.status >= 500 ? 'submit' : 'validation');
-        if (response.status >= 500) setSubmissionUncertain(true);
+        const uncertain = response.status >= 500 || response.status === 408;
+        const cleared = !uncertain && clearPending(targetOwner, targetId);
+        setErrorKind(uncertain || !cleared ? 'submit' : 'validation');
+        if (cleared) setSubmissionUncertain(false);
         setError(friendlyMessage(await toApiHttpError(response, '提交结果未确认'), '提交结果未确认，请先查看任务历史。')); 
         setMessages((current) => current.filter((message) => message.id !== placeholder.id));
         return;
       }
       const body = await response.json() as { jobId: string };
+      clearPending(targetOwner, targetId);
       writeLastSubmitted(body.jobId, topic.trim());
       setActiveJobId(body.jobId);
       const finalContent = '调研已启动。进度、来源和结果会持续显示在这里；完成后也可以在任务页继续追问。';
@@ -775,7 +827,14 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
         {error ? (
           <Box role="alert" sx={{ mx: 2.5, mb: 1.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, border: 1, borderColor: 'error.main', borderRadius: 1, bgcolor: 'var(--dr-color-danger-container)', px: 1.5, py: 1, typography: 'body2', color: 'error.main' }}>
             <Box component="span" sx={{ flex: 1 }}>{error}</Box>
-            {errorKind === 'submit' ? <Link component={NextLink} href="/ai-research?history=1">先查看任务历史，确认是否已启动</Link> : null}
+            {errorKind === 'submit' ? <>
+              <Link component={NextLink} href="/ai-research?history=1">先查看任务历史，确认是否已启动</Link>
+              <Button type="button" variant="outline" size="xs" onClick={() => {
+                if (ownerId && currentConversationId && clearPending(ownerId, currentConversationId)) {
+                  setSubmissionUncertain(false); setError(null); setErrorKind(null);
+                } else setError('无法更新浏览器存储，请允许本地存储后再试。');
+              }}>已核对历史，允许重新提交</Button>
+            </> : null}
             {loginRequired ? (
               <Link component={NextLink} href="/signin?callbackUrl=%2Fai-research" underline="always" sx={{ typography: 'metadata', fontWeight: 500, textUnderlineOffset: 2 }}>
                 登录后继续
