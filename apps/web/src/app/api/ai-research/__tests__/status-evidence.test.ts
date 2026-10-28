@@ -70,6 +70,15 @@ describe('GET /api/ai-research/[jobId] evidence workspace', () => {
     expect(payload.sources[1].snippet).toBe('fallback');
   });
 
+  it('preserves a captured body of 9000 Unicode characters without cutting surrogate pairs', async () => {
+    const body = '💡'.repeat(9000);
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: 'https://example.com/unicode', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [{ id: 'one', title: 'One', snippet: 'short', score: 1, sourceRef: { type: 'url', value: 'https://example.com/unicode' }, canonicalKey: 'https://example.com/unicode', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe(body);
+  });
+
   it('keeps execution success separate from insufficient research coverage', async () => {
     mocks.jobFindUnique.mockResolvedValue({
       requesterId: USER_ID,
