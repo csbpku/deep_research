@@ -351,3 +351,67 @@ def test_relevant_api_captures_semantic_parent_section() -> None:
     assert excerpt is not None
     assert "cancels siblings" in excerpt and "ExceptionGroup" in excerpt
     assert "return_exceptions=False" in excerpt
+
+
+@pytest.mark.asyncio
+async def test_changed_queued_evidence_is_marked_stale_before_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+    from ai_engine.job_runner.db_store import AI_TABLE
+
+    calls: list[str] = []
+    row = {
+        "reviewRunId": "run",
+        "researchId": "research",
+        "aiResearchJobId": "job",
+        "jobId": "job",
+        "authorId": "user",
+        "title": "Title",
+        "body": "Report",
+        "topic": "Topic",
+        "reportType": "research_report",
+        "attempt": 0,
+        "executionStatus": "queued",
+        "sourceSnapshotHash": "old-hash",
+        "revisionHash": "revision",
+        "runDetails": {"sourceSnapshotFormat": "canonical-v1"},
+        "jobReviewDetails": {},
+        "sourceSnapshot": [
+            {
+                "source_ref": {"type": "url", "value": "https://example.com"},
+                "canonical_key": "https://example.com",
+                "title": "Docs",
+                "snippet": "Changed source content.",
+                "step_captured": "search",
+            }
+        ],
+        "jobSourceSnapshot": [],
+    }
+
+    class Cursor:
+        async def fetchone(self):
+            return row
+
+    class Conn:
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+        async def execute(self, sql: str, params: Any = None):
+            calls.append(sql)
+            return Cursor()
+
+    class Pool:
+        @asynccontextmanager
+        async def connection(self):
+            yield Conn()
+
+    store = object.__new__(DbJobStore)
+    store._pool = Pool()  # type: ignore[assignment]
+    store._pool_open = True
+    store._table_name = AI_TABLE
+    store._max_retries = 3
+    store._review_lease_seconds = 600
+    monkeypatch.setattr(store, "open", AsyncMock())
+    assert await store.claim_next_review("worker") is None
+    assert any("\"executionStatus\" = 'stale'" in sql for sql in calls)
+    assert not any("\"executionStatus\" = 'reviewing'" in sql for sql in calls)
