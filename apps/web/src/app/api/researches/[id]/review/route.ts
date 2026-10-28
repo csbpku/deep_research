@@ -20,6 +20,7 @@ import { toApiErrorResponse } from '../../../../../lib/errors';
 import { withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { hashResearchRevision } from '../../../../../lib/research-revision';
+import { hashCanonicalSourceSnapshot } from '../../../../../lib/research-source-snapshot';
 import { evaluateResearchSufficiency } from '../../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 
@@ -91,7 +92,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   }
   const revisionHash = hashResearchRevision(research);
   const fullSnapshot = matchingCapturedSnapshot(research.researchSources, research.sourceAiJob?.partialSources);
-  const sourceSnapshotHash = fullSnapshot ? hashText(stableJson(fullSnapshot)) : hashSourceSnapshot(research.researchSources);
+  const sourceSnapshotHash = fullSnapshot ? hashText(stableJson(fullSnapshot)) : hashCanonicalSourceSnapshot(research.researchSources);
   const runId = randomUUID();
   const queuedAt = new Date();
   const parsedBrief = ResearchBriefSchema.safeParse(research.sourceAiJob?.brief);
@@ -104,6 +105,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   });
   const queuedDetails = {
     phase: 'queued',
+    sourceSnapshotFormat: 'canonical-v1',
     status: 'queued',
     attempts: 0,
     runId,
@@ -262,22 +264,7 @@ function hashText(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function hashSourceSnapshot(sources: Array<{
-  sourceRef: unknown;
-  canonicalKey: string;
-  title: string | null;
-  description: string | null;
-}>): string {
-  const payload = sources
-    .map((source) => ({
-      canonicalKey: source.canonicalKey,
-      sourceRef: source.sourceRef,
-      title: source.title,
-      snippet: source.description,
-    }))
-    .sort((a, b) => a.canonicalKey.localeCompare(b.canonicalKey));
-  return hashText(JSON.stringify(payload));
-}
+
 
 
 type PreviewSource = { sourceRef: unknown; canonicalKey: string; title: string | null; description: string | null };

@@ -3647,6 +3647,7 @@ def _make_draft_factory(store: JobStore) -> DraftFactory:
                                 json.dumps(
                                     {
                                         "phase": "queued",
+                                        "sourceSnapshotFormat": "canonical-v1",
                                         "status": "queued",
                                         "attempts": 0,
                                     },

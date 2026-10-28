@@ -484,3 +484,44 @@ async def test_changed_evidence_during_review_cannot_complete_as_current(
     await store.complete_review(work, {"status": "passed", "review_outcome": "clear"})
     assert any("\"executionStatus\" = 'stale'" in sql for sql, _ in calls)
     assert not any(isinstance(params, tuple) and params and params[0] == "completed" for _, params in calls)
+
+
+def test_new_review_guards_accept_short_and_mixed_but_legacy_can_fallback() -> None:
+    from ai_engine.job_runner import db_store
+    from ai_engine.server.app import _review_source_snapshot_hash
+
+    long = AdapterSource(
+        source_ref={"type": "url", "value": "https://example.com"},
+        canonical_key="https://example.com",
+        title="Docs",
+        snippet="Evidence " * 400,
+        score=1.0,
+        step_captured="search",
+    )
+    short = AdapterSource(
+        source_ref=long.source_ref,
+        canonical_key=long.canonical_key,
+        title=long.title,
+        snippet=db_store._clip_db_text(long.snippet, 1000),
+        score=1.0,
+        step_captured="search",
+    )
+
+    def row(source: AdapterSource) -> dict[str, object]:
+        return {
+            "source_ref": source.source_ref,
+            "canonical_key": source.canonical_key,
+            "title": source.title,
+            "snippet": source.snippet,
+            "step_captured": "search",
+            "score": source.score,
+        }
+
+    assert db_store._validated_review_sources(
+        [row(short)], [row(long)], _review_source_snapshot_hash((long,))
+    ) == (long,)
+    assert db_store._validated_review_sources(
+        [row(short)], [row(long)], _review_source_snapshot_hash((short,))
+    ) == (short,)
+    assert db_store._validated_review_sources([row(short)], [row(long)], "different") is None
+    assert db_store._review_sources_for_run([row(short)], [row(long)], "legacy-hash") == (short,)

@@ -17,9 +17,7 @@ def test_revision_hash_matches_the_web_snapshot_shape() -> None:
 
     # This value is also produced by JSON.stringify in
     # apps/web/src/lib/research-revision.ts.
-    assert research_revision_hash(row) == (
-        "865912a38aca6d83c65070d580acaa2342c7b1e4dc8e4a87bdae8b9a64722c1d"
-    )
+    assert research_revision_hash(row) == ("865912a38aca6d83c65070d580acaa2342c7b1e4dc8e4a87bdae8b9a64722c1d")
 
 
 def test_source_snapshot_hash_is_order_independent() -> None:
@@ -39,3 +37,21 @@ def test_source_snapshot_hash_is_order_independent() -> None:
     ]
 
     assert source_snapshot_hash(first) == source_snapshot_hash(list(reversed(first)))
+
+
+def test_canonical_source_hash_matches_web_unicode_vector() -> None:
+    rows = [
+        {
+            "canonicalKey": "https://z.example",
+            "sourceRef": {"value": "https://z.example", "type": "url"},
+            "title": "中文💡",
+            "description": "证据💡",
+        },
+        {
+            "canonicalKey": "https://a.example",
+            "sourceRef": {"type": "url", "value": "https://a.example"},
+            "title": "Alpha",
+            "description": None,
+        },
+    ]
+    assert source_snapshot_hash(rows) == "15d7ce403e96c052eeaad46f85e1fbc2feb523cb87ebba124cfffcb27473cc08"

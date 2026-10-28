@@ -102,14 +102,25 @@ def _review_sources(value: object) -> tuple[AdapterSource, ...]:
     return tuple(sources)
 
 
-def _review_sources_for_run(
+def _snapshot_digest(sources: Iterable[AdapterSource]) -> str:
+    payload = [
+        {"canonicalKey": source.canonical_key, "sourceRef": source.source_ref,
+         "title": source.title, "snippet": source.snippet}
+        for source in sorted(sources, key=lambda item: item.canonical_key)
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _validated_review_sources(
     short_snapshot: object, long_snapshot: object, snapshot_hash: object,
-) -> tuple[AdapterSource, ...]:
-    """Rebuild the run's mixed long/short evidence and verify its hash."""
+) -> tuple[AdapterSource, ...] | None:
+    """Match the exact current short or mixed evidence set against the run."""
     short = _review_sources(short_snapshot)
     long = _review_sources(long_snapshot)
-    if not long or not isinstance(snapshot_hash, str):
-        return short
+    if not isinstance(snapshot_hash, str):
+        return None
     by_key: dict[str, AdapterSource] = {}
     duplicate_keys: set[str] = set()
     for source in long:
@@ -127,15 +138,19 @@ def _review_sources_for_run(
             combined.append(saved)
         else:
             combined.append(preview)
-    payload = [
-        {"canonicalKey": source.canonical_key, "sourceRef": source.source_ref,
-         "title": source.title, "snippet": source.snippet}
-        for source in sorted(combined, key=lambda item: item.canonical_key)
-    ]
-    digest = hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return tuple(combined) if digest == snapshot_hash else short
+    if _snapshot_digest(combined) == snapshot_hash:
+        return tuple(combined)
+    if _snapshot_digest(short) == snapshot_hash:
+        return short
+    return None
+
+
+def _review_sources_for_run(
+    short_snapshot: object, long_snapshot: object, snapshot_hash: object,
+) -> tuple[AdapterSource, ...]:
+    """Retain historical fallback for unversioned runs."""
+    validated = _validated_review_sources(short_snapshot, long_snapshot, snapshot_hash)
+    return validated if validated is not None else _review_sources(short_snapshot)
 
 
 def _clip_db_text(value: str | None, limit: int) -> str | None:
@@ -1173,6 +1188,11 @@ class DbJobStore(JobStore):
                 raw = cast(dict[str, object], row)
                 run_id = str(raw["reviewRunId"])
                 job_id = str(raw["jobId"]) if raw.get("jobId") else None
+                run_details = raw.get("runDetails")
+                if (isinstance(run_details, dict) and run_details.get("sourceSnapshotFormat") == "canonical-v1"
+                        and _validated_review_sources(raw.get("sourceSnapshot"), raw.get("jobSourceSnapshot"), raw.get("sourceSnapshotHash")) is None):
+                    await self._mark_review_snapshot_stale(conn, run_id, str(raw["researchId"]), job_id)
+                    return None
                 prior_attempts = _json_int(raw.get("attempt"), 0)
                 if raw.get("executionStatus") == "reviewing" and (
                     prior_attempts >= self._max_retries
@@ -1276,6 +1296,38 @@ class DbJobStore(JobStore):
             claim_token=claim_token,
             review_mode=cast(Any, review_mode),
             target_claim=target_claim,
+        )
+
+    async def _mark_review_snapshot_stale(
+        self, conn: Any, run_id: str, research_id: str, job_id: str | None,
+    ) -> None:
+        """Close a run whose saved evidence no longer matches its ledger."""
+        details = json.dumps({"phase": "completed", "status": "stale", "error_code": "SOURCE_SNAPSHOT_CHANGED"})
+        await conn.execute(
+            'UPDATE "research_review_runs" SET "executionStatus" = \'stale\', "outcome" = \'stale\', '
+            '"details" = COALESCE("details", \'{}\'::jsonb) || %s::jsonb, '
+            '"leaseExpiresAt" = NULL, "heartbeatAt" = NULL, "completedAt" = now() WHERE "id" = %s',
+            (details, run_id),
+        )
+        if job_id:
+            await conn.execute(
+                'UPDATE "ai_research_jobs" SET "reviewStatus" = \'review_unavailable\', '
+                '"reviewStartedAt" = NULL, "reviewRunToken" = NULL, "reviewDetails" = %s::jsonb '
+                'WHERE "id" = %s AND "reviewStatus" IN (\'queued\', \'reviewing\')',
+                (details, job_id),
+            )
+        await conn.execute(
+            'UPDATE "researches" SET "reviewStatus" = \'review_unavailable\', '
+            '"reviewStartedAt" = NULL, "reviewRunToken" = NULL, "reviewDetails" = %s::jsonb '
+            'WHERE "id" = %s AND "reviewStatus" IN (\'queued\', \'reviewing\')',
+            (details, research_id),
+        )
+        await conn.execute(
+            'UPDATE "research_evidence_tasks" SET "status" = \'failed\', "completedAt" = now(), '
+            '"errorCode" = \'SOURCE_SNAPSHOT_CHANGED\', '
+            '"errorMessage" = \'资料已变化，请重新发起审核。\' '
+            'WHERE "reviewRunId" = %s AND "status" IN (\'review_queued\', \'evidence_ready\')',
+            (run_id,),
         )
 
     async def _exhaust_review_run(
@@ -1488,6 +1540,27 @@ class DbJobStore(JobStore):
         )
         async with self.pool.connection() as conn:
             async with conn.transaction():
+                if (work.review_run_id and work.draft_research_id
+                        and work.review_details.get("sourceSnapshotFormat") == "canonical-v1"):
+                    current = await (await conn.execute(
+                        'SELECT (SELECT COALESCE(jsonb_agg(jsonb_build_object('
+                        '  \'source_ref\', rs."sourceRef", \'canonical_key\', rs."canonicalKey", '
+                        '  \'title\', rs."title", \'snippet\', rs."description", \'step_captured\', \'search\')), \'[]\'::jsonb) '
+                        'FROM "research_sources" rs WHERE rs."researchId" = r."id") AS "sourceSnapshot", '
+                        'j."partialSources" AS "jobSourceSnapshot" '
+                        'FROM "research_review_runs" rr '
+                        'JOIN "researches" r ON r."id" = rr."researchId" '
+                        'LEFT JOIN "ai_research_jobs" j ON j."id" = rr."aiResearchJobId" '
+                        'WHERE rr."id" = %s AND rr."executionStatus" = \'reviewing\' '
+                        'AND (rr."details"->>\'claimToken\') = %s FOR UPDATE OF rr, r',
+                        (work.review_run_id, work.claim_token),
+                    )).fetchone()
+                    if current is None:
+                        return
+                    current_row = cast(dict[str, object], current)
+                    if _validated_review_sources(current_row.get("sourceSnapshot"), current_row.get("jobSourceSnapshot"), work.source_snapshot_hash) is None:
+                        await self._mark_review_snapshot_stale(conn, work.review_run_id, work.draft_research_id, work.job_id or None)
+                        return
                 # Lock/update the run before its compatibility mirrors.  PUT
                 # invalidation takes the same run -> job -> research order;
                 # keeping one order prevents a review completion racing with

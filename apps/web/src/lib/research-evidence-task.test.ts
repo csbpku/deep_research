@@ -25,3 +25,12 @@ describe('claim-scoped evidence snapshots', () => {
     expect(refreshed).not.toBe(original);
   });
 });
+
+
+it('hashes the shared Unicode source snapshot vector', async () => {
+  const { hashResearchSourceSnapshot } = await import('./research-evidence-task');
+  expect(hashResearchSourceSnapshot([
+    { canonicalKey: 'https://z.example', sourceRef: { value: 'https://z.example', type: 'url' }, title: '中文💡', description: '证据💡' },
+    { canonicalKey: 'https://a.example', sourceRef: { type: 'url', value: 'https://a.example' }, title: 'Alpha', description: null },
+  ])).toBe('15d7ce403e96c052eeaad46f85e1fbc2feb523cb87ebba124cfffcb27473cc08');
+});

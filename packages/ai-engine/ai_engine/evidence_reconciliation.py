@@ -59,7 +59,7 @@ def source_snapshot_hash(rows: list[Mapping[str, object]]) -> str:
         }
         for row in sorted(rows, key=lambda item: str(item.get("canonicalKey") or ""))
     ]
-    return hashlib.sha256(_json_stringify(payload).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _clip(value: object, limit: int) -> str | None:
@@ -233,6 +233,7 @@ async def reconcile_one(pool: Any, task_id: str) -> bool:
             run_id = str(uuid.uuid4())
             queued_at = _json_stringify({
                 "phase": "queued",
+                "sourceSnapshotFormat": "canonical-v1",
                 "status": "queued",
                 "attempts": 0,
                 "runId": run_id,
