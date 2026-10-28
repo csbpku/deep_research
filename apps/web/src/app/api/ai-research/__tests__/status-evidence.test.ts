@@ -79,6 +79,18 @@ describe('GET /api/ai-research/[jobId] evidence workspace', () => {
     expect((await response.json()).sources[0].snippet).toBe(body);
   });
 
+  it('keeps an updated research-ledger description when a captured snapshot has the same URL', async () => {
+    const key = 'https://example.com/docs';
+    const sourceRef = { type: 'url', value: key };
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: sourceRef, title: 'Docs', snippet: 'Old captured full text' }],
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [{ id: 'ledger-1', sourceRef, canonicalKey: key, title: 'Docs', description: 'New evidence text', createdAt: new Date('2026-09-02T00:00:00Z') }] },
+      aiResearchSources: [{ id: 'job-1', title: 'Docs', snippet: 'Old captured full text', score: 1, sourceRef, canonicalKey: key, stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe('New evidence text');
+  });
+
   it('keeps execution success separate from insufficient research coverage', async () => {
     mocks.jobFindUnique.mockResolvedValue({
       requesterId: USER_ID,
