@@ -77,6 +77,47 @@ def _group_sections(sections: list[tuple[str, str]], limit: int) -> list[list[tu
     return groups
 
 
+def _render_numbered_slides(source: str, limit: int) -> str | None:
+    """Keep explicit page boundaries and put references outside the deck."""
+    token = re.compile(
+        r"(?im)^#{1,2}[ \t]+(?:(?:slide|幻灯片)[ \t]*(\d+)[ \t]*[:：-][ \t]*(.*?)|"
+        r"(参考文献|references|bibliography))[ \t]*#*[ \t]*$"
+    )
+    matches = list(token.finditer(source))
+    if not any(match.group(1) == "1" for match in matches):
+        return None
+    preamble = source[:matches[0].start()].strip()
+    pages: list[tuple[str, str]] = []
+    references: list[str] = []
+    has_references = False
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        body = source[match.end():end].strip()
+        label = (match.group(2) or "").strip()
+        if match.group(3) or re.fullmatch(r"(?:参考文献|references|bibliography)", label, re.IGNORECASE):
+            has_references = True
+            if body:
+                references.append(body)
+        else:
+            pages.append((label, body))
+    if not pages:
+        return None
+    if preamble:
+        label, body = pages[0]
+        pages[0] = (label, "\n\n".join(part for part in (preamble, body) if part))
+    output: list[str] = []
+    for index, group in enumerate(_group_sections(pages, limit), start=1):
+        label = group[0][0]
+        bodies = [group[0][1]] if group[0][1] else []
+        for heading, body in group[1:]:
+            bodies.append(f"### {heading}\n\n{body}".strip())
+        text = "\n\n".join(bodies)
+        output.append(f"## Slide {index}: {label}" + (f"\n\n{text}" if text else ""))
+    if has_references:
+        output.append("## 参考文献" + ("\n\n" + "\n\n".join(references) if references else ""))
+    return "\n\n".join(output)
+
+
 def render_artifact_content(content: str, artifact_type: ArtifactType, title: str) -> str:
     """Render a supported artifact into its persisted text representation."""
     if artifact_type != "slides":
@@ -87,9 +128,9 @@ def render_artifact_content(content: str, artifact_type: ArtifactType, title: st
         return f"## Slide 1: {safe_title}"
 
     slide_limit = extract_slide_limit(f"{safe_title}\n{source}")
-    marker_count = len(re.findall(r"(?m)^#{1,2}\s+Slide\s+\d+\s*:", source))
-    if re.match(r"(?im)^#{1,2}\s+Slide\s+1\s*:", source) and marker_count <= slide_limit:
-        return source
+    numbered = _render_numbered_slides(source, slide_limit)
+    if numbered is not None:
+        return numbered
 
     slides: list[str] = []
     for index, group in enumerate(_group_sections(_split_markdown_sections(source), slide_limit), start=1):
