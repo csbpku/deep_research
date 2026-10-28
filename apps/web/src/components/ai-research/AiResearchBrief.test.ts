@@ -339,7 +339,7 @@ describe('AI research brief client request races', () => {
     for (const request of requests) respond(request, request.url.endsWith('/plan') ? planResponse('GraphRAG retrieval costs') : { items: [] });
     await vi.advanceTimersByTimeAsync(0); brief.flush();
     brief.changeField('研究重点回答', '核对性能与成本');
-    brief.clickButton('决策对比');
+    brief.changeObjective('decide');
     expect(ready.mock.calls.at(-1)![0].brief.questionsToAnswer).toEqual(['核对性能与成本']);
   });
 
