@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Lightbulb, Save } from 'lucide-react';
+import { Lightbulb, Save, Trash2 } from 'lucide-react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
@@ -11,6 +11,11 @@ import Chip from '@mui/material/Chip';
 import { AppButton } from '@/components/material/AppButton';
 import { AppDialog } from '@/components/material/AppDialog';
 import type { ExternalReadingDetail } from './RadarExternalReadingLanding';
+import {
+  clearJudgmentDraft,
+  readJudgmentDraft,
+  writeJudgmentDraft,
+} from '@/lib/radar-judgment-draft';
 
 interface Judgment {
   id: string; title: string; conclusion: string; updatedAt: string; private: boolean; matchReason: string;
@@ -58,8 +63,10 @@ export function RadarKnowledgeActions({ detail }: { detail: ExternalReadingDetai
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [savedId, setSavedId] = useState('');
+  const [restoredDraft, setRestoredDraft] = useState(false);
   const saveKey = useRef('');
   const pending = useRef(false);
+  const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
   function start() {
     const selection = window.getSelection();
@@ -67,11 +74,29 @@ export function RadarKnowledgeActions({ detail }: { detail: ExternalReadingDetai
     const selected = root && selection?.anchorNode && selection.focusNode
       && root.contains(selection.anchorNode) && root.contains(selection.focusNode) ? selection.toString().trim() : '';
     setQuote((selected || detail.interpretation || detail.excerpt || detail.title).slice(0, 12000));
-    setNote('');
+    // 未提交的判断按 radarSummaryId 保留：关掉对话框不该抹掉用户写好的东西。
+    const draft = readJudgmentDraft(detail.id);
+    setNote(draft?.note ?? '');
+    setRestoredDraft(Boolean(draft));
     setError('');
     setSavedId('');
     saveKey.current = crypto.randomUUID();
     setOpen(true);
+  }
+
+  function updateNote(value: string) {
+    setNote(value);
+    setRestoredDraft(false);
+    writeJudgmentDraft(detail.id, value);
+  }
+
+  function discardDraft() {
+    clearJudgmentDraft(detail.id);
+    setNote('');
+    setRestoredDraft(false);
+    // 丢弃按钮自己会被卸载，焦点必须交回输入框：否则焦点掉到 body，
+    // Escape 不再触发对话框的关闭。
+    noteRef.current?.focus();
   }
 
   async function save() {
@@ -89,6 +114,7 @@ export function RadarKnowledgeActions({ detail }: { detail: ExternalReadingDetai
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || '保存失败，请重试');
+      clearJudgmentDraft(detail.id);
       setSavedId(payload.draft.id);
       window.dispatchEvent(new Event('dr-knowledge-saved'));
     } catch (cause) {
@@ -109,7 +135,36 @@ export function RadarKnowledgeActions({ detail }: { detail: ExternalReadingDetai
       {savedId ? <Alert severity="success">已保存，仅你可见。</Alert> : <Box sx={{ display: 'grid', gap: 2, pt: 1 }}>
         <Typography component="a" href={detail.url} target="_blank" rel="noopener noreferrer" variant="body2" sx={{ color: 'primary.main', overflowWrap: 'anywhere' }}>{detail.title}</Typography>
         <TextField label="来源摘录 / AI 摘要" multiline minRows={2} maxRows={5} value={quote} slotProps={{ htmlInput: { readOnly: true } }} fullWidth />
-        <TextField label="我的判断" autoFocus multiline minRows={3} value={note} onChange={event => setNote(event.target.value)} disabled={saving} slotProps={{ htmlInput: { maxLength: 8000 } }} fullWidth />
+        <TextField
+          label="我的判断"
+          autoFocus
+          inputRef={noteRef}
+          multiline
+          minRows={3}
+          value={note}
+          onChange={event => updateNote(event.target.value)}
+          onKeyDown={event => {
+            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && note.trim() && !saving) {
+              event.preventDefault();
+              void save();
+            }
+          }}
+          disabled={saving}
+          slotProps={{ htmlInput: { maxLength: 8000 } }}
+          fullWidth
+        />
+        {restoredDraft ? (
+          <Alert
+            severity="info"
+            action={
+              <AppButton size="small" color="inherit" startIcon={<Trash2 aria-hidden />} onClick={discardDraft}>
+                丢弃草稿
+              </AppButton>
+            }
+          >
+            草稿已保留。
+          </Alert>
+        ) : null}
         {error ? <Alert severity="error">{error}</Alert> : null}
       </Box>}
     </AppDialog>

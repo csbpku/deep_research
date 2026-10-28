@@ -97,8 +97,8 @@ export function RadarCandidateCard({
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const prefetchStartedRef = useRef(false);
   const interpretation = candidate.interpretation;
-  const compactTeaser = candidate.selectionReason?.trim()
-    || interpretation?.trim()
+  // 雷达没有写入 selectionReason 的管线，"为什么值得看"由 AI 摘要承担。
+  const compactTeaser = interpretation?.trim()
     || candidate.excerpt?.trim()
     || null;
   const showExcerpt =
@@ -175,6 +175,10 @@ export function RadarCandidateCard({
       '&:last-child': compact ? { borderBottom: 0 } : {}, '&:hover': { backgroundColor: selected ? 'action.selected' : 'action.hover' },
     }}>
       <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }}>
+        {/* 等级 + 来源放在最前：扫雷达时最先要回答的是"值不值得看"。 */}
+        {tierLabel ? (
+          <Chip variant="outlined" size="small" label={isAdminQueue && tierScore !== null ? `${tierLabel} · ${tierScore}` : tierLabel} sx={{ color: readingTierColor(tier), borderColor: 'currentColor', fontVariantNumeric: 'tabular-nums' }} />
+        ) : null}
         <RadarSourceChip sourceType={candidate.sourceType} sourceName={candidate.sourceName} />
         {isAdminQueue ? <StatusBadge kind="radar" value={candidate.status} /> : null}
         {showPipelinePending ? (
@@ -194,31 +198,12 @@ export function RadarCandidateCard({
         onMouseEnter={prefetchDetail}
         onFocus={prefetchDetail}
         onClick={handlePreviewClick}
+        data-radar-preview-trigger={candidate.id}
         aria-current={selected ? 'page' : undefined}
         sx={{ color: 'text.primary', overflowWrap: 'anywhere', textDecoration: 'none', '&:hover': { color: 'primary.main', textDecoration: 'underline' } }}
       >
         {candidate.title}
       </Typography>
-
-      {candidate.topics.length > 0 || candidate.issues.length > 0 ? (
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm, paddingTop: space.xs }} aria-label="关联专题与议题">
-          {candidate.topics.slice(0, 2).map((t) => (
-            <AppTagLink
-              key={`topic-${t.id}`}
-              href={`/topics/${t.slug}`}
-              icon={<BookOpenCheck aria-hidden />} label={t.name}
-            />
-          ))}
-          {candidate.issues.slice(0, 2).map((iss) => (
-            <AppTagLink
-              key={`issue-${iss.id}`}
-              href={`/topics/${iss.topic.slug}`}
-              icon={<Sparkles aria-hidden />} label={iss.title} title={iss.title}
-              tone={iss.kind === 'event' ? 'info' : 'error'}
-            />
-          ))}
-        </Box>
-      ) : null}
 
       {compact && selected ? null : compact ? (
         compactTeaser ? (
@@ -240,10 +225,27 @@ export function RadarCandidateCard({
         </Typography>
       ) : null}
 
+      {candidate.topics.length > 0 || candidate.issues.length > 0 ? (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: space.sm }} aria-label="关联专题与议题">
+          {candidate.topics.slice(0, 2).map((t) => (
+            <AppTagLink
+              key={`topic-${t.id}`}
+              href={`/topics/${t.slug}`}
+              icon={<BookOpenCheck aria-hidden />} label={t.name}
+            />
+          ))}
+          {candidate.issues.slice(0, 2).map((iss) => (
+            <AppTagLink
+              key={`issue-${iss.id}`}
+              href={`/topics/${iss.topic.slug}`}
+              icon={<Sparkles aria-hidden />} label={iss.title} title={iss.title}
+              tone={iss.kind === 'event' ? 'info' : 'error'}
+            />
+          ))}
+        </Box>
+      ) : null}
+
       <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, borderTop: 1, borderColor: 'divider', paddingTop: space.sm }}>
-        {tierLabel ? (
-          <Chip variant="outlined" size="small" label={isAdminQueue && tierScore !== null ? `${tierLabel} · ${tierScore}` : tierLabel} sx={{ color: readingTierColor(tier), borderColor: 'currentColor', fontVariantNumeric: 'tabular-nums' }} />
-        ) : null}
         <RadarFeedbackBar
           summaryId={candidate.id}
           initialCounts={candidate.feedbackCounts}

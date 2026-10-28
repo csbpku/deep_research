@@ -41,7 +41,7 @@ vi.mock('node:fs/promises', () => ({
 
 import { POST as importPost } from '../imports/route';
 import { POST as researchPost } from '../researches/route';
-import { researchListWhereLegacy } from '../../../lib/research-list-where';
+import { researchListOrderBy, researchListWhereLegacy } from '../../../lib/research-list-where';
 import { DELETE as researchDelete } from '../researches/[id]/route';
 import { POST as publishPost } from '../researches/[id]/publish/route';
 import { CreateResearchInput } from '../../../lib/schemas';
@@ -495,5 +495,31 @@ describe('GET /api/researches scope', () => {
         },
       ],
     });
+  });
+});
+
+describe('research library ordering', () => {
+  it('keeps featured items on top for the newest sort', () => {
+    expect(researchListOrderBy('newest')).toEqual([
+      { featuredAt: { sort: 'desc', nulls: 'last' } },
+      { publishedAt: { sort: 'desc', nulls: 'last' } },
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ]);
+  });
+
+  it('orders by last edit for the updated sort', () => {
+    expect(researchListOrderBy('updated')).toEqual([
+      { updatedAt: 'desc' },
+      { featuredAt: { sort: 'desc', nulls: 'last' } },
+      { id: 'desc' },
+    ]);
+  });
+
+  it('orders by title for the title sort', () => {
+    expect(researchListOrderBy('title')).toEqual([
+      { title: 'asc' },
+      { id: 'desc' },
+    ]);
   });
 });

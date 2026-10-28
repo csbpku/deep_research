@@ -3286,10 +3286,16 @@ async def healthz(
 async def _health_payload(request: Request, store: JobStore) -> dict[str, str]:
     adapter = _adapter_singleton()
     health = await adapter.health()
+    # 内部服务令牌缺失时，业务接口会 503（INTERNAL_TOKEN_NOT_CONFIGURED），
+    # 但健康检查仍然报 ok —— 部署校验通过、页面却加载失败。让健康检查
+    # 直接暴露这个配置缺口，问题在发布后检查阶段就可见。
+    token_configured = bool(os.environ.get("INTERNAL_SERVICE_TOKEN", "").strip())
+    status = "ok" if health.ok and token_configured else "degraded"
     return {
-        "status": "ok" if health.ok else "degraded",
+        "status": status,
         "adapter": health.adapter_name,
         "jobs_in_memory": health.details.get("jobs_in_memory", "0"),
+        "internal_token_configured": "true" if token_configured else "false",
         "request_id": getattr(request.state, "request_id", ""),
     }
 

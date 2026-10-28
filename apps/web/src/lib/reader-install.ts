@@ -25,3 +25,27 @@ export const READER_STORE_URL = 'https://chromewebstore.google.com/detail/bldpmk
 export function getReaderInstallHref(_sourceUrl: string): string {
   return READER_STORE_URL;
 }
+
+const READER_PROMPT_DISMISSED_KEY = 'dr:reader-prompt-dismissed';
+
+/**
+ * "打开原文"是直链，Reader 安装提示只在用户明确要走 Reader 时出现。
+ * 用户拒绝过一次就记住这个选择，不再每篇文章都问一遍。
+ */
+export function isReaderPromptDismissed(): boolean {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    return window.localStorage.getItem(READER_PROMPT_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function dismissReaderPrompt(): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    window.localStorage.setItem(READER_PROMPT_DISMISSED_KEY, '1');
+  } catch {
+    // 存储不可用时退化为每次都提示，不阻塞阅读。
+  }
+}

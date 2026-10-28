@@ -28,6 +28,7 @@ import {
 } from '../../lib/radar/source-labels';
 import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
 import { AppButton } from '@/components/material/AppButton';
+import { isReaderPromptDismissed } from '@/lib/reader-install';
 import { zreadRepositoryUrl } from './radar-repository';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
@@ -136,9 +137,11 @@ export function RadarExternalReadingLanding({
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
   const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
+  const [readerPromptDismissed, setReaderPromptDismissed] = useState(false);
 
   useEffect(() => {
     setPlatformOrigin(window.location.origin);
+    setReaderPromptDismissed(isReaderPromptDismissed());
   }, []);
 
   const sourceLabel = formatSourceType(detail.sourceType);
@@ -152,7 +155,6 @@ export function RadarExternalReadingLanding({
   const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
   const tierLabel = tier ? (TIER_LABELS[tier] ?? tier) : '待判断';
   const { lead: summaryLead, supportingExcerpt } = radarSummaryParts(detail);
-  const selectionReason = detail.selectionReason?.trim() || null;
   const tags = cleanRadarTags(detail.tags);
   const publishedLabel = formatRadarDetailDate(detail.publishedAt);
   const displayTitle = decodeRadarTextEntities(detail.title);
@@ -172,11 +174,22 @@ export function RadarExternalReadingLanding({
           <RadarKnowledgeActions key={detail.id} detail={detail} />
           {sourceUrlAvailable ? (
             <AppButton
-              type="button" variant="contained"
-              onClick={() => setSourcePromptOpen(true)}
+              component="a" variant="contained"
+              href={detail.url} target="_blank" rel="noopener noreferrer"
               startIcon={zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}
             >
               <span>{zreadUrl ? '打开 GitHub' : '打开原文'}</span>
+            </AppButton>
+          ) : null}
+          {sourceUrlAvailable ? (
+            // Reader 是可选增强：装了扩展开侧栏，没装就是普通外链。
+            <AppButton
+              component="a" variant="outlined" color="inherit"
+              href={readerUrl} target="_blank" rel="noopener noreferrer"
+              data-reader-launch-source={readerUrl}
+              startIcon={<BookOpenCheck aria-hidden />}
+            >
+              <span>用 Reader 阅读</span>
             </AppButton>
           ) : null}
           {zreadUrl ? (
@@ -215,12 +228,9 @@ export function RadarExternalReadingLanding({
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Sparkles size={14} aria-hidden />
                   <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                    AI 摘要
+                    为什么值得看
                   </Typography>
                 </Box>
-                <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 0.5 }}>
-                  同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
-                </Typography>
                 <Typography variant="reading" component="p" sx={{ mt: 1, whiteSpace: 'pre-line' }}>
                   {summaryLead}
                 </Typography>
@@ -234,20 +244,14 @@ export function RadarExternalReadingLanding({
                     </Typography>
                   </Box>
                 ) : null}
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 2 }}>
+                  同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
+                </Typography>
               </Box>
             </Box>
 
             <Box component="aside" sx={{ minWidth: 0, borderBlock: { xs: 1, lg: 0 }, borderColor: 'divider', py: { xs: 2, lg: 0 }, pl: { lg: 2.5 }, borderLeft: { lg: 1 } }}>
-              {selectionReason ? (
-                <>
-                  <Typography variant="metadata" color="primary.main" sx={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                    为什么值得看
-                  </Typography>
-                  <Typography variant="body2" component="p" color="text.secondary" sx={{ mt: 1 }}>{selectionReason}</Typography>
-                </>
-              ) : null}
-
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: selectionReason ? 2.5 : 0, pt: selectionReason ? 2 : 0, borderTop: selectionReason ? 1 : 0, borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
                 <Chip size="small" variant="outlined" label={tierLabel}
                   sx={{ color: readingTierColor(tier), borderColor: 'currentColor', fontWeight: 600 }} />
                 {tags.length > 0 ? (
@@ -282,13 +286,31 @@ export function RadarExternalReadingLanding({
                 在来源网站继续阅读、保存和同步；只有你明确保存时才会上传内容。
               </Typography>
             </Box>
-            <AppButton type="button" onClick={() => setSourcePromptOpen(true)} variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}>
-              安装 Reader
-            </AppButton>
+            {readerPromptDismissed ? (
+              <AppButton
+                component="a" href={readerUrl} target="_blank" rel="noopener noreferrer"
+                variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}
+                data-reader-launch-source={readerUrl}
+              >
+                <span>用 Reader 阅读</span>
+              </AppButton>
+            ) : (
+              <AppButton type="button" onClick={() => setSourcePromptOpen(true)} variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}>
+                安装 Reader
+              </AppButton>
+            )}
           </Box>
         </Box>
       </Box>
-      <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} />
+      <ReaderSourcePrompt
+        key={detail.id}
+        open={sourcePromptOpen}
+        onClose={() => {
+          setSourcePromptOpen(false);
+          setReaderPromptDismissed(isReaderPromptDismissed());
+        }}
+        readerUrl={readerUrl}
+      />
     </Box>
   );
 }

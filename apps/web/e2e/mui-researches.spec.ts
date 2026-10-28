@@ -20,12 +20,22 @@ async function fixture(page: Page) {
   await page.route('**/api/researches?*', route => {
     const params = new URL(route.request().url()).searchParams;
     const scope = params.get('scope'), type = params.get('type'), second = params.get('page') === '2';
+    const query = params.get('q')?.trim().toLowerCase() ?? '';
+    const sort = params.get('sort') ?? 'newest';
     let items = scope === 'draft' ? [draft] : scope === 'mine'
       ? [{ ...item, title: '已归档研究', status: 'archived', canEdit: true }, { ...knowledge, canEdit: true }]
       : second ? [{ ...item, title: '第二页研究' }] : [item, knowledge];
     if (type) items = items.filter(row => row.type === type);
+    if (query) items = items.filter(row =>
+      row.title.toLowerCase().includes(query)
+      || row.body.toLowerCase().includes(query)
+      || row.tags.some(tag => tag.toLowerCase().includes(query)));
+    if (sort === 'title') items = [...items].sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans'));
+    if (sort === 'updated') items = [...items].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     const paginated = scope === 'published' && !type;
-    return route.fulfill({ json: { items, page: second ? 2 : 1, limit: 20, total: paginated ? 21 : items.length, totalPages: paginated ? 2 : 1 } });
+    // total 是筛选后的全库命中数：只有未筛选的 published 才假装有两页。
+    const total = paginated && !query ? 21 : items.length;
+    return route.fulfill({ json: { items, page: second ? 2 : 1, limit: 20, total, totalPages: total > 20 ? 2 : 1 } });
   });
 }
 
@@ -80,7 +90,7 @@ test.describe('MUI research library (mock API; no database writes)', () => {
     });
   }
 
-  test('current-page text filtering and sorting do not become server searches', async ({ page }) => {
+  test('search and sorting are delegated to the server', async ({ page }) => {
     const requests: URL[] = [];
     page.on('request', request => { if (request.url().includes('/api/researches?')) requests.push(new URL(request.url())); });
     await page.goto('/researches');
@@ -92,12 +102,14 @@ test.describe('MUI research library (mock API; no database writes)', () => {
     await expect(page.getByRole('heading', { name: item.title, exact: true })).not.toBeVisible();
     await input.fill('不存在的标题');
     await expect(page.getByRole('heading', { name: '没有匹配项' })).toBeVisible();
+    // 搜索必须打到服务端：客户端只能过滤当前页，第 21 条之后会变成假象。
+    expect(requests.some(url => url.searchParams.get('q') === 'RAG')).toBe(true);
     await input.fill('');
     await page.getByRole('combobox', { name: '排序方式' }).click();
     await page.getByRole('option', { name: '最近编辑', exact: true }).click();
     await expect(page.getByRole('tabpanel').getByRole('heading', { level: 2 }).first()).toHaveText(knowledge.title);
-    expect(requests.every(url => !url.searchParams.has('q') && !url.searchParams.has('sort'))).toBe(true);
-    expect(requests).toHaveLength(initialRequests);
+    expect(requests.some(url => url.searchParams.get('sort') === 'updated')).toBe(true);
+    expect(requests.length).toBeGreaterThan(initialRequests);
   });
 
   test('type API parameters, legacy URLs, tabs and pagination preserve existing contracts', async ({ page }) => {
