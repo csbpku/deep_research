@@ -22,11 +22,13 @@ describe('research state utilities', () => {
   });
   it('isolates drafts by account and conversation, and tolerates invalid data', () => {
     const storage = memoryStorage();
-    const draft = { reportType: 'web_brief', reportLength: 'standard', sourcePolicy: 'prefer_user_sources', sourceUrls: ['https://example.com'], sourceDraft: '', input: '', brief: null } satisfies ResearchDraft;
+    const draft = { reportType: 'web_brief', reportLength: 'standard', sourcePolicy: 'prefer_user_sources', sourceUrls: ['https://example.com'], sourceDraft: '', input: '', brief: null, seed: { id: 'radar-1', title: '资料标题', url: 'https://example.com/source', interpretation: null, body: null } } satisfies ResearchDraft;
     expect(writeResearchDraft(storage, 'user-1', 'conversation-1', draft)).toBe(true);
     expect(readResearchDraft(storage, 'user-1', 'conversation-1')).toEqual(draft);
     expect(readResearchDraft(storage, 'user-2', 'conversation-1')).toBeNull();
     expect(readResearchDraft(storage, 'user-1', 'conversation-2')).toBeNull();
+    storage.setItem('ai-research-draft:v1:user-1:conversation-1', JSON.stringify({ ...draft, seed: { id: 42 } }));
+    expect(readResearchDraft(storage, 'user-1', 'conversation-1')).toBeNull();
     storage.setItem('ai-research-draft:v1:user-1:conversation-1', '{bad');
     expect(readResearchDraft(storage, 'user-1', 'conversation-1')).toBeNull();
     expect(writeResearchDraft({ ...storage, setItem: () => { throw new Error('blocked'); } }, 'user-1', 'conversation-1', draft)).toBe(false);
