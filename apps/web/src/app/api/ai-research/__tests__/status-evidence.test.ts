@@ -71,6 +71,23 @@ describe('GET /api/ai-research/[jobId] evidence workspace', () => {
     expect(payload.sources[1].snippet).toBe('fallback');
   });
 
+  it('shows matching full evidence alongside changed and added ledger entries', async () => {
+    const key = 'https://example.com/docs'; const ref = { type: 'url', value: key }; const body = 'long evidence '.repeat(400);
+    const changedKey = 'https://example.com/edited'; const changedRef = { type: 'url', value: changedKey };
+    const addedKey = 'https://example.com/new'; const addedRef = { type: 'url', value: addedKey };
+    const date = new Date('2026-09-01T00:00:00Z');
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: ref, title: 'Docs', snippet: body },
+        { canonical_key: changedKey, source_ref: changedRef, title: 'Changed', snippet: 'Old evidence text' }], updatedAt: date,
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [
+        { id: 'one', sourceRef: ref, canonicalKey: key, title: 'Docs', description: body.slice(0, 999).trimEnd() + '…', createdAt: date },
+        { id: 'two', sourceRef: changedRef, canonicalKey: changedKey, title: 'Changed', description: 'New evidence text', createdAt: date },
+        { id: 'three', sourceRef: addedRef, canonicalKey: addedKey, title: 'Added', description: 'Added evidence text', createdAt: date },
+      ] }, aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources.map((source: { snippet: string }) => source.snippet)).toEqual([body, 'New evidence text', 'Added evidence text']);
+  });
+
   it('preserves a captured body of 9000 Unicode characters without cutting surrogate pairs', async () => {
     const body = '💡'.repeat(9000);
     mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],

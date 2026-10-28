@@ -105,33 +105,37 @@ def _review_sources(value: object) -> tuple[AdapterSource, ...]:
 def _review_sources_for_run(
     short_snapshot: object, long_snapshot: object, snapshot_hash: object,
 ) -> tuple[AdapterSource, ...]:
-    """Use a full job snapshot only when it is the review's exact evidence set.
-
-    Short research-source columns are editable. A changed preview or a hash
-    mismatch must never silently substitute a previous job's evidence.
-    """
+    """Rebuild the run's mixed long/short evidence and verify its hash."""
     short = _review_sources(short_snapshot)
     long = _review_sources(long_snapshot)
     if not long or not isinstance(snapshot_hash, str):
         return short
+    by_key: dict[str, AdapterSource] = {}
+    duplicate_keys: set[str] = set()
+    for source in long:
+        if source.canonical_key in by_key:
+            by_key.pop(source.canonical_key)
+            duplicate_keys.add(source.canonical_key)
+        elif source.canonical_key not in duplicate_keys:
+            by_key[source.canonical_key] = source
+    combined: list[AdapterSource] = []
+    for preview in short:
+        saved = by_key.get(preview.canonical_key)
+        if (saved is not None and saved.source_ref == preview.source_ref
+                and _clip_db_text(saved.title, 300) == preview.title
+                and _clip_db_text(saved.snippet, 1000) == preview.snippet):
+            combined.append(saved)
+        else:
+            combined.append(preview)
     payload = [
         {"canonicalKey": source.canonical_key, "sourceRef": source.source_ref,
          "title": source.title, "snippet": source.snippet}
-        for source in sorted(long, key=lambda item: item.canonical_key)
+        for source in sorted(combined, key=lambda item: item.canonical_key)
     ]
     digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    if digest != snapshot_hash or len(short) != len(long):
-        return short
-    short_by_key = {source.canonical_key: source for source in short}
-    for source in long:
-        preview = short_by_key.get(source.canonical_key)
-        if (preview is None or preview.source_ref != source.source_ref
-                or preview.title != _clip_db_text(source.title, 300)
-                or preview.snippet != _clip_db_text(source.snippet, 1000)):
-            return short
-    return long
+    return tuple(combined) if digest == snapshot_hash else short
 
 
 def _clip_db_text(value: str | None, limit: int) -> str | None:

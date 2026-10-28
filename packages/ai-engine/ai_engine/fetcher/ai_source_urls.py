@@ -265,6 +265,19 @@ def select_relevant_user_source_sections(html: str, question: str, *, limit: int
         if id(section) in seen:
             continue
         excerpt = _html_to_text(str(section)).strip()
+        if section.name == "dl" and isinstance(section.parent, Tag) and section.parent.name == "section":
+            # Some documentation puts essential explanation after the API's
+            # definition list, as sibling paragraphs within the same section.
+            # Stop at another definition or heading to avoid widening scope.
+            parts = [excerpt]
+            for sibling in section.next_siblings:
+                if not isinstance(sibling, Tag):
+                    continue
+                if sibling.name in {"dl", "section", "article", "h1", "h2", "h3", "h4"}:
+                    break
+                if sibling.name in {"p", "div", "ul", "ol", "pre", "blockquote", "table"}:
+                    parts.append(_html_to_text(str(sibling)).strip())
+            excerpt = "\n\n".join(part for part in parts if part)
         if excerpt:
             sections.append(excerpt)
             seen.add(id(section))
