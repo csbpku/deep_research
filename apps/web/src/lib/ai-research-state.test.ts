@@ -19,6 +19,8 @@ describe('research state utilities', () => {
   });
   it('removes quote protocol markers while preserving quoted text', () => {
     expect(stripResearchCitationMarkers('前 [[cite]]原文[[/cite]] 后 [[cite]]残缺')).toBe('前 原文 后 残缺');
+    expect(stripResearchCitationMarkers('正在输出 [[cit')).toBe('正在输出 ');
+    expect(stripResearchCitationMarkers('普通标记 [c')).toBe('普通标记 [c');
   });
   it('isolates drafts by account and conversation, and tolerates invalid data', () => {
     const storage = memoryStorage();
