@@ -4,7 +4,7 @@ import AxeBuilder from '@axe-core/playwright';
 const jobId = 'f0600000-0000-4000-8000-000000000001';
 const content = '# 异步任务的失败边界\n\n## Slide 1: 失败后的其他任务，谁来收尾？\n\n先区分异常传播与任务取消。\n\n## Slide 2: 默认首错，不等于整组取消\n\n- gather 立即传播首个异常，其他任务继续运行。[Python asyncio 官方文档](https://docs.python.org/3/library/asyncio-task.html)\n- TaskGroup 遇到非取消异常，会取消剩余任务。[Python asyncio 官方文档](https://docs.python.org/3/library/asyncio-task.html)\n- 需要收集所有结果时，用 return_exceptions 明确处理异常。[Python asyncio 官方文档](https://docs.python.org/3/library/asyncio-task.html)\n\n## Slide 3: 核对取消与清理\n\n- 用三个并发任务核对失败后的状态。\n- 检查 finally 清理逻辑。';
 
-async function mockSlides(page: Page) {
+async function mockSlides(page: Page, slideContent = content) {
   await page.route('**/api/ai-research/jobs*', route => route.fulfill({ json: { items: [], total: 0 } }));
   await page.route('**/api/ai-research/conversations*', route => route.fulfill({ json: { items: [] } }));
   await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, route => route.fulfill({ status: 404, body: 'not found' }));
@@ -16,7 +16,7 @@ async function mockSlides(page: Page) {
     startedAt: '2026-10-28T00:00:00Z', createdAt: '2026-10-28T00:00:00Z', completedAt: '2026-10-28T00:00:18Z',
     draftResearchId: 'f0600000-0000-4000-8000-000000000002',
     review: { phase: 'completed', status: 'passed', attempts: 1, corrected_count: 0, unverified_count: 0, contradicted_count: 0, claims: [] },
-    conversation: [], sources: [], artifact: { type: 'slides', title: '异步任务的失败边界', version: 1, mimeType: 'text/markdown', content, rawContent: null, payload: null, sourceRefs: [], sourceHash: null },
+    conversation: [], sources: [], artifact: { type: 'slides', title: '异步任务的失败边界', version: 1, mimeType: 'text/markdown', content: slideContent, rawContent: null, payload: null, sourceRefs: [], sourceHash: null },
   } }));
 }
 
@@ -102,4 +102,52 @@ test('users can choose and retain slide style without changing the content', asy
   await page.getByRole('option', { name: '精确技术', exact: true }).click();
   await expect(stage).toHaveAttribute('data-slide-style', 'technical');
   await expect(stage).toContainText('失败后的其他任务，谁来收尾');
+});
+
+const groupedContent = '# 技术研究简报\n\n## Slide 1: 并发失败后的传播、任务取消与资源清理边界\n\n### gather 的默认行为\n- 首个异常传播给调用方，其余任务继续运行。[官方文档](https://docs.python.org/3/library/asyncio-task.html)\n- 后续任务仍需由调用方明确管理。\n\n### TaskGroup 的默认行为\n- 非取消异常会触发其余任务取消，并等待任务完成清理。\n- 退出时汇总异常组。[官方文档](https://docs.python.org/3/library/asyncio-task.html)\n\n## 参考文献\n- 不应作为演示正文的附录标题';
+const viewports = [{ width: 375, height: 667 }, { width: 667, height: 375 }, { width: 768, height: 1024 }, { width: 1280, height: 720 }, { width: 1920, height: 1080 }];
+for (const mode of ['light', 'dark'] as const) for (const style of ['technical', 'editorial', 'teaching'] as const) for (const viewport of viewports) {
+  test(`${mode}/${style}: grouped slide is readable at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.addInitScript(({ theme, slideStyle }) => { localStorage.setItem('dr-theme', theme); localStorage.setItem('ai-research-slides-style:v1', slideStyle); }, { theme: mode, slideStyle: style });
+    await mockSlides(page, groupedContent);
+    await page.goto(`/ai-research/${jobId}`);
+    const stage = page.locator('[data-slide-stage]');
+    await expect(stage).toHaveAttribute('data-slide-style', style);
+    await expect(stage.locator('[data-slide-comparison]')).toBeVisible();
+    await expect(stage).toContainText('gather 的默认行为');
+    await expect(stage).toContainText('TaskGroup 的默认行为');
+    await expect(stage.getByRole('link', { name: /来源 1/ }).first()).toBeVisible();
+    await expect(stage).not.toContainText('不应作为演示正文的附录标题');
+    const geometry = await stage.evaluate(el => ({ page: document.documentElement.scrollWidth, viewport: innerWidth, width: el.scrollWidth, clientWidth: el.clientWidth, height: el.scrollHeight, clientHeight: el.clientHeight,
+      scrolling: [...el.querySelectorAll('*')].filter(child => ['auto', 'scroll'].includes(getComputedStyle(child).overflowY) && child.scrollHeight > child.clientHeight + 1).length }));
+    expect(geometry.page).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.width).toBeLessThanOrEqual(geometry.clientWidth + 1);
+    expect(geometry.height).toBeLessThanOrEqual(geometry.clientHeight + 1);
+    expect(geometry.scrolling).toBe(0);
+    const contrast = await stage.locator('h2,h3,p,li,a').evaluateAll(elements => {
+      const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+      const luminance = (c: number[]) => c.map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+      return elements.map(el => {
+        let parent: Element | null = el;
+        while (parent && getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)') parent = parent.parentElement;
+        const [a, b] = [luminance(rgb(getComputedStyle(parent!).backgroundColor)), luminance(rgb(getComputedStyle(el).color))].sort((x, y) => y - x);
+        return { label: el.textContent, ratio: (a + 0.05) / (b + 0.05) };
+      });
+    });
+    for (const { label, ratio } of contrast) expect(ratio, `${mode}/${style} ${label}`).toBeGreaterThanOrEqual(4.5);
+    if (viewport.width === 1280) {
+      await stage.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`slide-${mode}-${style}.png`) });
+    }
+  });
+}
+
+test('teaching style draws only the explicit arrows from source text', async ({ page }) => {
+  await mockSlides(page, '## Slide 1: 原文流程\n\n- 任务失败 → 取消其余任务 → 汇总异常组\n\n- 调用方处理异常。');
+  await page.goto(`/ai-research/${jobId}`);
+  const stage = page.locator('[data-slide-stage]');
+  await expect(stage.getByLabel('原文中的流程')).toHaveCount(1);
+  await expect(stage.getByLabel('原文中的流程')).toContainText('任务失败');
+  await expect(stage.getByLabel('原文中的流程')).toContainText('取消其余任务');
 });

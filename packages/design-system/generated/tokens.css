@@ -6,6 +6,7 @@
   --dr-color-surface: #ffffff;
   --dr-color-surface-raised: #ffffff;
   --dr-color-surface-container: #f4f6f8;
+  --dr-color-presentation-paper: #f7f3e8;
   --dr-color-surface-composer: #ffffff;
   --dr-color-outline: #e1e5eb;
   --dr-color-outline-strong: #b8c0cd;
@@ -109,6 +110,7 @@
   --dr-color-surface: #191e27;
   --dr-color-surface-raised: #202733;
   --dr-color-surface-container: #131820;
+  --dr-color-presentation-paper: #29261f;
   --dr-color-surface-composer: #202733;
   --dr-color-outline: #384353;
   --dr-color-outline-strong: #728097;

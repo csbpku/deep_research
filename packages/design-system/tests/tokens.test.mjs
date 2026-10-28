@@ -59,3 +59,11 @@ test('evidence has a distinct semantic colour from primary actions in both theme
     assert.ok(contrast(tokens['color-evidence'], tokens['color-evidence-container']) >= 4.5, `${name}: evidence text contrast`);
   }
 });
+
+test('slide paper keeps body, secondary and evidence text readable in both themes', () => {
+  for (const [name, tokens] of [['light', light], ['dark', dark]]) {
+    for (const key of ['color-text', 'color-text-secondary', 'color-evidence', 'color-primary']) {
+      assert.ok(contrast(tokens[key], tokens['color-presentation-paper']) >= 4.5, `${name}: ${key} on presentation paper`);
+    }
+  }
+});
