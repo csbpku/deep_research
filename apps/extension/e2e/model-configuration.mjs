@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { selectSettingsModel } from './settings-model-picker.mjs';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
@@ -9,7 +10,7 @@ const artifacts = await mkdtemp(join(tempDir(), 'reader-model-configuration-'));
 const build = new URL('../.output/chrome-mv3/', import.meta.url).pathname;
 const requests = [];
 let chatCalls = 0;
-const inventory = Array.from({ length: 12 }, (_, i) => ({ id: `chat-${String(i).padStart(2, '0')}` }));
+const inventory = Array.from({ length: 125 }, (_, i) => ({ id: `chat-${String(i).padStart(3, '0')}` }));
 const server = createServer(async (request, response) => {
   requests.push(request.url);
   response.setHeader('content-type', 'application/json');
@@ -49,6 +50,7 @@ async function launch(path, name) {
   contexts.push(context);
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const id = new URL(worker.url()).host;
+  await worker.evaluate(() => chrome.storage.local.set({ readerUiLanguage: 'zh-CN' }));
   const page = await context.newPage();
   await page.goto(`chrome-extension://${id}/sidepanel.html`);
   await page.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
@@ -67,11 +69,12 @@ try {
   // Start from the untouched production manifest: auto-discovery must never
   // bypass the user's optional host permission, unlike a pregranted fixture.
   const production = await launch(build, 'production');
-  assert.deepEqual(JSON.parse(await readFile(`${build}/manifest.json`, 'utf8')).host_permissions || [], []);
+  assert.deepEqual(JSON.parse(await readFile(`${build}/manifest.json`, 'utf8')).host_permissions, ['https://techradar.top/*', 'https://www.techradar.top/*']);
   await production.locator('#provider-picker-trigger').click();
   await production.getByRole('dialog', { name: '选择模型服务商' }).waitFor();
   assert.equal(await production.locator('#provider-picker-search').evaluate(n => n === document.activeElement), true);
-  assert.equal(await production.locator('[data-provider-id]').count(), 19);
+  assert.equal(await production.locator('[data-provider-id]').count(), 22);
+  assert.equal(await production.locator('[data-provider-id="minimax-global"]').count(), 0);
   await production.locator('#provider-picker-search').fill('Google');
   await production.locator('[data-provider-id="gemini"]').click();
   assert.equal(await production.locator('#provider-kind').inputValue(), 'gemini');
@@ -88,6 +91,20 @@ try {
   await production.locator('[data-provider-id="openai"]').click();
   await production.waitForFunction(() => document.querySelector('#provider-picker-icon')?.complete && document.querySelector('#provider-picker-icon')?.naturalWidth > 0);
   checks.push('real provider picker loads brand icons, searches grouped options and supports Escape/focus return');
+  await production.locator('#provider-picker-trigger').click();
+  await production.locator('#provider-picker-search').fill('MiniMax');
+  await production.locator('[data-provider-id="minimax"]').click();
+  assert.equal(await production.locator('#provider-region').inputValue(), 'minimax');
+  await production.locator('#provider-key').fill('china-fixture-key');
+  await production.locator('#provider-region').selectOption('minimax-global');
+  assert.equal(await production.locator('#provider-kind').inputValue(), 'minimax-global');
+  assert.equal(await production.locator('#provider-key').inputValue(), '');
+  assert.equal(await production.locator('#provider-url').inputValue(), 'https://api.minimax.io/v1');
+  await production.locator('#provider-region').selectOption('minimax');
+  assert.equal(await production.locator('#provider-key').inputValue(), 'china-fixture-key');
+  assert.equal(await production.locator('#provider-url').inputValue(), 'https://api.minimaxi.com/v1');
+  checks.push('one MiniMax entry exposes regions while keeping endpoint keys separate');
+  await production.locator('#provider-kind').selectOption('openai', { force: true });
   await production.locator('#refresh-models').click();
   await status(production, 'error');
   assert.match(await production.locator('#model-discovery-status').innerText(), /API Key/);
@@ -116,10 +133,19 @@ try {
   await configure(page);
   await page.locator('#provider-url').fill(`http://127.0.0.1:${port}/v1/chat/completions`);
   await status(page, 'ready');
-  assert.match(await page.locator('#model-discovery-status').innerText(), /12/);
+  assert.match(await page.locator('#model-discovery-status').innerText(), /125/);
   assert.equal(await page.locator('#provider-model-list').inputValue(), '');
-  await page.locator('#provider-model-search').fill('chat-11');
-  await page.locator('#provider-model-list').selectOption('chat-11');
+  await page.locator('#provider-model-search').click();
+  await page.getByRole('listbox').waitFor();
+  assert.equal(await page.getByRole('listbox').getByRole('option').count(), 125);
+  await page.screenshot({ path: `${artifacts}/model-picker-125.png` });
+  await page.locator('#provider-model-search').fill('not-a-real-model');
+  await page.getByText('没有匹配的模型，请换个关键词或手动输入模型 ID。', { exact: true }).waitFor();
+  await page.locator('#provider-model-search').fill('chat-124');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#provider-model-list').inputValue(), 'chat-124');
+  await selectSettingsModel(page, 'chat-011');
   checks.push('full completion URL normalizes; models are searchable and not silently selected');
   await page.locator('#save-settings').click();
   await page.waitForFunction(() => document.querySelector('#settings-notice')?.innerText.includes('已保存'));
@@ -130,9 +156,15 @@ try {
   await page.waitForFunction(() => document.querySelector('#provider-test-status')?.dataset.state === 'verified');
   assert.equal(chatCalls, 1);
   checks.push('explicit connection test receives a model reply');
+  await page.locator('#close-settings').click();
+  await page.locator('#settings-button').click();
+  await status(page, 'ready');
+  assert.equal(await page.locator('#provider-model-list option[value]').evaluateAll(items => items.filter(item => item.value).length), 125);
+  assert.equal(await page.locator('#provider-model-search').inputValue(), 'chat-011');
+  checks.push('reopening settings refreshes the full inventory and keeps the saved model');
 
   await page.locator('#provider-kind').selectOption('custom', { force: true });
-  assert.equal(await page.locator('#provider-connection-state').innerText(), '未连接');
+  assert.equal(await page.locator('#provider-connection-state').innerText(), '未配置');
   await page.locator('#provider-url').fill('https://custom.example/v1');
   await page.locator('#provider-key').fill('fixture-only-key');
   await page.locator('#provider-kind').selectOption('anthropic', { force: true });
@@ -200,10 +232,21 @@ try {
       const bounds = document.querySelector('#provider-picker-options').getBoundingClientRect();
       return [...document.querySelectorAll('#provider-picker-options img')].filter(n => {
         const r = n.getBoundingClientRect();
-        return r.top >= bounds.top && r.bottom <= bounds.bottom;
+        return r.width > 0 && r.height > 0 && r.top >= bounds.top && r.bottom <= bounds.bottom;
       }).every(n => n.complete && n.naturalWidth > 0);
     });
+    const textLayout = await page.locator('[data-provider-id="openai"]').evaluate(button => {
+      const name = button.querySelector('strong').getBoundingClientRect();
+      const subtitle = button.querySelector('small').getBoundingClientRect();
+      return subtitle.top >= name.bottom;
+    });
+    assert.ok(textLayout, 'provider name and subtitle occupy separate lines');
     await page.screenshot({ path: `${artifacts}/provider-picker-${width}.png` });
+    const lastProvider = page.locator('[data-provider-id="custom-anthropic"]');
+    await lastProvider.scrollIntoViewIfNeeded();
+    const lastBounds = await lastProvider.boundingBox();
+    const scrollBounds = await page.locator('#provider-picker-options').boundingBox();
+    assert.ok(lastBounds.y >= scrollBounds.y && lastBounds.y + lastBounds.height <= scrollBounds.y + scrollBounds.height + 1, 'last provider is reachable by scrolling');
     await page.keyboard.press('Escape');
   }
   checks.push('320/360/430px settings have no horizontal overflow or clipped controls');

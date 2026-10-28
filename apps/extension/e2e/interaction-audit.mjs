@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { selectSettingsModel } from './settings-model-picker.mjs';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium, expect } from '../../web/node_modules/@playwright/test/index.mjs';
@@ -233,7 +234,7 @@ try {
   await page.locator('#provider-kind').selectOption('local-proxy', { force: true });
   await page.locator('#provider-url').fill(`${origin}/v1`);
   await page.locator('#provider-model-list option[value="audit-chat"]').waitFor({ state: 'attached' });
-  await page.locator('#provider-model-list').selectOption('audit-chat');
+  await selectSettingsModel(page, 'audit-chat');
   await page.locator('#save-settings').click();
   await page.locator('#settings-notice').filter({ hasText: '已保存' }).waitFor();
   await page.locator('#close-settings').click();

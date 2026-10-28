@@ -106,9 +106,13 @@ h1, h2, h3, p { margin:0 }
 .provider-picker-menu { position:fixed; z-index:100; display:flex; flex-direction:column; overflow:hidden }
 .provider-picker-search-row { display:flex; align-items:center; flex:none; gap:8px; padding:var(--reader-space-2) }
 .provider-picker-search-row > input { flex:1; min-height:40px }
+.provider-picker-options { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:0 var(--reader-space-2) var(--reader-space-2) }
+.provider-picker-option > span:first-of-type { display:grid; flex:1; min-width:0; gap:2px }
+.provider-picker-option strong, .provider-picker-option small { display:block; overflow-wrap:anywhere }
+.provider-picker-option > img { flex:none }
 .provider-picker-group + .provider-picker-group { margin-top:var(--reader-space-2) }
 .provider-picker-group h4 { margin:var(--reader-space-1) var(--reader-space-1) var(--reader-space-2) }
-.provider-picker-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px }
+.provider-picker-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:8px }
 .provider-picker-check { display:grid; flex:none; place-items:center; width:14px; visibility:hidden }
 .provider-picker-check svg { width:14px; height:14px }
 .provider-picker-empty { padding:var(--reader-space-3) var(--reader-space-1); text-align:center }

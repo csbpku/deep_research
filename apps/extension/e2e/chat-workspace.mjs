@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { selectSettingsModel } from './settings-model-picker.mjs';
 import { createServer } from 'node:http';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -51,7 +52,7 @@ try {
   await panel.locator('#provider-kind').selectOption('local-proxy', { force: true });
   await panel.locator('#provider-url').fill('http://127.0.0.1:8879/v1');
   await panel.locator('#provider-model-list option[value="local-test-chat"]').waitFor({ state: 'attached' });
-  await panel.locator('#provider-model-list').selectOption('local-test-chat');
+  await selectSettingsModel(panel, 'local-test-chat');
   await panel.locator('#save-settings').click();
   await panel.locator('#settings-notice').filter({ hasText: '已保存' }).waitFor();
   assert.equal(requests.filter(r => r.messages).length, 0, 'saving configuration does not run model inference');

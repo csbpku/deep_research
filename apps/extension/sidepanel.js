@@ -1578,6 +1578,8 @@ function updateProviderForm() {
   const preset = providerPreset(kind);
   show($('provider-custom-url-field'), true);
   renderProviderPickerSelection();
+  show($('provider-region-field'), ['minimax', 'minimax-global'].includes(kind));
+  $('provider-region').value = kind === 'minimax-global' ? kind : 'minimax';
   if ($('provider-model')) $('provider-model').placeholder = preset.placeholder;
   if ($('provider-key-label')) $('provider-key-label').textContent = isLocalProvider({ baseUrl: $('provider-url').value }) ? t("API Key（本地服务选填）") : 'API Key';
   if ($('provider-endpoint-hint')) {
@@ -2102,6 +2104,7 @@ function closeProviderPicker({ restoreFocus = false } = {}) {
 
 function setupProviderPicker() {
   const choose = (id) => {
+    if (id === 'minimax' && $('provider-kind').value === 'minimax-global') id = 'minimax-global';
     $('provider-kind').value = id;
     $('provider-kind').dispatchEvent(new Event('change', { bubbles: true }));
     closeProviderPicker({ restoreFocus: true });
@@ -2162,7 +2165,7 @@ function sameSettingsConnection(a, b) {
 }
 
 function clearProviderErrors() {
-  for (const id of ['provider-url', 'provider-key', 'provider-model-list']) $(id).removeAttribute('aria-invalid');
+  for (const id of ['provider-url', 'provider-key', 'provider-model-list', 'provider-model-search']) $(id).removeAttribute('aria-invalid');
 }
 
 function resetProviderValidation() {
@@ -2185,34 +2188,41 @@ function setDiscoveryState(state, message) {
   status.setAttribute('role', state === 'error' ? 'alert' : 'status');
   $('refresh-models').disabled = busy;
   $('refresh-models').setAttribute('aria-busy', String(busy));
-  $('refresh-models').textContent = busy ? t("正在连接…") : state === 'ready' ? t("刷新模型列表") : t("连接并获取模型");
-  $('provider-connection-state').textContent = busy ? t("连接中") : state === 'ready' ? t("模型已读取") : state === 'error' ? t("连接未完成") : saved ? t("已配置") : t("未连接");
+  $('refresh-models').textContent = busy ? t("正在读取…") : state === 'ready' ? t("刷新模型列表") : t("读取模型列表");
+  $('provider-connection-state').textContent = busy ? t("读取中") : state === 'ready' ? t("列表已更新") : state === 'error' ? t("读取失败") : saved ? t("已配置") : t("未配置");
   $('provider-connection-state').classList.toggle('connected', state === 'ready');
+  publishSettingsModels();
 }
 
 function showProviderError(error, candidate, target = $('model-discovery-status'), focusField = true) {
   const issue = modelConnectionError(error, candidate);
   if (target === $('model-discovery-status')) setDiscoveryState('error', issue.message);
   else { target.textContent = issue.message; target.dataset.state = 'error'; target.setAttribute('role', 'alert'); }
-  if (issue.field && $(issue.field)) {
-    $(issue.field).setAttribute('aria-invalid', 'true');
-    if (focusField) $(issue.field).focus();
+  const field = issue.field === 'provider-model-list' ? 'provider-model-search' : issue.field;
+  if (field && $(field)) {
+    $(field).setAttribute('aria-invalid', 'true');
+    if (focusField) $(field).focus();
   }
-  if (['MODELS_UNSUPPORTED', 'EMPTY_MODELS'].includes(issue.code)) $('manual-model-settings').open = true;
+  if (['MODELS_UNSUPPORTED', 'EMPTY_MODELS', 'INCOMPLETE_MODELS'].includes(issue.code)) $('manual-model-settings').open = true;
+}
+
+function publishSettingsModels() {
+  window.dispatchEvent(new CustomEvent('reader:settings-model-state', { detail: {
+    options: [...$('provider-model-list').options].filter(option => option.value).map(option => ({ id: option.value, label: option.text })),
+    value: $('provider-model-list').value,
+    loading: $('model-discovery-status').dataset.state === 'loading',
+  } }));
 }
 
 function renderSettingsModels(selected = $('provider-model-list').value || $('provider-model').value) {
-  const query = $('provider-model-search').value.trim().toLocaleLowerCase();
   const models = sameSettingsConnection(discoveredConnection, providerFromFields()) ? settingsModels : [];
-  const visible = models.filter(item => `${item.id} ${item.label}`.toLocaleLowerCase().includes(query));
   const list = $('provider-model-list');
-  const items = visible.map(item => new Option(item.label, item.id));
+  const items = models.map(item => new Option(item.label, item.id));
   if (selected && !models.some(item => item.id === selected)) items.unshift(new Option(t("{0}（当前配置）", selected), selected));
   if (items.length && !items.some(item => item.value === selected)) items.unshift(new Option(t("请选择模型"), ''));
-  list.replaceChildren(...(items.length ? items : [new Option(query ? t("没有匹配的模型") : t("请先连接模型服务"), '')]));
-  if (items.some(item => item.value === selected)) list.value = selected;
-  else if (query) list.value = '';
-  show($('provider-model-search'), models.length > 6);
+  list.replaceChildren(...(items.length ? items : [new Option('', '')]));
+  list.value = items.some(item => item.value === selected) ? selected : '';
+  publishSettingsModels();
 }
 
 function changeProviderKind() {
@@ -2227,7 +2237,6 @@ function changeProviderKind() {
   $('provider-key-toggle').setAttribute('aria-label', t("显示 API Key"));
   $('provider-key-toggle').title = t("显示 API Key");
   $('provider-model').value = draft.model;
-  $('provider-model-search').value = '';
   discoveredConnection = null;
   settingsModels = [];
   $('provider-model-list').replaceChildren(new Option(draft.model || t("请先连接模型服务"), draft.model || ''));
@@ -2252,7 +2261,6 @@ async function refreshModels({ requestPermission = false } = {}) {
     if (controller !== modelDiscoveryController) return;
     settingsModels = models;
     discoveredConnection = candidate;
-    $('provider-model-search').value = '';
     const selected = candidate.model || '';
     $('provider-model').value = selected;
     renderSettingsModels(selected);
@@ -2265,13 +2273,12 @@ async function refreshModels({ requestPermission = false } = {}) {
   }
 }
 
-function scheduleModelDiscovery() {
-  providerFieldsDirty = true;
+function scheduleModelDiscovery({ markDirty = true } = {}) {
+  if (markDirty) providerFieldsDirty = true;
   updateProviderForm();
   modelDiscoveryController?.abort();
   resetProviderValidation();
   clearProviderErrors();
-  $('provider-model-search').value = '';
   renderSettingsModels();
   clearTimeout(modelDiscoveryTimer);
   let candidate;
@@ -3223,6 +3230,7 @@ function handleEmptyPrimary() {
 
 function showSettings() {
   show($('page-view'), false); show($('empty-view'), false); show(ensureSaveDialog(), false); show($('settings-view'), true); show($('reader-status-strip'), false); show($('settings-button'), true); document.querySelectorAll('.workspace-nav-item').forEach(button => button.setAttribute('aria-pressed', String(button.id === 'settings-button'))); applyProviderFields(); updateReadingModeUi();
+  if (readingMode === 'local') scheduleModelDiscovery({ markDirty: false });
 }
 
 function showModelSetupGuidance(action) {
@@ -3662,6 +3670,10 @@ async function init() {
   $('mode-platform')?.addEventListener('click', () => void setReadingMode('platform'));
   $('ai-availability-action')?.addEventListener('click', () => showModelSetupGuidance(readingMode === 'platform' ? t("平台 AI") : t("阅读")));
   $('provider-kind')?.addEventListener('change', changeProviderKind);
+  $('provider-region').addEventListener('change', () => {
+    $('provider-kind').value = $('provider-region').value;
+    changeProviderKind();
+  });
   setupProviderPicker();
   $('stop-answer').addEventListener('click', () => discussionController?.abort());
   $('interface-language').value = (await chrome.storage.local.get('readerUiLanguage')).readerUiLanguage || 'system';
@@ -3676,8 +3688,13 @@ async function init() {
   $('provider-url').addEventListener('input', scheduleModelDiscovery);
   $('provider-key').addEventListener('input', scheduleModelDiscovery);
   $('provider-model-list').addEventListener('change', () => { $('provider-model').value = $('provider-model-list').value; providerFieldsDirty = true; resetProviderValidation(); });
-  $('provider-model').addEventListener('input', () => { $('provider-model-list').value = ''; providerFieldsDirty = true; resetProviderValidation(); });
-  $('provider-model-search').addEventListener('input', () => renderSettingsModels());
+  $('provider-model').addEventListener('input', () => { renderSettingsModels($('provider-model').value.trim()); providerFieldsDirty = true; resetProviderValidation(); });
+  window.addEventListener('reader:settings-model-change', event => {
+    $('provider-model').value = event.detail;
+    renderSettingsModels(event.detail);
+    providerFieldsDirty = true;
+    resetProviderValidation();
+  });
   $('provider-key-toggle').addEventListener('click', () => {
     const visible = $('provider-key').type === 'password';
     $('provider-key').type = visible ? 'text' : 'password';

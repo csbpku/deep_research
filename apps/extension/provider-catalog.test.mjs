@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { PROVIDER_CATALOG, PROVIDER_GROUPS, PROVIDER_PRESETS, matchingProviders } from './provider-catalog.js';
+import { PROVIDER_CATALOG, PROVIDER_GROUPS, PROVIDER_PRESETS, matchingProviders, findProvider } from './provider-catalog.js';
 
 test('provider presets distinguish cloud companies, local servers and custom protocols', () => {
   assert.equal(new Set(PROVIDER_CATALOG.map(item => item.id)).size, PROVIDER_CATALOG.length);
@@ -32,6 +32,14 @@ test('legacy provider IDs remain loadable and protocol selection remains explici
   assert.equal(PROVIDER_PRESETS['local-proxy'].baseUrl, 'http://127.0.0.1:8317/v1');
   assert.equal(PROVIDER_PRESETS['lm-studio'].baseUrl, 'http://127.0.0.1:1234/v1');
   assert.equal(PROVIDER_PRESETS.ollama.baseUrl, 'http://127.0.0.1:11434/v1');
+});
+
+test('MiniMax has one visible provider while both saved region IDs remain loadable', () => {
+  assert.equal(PROVIDER_CATALOG.filter(item => item.label === 'MiniMax').length, 1);
+  assert.equal(findProvider('minimax-global').id, 'minimax');
+  assert.equal(PROVIDER_PRESETS['minimax-global'].baseUrl, 'https://api.minimax.io/v1');
+  assert.equal(PROVIDER_PRESETS.minimax.baseUrl, 'https://api.minimaxi.com/v1');
+  for (const id of ['mistral', 'together', 'nvidia', 'stepfun']) assert.ok(PROVIDER_PRESETS[id]);
 });
 
 test('every provider has a packaged SVG with no executable or external resource references', async () => {

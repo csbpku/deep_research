@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { selectSettingsModel } from './settings-model-picker.mjs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { join } from 'node:path';
@@ -37,7 +38,7 @@ try {
   await panel.locator('#provider-kind').selectOption('local-proxy', { force: true });
   await panel.locator('#refresh-models').click();
   await panel.locator(`#provider-model-list option[value="${report.model}"]`).waitFor({ state: 'attached' });
-  await panel.locator('#provider-model-list').selectOption(report.model);
+  await selectSettingsModel(panel, report.model);
   await panel.locator('#save-settings').click();
   await panel.locator('#settings-notice').filter({ hasText: '已保存' }).waitFor();
   await panel.locator('#close-settings').click();

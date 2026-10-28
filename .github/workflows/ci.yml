@@ -570,6 +570,12 @@ jobs:
         run: pnpm --filter @deep-research/reader-extension e2e:visual
         timeout-minutes: 8
 
+      - name: Reader model configuration E2E
+        env:
+          CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
+        run: pnpm --filter @deep-research/reader-extension e2e:model-configuration
+        timeout-minutes: 5
+
       - name: Reader interaction audit
         env:
           CHROME_FOR_TESTING: ${{ steps.chrome.outputs.path }}
