@@ -203,6 +203,9 @@ try {
 
   await panel.setViewportSize({ width: 320, height: 820 });
   await panel.locator('#settings-button').click();
+  await panel.locator('#settings-view').evaluate(element => { element.scrollTop = 0; });
+  const connectPosition = await panel.locator('#refresh-models').boundingBox();
+  if (!connectPosition || connectPosition.y + connectPosition.height > 820) throw new Error('first-run connection action is below the narrow panel viewport');
   await panel.screenshot({ path: tempPath('deep-research-reader-settings-local-320.png'), fullPage: true });
   const local320 = await layoutReport(panel, 'settings-local-320');
   if (!(await panel.locator('#local-provider-settings').isVisible()) || await panel.locator('#platform-settings').isVisible()) {
@@ -399,7 +402,34 @@ try {
 
   // Localized scope controls used to squeeze the model name down to a few
   // pixels at 320px. Exercise the actual selection state in both languages.
+  // All records below belong to this disposable test profile.
+  await panel.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('deep-research-reader');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = database.transaction(['insights', 'annotations'], 'readwrite');
+        for (const [kind, count] of [['insights', 17], ['annotations', 30]]) {
+          for (let index = 0; index < count; index++) {
+            const title = `Library fixture ${kind} ${index}`;
+            tx.objectStore(kind).put({ id: `critique-${kind}-${index}`, title, quote: `Saved evidence ${index}`,
+              document: { url: 'https://example.test/library-fixture', title, version: 'fixture-v1' },
+              url: 'https://example.test/library-fixture', anchor: { quote: `Saved evidence ${index}`, contentHash: 'fixture-v1' },
+              note: index === 0 ? 'Oldest annotation evidence' : `Saved note ${index}`,
+              createdAt: new Date(2020, 0, index + 1).toISOString() });
+          }
+        }
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally { database.close(); }
+  });
   const localizedLayouts = [];
+  const libraryLayouts = [];
   for (const language of ['en', 'zh-CN']) {
     await serviceWorker.evaluate(language => chrome.storage.local.set({ readerUiLanguage: language }), language);
     await article.bringToFront();
@@ -410,9 +440,33 @@ try {
       const layout = await layoutReport(panel, `chat-${language}-${width}`);
       const model = await panel.locator('#composer-model-label').evaluate(element => ({ width: element.clientWidth, label: element.textContent }));
       if (model.width < 60) throw new Error(`model name is unreadable beside the scope controls: ${JSON.stringify({ language, width, model })}`);
+      const selected = await panel.locator('#scope-selection').getAttribute('aria-pressed') === 'true';
+      const starter = language === 'en' ? (selected ? 'What is this passage about?' : 'What is this article about?') : (selected ? '这段讲了什么？' : '文章讲了什么？');
+      if (await panel.locator('#starter-summary').innerText() !== starter) throw new Error(`starter label does not match the active scope: ${language}`);
       await panel.screenshot({ path: tempPath(`reader-polish-${language}-${width}.png`) });
       localizedLayouts.push({ ...layout, model });
     }
+    await panel.setViewportSize({ width: 320, height: 820 });
+    await panel.locator('#nav-library').click();
+    await panel.locator('#library-search').fill('Library fixture');
+    await panel.locator('#library-kind').selectOption('annotation');
+    await panel.waitForFunction(() => document.querySelector('#library-summary')?.textContent?.includes('30'));
+    if (await panel.locator('#library-list .annotation-row').count() !== 12) throw new Error('first library page should contain twelve of thirty annotations');
+    await panel.locator('#library-next').click();
+    await panel.waitForFunction(expected => document.querySelector('#library-page')?.textContent === expected, language === 'en' ? 'Page 2 of 3' : '第 2 / 3 页');
+    await panel.locator('#library-search').fill('Oldest annotation evidence');
+    await panel.waitForFunction(() => document.querySelector('#library-list')?.textContent?.includes('Oldest annotation evidence') && document.querySelectorAll('#library-list .annotation-row').length === 1);
+    panel.once('dialog', dialog => dialog.dismiss());
+    await panel.locator('#library-list [data-action="delete"]').click();
+    if (await panel.locator('#library-list .annotation-row').count() !== 1) throw new Error('cancelled deletion removed an annotation');
+    panel.once('dialog', dialog => dialog.accept());
+    await panel.locator('#library-list [data-action="delete"]').click();
+    await panel.waitForFunction(() => document.querySelectorAll('#library-list .annotation-row').length === 0);
+    await panel.locator('#undo-library-delete').click();
+    await panel.waitForFunction(() => document.querySelectorAll('#library-list .annotation-row').length === 1);
+    await panel.locator('#library-search').scrollIntoViewIfNeeded();
+    libraryLayouts.push(await layoutReport(panel, `library-${language}-320`));
+    await panel.screenshot({ path: tempPath(`reader-library-${language}-320.png`) });
   }
 
   console.log(JSON.stringify({
@@ -420,6 +474,7 @@ try {
     extensionId,
     states: [local320, platform360, article420, history320],
     localizedLayouts,
+    libraryLayouts,
     chatLayout,
     dockActions,
     annotationHighlight,

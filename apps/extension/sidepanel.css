@@ -115,6 +115,13 @@ h1, h2, h3, p { margin:0 }
 #local-provider-settings [aria-invalid="true"]:focus-visible { outline-color:var(--reader-color-danger) }
 .page-notice { grid-column:1; grid-row:1; min-width:0; max-height:84px; overflow:auto; margin:0; padding:var(--reader-space-2) var(--reader-space-1) }
 .library-description { margin-top:var(--reader-space-2) }
+.library-filters { display:grid; grid-template-columns:minmax(0, 1fr); gap:var(--reader-space-3); margin-top:var(--reader-space-4) }
+.library-filters .field { margin-top:0 }
+.library-summary, .library-notice { margin-top:var(--reader-space-3) }
+.library-pagination { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2); margin-block:var(--reader-space-4) }
+.library-pagination span { font-variant-numeric:tabular-nums; text-align:center }
+.platform-data-details { margin-top:var(--reader-space-4) }
+@media (min-width: 520px) { .library-filters { grid-template-columns:minmax(0, 1fr) minmax(140px, 0.55fr); align-items:end } }
 .actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:var(--reader-space-4) }
 .field { margin-top:var(--reader-space-4) }
 .field label { display:block; margin-bottom:var(--reader-space-2) }
