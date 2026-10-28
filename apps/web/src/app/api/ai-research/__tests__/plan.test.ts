@@ -123,6 +123,22 @@ describe('POST /api/ai-research/plan', () => {
     }
   });
 
+  it('preserves quoted names containing conjunctions, commas and colons', async () => {
+    const cases = [
+      ['比较「Research and Development」和「MLflow」的工程取舍', ['Research and Development', 'MLflow']],
+      ['Compare "A: Research and Development" and "B, Inc." for a small team', ['A: Research and Development', 'B, Inc.']],
+    ] as const;
+    for (const [question, options] of cases) {
+      const res = await planPost(buildReq({ question }) as never, ctx());
+      expect((await res.json()).brief.comparisonOptions).toEqual(options);
+    }
+  });
+
+  it('does not strip a conjunction character from the beginning of a named product', async () => {
+    const res = await planPost(buildReq({ question: '比较 和鲸 ModelWhale 和 JupyterLab 的工程取舍' }) as never, ctx());
+    expect((await res.json()).brief.comparisonOptions).toEqual(['和鲸 ModelWhale', 'JupyterLab']);
+  });
+
   it('asks for named comparison options instead of treating vague instructions as products', async () => {
     const res = await planPost(buildReq({ question: '比较现有方案与更好的实现，给出适用边界与建议' }) as never, ctx());
     const body = await res.json();
@@ -165,6 +181,26 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.brief.decisionDimensions).not.toContain('部署与构建');
     expect(body.brief.decisionDimensions).not.toContain('磁盘与资源占用');
     expect(body.brief.decisionDimensions).not.toContain('回滚与恢复');
+  });
+
+  it('keeps a positive requirement after an excluded topic clause', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 Playwright 和 Cypress，不讨论部署和磁盘，但需要性能实测',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.decisionDimensions).toContain('网络/性能实测');
+    expect(body.brief.decisionDimensions).not.toContain('部署与构建');
+    expect(body.brief.decisionDimensions).not.toContain('磁盘与资源占用');
+  });
+
+  it('does not restore an explicitly excluded dimension through the fallback defaults', async () => {
+    const res = await planPost(buildReq({ question: '比较 A 和 B，不讨论安全风险' }) as never, ctx());
+    expect((await res.json()).brief.decisionDimensions).not.toContain('安全与风险');
+  });
+
+  it('does not mistake do-not-ignore instructions for excluded topics', async () => {
+    const res = await planPost(buildReq({ question: '比较 A 和 B，不要忽略性能和安全风险' }) as never, ctx());
+    expect((await res.json()).brief.decisionDimensions).toEqual(expect.arrayContaining(['网络/性能实测', '安全与风险']));
   });
 
   it('preserves explicitly supplied comparison options and dimensions, including an empty dimension list', async () => {
