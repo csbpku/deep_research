@@ -166,3 +166,7 @@ it('keeps overflowing numbered page content and moves reference slides to an app
   for (let i = 1; i <= 7; i += 1) { expect(deck).toContain(`标题${i}`); expect(deck).toContain(`正文${i}`); }
   expect(deck.endsWith('## 参考文献\n\n- 来源A')).toBe(true);
 });
+
+it('does not confuse per-slide bullet density with requested page count', () => {
+  expect(extractSlideLimit('用5页提纲说明；每页最多3个短要点')).toBe(5);
+});

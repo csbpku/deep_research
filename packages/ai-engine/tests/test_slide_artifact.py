@@ -72,3 +72,9 @@ def test_numbered_reference_slide_is_appendix_and_overflow_keeps_all_content() -
     assert deck.count("## Slide ") == 5
     assert all(f"正文{i}" in deck and f"标题{i}" in deck for i in range(1, 8))
     assert deck.endswith("## 参考文献\n\n- 来源A")
+
+
+def test_slide_page_limit_ignores_bullet_density() -> None:
+    from ai_engine.contracts.artifacts import extract_slide_limit
+
+    assert extract_slide_limit("用5页提纲说明；每页最多3个短要点") == 5
