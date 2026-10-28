@@ -546,6 +546,18 @@ try {
   if (await page.locator('#translation-summary').isVisible()) {
     assert.equal(await page.locator('#translation-summary').getAttribute('data-state'), 'completed');
   }
+  // Failure recovery must make a fresh provider request, rather than reuse
+  // the completed content/cache that cancellation intentionally preserved.
+  if (await page.locator('#restore-page').isVisible()) await menuAction('#restore-page');
+  await page.locator('#settings-button').click();
+  await page.locator('#clear-cache').click();
+  await page.waitForFunction(async () => {
+    const db = await new Promise(resolve => { const request = indexedDB.open('deep-research-reader'); request.onsuccess = () => resolve(request.result); });
+    try {
+      return await new Promise(resolve => { const request = db.transaction('cache').objectStore('cache').count(); request.onsuccess = () => resolve(request.result === 0); });
+    } finally { db.close(); }
+  });
+  await page.locator('#close-settings').click();
   failTranslations = true;
   await menuAction('#chat-translate');
   await page.locator('#translation-summary[data-state="error"]').waitFor();
