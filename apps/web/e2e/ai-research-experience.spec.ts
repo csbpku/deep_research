@@ -138,3 +138,88 @@ test('uncertain submission prevents accidental duplicate jobs', async ({ page })
   await expect(page.getByRole('link', { name: /任务历史/ })).toBeVisible();
   expect(submissions).toBe(1);
 });
+
+
+for (const width of [320, 390, 768, 1024, 1440]) {
+  test(`research plan remains readable and actionable at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockWorkspace(page);
+    await page.goto('/ai-research');
+    await page.getByRole('textbox', { name: 'AI 调研对话输入' }).fill(question);
+    await page.getByRole('textbox', { name: 'AI 调研对话输入' }).press('Control+Enter');
+    await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+    await page.getByRole('radio', { name: /^仅使用已选资料/ }).check();
+    await page.getByRole('textbox', { name: '添加网页资料（可选）', exact: true }).fill('https://docs.python.org/3/library/asyncio-task.html#asyncio.TaskGroup');
+    await page.getByRole('button', { name: '添加网页资料', exact: true }).click();
+    const card = page.getByRole('region', { name: 'AI 调研对话', exact: true });
+    const bounds = await card.evaluate(el => ({ card: el.clientWidth, content: el.scrollWidth, page: document.documentElement.scrollWidth, viewport: innerWidth }));
+    expect(bounds.content).toBeLessThanOrEqual(bounds.card + 1);
+    expect(bounds.page).toBeLessThanOrEqual(bounds.viewport);
+    for (const name of ['交付什么', '投入多少', '参考什么']) {
+      const labels = page.getByRole('radiogroup', { name, exact: true }).locator('label');
+      const geometry = await labels.evaluateAll(elements => elements.map(el => {
+        const box = el.getBoundingClientRect();
+        return { left: box.left, right: box.right, client: el.clientWidth, content: el.scrollWidth };
+      }));
+      for (const item of geometry) {
+        expect(item.left).toBeGreaterThanOrEqual(0);
+        expect(item.right).toBeLessThanOrEqual(width);
+        expect(item.content).toBeLessThanOrEqual(item.client + 1);
+      }
+    }
+    await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeEnabled();
+    if (width === 390) await page.screenshot({ path: testInfo.outputPath('research-plan-390.png'), fullPage: true });
+  });
+}
+
+test('keyboard reaches and edits every confirmation group before starting', async ({ page }) => {
+  await mockWorkspace(page);
+  await page.goto('/ai-research');
+  const composer = page.getByRole('textbox', { name: 'AI 调研对话输入' });
+  await composer.focus();
+  await page.keyboard.insertText(question);
+  await page.keyboard.press('Control+Enter');
+  await expect(page.getByRole('textbox', { name: '重点回答' })).toBeVisible();
+  const tabTo = async (target: import('@playwright/test').Locator) => {
+    for (let i = 0; i < 45; i++) {
+      if (await target.evaluate(el => el === document.activeElement)) break;
+      await page.keyboard.press('Tab');
+    }
+    await expect(target).toBeFocused();
+  };
+  const focus = page.getByRole('textbox', { name: '重点回答' });
+  await tabTo(focus);
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText('仅核对异常传播与取消行为');
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('textbox', { name: '对比对象' })).toBeFocused();
+  const output = page.getByRole('radio', { name: /^研究稿/ });
+  await tabTo(output);
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^Slides 提纲/ })).toBeChecked();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: /^网页简报/ })).toBeChecked();
+  await tabTo(page.getByRole('radio', { name: /^多轮研究/ }));
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.getByRole('radio', { name: /^单轮研究/ })).toBeChecked();
+  await tabTo(page.getByRole('radio', { name: /^网页搜索/ }));
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('radio', { name: /^仅使用已选资料/ })).toBeChecked();
+  const url = page.getByRole('textbox', { name: '添加网页资料（可选）', exact: true });
+  await page.keyboard.press('Tab');
+  await expect(url).toBeFocused();
+  await page.keyboard.insertText('https://docs.python.org/3/library/asyncio-task.html');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: '启动配置摘要' })).toContainText('1 条已选资料');
+  const suggestions = page.locator('summary').filter({ hasText: '历史资料建议（可选）' });
+  await tabTo(suggestions);
+  await page.keyboard.press('Space');
+  const source = page.getByRole('checkbox', { name: '使用资料：Python任务实践笔记', exact: true });
+  await tabTo(source);
+  await page.keyboard.press('Space');
+  await expect(source).toBeChecked();
+  await expect(page.getByRole('region', { name: '已选历史资料' })).toContainText('Python任务实践笔记');
+  await tabTo(page.getByRole('button', { name: '开始调研', exact: true }));
+  await expect(page.getByRole('button', { name: '开始调研', exact: true })).toBeEnabled();
+  await expect(focus).toHaveValue('仅核对异常传播与取消行为');
+});
