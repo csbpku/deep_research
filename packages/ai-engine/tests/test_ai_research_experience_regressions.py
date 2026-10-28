@@ -213,3 +213,56 @@ def test_review_hash_matches_bounded_persisted_snapshot() -> None:
         snippet=db_store._clip_db_text(source.snippet, 12000),
     )
     assert _review_source_snapshot_hash((source,)) == _review_source_snapshot_hash((persisted,))
+
+
+@pytest.mark.asyncio
+async def test_locked_source_selects_multiple_query_relevant_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.adapters.base import ResearchRequest
+
+    html = (
+        "<html><body><main><h1>Python asyncio</h1><p>"
+        + "Unrelated introduction. " * 800
+        + "</p>"
+        + '<dl><dt id="asyncio.TaskGroup">class asyncio.TaskGroup</dt><dd>When one task fails, remaining tasks are cancelled.</dd></dl>'
+        + "<p>"
+        + "Other APIs. " * 1000
+        + "</p>"
+        + '<dl><dt id="asyncio.gather">asyncio.gather(*aws, return_exceptions=False)</dt><dd>By default the first exception is propagated and other awaitables continue.</dd></dl>'
+        + "</main></body></html>"
+    ).encode()
+
+    async def fetch(url: str) -> FetchedDocument:
+        return FetchedDocument(
+            url=url,
+            final_ip="8.8.8.8",
+            status=200,
+            headers={},
+            content=html,
+            content_type="text/html",
+            elapsed_ms=1,
+        )
+
+    monkeypatch.setattr(ai_source_urls, "safe_fetch", fetch)
+    request = ResearchRequest(
+        job_id="focus",
+        request_id="focus",
+        topic="比较 asyncio.gather 与 TaskGroup 的异常传播和取消行为",
+        context=None,
+        report_type="research_report",
+        source_policy="only_user_sources",
+        source_refs=({"type": "url", "value": "https://docs.example.test/tasks", "required": True},),
+    )
+    job = gr._Job(request)
+    adapter = object.__new__(gr.GptResearcherAdapter)
+    sources = await adapter._load_locked_user_sources(job)
+    assert sources is not None and len(sources) == 1
+    excerpt = sources[0].snippet or ""
+    assert len(excerpt) <= 12000
+    assert "remaining tasks are cancelled" in excerpt
+    assert "return_exceptions=False" in excerpt
+    assert "other awaitables continue" in excerpt
+    assert "return_exceptions=False" in str(gr._append_captured_evidence_to_context("", sources))
+    assert "return_exceptions=False" in _review_source_text(request.topic, tuple(sources))
+    assert sources[0].canonical_key == "https://docs.example.test/tasks"
