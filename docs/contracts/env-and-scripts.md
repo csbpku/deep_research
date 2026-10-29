@@ -146,6 +146,7 @@ Google OAuth callback 为 `{NEXTAUTH_URL}/api/auth/callback/google`，GitHub OAu
 | `WEWE_AUTH_CODE` | secret | WeWe RSS 控制台授权码；自动 feed.refreshArticles 必需 | 空 |
 | `PRODUCTHUNT_API_TOKEN` | secret | ProductHunt GraphQL token；留空禁用该来源 | 空 |
 | `RETRIEVER` | enum: tavily/duckduckgo | AI 调研检索后端；仅 tavily 需要 `TAVILY_API_KEY` | `tavily` |
+| `DDGS_BACKENDS` | csv: yahoo/duckduckgo/brave/google/mojeek/yandex | `RETRIEVER=duckduckgo` 时的检索引擎顺序（逐个降级）；主机出口被 DNS 污染或屏蔽时，务必保留至少一个可达引擎，否则检索会静默返回空结果 | `yahoo,duckduckgo,brave,google` |
 | `LLM_USAGE_AUDIT_ENABLED` | bool | 共享 LLM 调用 usage 审计记录开关 | `true` |
 | `LLM_RETRY_ATTEMPTS` | int | 主模型同规格重试次数 | `1` |
 | `LLM_CIRCUIT_ENABLED` | bool | endpoint 连续失败熔断开关 | `true` |
