@@ -1,5 +1,7 @@
 'use client';
 
+import { formatResearchRelativeTime as relativeTime } from '@/lib/ai-research-state';
+
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePathname, useRouter } from 'next/navigation';
@@ -78,16 +80,7 @@ function isTerminal(item: RecentResearchArtifact): boolean {
   return ['succeeded', 'failed', 'cancelled', 'partial'].includes(item.status);
 }
 
-function relativeTime(iso: string | null): string {
-  if (!iso) return '刚刚';
-  const diff = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(diff) || diff < 60_000) return '刚刚';
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
-}
+
 
 function RecentTaskFooter({ openTaskHistoryOnLoad }: { openTaskHistoryOnLoad: boolean }) {
   return (

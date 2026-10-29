@@ -53,6 +53,7 @@ export const GET = apiHandler<[NextRequest, { params: Promise<{ id: string }> }]
 
   return NextResponse.json({
     id: conversation.id,
+      userId: user.id,
     jobId: conversation.jobId,
     title: conversation.title,
     status: conversation.status,
@@ -132,6 +133,7 @@ export const PATCH = apiHandler<[NextRequest, { params: Promise<{ id: string }> 
 
   return NextResponse.json({
     id: conversation.id,
+      userId: user.id,
     jobId: conversation.jobId,
     title: conversation.title,
     status: conversation.status,

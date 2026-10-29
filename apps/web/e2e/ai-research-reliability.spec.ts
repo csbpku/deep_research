@@ -46,6 +46,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     await page.setViewportSize(viewport);
     const conversationId = randomUUID();
     const topicId = randomUUID();
+    const userId = randomUUID();
     const question = '我想学习一下grok bot';
     const background = '先解释工作原理。\n' + '需要官方原文和可运行示例。'.repeat(200) + '\n最后务必保留安全边界。';
     let planCalls = 0;
@@ -56,10 +57,14 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     let submitted: Record<string, unknown> | undefined;
     let transcript: Array<{ id: string; role: string; content: string; createdAt: string }> = [];
     const conversation = () => ({
-      id: conversationId, title: question, jobId: null, status: 'active',
+      id: conversationId, userId, title: question, jobId: null, status: 'active',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       messageCount: transcript.length, messages: transcript,
     });
+    await page.route('**/api/auth/session', (route) => route.fulfill({ json: {
+      user: { id: userId, email: 'fixture@e2e.local', name: 'Reliability fixture', role: 'member' },
+      expires: '2099-01-01',
+    } }));
     await page.route('**/api/ai-research/conversations*', async (route) => {
       if (route.request().method() === 'POST') {
         const input = route.request().postDataJSON() as { messages: typeof transcript };

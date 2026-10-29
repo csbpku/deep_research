@@ -148,6 +148,7 @@
   let toolbarHost = null;
   let readerDockHost = null;
   let readerStatusHost = null;
+  let readerStatusRevision = 0;
   const annotationHighlights = new Map();
   let refreshTimer = 0;
   let viewportTimer = 0;
@@ -693,7 +694,7 @@
 
   async function selectionContext() {
     const selection = window.getSelection();
-    const quote = clean(selection?.toString() || '');
+    let quote = clean(selection?.toString() || '');
     if (!quote || isTranslationNode(selection?.anchorNode) || isTranslationNode(selection?.focusNode)) return null;
     removeSelectionTranslation();
     const selectedElement = selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
@@ -704,6 +705,9 @@
     const quoteRange = findQuoteRange(page.body, quote);
     const startOffset = quoteRange?.start;
     const endOffset = quoteRange?.end;
+    // Offsets and quote must describe the same exact slice. A selection
+    // crossing paragraphs uses normalized whitespace only to find that slice.
+    if (quoteRange) quote = page.body.slice(startOffset, endOffset);
     const prefix = startOffset > 0 ? page.body.slice(Math.max(0, startOffset - 120), startOffset) : '';
     const suffix = endOffset !== undefined ? page.body.slice(endOffset, endOffset + 120) : '';
     const hash = await contentHash(page.body);
@@ -934,7 +938,7 @@
     shadow.innerHTML = localizedMarkup(`
       <style>:host{all:initial}div{display:flex;gap:var(--reader-space-1);max-width:min(520px,calc(100vw - 16px));overflow-x:auto;padding:6px;border:1px solid var(--reader-color-outline);border-radius:var(--reader-radius-medium);background:var(--reader-color-surface-raised);box-shadow:var(--reader-elevation-2);font:var(--reader-type-label)/1.4 var(--reader-font-family)}button{min-height:36px;border:0;border-radius:var(--reader-radius-small);background:transparent;color:var(--reader-color-text-secondary);padding:6px 10px;font:inherit;cursor:pointer;white-space:nowrap;transition:background-color var(--reader-motion-fast),color var(--reader-motion-fast)}button:hover{background:var(--reader-color-primary-container);color:var(--reader-color-primary)}button:focus-visible{outline:2px solid var(--reader-color-primary);outline-offset:2px}</style>
       <div role="toolbar" aria-label="Deep Research 阅读操作">
-        <button data-action="explain" aria-keyshortcuts="Alt+Shift+E" title="Alt+Shift+E">解释这段</button><button data-action="translate" aria-keyshortcuts="Alt+Shift+T" title="Alt+Shift+T">翻译这段</button><button data-action="ask" aria-keyshortcuts="Alt+Shift+Q" title="Alt+Shift+Q">问这段</button><button data-action="save" aria-keyshortcuts="Alt+Shift+K" title="Alt+Shift+K">摘录</button>
+        <button data-action="explain" aria-keyshortcuts="Alt+Shift+E" title="Alt+Shift+E">解释这段</button><button data-action="translate" aria-keyshortcuts="Alt+Shift+T" title="Alt+Shift+T">翻译这段</button><button data-action="ask" aria-keyshortcuts="Alt+Shift+Q" title="Alt+Shift+Q">问这段</button><button data-action="save" aria-keyshortcuts="Alt+Shift+K" title="Alt+Shift+K">保存</button>
       </div>`);
     shadow.querySelectorAll('button').forEach((button) => {
       button.addEventListener('pointerdown', (event) => { event.preventDefault(); event.stopPropagation(); });
@@ -980,18 +984,37 @@
         <button type="button" data-action="open" data-tooltip="打开聊天" aria-label="打开聊天" title="打开 Deep Research Reader 聊天侧栏"><span class="glyph">R</span></button>
       </div>`);
     shadow.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => {
+      if (button.dataset.action === 'open') { openChatPanel(); return; }
       if (button.dataset.action === 'summary') setReaderStatus(t("正在读取正文并生成全文总结…"), 'loading');
       if (button.dataset.action === 'translate') setReaderStatus(t("正在读取正文，准备全文翻译…"), 'loading');
-      if (button.dataset.action === 'open') setReaderStatus(t("正在打开聊天侧栏…"), 'loading');
       chrome.runtime.sendMessage({
-        type: button.dataset.action === 'open' ? 'deep-research:open-panel' : 'deep-research:page-action',
-        ...(button.dataset.action === 'open' ? {} : { action: button.dataset.action }),
+        type: 'deep-research:page-action', action: button.dataset.action,
       }).catch(() => {});
     }));
     document.documentElement.appendChild(readerDockHost);
   }
 
+  function openChatPanel() {
+    const revision = setReaderStatus(t("正在打开聊天侧栏…"), 'loading');
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      // Opening can finish after another click starts translation or chat.
+      // Only replace the feedback belonging to this particular open request.
+      if (readerStatusRevision !== revision) return;
+      setReaderStatus(result?.ok ? t("聊天侧栏已打开")
+        : t("未能打开聊天侧栏，请点击浏览器工具栏的 Reader 图标重试。"), result?.ok ? 'ready' : 'error');
+    };
+    const timer = window.setTimeout(() => finish({ ok: false }), 5000);
+    try {
+      chrome.runtime.sendMessage({ type: 'deep-research:open-panel' }).then(finish).catch(() => finish({ ok: false }));
+    } catch { finish({ ok: false }); }
+  }
+
   function setReaderStatus(label, tone = 'loading', detail = '') {
+    const revision = ++readerStatusRevision;
     if (!readerStatusHost?.isConnected) {
       readerStatusHost = document.createElement('div');
       readerStatusHost.dataset.deepResearchStatus = 'true';
@@ -1015,7 +1038,7 @@
       document.documentElement.appendChild(readerStatusHost);
     }
     const status = readerStatusHost.__statusElement;
-    if (!status) return;
+    if (!status) return revision;
     status.classList.remove('ready', 'error');
     if (tone === 'ready' || tone === 'error') status.classList.add(tone);
     status.querySelector('.label').textContent = label;
@@ -1025,6 +1048,7 @@
     if (tone !== 'loading') {
       readerStatusHost.__hideTimer = window.setTimeout(() => status.classList.remove('visible'), 2600);
     }
+    return revision;
   }
 
   function send(payload) {
@@ -1092,6 +1116,7 @@
     const top = beside ? Math.max(8, Math.min(anchor.top, window.innerHeight - 240))
       : below >= 180 ? anchor.bottom + 8 : Math.max(8, anchor.top - 300);
     popup.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:${width}px;height:${Math.min(300, Math.max(120, window.innerHeight - top - 8))}px;min-width:min(280px,calc(100vw - 16px));min-height:120px;max-width:calc(100vw - 16px);max-height:calc(100vh - ${top + 8}px);resize:both;overflow:hidden;pointer-events:auto;`;
+    applyReaderDesignTokens(popup);
     const initialStyle = popup.style.cssText;
     const expand = shadow.querySelector('.expand');
     expand.addEventListener('click', () => {

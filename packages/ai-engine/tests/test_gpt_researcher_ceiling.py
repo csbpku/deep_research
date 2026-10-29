@@ -273,7 +273,8 @@ def test_grounded_report_prompt_covers_generic_infrastructure_comparisons() -> N
     assert "## 分方案发现" in prompt
     assert "## 取舍与结论" in prompt
     assert "## 下一步行动" in prompt
-    assert "带宽或资源成本" in prompt
+    assert "带宽、回滚和磁盘空间" in prompt
+    assert "用户问题和研究方案中适用的决策维度" in prompt
 
 
 def test_slides_prompt_has_a_page_level_content_contract() -> None:
@@ -312,3 +313,11 @@ def test_web_brief_prompt_is_not_a_slide_outline() -> None:
         "下一步验证动作：",
     ):
         assert field in prompt
+
+
+def test_slides_contract_respects_requested_total_page_count() -> None:
+    from ai_engine.adapters.gpt_researcher import _report_output_contract
+
+    contract = _report_output_contract("比较 asyncio.gather 和 TaskGroup，用5页提纲说明", report_type="slides")
+    assert "总共 5 页" in contract
+    assert "封面和收尾页计入总页数" in contract

@@ -16,6 +16,7 @@ vi.mock('next/navigation', () => ({
 import ResearchesPage from './page';
 
 interface QueryOptions {
+  queryKey: unknown[];
   queryFn: () => Promise<unknown>;
   retry: (count: number, error: Error) => boolean;
   refetchOnMount: (query: { state: { error: Error } }) => boolean;
@@ -111,5 +112,25 @@ describe('research library authentication', () => {
     const config = mocks.query.mock.calls[0][0] as QueryOptions;
     expect(config.retry(0, error)).toBe(true);
     expect(config.retry(1, error)).toBe(false);
+  });
+
+  it('sends the search query and the sort order to the server', async () => {
+    failWith(new ApiHttpError({}, 401, 'Unauthorized'));
+    render(h(ResearchesPage));
+    const config = mocks.query.mock.calls[0][0] as QueryOptions;
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ items: [], page: 1, limit: 20, total: 0, totalPages: 0 }),
+      { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    await config.queryFn();
+
+    const requestUrl = String(fetchMock.mock.calls[0][0]);
+    const params = new URL(requestUrl, 'http://localhost').searchParams;
+    // 搜索与排序必须打到服务端；客户端只能重排当前页，那会让"没有匹配项"
+    // 在第 21 条之后变成假象。
+    expect(params.get('sort')).toBe('newest');
+    expect(params.get('scope')).toBe('draft');
+    expect(params.get('limit')).toBe('20');
   });
 });

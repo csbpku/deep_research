@@ -21,6 +21,49 @@ async function fixture(page: Page) {
 test.describe('MUI radar migration contracts (no database writes)', () => {
   test.beforeEach(async ({ page }) => { await fixture(page); });
 
+  test('preview hands focus to the panel, closes on Escape and returns focus to the source title', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/radar?date=all');
+    const title = page.getByRole('link', { name: candidate.title, exact: true });
+    await title.click();
+
+    const preview = page.getByRole('complementary', { name: '文章概览', exact: true });
+    await expect(preview).toBeVisible();
+    // 焦点必须进入预览面板，否则键盘用户要穿过剩下的卡片。
+    await expect(preview.getByRole('heading', { level: 2, name: candidate.title })).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect.poll(() => new URL(page.url()).searchParams.get('open')).toBeNull();
+    await expect(preview).toHaveCount(0);
+    // Esc 之后焦点回到来源标题。
+    await expect(title).toBeFocused();
+  });
+
+  test('the radar card leads with tier and source, then title, then the recommendation', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/radar?date=all');
+    const card = page.locator('article').first();
+    const order = await card.evaluate(element => {
+      const text = (node: Element | null) => node?.textContent?.trim() ?? '';
+      const tier = Array.from(element.querySelectorAll('.MuiChip-label')).find(node => node.textContent?.includes('精读'));
+      const title = element.querySelector('a[href]');
+      const teaser = Array.from(element.querySelectorAll('p')).find(node => node.textContent?.includes('先呈现摘要'));
+      return {
+        tier: tier ? tier.getBoundingClientRect().top : null,
+        title: title ? title.getBoundingClientRect().top : null,
+        teaser: teaser ? teaser.getBoundingClientRect().top : null,
+        sourceBeforeTitle: Boolean(element.querySelector('[data-radar-source]')),
+      };
+    });
+    expect(order.tier).not.toBeNull();
+    expect(order.title).not.toBeNull();
+    expect(order.teaser).not.toBeNull();
+    // 等级 + 来源 → 标题 → 推荐语
+    expect(order.tier!).toBeLessThan(order.title!);
+    expect(order.title!).toBeLessThan(order.teaser!);
+    expect(order.sourceBeforeTitle).toBe(true);
+  });
+
   test('nested menu Escape returns to drawer, then trigger, without losing filters', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/radar?date=all');
@@ -101,24 +144,19 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
         await expect(scoreToggle).toHaveAttribute('aria-expanded', 'true');
         await expect(page.getByText('信息增量', { exact: true })).toBeVisible();
 
-        const sourceButton = page.getByRole('button', { name: '打开原文' });
-        await sourceButton.click();
-        const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
-        await expect(prompt).toBeVisible();
-        await expect(prompt.locator('..')).toHaveCSS('opacity', '1');
-        expect((await new AxeBuilder({ page }).include('.MuiDialog-root').analyze()).violations).toEqual([]);
+        // 打开原文是直链；Reader 安装说明只在显式请求时出现。
+        const sourceLink = page.getByRole('link', { name: '打开原文' });
         const sourcePromise = page.waitForEvent('popup');
-        await prompt.getByRole('link', { name: '已安装，打开原文' }).click();
+        await sourceLink.click();
         const sourcePage = await sourcePromise;
-        await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research\?/u);
-        const sourceUrl = new URL(sourcePage.url());
-        expect(sourceUrl.searchParams.get('deep-research-summary')).toBe(id);
-        expect(sourceUrl.searchParams.get('deep-research-platform')).toBe(new URL(testInfo.project.use.baseURL!).origin);
+        await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research$/u);
         await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
         await sourcePage.close();
-        await page.keyboard.press('Escape');
-        await expect(prompt).not.toBeVisible();
-        await expect(sourceButton).toBeFocused();
+
+        // "用 Reader 阅读"是可选增强，带雷达来源标记。
+        const readerLink = page.getByRole('link', { name: '用 Reader 阅读' });
+        await expect(readerLink).toHaveAttribute('data-reader-launch-source', /deep-research-summary=/u);
+        await expect(readerLink).toHaveAttribute('href', /deep-research-source=radar/u);
 
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         expect((await new AxeBuilder({ page }).include('#main-content').analyze()).violations).toEqual([]);
@@ -139,7 +177,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
     } }));
     await page.setViewportSize({ width: 320, height: 720 });
     await page.goto(`/radar/${id}`);
-    await expect(page.getByRole('button', { name: '打开 GitHub' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '打开 GitHub' })).toHaveAttribute('href', 'https://github.com/microsoft/markitdown');
     await expect(page.getByRole('link', { name: '打开 Zread' })).toHaveAttribute('href', 'https://zread.ai/microsoft/markitdown');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect((await new AxeBuilder({ page }).include('#main-content').analyze()).violations).toEqual([]);
@@ -427,32 +465,36 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       const title = page.getByRole('link', { name: candidate.title, exact: true });
       await title.click();
       const preview = page.getByRole(width >= 1024 ? 'complementary' : 'dialog', { name: '文章概览', exact: true }).filter({ visible: true });
-      const open = preview.getByRole('button', { name: '打开原文', exact: true });
-      await open.click();
-      const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
-      await expect(prompt).toBeVisible();
+      const open = preview.getByRole('link', { name: '打开原文', exact: true });
+      await expect(open).toHaveAttribute('href', 'https://example.com/research');
       const sourcePromise = page.waitForEvent('popup');
-      await prompt.getByRole('link', { name: '已安装，打开原文' }).click();
+      await open.click();
       const sourcePage = await sourcePromise;
-      await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research\?/u);
-      expect(new URL(sourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
+      await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research$/u);
       await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
       await sourcePage.close();
-      await page.keyboard.press('Escape');
-      await expect(preview).toBeVisible();
-      await expect(open).toBeFocused();
     });
   }
 
   for (const width of [1440, 320]) {
-    test(`${width}px: store opens separately and returning after installation opens the same article`, async ({ page }, testInfo) => {
+    test(`${width}px: the Reader prompt is only shown on an explicit install request`, async ({ page }, testInfo) => {
       const storeUrl = 'https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl';
       await page.context().route(storeUrl, route => route.fulfill({ contentType: 'text/html', body: '<h1>Reader store fixture</h1>' }));
       await page.context().route('https://example.com/research**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Original article fixture</h1>' }));
       await page.setViewportSize({ width, height: 844 });
       await page.goto(`/radar/${id}`);
       const platformUrl = page.url();
-      await page.getByRole('button', { name: '打开原文', exact: true }).click();
+      // 打开原文是直链，不弹安装对话框。
+      const sourcePromise = page.waitForEvent('popup');
+      await page.getByRole('link', { name: '打开原文', exact: true }).click();
+      const sourcePage = await sourcePromise;
+      await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research$/u);
+      await sourcePage.close();
+      await expect(page.getByRole('dialog', { name: '是否已安装 Reader？' })).toHaveCount(0);
+      await expect(page).toHaveURL(platformUrl);
+
+      // 显式请求 Reader 时才给安装说明。
+      await page.getByRole('button', { name: '安装 Reader', exact: true }).click();
       const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
       await expect(prompt).toBeVisible();
       const storePromise = page.waitForEvent('popup');
@@ -466,11 +508,11 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       expect(await prompt.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`reader-install-return-${width}.png`) });
       await store.close();
-      const sourcePromise = page.waitForEvent('popup');
+      const readerSourcePromise = page.waitForEvent('popup');
       await prompt.getByRole('link', { name: '安装完成，打开原文' }).click();
-      const sourcePage = await sourcePromise;
-      await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
-      expect(new URL(sourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
+      const readerSourcePage = await readerSourcePromise;
+      await expect(readerSourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
+      expect(new URL(readerSourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
       await expect(page).toHaveURL(platformUrl);
     });
   }

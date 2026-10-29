@@ -104,6 +104,132 @@ describe('POST /api/ai-research/plan', () => {
     expect(body.missingFields).not.toContain('comparisonOptions');
   });
 
+  it('keeps scenario and requested advice out of the real Playwright comparison options', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 Playwright 和 Cypress 在小型 TypeScript 团队端到端测试中的选择，给出适用边界与建议',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual(['Playwright', 'Cypress']);
+    expect(body.ready).toBe(true);
+  });
+
+  it('extracts compact Chinese and English comparison names without swallowing requirements', async () => {
+    for (const question of [
+      '比较Playwright和Cypress的工程取舍，给出建议',
+      'Compare Playwright and Cypress for a small TypeScript team, provide trade-offs.',
+    ]) {
+      const res = await planPost(buildReq({ question }) as never, ctx());
+      expect((await res.json()).brief.comparisonOptions).toEqual(['Playwright', 'Cypress']);
+    }
+  });
+
+  it('preserves quoted names containing conjunctions, commas and colons', async () => {
+    const cases = [
+      ['比较「Research and Development」和「MLflow」的工程取舍', ['Research and Development', 'MLflow']],
+      ['Compare "A: Research and Development" and "B, Inc." for a small team', ['A: Research and Development', 'B, Inc.']],
+    ] as const;
+    for (const [question, options] of cases) {
+      const res = await planPost(buildReq({ question }) as never, ctx());
+      expect((await res.json()).brief.comparisonOptions).toEqual(options);
+    }
+  });
+
+  it('does not strip a conjunction character from the beginning of a named product', async () => {
+    const res = await planPost(buildReq({ question: '比较 和鲸 ModelWhale 和 JupyterLab 的工程取舍' }) as never, ctx());
+    expect((await res.json()).brief.comparisonOptions).toEqual(['和鲸 ModelWhale', 'JupyterLab']);
+  });
+
+  it('asks for named comparison options instead of treating vague instructions as products', async () => {
+    const res = await planPost(buildReq({ question: '比较现有方案与更好的实现，给出适用边界与建议' }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual([]);
+    expect(body.missingFields).toContain('comparisonOptions');
+    expect(body.ready).toBe(false);
+    expect(body.assistantMessage).toContain('对比对象');
+    expect(body.assistantMessage).not.toContain('comparisonOptions');
+  });
+
+  it('uses the requested runtime behaviours rather than imposing operational comparison dimensions', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 asyncio.gather 和 asyncio.TaskGroup 的异常传播和取消行为差异，说明适用边界',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.comparisonOptions).toEqual(['asyncio.gather', 'asyncio.TaskGroup']);
+    expect(body.brief.decisionDimensions).toEqual(expect.arrayContaining(['异常传播', '取消行为']));
+    expect(body.brief.decisionDimensions).not.toEqual(expect.arrayContaining(['磁盘与资源占用']));
+    expect(body.brief.decisionDimensions).not.toContain('部署与构建');
+    expect(body.brief.decisionDimensions).not.toContain('回滚与恢复');
+    expect(body.brief.decisionDimensions).not.toContain('网络/性能实测');
+    expect(body.plan.steps.find((step: { title: string }) => step.title === '对比关键维度').detail).toContain('异常传播');
+  });
+
+  it('retains the operational evidence requirements when the question explicitly requests them', async () => {
+    const res = await planPost(buildReq({
+      question: 'GHCR 固定 SHA 镜像 vs VPS 本地构建：比较带宽、回滚和磁盘空间',
+    }) as never, ctx());
+    expect((await res.json()).brief.decisionDimensions).toEqual(expect.arrayContaining([
+      '网络/性能实测', '磁盘与资源占用', '部署与构建', '回滚与恢复',
+    ]));
+  });
+
+  it('does not infer dimensions that the user explicitly excludes', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 asyncio.gather 和 asyncio.TaskGroup 的异常传播；不讨论部署、磁盘和回滚',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.decisionDimensions).toContain('异常传播');
+    expect(body.brief.decisionDimensions).not.toContain('部署与构建');
+    expect(body.brief.decisionDimensions).not.toContain('磁盘与资源占用');
+    expect(body.brief.decisionDimensions).not.toContain('回滚与恢复');
+  });
+
+  it('keeps a positive requirement after an excluded topic clause', async () => {
+    const res = await planPost(buildReq({
+      question: '比较 Playwright 和 Cypress，不讨论部署和磁盘，但需要性能实测',
+    }) as never, ctx());
+    const body = await res.json();
+    expect(body.brief.decisionDimensions).toContain('网络/性能实测');
+    expect(body.brief.decisionDimensions).not.toContain('部署与构建');
+    expect(body.brief.decisionDimensions).not.toContain('磁盘与资源占用');
+  });
+
+  it('respects the real acceptance request not to expand into unrelated operational topics', async () => {
+    for (const exclusion of [
+      '不展开无关的部署、磁盘或回滚',
+      '不延伸到部署、磁盘或回滚',
+      '不扩展到部署、磁盘或回滚',
+    ]) {
+      const res = await planPost(buildReq({
+        question: `【最终验收】比较 Python asyncio.gather 和 asyncio.TaskGroup 的异常传播与取消行为。仅使用指定官方文档，先给直接结论，再给行为对照及引用；控制在1000字内，${exclusion}。`,
+        context: '直接比较首个异常传播与其他任务是否取消；区分 return_exceptions 和用户取消。',
+      }) as never, ctx());
+      expect((await res.json()).brief.decisionDimensions).toEqual(['异常传播', '取消行为']);
+    }
+  });
+
+  it('does not restore an explicitly excluded dimension through the fallback defaults', async () => {
+    const res = await planPost(buildReq({ question: '比较 A 和 B，不讨论安全风险' }) as never, ctx());
+    expect((await res.json()).brief.decisionDimensions).not.toContain('安全与风险');
+  });
+
+  it('does not mistake do-not-ignore instructions for excluded topics', async () => {
+    const res = await planPost(buildReq({ question: '比较 A 和 B，不要忽略性能和安全风险' }) as never, ctx());
+    expect((await res.json()).brief.decisionDimensions).toEqual(expect.arrayContaining(['网络/性能实测', '安全与风险']));
+  });
+
+  it('preserves explicitly supplied comparison options and dimensions, including an empty dimension list', async () => {
+    for (const decisionDimensions of [['异常传播'], []]) {
+      const res = await planPost(buildReq({
+        question: '比较 Playwright 和 Cypress 的工程取舍',
+        comparisonOptions: ['Explicit A', 'Explicit B'],
+        decisionDimensions,
+      }) as never, ctx());
+      const body = await res.json();
+      expect(body.brief.comparisonOptions).toEqual(['Explicit A', 'Explicit B']);
+      expect(body.brief.decisionDimensions).toEqual(decisionDimensions);
+    }
+  });
+
   it('推断学习类问题为 learn', async () => {
     const res = await planPost(buildReq({ question: 'GraphRAG 怎么上手？' }) as never, ctx());
     const body = await res.json();

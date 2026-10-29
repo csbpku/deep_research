@@ -27,7 +27,7 @@ import {
 } from '@deep-research/shared/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
-import { apiHandler, parseBody } from '@/lib/api-handler';
+import { apiHandler } from '@/lib/api-handler';
 import { requireUser } from '@/lib/auth/session';
 import { toApiErrorResponse } from '@/lib/errors';
 import { log, withRequestId } from '@/lib/log';
@@ -87,7 +87,7 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
     ...(brief.questionsToAnswer.length > 0
       ? ['- 必须回答的问题：', ...brief.questionsToAnswer.map((item) => `  - ${item}`)]
       : []),
-    ...(brief.comparisonOptions.length > 0
+    ...(brief.objective === 'decide' && brief.comparisonOptions.length > 0
       ? ['- 必须比较的对象或方案：', ...brief.comparisonOptions.map((item) => `  - ${item}`)]
       : []),
     ...(brief.objective === 'decide' && brief.decisionDimensions.length > 0
@@ -304,7 +304,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   let upstreamRes: Response;
   try {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
+    setTimeout(() => ac.abort(), AI_ENGINE_TIMEOUT_MS);
     upstreamRes = await fetch(url, {
       method: 'POST',
       headers: {
@@ -401,11 +401,3 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
     { status: upstreamRes.status },
   );
 });
-
-function cryptoUuid(): string {
-  // Web Crypto is universally available; v4-style fallback below for safety
-  const g = globalThis as unknown as { crypto?: { randomUUID?: () => string } };
-  if (g.crypto?.randomUUID) return g.crypto.randomUUID();
-  const rnd = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0');
-  return `${rnd()}${rnd()}-${rnd()}-4${rnd().slice(1)}-${rnd()}-${rnd()}${rnd()}${rnd()}`;
-}

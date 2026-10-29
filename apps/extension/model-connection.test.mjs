@@ -55,6 +55,30 @@ test('OpenAI, Anthropic and native model-list shapes are accepted', async () => 
   }
 });
 
+test('discovery retains models beyond ten pages and follows page tokens', async () => {
+  for (const tokenKey of ['next_page_token', 'nextPageToken', 'next_cursor', 'last_id']) {
+    let page = 0;
+    const models = await fetchProviderModels(provider, {}, { fetch: async url => {
+      assert.equal(new URL(url).searchParams.size, page === 0 ? 0 : 1);
+      page += 1;
+      return json({ data: [{ id: `model-${page}`, display_name: `Model ${page}` }],
+        ...(page < 12 ? { [tokenKey]: String(page), ...(tokenKey === 'last_id' ? { has_more: true } : {}) } : {}) });
+    } });
+    assert.equal(page, 12);
+    assert.equal(models.length, 12);
+    assert.ok(models.some(model => model.id === 'model-12'));
+  }
+});
+
+test('broken pagination reports incomplete inventory instead of returning a short list', async () => {
+  for (const payload of [
+    { data: [{ id: 'first' }], has_more: true },
+    { data: [{ id: 'first' }], has_more: true, last_id: 'first' },
+  ]) {
+    await assert.rejects(fetchProviderModels(provider, {}, { fetch: async () => json(payload) }), error => error.code === 'INCOMPLETE_MODELS');
+  }
+});
+
 test('authorization, unsupported list, rate limit and server failure have distinct recovery states', async () => {
   for (const [status, code, field] of [[401, 'AUTH', 'provider-key'], [403, 'AUTH', 'provider-key'], [404, 'MODELS_UNSUPPORTED', 'provider-url'], [405, 'MODELS_UNSUPPORTED', 'provider-url'], [429, 'RATE_LIMIT', ''], [503, 'SERVICE', '']]) {
     await assert.rejects(fetchProviderModels(provider, {}, { fetch: async () => json({ error: { message: 'must-not-echo-fixture-key' } }, status) }), error => error.code === code && error.field === field && !error.message.includes('fixture-key'));

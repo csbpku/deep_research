@@ -221,7 +221,7 @@ test.describe('Research follow-up and personal knowledge', () => {
           suggestedContext: [],
         }),
       }));
-    await page.route('**/api/ai-research', async (route) => {
+      await page.route('**/api/ai-research', async (route) => {
         if (route.request().method() !== 'POST') return route.continue();
         submitted = route.request().postDataJSON() as Record<string, unknown>;
         return route.fulfill({
@@ -259,7 +259,12 @@ test.describe('Research follow-up and personal knowledge', () => {
       expect(retrieved.items).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: savedResearchId }),
       ]));
-      const sourceCard = page.getByRole('region', { name: '相关历史判断与资料' })
+      const suggestions = page.getByRole('region', { name: '相关历史判断与资料' });
+      await expect(suggestions).not.toBeVisible();
+      await expect(page.getByText('历史资料建议（可选） · 已选 0 条', { exact: true })).toBeVisible();
+      await page.getByText('历史资料建议（可选） · 已选 0 条', { exact: true }).click();
+      await expect(suggestions).toBeVisible();
+      const sourceCard = suggestions
         .locator('label').filter({ hasText: sourceTitle });
       const suggestedSource = sourceCard.getByRole('checkbox', { name: `使用资料：${sourceTitle}`, exact: true });
       await expect(suggestedSource).toBeVisible();
@@ -267,6 +272,7 @@ test.describe('Research follow-up and personal knowledge', () => {
       await expect(suggestedSource).not.toBeChecked();
       await suggestedSource.check();
       await expect(suggestedSource).toBeChecked();
+      await expect(page.getByRole('region', { name: '已选历史资料' })).toContainText(sourceTitle);
       await page.getByRole('button', { name: '开始调研' }).click();
 
       await expect.poll(() => submitted).not.toBeNull();

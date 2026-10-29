@@ -160,7 +160,6 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
   // W2/W3 review 修正: 用 INSERT 遇到唯一约束(并发同 SHA-256)时 catch P2002,
   // 清理 temp 文件并返回已有 job id(不是 500)。避免 findFirst+create race。
   let job: { id: string; status: string; originalFilename: string | null; mimeType: string | null; sizeBytes: bigint | null; contentSha256: string | null; warnings: unknown; createdAt: Date };
-  let duplicate = false;
   try {
     job = await prisma.contentImportJob.create({
       data: {
@@ -230,7 +229,7 @@ export const POST = apiHandler<[NextRequest]>(async (req) => {
 // ─── GET /api/imports ─────────────────────────────────────────────────
 
 export const GET = apiHandler<[NextRequest]>(async (req) => {
-  const requestId = withRequestId(req.headers);
+  withRequestId(req.headers);
   const u = await requireUser(req);
   if (u instanceof NextResponse) return u;
 

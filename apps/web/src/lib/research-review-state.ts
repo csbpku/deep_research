@@ -90,10 +90,14 @@ export function resolveCurrentReviewState<T extends ReviewRunState>(
   const revisionHash = hashResearchRevision(revision);
   const loadedRuns = Array.isArray(reviewRuns);
   const runs = loadedRuns ? sortNewestFirst(reviewRuns) : [];
-  const currentRun = runs.find((run) => (
-    run.revisionHash === revisionHash && run.executionStatus !== 'stale'
-  )) ?? null;
+  const currentRun = runs.find((run) => run.revisionHash === revisionHash) ?? null;
 
+  if (currentRun?.executionStatus === 'stale') {
+    return {
+      revisionHash, status: 'stale', outcome: 'stale', run: null, attempt: 0,
+      isCurrentRevision: false, isLegacyFallback: false,
+    };
+  }
   if (currentRun) {
     return {
       revisionHash,

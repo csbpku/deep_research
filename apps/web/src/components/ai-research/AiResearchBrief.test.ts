@@ -240,6 +240,24 @@ function mountBrief(initialProps: BriefProps) {
   flush();
   return {
     flush,
+    changeObjective(value: string) {
+      function find(node: ReactNode): ((event: { target: { value: string } }) => void) | undefined {
+        if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
+        if (!isValidElement<{ children?: ReactNode; label?: string; select?: boolean; onChange?: (event: { target: { value: string } }) => void }>(node)) return;
+        if (node.props.label === '研究方式' && node.props.select) return node.props.onChange;
+        return find(node.props.children);
+      }
+      const change = find(output); if (!change) throw new Error('Research objective selector not found'); change({ target: { value } }); flush();
+    },
+    changeField(label: string, value: string) {
+      function find(node: ReactNode): ((event: { target: { value: string } }) => void) | undefined {
+        if (Array.isArray(node)) { for (const child of node) { const found = find(child); if (found) return found; } return; }
+        if (!isValidElement<{ children?: ReactNode; 'aria-label'?: string; onChange?: (event: { target: { value: string } }) => void }>(node)) return;
+        if (node.props['aria-label'] === label && node.props.onChange) return node.props.onChange;
+        return find(node.props.children);
+      }
+      const change = find(output); if (!change) throw new Error(`Field ${label} not found`); change({ target: { value } }); flush();
+    },
     update(next: Partial<BriefProps>) { props = { ...props, ...next }; flush(); },
     suggestions() {
       const found = findSuggestions(output);
@@ -302,6 +320,62 @@ describe('AI research brief client request races', () => {
     private: true, confirmedKnowledge: true,
     sourceRefs: [{ type: 'research' as const, value: 'confirmed-1', required: false }],
   };
+
+  it.each(['mapped', 'legacy'] as const)('retains selected issue/bookmark refs after %s draft restores without search results', async (version) => {
+    vi.useFakeTimers();
+    const requests: Array<{ url: string; response: ReturnType<typeof deferred<Response>> }> = [];
+    vi.stubGlobal('fetch', vi.fn((url: string) => { const response = deferred<Response>(); requests.push({ url, response }); return response.promise; }));
+    const ready = vi.fn();
+    const question = 'GraphRAG retrieval costs';
+    const selected = [
+      { kind: 'issue' as const, id: 'issue-id', title: '专题', snippet: '', sourceRefs: [{ type: 'summary' as const, value: 'summary-id', required: false }] },
+      { kind: 'bookmark' as const, id: 'bookmark-id', title: '收藏', snippet: '', sourceRefs: [{ type: 'research' as const, value: 'research-id', required: false }] },
+    ];
+    const refs = [...selected[0]!.sourceRefs, ...selected[1]!.sourceRefs];
+    const initialBrief = { objective: 'investigate' as const, suggestedContextIds: selected.map((item) => item.id), assistantMessage: 'Ready', scopeValid: true,
+      ...(version === 'mapped' ? { selectedContextItems: selected } : {}),
+      brief: { objective: 'investigate' as const, question, constraints: [], questionsToAnswer: ['旧重点'], comparisonOptions: [], decisionDimensions: [], successCriteria: [], sourcePolicy: 'prefer_user_sources' as const, outputType: 'markdown' as const,
+        scope: { timeRange: { preset: 'any' as const }, regions: [], technologyVersions: [], retrievalNotes: '' }, contextRefs: refs } };
+    mounted = mountBrief({ question, context: '', initialBrief, onBriefReady: ready });
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) respond(request, request.url.endsWith('/plan') ? planResponse(question) : { items: [] });
+    await vi.advanceTimersByTimeAsync(0); mounted.flush();
+    mounted.changeField('研究重点回答', '保留来源并改重点');
+    expect(ready.mock.calls.at(-1)![0].brief.contextRefs).toEqual(refs);
+    expect(mounted.suggestions().selectedIds).toEqual(['issue-id', 'bookmark-id']);
+    if (version === 'mapped') {
+      expect(mounted.suggestions().items.map((item) => item.id)).toEqual(['issue-id', 'bookmark-id']);
+      mounted.suggestions().onToggle('issue-id'); mounted.flush();
+      expect(ready.mock.calls.at(-1)![0].brief.contextRefs).toEqual([refs[1]]);
+    } else {
+      mounted.suggestions().onToggle('issue-id'); mounted.flush();
+      expect(ready.mock.calls.at(-1)![0].contextSelectionIncomplete).toBe(true);
+      mounted.suggestions().onToggle('bookmark-id'); mounted.flush();
+      expect(ready.mock.calls.at(-1)![0].brief.contextRefs).toEqual([]);
+    }
+  });
+
+  it('drops hidden comparison requirements when changing from comparison to learning', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) {
+      const plan = planResponse('GraphRAG retrieval costs');
+      respond(request, request.url.endsWith('/plan') ? { ...plan, brief: { ...plan.brief, objective: 'decide', comparisonOptions: ['A', 'B'], decisionDimensions: ['成本'] } } : { items: [] });
+    }
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.changeObjective('learn');
+    expect(ready.mock.calls.at(-1)![0].brief).toMatchObject({ objective: 'learn', comparisonOptions: [], decisionDimensions: [] });
+  });
+
+  it('keeps an explicitly edited question when switching to decision research', async () => {
+    const { brief, requests, ready } = setup();
+    await vi.advanceTimersByTimeAsync(300);
+    for (const request of requests) respond(request, request.url.endsWith('/plan') ? planResponse('GraphRAG retrieval costs') : { items: [] });
+    await vi.advanceTimersByTimeAsync(0); brief.flush();
+    brief.changeField('研究重点回答', '核对性能与成本');
+    brief.changeObjective('decide');
+    expect(ready.mock.calls.at(-1)![0].brief.questionsToAnswer).toEqual(['核对性能与成本']);
+  });
 
   it('debounces both endpoints and propagates the latest topicHint even when only the hint changes', async () => {
     const { brief, requests } = setup();

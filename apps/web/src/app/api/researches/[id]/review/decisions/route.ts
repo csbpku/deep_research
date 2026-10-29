@@ -1,10 +1,11 @@
+import { hashCanonicalSourceSnapshot } from '../../../../../../lib/research-source-snapshot';
 // POST /api/researches/[id]/review/decisions
 // Record a human disposition for one claim in the current, completed review
 // run. The machine verdict remains immutable. A verification request also
 // queues the replacement run in the same transaction, so the audit record and
 // the recoverable workflow cannot diverge.
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { Prisma } from '@prisma/client';
@@ -55,6 +56,7 @@ const researchSelect = {
   sourceAiJob: {
     select: {
       id: true,
+      partialSources: true,
       brief: true,
       sourcePolicy: true,
       aiResearchSources: {
@@ -258,6 +260,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         sourceAiJob: {
           select: {
             id: true,
+            partialSources: true,
             brief: true,
             sourcePolicy: true,
             aiResearchSources: {
@@ -373,9 +376,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       // actionable while no worker can pick it up.
       const queuedAt = new Date();
       const queuedId = randomUUID();
-      const sourceSnapshotHash = hashSourceSnapshot(freshResearch.researchSources);
+      const sourceSnapshotHash = hashCanonicalSourceSnapshot(freshResearch.researchSources, freshResearch.sourceAiJob?.partialSources);
       const queuedDetails = {
         phase: 'queued',
+        sourceSnapshotFormat: 'canonical-v1',
         status: 'queued',
         attempts: 0,
         runId: queuedId,
@@ -558,27 +562,6 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
       : null,
   });
 });
-
-function hashText(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function hashSourceSnapshot(sources: Array<{
-  sourceRef: unknown;
-  canonicalKey: string;
-  title: string | null;
-  description: string | null;
-}>): string {
-  const payload = sources
-    .map((source) => ({
-      canonicalKey: source.canonicalKey,
-      sourceRef: source.sourceRef,
-      title: source.title,
-      snippet: source.description,
-    }))
-    .sort((a, b) => a.canonicalKey.localeCompare(b.canonicalKey));
-  return hashText(JSON.stringify(payload));
-}
 
 function claimIsCitationRelationshipForDecision(claim: { evidence?: { resolver?: string | null } | null }): boolean {
   return claim.evidence?.resolver === 'captured-source-citation';

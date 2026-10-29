@@ -822,6 +822,11 @@ async def test_browser_reading_mode_uses_full_text_transiently_without_persistin
     assert insert_params[18] == insert_params[19]
     assert "originalMarkdown" in insert_sql
     assert insert_params[23] is None
+    # The content kind describes the source shape, not whether the full text
+    # is cached, so external reading mode must still record it.  Without it
+    # the platform cannot tell a repository from a web page and hides
+    # repository-only reading entry points.
+    assert insert_params[24] == "github_repo"
     assert insert_params[25] is False
     assert insert_params[26] is None
     assert insert_params[27] is None
@@ -913,6 +918,7 @@ async def test_browser_reading_mode_fetches_arxiv_full_html_for_scoring(
     assert insert_params[18] == insert_params[19]
     assert not insert_params[15].startswith("来源摘要初筛：")
     assert insert_params[23] is None
+    assert insert_params[24] == "arxiv"
     assert insert_params[27] is None
     assert full_paper not in str(insert_params)
 

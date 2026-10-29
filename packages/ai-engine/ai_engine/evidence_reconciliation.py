@@ -48,7 +48,7 @@ def research_revision_hash(row: Mapping[str, object]) -> str:
     return hashlib.sha256(_json_stringify(snapshot).encode("utf-8")).hexdigest()
 
 
-def source_snapshot_hash(rows: list[Mapping[str, object]]) -> str:
+def source_snapshot_hash(rows: list[Mapping[str, object]], partial: object = None) -> str:
     """Hash the source ledger with the same canonical ordering as the BFF."""
     payload = [
         {
@@ -59,7 +59,14 @@ def source_snapshot_hash(rows: list[Mapping[str, object]]) -> str:
         }
         for row in sorted(rows, key=lambda item: str(item.get("canonicalKey") or ""))
     ]
-    return hashlib.sha256(_json_stringify(payload).encode("utf-8")).hexdigest()
+    if partial:
+        from ai_engine.job_runner.db_store import _mixed_review_sources, _review_sources, _snapshot_digest
+
+        short = _review_sources([{"source_ref": row.get("sourceRef"), "canonical_key": row.get("canonicalKey"),
+                                  "title": row.get("title"), "snippet": row.get("description")} for row in rows])
+        if len(short) == len(rows):
+            return _snapshot_digest(_mixed_review_sources(short, _review_sources(partial)))
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _clip(value: object, limit: int) -> str | None:
@@ -82,7 +89,7 @@ async def reconcile_one(pool: Any, task_id: str) -> bool:
                     '       j."status" AS "jobStatus", j."errorCode", j."errorMessage", '
                     '       r."status" AS "researchStatus", r."title", r."body", '
                     '       r."background", r."conclusion", r."risks", r."tags", '
-                    '       original."id" AS "originalJobId" '
+                    '       original."id" AS "originalJobId", original."partialSources" AS "originalSources" '
                     'FROM "research_evidence_tasks" t '
                     'JOIN "ai_research_jobs" j ON j."id" = t."aiResearchJobId" '
                     'JOIN "researches" r ON r."id" = t."researchId" '
@@ -190,7 +197,7 @@ async def reconcile_one(pool: Any, task_id: str) -> bool:
                     )
                 ).fetchall()
             )
-            ledger_hash = source_snapshot_hash(ledger)
+            ledger_hash = source_snapshot_hash(ledger, task.get("originalSources"))
             active = await (
                 await conn.execute(
                     'SELECT "id" FROM "research_review_runs" '
@@ -233,6 +240,7 @@ async def reconcile_one(pool: Any, task_id: str) -> bool:
             run_id = str(uuid.uuid4())
             queued_at = _json_stringify({
                 "phase": "queued",
+                "sourceSnapshotFormat": "canonical-v1",
                 "status": "queued",
                 "attempts": 0,
                 "runId": run_id,

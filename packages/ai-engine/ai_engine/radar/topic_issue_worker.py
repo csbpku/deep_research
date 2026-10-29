@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
+from ai_engine.radar.content_kind import effective_kind
 
 from ai_engine.llm.client import (
     generate_text,
@@ -224,7 +225,7 @@ async def _fetch_topic_inputs(
                 "title": str(r["title"] or ""),
                 "interpretation": str(r["interpretation"] or ""),
                 "tags": list(r["tags"] or []),
-                "originalKind": r["originalKind"],
+                "originalKind": effective_kind(r["originalKind"], str(r["url"] or "")),
                 "url": str(r["url"] or ""),
                 "sourceHost": str(r["sourceHost"] or ""),
                 "distilledTier": r["distilledTier"],

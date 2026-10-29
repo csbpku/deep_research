@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Bookmark, Check, Languages, Loader2, MessageCircle, Send, Sparkles, X } from 'lucide-react';
+import { BookOpen, Bookmark, Check, Languages, MessageCircle, Send, Sparkles, X } from 'lucide-react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';

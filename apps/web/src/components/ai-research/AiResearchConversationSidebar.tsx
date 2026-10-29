@@ -1,5 +1,7 @@
 'use client';
 
+import { formatResearchRelativeTime as relativeTime } from '@/lib/ai-research-state';
+
 import React from 'react';
 import NextLink from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -19,18 +21,7 @@ import { friendlyMessage } from '@/lib/errors/friendly';
 import { retryOnceAi } from '@/lib/errors/friendly';
 import { ApiHttpError, toApiHttpError } from '@/lib/errors/api-error';
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms) || ms < 0) return '刚刚';
-  const min = Math.floor(ms / 60_000);
-  if (min < 1) return '刚刚';
-  if (min < 60) return `${min} 分钟前`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} 小时前`;
-  const day = Math.floor(hr / 24);
-  if (day < 7) return `${day} 天前`;
-  return `${Math.floor(day / 30)} 个月前`;
-}
+
 
 export function AiResearchConversationSidebar({
   activeConversationId,

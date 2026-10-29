@@ -157,7 +157,6 @@ export function Select({
   const content = parts.find((child) => child.type === SelectContent) as ReactElement<{ children?: ReactNode }> | undefined;
   const valueSlot = trigger ? Children.toArray(trigger.props.children).find(isValidElement) as ReactElement<{ placeholder?: string }> | undefined : undefined;
   const options = flattenOptions(content?.props.children);
-  const selected = options.find((item) => item.value === value);
   const placeholder = valueSlot?.props.placeholder ?? '';
 
   return (

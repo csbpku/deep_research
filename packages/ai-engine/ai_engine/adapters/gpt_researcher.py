@@ -2787,45 +2787,6 @@ def _append_run_audit(
     return f"{report.rstrip()}\n\n" + "\n".join(lines)
 
 
-async def _repair_report_with_review(
-    report: str,
-    instructions: tuple[str, ...],
-    sources: list[AdapterSource],
-) -> str | None:
-    """Ask the generator tier to apply reviewer instructions only."""
-    if not instructions:
-        return None
-    from ai_engine.llm.client import generate_text
-
-    source_lines = _format_source_lines(sources, include_excerpts=True)
-    prompt = (
-        "请根据事实审核意见修订以下中文调研报告。只修改审核意见涉及的事实，"
-        "不得新增没有来源支持的内容，不要输出参考文献章节。保留原有结构。\n\n"
-        "审核意见：\n- " + "\n- ".join(instructions) + "\n\n"
-        f"报告：\n{_strip_reference_section(report)[:24000]}\n\n"
-        f"可用来源：\n{source_lines[:8000]}"
-    )
-    try:
-        result = await generate_text(
-            user_prompt=prompt,
-            system_prompt=(
-                "你是调研报告修订 Agent。只能依据审核意见和给定来源修改报告，"
-                "无法确认的事实必须删除或标记为未核实。只输出修订后的报告正文。"
-            ),
-            llm_spec=resolve_spec(
-                "utility", explicit=os.environ.get("FACT_REPAIR_LLM")
-            ),
-            tier="light",
-            max_tokens=3000,
-            timeout=60.0,
-            disable_thinking=True,
-            operation="research.fact_repair",
-        )
-    except Exception:
-        return None
-    return result.text.strip() or None
-
-
 def _mark_unresolved_claims(
     report: str,
     claims: Iterable[ClaimVerdict],
@@ -3512,7 +3473,7 @@ def _format_evidence_packet(
     after generation.
     """
     if excerpt_chars is None:
-        excerpt_chars = _report_budget("REPORT_EVIDENCE_EXCERPT_CHARS", 4000, 120, 12000)
+        excerpt_chars = _report_budget("REPORT_EVIDENCE_EXCERPT_CHARS", 12000, 120, 12000)
     if max_chars is None:
         max_chars = _report_budget("REPORT_EVIDENCE_MAX_CHARS", 120000, 24000, 500000)
     lines: list[str] = []
@@ -3649,6 +3610,13 @@ def _report_output_contract(
     generic_comparison = _has_explicit_comparison(topic, context)
 
     if normalized_type == "slides":
+        from ai_engine.contracts.artifacts import extract_slide_limit
+
+        slide_count = extract_slide_limit(f"{topic or ''}\n{context or ''}", fallback=0)
+        page_instruction = (
+            f"总共 {slide_count} 页；封面和收尾页计入总页数，不额外增加参考文献页。\n"
+            if slide_count else ""
+        )
         comparison = official_comparison or generic_comparison
         comparison_hint = (
             "对于多产品比较，按产品和决策维度组织页面，确保每个产品都有单独的事实页；"
@@ -3658,11 +3626,12 @@ def _report_output_contract(
         return (
             "这是 Slides 提纲，不是长篇研究报告。必须输出完整 Markdown，并严格使用以下格式：\n"
             "`# 演示标题`，随后是 `## Slide 1: 页面标题`、`## Slide 2: 页面标题` 等按顺序编号的页面。\n"
+            "演示标题与页面标题是格式占位，必须替换为具体主题和本页判断，不得照抄占位词或整段用户指令。\n"
             "每页只承载一个核心判断或一个必要的过渡；每页最多 3 条短要点；每条尽量不超过 32 个中文字符；"
             "不要写长段落，不要把完整来源列表塞进页面。重要判断在对应要点末尾使用证据编号（如 [S2]）；"
             "没有直接证据就写‘本轮未确认’，不要用常识补全。最后一页必须是‘证据缺口与下一步’或等价标题，"
             "明确哪些结论仍需核验以及下一步动作。不要输出参考文献章节，系统会从证据账本补上。\n"
-            f"{comparison_hint}\n"
+            f"{comparison_hint}{page_instruction}\n"
         )
 
     if normalized_type == "web_brief":
@@ -3721,7 +3690,7 @@ def _report_output_contract(
             "这是一个明确的方案/路径对比。必须输出完整 Markdown 中文报告，并按以下顺序组织：\n"
             "1. `## 决策摘要`：先给出当前证据支持的选型结论；如果证据不足，明确写‘暂不能定案’以及缺什么；\n"
             "2. `## 研究范围与方法`：列出本轮实际覆盖的每个方案、资料边界和证据限制；\n"
-            "3. `## 对比矩阵`：逐项比较用户点名的方案，至少覆盖实现/部署、带宽或资源成本、回滚与恢复、磁盘/运维负担、可靠性和安全；每个单元格没有直接证据就写‘本轮未确认’；\n"
+            "3. `## 对比矩阵`：逐项比较用户点名的方案，使用用户问题和研究方案中适用的决策维度；每个单元格没有直接证据就写‘本轮未确认’；\n"
             "4. `## 分方案发现`：分别说明每个方案的事实、优势、限制和适用前提，不能用一方资料替代另一方；\n"
             "5. `## 取舍与结论`：把事实、基于事实的推断和建议分开，明确结论适用的前提；\n"
             "6. `## 证据覆盖与未确认项`：指出哪一方或哪一个关键维度没有可核对正文，不能把未查到当成没有；\n"
@@ -4561,6 +4530,14 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                             }
                         report_progress = dict(job.research_progress)
 
+                    if job.request.report_type != "evidence_search" and _fetched_source_count(sources_for_report) == 0:
+                        async with job.lock:
+                            job.current_step = cast("AiJobStep", AI_JOB_STEP["SEARCH"])
+                        await self._mark_failed(
+                            job, "NO_SOURCES_FOUND", "调研未收集到任何可访问来源，已中止生成草稿"
+                        )
+                        return
+
                     # The recursive skill's context contains every branch's
                     # raw search material, including URL-only discoveries and
                     # pages that were later removed by the evidence ceiling.
@@ -4984,7 +4961,7 @@ class GptResearcherAdapter(ResearchEngineAdapter):
         bounded so a small set is easy to reason about and a required source
         failure stops the job with an actionable error.
         """
-        from ai_engine.fetcher.ai_source_urls import _fetch_user_url
+        from ai_engine.fetcher.ai_source_urls import _fetch_user_url, select_relevant_user_source_sections
 
         fetched_urls = 0
         for ref in job.request.source_refs:
@@ -5016,7 +4993,15 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 continue
 
             if fetched.is_accessible and _usable_source_snippet(fetched.adapter_source.snippet):
-                job.sources = _merge_sources(job.sources, [fetched.adapter_source])
+                source = fetched.adapter_source
+                document = getattr(fetched, "fetched_doc", None)
+                if document is not None and "html" in document.content_type.lower():
+                    relevant = select_relevant_user_source_sections(
+                        document.content.decode("utf-8", errors="replace"), job.request.topic,
+                    )
+                    if relevant and _usable_source_snippet(relevant):
+                        source = replace(source, snippet=relevant)
+                job.sources = _merge_sources(job.sources, [source])
                 fetched_urls += 1
             elif ref.get("required") is True:
                 await self._mark_failed(

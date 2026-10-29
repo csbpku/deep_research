@@ -14,7 +14,6 @@ import { apiHandler, parseBody } from '@/lib/api-handler';
 import { prisma } from '@/lib/db';
 import { requireUser } from '@/lib/auth/session';
 import {
-  DEFAULT_RESEARCH_DECISION_DIMENSIONS,
   RESEARCH_INPUT_MAX_CHARS,
   ResearchScopeSchema,
   type ResearchBrief,
@@ -23,6 +22,7 @@ import {
 } from '@deep-research/shared/schemas';
 import type { ResearchObjective } from '@deep-research/shared/states';
 import { recordProductEvent } from '@/lib/product-events';
+import { inferComparisonOptions, inferDecisionDimensions } from '@/lib/research-plan-semantics';
 import { extractPersonalContextKeywords, findPersonalContext } from '@/lib/personal-context-relevance';
 
 const PlanInput = z.object({
@@ -30,6 +30,8 @@ const PlanInput = z.object({
   context: z.string().max(RESEARCH_INPUT_MAX_CHARS).optional(),
   constraints: z.array(z.string().min(1).max(240)).max(20).optional(),
   questionsToAnswer: z.array(z.string().min(1).max(240)).max(20).optional(),
+  comparisonOptions: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
+  decisionDimensions: z.array(z.string().trim().min(1).max(160)).max(20).optional(),
   scope: ResearchScopeSchema.optional(),
   outputType: z.enum(['markdown', 'slides', 'web']).optional(),
   sourcePolicy: z.enum(['prefer_user_sources', 'only_user_sources']).optional(),
@@ -43,9 +45,9 @@ const LEARN_KEYWORDS = /(怎么用|如何用|教程|入门|学习|从零|基础|
 const EXPLORE_KEYWORDS = /(概览|概要|有哪些|最近|新出|动态|趋势)/iu;
 
 const OBJECTIVE_LABELS: Record<ResearchObjective, string> = {
-  explore: '快速概览',
+  explore: '主题概览',
   learn: '系统学习',
-  investigate: '深入调研',
+  investigate: '机制分析',
   decide: '决策对比',
 };
 
@@ -58,36 +60,11 @@ function inferObjective(question: string): ResearchObjective {
   return 'investigate';
 }
 
-function splitPlanItems(value: string): string[] {
-  return value
-    .split(/、|，|,|；|;|\s+(?:和|与|以及|及|vs\.?|versus)\s+/iu)
-    .map((item) => item
-      .replace(/^(?:比较|对比|compare)\s*/iu, '')
-      // A comparison question usually appends the dimension after the last
-      // option: “比较 A、B 和 C 的研究过程设计”. Keep the option name and
-      // remove only that trailing comparison dimension; otherwise the plan
-      // presents “C 的研究过程设计” as if it were a fourth product.
-      .replace(/\s*(?:的)?(?:工程取舍|研究过程(?:设计)?|研究能力|产品能力|优劣|区别|差异|对比|比较)$/iu, '')
-      .trim())
-    .filter((item) => item.length >= 2 && item.length <= 80)
-    .slice(0, 8);
-}
-
-function inferComparisonOptions(question: string): string[] {
-  const comparison = question.match(/(?:比较|对比|compare)\s+(.+?)(?=[:：。！？!?]|$)/iu);
-  if (!comparison) {
-    const versus = question.match(/(.+?)\s+(?:vs\.?|versus)\s+(.+?)(?=[:：。！？!?]|$)/iu);
-    if (!versus) return [];
-    return Array.from(new Set(splitPlanItems(`${versus[1]}、${versus[2]}`)));
-  }
-  return Array.from(new Set(splitPlanItems(comparison[1])));
-}
-
 function defaultQuestionsToAnswer(objective: ResearchObjective): string[] {
   if (objective === 'decide') {
     return [
       '每个候选方案解决什么问题，适用前提是什么？',
-      '在效果、成本、实现与运维风险上，有哪些可核对的差异？',
+      '围绕问题中关注的行为、适用边界和限制，有哪些可核对的差异？',
       '哪些关键判断有直接来源支持，哪些仍存在证据缺口或冲突？',
       '结合当前场景，推荐什么选择，下一步如何用最小成本验证？',
     ];
@@ -125,10 +102,6 @@ function defaultSuccessCriteria(objective: ResearchObjective): string[] {
   return criteria;
 }
 
-function defaultDecisionDimensions(objective: ResearchObjective): string[] {
-  return objective === 'decide' ? [...DEFAULT_RESEARCH_DECISION_DIMENSIONS] : [];
-}
-
 function questionToBrief(
   question: string,
   objective: ResearchObjective,
@@ -143,7 +116,7 @@ function questionToBrief(
     constraints: partial.constraints ?? [],
     questionsToAnswer: partial.questionsToAnswer ?? defaultQuestionsToAnswer(objective),
     comparisonOptions: partial.comparisonOptions ?? inferComparisonOptions(question),
-    decisionDimensions: partial.decisionDimensions ?? defaultDecisionDimensions(objective),
+    decisionDimensions: partial.decisionDimensions ?? (objective === 'decide' ? inferDecisionDimensions(question, partial.context) : []),
     successCriteria: partial.successCriteria ?? defaultSuccessCriteria(objective),
     sourcePolicy: partial.sourcePolicy ?? 'prefer_user_sources',
     contextRefs: partial.contextRefs ?? [],
@@ -152,14 +125,14 @@ function questionToBrief(
   };
 }
 
-function buildPlanSteps(objective: ResearchObjective, question: string): ResearchPlan {
+function buildPlanSteps(objective: ResearchObjective, question: string, dimensions: string[]): ResearchPlan {
   const trimmed = question.slice(0, 60);
   if (objective === 'decide') {
     return {
       summary: `围绕「${trimmed}」开展决策类调研，给出选项、利弊与可执行建议。`,
       steps: [
         { title: '梳理备选方案', detail: '枚举主流方案与团队现状匹配点' },
-        { title: '对比关键维度', detail: '性能 / 成本 / 学习曲线 / 可运维性 / 风险' },
+        { title: '对比关键维度', detail: dimensions.length ? dimensions.join(' / ') : '只核对已确认的问题，不额外添加比较维度' },
         { title: '交叉核对证据', detail: '优先查找第一方资料，并标出冲突与缺口' },
         { title: '给出推荐与下一步', detail: '建议方案 + 最小验证步骤 + 风险关注点' },
       ],
@@ -274,12 +247,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
     constraints: body.constraints,
     context: body.context,
     questionsToAnswer: body.questionsToAnswer,
+    comparisonOptions: body.comparisonOptions,
+    decisionDimensions: body.decisionDimensions,
     scope: body.scope,
     outputType: body.outputType,
     sourcePolicy: body.sourcePolicy,
   });
 
-  const plan = buildPlanSteps(objective, question);
+  const plan = buildPlanSteps(objective, question, brief.decisionDimensions);
   const missingFields: string[] = [];
   if (objective === 'decide' && brief.comparisonOptions.length === 0) {
     missingFields.push('comparisonOptions');
@@ -306,10 +281,10 @@ export const POST = apiHandler<[NextRequest, { params: Promise<Record<string, st
   return NextResponse.json({
     assistantMessage:
       objective === 'explore'
-        ? '这是快速概览，可以直接启动。'
+        ? '这是主题概览，可以直接启动。'
         : missingFields.length === 0
           ? `判断为「${OBJECTIVE_LABELS[objective]}」类调研。研究计划已生成，可以直接启动。`
-          : `判断为「${OBJECTIVE_LABELS[objective]}」类调研。建议补充：${missingFields.map((field) => field).join('、')}；也可以直接开始，AI 会按现有范围执行。`,
+          : `判断为「${OBJECTIVE_LABELS[objective]}」类调研。建议补充：${missingFields.map((field) => field === 'comparisonOptions' ? '对比对象' : '重点回答').join('、')}；也可以直接开始，AI 会按现有范围执行。`,
     brief,
     plan,
     ready: missingFields.length === 0,

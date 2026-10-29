@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const RESEARCH_ID = '22222222-2222-4222-8222-222222222222';
@@ -74,6 +75,46 @@ beforeEach(() => {
 });
 
 describe('version-scoped fact review runs', () => {
+
+  it('queues a manual review against the matching full captured evidence', async () => {
+    const body = '证据'.repeat(800);
+    const canonicalKey = 'https://example.com/docs';
+    const sourceRef = { type: 'url', value: canonicalKey };
+    const short = body.slice(0, 999).trimEnd() + '…';
+    mocks.researchFindUnique.mockResolvedValue({ ...draft(),
+      sourceAiJob: { id: JOB_ID, partialSources: [{ canonical_key: canonicalKey, source_ref: sourceRef, title: '官方文档', snippet: body }] },
+      researchSources: [{ canonicalKey, sourceRef, title: '官方文档', description: short }],
+    });
+    const response = await reviewPost(new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never, params(RESEARCH_ID));
+    expect(response.status).toBe(202);
+    const expected = createHash('sha256').update(JSON.stringify([{ canonicalKey, snippet: body, sourceRef, title: '官方文档' }]), 'utf8').digest('hex');
+    expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected, details: expect.objectContaining({ sourceSnapshotFormat: 'canonical-v1' }) }) }));
+  });
+
+  it('queues the same mixed evidence shown for an added and an edited source', async () => {
+    const key = 'https://example.com/docs'; const ref = { type: 'url', value: key };
+    const body = 'long evidence '.repeat(400);
+    const changedKey = 'https://example.com/edited'; const changedRef = { type: 'url', value: changedKey };
+    const addedKey = 'https://example.com/new'; const addedRef = { type: 'url', value: addedKey };
+    const sources = [
+      { canonicalKey: key, sourceRef: ref, title: 'Docs', description: body.slice(0, 999).trimEnd() + '…' },
+      { canonicalKey: changedKey, sourceRef: changedRef, title: 'Changed', description: 'New evidence text' },
+      { canonicalKey: addedKey, sourceRef: addedRef, title: 'Added', description: 'Added evidence text' },
+    ];
+    mocks.researchFindUnique.mockResolvedValue({ ...draft(), sourceAiJob: { id: JOB_ID, partialSources: [
+      { canonical_key: key, source_ref: ref, title: 'Docs', snippet: body },
+      { canonical_key: changedKey, source_ref: changedRef, title: 'Changed', snippet: 'Old evidence text' },
+    ] }, researchSources: sources });
+    const response = await reviewPost(new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never, params(RESEARCH_ID));
+    expect(response.status).toBe(202);
+    const expected = createHash('sha256').update(JSON.stringify([
+      { canonicalKey: key, snippet: body, sourceRef: ref, title: 'Docs' },
+      { canonicalKey: changedKey, snippet: 'New evidence text', sourceRef: changedRef, title: 'Changed' },
+      { canonicalKey: addedKey, snippet: 'Added evidence text', sourceRef: addedRef, title: 'Added' },
+    ]), 'utf8').digest('hex');
+    expect(mocks.researchReviewRunCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sourceSnapshotHash: expected }) }));
+  });
+
   it('queues a new run and returns 202 without waiting for the reviewer', async () => {
     const response = await reviewPost(
       new Request(`http://localhost/api/researches/${RESEARCH_ID}/review`, { method: 'POST' }) as never,

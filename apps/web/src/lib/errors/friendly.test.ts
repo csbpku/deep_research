@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 
 import {
-  friendlyError,
   friendlyMessage,
   retryOnceAi,
 } from './friendly';

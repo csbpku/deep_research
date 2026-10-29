@@ -112,6 +112,10 @@ async function layoutReport(page, name) {
 try {
   const serviceWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(serviceWorker.url()).host;
+  // This test drives a regular extension tab as its panel. Keep Chrome from
+  // opening a second native reader that also consumes the dock action.
+  // Native panel opening is covered by ui-regressions.test.mjs.
+  await serviceWorker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
   // The injected controls follow the browser UI language, which differs
   // between a developer's macOS session and a Linux CI runner. Pin it so
   // the label assertions below describe one fixed product state.
@@ -142,6 +146,22 @@ try {
     }
     dockActions.push({ label, role: 'button', visible: true });
   }
+
+  // Keep the native opener stubbed, but click the real page dock and let the
+  // service worker/content-script response channel handle every outcome.
+  for (const outcome of ['success', 'reject', 'timeout']) {
+    await serviceWorker.evaluate(mode => {
+      chrome.sidePanel.open = mode === 'success' ? async () => {}
+        : mode === 'reject' ? async () => { throw new Error('fixture panel rejection'); }
+          : () => new Promise(() => {});
+    }, outcome);
+    await article.getByRole('button', { name: '打开聊天', exact: true }).click();
+    const status = article.locator('[data-deep-research-status] .status');
+    await status.locator('.label').filter({ hasText: outcome === 'success' ? '聊天侧栏已打开' : '未能打开聊天侧栏' }).waitFor({ timeout: 7000 });
+    await status.evaluate(node => { if (!node.classList.contains('visible')) throw new Error('open-panel feedback was not shown'); });
+    await article.waitForFunction(() => !document.querySelector('[data-deep-research-status]')?.shadowRoot?.querySelector('.status')?.classList.contains('visible'), null, { timeout: 5000 });
+  }
+  await serviceWorker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
 
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
@@ -186,6 +206,24 @@ try {
   if (!summaryGuidance.includes('全文总结尚未开始') || !summaryGuidance.includes('模型服务')) {
     throw new Error(`dock summary click did not explain local model setup: ${summaryGuidance}`);
   }
+  // A newly opened native panel and ordinary article updates both re-report
+  // context. That refresh must retain the reason settings were opened.
+  await panel.evaluate(() => {
+    window.contextRefreshed = new Promise(resolve => {
+      const listener = message => {
+        if (message.type !== 'deep-research:page-context') return;
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve();
+      };
+      chrome.runtime.onMessage.addListener(listener);
+    });
+  });
+  await serviceWorker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  });
+  await panel.evaluate(() => window.contextRefreshed);
+  await panel.waitForFunction(() => document.querySelector('#mode-guidance')?.textContent?.includes('全文总结尚未开始'));
   await panel.locator('#close-settings').click();
   const localAvailability = await panel.locator('#ai-availability-banner').innerText();
   if (!localAvailability.includes('独立模式尚未配置模型') || await panel.locator('#ai-availability-action').innerText() !== '配置模型') {
@@ -203,6 +241,9 @@ try {
 
   await panel.setViewportSize({ width: 320, height: 820 });
   await panel.locator('#settings-button').click();
+  await panel.locator('#settings-view').evaluate(element => { element.scrollTop = 0; });
+  const connectPosition = await panel.locator('#refresh-models').boundingBox();
+  if (!connectPosition || connectPosition.y + connectPosition.height > 820) throw new Error('first-run connection action is below the narrow panel viewport');
   await panel.screenshot({ path: tempPath('deep-research-reader-settings-local-320.png'), fullPage: true });
   const local320 = await layoutReport(panel, 'settings-local-320');
   if (!(await panel.locator('#local-provider-settings').isVisible()) || await panel.locator('#platform-settings').isVisible()) {
@@ -273,11 +314,12 @@ try {
   if (await panel.locator('#ask-page').count() !== 0 || await panel.locator('.selection-action-label').isVisible()) {
     throw new Error('选段工具仍重复展示聊天范围/整页提问入口。');
   }
-  await panel.locator('#annotate-selection').click();
-  await panel.locator('#annotation-dialog').waitFor({ state: 'visible', timeout: 5_000 });
-  await panel.locator('#annotation-note').fill('E2E annotation note');
-  await panel.locator('#confirm-annotation').click();
-  await panel.getByText('标注已保存，并已在原文高亮。').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#save-selection').click();
+  await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
+  await panel.locator('#save-note').fill('E2E annotation note');
+  await panel.locator('#save-highlight').check();
+  await panel.locator('#confirm-save').click();
+  await panel.locator('#save-dialog').waitFor({ state: 'hidden', timeout: 10_000 });
   const annotationHighlight = await article.waitForFunction(() => {
     const target = document.querySelector('#target')?.getBoundingClientRect();
     const marks = [...document.querySelectorAll('[data-deep-research-annotation-highlight] > span')];
@@ -302,8 +344,8 @@ try {
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
   const excerptCopy = await panel.locator('#save-mode-note').innerText();
-  if (!excerptCopy.includes('不会在原文添加高亮') || !excerptCopy.includes('阅读结论卡')) {
-    throw new Error(`excerpt action does not explain its distinction from an annotation: ${excerptCopy}`);
+  if (!excerptCopy.includes('同一条记录') || !excerptCopy.includes('按需选择')) {
+    throw new Error(`save action should explain unified records and optional features: ${excerptCopy}`);
   }
   await panel.locator('#cancel-save').click();
 
@@ -397,10 +439,81 @@ try {
   await panel.locator('#close-history').click();
   await panel.waitForURL(url => url.pathname === '/sidepanel.html');
 
+  // Localized scope controls used to squeeze the model name down to a few
+  // pixels at 320px. Exercise the actual selection state in both languages.
+  // All records below belong to this disposable test profile.
+  await panel.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('deep-research-reader');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = database.transaction(['insights', 'annotations'], 'readwrite');
+        for (const [kind, count] of [['insights', 17], ['annotations', 30]]) {
+          for (let index = 0; index < count; index++) {
+            const title = `Library fixture ${kind} ${index}`;
+            tx.objectStore(kind).put({ id: `critique-${kind}-${index}`, title, quote: `Saved evidence ${index}`,
+              document: { url: 'https://example.test/library-fixture', title, version: 'fixture-v1' },
+              url: 'https://example.test/library-fixture', anchor: { quote: `Saved evidence ${index}`, contentHash: 'fixture-v1' },
+              note: index === 0 ? 'Oldest annotation evidence' : `Saved note ${index}`,
+              createdAt: new Date(2020, 0, index + 1).toISOString() });
+          }
+        }
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally { database.close(); }
+  });
+  const localizedLayouts = [];
+  const libraryLayouts = [];
+  for (const language of ['en', 'zh-CN']) {
+    await serviceWorker.evaluate(language => chrome.storage.local.set({ readerUiLanguage: language }), language);
+    await article.bringToFront();
+    await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await panel.waitForFunction(() => document.documentElement.dataset.readerReady === 'true');
+    for (const width of [320, 360, 420, 600]) {
+      await panel.setViewportSize({ width, height: 820 });
+      const layout = await layoutReport(panel, `chat-${language}-${width}`);
+      const model = await panel.locator('#composer-model-label').evaluate(element => ({ width: element.clientWidth, label: element.textContent }));
+      if (model.width < 60) throw new Error(`model name is unreadable beside the scope controls: ${JSON.stringify({ language, width, model })}`);
+      const selected = await panel.locator('#scope-selection').getAttribute('aria-pressed') === 'true';
+      const starter = language === 'en' ? (selected ? 'What is this passage about?' : 'What is this article about?') : (selected ? '这段讲了什么？' : '文章讲了什么？');
+      if (await panel.locator('#starter-summary').innerText() !== starter) throw new Error(`starter label does not match the active scope: ${language}`);
+      await panel.screenshot({ path: tempPath(`reader-polish-${language}-${width}.png`) });
+      localizedLayouts.push({ ...layout, model });
+    }
+    await panel.setViewportSize({ width: 320, height: 820 });
+    await panel.locator('#nav-library').click();
+    await panel.locator('#library-search').fill('Library fixture');
+    await panel.locator('#library-kind').selectOption('annotation');
+    await panel.waitForFunction(() => document.querySelector('#library-summary')?.textContent?.includes('30'));
+    if (await panel.locator('#library-list .annotation-row').count() !== 12) throw new Error('first library page should contain twelve of thirty annotations');
+    await panel.locator('#library-next').click();
+    await panel.waitForFunction(expected => document.querySelector('#library-page')?.textContent === expected, language === 'en' ? 'Page 2 of 3' : '第 2 / 3 页');
+    await panel.locator('#library-search').fill('Oldest annotation evidence');
+    await panel.waitForFunction(() => document.querySelector('#library-list')?.textContent?.includes('Oldest annotation evidence') && document.querySelectorAll('#library-list .annotation-row').length === 1);
+    panel.once('dialog', dialog => dialog.dismiss());
+    await panel.locator('#library-list [data-action="delete"]').click();
+    if (await panel.locator('#library-list .annotation-row').count() !== 1) throw new Error('cancelled deletion removed an annotation');
+    panel.once('dialog', dialog => dialog.accept());
+    await panel.locator('#library-list [data-action="delete"]').click();
+    await panel.waitForFunction(() => document.querySelectorAll('#library-list .annotation-row').length === 0);
+    await panel.locator('#undo-library-delete').click();
+    await panel.waitForFunction(() => document.querySelectorAll('#library-list .annotation-row').length === 1);
+    await panel.locator('#library-search').scrollIntoViewIfNeeded();
+    libraryLayouts.push(await layoutReport(panel, `library-${language}-320`));
+    await panel.screenshot({ path: tempPath(`reader-library-${language}-320.png`) });
+  }
+
   console.log(JSON.stringify({
     ok: true,
     extensionId,
     states: [local320, platform360, article420, history320],
+    localizedLayouts,
+    libraryLayouts,
     chatLayout,
     dockActions,
     annotationHighlight,

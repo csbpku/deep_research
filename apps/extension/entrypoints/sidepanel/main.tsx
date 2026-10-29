@@ -14,6 +14,8 @@ import { ReaderButton, ReaderTextField, ReaderSelect, ReaderDisclosure } from '.
 import { ReaderThemeProvider } from '../../components/reader-theme';
 import { TranslationLanguagePicker } from '../../components/translation-language-picker';
 import { ProviderSelector } from '../../components/provider-selector';
+import { ReadingSaveOptions } from '../../components/reading-save-options';
+import { SettingsModelPicker } from '../../components/settings-model-picker';
 
 /**
  * React owns the panel UI. The reading controller remains an imperative
@@ -80,7 +82,15 @@ function ReaderPanel() {
               <ReaderButton id="sync-session" className="hidden" variant="outlined">{t("同步会话")}</ReaderButton>
             </div>
           </div>
+          <div className="library-filters">
+            <div className="field"><label htmlFor="library-search">{t("搜索收藏")}</label><ReaderTextField id="library-search" type="search" placeholder={t("标题、原文、笔记或结论")} /></div>
+            <div className="field"><label htmlFor="library-kind">{t("内容类型")}</label><ReaderSelect id="library-kind" defaultValue="all"><option value="all">{t("全部类型")}</option><option value="insight">{t("摘录与结论")}</option><option value="annotation">{t("原文标注")}</option></ReaderSelect></div>
+          </div>
+          <ReaderButton id="clear-library-filters" className="hidden" type="button">{t("清除筛选")}</ReaderButton>
+          <Alert id="library-notice" className="library-notice hidden" role="status" aria-live="polite" icon={false} action={<ReaderButton id="undo-library-delete" className="hidden" type="button">{t("撤销删除")}</ReaderButton>}><span id="library-notice-text" /></Alert>
+          <p id="library-summary" className="small library-summary" role="status" aria-live="polite" />
           <div id="library-list" className="small" style={{ paddingTop: 10 }}>{t("还没有本地保存的成果。")}</div>
+          <nav id="library-pagination" className="library-pagination hidden" aria-label={t("收藏分页")}><ReaderButton id="library-previous" type="button" variant="outlined">{t("上一页")}</ReaderButton><span id="library-page" className="small" /><ReaderButton id="library-next" type="button" variant="outlined">{t("下一页")}</ReaderButton></nav>
         </section>
         </div>
 
@@ -179,12 +189,11 @@ function ReaderPanel() {
               </div>
               <Paper component="div" variant="outlined" id="composer-model-menu" className="composer-model-menu hidden" role="dialog" aria-label={t("切换模型")}><label htmlFor="composer-model-search">{t("选择模型")}</label><ReaderTextField id="composer-model-search" type="search" placeholder={t("搜索模型…")} autoComplete="off"  /><div id="composer-model-options" className="composer-model-options" role="listbox" aria-label={t("可用模型")} /><div id="composer-model-status" className="small" role="status" /><div className="composer-model-actions"><ReaderButton id="composer-model-refresh" type="button" variant="text">{t("刷新列表")}</ReaderButton><ReaderButton id="composer-model-settings" type="button" variant="text">{t("连接设置")}</ReaderButton></div></Paper>
               <Paper component="div" variant="outlined" id="chat-selection-card" className="chat-selection-card hidden" aria-label={t("当前选中的原文")}>
-                <div className="selection-preview-heading"><ReaderButton id="clear-chat-selection" type="button" aria-label={t("清除选段，基于整篇")} title={t("清除选段，基于整篇")} variant="text">×</ReaderButton></div>
+                <div className="selection-preview-heading"><ReaderButton id="clear-chat-selection" type="button" aria-label={t("清除选段，基于整篇")} title={t("清除选段，基于整篇")} variant="text" control="icon" sx={{ width: 32, height: 32, minHeight: 32 }}><ComposerIcon kind="close" size={16} /></ReaderButton></div>
                 <blockquote id="chat-selection-quote" />
                 <div id="selection-section" className="selection-preview-actions">
                   <ReaderButton id="copy-chat-selection" type="button" variant="text">{t("复制选段")}</ReaderButton>
-                  <ReaderButton id="annotate-selection" type="button" title={t("在原网页高亮并添加笔记")} variant="text">{t("标注")}</ReaderButton>
-                  <ReaderButton id="save-selection" type="button" title={t("将选段存入阅读库")} variant="text">{t("保存摘录")}</ReaderButton>
+                  <ReaderButton id="save-selection" type="button" title={t("保存摘录、笔记并选择是否高亮")} variant="text">{t("保存")}</ReaderButton>
                   <ReaderButton id="toggle-chat-selection" type="button" aria-expanded="false" aria-controls="chat-selection-quote" variant="text">{t("展开")}</ReaderButton>
                 </div>
               </Paper>
@@ -196,13 +205,13 @@ function ReaderPanel() {
               <InputBase id="question-input" className="reader-composer-field" multiline inputComponent="textarea" rows={1} placeholder={t("问问这篇文章…")} sx={{ display: 'flex', width: '100%', padding: 0, '& textarea': { boxSizing: 'border-box' } }} />
               <div className="chat-composer-footer">
                 <div className="composer-tools">
-                  <ReaderButton id="chat-summary" type="button" title={t("总结当前整篇或选段")} variant="text"><ComposerIcon kind="summary" />{t("总结")}</ReaderButton>
-                  <ReaderButton id="chat-translate" type="button" title={t("翻译当前整篇或选段")} variant="text"><ComposerIcon kind="translate" />{t("翻译")}</ReaderButton>
+                  <ReaderButton id="chat-summary" type="button" title={t("总结当前整篇或选段")} variant="text" startIcon={<ComposerIcon kind="summary" />}>{t("总结")}</ReaderButton>
+                  <ReaderButton id="chat-translate" type="button" title={t("翻译当前整篇或选段")} variant="text" startIcon={<ComposerIcon kind="translate" />}>{t("翻译")}</ReaderButton>
                   <TranslationLanguagePicker />
                 </div>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: space.sm, flex: '1 1 0', minWidth: 0 }}>
                 <ReaderButton id="web-search-toggle" type="button" variant="text" aria-pressed="false" title={t("按需搜索公开网络；仅发送必要关键词，翻译和总结不联网。")}
-                  sx={{ '&[aria-pressed="true"]': { bgcolor: 'action.selected', color: 'primary.main' } }}>
+                  sx={{ gap: space.xs, '&[aria-pressed="true"]': { bgcolor: 'action.selected', color: 'primary.main' } }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/></svg>
                   {t("联网补充")}
                 </ReaderButton>
@@ -218,36 +227,32 @@ function ReaderPanel() {
 
       <section id="settings-view" className="setting-panel hidden">
         <div className="settings-view-head">
-          <div><div className="eyebrow">{t("设置")}</div><Typography component="h2" variant="h2">{t("模型与数据")}</Typography></div>
+          <Typography component="h2" variant="h2">{t("模型与数据")}</Typography>
           <ReaderButton id="close-settings" type="button" variant="text">{t("返回聊天")}</ReaderButton>
         </div>
         <div className="mode-switch" role="group" aria-label={t("Reader 运行方式")}>
           <ReaderButton id="mode-local" className="mode-option" variant="outlined" type="button" aria-pressed="true" control="mode">
-            <span className="mode-option-content"><strong>{t("独立模式")}</strong><span>{t("自带模型，本地保存")}</span></span><span className="mode-option-check" aria-hidden="true"><ComposerIcon kind="check" /></span>
+            <span className="mode-option-content"><strong>{t("独立模式")}</strong><span>{t("自选服务，本地保存")}</span></span><span className="mode-option-check" aria-hidden="true"><ComposerIcon kind="check" /></span>
           </ReaderButton>
           <ReaderButton id="mode-platform" className="mode-option" variant="outlined" type="button" aria-pressed="false" control="mode">
-            <span className="mode-option-content"><strong>{t("平台模式")}</strong><span>{t("平台 AI Engine，数据库同步")}</span></span><span className="mode-option-check" aria-hidden="true"><ComposerIcon kind="check" /></span>
+            <span className="mode-option-content"><strong>{t("平台模式")}</strong><span>{t("平台模型，同步成果")}</span></span><span className="mode-option-check" aria-hidden="true"><ComposerIcon kind="check" /></span>
           </ReaderButton>
         </div>
         <Alert id="mode-guidance" className="mode-guidance hidden" role="status" aria-live="polite"  icon={false} severity="info" />
 
-        <section className="settings-card">
-          <div className="field"><label htmlFor="interface-language">{t('界面语言')}</label><ReaderSelect id="interface-language" defaultValue="system"><option value="system">{t('跟随浏览器')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></ReaderSelect></div>
-          <p className="small">{t('回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。')}</p>
-        </section>
-
         <section id="platform-settings" className="settings-card">
           <div className="settings-card-heading">
-            <div><div className="settings-kicker">Deep Research</div><Typography component="h3" variant="h3">{t("连接调研平台")}</Typography></div>
+            <Typography component="h3" variant="h3">{t("连接调研平台")}</Typography>
             <span id="platform-status" className="connection-badge">{t("未连接")}</span>
           </div>
-          <p className="small">{t("问答、总结、选段翻译、全文翻译和图片文字翻译使用调研平台 AI Engine；阅读会话和确认保存的结论同步到 PostgreSQL。全文仅在你发起操作时发送。图片字节由浏览器读取后按需上传，不上传图片 URL；翻译缓存保留在本地。")}</p>
+          <p className="small">{t("连接后使用平台提供的模型，并同步会话与确认保存的结论。")}</p>
           <p className="small">{t("目标平台：")}<strong id="platform-target">techradar.top</strong></p>
           <div className="actions">
             <ReaderButton id="connect-platform" variant="contained">{t("连接平台")}</ReaderButton>
             <ReaderButton id="disconnect-platform" className="hidden" variant="outlined" color="error">{t("断开连接")}</ReaderButton>
             <ReaderButton id="restore-session" className="hidden" variant="outlined">{t("恢复云端会话")}</ReaderButton>
           </div>
+          <ReaderDisclosure className="platform-data-details" label={t("数据如何使用")}><p className="small">{t("问答、总结、选段翻译、全文翻译和图片文字翻译使用调研平台 AI Engine；阅读会话和确认保存的结论同步到 PostgreSQL。全文仅在你发起操作时发送。图片字节由浏览器读取后按需上传，不上传图片 URL；翻译缓存保留在本地。")}</p></ReaderDisclosure>
         </section>
 
         <section id="local-provider-settings" className="settings-card">
@@ -256,17 +261,22 @@ function ReaderPanel() {
             <span id="provider-connection-state" className="connection-badge">{t("未连接")}</span>
           </div>
           <ProviderSelector />
+          <div id="provider-region-field" className="field hidden"><label htmlFor="provider-region">{t('MiniMax 服务区域')}</label><ReaderSelect id="provider-region" defaultValue="minimax"><option value="minimax">{t('国内站 · minimaxi.com')}</option><option value="minimax-global">{t('国际站 · minimax.io')}</option></ReaderSelect><p className="small">{t('请选择 API Key 所属站点；切换区域后需填写该站点的 Key。')}</p></div>
           <div id="provider-custom-url-field" className="field"><label htmlFor="provider-url">{t("API 地址")}</label><ReaderTextField id="provider-url" type="url" className="reader-settings-field" placeholder="https://api.example.com/v1" autoComplete="off" slotProps={{ htmlInput: { spellCheck: false, 'aria-describedby': 'provider-endpoint-hint model-discovery-status' } }} /></div>
           <div id="provider-endpoint-hint" className="small provider-endpoint-hint" />
           <div className="field"><label id="provider-key-label" htmlFor="provider-key">API Key</label><div className="provider-key-control"><ReaderTextField id="provider-key" className="reader-settings-field" type="password" autoComplete="off" placeholder={t("输入服务商提供的 Key")} slotProps={{ htmlInput: { spellCheck: false, 'aria-describedby': 'model-discovery-status' } }} /><ReaderButton id="provider-key-toggle" className="provider-key-toggle" type="button" aria-label={t("显示 API Key")} title={t("显示 API Key")} aria-pressed="false" variant="outlined" control="icon"><ComposerIcon kind="eye" /></ReaderButton></div></div>
-          <ReaderButton id="refresh-models" className="provider-connect" type="button" variant="contained">{t("连接并获取模型")}</ReaderButton>
+          <ReaderButton id="refresh-models" className="provider-connect" type="button" variant="contained">{t("读取模型列表")}</ReaderButton>
           <div id="model-discovery-status" className="provider-feedback" role="status" aria-live="polite" />
-          <div className="field provider-model-field"><label htmlFor="provider-model-list">{t("模型")}</label><ReaderTextField id="provider-model-search" type="search" className="hidden" placeholder={t("搜索模型")} aria-label={t("搜索模型")}  /><ReaderSelect id="provider-model-list"><option value="">{t("请先连接模型服务")}</option></ReaderSelect><ReaderDisclosure id="manual-model-settings" label={<>{t("手动指定模型 ID")}</>}><label htmlFor="provider-model">{t("模型 ID")}</label><ReaderTextField id="provider-model" className="reader-settings-field" placeholder={t("填写服务商提供的模型 ID")} slotProps={{ htmlInput: { spellCheck: false } }} /></ReaderDisclosure></div>
+          <div className="field provider-model-field"><label htmlFor="provider-model-search">{t("选择模型")}</label><SettingsModelPicker /><p id="model-list-help" className="small">{t('列表由当前服务返回，可按名称或 ID 搜索；实际可用范围取决于账号权限。')}</p><ReaderDisclosure id="manual-model-settings" label={<>{t("手动指定模型 ID")}</>}><label htmlFor="provider-model">{t("模型 ID")}</label><ReaderTextField id="provider-model" className="reader-settings-field" placeholder={t("填写服务商提供的模型 ID")} slotProps={{ htmlInput: { spellCheck: false } }} /></ReaderDisclosure></div>
           <div className="actions provider-save-actions"><ReaderButton id="save-settings" type="button" variant="contained">{t("保存配置")}</ReaderButton><ReaderButton id="test-provider" type="button" variant="outlined">{t("测试连接")}</ReaderButton></div>
           <div id="provider-test-status" className="provider-feedback" role="status" aria-live="polite" />
           <ReaderDisclosure className="provider-extra-checks" label={<>{t("图片能力")}</>}><ReaderButton id="test-vision" type="button" variant="outlined">{t("检测图片能力")}</ReaderButton></ReaderDisclosure>
         </section>
               <Alert id="settings-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
+        <section className="settings-card">
+          <div className="field"><label htmlFor="interface-language">{t('界面语言')}</label><ReaderSelect id="interface-language" defaultValue="system"><option value="system">{t('跟随浏览器')}</option><option value="zh-CN">简体中文</option><option value="en">English</option></ReaderSelect></div>
+          <p className="small">{t('回答跟随提问语言；翻译可在输入区旁选择目标语言，并自动记住。')}</p>
+        </section>
         <div className="section-label"><Typography component="h2" variant="h3">{t("本地数据")}</Typography></div>
         <div className="actions"><ReaderButton id="export-data" variant="outlined">{t("导出阅读数据")}</ReaderButton><ReaderButton id="import-data" variant="outlined">{t("导入数据")}</ReaderButton><ReaderButton id="clear-cache" variant="outlined" color="error">{t("清除翻译缓存")}</ReaderButton><ReaderButton id="clear-data" variant="outlined" color="error">{t("清除本地数据")}</ReaderButton></div>
         <p className="small" style={{ marginTop: 8 }}>{t("卸载扩展前请先导出需要保留的阅读成果；卸载后浏览器本地数据不保证恢复。")}</p>
@@ -276,23 +286,15 @@ function ReaderPanel() {
 
       <section id="save-dialog" className="setting-panel hidden">
         <div className="eyebrow">{t("保存阅读成果")}</div>
-        <Typography component="h2" variant="h2">{t("留下以后能复用的结论")}</Typography>
-        <p id="save-mode-note" className="small" style={{ marginTop: 8 }}>{t("保存为可检索的阅读结论卡，不会在原文添加高亮。")}</p>
+        <Typography component="h2" variant="h2">{t("保存摘录与笔记")}</Typography>
+        <p id="save-mode-note" className="small" style={{ marginTop: 8 }} />
         <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} /></div>
         <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
+        <ReadingSaveOptions />
+        <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
         <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
         <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
         <div className="actions"><ReaderButton id="confirm-save" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" variant="outlined">{t("取消")}</ReaderButton></div>
-      </section>
-
-      <section id="annotation-dialog" className="setting-panel hidden">
-        <div className="eyebrow">{t("原文标注")}</div><Typography component="h2" variant="h2">{t("给这段内容留下位置标记")}</Typography>
-        <p className="small">{t("保存后会按原文位置叠加高亮，并保留一条短笔记；不会创建阅读结论卡。仅在原文版本匹配时高亮，标注保存在浏览器本地。")}</p>
-        <div className="field"><label htmlFor="annotation-quote">{t("待标注原文")}</label><span id="annotation-source-title" className="small" /><ReaderTextField id="annotation-quote" multiline minRows={3} slotProps={{ htmlInput: { readOnly: true } }} /></div>
-        <div className="field"><label htmlFor="annotation-note">{t("标注笔记")}</label><ReaderTextField id="annotation-note" multiline minRows={3} placeholder={t("例如：这里是性能瓶颈的关键假设")} /></div>
-        <Alert id="annotation-notice" className="notice hidden" icon={false} severity="info" />
-        <div className="actions"><ReaderButton id="confirm-annotation" variant="contained">{t("保存标注并高亮")}</ReaderButton><ReaderButton id="cancel-annotation" variant="outlined">{t("取消")}</ReaderButton></div>
       </section>
 
       <div id="mode-data-note" className="footer">{t("独立模式：模型请求与阅读成果保存在本地，可导出或清除。")}</div>

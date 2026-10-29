@@ -15,20 +15,6 @@ export interface AiReviewPresentationInput {
   error_code?: string | null;
 }
 
-/** The phase is a workflow checkpoint, not a factual verdict. */
-export function reviewPhaseLabel(phase: string | null | undefined): string | null {
-  switch (phase) {
-    case 'inventorying': return '正在整理报告声明和来源清单';
-    case 'adjudicating': return '正在逐条判断声明与证据的关系';
-    case 'matching': return '正在把声明和可核对原文匹配';
-    case 'conflict_check': return '正在检查支持关系和来源冲突';
-    case 'reviewing': return '正在执行事实核验';
-    case 'queued': return '等待审核任务开始';
-    case 'completed': return '审核账本已完成';
-    default: return null;
-  }
-}
-
 export interface ReviewBatchProgress {
   batchIndex: number | null;
   batchCount: number;
@@ -169,22 +155,6 @@ export function reviewDisplayTone(review: AiReviewPresentationInput | null): Rev
     case 'reviewing': return 'warning';
     default: return 'neutral';
   }
-}
-
-export function reviewOutcome(
-  review: (AiReviewPresentationInput & ReviewSummaryPresentationInput) | null,
-): 'clear' | 'attention' | 'blocked' | 'unavailable' | 'unknown' {
-  const explicit = review?.review_outcome;
-  if (explicit === 'clear' || explicit === 'attention' || explicit === 'blocked' || explicit === 'unavailable') {
-    return explicit;
-  }
-  const status = reviewDisplayStatus(review);
-  if (status === 'review_unavailable') return 'unavailable';
-  if (status === 'blocked') return 'blocked';
-  if (status === 'needs_action') return 'attention';
-  if (status === 'needs_revision') return 'attention';
-  if (status === 'passed') return 'clear';
-  return 'unknown';
 }
 
 export function claimIsCitationRelationship(claim: ClaimEvidencePresentationInput): boolean {

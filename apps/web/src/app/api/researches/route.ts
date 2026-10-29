@@ -14,7 +14,6 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { Prisma } from '@prisma/client';
 import { prisma } from '../../../lib/db';
 import { apiHandler, parseBody } from '../../../lib/api-handler';
 import { requireUser } from '../../../lib/auth/session';
@@ -23,7 +22,7 @@ import { log, withRequestId } from '../../../lib/log';
 import { CreateResearchInput, ResearchListQuery } from '../../../lib/schemas';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
-import { researchListWhere } from '../../../lib/research-list-where';
+import { researchListOrderBy, researchListWhere } from '../../../lib/research-list-where';
 import { confirmedKnowledgeIndexText, queuePersonalKnowledgeIndex } from '../../../lib/personal-knowledge-index';
 
 export const POST = apiHandler<[NextRequest]>(async (req) => {
@@ -111,6 +110,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     type: url.searchParams.get('type') ?? undefined,
     scope: url.searchParams.get('scope') ?? undefined,
     q: url.searchParams.get('q') ?? undefined,
+    sort: url.searchParams.get('sort') ?? undefined,
     page: url.searchParams.get('page') ?? undefined,
     limit: url.searchParams.get('limit') ?? undefined,
     topicId: url.searchParams.get('topicId') ?? undefined,
@@ -127,7 +127,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
     });
   }
 
-  const { type, scope, q, page, limit, topicId, objective, reviewStatus, hasOpenClaims } = parsed.data;
+  const { type, scope, q, sort, page, limit, topicId, objective, reviewStatus, hasOpenClaims } = parsed.data;
 
   // 安全规则：published scope 所有人可见；draft scope 仅 owner 自己可见
   const where = researchListWhere({
@@ -138,11 +138,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
   const [items, total] = await Promise.all([
     prisma.research.findMany({
       where,
-      orderBy: [
-        { featuredAt: { sort: 'desc', nulls: 'last' } },
-        { publishedAt: { sort: 'desc', nulls: 'last' } },
-        { createdAt: 'desc' },
-      ],
+      orderBy: researchListOrderBy(sort),
       skip: (page - 1) * limit,
       take: limit,
       select: {

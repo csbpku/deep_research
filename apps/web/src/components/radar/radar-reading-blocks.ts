@@ -6,26 +6,6 @@ import {
 
 export { cleanExtractedPlainText, stripExtractedPaperFootnotes };
 
-/**
- * Brief fields are rendered as plain text. Reject source Markdown rather than
- * showing README headings, image badges, or collection-card links as if they
- * were an AI judgment.
- */
-export function cleanRadarBrief(value: string): string | null {
-  const raw = decodeRadarTextEntities(value).trim();
-  if (!raw) return null;
-  if (
-    /(?:^|\n)\s*#{1,6}\s+/u.test(raw)
-    || /!\[[^\]]*\]\([^)]+\)/u.test(raw)
-    || (raw.match(/\[[^\]]+\]\([^)]+\)/gu)?.length ?? 0) >= 2
-  ) {
-    return null;
-  }
-  const cleaned = cleanExtractedPlainText(raw);
-  if (cleaned.length < 24) return null;
-  return cleaned;
-}
-
 export function decodeRadarTextEntities(value: string): string {
   const named: Record<string, string> = {
     amp: '&',
@@ -250,10 +230,6 @@ export function splitRadarReadingBlocks(content: string): string[] {
   }
   flush();
   return blocks;
-}
-
-export function radarBlockId(index: number): string {
-  return `radar-source-block-${index}`;
 }
 
 export function normalizeRadarQuote(value: string): string {

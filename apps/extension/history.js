@@ -1,8 +1,7 @@
 import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecords } from './components/material-runtime.tsx';
-import { t, localizedMarkup, getUiLanguage } from './i18n.js';
+import { t, getUiLanguage } from './i18n.js';
 import { readerStore } from './reader-store.js';
 import { renderMarkdown } from './markdown-renderer.js';
-import { readingAnswerText } from './reader-core.js';
 import { resolvePlatformOrigin, tokenBoundToOrigin } from './platform-config.js';
 
 let sessions = [];

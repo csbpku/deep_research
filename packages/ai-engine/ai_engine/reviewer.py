@@ -949,33 +949,31 @@ def _review_source_text(
     pages. Keep every captured URL in the prompt and use a compact excerpt so
     coverage, rather than source ordering, determines what can be audited.
     """
-    lines: list[str] = []
-    remaining = max(0, max_chars)
+    entries: list[tuple[str, str]] = []
     for index, source in enumerate(sources, start=1):
         title, _ = sanitize_external_instruction_text(
             " ".join((source.title or source.canonical_key or "来源").split())
         )
-        title = title[:120]
         url = source.canonical_key[:240]
         excerpt, _ = sanitize_external_instruction_text(
             " ".join((source.snippet or "").split())
         )
-        excerpt = excerpt[:420]
-        line = f"- source_id={index}; title={title}; url={url}\n  摘录：{excerpt or '(本轮没有保存原文摘录，不能据此标记 verified)'}"
-        if len(line) <= remaining:
-            lines.append(line)
-            remaining -= len(line)
-            continue
+        header = f"- source_id={index}; title={title[:120]}; url={url}\n  摘录："
+        entries.append((header, excerpt or "(本轮没有保存原文摘录，不能据此标记 verified)"))
 
-        # Do not drop the tail of the source set just because an earlier
-        # title or URL was unusually long. Preserve its identity even when
-        # the excerpt has to be shortened.
-        compact = f"- source_id={index}; title={title[:80]}; url={url[:180]}"
-        if len(compact) <= remaining:
-            lines.append(compact)
-            remaining -= len(compact)
-        else:
+    # Reserve all source identities first, then fairly share the remaining
+    # space. One page can use its full saved evidence; many pages retain an
+    # excerpt each instead of being crowded out by early pages.
+    available = max(0, max_chars - sum(len(header) + 1 for header, _ in entries))
+    per_source = min(12000, available // max(1, len(entries)))
+    lines: list[str] = []
+    remaining = max(0, max_chars)
+    for header, excerpt in entries:
+        line = header + excerpt[:per_source]
+        if len(line) + (1 if lines else 0) > remaining:
             break
+        lines.append(line)
+        remaining -= len(line) + (1 if len(lines) > 1 else 0)
     return "\n".join(lines)
 
 

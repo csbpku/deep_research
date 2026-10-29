@@ -26,12 +26,16 @@ describe('RadarPreviewPanel', () => {
     }));
 
     expect(html).toContain('文章概览');
-    expect(html).toContain('AI 摘要');
+    // "为什么值得看"现在由 AI 摘要承担，不再是永远不渲染的死段落。
+    expect(html).toContain('为什么值得看');
     expect(html).toContain('同步时临时读取原文生成摘要和评分；全文不保存在本站');
     expect(html).not.toContain('line-clamp-6');
-    expect(html).toContain('为什么值得看');
+    expect(html).not.toContain('AI 摘要');
     expect(html).toContain('打开原文');
-    expect(html).not.toContain('data-reader-launch-source=');
+    // Reader 是可选增强：装了就开侧栏，没装就是普通外链。
+    expect(html).toContain('用 Reader 阅读');
+    expect(html).toContain('data-reader-launch-source=');
+    expect(html).toContain('href="https://example.com/article"');
     expect(html).toContain('深入调研');
     expect(html).not.toContain('查看完整详情');
     expect(html).not.toContain('评分详情');
@@ -84,6 +88,31 @@ describe('RadarPreviewPanel', () => {
     }));
 
     expect(html).toContain('打开 GitHub');
+    expect(html).toContain('打开 Zread');
+    expect(html).toContain('https://zread.ai/microsoft/markitdown');
+  });
+
+  it('shows the Zread action for repository rows without a stored content kind', () => {
+    const html = renderToStaticMarkup(createElement(RadarPreviewPanel, {
+      detail: {
+        id: '44444444-4444-4444-8444-444444444444',
+        title: 'microsoft/markitdown',
+        excerpt: 'Repository context.',
+        interpretation: 'Repository summary.',
+        scoreReason: null,
+        distilledScore: null,
+        tier: 'deep_read',
+        selectionReason: null,
+        url: 'https://github.com/microsoft/markitdown',
+        sourceType: 'github',
+        sourceName: 'GitHub',
+        originalKind: null,
+        tags: [],
+        publishedAt: null,
+      },
+      onClose: () => undefined,
+    }));
+
     expect(html).toContain('打开 Zread');
     expect(html).toContain('https://zread.ai/microsoft/markitdown');
   });

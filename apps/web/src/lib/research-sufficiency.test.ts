@@ -37,6 +37,27 @@ describe('evaluateResearchSufficiency', () => {
     expect(summary.otherGaps).toEqual(['官方资料', '结构化推荐（缺少：置信度）']);
   });
 
+  it('does not invent an operational matrix when the confirmed plan explicitly has no dimensions', () => {
+    const result = evaluateResearchSufficiency({
+      brief: { objective: 'decide', comparisonOptions: ['Playwright', 'Cypress'], decisionDimensions: [] },
+      sources: [],
+    });
+    expect(result.matrix).toBeNull();
+    expect(result.basis).toBe('explicit_comparison');
+    expect(result.requiredCount).toBe(2);
+    expect(result.missing).toEqual(['Playwright', 'Cypress']);
+  });
+
+  it('keeps a general comparison fallback free of deployment, disk and rollback requirements', () => {
+    const result = evaluateResearchSufficiency({
+      brief: { objective: 'decide', comparisonOptions: ['Playwright', 'Cypress'] },
+      sources: [],
+    });
+    expect(result.matrix?.dimensions).not.toContain('部署与构建');
+    expect(result.matrix?.dimensions).not.toContain('磁盘与资源占用');
+    expect(result.matrix?.dimensions).not.toContain('回滚与恢复');
+  });
+
   it('does not use a raw source count to claim that an explicit comparison is covered', () => {
     const result = evaluateResearchSufficiency({
       brief: {

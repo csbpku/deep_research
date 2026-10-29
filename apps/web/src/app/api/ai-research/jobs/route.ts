@@ -22,7 +22,7 @@ import { ERROR_CODES } from '@deep-research/shared/errors';
 import { apiHandler } from '../../../../lib/api-handler';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
-import { log, withRequestId } from '../../../../lib/log';
+import { withRequestId } from '../../../../lib/log';
 import { getWebEnv } from '../../../../lib/env';
 import { fetchAiEngine } from '../../../../lib/ai-bff/fetch-ai-engine';
 

@@ -53,11 +53,10 @@ describe('RadarExternalReadingLanding', () => {
 
     expect(html).toContain('安装 Reader');
     // Only the confirmation inside the dialog may be intercepted by Reader.
-    expect(html).not.toContain('data-reader-launch-source=');
-    expect(html).toContain('AI 摘要');
+    expect(html).toContain('data-reader-launch-source=');
+    expect(html).toContain('为什么值得看');
     expect(html).toContain('同步时临时读取原文生成摘要和评分；全文不保存在本站');
     expect(html).toContain('A concise AI interpretation.');
-    expect(html).toContain('为什么值得看');
     expect(html).toContain('MuiTypography-root');
     expect(html).toContain('MuiButton-root');
     expect(html).toContain('MuiChip-root');
@@ -154,5 +153,50 @@ describe('RadarExternalReadingLanding', () => {
     expect(html).toContain('打开 Zread');
     expect(html).toContain('https://zread.ai/microsoft/markitdown');
     expect(html).not.toContain('>打开原文<');
+  });
+
+  it('offers the Zread action for repository rows without a stored content kind', () => {
+    const html = renderToStaticMarkup(createElement(RadarExternalReadingLanding, {
+      detail: {
+        id: '22222222-2222-4222-8222-222222222222',
+        title: 'microsoft/markitdown',
+        excerpt: 'Repository summary.',
+        interpretation: 'A concise AI interpretation.',
+        scoreReason: null,
+        distilledScore: null,
+        tier: 'deep_read',
+        selectionReason: null,
+        url: 'https://github.com/microsoft/markitdown',
+        sourceType: 'github',
+        sourceName: 'GitHub',
+        originalKind: null,
+      },
+    }));
+
+    expect(html).toContain('打开 Zread');
+    expect(html).toContain('https://zread.ai/microsoft/markitdown');
+    expect(html).toContain('仓库');
+  });
+
+  it('keeps non-repository rows on the original-link path', () => {
+    const html = renderToStaticMarkup(createElement(RadarExternalReadingLanding, {
+      detail: {
+        id: '33333333-3333-4333-8333-333333333333',
+        title: 'An article',
+        excerpt: 'Article summary.',
+        interpretation: 'A concise AI interpretation.',
+        scoreReason: null,
+        distilledScore: null,
+        tier: 'deep_read',
+        selectionReason: null,
+        url: 'https://example.com/post',
+        sourceType: 'rss',
+        sourceName: 'RSS',
+        originalKind: null,
+      },
+    }));
+
+    expect(html).not.toContain('打开 Zread');
+    expect(html).toContain('打开原文');
   });
 });

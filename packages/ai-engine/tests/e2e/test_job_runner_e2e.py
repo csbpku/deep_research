@@ -61,10 +61,6 @@ def _lease_from(acquired: JobAcquired) -> JobLease:
     return acquired[0]
 
 
-def _snapshot_from(acquired: JobAcquired) -> JobSnapshot:
-    return acquired[1]
-
-
 async def test_concurrent_workers_only_one_acquires_lease(member_user_id: str) -> None:
     """两个 worker 同时调用 acquire_next_job，只有一个拿到 lease。"""
     job_id = _seed_job(member_user_id)

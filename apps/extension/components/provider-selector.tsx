@@ -14,6 +14,7 @@ export function ProviderSelector() {
         {PROVIDER_GROUPS.map(group => <optgroup key={group.id} label={t(group.label)}>
           {PROVIDER_CATALOG.filter(item => item.group === group.id).map(item => <option key={item.id} value={item.id}>{t(item.label)} · {t(item.subtitle)}</option>)}
         </optgroup>)}
+        <option value="minimax-global">MiniMax · {t('国际站')}</option>
       </select>
       <ReaderButton variant="outlined" control="provider" id="provider-picker-trigger" className="provider-picker-trigger" type="button" role="combobox" aria-label={t("服务商")} aria-controls="provider-picker-menu" aria-haspopup="dialog" aria-expanded="false">
         <img id="provider-picker-icon" src="providers/openai.svg" alt="" width="30" height="30" />

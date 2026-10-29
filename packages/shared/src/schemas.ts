@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SUMMARY_STATUS, CREATION_METHOD, SOURCE_POLICY, PROMOTE_STATUS } from './states';
+import { SOURCE_POLICY } from './states';
 
 // Accept historical payloads while returning the current three-tier taxonomy.
 export const DistilledTierSchema = z.enum(['collection', 'deep_read', 'skim', 'noise'])
@@ -506,20 +506,9 @@ export const ResearchScopeSchema = z.object({
 });
 export type ResearchScope = z.infer<typeof ResearchScopeSchema>;
 
-/**
- * Decision research is not complete when every option has merely been
- * mentioned. These are the default cells a decision run must account for.
- * They deliberately include operational measurements because those are the
- * gaps most likely to make a long report look more certain than it is.
- */
+/** Cross-domain fallback; operational dimensions come from the confirmed plan. */
 export const DEFAULT_RESEARCH_DECISION_DIMENSIONS = [
   '效果与适用范围',
-  '成本与资源',
-  '网络/性能实测',
-  '磁盘与资源占用',
-  '部署与构建',
-  '回滚与恢复',
-  '可运维性',
   '安全与风险',
 ] as const;
 

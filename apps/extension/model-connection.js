@@ -95,10 +95,11 @@ export async function fetchProviderModels(provider, headers, options = {}) {
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 8_000);
   const models = new Map();
+  const cursors = new Set();
   const requestHeaders = { ...headers };
   delete requestHeaders['content-type'];
   try {
-    for (let page = 0; page < 10; page += 1) {
+    for (let page = 0; page < 100; page += 1) {
       const response = await (options.fetch || fetch)(url, { headers: requestHeaders, signal: controller.signal });
       if (!response.ok) throw httpError(response.status);
       let payload;
@@ -111,11 +112,19 @@ export async function fetchProviderModels(provider, headers, options = {}) {
       for (const model of items) {
         const id = typeof model === 'string' ? model : model?.id || model?.name || model?.model;
         if (typeof id !== 'string' || !id.trim()) continue;
-        models.set(id.trim(), { id: id.trim(), label: String(model?.display_name || id).trim() });
+        models.set(id.trim(), { id: id.trim(), label: String(model?.display_name || model?.displayName || (model?.id && model?.name) || id).trim() });
       }
-      if (!payload.has_more || !payload.last_id) break;
-      if (url.searchParams.get('after_id') === payload.last_id) break;
-      url.searchParams.set('after_id', payload.last_id);
+      const cursor = payload.next_page_token ? ['page_token', payload.next_page_token]
+        : payload.nextPageToken ? ['pageToken', payload.nextPageToken]
+          : payload.next_cursor ? ['cursor', payload.next_cursor]
+            : payload.has_more && payload.last_id ? ['after_id', payload.last_id] : null;
+      if (!cursor && !payload.has_more) break;
+      const key = JSON.stringify(cursor);
+      if (!cursor || cursors.has(key) || page === 99) {
+        throw new ModelConnectionError('INCOMPLETE_MODELS', '服务的模型列表未完整读取，请刷新重试，或手动指定模型 ID', 'provider-model-list');
+      }
+      cursors.add(key);
+      url.searchParams.set(...cursor);
     }
     if (!models.size) throw new ModelConnectionError('EMPTY_MODELS', '服务当前没有可用模型，请先加载模型或手动指定模型 ID', 'provider-model-list');
     return [...models.values()].sort((a, b) => a.label.localeCompare(b.label));

@@ -93,9 +93,9 @@ AI engine 镜像偏大的原因有两层：
 
 ## Registry 部署
 
-CI 和 Deploy 的执行机固定为 `ubuntu-24.04`，不跟随 `ubuntu-latest` 的跨版本迁移。pnpm/uv、缓存/证据上传、Docker 构建/登录/元数据、SSH agent 的 Action 使用 Node 24 运行时的官方发布并固定 commit SHA；pnpm 包管理器仍为 10.0.0，uv 保留原有 latest、无缓存安装行为。升级执行机或 Action 时，通过维护 PR 重跑四项 CI，不以压制弃用警告代替兼容性验证。
+CI 和 Deploy 的执行机固定为 `ubuntu-24.04`，不跟随 `ubuntu-latest` 的跨版本迁移。pnpm/uv、缓存/证据上传、Docker 构建/登录/元数据、SSH agent 的 Action 使用 Node 24 运行时的官方发布；pnpm 包管理器仍为 10.0.0，uv 保留原有 latest、无缓存安装行为。升级执行机或 Action 时，通过维护 PR 重跑五项 CI 及 `CI gate`，不以压制弃用警告代替兼容性验证。
 
-Playwright 缓存只保存浏览器二进制，不包含 apt 系统库和中文字体。通用 E2E 即使命中缓存，也执行 `playwright install --with-deps chromium`，让新 runner 的字体和依赖与冷缓存安装一致。
+Playwright 浏览器缓存只保存浏览器二进制，不包含 apt 系统库和中文字体。每个浏览器 job 都运行独立的系统依赖安装器，使用下面描述的 apt 归档缓存，让新 runner 的依赖与冷缓存安装一致。
 
 纯文档改动（每个路径都是 `docs/**` 或 `*.md`）不重建镜像、不重启生产。CI 与 Deploy 共用 `scripts/ci-changed-paths.sh` 判定：CI 跳过类型检查、单测和全部 E2E 套件，Deploy 跳过镜像构建、Reader Beta 发布和 VPS 部署；判定失败时按可发布处理。打进 Reader Beta 包的 Markdown（`apps/extension/{PRIVACY,BETA_INSTALL,COMPATIBILITY,BETA_CHECKLIST}.md`）属于产物，改动它们仍走完整发布流程。
 
@@ -105,12 +105,12 @@ Playwright 浏览器系统依赖（Chromium 运行库与中日韩字体，约 26
 
 `.github/workflows/deploy.yml` 在 `CI` 成功后执行以下步骤：
 
-1. 使用同一个提交 SHA 构建 `web` 和 `ai-engine` 两个默认生产镜像；`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。
-2. 推送到 GHCR 对应的两个 `<commit-sha>` 镜像，同时更新 `latest`。
-3. 构建并校验 Reader Beta ZIP。版本号来自扩展 manifest；工作流创建不可覆盖的 `reader-v<version>` GitHub Pre-release，并导出资产 SHA-256。扩展源码变更但未升版本，或已有 release 资产缺失/不匹配时，发布失败，不会覆盖旧资产。版本门禁只覆盖扩展发布内容，`apps/extension/README.md` 与 `apps/extension/RELEASE_NOTES.md` 的改动不算源码变化，不会要求升版本。
-4. 通过专用 SSH key 上传 Compose / nginx 运维文件到 VPS；更新 `.env` 中的 `READING_EXTENSION_BETA_URL`、`READING_EXTENSION_BETA_PATH`、`READING_EXTENSION_BETA_VERSION` 和 `READING_EXTENSION_BETA_SHA256`。健康检查通过后再持久化 `WEB_IMAGE` / `AI_ENGINE_IMAGE` 为目标 SHA 镜像，防止残留快照选择器让后续 Compose 操作回退；失败回滚时恢复这六项原值，其余配置与凭据保持不变。
-5. VPS 拉取固定 SHA 镜像，使用更新后的 `.env` 启动；Web entrypoint 负责 `prisma migrate deploy`、幂等 Admin bootstrap 和幂等默认雷达源 bootstrap。
-6. 通过 `/healthz`、`/readyz` 和 `/ai-healthz` 做发布后检查；失败时恢复 Beta 配置和发布前实际运行的镜像对。仅在没有现有容器时才回退使用上一 registry SHA。
+1. 下载成功 main CI 的 `ci-change-plan` 并校验目标 SHA 与事件来源；直接使用该计划决定是否发布。手动发布要求同 SHA 的完整成功校验，纯文档跳过不满足要求；必要时先从 CI 的 `workflow_dispatch` 重跑。计划和 Reader 产物保留 14 天。
+2. 使用 matrix 并行构建、推送 `web` 和 `ai-engine` 两个默认生产镜像。`render-review` 不进入默认 workflow，需要浏览器审核时再显式构建并推送。
+3. 镜像使用 `<commit-sha>` 标签，同时更新 `latest`。Reader 发布与镜像构建并行，直接复用成功 CI 校验过的 `reader-beta` ZIP，不再次安装依赖或构建。版本门禁比较完整 ZIP 文件树，覆盖共享设计系统及实际依赖输出，忽略 ZIP 时间戳/压缩差异；同版本内容不一致则失败，已存在的资产不会覆盖。
+4. 镜像和 Reader 产物全部就绪后进入串行生产 job。先检查已部署 SHA 的祖先关系，跳过晚完成的旧版本；通过专用 SSH key 把 `infra/deploy-files.txt` 中的文件上传至 `.releases/<sha>/` 暂存目录，保留线上配置。
+5. `infra/deploy-release.sh` 保存运行配置及私密环境快照，再应用候选文件、更新 Reader 元数据、备份数据库、拉取固定 SHA 镜像并启动；Web entrypoint 负责 `prisma migrate deploy` 和幂等 bootstrap。失败时恢复原 Compose/nginx/运维文件、六项发布环境值以及发布前实际运行的镜像对；其他环境配置保持原值。仅在没有现有容器时才回退使用上一 registry SHA。
+6. 检查 `/healthz`、`/readyz`、`/ai-healthz` 和公开内部接口的 404 隔离；显式启用的独立 repair worker 也完成更新后，才持久化 `WEB_IMAGE` / `AI_ENGINE_IMAGE` 和成功 marker。回滚后再次检查健康。运行配置快照、数据库 dump、拉取日志均保留，清理由明确的维护操作处理。
 
 发布脚本会并行拉取两个核心服务镜像，再统一启动 Compose；单个镜像仍保留
 15 分钟超时和 3 次重试，失败时沿用原有回滚流程。这样发布耗时主要取决于最慢的

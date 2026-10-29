@@ -19,7 +19,7 @@ import {
 } from './RadarExternalReadingLanding';
 import { formatRadarContentKind, formatSourceType } from '@/lib/radar/source-labels';
 import { TIER_LABELS, readingTierColor } from '@/components/domain/ScoreBar';
-import { zreadRepositoryUrl } from './radar-repository';
+import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
 import { RadarSourceChip } from './RadarSourceChip';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
@@ -37,14 +37,18 @@ export function RadarPreviewPanel({
   detail,
   onClose,
   className,
+  panelRef: panelRefProp,
 }: {
   detail: ExternalReadingDetail;
   onClose: () => void;
   className?: string;
+  /** 父级用它做焦点交接（打开时聚焦标题，关闭时还焦点）。 */
+  panelRef?: React.RefObject<HTMLElement | null>;
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
   const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
-  const panelRef = useRef<HTMLElement>(null);
+  const localPanelRef = useRef<HTMLElement>(null);
+  const panelRef = panelRefProp ?? localPanelRef;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -125,20 +129,21 @@ export function RadarPreviewPanel({
 
   const sourceLabel = formatSourceType(detail.sourceType);
   const sourceName = detail.sourceName?.trim() || sourceLabel.short;
-  const contentLabel = formatRadarContentKind(detail.originalKind, detail.sourceType, detail.url);
+  const originalKind = effectiveOriginalKind(detail.originalKind, detail.url);
+  const contentLabel = formatRadarContentKind(originalKind, detail.sourceType, detail.url);
   const publishedLabel = formatRadarDetailDate(detail.publishedAt);
   const { lead, supportingExcerpt } = radarSummaryParts(detail);
   const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
   const tierLabel = tier ? (TIER_LABELS[tier] ?? tier) : '待判断';
   const tags = cleanRadarTags(detail.tags);
   const sourceUrlAvailable = isHttpUrl(detail.url);
-  const zreadUrl = detail.originalKind === 'github_repo'
+  const zreadUrl = originalKind === 'github_repo'
     ? zreadRepositoryUrl(detail.url)
     : null;
   const readerUrl = externalReaderUrl(detail.url, detail.id, platformOrigin);
 
   return (
-    <Box ref={panelRef} component="aside" data-radar-knowledge-id={detail.id} className={className} aria-label="文章概览" sx={{
+    <Box ref={panelRef ?? localPanelRef} component="aside" data-radar-knowledge-id={detail.id} className={className} aria-label="文章概览" sx={{
       display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden',
       overflowWrap: 'anywhere',
       border: 1, borderColor: 'divider', borderRadius: tokens['radius-medium'], bgcolor: 'background.paper',
@@ -157,10 +162,7 @@ export function RadarPreviewPanel({
         </Typography>
         <Typography component="h2" variant="panelTitle" sx={{ marginTop: space.md, overflowWrap: 'anywhere' }}>{detail.title}</Typography>
         <Box component="section" aria-labelledby="radar-preview-summary" sx={{ marginTop: space.section, borderLeft: 2, borderColor: 'primary.main', paddingLeft: space.md }}>
-          <Typography component="h3" id="radar-preview-summary" variant="fieldTitle">AI 摘要</Typography>
-          <Typography component="p" variant="metadata" color="text.secondary" sx={{ marginTop: space.xs }}>
-            同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
-          </Typography>
+          <Typography component="h3" id="radar-preview-summary" variant="fieldTitle">为什么值得看</Typography>
           <Typography component="p" variant="reading" sx={{ marginTop: space.sm, whiteSpace: 'pre-line' }}>{lead}</Typography>
           {supportingExcerpt ? (
             <Box sx={{ marginTop: space.md, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
@@ -168,13 +170,10 @@ export function RadarPreviewPanel({
               <Typography component="p" variant="reading" color="text.secondary" sx={{ marginTop: space.sm, display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden', whiteSpace: 'pre-line' }}>{supportingExcerpt}</Typography>
             </Box>
           ) : null}
+          <Typography component="p" variant="metadata" color="text.secondary" sx={{ marginTop: space.md }}>
+            同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
+          </Typography>
         </Box>
-        {detail.selectionReason?.trim() ? (
-          <Box component="section" sx={{ marginTop: space.section, paddingTop: space.lg, borderTop: 1, borderColor: 'divider' }}>
-            <Typography component="h3" variant="fieldTitle">为什么值得看</Typography>
-            <Typography component="p" variant="reading" color="text.secondary" sx={{ marginTop: space.sm }}>{detail.selectionReason.trim()}</Typography>
-          </Box>
-        ) : null}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>
           <Chip size="small" variant="outlined" label={tierLabel} sx={{ color: readingTierColor(tier), borderColor: 'currentColor' }} />
           {tags.map(tag => <Chip key={tag} size="small" variant="outlined" label={`#${tag}`} />)}
@@ -190,8 +189,22 @@ export function RadarPreviewPanel({
       <Box component="footer" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, borderTop: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0 }}>
         <RadarKnowledgeActions key={detail.id} detail={detail} />
         {sourceUrlAvailable ? (
-          <AppButton type="button" variant="contained" onClick={() => setSourcePromptOpen(true)} sx={{ flex: '1 0 auto' }}>
+          <AppButton component="a" variant="contained" href={detail.url} target="_blank" rel="noopener noreferrer" sx={{ flex: '1 0 auto' }}>
             {zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}{zreadUrl ? '打开 GitHub' : '打开原文'}
+          </AppButton>
+        ) : null}
+        {sourceUrlAvailable ? (
+          // Reader 是可选增强：装了扩展就开侧栏，没装就当作普通外链打开原文。
+          <AppButton
+            component="a"
+            variant="outlined"
+            href={readerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-reader-launch-source={readerUrl}
+            sx={{ flex: '1 0 auto' }}
+          >
+            <BookOpen aria-hidden />用 Reader 阅读
           </AppButton>
         ) : null}
         {zreadUrl ? (

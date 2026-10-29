@@ -45,7 +45,7 @@ describe('POST /api/ai-research when the engine does not accept the job', () => 
   it('checkpoints complete legacy input outside the varchar display fields', async () => {
     const question = 'Grok Bot '.repeat(500);
     const context = 'Requirements '.repeat(1000) + 'FINAL REQUIREMENT';
-    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ job_id: JOB_ID, status: 'queued' }), { status: 202 }));
+    const upstream = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ job_id: JOB_ID, status: 'queued' }), { status: 202 }));
     vi.stubGlobal('fetch', upstream);
     await POST(request({ topic: question, context }));
     const { data } = mocks.jobCreate.mock.calls[0][0];
@@ -57,6 +57,33 @@ describe('POST /api/ai-research when the engine does not accept the job', () => 
     const payload = JSON.parse(upstream.mock.calls[0][1].body);
     expect(payload.context).toContain(question.trim());
     expect(payload.context).toContain('FINAL REQUIREMENT');
+  });
+
+  it('does not force inherited comparison options into a non-decision objective', async () => {
+    const upstream = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ job_id: JOB_ID, status: 'queued' }), { status: 202 }));
+    vi.stubGlobal('fetch', upstream);
+    for (const objective of ['learn', 'investigate', 'explore']) {
+      await POST(request({ brief: {
+        objective, question: '学习异步 API', comparisonOptions: ['asyncio.gather', 'asyncio.TaskGroup'],
+        decisionDimensions: ['异常传播'],
+      } }));
+      const payload = JSON.parse(upstream.mock.calls.at(-1)![1].body);
+      expect(payload.context).not.toContain('必须比较的对象或方案');
+      expect(payload.context).not.toContain('必须逐格覆盖的决策维度');
+    }
+  });
+
+  it('continues to require confirmed comparison options and dimensions for decision research', async () => {
+    const upstream = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ job_id: JOB_ID, status: 'queued' }), { status: 202 }));
+    vi.stubGlobal('fetch', upstream);
+    await POST(request({ brief: {
+      objective: 'decide', question: '比较异步 API', comparisonOptions: ['asyncio.gather', 'asyncio.TaskGroup'],
+      decisionDimensions: ['异常传播'],
+    } }));
+    const payload = JSON.parse(upstream.mock.calls[0][1].body);
+    expect(payload.context).toContain('必须比较的对象或方案');
+    expect(payload.context).toContain('asyncio.TaskGroup');
+    expect(payload.context).toContain('必须逐格覆盖的决策维度');
   });
 
   it('marks the pre-created row failed so the DB worker cannot run it', async () => {
