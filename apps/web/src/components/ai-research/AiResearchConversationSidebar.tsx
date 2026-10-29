@@ -104,7 +104,7 @@ export function AiResearchConversationSidebar({
                 <li key={conversation.id}>
                   <Link
                     component={NextLink}
-                    href={conversation.jobId ? `/ai-research/${conversation.jobId}` : `/ai-research?conversation=${conversation.id}`}
+                    href={`/ai-research?conversation=${conversation.id}`}
                     underline="none"
                     sx={{
                       display: 'flex', alignItems: 'flex-start', gap: 1, borderRadius: 1, px: 1.5, py: 1,

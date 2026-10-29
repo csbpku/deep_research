@@ -1,15 +1,14 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import React, { useEffect } from 'react';
-import { AlertTriangle, Check, CheckCircle2, Clock3, ExternalLink } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, Check, CheckCircle2, Clock3, RotateCw } from 'lucide-react';
 import NextLink from 'next/link';
 
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
 import { ResearchWebBrief } from '@/components/ai-research/ResearchWebBrief';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
 import Box from '@mui/material/Box';
-import Link from '@mui/material/Link';
 import LinearProgress from '@mui/material/LinearProgress';
 import Paper from '@mui/material/Paper';
 import { StatusBadge } from '@/components/domain/StatusBadge';
@@ -114,8 +113,20 @@ function StepStepper({ currentStep, succeeded }: { currentStep: string | null; s
   );
 }
 
-export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
+export function InlineAiResearchStatus({
+  jobId,
+  onRestart,
+  embedded = false,
+}: {
+  jobId: string;
+  /** Reuse this job's configuration and return to the editable brief. */
+  onRestart?: () => void | Promise<void>;
+  /** Rendered inside the conversation: show the report in full. */
+  embedded?: boolean;
+}) {
   const queryClient = useQueryClient();
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const query = useQuery<InlineJob>({
     queryKey: ['inline-ai-research', jobId],
     queryFn: async () => {
@@ -235,9 +246,26 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
         : job.reportType === 'summary_brief'
           ? '快速判断'
           : '研究稿';
+  async function cancelRun(): Promise<void> {
+    if (cancelling) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      const response = await fetch(`/api/ai-research/${encodeURIComponent(jobId)}/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      if (!response.ok) throw await toApiHttpError(response, '停止调研失败');
+      await query.refetch();
+    } catch (error) {
+      setCancelError(friendlyMessage(error, '停止调研失败，请稍后重试。'));
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   return (
-    <Paper component="section" variant="outlined" aria-label="调研状态" sx={{ overflow: 'hidden' }}>
+    <Paper component="section" id="ai-research-result" variant="outlined" aria-label="调研状态" sx={{ overflow: 'hidden', scrollMarginTop: 72 }}>
       <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box sx={{ minWidth: 0 }}>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
@@ -255,11 +283,15 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
           </Box>
           <Typography component="p" variant="metadata" noWrap sx={{ mt: 0.5, color: 'text.secondary' }}>{job.topic ?? '当前调研'}</Typography>
         </Box>
-        <Link component={NextLink} href={`/ai-research/${job.jobId}`} underline="hover" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, typography: 'metadata', fontWeight: 500, color: 'primary.main' }}>
-          打开完整任务
-          <ExternalLink size={12} />
-        </Link>
+        {terminal ? (
+          <Typography component="span" variant="metadata" color="text.secondary">结果与追问在本对话中</Typography>
+        ) : (
+          <Button type="button" size="xs" variant="outline" onClick={() => void cancelRun()} disabled={cancelling}>
+            {cancelling ? '正在停止…' : '停止调研'}
+          </Button>
+        )}
       </Box>
+      {cancelError ? <Typography component="p" role="alert" sx={{ px: 2, py: 1, typography: 'metadata', color: 'error.main' }}>{cancelError}</Typography> : null}
 
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, gap: 2, p: 2 }}>
         {query.isError ? (
@@ -325,8 +357,8 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
             {status === 'partial' ? (
               <Typography component="p" variant="metadata" sx={{ mt: 1, opacity: 0.8 }}>
                 {evidenceOnly
-                  ? '已抓取的正文仍可在完整任务中核对；重新运行会重新生成研究稿，不会把这次资料摘要当成结论。'
-                  : '已抓取的正文仍可核对；重新运行会创建一条新的调研任务。'}
+                  ? '已抓取的正文仍可核对；重新调研会重新生成研究稿，不会把这次资料摘要当成结论。'
+                  : '已抓取的正文仍可核对；重新调研会创建一条新的调研任务。'}
               </Typography>
             ) : null}
           </Box>
@@ -349,7 +381,9 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
                   maxHeight: 'none',
                   overflow: 'visible',
                   bgcolor: 'background.paper',
-                  '@media (min-width: 1024px)': { maxHeight: 720, overflowY: 'auto' },
+                  '@media (min-width: 1024px)': embedded
+                    ? { maxHeight: 'none', overflowY: 'visible' }
+                    : { maxHeight: 720, overflowY: 'auto' },
                 }}
               />
             )}
@@ -361,15 +395,52 @@ export function InlineAiResearchStatus({ jobId }: { jobId: string }) {
               maxHeight: 'none',
               overflow: 'visible',
               bgcolor: 'background.paper',
-              '@media (min-width: 1024px)': { maxHeight: 720, overflowY: 'auto' },
+              '@media (min-width: 1024px)': embedded
+                ? { maxHeight: 'none', overflowY: 'visible' }
+                : { maxHeight: 720, overflowY: 'auto' },
             }}
           />
         ) : null}
 
-        {status === 'succeeded' && job.draftResearchId ? (
-          <Button asChild size="sm" variant="outline">
-            <NextLink href={`/researches/${job.draftResearchId}`}>打开可编辑草稿</NextLink>
-          </Button>
+        {terminal && job.sources.length > 0 ? (
+          <Box component="details" sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
+            <Box component="summary" sx={{ cursor: 'pointer', typography: 'metadata', fontWeight: 500 }}>
+              证据与审查 · {job.sources.length} 条来源
+              {job.review?.status ? ` · ${job.review.status}` : ''}
+            </Box>
+            <Box component="ul" sx={{ mt: 1, mb: 0, pl: 0, display: 'grid', gap: 1, maxHeight: 320, overflowY: 'auto', listStyle: 'none' }}>
+              {job.sources.map((source) => (
+                <Box component="li" key={source.id} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, px: 1.5, py: 1 }}>
+                  <Typography component="p" variant="metadata" sx={{ fontWeight: 500, overflowWrap: 'anywhere' }}>
+                    {source.href ? (
+                      <a href={source.href} target="_blank" rel="noreferrer noopener" style={{ color: 'inherit' }}>{source.title}</a>
+                    ) : source.title}
+                  </Typography>
+                  {source.snippet ? (
+                    <Typography component="p" variant="metadata" color="text.secondary" sx={{ mt: 0.5, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {source.snippet}
+                    </Typography>
+                  ) : null}
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        ) : null}
+
+        {terminal ? (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
+            {onRestart ? (
+              <Button type="button" size="sm" variant="outline" onClick={() => void onRestart()}>
+                <RotateCw size={14} aria-hidden />
+                重新调研
+              </Button>
+            ) : null}
+            {status === 'succeeded' && job.draftResearchId ? (
+              <Button asChild size="sm" variant="outline">
+                <NextLink href={`/researches/${job.draftResearchId}`}>打开可编辑草稿</NextLink>
+              </Button>
+            ) : null}
+          </Box>
         ) : null}
       </Box>
     </Paper>

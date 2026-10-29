@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import NextLink from 'next/link';
+import { useQuery } from '@tanstack/react-query';
 import {
   Bot,
   Check,
@@ -22,6 +23,7 @@ import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearc
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
 import { AppTextField as Input } from '@/components/material/AppTextField';
+import MarkdownContent from '@/components/MarkdownContent';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
@@ -32,7 +34,8 @@ import {
   isStartResearchIntent,
   type ResearchConversationPhase,
 } from '@/lib/ai-research-conversation';
-import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
+import type { AiResearchChatMessage, AiResearchConversationDetail, FollowUpIntent } from '@/lib/ai-research-chat';
+import { stripResearchCitationMarkers } from '@/lib/ai-research-state';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { writeLastSubmitted } from '@/lib/last-submitted';
@@ -78,10 +81,18 @@ const EXAMPLE_PROMPTS = [
   '哪些 HTML 转 Markdown 工具最不容易丢失结构？',
 ];
 
+const FOLLOW_UP_SHORTCUTS: Array<{ intent: FollowUpIntent; label: string }> = [
+  { intent: 'answer', label: '继续问答' },
+  { intent: 'verify', label: '核验证据' },
+  { intent: 'revise', label: '修订建议' },
+  { intent: 'action', label: '生成行动项' },
+];
+
 interface Message {
   id: string;
   role: 'assistant' | 'user';
   content: string;
+  intent?: AiResearchChatMessage['intent'];
 }
 
 function newId(prefix: string): string {
@@ -194,8 +205,8 @@ function ResearchRunReceipt({ jobId, topic }: { jobId: string; topic: string }) 
       </Typography>
       <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.5, rowGap: 0.5, typography: 'metadata' }}>
         <Typography component="span" variant="metadata" color="text.secondary">启动配置已锁定，避免运行中产生歧义。</Typography>
-        <Link component={NextLink} href={`/ai-research/${jobId}`} underline="hover" sx={{ fontWeight: 500, color: 'primary.main' }}>
-          打开任务并继续追问 →
+        <Link href="#ai-research-result" underline="hover" sx={{ fontWeight: 500, color: 'primary.main' }}>
+          结果和追问都在本对话中 ↓
         </Link>
       </Box>
     </Paper>
@@ -252,7 +263,29 @@ function clearPending(userId: string, conversationId: string): boolean {
   } catch { return false; }
 }
 
-export function AiResearchConversation({ conversationId }: { conversationId?: string | null }) {
+interface InlineJobSnapshot {
+  jobId: string;
+  status: string;
+  finalStatus: string | null;
+  outputText: string | null;
+  reportType: string | null;
+  reportLength?: 'brief' | 'standard' | 'deep';
+  deliverableStatus?: 'report' | 'evidence_only' | 'none';
+  draftResearchId: string | null;
+  artifact: { content: string | null } | null;
+}
+
+const TERMINAL_JOB_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
+
+export function AiResearchConversation({
+  conversationId,
+  fromJobId = null,
+  jobId = null,
+}: {
+  conversationId?: string | null;
+  fromJobId?: string | null;
+  jobId?: string | null;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const seedId = searchParams.get('seed');
@@ -289,10 +322,162 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
   const [restoredBrief, setRestoredBrief] = useState<BriefValue | null>(null);
   const [draftStorageError, setDraftStorageError] = useState(false);
   const [submissionUncertain, setSubmissionUncertain] = useState(false);
+  const [followUpSending, setFollowUpSending] = useState(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
+  const [followUpIntent, setFollowUpIntent] = useState<FollowUpIntent>('answer');
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousConversationIdRef = useRef<string | null>(conversationId ?? null);
   const loadedConversationIdRef = useRef<string | null>(null);
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const fromJobAppliedRef = useRef(false);
+  const jobRouteResolvedRef = useRef(false);
+
+  // Task history, the topbar and old /ai-research/<jobId> links all land here.
+  // Resolve the job to its conversation instead of rendering a separate
+  // result page; jobs created outside the chat get a conversation on demand.
+  useEffect(() => {
+    if (!jobId || conversationId || jobRouteResolvedRef.current) return;
+    jobRouteResolvedRef.current = true;
+    let cancelled = false;
+    setHydrating(true);
+    void (async () => {
+      const existing = await fetch(`/api/ai-research/conversations/by-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      if (cancelled) return;
+      if (existing.ok) {
+        const conversation = await existing.json() as AiResearchConversationDetail;
+        router.replace(`/ai-research?conversation=${conversation.id}`, { scroll: false });
+        return;
+      }
+      if (existing.status !== 404) throw await toApiHttpError(existing, '读取调研对话失败');
+      const detail = await fetch(`/api/ai-research/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      if (!detail.ok) throw await toApiHttpError(detail, '读取调研任务失败');
+      if (cancelled) return;
+      const job = await detail.json() as { topic?: string | null };
+      const topicText = typeof job.topic === 'string' ? job.topic : 'AI 调研';
+      const created = await fetch('/api/ai-research/conversations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: topicText.slice(0, 200),
+          jobId,
+          messages: [
+            { role: 'user', content: topicText },
+            { role: 'assistant', content: '这次调研已结束，结果、证据和追问都在本对话中。' },
+          ],
+        }),
+      });
+      if (!created.ok) throw await toApiHttpError(created, '创建调研对话失败');
+      if (cancelled) return;
+      const conversation = await created.json() as AiResearchConversationDetail;
+      router.replace(`/ai-research?conversation=${conversation.id}`, { scroll: false });
+    })().catch((err: unknown) => {
+      if (!cancelled) {
+        setErrorKind('restore');
+        setError(friendlyMessage(err, '无法打开这条调研，请从任务历史重试。'));
+      }
+    }).finally(() => {
+      if (!cancelled) setHydrating(false);
+    });
+    return () => {
+      cancelled = true;
+      jobRouteResolvedRef.current = false;
+    };
+  }, [conversationId, jobId, router]);
+
+  // "调整配置后重跑" navigates here with the failed job id. Rebuild the
+  // submit form from that job so the user edits the previous research
+  // instead of retyping it into a blank conversation.
+  useEffect(() => {
+    if (!fromJobId || conversationId || fromJobAppliedRef.current) return;
+    fromJobAppliedRef.current = true;
+    let cancelled = false;
+    setHydrating(true);
+    void fetch(`/api/ai-research/${encodeURIComponent(fromJobId)}`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw await toApiHttpError(response, '读取原调研配置失败');
+        return await response.json() as Record<string, unknown>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const restoredTopic = typeof data.topic === 'string' ? data.topic : '';
+        const restoredContext = typeof data.context === 'string' ? data.context : '';
+        const restoredType = ['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
+          ? data.reportType as ReportType
+          : 'research_report';
+        const restoredLength = ['brief', 'standard', 'deep'].includes(String(data.reportLength))
+          ? data.reportLength as ResearchLength
+          : restoredType === 'summary_brief' ? 'brief' : 'deep';
+        const restoredPolicy = data.sourcePolicy === 'only_user_sources' ? 'only_user_sources' : 'prefer_user_sources';
+        const restoredUrls = Array.isArray(data.sourceRefs)
+          ? (data.sourceRefs as Array<Record<string, unknown>>)
+            .filter((ref) => ref.type === 'url')
+            .map((ref) => (typeof ref.value === 'string' ? ref.value : ''))
+            .filter((url) => /^https?:\/\//iu.test(url))
+          : [];
+        setTopic(restoredTopic);
+        setContext(restoredContext);
+        setInput(restoredTopic);
+        setReportType(restoredType);
+        setReportLength(restoredLength);
+        setSourcePolicy(restoredPolicy);
+        setSourceUrls(restoredUrls);
+        setBrief(null);
+        setRestoredBrief(null);
+        setActiveJobId(null);
+        setPhase('ready');
+        setMessages([
+          {
+            id: newId('assistant'),
+            role: 'assistant',
+            content: '已载入上次调研的问题和设置。可以直接重新开始，或先调整研究类型、深度和资料范围。',
+          },
+          ...(restoredTopic ? [{ id: newId('user'), role: 'user' as const, content: restoredTopic }] : []),
+        ]);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setErrorKind('restore');
+          setError(friendlyMessage(err, '无法载入上次调研配置，请重新填写。'));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHydrating(false);
+      });
+    return () => { cancelled = true; };
+  }, [fromJobId, conversationId]);
+
+  const activeJobQuery = useQuery<InlineJobSnapshot>({
+    queryKey: ['inline-ai-research', activeJobId],
+    enabled: Boolean(activeJobId),
+    queryFn: async () => {
+      const response = await fetch(`/api/ai-research/${encodeURIComponent(activeJobId ?? '')}`, { cache: 'no-store' });
+      if (!response.ok) throw await toApiHttpError(response, '读取调研状态失败');
+      return await response.json() as InlineJobSnapshot;
+    },
+    refetchInterval: (query) => {
+      const snapshot = query.state.data;
+      const status = snapshot?.finalStatus ?? snapshot?.status;
+      return status && TERMINAL_JOB_STATUSES.has(status) ? false : 5_000;
+    },
+  });
+  const activeJobStatus = activeJobQuery.data?.finalStatus ?? activeJobQuery.data?.status;
+  const activeJobTerminal = Boolean(activeJobStatus && TERMINAL_JOB_STATUSES.has(activeJobStatus));
+  const activeJobHasReport = Boolean(
+    activeJobQuery.data?.artifact?.content || activeJobQuery.data?.outputText,
+  ) && activeJobQuery.data?.deliverableStatus !== 'evidence_only';
+  const activeJobConversationQuery = useQuery<AiResearchConversationDetail | null>({
+    queryKey: ['ai-research-conversation', activeJobId],
+    enabled: Boolean(activeJobId) && activeJobTerminal && activeJobHasReport,
+    retry: false,
+    queryFn: async () => {
+      const response = await fetch(`/api/ai-research/conversations/by-job/${encodeURIComponent(activeJobId ?? '')}`, { cache: 'no-store' });
+      // Jobs created outside the chat (radar, imports) have no conversation
+      // yet. That is not an error: the first follow-up creates one.
+      if (response.status === 404) return null;
+      if (!response.ok) throw await toApiHttpError(response, '追问对话不可读');
+      return await response.json() as AiResearchConversationDetail;
+    },
+  });
 
   function resetForNewConversation() {
     setPhase('understand');
@@ -319,6 +504,8 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     setOwnerId(null);
     setDraftStorageError(false);
     setSubmissionUncertain(false);
+    setFollowUpSending(false);
+    setFollowUpError(null);
     setErrorKind(null);
     setActiveJobId(null);
     setError(null);
@@ -356,6 +543,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           id: message.id,
           role: message.role,
           content: message.content,
+          ...(message.intent ? { intent: message.intent } : {}),
         }));
         setMessages(restored);
         loadedConversationIdRef.current = conversation.id;
@@ -566,12 +754,20 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
 
   function handleMessageSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (composerMode === 'followup') {
+      void sendFollowUp(input);
+      return;
+    }
     processUserMessage(input);
   }
 
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
+      if (composerMode === 'followup') {
+        void sendFollowUp(input);
+        return;
+      }
       processUserMessage(input);
     }
   }
@@ -744,7 +940,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           markSubmitted(lockOwner, lockTarget, body.jobId);
           writeLastSubmitted(body.jobId, topic.trim());
           setActiveJobId(body.jobId);
-          const finalContent = '调研已启动。进度、来源和结果会持续显示在这里；完成后也可以在任务页继续追问。';
+          const finalContent = '调研已启动。进度、来源和结果会持续显示在这里；完成后可以直接接着追问。';
           setMessages((current) => current.map((message) => (
             message.id === placeholder.id ? { ...message, content: finalContent } : message
           )));
@@ -764,12 +960,189 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
     }
   }
 
+  /**
+   * Send a post-research question through the same conversation thread.
+   *
+   * The durable conversation already carries the research context, so the
+   * follow-up uses that instead of creating a second "chat" surface. The
+   * server persists both turns; this component only renders the stream.
+   */
+  async function sendFollowUp(raw: string): Promise<void> {
+    const content = raw.trim();
+    if (!content || !activeJobId || followUpSending) return;
+    setInput('');
+    setFollowUpError(null);
+    setFollowUpSending(true);
+    const userId = newId('followup-user');
+    const assistantId = newId('followup-assistant');
+    setMessages((current) => [
+      ...current,
+      { id: userId, role: 'user', content, intent: followUpIntent },
+      { id: assistantId, role: 'assistant', content: '', intent: followUpIntent },
+    ]);
+    let accumulated = '';
+    try {
+      let conversationIdForJob = activeJobConversationQuery.data?.id;
+      if (!conversationIdForJob) {
+        const created = await fetch('/api/ai-research/conversations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            title: (topic || 'AI 调研').slice(0, 200),
+            jobId: activeJobId,
+            messages: messages.map(({ role, content: text }) => ({ role, content: text })).slice(0, 200),
+          }),
+        });
+        if (!created.ok) throw await toApiHttpError(created, '追问会话创建失败');
+        const detail = await created.json() as AiResearchConversationDetail;
+        conversationIdForJob = detail.id;
+        await activeJobConversationQuery.refetch();
+      }
+      const response = await fetch(
+        `/api/ai-research/conversations/${encodeURIComponent(conversationIdForJob)}/messages/stream`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ content, intent: followUpIntent }),
+        },
+      );
+      if (!response.ok || !response.body) {
+        throw new Error(friendlyMessage(await toApiHttpError(response, '追问失败'), '追问失败，请稍后重试。'));
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
+          const lines = frame.split('\n');
+          const dataLine = lines.find((line) => line.startsWith('data: '));
+          if (!dataLine) continue;
+          const eventLine = lines.find((line) => line.startsWith('event: '));
+          const event = eventLine ? eventLine.slice(7).trim() : 'progress';
+          if (event === 'error') {
+            try {
+              const payload = JSON.parse(dataLine.slice(6)) as { message?: unknown };
+              if (typeof payload.message === 'string' && payload.message) {
+                setFollowUpError(payload.message);
+              }
+            } catch {
+              // A malformed error frame must not break the turn.
+            }
+            continue;
+          }
+          let payload: unknown;
+          try {
+            payload = JSON.parse(dataLine.slice(6));
+          } catch {
+            continue;
+          }
+          if (event === 'done') {
+            // The done frame carries the authoritative full answer, so use it
+            // instead of appending (which would duplicate the whole text).
+            const complete = typeof payload === 'string'
+              ? payload
+              : payload && typeof payload === 'object' && typeof (payload as { content?: unknown }).content === 'string'
+                ? (payload as { content: string }).content
+                : '';
+            if (complete) {
+              accumulated = complete;
+              setMessages((current) => current.map((message) => (
+                message.id === assistantId ? { ...message, content: accumulated } : message
+              )));
+            }
+            continue;
+          }
+          if (event !== 'delta') continue;
+          const delta = typeof payload === 'string'
+            ? payload
+            : payload && typeof payload === 'object' && typeof (payload as { content?: unknown }).content === 'string'
+              ? (payload as { content: string }).content
+              : '';
+          if (!delta) continue;
+          accumulated += delta;
+          setMessages((current) => current.map((message) => (
+            message.id === assistantId ? { ...message, content: accumulated } : message
+          )));
+        }
+      }
+      if (activeJobConversationQuery.data) {
+        void activeJobConversationQuery.refetch();
+      }
+    } catch (err) {
+      setFollowUpError(friendlyMessage(err, '追问失败，请稍后重试。'));
+      setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
+    } finally {
+      setFollowUpSending(false);
+    }
+  }
+
+  /**
+   * Rebuild the submit form from the finished job so the single "重新调研"
+   * action returns to the same conversation with the previous configuration
+   * already loaded and editable.
+   */
+  async function restartWithSameConfig(): Promise<void> {
+    const jobId = activeJobId;
+    if (!jobId) return;
+    try {
+      const response = await fetch(`/api/ai-research/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      if (!response.ok) throw await toApiHttpError(response, '读取原调研配置失败');
+      const data = await response.json() as Record<string, unknown>;
+      const restoredType = ['research_report', 'summary_brief', 'slides', 'web_brief'].includes(String(data.reportType))
+        ? data.reportType as ReportType
+        : 'research_report';
+      const restoredUrls = Array.isArray(data.sourceRefs)
+        ? (data.sourceRefs as Array<Record<string, unknown>>)
+          .filter((ref) => ref.type === 'url')
+          .map((ref) => (typeof ref.value === 'string' ? ref.value : ''))
+          .filter((url) => /^https?:\/\//iu.test(url))
+        : [];
+      setTopic(typeof data.topic === 'string' ? data.topic : '');
+      setContext(typeof data.context === 'string' ? data.context : '');
+      setReportType(restoredType);
+      setReportLength(['brief', 'standard', 'deep'].includes(String(data.reportLength))
+        ? data.reportLength as ResearchLength
+        : restoredType === 'summary_brief' ? 'brief' : 'deep');
+      setSourcePolicy(data.sourcePolicy === 'only_user_sources' ? 'only_user_sources' : 'prefer_user_sources');
+      setSourceUrls(restoredUrls);
+      setActiveJobId(null);
+      setPhase('ready');
+      setBrief(null);
+      setRestoredBrief(null);
+      setFollowUpError(null);
+      setMessages([
+        {
+          id: newId('assistant'),
+          role: 'assistant',
+          content: '已载入上次调研的问题和设置。可以确认后重新开始，也可以先调整研究类型、深度和资料范围。',
+        },
+      ]);
+    } catch (err) {
+      setFollowUpError(friendlyMessage(err, '无法载入上次调研配置，请重新填写。'));
+    }
+  }
+
   const scopeIncomplete = brief?.scopeValid === false;
   const sourceSelectionIncomplete = sourcePolicy === 'only_user_sources'
     && sourceRefs.length === 0
     && (brief?.suggestedContextIds.length ?? 0) === 0;
   const loginRequired = !!error && /登录|401|未认证/u.test(error);
   const stepIndex = activeJobId ? 3 : phase === 'understand' ? 0 : phase === 'refine' ? 1 : 2;
+  // The composer has three jobs in one thread: shape the brief, wait for a
+  // running job, then ask follow-ups about the finished report. Keeping one
+  // input avoids a second "chat" surface competing with the conversation.
+  const composerMode: 'plan' | 'running' | 'followup' | 'restart' = !activeJobId
+    ? 'plan'
+    : activeJobTerminal
+      ? activeJobHasReport ? 'followup' : 'restart'
+      : 'running';
+  const showInlineFollowUp = composerMode === 'followup';
+  const visibleMessages = messages;
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -794,7 +1167,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
       <Box sx={{ display: 'flex', minHeight: 0, flexDirection: 'column' }}>
         <Box
           ref={scrollRef}
-          sx={{ minWidth: 0, gridTemplateColumns: 'minmax(0, 1fr)', display: 'grid', minHeight: 320, flex: 1, gap: 2.5, overflowY: { xs: 'visible', lg: activeJobId ? 'auto' : 'visible' }, maxHeight: { xs: 'none', lg: activeJobId ? '70vh' : 'none' }, px: { xs: 2.5, sm: 2.5 }, py: 2.5 }}
+          sx={{ minWidth: 0, gridTemplateColumns: 'minmax(0, 1fr)', display: 'grid', minHeight: 320, flex: 1, gap: 2.5, overflowY: { xs: 'visible', lg: composerMode === 'running' ? 'auto' : 'visible' }, maxHeight: { xs: 'none', lg: composerMode === 'running' ? '70vh' : 'none' }, px: { xs: 2.5, sm: 2.5 }, py: 2.5 }}
           aria-live="polite"
         >
           {hydrating ? (
@@ -804,7 +1177,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
             </Box>
           ) : (
             <>
-              {messages.map((message) => (
+              {visibleMessages.map((message) => (
                 <Box key={message.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexDirection: message.role === 'user' ? 'row-reverse' : 'row' }}>
                   <Box component="span" sx={{ mt: 0.5, display: 'grid', width: 28, height: 28, flexShrink: 0, placeItems: 'center', borderRadius: 1, bgcolor: message.role === 'assistant' ? 'action.selected' : 'action.hover', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
                     {message.role === 'assistant' ? <Bot size={14} /> : <UserRound size={14} />}
@@ -813,9 +1186,19 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                     <Typography component="span" variant="metadata" sx={{ mb: 0.5, display: 'block', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
                       {message.role === 'assistant' ? 'AI 调研助手' : '你'}
                     </Typography>
-                    <Typography component="p" variant="reading" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                      {message.content}
-                    </Typography>
+                    {message.role === 'assistant' && message.intent ? (
+                      message.content ? (
+                        <Box sx={{ mt: 0.5, typography: 'reading', textAlign: 'left', overflowWrap: 'anywhere' }}>
+                          <MarkdownContent content={stripResearchCitationMarkers(message.content)} compact />
+                        </Box>
+                      ) : (
+                        <CircularProgress size={14} sx={{ mt: 0.5 }} aria-label="正在生成回答" />
+                      )
+                    ) : (
+                      <Typography component="p" variant="reading" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                        {message.content}
+                      </Typography>
+                    )}
                   </Box>
                 </Box>
               ))}
@@ -907,7 +1290,7 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
                     jobId={activeJobId}
                     topic={topic}
                   />
-                  <InlineAiResearchStatus jobId={activeJobId} />
+                  <InlineAiResearchStatus jobId={activeJobId} onRestart={restartWithSameConfig} embedded />
                 </Box>
               ) : null}
             </>
@@ -930,14 +1313,40 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
           </Box>
         ) : null}
 
+        {showInlineFollowUp ? (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, borderTop: 1, borderColor: 'divider', px: 2, py: 1.25 }}>
+            <Typography component="span" variant="metadata" color="text.secondary">追问方式</Typography>
+            {FOLLOW_UP_SHORTCUTS.map((item) => (
+              <Button
+                key={item.intent}
+                type="button"
+                size="xs"
+                variant={followUpIntent === item.intent ? 'secondary' : 'outline'}
+                aria-pressed={followUpIntent === item.intent}
+                onClick={() => setFollowUpIntent(item.intent)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </Box>
+        ) : null}
+        {followUpError ? (
+          <Typography component="p" role="alert" sx={{ borderTop: 1, borderColor: 'divider', px: 2, py: 1, typography: 'metadata', color: 'error.main' }}>
+            {followUpError}
+          </Typography>
+        ) : null}
         <Box component="form" data-ai-research-form onSubmit={handleMessageSubmit} sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper', p: 2 }}>
     <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', transition: 'border-color 120ms ease-out, box-shadow 120ms ease-out', '&:focus-within': { borderColor: 'primary.main', boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}22` } }}>
             <Textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder={activeJobId
-                ? '任务运行中，请打开完整任务查看进度或继续追问'
+              placeholder={showInlineFollowUp
+                ? '继续追问这份研究，例如：这个结论的关键前提是什么？'
+                : composerMode === 'running'
+                ? '任务运行中，进度和结果会持续显示在这里'
+                : composerMode === 'restart'
+                ? '这次调研没有生成可追问的结果；请先点上方“重新调研”恢复配置'
                 : phase === 'understand'
                   ? '例如：我们是否应该采用 GraphRAG？'
                   : phase === 'refine'
@@ -946,16 +1355,22 @@ export function AiResearchConversation({ conversationId }: { conversationId?: st
               rows={3}
               maxLength={20_000}
               aria-label="AI 调研对话输入"
-              disabled={submitting || conversationCreating || hydrating || !!activeJobId}
+              disabled={submitting || conversationCreating || hydrating || composerMode === 'running' || composerMode === 'restart'}
               sx={{ '& .MuiOutlinedInput-root': { minHeight: 92, bgcolor: 'transparent', boxShadow: 'none', '& fieldset': { border: 0 } }, '& textarea': { resize: 'none' } }}
             />
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, px: 1.5, pb: 1.5 }}>
               <Typography component="span" variant="metadata" color="text.secondary">
-                {activeJobId ? '请在完整任务页追问' : `⌘/Ctrl + Enter 发送 · ${input.length}/20000`}
+                {showInlineFollowUp
+                  ? (followUpSending ? '正在基于已保存资料回答…' : '回答基于上方报告和已保存资料，并自动保存到当前对话。')
+                  : composerMode === 'running'
+                    ? '任务完成后可在这里继续追问'
+                    : composerMode === 'restart'
+                      ? '恢复原配置后可以直接修改并重新开始'
+                    : `⌘/Ctrl + Enter 发送 · ${input.length}/20000`}
               </Typography>
-              <Button type="submit" size="sm" disabled={!input.trim() || submitting || conversationCreating || hydrating || !!activeJobId} aria-label="发送消息（AI 调研）">
-                <Send size={14} />
-                发送
+              <Button type="submit" size="sm" disabled={!input.trim() || submitting || conversationCreating || hydrating || composerMode === 'running' || composerMode === 'restart' || followUpSending} aria-label="发送消息（AI 调研）">
+                {followUpSending ? <CircularProgress size={14} thickness={5} aria-hidden /> : <Send size={14} />}
+                {followUpSending ? '回答中…' : '发送'}
               </Button>
             </Box>
           </Box>

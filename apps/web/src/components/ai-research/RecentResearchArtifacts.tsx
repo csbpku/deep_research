@@ -146,7 +146,7 @@ export function RecentResearchArtifacts({
     try {
       const jobId = await rerunResearchTask(item);
       await queryClient.invalidateQueries({ queryKey: ['ai-research-jobs'] });
-      router.push(`/ai-research/${jobId}`);
+      router.push(`/ai-research?job=${jobId}`);
     } catch (error) {
       setRerunError(error instanceof Error ? error.message : '重新运行失败');
     } finally {
@@ -208,9 +208,9 @@ export function RecentResearchArtifacts({
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Typography variant="listTitle" component="h3" title={item.topic} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>
-                      <MuiLink component={Link} href={`/ai-research/${item.jobId}`} color="inherit" underline="hover">{item.topic}</MuiLink>
+                      <MuiLink component={Link} href={`/ai-research?job=${item.jobId}`} color="inherit" underline="hover">{item.topic}</MuiLink>
                     </Typography>
-                    <MuiLink component={Link} href={`/ai-research/${item.jobId}`} underline="hover" sx={{ display: 'inline-flex', mt: 0.5, typography: 'metadata', fontWeight: 500 }}>{mainLabel}</MuiLink>
+                    <MuiLink component={Link} href={`/ai-research?job=${item.jobId}`} underline="hover" sx={{ display: 'inline-flex', mt: 0.5, typography: 'metadata', fontWeight: 500 }}>{mainLabel}</MuiLink>
                     <Stack direction="row" useFlexGap spacing={1} sx={{ mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
                       <StatusBadge kind="job" value={taskStatusBadgeValue(item)} label={taskStatusLabel(item)} />
                       <Typography variant="metadata" color="text.secondary">
@@ -246,7 +246,7 @@ export function RecentResearchArtifacts({
                           </MenuItem>
                         ) : null}
                         {canContinue ? (
-                          <MenuItem component={Link} href={`/ai-research/${item.jobId}#research-chat`} onClick={() => { setMenuAnchor(null); setMenuJobId(null); }}>
+                          <MenuItem component={Link} href={`/ai-research?job=${item.jobId}`} onClick={() => { setMenuAnchor(null); setMenuJobId(null); }}>
                             <MessageCircle size={16} />继续追问
                           </MenuItem>
                         ) : null}
