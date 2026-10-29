@@ -44,6 +44,7 @@ from ai_engine.adapters.gpt_researcher import (
     _record_retrieval_event,
     _resolve_retriever_selection,
     _resolve_ddgs_backends,
+    _search_unavailable,
     _ScopedDuckduckgo,
     _ResilientTavilySearch,
     _filter_search_results_by_topic,
@@ -523,6 +524,64 @@ def test_retriever_selection_downgrades_tavily_without_a_key(
     assert _resolve_retriever_selection() == ("duckduckgo", "tavily_not_configured")
 
 
+def test_search_unavailable_only_reports_a_real_provider_failure() -> None:
+    """An empty result is normal; a failed provider is an outage."""
+    empty_job = _Job(request=ResearchRequest(
+        job_id="search-empty",
+        request_id="search-empty",
+        topic="search health",
+        context=None,
+        report_type="research_report",
+        source_policy=SOURCE_POLICY["PREFER_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=(),
+    ))
+    token = _ACTIVE_RESEARCH_JOB.set(empty_job)
+    try:
+        _record_retrieval_event(provider="TavilySearch", result_count=0)
+    finally:
+        _ACTIVE_RESEARCH_JOB.reset(token)
+
+    assert _search_unavailable(empty_job) is False
+
+    failed_job = _Job(request=ResearchRequest(
+        job_id="search-failed",
+        request_id="search-failed",
+        topic="search health",
+        context=None,
+        report_type="research_report",
+        source_policy=SOURCE_POLICY["PREFER_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=(),
+    ))
+    token = _ACTIVE_RESEARCH_JOB.set(failed_job)
+    try:
+        _record_retrieval_event(provider="Duckduckgo", error=RuntimeError("DNS poisoned"))
+    finally:
+        _ACTIVE_RESEARCH_JOB.reset(token)
+
+    assert _search_unavailable(failed_job) is True
+
+
+def test_search_unavailable_is_false_when_another_engine_returned_results() -> None:
+    """A single failed engine must not mask a successful search."""
+    job = _Job(request=ResearchRequest(
+        job_id="search-mixed",
+        request_id="search-mixed",
+        topic="search health",
+        context=None,
+        report_type="research_report",
+        source_policy=SOURCE_POLICY["PREFER_USER_SOURCES"],  # type: ignore[arg-type]
+        source_refs=(),
+    ))
+    token = _ACTIVE_RESEARCH_JOB.set(job)
+    try:
+        _record_retrieval_event(provider="Duckduckgo:yahoo", error=RuntimeError("DNS poisoned"))
+        _record_retrieval_event(provider="Duckduckgo:duckduckgo", result_count=3)
+    finally:
+        _ACTIVE_RESEARCH_JOB.reset(token)
+
+    assert _search_unavailable(job) is False
+
+
 def test_tavily_empty_result_uses_duckduckgo_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -809,7 +868,36 @@ def test_scoped_duckduckgo_passes_explicit_backend_allowlist_to_ddgs(
     assert observed["query"] == "database comparison"
     assert observed["region"] == "wt-wt"
     assert observed["max_results"] == 7
-    assert observed["backend"] == "duckduckgo,brave,google"
+    assert observed["backend"] == "yahoo"
+
+
+def test_scoped_duckduckgo_falls_back_to_the_next_backend_when_one_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One poisoned engine must not take the whole search down with it."""
+    attempted: list[str] = []
+
+    class FakeDDGS:
+        def text(self, query: str, **kwargs: object) -> list[dict[str, str]]:
+            backend = str(kwargs.get("backend", ""))
+            attempted.append(backend)
+            if backend == "yahoo":
+                raise RuntimeError("DNS poisoned")
+            return [{"href": "https://example.com/evidence", "body": "captured"}]
+
+    class DelegateWithDDGS:
+        def __init__(self, query: str, **_: object) -> None:
+            self.ddg = FakeDDGS()
+
+        def search(self, **_: object) -> list[dict[str, str]]:
+            raise AssertionError("the backend-aware DDGS path should be used")
+
+    monkeypatch.setattr("ai_engine.adapters.gpt_researcher._Duckduckgo", DelegateWithDDGS)
+
+    result = _ScopedDuckduckgo("database comparison").search(max_results=5)
+
+    assert result == [{"href": "https://example.com/evidence", "body": "captured"}]
+    assert attempted == ["yahoo", "duckduckgo"]
 
 
 def test_ddgs_backend_resolution_is_allowlisted_and_deduplicated(
@@ -817,7 +905,7 @@ def test_ddgs_backend_resolution_is_allowlisted_and_deduplicated(
 ) -> None:
     monkeypatch.delenv("DDGS_BACKENDS", raising=False)
     monkeypatch.delenv("DDGS_BACKEND", raising=False)
-    assert _resolve_ddgs_backends() == ("duckduckgo", "brave", "google")
+    assert _resolve_ddgs_backends() == ("yahoo", "duckduckgo", "brave", "google")
 
     monkeypatch.setenv(
         "DDGS_BACKENDS",
