@@ -25,8 +25,10 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
 import Paper from '@mui/material/Paper';
 import TextField from '@mui/material/TextField';
+import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import { friendlyMessage } from '@/lib/errors/friendly';
+import { inferDecisionDimensions } from '@/lib/research-plan-semantics';
 import type { ResearchScope, ResearchTimeRange } from '@deep-research/shared/schemas';
 
 type Objective = 'explore' | 'learn' | 'investigate' | 'decide';
@@ -37,9 +39,9 @@ type ContextSourceRef = {
 };
 
 const OBJECTIVE_LABELS: Record<Objective, string> = {
-  explore: '快速概览',
+  explore: '主题概览',
   learn: '系统学习',
-  investigate: '深入调研',
+  investigate: '机制分析',
   decide: '决策对比',
 };
 
@@ -67,7 +69,7 @@ interface PlanResponse {
 }
 
 interface PersonalContextItem {
-  kind: 'research' | 'knowledge' | 'issue' | 'bookmark';
+  kind: 'research' | 'knowledge' | 'issue' | 'bookmark' | 'legacy';
   id: string;
   title: string;
   snippet: string;
@@ -85,6 +87,7 @@ interface BriefProps {
   question: string;
   context: string;
   topicHint?: string;
+  initialBrief?: BriefValue | null;
   children?: ReactNode;
   startAction?: ReactNode;
   onBriefReady?: (brief: BriefValue) => void;
@@ -95,8 +98,12 @@ export interface BriefValue {
   objective: Objective;
   primaryTopicId?: string;
   suggestedContextIds: string[];
+  selectedContextItems?: PersonalContextItem[];
+  legacyContextSelection?: { ids: string[]; refs: ContextSourceRef[] } | null;
+  contextSelectionIncomplete?: boolean;
   assistantMessage: string;
   scopeValid?: boolean;
+  decisionNeedsConfirmation?: boolean;
   brief?: {
     objective: Objective;
     question: string;
@@ -120,24 +127,34 @@ interface FetchState {
   authRequired?: boolean;
 }
 
-export function AiResearchBrief({ question, context, topicHint, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
+export function AiResearchBrief({ question, context, topicHint, initialBrief, children, startAction, onBriefReady, onPlanningChange }: BriefProps) {
   const trimmed = question.trim();
   const isShort = trimmed.length < 2;
   const [state, setState] = useState<FetchState>({ status: 'idle' });
-  const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>([]);
-  const [selectedContextItems, setSelectedContextItems] = useState<PersonalContextItem[]>([]);
-  const [focusText, setFocusText] = useState('');
-  const [comparisonText, setComparisonText] = useState('');
-  const [objective, setObjective] = useState<Objective>('investigate');
-  const [timeRange, setTimeRange] = useState<ResearchTimeRange['preset']>('any');
-  const [scopeFrom, setScopeFrom] = useState('');
-  const [scopeTo, setScopeTo] = useState('');
-  const [retrievalNotes, setRetrievalNotes] = useState('');
+  const initialIds = initialBrief?.suggestedContextIds ?? [];
+  const initialLegacy = initialBrief?.legacyContextSelection ?? (!initialBrief?.selectedContextItems && initialIds.length
+    ? { ids: initialIds, refs: initialBrief?.brief?.contextRefs ?? [] } : null);
+  const restoredItems = initialBrief?.selectedContextItems ?? initialIds.map((id) => ({
+    kind: 'legacy' as const, id, title: `旧草稿已选资料 (${id})`, snippet: '旧草稿未保存资料名称；保留原有引用。', sourceRefs: [],
+  }));
+  const [acceptedContextIds, setAcceptedContextIds] = useState<string[]>(initialIds);
+  const [selectedContextItems, setSelectedContextItems] = useState<PersonalContextItem[]>(restoredItems);
+  const legacySelectionRef = useRef(initialLegacy);
+  const [focusText, setFocusText] = useState(initialBrief?.brief?.questionsToAnswer.join('\n') ?? '');
+  const [comparisonText, setComparisonText] = useState(initialBrief?.brief?.comparisonOptions.join('\n') ?? '');
+  const [objective, setObjective] = useState<Objective>(initialBrief?.objective ?? 'investigate');
+  const [timeRange, setTimeRange] = useState<ResearchTimeRange['preset']>(initialBrief?.brief?.scope.timeRange.preset ?? 'any');
+  const [scopeFrom, setScopeFrom] = useState(initialBrief?.brief?.scope.timeRange.from ?? '');
+  const [scopeTo, setScopeTo] = useState(initialBrief?.brief?.scope.timeRange.to ?? '');
+  const [retrievalNotes, setRetrievalNotes] = useState(initialBrief?.brief?.scope.retrievalNotes ?? '');
   const [contextSearch, setContextSearch] = useState('');
   const [contextSearchItems, setContextSearchItems] = useState<PersonalContextItem[]>([]);
   const [contextSearchLoading, setContextSearchLoading] = useState(false);
   const [contextPanelOpen, setContextPanelOpen] = useState(false);
-  const selectionRef = useRef<PersonalContextItem[]>([]);
+  const selectionRef = useRef<PersonalContextItem[]>(restoredItems);
+  const editedBriefRef = useRef<BriefValue | null>(initialBrief ?? null);
+  const focusTouchedRef = useRef(!!initialBrief?.brief?.questionsToAnswer.length);
+  const decisionDimensionsRef = useRef<string[]>(initialBrief?.objective === 'decide' ? initialBrief.brief?.decisionDimensions ?? [] : []);
   const callbacksRef = useRef({ onBriefReady, onPlanningChange });
   callbacksRef.current = { onBriefReady, onPlanningChange };
   const contextSearchQuery = getPersonalContextSearchQuery(contextPanelOpen, contextSearch, trimmed);
@@ -218,6 +235,13 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         const data = (await response.json()) as PlanResponse;
         if (cancelled) return;
         setState({ status: 'ready', plan: data });
+        if (!editedBriefRef.current && data.brief.objective === 'decide') decisionDimensionsRef.current = data.brief.decisionDimensions ?? [];
+        const edited = editedBriefRef.current;
+        if (edited?.brief?.question === trimmed) {
+          callbacksRef.current.onPlanningChange?.(false);
+          callbacksRef.current.onBriefReady?.(edited);
+          return;
+        }
         setFocusText((data.brief.questionsToAnswer ?? []).join('\n'));
         setComparisonText((data.brief.comparisonOptions ?? []).join('\n'));
         setObjective(data.brief.objective);
@@ -235,6 +259,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
           objective: data.brief.objective,
           primaryTopicId: data.brief.primaryTopicId ?? topicHint,
           suggestedContextIds: selectedIds,
+          selectedContextItems: selected,
           assistantMessage: data.assistantMessage,
           scopeValid: true,
           brief: {
@@ -341,28 +366,31 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     nextRetrievalNotes?: string;
     selectedIds?: string[];
   } = {}) {
+    const legacy = legacySelectionRef.current;
+    const legacyRemaining = legacy?.ids.filter((id) => selectedIds.includes(id)) ?? [];
+    const legacyIncomplete = !!legacy && legacyRemaining.length > 0 && legacyRemaining.length !== legacy.ids.length;
+    const retainedLegacy = legacyRemaining.length ? legacy : null;
+    const selected = selectionRef.current.filter((item) => selectedIds.includes(item.id));
+    const selectedRefs = idsToContextRefs(selectedIds, [], selected);
+    const combinedRefs = Array.from(new Map([...(retainedLegacy?.refs ?? []), ...selectedRefs].map((ref) => [`${ref.type}:${ref.value}`, ref])).values()).slice(0, 10);
     if (!plan) {
-      onBriefReady?.({
+      const next: BriefValue = {
         objective, primaryTopicId: topicHint, suggestedContextIds: selectedIds,
+        selectedContextItems: selected, legacyContextSelection: retainedLegacy, contextSelectionIncomplete: legacyIncomplete,
         assistantMessage: '', scopeValid: true,
         brief: {
           objective, primaryTopicId: topicHint, question: trimmed,
           constraints: context.trim() ? [context.trim()] : [], questionsToAnswer: [],
           comparisonOptions: [], decisionDimensions: [], successCriteria: [],
           sourcePolicy: 'prefer_user_sources', outputType: 'markdown', scope: emptyScope(),
-          contextRefs: idsToContextRefs(selectedIds, [], availableContext),
+          contextRefs: combinedRefs,
         },
-      });
+      };
+      editedBriefRef.current = next;
+      onBriefReady?.(next);
       return;
     }
-    const ids: string[] = [];
-    if (state.plan) {
-      for (const item of availableContext) {
-        if (selectedIds.includes(item.id)) {
-          ids.push(item.id);
-        }
-      }
-    }
+    const ids = selectedIds;
     const questionsToAnswer = nextFocusText
       .split(/\n|；|;/u)
       .map((item) => item.trim())
@@ -373,21 +401,27 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       .map((item) => item.trim())
       .filter(Boolean)
       .slice(0, 20);
+    const explicitDecisionDimensions = inferDecisionDimensions(trimmed, nextFocusText);
+    const decisionDimensions = nextObjective === 'decide'
+      ? decisionDimensionsRef.current.length ? decisionDimensionsRef.current : explicitDecisionDimensions
+      : [];
     const validScope = nextTimeRange !== 'custom'
       || (!!nextScopeFrom && !!nextScopeTo && nextScopeFrom <= nextScopeTo);
-    onBriefReady?.({
+    const next: BriefValue = {
       objective: nextObjective,
       primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
       suggestedContextIds: ids,
+      selectedContextItems: selected, legacyContextSelection: retainedLegacy, contextSelectionIncomplete: legacyIncomplete,
       assistantMessage: plan!.assistantMessage,
       scopeValid: validScope,
+      decisionNeedsConfirmation: nextObjective === 'decide' && (comparisonOptions.length < 2 || decisionDimensions.length === 0),
       brief: {
         objective: nextObjective,
         question: plan!.brief.question,
         constraints: plan!.brief.constraints ?? [],
         questionsToAnswer,
-        comparisonOptions,
-        decisionDimensions: plan!.brief.decisionDimensions ?? [],
+        comparisonOptions: nextObjective === 'decide' ? comparisonOptions : [],
+        decisionDimensions,
         successCriteria: plan!.brief.successCriteria ?? [],
         sourcePolicy: plan!.brief.sourcePolicy ?? 'prefer_user_sources',
         scope: {
@@ -404,9 +438,19 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
         },
         primaryTopicId: plan!.brief.primaryTopicId ?? topicHint,
         outputType: plan!.brief.outputType ?? 'markdown',
-        contextRefs: idsToContextRefs(ids, plan!.brief.contextRefs ?? [], availableContext),
+        contextRefs: combinedRefs,
       },
-    });
+    };
+    editedBriefRef.current = next;
+    onBriefReady?.(next);
+  }
+
+  function handleObjectiveChange(value: Objective) {
+    const nextFocus = value === 'decide' && objective !== 'decide' && !focusTouchedRef.current && plan?.brief.objective !== 'decide'
+      ? '' : focusText;
+    if (nextFocus !== focusText) setFocusText(nextFocus);
+    setObjective(value);
+    publishPlan({ nextObjective: value, nextFocusText: nextFocus });
   }
 
   function toggleContext(id: string) {
@@ -423,6 +467,9 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       }
     }
     const next = Array.from(set);
+    if (legacySelectionRef.current && !legacySelectionRef.current.ids.some((legacyId) => set.has(legacyId))) {
+      legacySelectionRef.current = null;
+    }
     setSelectedContextItems(selectionRef.current);
     setAcceptedContextIds(next);
     publishPlan({ selectedIds: next });
@@ -446,47 +493,28 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
     : '研究方案已准备好，可以直接开始。';
 
   return (
-    <Paper component="div" variant="outlined" sx={{ overflow: 'hidden', borderColor: 'primary.main', fontSize: 'var(--dr-type-caption)' }}>
+    <Paper component="div" variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', fontSize: 'var(--dr-type-label)' }}>
       <Box component="header" sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box>
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'primary.main' }}>
-            <BookOpenCheck size={14} /> 研究方案
+          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'listTitle', fontWeight: 600, color: 'text.primary' }}>
+            <BookOpenCheck size={18} aria-hidden /> 研究方案
           </Box>
           <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'text.secondary' }}>确认要回答什么、参考哪些资料和需要什么产出；启动后设置会锁定。</Typography>
         </Box>
         <Box sx={{ display: 'flex', flexShrink: 0, alignSelf: { xs: 'flex-end', sm: 'auto' }, alignItems: 'center', gap: 1 }}>
           <Chip size="small" color="primary" variant="outlined" label={OBJECTIVE_LABELS[objective]} />
-          {startAction}
         </Box>
       </Box>
 
-      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', gap: 1.5, px: 2, py: 2 }}>
+      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 3, px: { xs: 2, sm: 3 }, py: 3 }}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
-          <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>回答什么</Typography>
+          <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>研究什么</Typography>
           <Typography component="span" variant="metadata" color="text.secondary">AI 已根据问题整理，可调整</Typography>
         </Box>
 
-        <Box component="fieldset" sx={{ display: 'grid', gap: 1, m: 0, p: 0, border: 0, minWidth: 0 }}>
-        <Box component="legend" sx={{ mb: 1, p: 0, fontWeight: 500, color: 'text.primary' }}>研究目标</Box>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-          {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map((value) => (
-            <Button
-              key={value}
-              type="button"
-              aria-pressed={objective === value}
-              size="small"
-              variant={objective === value ? 'contained' : 'outlined'}
-              onClick={() => {
-                setObjective(value);
-                publishPlan({ nextObjective: value });
-              }}
-              sx={{ minHeight: 32, borderRadius: 'var(--dr-radius-pill)', px: 1.5 }}
-            >
-              {OBJECTIVE_LABELS[value]}
-            </Button>
-          ))}
-        </Box>
-        </Box>
+        <TextField select label="研究方式" value={objective} onChange={event => handleObjectiveChange(event.target.value as Objective)} sx={{ width: { xs: '100%', sm: 200 } }}>
+          {(Object.keys(OBJECTIVE_LABELS) as Objective[]).map(value => <MenuItem key={value} value={value}>{OBJECTIVE_LABELS[value]}</MenuItem>)}
+        </TextField>
 
       <Typography component="p" variant="metadata" sx={{ lineHeight: 1.6, color: 'text.secondary' }}>
         {objectiveChanged
@@ -546,6 +574,7 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
             value={focusText}
             onChange={(event) => {
               const next = event.target.value;
+              focusTouchedRef.current = true;
               setFocusText(next);
               publishPlan({ nextFocusText: next });
             }}
@@ -584,12 +613,32 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
       ) : null}
       </Box>
 
+      {acceptedContextIds.length > 0 ? (
+        <Box component="section" aria-label="已选历史资料" sx={{ borderTop: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 2, display: 'grid', gap: 1 }}>
+          <Typography variant="body2" sx={{ color: 'info.main', fontWeight: 600 }}>已选历史资料</Typography>
+          {availableContext.filter(item => acceptedContextIds.includes(item.id)).map(item => (
+            <Box key={item.id} sx={{ display: 'flex', gap: 1, alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+              <Typography variant="metadata" sx={{ overflowWrap: 'anywhere', minWidth: 0 }}>{item.title}</Typography>
+              <Button type="button" size="small" aria-label={`取消选择：${item.title}`} onClick={() => toggleContext(item.id)} sx={{ flexShrink: 0 }}>移除</Button>
+            </Box>
+          ))}
+        </Box>
+      ) : null}
+      {legacySelectionRef.current && acceptedContextIds.some((id) => legacySelectionRef.current?.ids.includes(id)) &&
+       legacySelectionRef.current.ids.some((id) => !acceptedContextIds.includes(id)) ? (
+        <Box role="alert" sx={{ typography: 'metadata', color: 'warning.main', mt: 1 }}>
+          旧草稿没有保存资料与来源的对应关系。请取消其余旧资料，再重新选择需要的资料。
+        </Box>
+      ) : null}
+      <Box component="details" sx={{ borderTop: 1, borderColor: 'divider' }}>
+        <Box component="summary" sx={{ cursor: 'pointer', px: { xs: 2, sm: 3 }, py: 2, color: 'info.main', typography: 'body2', fontWeight: 600 }}>历史资料建议（可选） · 已选 {acceptedContextIds.length} 条</Box>
       <PersonalContextSuggestions
         items={availableContext}
         selectedIds={acceptedContextIds}
         loading={contextSearchLoading}
         onToggle={toggleContext}
       />
+      </Box>
 
       <Box component="section" aria-label="更多设置" sx={{ borderTop: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box sx={{ mb: 1 }}>
@@ -731,6 +780,10 @@ export function AiResearchBrief({ question, context, topicHint, children, startA
           建议补充：{missingFields.map((field) => translateMissing(field)).join('、')}
         </Typography>
       ) : null}
+      <Box component="footer" sx={{ position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 1.5, px: { xs: 2, sm: 3 }, py: 2, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider' }}>
+        <Typography variant="metadata" color="text.secondary">确认以上设置，启动后将锁定。</Typography>
+        {startAction}
+      </Box>
     </Paper>
   );
 }
@@ -751,11 +804,11 @@ function PlanningFallback({
   children?: ReactNode;
 }) {
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden', borderColor: 'primary.main', bgcolor: 'background.paper', typography: 'metadata' }}>
+    <Paper variant="outlined" sx={{ minWidth: 0, borderColor: 'divider', bgcolor: 'background.paper', typography: 'metadata' }}>
       <Box component="header" sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
         <Box>
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'metadata', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'primary.main' }}>
-            <BookOpenCheck size={14} /> 研究方案
+          <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, typography: 'listTitle', fontWeight: 600, color: 'text.primary' }}>
+            <BookOpenCheck size={18} aria-hidden /> 研究方案
           </Box>
           <Typography component="p" variant="metadata" sx={{ mt: 0.5, maxWidth: '36rem', lineHeight: 1.6, color: 'text.secondary' }}>
             {loading ? '研究方案正在生成；你可以先调整资料和产出，也可以直接开始。' : '研究方案暂时不可用；你仍可以按当前问题直接开始，完成后再补充方案。'}
@@ -763,12 +816,11 @@ function PlanningFallback({
         </Box>
         <Box sx={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 1 }}>
           <Chip size="small" color={loading ? 'default' : 'primary'} variant="outlined" label={loading ? '计划生成中' : '可直接开始'} />
-          {startAction}
         </Box>
       </Box>
-      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', gap: 1.5, px: 2, py: 2 }}>
+      <Box component="section" aria-label="研究方案" sx={{ display: 'grid', minWidth: 0, gap: 3, px: { xs: 2, sm: 3 }, py: 3 }}>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
-            <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>回答什么</Typography>
+            <Typography component="h3" variant="body2" sx={{ fontWeight: 500 }}>研究什么</Typography>
             <Typography component="span" variant="metadata" color="text.secondary">{loading ? '正在整理研究角度' : '当前问题仍可执行'}</Typography>
           </Box>
           {loading ? (
@@ -789,10 +841,11 @@ function PlanningFallback({
           )}
       </Box>
       {children ? (
-        <Box component="section" aria-label="资料与产出" sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'action.hover', px: 2, py: 2 }}>
+        <Box component="section" aria-label="资料与产出" sx={{ borderTop: 1, borderColor: 'divider', px: { xs: 2, sm: 3 }, py: 3 }}>
           {children}
         </Box>
       ) : null}
+      <Box component="footer" sx={{ display: 'flex', justifyContent: 'flex-end', p: 2, borderTop: 1, borderColor: 'divider' }}>{startAction}</Box>
     </Paper>
   );
 }
@@ -822,7 +875,8 @@ function splitPlanItems(value: string, includeComma = false): string[] {
   return value.split(separator).map((item) => item.trim()).filter(Boolean).slice(0, 20);
 }
 
-function contextKindLabel(kind: 'research' | 'knowledge' | 'issue' | 'bookmark'): string {
+function contextKindLabel(kind: 'research' | 'knowledge' | 'issue' | 'bookmark' | 'legacy'): string {
+  if (kind === 'legacy') return '旧草稿资料';
   if (kind === 'research') return '历史研究';
   if (kind === 'knowledge') return '知识库';
   if (kind === 'bookmark') return '收藏';

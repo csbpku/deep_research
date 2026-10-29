@@ -52,6 +52,123 @@ beforeEach(() => {
 });
 
 describe('GET /api/ai-research/[jobId] evidence workspace', () => {
+
+  it('does not present a quick-brief planning context as captured source evidence', async () => {
+    mocks.jobFindUnique.mockResolvedValue({
+      requesterId: USER_ID, context: '[用户确认的研究计划] only a plan', reportType: 'summary_brief',
+      reportLength: 'brief', sourcePolicy: 'prefer_user_sources', sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: `context:${JOB_ID}`, source_ref: { type: 'url', value: `context:${JOB_ID}` },
+        title: 'Model guidance', snippet: '[用户确认的研究计划] only a plan', step_captured: 'search' }],
+      updatedAt: new Date('2026-10-28T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [], _count: { aiResearchSources: 0 },
+    });
+    mocks.fetchAiEngine.mockResolvedValue({ ok: true, status: 200, body: {
+      job_id: JOB_ID, status: 'succeeded', final_status: 'succeeded', report_type: 'summary_brief',
+      topic: 'Quick direction', output_text: 'A model-only direction, not verified research.',
+      draft_research_id: null, sources_count: 1, partial_sources_count: 1,
+    } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+    expect(payload.capturedSourcesCount).toBe(0);
+    expect(payload.savedSourcesCount).toBe(0);
+    expect(payload.sources).toEqual([]);
+    expect(payload.artifact.content).toContain('A model-only direction');
+    expect(payload.draftResearchId).toBeNull();
+  });
+
+  it('keeps real URL evidence when synthetic planning context is also present', async () => {
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, reportType: 'summary_brief',
+      sourceRefs: [], brief: null, conversation: [], updatedAt: new Date('2026-10-28T00:00:00Z'), draftResearch: null,
+      partialSources: [
+        { canonical_key: `context:${JOB_ID}`, source_ref: { type: 'url', value: `context:${JOB_ID}` }, title: 'Plan', snippet: 'A user plan' },
+        { canonical_key: 'https://docs.python.org/3/library/asyncio-task.html', source_ref: { type: 'url', value: 'https://docs.python.org/3/library/asyncio-task.html' }, title: 'Official tasks', snippet: 'An actual captured paragraph.' },
+      ], aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+    expect(payload.capturedSourcesCount).toBe(1);
+    expect(payload.sources).toHaveLength(1);
+    expect(payload.sources[0].href).toBe('https://docs.python.org/3/library/asyncio-task.html');
+  });
+
+  it('returns the matching bounded captured body for the owner and preserves short fallback', async () => {
+    const longBody = 'captured evidence '.repeat(600);
+    const preview = longBody.slice(0, 1999).trimEnd() + '…';
+    mocks.jobFindUnique.mockResolvedValue({
+      requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonicalKey: 'https://example.com/one', sourceRef: { type: 'url', value: 'https://example.com/one' }, title: 'One', snippet: longBody }],
+      updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [
+        { id: 'one', title: 'One', snippet: preview, score: 1, sourceRef: { type: 'url', value: 'https://example.com/one' }, canonicalKey: 'https://example.com/one', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
+        { id: 'two', title: 'Two', snippet: 'fallback', score: 1, sourceRef: { type: 'url', value: 'https://example.com/two' }, canonicalKey: 'https://example.com/two', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') },
+      ], _count: { aiResearchSources: 2 },
+    });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    const payload = await response.json();
+    expect(payload.sources[0].snippet).toBe(longBody);
+    expect(payload.sources[1].snippet).toBe('fallback');
+  });
+
+  it('shows matching full evidence alongside changed and added ledger entries', async () => {
+    const key = 'https://example.com/docs'; const ref = { type: 'url', value: key }; const body = 'long evidence '.repeat(400);
+    const changedKey = 'https://example.com/edited'; const changedRef = { type: 'url', value: changedKey };
+    const addedKey = 'https://example.com/new'; const addedRef = { type: 'url', value: addedKey };
+    const date = new Date('2026-09-01T00:00:00Z');
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: ref, title: 'Docs', snippet: body },
+        { canonical_key: changedKey, source_ref: changedRef, title: 'Changed', snippet: 'Old evidence text' }], updatedAt: date,
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [
+        { id: 'one', sourceRef: ref, canonicalKey: key, title: 'Docs', description: body.slice(0, 999).trimEnd() + '…', createdAt: date },
+        { id: 'two', sourceRef: changedRef, canonicalKey: changedKey, title: 'Changed', description: 'New evidence text', createdAt: date },
+        { id: 'three', sourceRef: addedRef, canonicalKey: addedKey, title: 'Added', description: 'Added evidence text', createdAt: date },
+      ] }, aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources.map((source: { snippet: string }) => source.snippet)).toEqual([body, 'New evidence text', 'Added evidence text']);
+  });
+
+  it('preserves a captured body of 9000 Unicode characters without cutting surrogate pairs', async () => {
+    const body = '💡'.repeat(9000);
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: 'https://example.com/unicode', source_ref: { type: 'url', value: 'https://example.com/unicode' }, title: 'One', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'), draftResearch: null,
+      aiResearchSources: [{ id: 'one', title: 'One', snippet: Array.from(body).slice(0, 1999).join('') + '…', score: 1, sourceRef: { type: 'url', value: 'https://example.com/unicode' }, canonicalKey: 'https://example.com/unicode', stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe(body);
+  });
+
+  it('keeps an updated research-ledger description when a captured snapshot has the same URL', async () => {
+    const key = 'https://example.com/docs';
+    const sourceRef = { type: 'url', value: key };
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: sourceRef, title: 'Docs', snippet: 'Old captured full text' }],
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [{ id: 'ledger-1', sourceRef, canonicalKey: key, title: 'Docs', description: 'New evidence text', createdAt: new Date('2026-09-02T00:00:00Z') }] },
+      aiResearchSources: [{ id: 'job-1', title: 'Docs', snippet: 'Old captured full text', score: 1, sourceRef, canonicalKey: key, stepCaptured: 'search', createdAt: new Date('2026-09-01T00:00:00Z') }], _count: { aiResearchSources: 1 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe('New evidence text');
+  });
+
+  it('upgrades a research ledger only when snapshot identity and short preview match', async () => {
+    const key = 'https://example.com/docs'; const sourceRef = { type: 'url', value: key }; const body = '证据'.repeat(800);
+    const description = Array.from(body).slice(0, 999).join('') + '…';
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: sourceRef, title: 'Docs', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [{ id: 'ledger-1', sourceRef, canonicalKey: key, title: 'Docs', description, createdAt: new Date('2026-09-02T00:00:00Z') }] },
+      aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe(body);
+  });
+
+  it.each(['title', 'sourceRef'])('does not upgrade when %s no longer matches', async (field) => {
+    const key = 'https://example.com/docs'; const ref = { type: 'url', value: key }; const body = '正文'.repeat(700);
+    const description = Array.from(body).slice(0, 999).join('') + '…';
+    const ledger = { id: 'ledger-1', sourceRef: field === 'sourceRef' ? { type: 'url', value: 'https://example.com/new' } : ref,
+      canonicalKey: key, title: field === 'title' ? 'New title' : 'Docs', description, createdAt: new Date('2026-09-02T00:00:00Z') };
+    mocks.jobFindUnique.mockResolvedValue({ requesterId: USER_ID, context: null, sourceRefs: [], brief: null, conversation: [],
+      partialSources: [{ canonical_key: key, source_ref: ref, title: 'Docs', snippet: body }], updatedAt: new Date('2026-09-01T00:00:00Z'),
+      draftResearch: { title: 'Report', body: '# 结论', researchSources: [ledger] }, aiResearchSources: [], _count: { aiResearchSources: 0 } });
+    const response = await GET(request(), { params: Promise.resolve({ jobId: JOB_ID }) });
+    expect((await response.json()).sources[0].snippet).toBe(description);
+  });
+
   it('keeps execution success separate from insufficient research coverage', async () => {
     mocks.jobFindUnique.mockResolvedValue({
       requesterId: USER_ID,

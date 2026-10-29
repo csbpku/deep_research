@@ -24,6 +24,7 @@ export interface AiResearchConversationSummary {
 
 export interface AiResearchConversationDetail extends AiResearchConversationSummary {
   messages: AiResearchChatMessage[];
+  userId?: string;
 }
 
 export function publicAiResearchMessage(message: {

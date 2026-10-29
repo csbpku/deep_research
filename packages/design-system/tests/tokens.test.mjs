@@ -52,3 +52,18 @@ test('Web and Reader generated styles match the shared source', () => {
   execFileSync(process.execPath, [new URL('../scripts/generate.mjs', import.meta.url).pathname, '--check']);
   execFileSync(process.execPath, [new URL('../../../apps/extension/scripts/generate-design-system.mjs', import.meta.url).pathname, '--check']);
 });
+
+test('evidence has a distinct semantic colour from primary actions in both themes', () => {
+  for (const [name, tokens] of [['light', light], ['dark', dark]]) {
+    assert.notEqual(tokens['color-evidence'], tokens['color-primary'], `${name}: sources must be distinguishable from actions`);
+    assert.ok(contrast(tokens['color-evidence'], tokens['color-evidence-container']) >= 4.5, `${name}: evidence text contrast`);
+  }
+});
+
+test('slide paper keeps body, secondary and evidence text readable in both themes', () => {
+  for (const [name, tokens] of [['light', light], ['dark', dark]]) {
+    for (const key of ['color-text', 'color-text-secondary', 'color-evidence', 'color-primary']) {
+      assert.ok(contrast(tokens[key], tokens['color-presentation-paper']) >= 4.5, `${name}: ${key} on presentation paper`);
+    }
+  }
+});

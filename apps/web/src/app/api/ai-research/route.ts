@@ -87,7 +87,7 @@ function briefInstruction(brief: ResearchBrief | undefined): string {
     ...(brief.questionsToAnswer.length > 0
       ? ['- 必须回答的问题：', ...brief.questionsToAnswer.map((item) => `  - ${item}`)]
       : []),
-    ...(brief.comparisonOptions.length > 0
+    ...(brief.objective === 'decide' && brief.comparisonOptions.length > 0
       ? ['- 必须比较的对象或方案：', ...brief.comparisonOptions.map((item) => `  - ${item}`)]
       : []),
     ...(brief.objective === 'decide' && brief.decisionDimensions.length > 0

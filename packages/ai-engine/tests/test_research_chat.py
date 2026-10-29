@@ -42,18 +42,21 @@ def test_follow_up_streams_done_frame_with_report_grounding() -> None:
                     "source_type": "web",
                 }
             ],
-            "history": [{"role": "user", "content": "前期问题"}, {"role": "assistant", "content": "前期回答"}],
+            "history": [
+                {"role": "user", "content": "前期问题"},
+                {"role": "assistant", "content": "前期回答"},
+            ],
             "question": "再展开讲讲风险",
         },
     ) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
 
-    assert 'event: start' in body
-    assert 'event: delta' in body
-    assert 'event: done' in body
+    assert "event: start" in body
+    assert "event: delta" in body
+    assert "event: done" in body
     assert '"content":' in body
-    assert 'event: error' not in body
+    assert "event: error" not in body
 
 
 def test_follow_up_rejects_empty_question() -> None:
@@ -112,7 +115,7 @@ def test_follow_up_uses_chat_mode_prompt_and_system_instructions() -> None:
     ) as response:
         body = "".join(response.iter_text())
 
-    assert 'event: error' not in body
+    assert "event: error" not in body
     assert adapter.captured is not None
     assert adapter.captured.request_id.startswith("chat-")
     assert "不要展示内部推理过程" in (adapter.captured.context or "")
@@ -125,3 +128,86 @@ def test_follow_up_uses_chat_mode_prompt_and_system_instructions() -> None:
 def test_clean_model_text_strips_closed_and_unclosed_think_blocks() -> None:
     assert _clean_model_text("<think>内部推理</think>\n这是最终回答。") == "这是最终回答。"
     assert _clean_model_text("<think>未闭合的推理") == ""
+
+
+def test_follow_up_ledger_includes_late_evidence_and_shares_a_bounded_budget() -> None:
+    from ai_engine.server.research_chat import FollowUpBody, _format_evidence_ledger
+
+    body = FollowUpBody(
+        user_id="u",
+        question="Explain cancellation",
+        evidence=[
+            {"key": "first", "excerpt": "X" * 5000 + " ExceptionGroup and CancelledError differ."},
+            {"key": "second", "excerpt": "Y" * 12000},
+        ],
+    )
+    ledger = _format_evidence_ledger(body.evidence)
+    assert "ExceptionGroup and CancelledError differ." in ledger
+    many = [dict(key=f"source-{i}", excerpt="Z" * 12000) for i in range(32)]
+    bounded = FollowUpBody(user_id="u", question="Compare", evidence=many)
+    output = _format_evidence_ledger(bounded.evidence)
+    assert output.count("Z") == 120000
+    assert "[evidence-source 32]" in output
+
+
+def test_follow_up_accepts_web_evidence_metadata_names() -> None:
+    from ai_engine.server.research_chat import FollowUpBody
+
+    body = FollowUpBody.model_validate(
+        {
+            "user_id": "u",
+            "question": "q",
+            "evidence": [
+                {
+                    "key": "k",
+                    "excerpt": "body",
+                    "capturedAt": "2026-10-28T00:00:00Z",
+                    "sourceType": "research",
+                }
+            ],
+        }
+    )
+    assert body.evidence[0].captured_at == "2026-10-28T00:00:00Z"
+    assert body.evidence[0].source_type == "research"
+
+
+def test_follow_up_passes_late_current_evidence_to_adapter_without_search() -> None:
+    class CaptureAdapter(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.captured: ResearchRequest | None = None
+
+        async def submit(self, request: ResearchRequest) -> str:
+            self.captured = request
+            return await super().submit(request)
+
+    adapter = CaptureAdapter()
+    app = FastAPI()
+    app.include_router(router)
+    app.state.adapter = adapter
+    client = TestClient(app)
+    with client.stream(
+        "POST",
+        "/api/ai-research/chat/follow-up",
+        json={
+            "user_id": "u",
+            "report_title": "Asyncio",
+            "report_content": "Report",
+            "question": "单个任务取消与非取消异常分别如何处理？",
+            "evidence": [
+                {
+                    "key": "https://example.test/asyncio",
+                    "title": "Official",
+                    "sourceType": "url",
+                    "excerpt": "Documentation. " * 400
+                    + "A failure other than CancelledError cancels other tasks; exceptions form an ExceptionGroup.",
+                }
+            ],
+        },
+    ) as response:
+        assert response.status_code == 200
+        assert "event: done" in "".join(response.iter_text())
+    assert adapter.captured is not None
+    assert "A failure other than CancelledError" in (adapter.captured.context or "")
+    assert "ExceptionGroup" in (adapter.captured.context or "")
+    assert adapter.captured.source_refs == ()

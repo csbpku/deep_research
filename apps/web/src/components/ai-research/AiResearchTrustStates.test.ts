@@ -190,3 +190,36 @@ describe('inline research progress during a background read failure', () => {
     expect(html).toContain('调研状态暂时不可读');
   });
 });
+
+
+describe('quick-brief evidence profile', () => {
+  it('shows model-only output without promoting a runtime planning context count to fetched evidence', () => {
+    mocks.query.mockReturnValue({ isLoading: false, isError: false, data: {
+      jobId: 'quick-1', topic: 'Quick direction', status: 'succeeded', finalStatus: 'succeeded', currentStep: 'write',
+      reportType: 'summary_brief', reportLength: 'brief', partialSourcesCount: 1, capturedSourcesCount: 0,
+      sourcesCount: 1, savedSourcesCount: 0, failedSourcesCount: 0, draftResearchId: null,
+      outputText: 'A model-only direction', artifact: { type: 'markdown', title: 'Quick direction', content: 'A model-only direction' },
+      deliverableStatus: 'report', review: null, researchProgress: { sourcesCaptured: 1 }, sources: [],
+    } });
+    const html = render(h(InlineAiResearchStatus, { jobId: 'quick-1' }));
+    expect(html).toContain('仅模型摘录');
+    expect(html).not.toContain('已抓取正文');
+    expect(html).not.toContain('资料已保留');
+    expect(html).toContain('不做完整检索或逐条核验');
+  });
+
+  it('retains real captured evidence on a quick brief without calling it verified research', () => {
+    mocks.query.mockReturnValue({ isLoading: false, isError: false, data: {
+      jobId: 'quick-2', topic: 'Quick evidence', status: 'succeeded', finalStatus: 'succeeded', currentStep: 'write',
+      reportType: 'summary_brief', reportLength: 'brief', partialSourcesCount: 2, capturedSourcesCount: 1,
+      sourcesCount: 2, savedSourcesCount: 1, failedSourcesCount: 0, draftResearchId: null,
+      outputText: 'A quick direction', artifact: { type: 'markdown', title: 'Quick evidence', content: 'A quick direction' },
+      deliverableStatus: 'report', review: null, researchProgress: { sourcesCaptured: 2 },
+      sources: [{ id: 'real', title: 'Official source', snippet: 'Captured text.', href: 'https://docs.python.org/3/', type: 'url' }],
+    } });
+    const html = render(h(InlineAiResearchStatus, { jobId: 'quick-2' }));
+    expect(html).toContain('快速判断已生成');
+    expect(html).toContain('不做完整检索或逐条核验');
+    expect(html).not.toContain('可以直接参考');
+  });
+});

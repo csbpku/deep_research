@@ -7,7 +7,7 @@
 // creates a durable run; legacy review* fields are updated as compatibility
 // mirrors only.
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { Prisma } from '@prisma/client';
@@ -20,6 +20,7 @@ import { toApiErrorResponse } from '../../../../../lib/errors';
 import { withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { hashResearchRevision } from '../../../../../lib/research-revision';
+import { hashCanonicalSourceSnapshot } from '../../../../../lib/research-source-snapshot';
 import { evaluateResearchSufficiency } from '../../../../../lib/research-sufficiency';
 import { ResearchBriefSchema } from '@deep-research/shared/schemas';
 
@@ -58,6 +59,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           id: true,
           brief: true,
           sourcePolicy: true,
+          partialSources: true,
           aiResearchSources: {
             orderBy: { createdAt: 'asc' },
             select: { canonicalKey: true, title: true, snippet: true },
@@ -89,7 +91,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     });
   }
   const revisionHash = hashResearchRevision(research);
-  const sourceSnapshotHash = hashSourceSnapshot(research.researchSources);
+  const sourceSnapshotHash = hashCanonicalSourceSnapshot(research.researchSources, research.sourceAiJob?.partialSources);
   const runId = randomUUID();
   const queuedAt = new Date();
   const parsedBrief = ResearchBriefSchema.safeParse(research.sourceAiJob?.brief);
@@ -102,6 +104,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
   });
   const queuedDetails = {
     phase: 'queued',
+    sourceSnapshotFormat: 'canonical-v1',
     status: 'queued',
     attempts: 0,
     runId,
@@ -255,24 +258,3 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     review: queuedDetails,
   }, { status: 202 });
 });
-
-function hashText(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function hashSourceSnapshot(sources: Array<{
-  sourceRef: unknown;
-  canonicalKey: string;
-  title: string | null;
-  description: string | null;
-}>): string {
-  const payload = sources
-    .map((source) => ({
-      canonicalKey: source.canonicalKey,
-      sourceRef: source.sourceRef,
-      title: source.title,
-      snippet: source.description,
-    }))
-    .sort((a, b) => a.canonicalKey.localeCompare(b.canonicalKey));
-  return hashText(JSON.stringify(payload));
-}

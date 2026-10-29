@@ -118,6 +118,8 @@ const DIMENSION_ALIASES: Record<string, string[]> = {
   '部署与构建': ['部署', '构建', '镜像', '安装', 'build', 'deploy', 'image', 'install'],
   '回滚与恢复': ['回滚', '恢复', '备份', '版本', 'rollback', 'restore', 'backup', 'recovery'],
   '可运维性': ['运维', '监控', '日志', '升级', '维护', 'operation', 'monitoring', 'maintenance'],
+  '异常传播': ['异常', 'exception', 'error propagation'],
+  '取消行为': ['取消', 'cancel', 'cancellation'],
   '安全与风险': ['安全', '风险', '权限', '漏洞', '合规', 'security', 'risk', 'vulnerability'],
 };
 
@@ -304,7 +306,7 @@ export function evaluateResearchSufficiency(input: ResearchSufficiencyInput): Re
   const options = Array.from(new Set((input.brief?.comparisonOptions ?? []).map((option) => option.trim()).filter(Boolean)));
   const isDecision = input.brief?.objective === 'decide';
   const dimensions = isDecision
-    ? Array.from(new Set((input.brief?.decisionDimensions?.length ? input.brief.decisionDimensions : DEFAULT_RESEARCH_DECISION_DIMENSIONS).map((dimension) => dimension.trim()).filter(Boolean)))
+    ? Array.from(new Set((input.brief?.decisionDimensions ?? DEFAULT_RESEARCH_DECISION_DIMENSIONS).map((dimension) => dimension.trim()).filter(Boolean)))
     : [];
 
   for (const option of options) {
@@ -345,7 +347,7 @@ export function evaluateResearchSufficiency(input: ResearchSufficiencyInput): Re
     }
   }
   const missingCells = cells.filter((cell) => cell.state !== 'evidence').map((cell) => `${cell.option} × ${cell.dimension}`);
-  const matrix: ResearchCoverageMatrix | null = isDecision && options.length > 0
+  const matrix: ResearchCoverageMatrix | null = isDecision && options.length > 0 && dimensions.length > 0
     ? { options, dimensions, cells, complete: missingCells.length === 0, missingCells }
     : null;
 

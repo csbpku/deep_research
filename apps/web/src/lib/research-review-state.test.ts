@@ -31,6 +31,15 @@ describe('resolveCurrentReviewState', () => {
     expect(state).toMatchObject({ status: 'stale', outcome: 'stale', isCurrentRevision: false, isLegacyFallback: false });
   });
 
+  it('does not resurrect an older success after the latest run is stale', () => {
+    const revisionHash = hashResearchRevision(revision);
+    const state = resolveCurrentReviewState(revision, [
+      { id: 'latest', revisionHash, executionStatus: 'stale', outcome: 'stale', attempt: 1, createdAt: '2026-10-28T01:00:00Z' },
+      { id: 'old', revisionHash, executionStatus: 'completed', outcome: 'clear', attempt: 1, createdAt: '2026-10-27T01:00:00Z' },
+    ]);
+    expect(state).toMatchObject({ status: 'stale', isCurrentRevision: false });
+  });
+
   it('only allows the compatibility fallback when runs were not loaded', () => {
     const state = resolveCurrentReviewState(revision, undefined, 'passed');
     expect(state).toMatchObject({ status: 'passed', outcome: 'clear', isCurrentRevision: true, isLegacyFallback: true });

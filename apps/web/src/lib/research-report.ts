@@ -132,9 +132,10 @@ interface SlideSection {
 /** Infer an explicit page constraint from the user's request or saved brief. */
 export function extractSlideLimit(text: string, fallback = DEFAULT_SLIDE_LIMIT): number {
   const source = String(text ?? '');
-  const match = source.match(/(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)?/u)
+  const match = source.match(/(?:不超过|以内|最多|至多)\s*(\d+)\s*(?:页|张)/u)
     ?? source.match(/(\d+)\s*(?:页|张)\s*(?:以内|上限)/u)
-    ?? source.match(/(?:max(?:imum)?|up\s+to)\s*(\d+)\s*(?:slides?|pages?)/iu);
+    ?? source.match(/(?:max(?:imum)?|up\s+to)\s*(\d+)\s*(?:slides?|pages?)/iu)
+    ?? source.match(/(\d+)\s*(?:页|张|slides?\b|pages?\b)/iu);
   const value = Number(match?.[1]);
   if (!Number.isFinite(value)) return fallback;
   return Math.min(MAX_SLIDE_LIMIT, Math.max(MIN_SLIDE_LIMIT, Math.trunc(value)));
@@ -171,6 +172,36 @@ function groupSections(sections: SlideSection[], limit: number): SlideSection[][
   return groups;
 }
 
+function renderNumberedSlides(source: string, limit: number): string | null {
+  const token = /^#{1,2}[ \t]+(?:(?:slide|幻灯片)[ \t]*(\d+)[ \t]*[:：-][ \t]*(.*?)|(参考文献|references|bibliography))[ \t]*#*[ \t]*$/gimu;
+  const matches = Array.from(source.matchAll(token));
+  if (!matches.some((match) => match[1] === '1')) return null;
+  const preamble = source.slice(0, matches[0].index).trim();
+  const pages: SlideSection[] = [];
+  const references: string[] = [];
+  let hasReferences = false;
+  matches.forEach((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? source.length;
+    const body = source.slice(start, end).trim();
+    const label = (match[2] ?? '').trim();
+    if (match[3] || /^(?:参考文献|references|bibliography)$/iu.test(label)) {
+      hasReferences = true;
+      if (body) references.push(body);
+    } else {
+      pages.push({ heading: label, body });
+    }
+  });
+  if (!pages.length) return null;
+  if (preamble) pages[0].body = [preamble, pages[0].body].filter(Boolean).join('\n\n');
+  const slides = groupSections(pages, limit).map((group, index) => {
+    const bodies = [group[0].body, ...group.slice(1).map((section) => `### ${section.heading}\n\n${section.body}`.trim())].filter(Boolean);
+    return `## Slide ${index + 1}: ${group[0].heading}${bodies.length ? `\n\n${bodies.join('\n\n')}` : ''}`;
+  });
+  if (hasReferences) slides.push(`## 参考文献${references.length ? `\n\n${references.join('\n\n')}` : ''}`);
+  return slides.join('\n\n');
+}
+
 /**
  * Keep the presentation boundary compatible with older jobs whose draft body
  * was persisted before the Slides renderer ran.
@@ -187,9 +218,8 @@ export function renderSlidesArtifactContent(content: string, title = 'AI 调研'
   if (!normalized) return `## Slide 1: ${safeTitle}`;
 
   const slideLimit = extractSlideLimit(`${safeTitle}\n${normalized}`);
-  const alreadyCanonical = /^#{1,2}\s+Slide\s+1\s*:/imu.test(normalized)
-    && (normalized.match(/^#{1,2}\s+Slide\s+\d+\s*:/gmu)?.length ?? 0) <= slideLimit;
-  if (alreadyCanonical) return normalized;
+  const numbered = renderNumberedSlides(normalized, slideLimit);
+  if (numbered !== null) return numbered;
 
   const groups = groupSections(splitMarkdownSections(normalized), slideLimit);
   return groups.map((group, index) => {

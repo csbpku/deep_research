@@ -162,6 +162,11 @@ test.describe('AI Research V2 brief', () => {
 
     // Brief 卡片应出现
     await expect(page.getByText('研究方案', { exact: true })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('button', { name: '快速概览', exact: true })).toBeVisible();
+    const objective = page.getByRole('combobox', { name: '研究方式', exact: true });
+    await expect(objective).toHaveText('主题概览');
+    await objective.click();
+    await expect(page.getByRole('option', { name: '主题概览', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await page.getByRole('option', { name: '系统学习', exact: true }).click();
+    await expect(objective).toHaveText('系统学习');
   });
 });

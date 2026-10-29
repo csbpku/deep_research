@@ -1,8 +1,9 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 
 import { prisma } from './db';
 import { hashResearchRevision } from './research-revision';
+import { hashCanonicalSourceSnapshot } from './research-source-snapshot';
 
 type SourceSnapshotRow = {
   sourceRef: unknown;
@@ -27,20 +28,8 @@ export type ResearchEvidenceTaskView = {
   completedAt: string | null;
 };
 
-function hashText(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-export function hashResearchSourceSnapshot(sources: SourceSnapshotRow[]): string {
-  const payload = sources
-    .map((source) => ({
-      canonicalKey: source.canonicalKey,
-      sourceRef: source.sourceRef,
-      title: source.title,
-      snippet: source.description,
-    }))
-    .sort((a, b) => a.canonicalKey.localeCompare(b.canonicalKey));
-  return hashText(JSON.stringify(payload));
+export function hashResearchSourceSnapshot(sources: SourceSnapshotRow[], partial?: unknown): string {
+  return hashCanonicalSourceSnapshot(sources, partial);
 }
 
 function asTaskView(task: {
@@ -117,7 +106,7 @@ export async function reconcileResearchEvidenceTask(
           risks: true,
           tags: true,
           status: true,
-          sourceAiJob: { select: { id: true } },
+          sourceAiJob: { select: { id: true, partialSources: true } },
           reviewRuns: {
             where: { executionStatus: 'completed' },
             orderBy: { createdAt: 'desc' },
@@ -247,7 +236,7 @@ export async function reconcileResearchEvidenceTask(
             risks: true,
             tags: true,
             status: true,
-            sourceAiJob: { select: { id: true } },
+            sourceAiJob: { select: { id: true, partialSources: true } },
             reviewRuns: {
               where: { executionStatus: 'completed' },
               orderBy: { createdAt: 'desc' },
@@ -320,7 +309,7 @@ export async function reconcileResearchEvidenceTask(
       orderBy: { createdAt: 'asc' },
       select: { sourceRef: true, canonicalKey: true, title: true, description: true },
     });
-    const sourceSnapshotHash = hashResearchSourceSnapshot(sourceLedger);
+    const sourceSnapshotHash = hashResearchSourceSnapshot(sourceLedger, fresh.research.sourceAiJob?.partialSources);
     const activeRun = await tx.researchReviewRun.findFirst({
       where: { researchId: fresh.researchId, executionStatus: { in: ['queued', 'reviewing'] } },
       select: { id: true },
@@ -346,6 +335,7 @@ export async function reconcileResearchEvidenceTask(
     const reviewRunId = randomUUID();
     const details = {
       phase: 'queued',
+      sourceSnapshotFormat: 'canonical-v1',
       status: 'queued',
       attempts: 0,
       runId: reviewRunId,

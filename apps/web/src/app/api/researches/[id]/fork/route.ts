@@ -18,6 +18,7 @@ import { log, withRequestId } from '../../../../../lib/log';
 import { ERROR_CODES } from '@deep-research/shared/errors';
 import { RESEARCH_STATUS } from '@deep-research/shared/states';
 import { hashResearchRevision } from '../../../../../lib/research-revision';
+import { hashCanonicalSourceSnapshot } from '../../../../../lib/research-source-snapshot';
 
 const IdParam = z.object({ id: z.string().uuid() });
 
@@ -171,13 +172,14 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
         data: {
           researchId: created.id,
           revisionHash: hashResearchRevision(existing),
-          sourceSnapshotHash: hashSourceSnapshot(existing.researchSources),
+          sourceSnapshotHash: hashCanonicalSourceSnapshot(existing.researchSources),
           policyVersion: 'fact-review-v1',
           executionStatus: 'queued',
           attempt: 0,
           triggeredBy: 'revision_fork',
           details: {
             phase: 'queued',
+            sourceSnapshotFormat: 'canonical-v1',
             status: 'queued',
             attempts: 0,
             source: 'revision_fork',
@@ -225,24 +227,3 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     author: { id: user.id, name: user.name },
   }, { status: 201 });
 });
-
-function hashText(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function hashSourceSnapshot(sources: Array<{
-  sourceRef: unknown;
-  canonicalKey: string;
-  title: string | null;
-  description: string | null;
-}>): string {
-  const payload = sources
-    .map((source) => ({
-      canonicalKey: source.canonicalKey,
-      sourceRef: source.sourceRef,
-      title: source.title,
-      snippet: source.description,
-    }))
-    .sort((a, b) => a.canonicalKey.localeCompare(b.canonicalKey));
-  return hashText(JSON.stringify(payload));
-}
