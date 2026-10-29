@@ -51,7 +51,7 @@ describe('RadarExternalReadingLanding', () => {
       },
     }));
 
-    expect(html).toContain('安装 Reader');
+    expect(html).toContain('用 Reader 阅读');
     // Only the confirmation inside the dialog may be intercepted by Reader.
     expect(html).toContain('data-reader-launch-source=');
     expect(html).toContain('为什么值得看');

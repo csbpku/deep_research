@@ -5,6 +5,7 @@ import { readerStore } from './reader-store.js';
 import { activationReason } from './activation.js';
 import { DEFAULT_WEB_APP_URL, resolvePlatformOrigin } from './platform-config.js';
 import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
+import { resumePendingInstall } from './reader-install-resume.js';
 
 const CONTENT_SCRIPT = 'content.js';
 const RESUME_ALARM = 'deep-research-reader-resume';
@@ -499,6 +500,9 @@ async function createReaderMenus() {
   });
 }
 chrome.runtime.onInstalled.addListener(createReaderMenus);
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') void resumePendingInstall(chrome).catch(() => {});
+});
 chrome.runtime.onStartup.addListener(createReaderMenus);
 chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.readerUiLanguage) void createReaderMenus(); });
 chrome.contextMenus?.onClicked.addListener((info, tab) => {

@@ -36,7 +36,7 @@ test('an explicitly saved judgment returns to its topic and paraphrased opening,
   await page.getByRole('tab', { name: /相关研究/ }).click();
   await expect(page.getByRole('tabpanel').filter({ visible: true }).getByRole('link', { name: payload.title, exact: true }).first()).toBeVisible();
   await page.goto(`/radar/${radar.id}`);
-  await expect(page.getByRole('region', { name: '你之前的判断' }).getByText(note, { exact: false })).toBeVisible();
+  await expect(page.getByRole('region', { name: '你之前的笔记' }).getByText(note, { exact: false })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('private-judgment-returned.png'), fullPage: true });
 
   const other = await browser.newContext();

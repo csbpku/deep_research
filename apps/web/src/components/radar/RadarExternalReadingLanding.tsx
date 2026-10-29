@@ -28,7 +28,7 @@ import {
 } from '../../lib/radar/source-labels';
 import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
 import { AppButton } from '@/components/material/AppButton';
-import { isReaderPromptDismissed, READER_STORE_URL } from '@/lib/reader-install';
+import { READER_STORE_URL } from '@/lib/reader-install';
 import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
@@ -137,11 +137,9 @@ export function RadarExternalReadingLanding({
 }) {
   const [platformOrigin, setPlatformOrigin] = useState<string | null>(null);
   const [sourcePromptOpen, setSourcePromptOpen] = useState(false);
-  const [readerPromptDismissed, setReaderPromptDismissed] = useState(false);
 
   useEffect(() => {
     setPlatformOrigin(window.location.origin);
-    setReaderPromptDismissed(isReaderPromptDismissed());
   }, []);
 
   const sourceLabel = formatSourceType(detail.sourceType);
@@ -188,6 +186,7 @@ export function RadarExternalReadingLanding({
               component="a" variant="outlined" color="inherit"
               href={READER_STORE_URL} target="_blank" rel="noopener noreferrer"
               data-reader-launch-source={readerUrl}
+              onClick={(event) => { event.preventDefault(); setSourcePromptOpen(true); }}
               startIcon={<BookOpenCheck aria-hidden />}
             >
               <span>用 Reader 阅读</span>
@@ -287,30 +286,22 @@ export function RadarExternalReadingLanding({
                 在来源网站继续阅读、保存和同步；只有你明确保存时才会上传内容。
               </Typography>
             </Box>
-            {readerPromptDismissed ? (
-              <AppButton
-                component="a" href={READER_STORE_URL} target="_blank" rel="noopener noreferrer"
-                variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}
-                data-reader-launch-source={readerUrl}
-              >
-                <span>用 Reader 阅读</span>
-              </AppButton>
-            ) : (
-              <AppButton type="button" onClick={() => setSourcePromptOpen(true)} variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}>
-                安装 Reader
-              </AppButton>
-            )}
+            <AppButton component="a" href={READER_STORE_URL} target="_blank" rel="noopener noreferrer"
+              variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}
+              data-reader-launch-source={readerUrl}
+              onClick={(event) => { event.preventDefault(); setSourcePromptOpen(true); }}>
+              <span>用 Reader 阅读</span>
+            </AppButton>
           </Box>
         </Box>
       </Box>
       <ReaderSourcePrompt
         key={detail.id}
         open={sourcePromptOpen}
-        onClose={() => {
-          setSourcePromptOpen(false);
-          setReaderPromptDismissed(isReaderPromptDismissed());
-        }}
+        onClose={() => setSourcePromptOpen(false)}
         readerUrl={readerUrl}
+        sourceUrl={detail.url}
+        articleTitle={detail.title}
       />
     </Box>
   );

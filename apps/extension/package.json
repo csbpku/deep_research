@@ -1,6 +1,6 @@
 {
   "name": "@deep-research/reader-extension",
-  "version": "0.2.34",
+  "version": "0.2.35",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "e2e:interaction-audit": "node e2e/interaction-audit.mjs",
     "e2e:live-reading-audit": "READER_LIVE=1 node e2e/live-reading-audit.mjs",
     "e2e:source-launch": "node e2e/platform-source-launch.mjs",
+    "e2e:install-resume": "node e2e/install-resume.mjs",
     "e2e:model-configuration": "node e2e/model-configuration.mjs",
     "e2e:live-model-configuration": "READER_LIVE=1 node e2e/live-provider-configuration.mjs",
     "e2e:conversation-history": "node e2e/conversation-history.mjs",
