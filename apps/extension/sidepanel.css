@@ -18,7 +18,7 @@ h1, h2, h3, p { margin:0 }
 #reading-section > .section-label { margin-top:0 }
 .discussion-panel { display:flex; flex-direction:column; min-height:0; flex:1 }
 .discussion-heading { display:none }
-.discussion-source-card { display:flex; align-items:center; flex:none; gap:8px; min-height:36px; padding:0px var(--reader-space-4) }
+.discussion-source-card { display:flex; align-items:center; flex:none; gap:var(--reader-space-2); min-height:var(--reader-touch-target); padding:var(--reader-space-1) var(--reader-space-4) }
 .discussion-source-main { flex:1; min-width:0 }
 .discussion-source-main strong { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .discussion-source-main span { display:none }
@@ -30,7 +30,8 @@ h1, h2, h3, p { margin:0 }
    `margin-block: auto` cannot do this: it resolves to 0 once the flex
    container overflows. */
 .chat-transcript > .conversation-empty { flex:1 0 auto; display:flex; flex-direction:column; justify-content:center; padding:28px 0px; text-wrap:pretty }
-.conversation-empty p { margin-top:var(--reader-space-2) }
+.conversation-empty h2, .conversation-empty p { text-wrap:balance }
+.conversation-empty p { max-width:48ch; margin-top:var(--reader-space-2) }
 .conversation-starters { display:grid; gap:8px; margin-top:var(--reader-space-6) }
 .conversation-message-tools { display:flex; margin-top:var(--reader-space-2) }
 .conversation-list { display:grid; grid-template-columns:minmax(0, 1fr); gap:var(--reader-space-6) }
@@ -60,8 +61,8 @@ h1, h2, h3, p { margin:0 }
 .evidence-open { display:block; margin-top:var(--reader-space-1) }
 .answer-actions { display:flex; flex-wrap:wrap; gap:var(--reader-space-2); margin-top:var(--reader-space-3) }
 .chat-selection-card, .image-context-card { position:relative; margin:var(--reader-space-2) 0 var(--reader-space-2); padding:var(--reader-space-2) var(--reader-space-2) }
-.selection-preview-heading { position:absolute; right:2px; top:2px }
-.chat-selection-card blockquote { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; max-height:40px; overflow:hidden; margin:0px var(--reader-space-5) var(--reader-space-2) 0; overflow-wrap:anywhere; user-select:text }
+.selection-preview-heading { position:absolute; right:var(--reader-space-1); top:var(--reader-space-1) }
+.chat-selection-card blockquote { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; max-height:40px; overflow:hidden; margin:0 var(--reader-space-8) var(--reader-space-2) 0; overflow-wrap:anywhere; user-select:text }
 .chat-selection-card.expanded blockquote { display:block; max-height:min(120px,20dvh); overflow:auto; white-space:pre-wrap }
 .selection-preview-actions { display:flex; flex-wrap:wrap; align-items:center; gap:0px }
 #toggle-chat-selection { margin-left:auto }
@@ -120,11 +121,19 @@ h1, h2, h3, p { margin:0 }
 #local-provider-settings [aria-invalid="true"]:focus-visible { outline-color:var(--reader-color-danger) }
 .page-notice { grid-column:1; grid-row:1; min-width:0; max-height:84px; overflow:auto; margin:0; padding:var(--reader-space-2) var(--reader-space-1) }
 .library-description { margin-top:var(--reader-space-2) }
+.library-filters { display:grid; grid-template-columns:minmax(0, 1fr); gap:var(--reader-space-3); margin-top:var(--reader-space-4) }
+.library-filters .field { margin-top:0 }
+.library-summary, .library-notice { margin-top:var(--reader-space-3) }
+.library-pagination { display:flex; align-items:center; justify-content:space-between; gap:var(--reader-space-2); margin-block:var(--reader-space-4) }
+.library-pagination span { font-variant-numeric:tabular-nums; text-align:center }
+.platform-data-details { margin-top:var(--reader-space-4) }
+@media (min-width: 520px) { .library-filters { grid-template-columns:minmax(0, 1fr) minmax(140px, 0.55fr); align-items:end } }
 .actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:var(--reader-space-4) }
 .field { margin-top:var(--reader-space-4) }
 .field label { display:block; margin-bottom:var(--reader-space-2) }
 .settings-view-head { display:flex; justify-content:space-between; align-items:center; gap:8px }
-.settings-view-head h2, .setting-panel > h2 { margin-top:var(--reader-space-1) }
+.settings-view-head h2 { margin:0 }
+.setting-panel > h2 { margin-top:var(--reader-space-1) }
 .shell:has(#settings-view:not(.hidden)) #settings-button { display:flex !important }
 .mode-switch { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:var(--reader-space-5) }
 .mode-option .mode-option-content { display:grid; width:100%; min-width:0; gap:4px }
@@ -134,8 +143,10 @@ h1, h2, h3, p { margin:0 }
 .settings-card > .small { margin-top:var(--reader-space-2) }
 .mode-guidance { margin-top:var(--reader-space-3) }
 .settings-card { margin-top:var(--reader-space-5); padding-top:var(--reader-space-5) }
-.settings-card-heading { display:flex; justify-content:space-between; gap:8px; margin-bottom:var(--reader-space-2) }
-.connection-badge { align-self:center; padding:var(--reader-space-1) var(--reader-space-2) }
+.settings-card-heading { display:flex; justify-content:space-between; align-items:center; gap:var(--reader-space-2); margin-bottom:var(--reader-space-2) }
+.settings-card-heading > :first-child { min-width:0 }
+.settings-card .small { text-wrap:pretty }
+.connection-badge { align-self:center; flex:none; padding:var(--reader-space-1) var(--reader-space-2) }
 .check { display:flex; align-items:flex-start; gap:8px; margin-top:var(--reader-space-4) }
 .model-picker { display:flex; gap:8px }
 .model-picker select { min-width:0; flex:1 }
@@ -175,6 +186,14 @@ h1, h2, h3, p { margin:0 }
 .row-main { flex:1; min-width:0 }
 .row-meta { margin-top:var(--reader-space-1) }
 .footer { display:none }
+/* Keep the model readable when localized scope labels fill a narrow panel. */
+@media (max-width: 399px) {
+  .composer-context-row:has(.discussion-scope-options:not(.hidden)) { display:grid; grid-template-columns:var(--reader-space-8) minmax(0,1fr); gap:var(--reader-space-1) var(--reader-space-2) }
+  .composer-context-row:has(.discussion-scope-options:not(.hidden)) #composer-size-toggle { grid-column:1; grid-row:1; width:var(--reader-space-8); height:var(--reader-space-8); min-height:var(--reader-space-8) }
+  .composer-context-row:has(.discussion-scope-options:not(.hidden)) .composer-model { grid-column:2; grid-row:1; justify-self:end; max-width:100% }
+  .composer-context-row:has(.discussion-scope-options:not(.hidden)) .discussion-scope-options { grid-column:1 / -1; grid-row:2; flex-wrap:wrap }
+  .selection-preview-actions { gap:var(--reader-space-1) }
+}
 @media (min-width: 600px) { .chat-transcript { padding-inline:var(--reader-space-6) } .chat-composer { margin-inline:var(--reader-space-5) } .setting-panel { padding-inline:var(--reader-space-6) } }
 @media (max-height: 560px) { .masthead { height:48px } .discussion-source-card { min-height:36px; padding-block:0px } .chat-composer { margin-bottom:var(--reader-space-2) } .chat-transcript { padding-block:var(--reader-space-3) } }
 

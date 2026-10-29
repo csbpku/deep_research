@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test reader-core.test.mjs reader-store.test.mjs i18n.test.mjs model-connection.test.mjs provider-catalog.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs reader-platform-bridge-utils.test.mjs ui-regressions.test.mjs translation-language.test.mjs web-search.test.mjs",
+    "test": "node --test reader-core.test.mjs reader-store.test.mjs reader-library.test.mjs i18n.test.mjs model-connection.test.mjs provider-catalog.test.mjs activation.test.mjs markdown-renderer.test.mjs platform-config.test.mjs reader-platform-bridge-utils.test.mjs ui-regressions.test.mjs translation-language.test.mjs web-search.test.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
     "e2e:live-provider": "READER_LIVE=1 node e2e/smoke.mjs",
     "e2e:worker": "node e2e/worker-smoke.mjs",
@@ -29,7 +29,7 @@
     "e2e:live-image-benchmark": "node e2e/live-image-benchmark.mjs",
     "e2e:live-image-review": "node e2e/live-image-visual-review.mjs",
     "e2e:pkce": "node e2e/platform-pkce.mjs",
-    "check": "node --check background.js && node --check content.js && node --check reader-platform-bridge.js && node --check reader-platform-bridge-utils.js && node --check reader-store.js && node --check reader-core.js && node --check model-connection.js && node --check markdown-renderer.js && node --check sidepanel.js && node --check history.js && node --check scripts/sync-static.mjs",
+    "check": "node --check background.js && node --check content.js && node --check reader-platform-bridge.js && node --check reader-platform-bridge-utils.js && node --check reader-store.js && node --check reader-library.js && node --check reader-core.js && node --check model-connection.js && node --check markdown-renderer.js && node --check sidepanel.js && node --check history.js && node --check scripts/sync-static.mjs",
     "wxt:prepare": "wxt prepare",
     "build": "node scripts/sync-static.mjs && wxt build",
     "build:e2e": "READER_E2E=1 node scripts/sync-static.mjs && READER_E2E=1 wxt build",

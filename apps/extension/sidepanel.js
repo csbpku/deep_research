@@ -1,10 +1,10 @@
 import { SEARCH_ORIGINS } from './web-search.js';
 import { renderMaterialConversation, renderMaterialEvidence, renderMaterialRecords, renderMaterialOptions, renderMaterialFollowups, renderMaterialFailures } from './components/material-runtime.tsx';
-import { t, localizedMarkup, getUiLanguage, setUiLanguage } from './i18n.js';
-import { platformAnswerErrorMessage } from './platform-answer.js';
+import { t, getUiLanguage, setUiLanguage } from './i18n.js';
 import { answerTaskPresentation, waitForAnswerTask, requestAnswerTask } from './answer-task.js';
 import { normalizeTranslationLanguage, resolveTranslationLanguage } from './translation-language.js';
 import { readerStore } from './reader-store.js';
+import { createLibraryDeletion, libraryPage, LIBRARY_PAGE_SIZE } from './reader-library.js';
 import {
   prepareVisionImage,
   applyTextTranslations,
@@ -12,9 +12,7 @@ import {
   isLocalProvider,
   translationContext,
   translationBatches,
-  explainSelection,
   readingAnswerText,
-  explainImage,
   boundTaskContext,
   buildAnnotationUrl,
   loadProvider,
@@ -116,6 +114,10 @@ let activationNeeded = null;
 let pageReadState = 'idle';
 let lastSavedInsight = null;
 let insightSyncFailed = false;
+const libraryView = { query: '', kind: 'all', page: 1 };
+const libraryDeletion = createLibraryDeletion(readerStore);
+let libraryRenderRequest = 0;
+let libraryMutationBusy = false;
 let editingInsight = null;
 let pendingInsightSource = null;
 let saveDialogGeneration = 0;
@@ -472,6 +474,10 @@ function renderPersistentComposer(scope = activeDiscussionScope()) {
   show(composer, visible);
   const descriptor = pageReadDescriptor(context);
   const selectionReady = scope === 'selection' && Boolean(context?.selection?.quote);
+  if ($('starter-summary')) {
+    $('starter-summary').textContent = scope === 'selection' ? t("这段讲了什么？") : t("文章讲了什么？");
+    show($('starter-summary'), scope !== 'image');
+  }
   show($('copy-chat-selection'), selectionReady);
   show($('chat-selection-card'), selectionReady);
   show($('selection-section'), selectionReady);
@@ -1397,28 +1403,96 @@ async function applyAnnotationsForContext(context) {
 
 async function updateLibrary() {
   void updatePageKnowledge({ refresh: true });
-  const [insights, annotations] = await Promise.all([
-    readerStore.listInsights(),
-    readerStore.listAnnotations(),
-  ]);
+  const request = ++libraryRenderRequest;
   const list = $('library-list');
   const historyButton = $('open-history');
   if (historyButton) historyButton.textContent = t("聊天记录");
-  const records = [
-    ...insights.slice(0, 12).map(insight => ({ key: insight.id, className: 'insight-row', title: insight.title || insight.quote,
-      detail: insight.quote, answer: insight.note?.slice(0, 400), tags: insight.tags, meta: new Date(insight.createdAt).toLocaleString(), actions: [
-        { label: t("编辑"), action: 'edit', run: () => openSaveDialog(insight) },
-        { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteInsight(insight.id); await applyAnnotationsForContext(pageContext || documentContext); await updateLibrary(); } },
-      ] })),
-    ...annotations.filter(annotation => !annotation.insightId).slice(0, 12).map(annotation => ({ key: annotation.id, className: 'insight-row annotation-row',
-      title: annotation.note || annotation.document?.title || t("未命名标注"), detail: annotation.anchor?.quote,
-      meta: t("标注 · {0}", new Date(annotation.updatedAt || annotation.createdAt).toLocaleString()), actions: [
-        { label: t("编辑"), action: 'edit', run: () => void openAnnotationDialog(annotation) },
-        { label: t("回到原文"), action: 'focus', run: async () => { try { await chrome.tabs.create({ url: buildAnnotationUrl(annotation.document.url, annotation.anchor), active: true }); } catch { setNotice(t("无法打开原文，请复制来源地址后重试。")); } } },
-        { label: t("删除"), action: 'delete', danger: true, run: async () => { await readerStore.deleteAnnotation(annotation.id); if (readerStore.pageKey(contextUrl()) === readerStore.pageKey(annotation.document.url)) sendToPage({ type: 'deep-research:clear-annotations' }); await updateLibrary(); } },
-      ] })),
-  ];
-  renderMaterialRecords(list, records, t("还没有收藏。点击选段旁的“保存”或回答下方的“保存结论”，确认后才会加入这里。聊天记录自动保存在“历史”中。"));
+  list.setAttribute('aria-busy', 'true');
+  try {
+    const [insights, annotations] = await Promise.all([readerStore.listInsights(), readerStore.listAnnotations()]);
+    if (request !== libraryRenderRequest) return;
+    const visibleAnnotations = annotations.filter(annotation => !annotation.insightId);
+    const result = libraryPage(insights, visibleAnnotations, libraryView);
+    libraryView.page = result.page;
+    const records = result.items.map(({ kind, record }) => kind === 'insight'
+      ? { key: `${kind}:${record.id}`, className: 'insight-row', title: record.title || record.quote,
+        source: record.url || record.document?.url, detail: record.quote, answer: record.note || record.aiAnswer, tags: record.tags,
+        meta: new Date(record.createdAt).toLocaleString(), actions: [
+          { label: t("编辑"), action: 'edit', run: () => openSaveDialog(record) },
+          { label: t("删除"), action: 'delete', danger: true, run: () => void deleteLibraryRecord(kind, record) },
+        ] }
+      : { key: `${kind}:${record.id}`, className: 'insight-row annotation-row',
+        title: record.note || record.document?.title || t("未命名标注"), source: record.document?.url, detail: record.anchor?.quote,
+        meta: t("标注 · {0}", new Date(record.updatedAt || record.createdAt).toLocaleString()), actions: [
+          { label: t("编辑"), action: 'edit', run: () => void openAnnotationDialog(record) },
+          { label: t("回到原文"), action: 'focus', run: async () => { try { await chrome.tabs.create({ url: buildAnnotationUrl(record.document.url, record.anchor), active: true }); } catch { setLibraryNotice(t("无法打开原文，请复制来源地址后重试。")); } } },
+          { label: t("删除"), action: 'delete', danger: true, run: () => void deleteLibraryRecord(kind, record) },
+        ] });
+    renderMaterialRecords(list, records, result.collectionTotal
+      ? t("没有匹配的收藏，试试其他关键词或清除筛选。")
+      : t("还没有收藏。点击选段旁的“保存”或回答下方的“保存结论”，确认后才会加入这里。聊天记录自动保存在“历史”中。"));
+    $('library-summary').textContent = t("显示 {0}–{1} 条，共 {2} 条匹配 / {3} 条收藏", result.total ? (result.page - 1) * LIBRARY_PAGE_SIZE + 1 : 0,
+      Math.min(result.page * LIBRARY_PAGE_SIZE, result.total), result.total, result.collectionTotal);
+    $('library-page').textContent = t("第 {0} / {1} 页", result.page, result.pages);
+    $('library-previous').disabled = result.page === 1;
+    $('library-next').disabled = result.page === result.pages;
+    show($('library-pagination'), result.pages > 1);
+    show($('clear-library-filters'), Boolean(libraryView.query.trim() || libraryView.kind !== 'all'));
+  } catch {
+    if (request === libraryRenderRequest) setLibraryNotice(t("收藏读取失败，请点击“刷新”重试。"));
+  } finally {
+    if (request === libraryRenderRequest) list.setAttribute('aria-busy', 'false');
+  }
+}
+
+function setLibraryNotice(message) {
+  $('library-notice-text').textContent = message;
+  show($('library-notice'), true);
+  show($('undo-library-delete'), libraryDeletion.count > 0);
+}
+
+async function refreshLibraryAnnotations() {
+  const context = pageContext || documentContext || selectionContext;
+  if (context) await applyAnnotationsForContext(context);
+}
+
+async function deleteLibraryRecord(kind, record) {
+  if (libraryMutationBusy) return;
+  const title = String(record.title || record.note || record.document?.title || record.quote || t("未命名标注")).slice(0, 80);
+  if (!window.confirm(t("删除浏览器中的“{0}”？\n关闭当前面板前可撤销；已同步的平台副本不受影响。", title))) return;
+  libraryMutationBusy = true;
+  $('undo-library-delete').disabled = true;
+  try {
+    const removed = await libraryDeletion.remove(kind, record);
+    if (kind === 'annotation') await refreshLibraryAnnotations();
+    await updateLibrary();
+    setLibraryNotice(removed ? t("已删除“{0}”。关闭面板前可撤销。", title) : t("该收藏已不存在，列表已刷新。"));
+    $('undo-library-delete').disabled = false;
+    if (removed) $('undo-library-delete').focus({ preventScroll: true });
+  } catch {
+    setLibraryNotice(t("删除失败，请刷新后重试。"));
+  } finally {
+    libraryMutationBusy = false;
+    $('undo-library-delete').disabled = false;
+  }
+}
+
+async function undoLibraryDelete() {
+  if (libraryMutationBusy) return;
+  libraryMutationBusy = true;
+  $('undo-library-delete').disabled = true;
+  try {
+    const item = await libraryDeletion.undo();
+    if (item?.kind === 'annotation') await refreshLibraryAnnotations();
+    await updateLibrary();
+    setLibraryNotice(item?.restored ? t("收藏已恢复。") : t("记录已在其他页面恢复，未覆盖现有内容。"));
+    if (libraryDeletion.count === 0) $('library-search').focus({ preventScroll: true });
+  } catch {
+    setLibraryNotice(t("恢复失败，仍可点击“撤销删除”重试。"));
+  } finally {
+    libraryMutationBusy = false;
+    $('undo-library-delete').disabled = false;
+  }
 }
 
 async function openKnowledgeUrl(value) {
@@ -1852,20 +1926,6 @@ async function syncCurrentSession({ quiet = false } = {}) {
     if (error instanceof Error && /令牌|连接|AUTH_NOT_AUTHENTICATED/u.test(error.message)) setPlatformConnected(false, t("平台令牌已失效，请重新连接"));
     if (!quiet) setNotice(error instanceof Error ? error.message : t("阅读会话同步失败"));
   }
-}
-
-function platformContext(context, scope) {
-  const body = String(context?.body || '');
-  const selection = scope === 'selection' ? context?.selection : undefined;
-  return {
-    url: context.url,
-    title: String(context.title || t("当前网页")).slice(0, 300),
-    language: currentReadingLanguage(),
-    scope,
-    body,
-    ...(typeof context.section === 'string' && context.section ? { section: context.section } : {}),
-    ...(selection ? { selection } : {}),
-  };
 }
 
 
@@ -3782,7 +3842,17 @@ async function init() {
     openDiscussion(activeDiscussionScope(), 'ask');
   });
   $('refresh-library').addEventListener('click', () => void updateLibrary());
-  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await readerStore.clearAll(); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
+  $('library-search').addEventListener('input', event => { libraryView.query = event.target.value; libraryView.page = 1; void updateLibrary(); });
+  $('library-kind').addEventListener('change', event => { libraryView.kind = event.target.value; libraryView.page = 1; void updateLibrary(); });
+  $('clear-library-filters').addEventListener('click', () => {
+    libraryView.query = ''; libraryView.kind = 'all'; libraryView.page = 1;
+    $('library-search').value = ''; $('library-kind').value = 'all';
+    void updateLibrary(); $('library-search').focus();
+  });
+  $('library-previous').addEventListener('click', () => { libraryView.page -= 1; void updateLibrary(); $('library-summary').scrollIntoView({ block: 'nearest' }); });
+  $('library-next').addEventListener('click', () => { libraryView.page += 1; void updateLibrary(); $('library-summary').scrollIntoView({ block: 'nearest' }); });
+  $('undo-library-delete').addEventListener('click', () => void undoLibraryDelete());
+  $('clear-cache').addEventListener('click', () => void readerStore.clearCache().then(() => setNotice(t("翻译缓存已清除。"), $('settings-notice')))); $('clear-data').addEventListener('click', async () => { if (!window.confirm(t("清除本地阅读会话、收藏、设置和缓存？导出数据不会受影响。"))) return; activeTranslationRun += 1; discussionController?.abort(); translationController?.abort(); translationRunning = false; translationRequested = false; fullTranslationEnabled = false; activeJobRecord = null; pendingJob = null; lastSavedInsight = null; await libraryDeletion.reset(); await readerStore.clearAll(); show($('library-notice'), false); webSearchEnabled = false; renderWebSearchToggle(); translationLanguage = 'interface'; updateTranslationLanguageUi(); await chrome.storage.local.remove(['readerToken', 'readerPlatformUrl']); provider = null; platformUrl = DEFAULT_WEB_APP_URL; updatePlatformTarget(); setPlatformConnected(false);  applyProviderFields(); setNotice(t("本地阅读数据已清除。"), $('settings-notice')); await updateLibrary(); }); $('export-data').addEventListener('click', () => void readerStore.exportData().then(downloadJson)); $('import-data').addEventListener('click', () => $('import-file').click()); $('import-file').addEventListener('change', async (event) => { const file = event.target.files?.[0]; if (!file) return; try { await readerStore.importData(JSON.parse(await file.text())); webSearchEnabled = await readerStore.getSetting('webSearchEnabled', false) === true; await syncSearchPermissions(); renderWebSearchToggle(); translationLanguage = normalizeTranslationLanguage(await readerStore.getSetting('translationLanguage', 'interface')); updateTranslationLanguageUi(); provider = await loadProvider();  platformUrl = resolvePlatformOrigin(await readerStore.getSetting('platformUrl', ''), radarEntryPlatformUrl); updatePlatformTarget(); await chrome.storage.local.set({ readerPlatformUrl: platformUrl }); applyProviderFields(); setNotice(t("阅读数据已导入。"), $('settings-notice')); await updateLibrary(); } catch (error) { setNotice(error instanceof SyntaxError ? t("导入文件不是有效的 JSON，请选择导出的阅读数据文件。") : error instanceof Error ? error.message : t("导入失败"), $('settings-notice')); } finally { event.target.value = ''; } });
   await updateLibrary();
   void restorePendingPageAction();
   selectionActionsReady = true;
