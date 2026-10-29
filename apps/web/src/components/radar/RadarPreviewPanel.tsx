@@ -23,6 +23,7 @@ import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
 import { RadarSourceChip } from './RadarSourceChip';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
+import { READER_STORE_URL } from '@/lib/reader-install';
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -186,31 +187,30 @@ export function RadarPreviewPanel({
           </Box>
         ) : null}
       </Box>
-      <Box component="footer" sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, borderTop: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0 }}>
+      <Box component="footer" sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: space.sm, borderTop: 1, borderColor: 'divider', padding: space.lg, flexShrink: 0, '& > .MuiButton-root': { minWidth: 0, minHeight: 44, width: '100%' } }}>
         <RadarKnowledgeActions key={detail.id} detail={detail} />
         {sourceUrlAvailable ? (
-          <AppButton component="a" variant="contained" href={detail.url} target="_blank" rel="noopener noreferrer" sx={{ flex: '1 0 auto' }}>
+          <AppButton component="a" variant="contained" href={detail.url} target="_blank" rel="noopener noreferrer">
             {zreadUrl ? <Github aria-hidden /> : <ExternalLink aria-hidden />}{zreadUrl ? '打开 GitHub' : '打开原文'}
           </AppButton>
         ) : null}
         {sourceUrlAvailable ? (
-          // Reader 是可选增强：装了扩展就开侧栏，没装就当作普通外链打开原文。
+          // The installed extension intercepts this link; without it the link opens the store.
           <AppButton
             component="a"
             variant="outlined"
-            href={readerUrl}
+            href={READER_STORE_URL}
             target="_blank"
             rel="noopener noreferrer"
             data-reader-launch-source={readerUrl}
-            sx={{ flex: '1 0 auto' }}
           >
             <BookOpen aria-hidden />用 Reader 阅读
           </AppButton>
         ) : null}
         {zreadUrl ? (
-          <AppButton component="a" variant="outlined" href={zreadUrl} target="_blank" rel="noopener noreferrer" sx={{ flex: '1 0 auto' }}><BookOpen aria-hidden />打开 Zread</AppButton>
+          <AppButton component="a" variant="outlined" href={zreadUrl} target="_blank" rel="noopener noreferrer"><BookOpen aria-hidden />打开 Zread</AppButton>
         ) : null}
-        <AppButton component={Link} href={`/ai-research?seed=${encodeURIComponent(detail.id)}`} prefetch={false} variant="outlined" sx={{ flex: '1 0 auto' }}><Sparkles aria-hidden />深入调研</AppButton>
+        <AppButton component={Link} href={`/ai-research?seed=${encodeURIComponent(detail.id)}`} prefetch={false} variant="outlined"><Sparkles aria-hidden />深入调研</AppButton>
       </Box>
       <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} />
     </Box>

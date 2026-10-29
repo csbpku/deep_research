@@ -39,6 +39,37 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
     await expect(title).toBeFocused();
   });
 
+  test('preview actions stay aligned and Reader links to the store without the extension', async ({ page }) => {
+    await page.route(`**/api/radar/${id}?*`, route => route.fulfill({ json: { ...candidate, isAuthenticated: true } }));
+    await page.context().route('https://chromewebstore.google.com/**', route => route.fulfill({ body: 'Reader store fixture' }));
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/radar?date=all');
+      await page.getByRole('link', { name: candidate.title, exact: true }).click();
+      const panel = page.locator('aside[aria-label="文章概览"]:visible');
+      const buttons = [
+        panel.getByRole('button', { name: '记录判断' }),
+        panel.getByRole('link', { name: '打开原文' }),
+        panel.getByRole('link', { name: '用 Reader 阅读' }),
+        panel.getByRole('link', { name: '深入调研' }),
+      ];
+      for (const button of buttons) await expect(button).toBeVisible();
+      const boxes = await Promise.all(buttons.map(button => button.boundingBox()));
+      for (const box of boxes) expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(Math.abs(boxes[0]!.width - boxes[1]!.width)).toBeLessThan(1);
+      expect(Math.abs(boxes[2]!.width - boxes[3]!.width)).toBeLessThan(1);
+      expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThan(1);
+      expect(Math.abs(boxes[2]!.y - boxes[3]!.y)).toBeLessThan(1);
+      await expect(buttons[2]).toHaveAttribute('href', /chromewebstore\.google\.com\/detail\//u);
+      await expect(buttons[2]).toHaveAttribute('data-reader-launch-source', /deep-research-summary=/u);
+      if (width === 1440) {
+        const [store] = await Promise.all([page.waitForEvent('popup'), buttons[2].click()]);
+        await expect(store).toHaveURL(/chromewebstore\.google\.com\/detail\//u);
+        await store.close();
+      }
+    }
+  });
+
   test('the radar card leads with tier and source, then title, then the recommendation', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/radar?date=all');
@@ -153,10 +184,10 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
         await expect(sourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
         await sourcePage.close();
 
-        // "用 Reader 阅读"是可选增强，带雷达来源标记。
+        // 无扩展时走商店，已安装扩展可从数据属性读取原文。
         const readerLink = page.getByRole('link', { name: '用 Reader 阅读' });
         await expect(readerLink).toHaveAttribute('data-reader-launch-source', /deep-research-summary=/u);
-        await expect(readerLink).toHaveAttribute('href', /deep-research-source=radar/u);
+        await expect(readerLink).toHaveAttribute('href', /chromewebstore\.google\.com\/detail\//u);
 
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         expect((await new AxeBuilder({ page }).include('#main-content').analyze()).violations).toEqual([]);
