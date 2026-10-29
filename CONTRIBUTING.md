@@ -28,7 +28,7 @@ gh pr create --base main --head codex/radar-filter-fix
 ```
 
 4. PR 说明具体变化、验证结果和部署影响；报告分支名、提交 SHA、PR 链接和 CI 状态。无权限或 CI 失败时明确报告，不能把本地提交称为已推送或已发布。
-5. 合并前确保 PR 基于最新 `main`、无未解决冲突，且四项 CI 均成功：Web 类型/单测/构建、通用 Web Playwright E2E、专用测试库上的 MUI production E2E、Python 质量与 E2E。禁止绕过失败检查或强推覆盖他人提交。纯文档改动会跳过这四项重任务，判定见下文。
+5. 合并前确保 PR 基于最新 `main`、无未解决冲突，且五项 CI 与 `CI gate` 均成功：Web 类型/单测/构建、通用 Web Playwright E2E、专用测试库上的 MUI production E2E、Python 质量与 E2E、Reader 扩展 E2E。禁止绕过失败检查或强推覆盖他人提交。纯文档改动会跳过这五项重任务，判定见下文。
 
 ## 合并与部署
 
@@ -45,6 +45,10 @@ gh pr create --base main --head codex/radar-filter-fix
 - 用 `git diff --no-renames` 比较，所以把源码文件改名到 `docs/` 下仍算代码改动。
 
 判定逻辑本身有测试：`node --test scripts/tests/ci-changed-paths.test.mjs`，CI 每次运行都会执行。
+
+CI 使用 `scripts/ci-change-plan.mjs` 生成并保存 `ci-change-plan` 产物：PR 比较 merge base 到分支 head，push 比较事件的 `before` 到目标 SHA，覆盖一次 push 的全部提交。Deploy 直接读取成功 CI 的这份计划并校验 SHA，不重新猜测比较基线。PR 新运行可取消旧运行，main 的校验保留；只有实际修改 VPS 的 job 串行，并拒绝用旧提交覆盖已部署的新后代。
+
+Reader CI 比较完整 ZIP 文件树与已发布版本，覆盖共享主题与实际依赖构建结果；内容变化必须升级扩展版本。发布复用成功 main CI 保存的 `reader-beta` 产物。两种 CI 产物保留 14 天；手动发布要求目标 SHA 有完整成功的 main CI，纯文档跳过不能替代该验证，必要时从 CI 的 `workflow_dispatch` 重跑。
 
 CI 与发布脚手架的改动（`.github/workflows/**`、`.github/actions/**`、`scripts/ci-*`、`scripts/tests/ci-*`、`scripts/install-playwright-deps.sh`、`scripts/playwright-deps-packages.mjs`、`scripts/tests/playwright-deps-packages.test.mjs`）单独成一档：这类改动必须跑完整 CI 验证，但没有改动任何镜像或扩展包，所以 Deploy 会跳过镜像构建、Reader Beta 发布和 VPS 部署。镜像实际 COPY 的文件（例如 `scripts/docker-entrypoint-web.sh`、`infra/*.Dockerfile`）不在此列，改动它们仍走完整发布流程。用 `scripts/ci-changed-paths.sh --scope <base> <head>` 可以直接读出档位：`documentation`、`ci-only` 或 `deployable`。
 
