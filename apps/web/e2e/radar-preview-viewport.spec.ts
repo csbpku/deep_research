@@ -28,16 +28,12 @@ async function setup(page: Page) {
 }
 
 async function confirmSource(page: Page) {
-  const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
-  await expect(prompt).toBeVisible();
+  // "打开原文"是直链：Reader 不再是阅读的前置条件。
   const sourcePromise = page.waitForEvent('popup');
-  await prompt.getByRole('link', { name: '已安装，打开原文' }).click();
+  await page.getByRole('link', { name: '打开原文', exact: true }).click();
   const sourcePage = await sourcePromise;
   await expect(sourcePage.getByRole('heading', { name: 'Original article' })).toBeVisible();
-  expect(new URL(sourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
   await sourcePage.close();
-  await page.keyboard.press('Escape');
-  await expect(prompt).not.toBeVisible();
 }
 
 async function controlsFit(page: Page) {
@@ -45,7 +41,7 @@ async function controlsFit(page: Page) {
     const main = document.getElementById('main-content')!;
     const port = main.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
-    const button = Array.from(panel.querySelectorAll('button')).find(item => item.textContent?.includes('打开原文'))!;
+    const button = Array.from(panel.querySelectorAll('a')).find(item => item.textContent?.includes('打开原文'))!;
     const target = button.getBoundingClientRect();
     const close = panel.querySelector('button[aria-label="关闭预览"]')!.getBoundingClientRect();
     const hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 2);
@@ -74,7 +70,7 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
     await expect(page.locator('main')).not.toHaveAttribute('aria-hidden', 'true');
     await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
     await page.screenshot({ path: testInfo.outputPath('cold-open-desktop.png') });
-    const button = page.getByRole('button', { name: '打开原文', exact: true });
+    const button = page.getByRole('link', { name: '打开原文', exact: true });
     const bounds = (await button.boundingBox())!;
     await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
     await confirmSource(page);
@@ -135,7 +131,7 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
       }
       await page.setViewportSize({ width: viewport.width, height: viewport.height - 80 });
       await expect.poll(() => controlsFit(page)).toEqual({ fits: true, clickable: true });
-      const button = panel.getByRole('button', { name: '打开原文', exact: true });
+      const button = panel.getByRole('link', { name: '打开原文', exact: true });
       const bounds = (await button.boundingBox())!;
       // A coordinate click cannot auto-scroll the document to conceal clipping.
       await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
@@ -148,7 +144,7 @@ test.describe('Radar preview stays inside the scroll viewport', () => {
     await page.goto('/radar?date=all');
     await page.getByRole('link', { name: candidate.title, exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '文章概览', exact: true });
-    const button = dialog.getByRole('button', { name: '打开原文', exact: true });
+    const button = dialog.getByRole('link', { name: '打开原文', exact: true });
     await expect(button).toBeInViewport({ ratio: 1 });
     const body = dialog.locator('[data-radar-preview-body]');
     await body.evaluate(element => { element.scrollTop = element.scrollHeight; });

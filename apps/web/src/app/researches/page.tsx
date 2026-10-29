@@ -6,18 +6,13 @@
 //   - 成果 / 草稿 / 我的已发布三种状态视图
 //   - 研究报告 / 知识卡片作为成果类型筛选
 //   - 卡片：标题、标签、creationMethod 徽标、draft 标签、作者、状态
-//   - 搜索：按标题 + 标签子串过滤（客户端；limit=20 时只过滤当前页）
+//   - 搜索：服务端全库过滤（标题 / 正文 / 标签）
 //   - 排序：最新发布 / 最近编辑 / 标题
 //   - 新建按钮 → 跳转编辑页
 //   - 分页
 //
 // 旧的 ?tab=research / knowledge / mine / draft 继续兼容。
-//
-// 性能说明：搜索/排序目前是 client-side（瞬时反馈，零 API 改动）。
-// 当已发布条目超过 ~500 条时，应迁移到 server-side：API 加 ?q= ?sort= 参数，
-// 这一层的 filter/sort 逻辑迁移到 Prisma orderBy/where。
-
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -135,6 +130,7 @@ function ResearchesContent() {
   const view = researchViewForTab(tab);
   const [page, setPage] = useState(1);
   const [q, setQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
   const [sort, setSort] = useState<SortKey>('newest');
   const [type, setType] = useState<ResearchTypeFilter>(() => (
     hasExplicitTab ? researchTypeForTab(tab) : 'all'
@@ -143,7 +139,7 @@ function ResearchesContent() {
   const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
 
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery<ListResponse>({
-    queryKey: ['researches', view, type, page],
+    queryKey: ['researches', view, type, sort, page, debouncedQ],
     queryFn: async () => {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 12_000);
@@ -151,8 +147,10 @@ function ResearchesContent() {
         scope: tab === 'draft' ? 'draft' : tab === 'mine' ? 'mine' : 'published',
         page: String(page),
         limit: '20',
+        sort,
       });
       if (type !== 'all') params.set('type', type);
+      if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
       try {
         const res = await fetch(`/api/researches?${params}`, { signal: controller.signal });
         if (!res.ok) throw await toApiHttpError(res, '研究库暂时无法读取。');
@@ -190,36 +188,24 @@ function ResearchesContent() {
     setType(hasExplicitTab ? researchTypeForTab(tab) : 'all');
     setPage(1);
     setQ('');
+    setDebouncedQ('');
   }, [hasExplicitTab, tab, tabParam]);
 
-  // 客户端过滤 + 排序。
-  // 注意：搜索 `q` 在 reset page 时回到 1；切 tab 时已经重置过 page。
-  const visible = useMemo(() => {
-    if (!data) return [] as ResearchItem[];
-    const needle = q.trim().toLowerCase();
-    const filtered = needle
-      ? data.items.filter((it) =>
-          it.title.toLowerCase().includes(needle) ||
-          it.tags.some((t) => t.toLowerCase().includes(needle)),
-        )
-      : data.items;
-    const sorted = [...filtered];
-    if (sort === 'newest') {
-      sorted.sort((a, b) => {
-        const ta = a.publishedAt ?? a.createdAt;
-        const tb = b.publishedAt ?? b.createdAt;
-        return tb.localeCompare(ta);
-      });
-    } else if (sort === 'updated') {
-      sorted.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    } else {
-      sorted.sort((a, b) => a.title.localeCompare(b.title, 'zh-Hans'));
-    }
-    return sorted;
-  }, [data, q, sort]);
+  // 搜索现在打到服务端：输入停顿后再发请求，避免每个字符都触发一次全库查询。
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQ(q);
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [q]);
 
-  // 过滤掉所有条目时，给用户更明确的反馈
-  const filteredOut = !!data && visible.length === 0 && data.items.length > 0;
+  // 搜索与排序都在服务端执行：客户端只能过滤当前页，那会让"没有匹配项"
+  // 在第 21 条之后变成假象，排序也会看起来像全库顺序。
+  const visible = data?.items ?? [];
+  // 服务端已按 q/type 过滤，total 就是筛选后的全库命中数。
+  const hasActiveFilter = Boolean(debouncedQ.trim()) || sort !== 'newest' || type !== 'all';
+  const filteredOut = !!data && visible.length === 0 && data.total === 0 && hasActiveFilter;
 
   return (
     <div className={`material-surface ${styles.screen}`}>
@@ -275,7 +261,7 @@ function ResearchesContent() {
           q || sort !== 'newest' || type !== 'all' ? (
             <span className={styles.filteredCount}>
               <ArrowDownNarrowWide size={12} aria-hidden />
-              {visible.length} / {data?.items.length ?? 0}
+              {data?.total ?? 0} 条
             </span>
           ) : null
         }
@@ -286,7 +272,7 @@ function ResearchesContent() {
               type="search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索标题或标签…"
+              placeholder="搜索标题、正文或标签…"
               aria-label="搜索研究库"
               sx={{ '& input': { paddingLeft: '36px' } }}
             />
@@ -363,7 +349,7 @@ function ResearchesContent() {
           />
         ) : null}
 
-        {!loginRequired && data && data.items.length === 0 && (
+        {!loginRequired && data && data.items.length === 0 && !filteredOut && (
           <EmptyState
             title={
               view === 'draft'
@@ -394,7 +380,9 @@ function ResearchesContent() {
         {!loginRequired && filteredOut && (
           <EmptyState
             title="没有匹配项"
-            description={q ? `没有标题或标签包含「${q}」的调研。试试别的关键词，或清空搜索。` : '当前排序下没有内容。'}
+            description={debouncedQ.trim()
+              ? `全库里没有标题、正文或标签匹配「${debouncedQ.trim()}」的内容。试试别的关键词，或清空搜索。`
+              : '当前筛选下没有内容。'}
           />
         )}
 

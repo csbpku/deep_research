@@ -45,7 +45,7 @@ test.describe('Radar flows', () => {
       const preview = viewport.width < 1024
         ? page.getByRole('dialog')
         : page.getByRole('complementary', { name: '文章概览' });
-      await expect(preview).toContainText('AI 摘要');
+      await expect(preview).toContainText('为什么值得看');
       await expect(preview.getByRole('button', { name: '关闭预览' })).toBeVisible();
       if (viewport.width < 1024) {
         const bounds = await preview.boundingBox();

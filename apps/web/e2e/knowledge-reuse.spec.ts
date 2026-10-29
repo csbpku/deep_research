@@ -225,11 +225,21 @@ test.describe('Knowledge reuse and frontend trust acceptance', () => {
             await expect(save).toBeDisabled();
             expect(writes).toEqual([]);
 
-            // Escape must not save or silently turn the summary into a judgment.
+            // Escape must not save or silently turn the summary into a judgment,
+            // but the note the user already wrote must survive the close.
+            await note.fill('这是一段还没保存的判断草稿');
             await page.keyboard.press('Escape');
             await expect(dialog).not.toBeVisible();
             await expect(trigger).toBeFocused();
             expect(writes).toEqual([]);
+            await trigger.click();
+            await expect(note).toHaveValue('这是一段还没保存的判断草稿');
+            await expect(dialog.getByRole('alert')).toContainText('草稿已保留');
+            // 显式丢弃才会清掉草稿。
+            await dialog.getByRole('button', { name: '丢弃草稿', exact: true }).click();
+            await expect(note).toHaveValue('');
+            await page.keyboard.press('Escape');
+            await expect(dialog).not.toBeVisible();
             await trigger.click();
             await expect(note).toHaveValue('');
             const personalNote = `我的判断（${identity}）：只在完成本地基准复现后采用，不能把摘要当成已验证结论。`;

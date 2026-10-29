@@ -11,7 +11,7 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Menu from '@mui/material/Menu';
@@ -427,14 +427,14 @@ export default function RadarScreen() {
   const qualitySummary = quality.length === QUALITY_OPTIONS.length ? '全部等级' : qualityLabel;
   const mobileFilterSummary = `${dateLabel} · ${sourceSummary} · ${qualitySummary}`;
   const currentUrlState: RadarUrlState = { q, sourceTypes, quality, dateRange, page, perPage, view, selectedId };
-  const replaceUrlState = (patch: Partial<RadarUrlState>) => {
+  const replaceUrlState = useCallback((patch: Partial<RadarUrlState>) => {
     const next = { ...currentUrlState, ...patch };
     const listStateChanged = Object.keys(patch).some((key) => key !== 'selectedId');
     if (listStateChanged && !Object.prototype.hasOwnProperty.call(patch, 'selectedId')) {
       next.selectedId = null;
     }
     router.replace(`${pathname}?${radarUrlParams(next).toString()}`, { scroll: false });
-  };
+  }, [currentUrlState, pathname, router]);
   const resetFilters = () => {
     const next: RadarUrlState = {
       ...currentUrlState,
@@ -467,7 +467,48 @@ export default function RadarScreen() {
     replaceUrlState({ q: nextQuery, page: 1, selectedId: null });
   };
   const openPreview = (summaryId: string) => replaceUrlState({ selectedId: summaryId });
-  const closePreview = () => replaceUrlState({ selectedId: null });
+
+  // 预览的键盘交接：打开后焦点进入面板并播报，Esc 关闭并把焦点还给
+  // 来源标题——否则键盘用户要穿过剩下的卡片才能到"记录判断"。
+  const previewTriggerRef = useRef<HTMLElement | null>(null);
+  const previewPanelRef = useRef<HTMLElement | null>(null);
+  const closePreview = useCallback(() => {
+    const trigger = previewTriggerRef.current;
+    replaceUrlState({ selectedId: null });
+    // 等列表把面板卸掉再还焦点，否则焦点会落回 body。
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
+  }, [replaceUrlState]);
+
+  // 打开预览：记住来源标题，并把焦点交给面板（读屏用户能听到位置变化）。
+  useEffect(() => {
+    if (!selectedId) return;
+    const trigger = document.querySelector<HTMLElement>(
+      `article [data-radar-preview-trigger="${CSS.escape(selectedId)}"]`,
+    );
+    if (trigger) previewTriggerRef.current = trigger;
+    const panel = previewPanelRef.current;
+    if (!panel) return;
+    const heading = panel.querySelector<HTMLElement>('h2');
+    heading?.setAttribute('tabindex', '-1');
+    heading?.focus({ preventScroll: true });
+  }, [selectedId, previewQuery.data]);
+
+  // Esc 关闭预览。
+  useEffect(() => {
+    if (!selectedId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      // 弹窗（记录判断 / Reader 提示）自己处理 Esc。
+      if (document.querySelector('[role="dialog"]')) return;
+      event.preventDefault();
+      closePreview();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedId, closePreview]);
+
   const previewContent = previewQuery.isLoading && !previewQuery.data ? (
     <aside className={styles.previewState}>
       <LoadingState label="正在准备文章概览…" />
@@ -483,6 +524,7 @@ export default function RadarScreen() {
     <RadarPreviewPanel
       detail={previewQuery.data}
       onClose={closePreview}
+      panelRef={previewPanelRef}
     />
   ) : null;
 

@@ -57,6 +57,7 @@ export const ResearchListQuery = z.object({
   type: z.enum([RESEARCH_TYPE.RESEARCH, RESEARCH_TYPE.KNOWLEDGE]).optional(),
   scope: z.enum(['published', 'draft', 'mine']).default('published'),
   q: z.string().trim().max(200).optional(),
+  sort: z.enum(['newest', 'updated', 'title']).default('newest'),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   // ADR 0010: 调研库 V2 筛选

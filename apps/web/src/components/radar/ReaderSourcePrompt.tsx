@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Box from '@mui/material/Box';
 import { AppButton } from '@/components/material/AppButton';
 import { AppDialog } from '@/components/material/AppDialog';
-import { READER_STORE_URL, safeReaderReturnUrl } from '@/lib/reader-install';
+import { dismissReaderPrompt, READER_STORE_URL, safeReaderReturnUrl } from '@/lib/reader-install';
 
 export function ReaderSourcePrompt({ open, onClose, readerUrl }: {
   open: boolean;
@@ -14,10 +14,16 @@ export function ReaderSourcePrompt({ open, onClose, readerUrl }: {
   const [storeOpened, setStoreOpened] = useState(false);
   const sourceHref = safeReaderReturnUrl(readerUrl);
 
+  const close = () => {
+    // 关掉提示等于"我不想被问"，记住这个选择，不再每篇文章都问一遍。
+    dismissReaderPrompt();
+    onClose();
+  };
+
   return (
     <AppDialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="是否已安装 Reader？"
       description={!sourceHref
         ? '扩展商店会在新标签页打开。安装后，打开一篇文章并点击浏览器工具栏中的 Reader。'
@@ -41,6 +47,9 @@ export function ReaderSourcePrompt({ open, onClose, readerUrl }: {
               {storeOpened ? '安装完成，打开原文' : '已安装，打开原文'}
             </AppButton>
           ) : null}
+          <AppButton variant="text" color="inherit" onClick={close} sx={{ minHeight: 44 }}>
+            不用，直接阅读
+          </AppButton>
         </Box>
       )}
     />
