@@ -6,7 +6,6 @@ import { ReadingTranslateInputSchema } from '@deep-research/shared/schemas';
 import { apiHandler, parseBody } from '../../../../lib/api-handler';
 import { getWebEnv } from '../../../../lib/env';
 import { fetchAiEngine } from '../../../../lib/ai-bff/fetch-ai-engine';
-import { toApiErrorResponse } from '../../../../lib/errors';
 import { withRequestId } from '../../../../lib/log';
 import { requireReadingUser } from '../../../../lib/reading-auth';
 

@@ -290,18 +290,6 @@ def _http_error(code: str, message: str, details: dict[str, Any] | None = None) 
     return HTTPException(status_code=HTTP_STATUS.get(code, 500), detail=body)
 
 
-def _estimate_tokens(text: str) -> int:
-    """~4 chars/token heuristic. Conservative for mixed CN/EN."""
-    return max(1, len(text) // 4)
-
-
-def _truncate_to_tokens(text: str, max_tokens: int) -> str:
-    if _estimate_tokens(text) <= max_tokens:
-        return text
-    max_chars = max_tokens * 4
-    return text[:max_chars]
-
-
 async def _load_summary(pool: Any, summary_id: str) -> dict[str, Any] | None:
     async with pool.connection() as conn:
         row = await (

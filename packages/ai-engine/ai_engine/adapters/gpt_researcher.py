@@ -2787,45 +2787,6 @@ def _append_run_audit(
     return f"{report.rstrip()}\n\n" + "\n".join(lines)
 
 
-async def _repair_report_with_review(
-    report: str,
-    instructions: tuple[str, ...],
-    sources: list[AdapterSource],
-) -> str | None:
-    """Ask the generator tier to apply reviewer instructions only."""
-    if not instructions:
-        return None
-    from ai_engine.llm.client import generate_text
-
-    source_lines = _format_source_lines(sources, include_excerpts=True)
-    prompt = (
-        "请根据事实审核意见修订以下中文调研报告。只修改审核意见涉及的事实，"
-        "不得新增没有来源支持的内容，不要输出参考文献章节。保留原有结构。\n\n"
-        "审核意见：\n- " + "\n- ".join(instructions) + "\n\n"
-        f"报告：\n{_strip_reference_section(report)[:24000]}\n\n"
-        f"可用来源：\n{source_lines[:8000]}"
-    )
-    try:
-        result = await generate_text(
-            user_prompt=prompt,
-            system_prompt=(
-                "你是调研报告修订 Agent。只能依据审核意见和给定来源修改报告，"
-                "无法确认的事实必须删除或标记为未核实。只输出修订后的报告正文。"
-            ),
-            llm_spec=resolve_spec(
-                "utility", explicit=os.environ.get("FACT_REPAIR_LLM")
-            ),
-            tier="light",
-            max_tokens=3000,
-            timeout=60.0,
-            disable_thinking=True,
-            operation="research.fact_repair",
-        )
-    except Exception:
-        return None
-    return result.text.strip() or None
-
-
 def _mark_unresolved_claims(
     report: str,
     claims: Iterable[ClaimVerdict],

@@ -237,7 +237,7 @@ export default function EditorPage() {
   const [selectedAnchor, setSelectedAnchor] = useState<CommentAnchor | null>(null);
   const [commandState, setCommandState] = useState<{ query: string; start: number } | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
-  const [selectionMessage, setSelectionMessage] = useState('');
+  const [, setSelectionMessage] = useState('');
   /* flashMessage:与 selectedText 解耦的瞬时反馈(2s 自动消失),
      避免复制 toast 在选区仍然存在时被立刻隐藏 */
   const [flashMessage, setFlashMessage] = useState('');
@@ -246,7 +246,7 @@ export default function EditorPage() {
     const t = setTimeout(() => setFlashMessage(''), 2000);
     return () => clearTimeout(t);
   }, [flashMessage]);
-  const [bodyHash, setBodyHash] = useState('');
+  const [, setBodyHash] = useState('');
   const [assistantResult, setAssistantResult] = useState<{ operation: string; original: string; suggestion: string | null; rationale: string; claims: Array<{ text: string; verdict: string; evidence?: string }>; warnings: string[] } | null>(null);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantError, setAssistantError] = useState('');

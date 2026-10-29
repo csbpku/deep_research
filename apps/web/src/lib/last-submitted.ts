@@ -14,23 +14,6 @@ export interface LastSubmitted {
   at: number;
 }
 
-export function readLastSubmitted(): LastSubmitted | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.sessionStorage.getItem(LAST_SUBMITTED_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as LastSubmitted;
-    if (typeof parsed.jobId !== 'string' || typeof parsed.at !== 'number') return null;
-    if (Date.now() - parsed.at > LAST_SUBMITTED_TTL_MS) {
-      window.sessionStorage.removeItem(LAST_SUBMITTED_KEY);
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 export function writeLastSubmitted(jobId: string, topic: string): void {
   if (typeof window === 'undefined') return;
   try {
@@ -40,14 +23,5 @@ export function writeLastSubmitted(jobId: string, topic: string): void {
     );
   } catch {
     // sessionStorage 在隐身/受限模式下不可用 —— 不抛错,横幅不显示。
-  }
-}
-
-export function clearLastSubmitted(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(LAST_SUBMITTED_KEY);
-  } catch {
-    // 静默失败 —— 仅清理本地状态。
   }
 }

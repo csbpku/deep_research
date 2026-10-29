@@ -153,7 +153,6 @@ export function DeepResearchProgressCard({
   // page being opened, and a bounded evidence ledger can contain fewer rows
   // than the number of pages touched. Never infer page visits from either.
   const visited = typeof progress.pagesVisited === 'number' ? progress.pagesVisited : null;
-  const visitedLabel = visited === null ? '已打开页面未记录' : `${visited} 个已打开页面`;
   const coverage = Object.values(progress.sourceCoverage ?? {});
   const coveredProducts = coverage.filter((item) => item.status === 'covered').length;
   const retrieval = progress.retrieval;

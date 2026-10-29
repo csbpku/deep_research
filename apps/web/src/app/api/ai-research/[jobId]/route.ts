@@ -12,7 +12,7 @@ import { apiHandler } from '../../../../lib/api-handler';
 import { prisma } from '../../../../lib/db';
 import { requireUser } from '../../../../lib/auth/session';
 import { toApiErrorResponse } from '../../../../lib/errors';
-import { log, withRequestId } from '../../../../lib/log';
+import { withRequestId } from '../../../../lib/log';
 import { getWebEnv } from '../../../../lib/env';
 import { fetchAiEngine } from '../../../../lib/ai-bff/fetch-ai-engine';
 import {

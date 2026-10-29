@@ -8,7 +8,6 @@ import {
   FileText,
   Globe2,
   Link2,
-  Loader2,
   Presentation,
   Send,
   Sparkles,

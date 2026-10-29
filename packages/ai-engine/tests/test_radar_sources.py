@@ -480,43 +480,6 @@ async def test_github_release_candidates() -> None:
     assert items[0].tags == ("github", "release")
 
 
-def _github_iso(days_ago: int = 0) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _github_pr(updated_at: str | None = None) -> dict[str, Any]:
-    return {
-        "title": "PR title",
-        "html_url": "https://github.com/acme/agent/pull/1",
-        "body": "PR body",
-        "updated_at": updated_at or _github_iso(),
-        "state": "open",
-        "user": {"login": "alice"},
-    }
-
-
-def _github_issue(number: int, updated_at: str) -> dict[str, Any]:
-    return {
-        "number": number,
-        "title": f"issue-{number}",
-        "html_url": f"https://github.com/acme/agent/issues/{number}",
-        "body": "Issue body",
-        "updated_at": updated_at,
-        "state": "open",
-        "user": {"login": "alice"},
-    }
-
-
-def _github_release(tag: str, published_at: str) -> dict[str, Any]:
-    return {
-        "tag_name": tag,
-        "name": tag,
-        "html_url": f"https://github.com/acme/agent/releases/tag/{tag}",
-        "body": "Release body",
-        "published_at": published_at,
-    }
-
-
 async def test_github_rejects_invalid_repo_config() -> None:
     with pytest.raises(ValueError, match="owner/name"):
         await fetch_github({"repos": ["invalid"], "type": "stars"})

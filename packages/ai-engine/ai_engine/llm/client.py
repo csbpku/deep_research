@@ -151,29 +151,6 @@ def _parse_spec(spec: str) -> tuple[str, str]:
     return vendor, model
 
 
-def _credential_profile(model: str) -> str | None:
-    """Select an optional model-specific credential profile.
-
-    The provider prefix describes the wire protocol (``anthropic`` or
-    ``openai``).  A model-specific profile allows two compatible providers
-    to coexist without overwriting the generic credentials, e.g. MiniMax as
-    the primary and DeepSeek as the fallback.
-    """
-    normalized = model.strip().lower()
-    if normalized.startswith("minimax-") or normalized.startswith("minimax:"):
-        return "MINIMAX"
-    if normalized.startswith("deepseek-") or normalized.startswith("deepseek:"):
-        return "DEEPSEEK"
-    return None
-
-
-def _profile_value(profile: str, name: str) -> str:
-    return (
-        os.environ.get(f"{profile}_{name}", "")
-        or os.environ.get(f"{profile.lower()}_{name.lower()}", "")
-    )
-
-
 def _credentials(provider: str, tier: LlmTier, model: str = "") -> tuple[str, str | None]:
     purpose: LlmPurpose = "research" if tier == "heavy" else "utility"
     route = resolve_route(purpose, spec=f"{provider}:{model}", tier=tier)

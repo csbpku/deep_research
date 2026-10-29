@@ -8,7 +8,6 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../../../../../lib/db';
 import { apiHandler } from '../../../../../lib/api-handler';
@@ -499,7 +498,3 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
     author: { id: result.author.id, name: result.author.name },
   });
 });
-
-function hashText(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}

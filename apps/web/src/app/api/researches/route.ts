@@ -14,7 +14,6 @@
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { Prisma } from '@prisma/client';
 import { prisma } from '../../../lib/db';
 import { apiHandler, parseBody } from '../../../lib/api-handler';
 import { requireUser } from '../../../lib/auth/session';
