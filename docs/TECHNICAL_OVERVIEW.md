@@ -103,7 +103,7 @@ Reader 聊天提供默认关闭、记忆选择的“联网补充”。只有显�
 
 Reader 与 Monica 原网页交互的对照、技术阅读差异化、双模式权威数据边界和明确非目标见 [`READER_PRODUCT_DECISIONS.md`](./READER_PRODUCT_DECISIONS.md)。
 
-雷达迁移由 `RADAR_READING_MODE` 控制，默认值为 `browser`。新同步尽量抓取来源正文用于当次摘要和评分，但不持久化全文；后续 enrichment/recovery 队列保持关闭。专题刷新、议题提取与综合采用统一的公开阅读门槛：已评分的 external-reading 高价值候选使用入库摘要/判断参与专题，不要求持久化正文；旧站内阅读候选仍要求 enrichment、正文质量和内容审核通过。专题关联匹配标题、URL、内容标签及保存的摘要/判断，预设关键词支持中英文；噪声、未评分、已屏蔽/归档、未审核分享和 GitHub Issue/PR/Release 不进入专题。候选成员变化（包括总数不变时的替换）会清除综述缓存与输入 hash，下一轮重新生成。显式设置为 `enriched` 才运行旧的站内正文链路；历史行和显式 Admin enrichment 保留，便于渐进迁移和回滚。
+雷达迁移由 `RADAR_READING_MODE` 控制，默认值为 `browser`。新同步尽量抓取来源正文用于当次摘要和评分，但不持久化全文；后续 enrichment/recovery 队列保持关闭。`originalKind` 描述内容形态（仓库/论文/Issue/文章），与全文是否入库解耦，站外阅读模式同样写入，消费端在字段缺失时按 URL 推导形态。专题刷新、议题提取与综合采用统一的公开阅读门槛：已评分的 external-reading 高价值候选使用入库摘要/判断参与专题，不要求持久化正文；旧站内阅读候选仍要求 enrichment、正文质量和内容审核通过。专题关联匹配标题、URL、内容标签及保存的摘要/判断，预设关键词支持中英文；噪声、未评分、已屏蔽/归档、未审核分享和 GitHub Issue/PR/Release 不进入专题。候选成员变化（包括总数不变时的替换）会清除综述缓存与输入 hash，下一轮重新生成。显式设置为 `enriched` 才运行旧的站内正文链路；历史行和显式 Admin enrichment 保留，便于渐进迁移和回滚。
 
 雷达状态治理通过 Admin 批量预检/执行和同源 SSH 维护核心完成，保留正文、历史诊断及引用，支持审计、条件写入、断点补救和安全回滚。已授权的确认噪声使用独立物理删除流程，要求当前有效噪声评分及无引用保护，原文抓取失败或片段不阻止处置，并先保留库外恢复归档；接口、预算和操作边界见 [`contracts/radar-governance.md`](./contracts/radar-governance.md)。
 

@@ -87,4 +87,29 @@ describe('RadarPreviewPanel', () => {
     expect(html).toContain('打开 Zread');
     expect(html).toContain('https://zread.ai/microsoft/markitdown');
   });
+
+  it('shows the Zread action for repository rows without a stored content kind', () => {
+    const html = renderToStaticMarkup(createElement(RadarPreviewPanel, {
+      detail: {
+        id: '44444444-4444-4444-8444-444444444444',
+        title: 'microsoft/markitdown',
+        excerpt: 'Repository context.',
+        interpretation: 'Repository summary.',
+        scoreReason: null,
+        distilledScore: null,
+        tier: 'deep_read',
+        selectionReason: null,
+        url: 'https://github.com/microsoft/markitdown',
+        sourceType: 'github',
+        sourceName: 'GitHub',
+        originalKind: null,
+        tags: [],
+        publishedAt: null,
+      },
+      onClose: () => undefined,
+    }));
+
+    expect(html).toContain('打开 Zread');
+    expect(html).toContain('https://zread.ai/microsoft/markitdown');
+  });
 });

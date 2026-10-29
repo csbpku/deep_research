@@ -1056,13 +1056,19 @@ async def _insert_candidate(
     original_kind: str | None = None
     original_bytes: int | None = None
     original_sha256: str | None = None
-    if DEEPDIVE_ENABLED and not browser_reading_mode_enabled():
+    if DEEPDIVE_ENABLED:
+        # ``originalKind`` describes the shape of the source (repository,
+        # paper, issue, article).  It is not a cache marker: browser reading
+        # mode only decides whether the full text stays on this side, so the
+        # kind must still be recorded or the platform cannot tell a
+        # repository from a web page and hides repository-only entry points.
         original_kind = (
             original_kind_override
             or _classify_original_kind(source.source_type, stored_url)
         )
-        # Truncate on a UTF-8 boundary and describe exactly what is stored.
-        original_markdown, original_bytes, original_sha256 = _stored_original(markdown)
+        if not browser_reading_mode_enabled():
+            # Truncate on a UTF-8 boundary and describe exactly what is stored.
+            original_markdown, original_bytes, original_sha256 = _stored_original(markdown)
 
     async with pool.connection() as conn:
         async with conn.transaction():

@@ -28,7 +28,7 @@ import {
 } from '../../lib/radar/source-labels';
 import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
 import { AppButton } from '@/components/material/AppButton';
-import { zreadRepositoryUrl } from './radar-repository';
+import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
 
@@ -143,10 +143,11 @@ export function RadarExternalReadingLanding({
 
   const sourceLabel = formatSourceType(detail.sourceType);
   const sourceName = detail.sourceName?.trim() || sourceLabel.short;
-  const contentLabel = formatRadarContentKind(detail.originalKind, detail.sourceType, detail.url);
+  const originalKind = effectiveOriginalKind(detail.originalKind, detail.url);
+  const contentLabel = formatRadarContentKind(originalKind, detail.sourceType, detail.url);
   const readerUrl = externalReaderUrl(detail.url, detail.id, platformOrigin);
   const sourceUrlAvailable = isHttpUrl(detail.url);
-  const zreadUrl = detail.originalKind === 'github_repo'
+  const zreadUrl = originalKind === 'github_repo'
     ? zreadRepositoryUrl(detail.url)
     : null;
   const tier = detail.tier ?? detail.distilledScore?.tier ?? null;
