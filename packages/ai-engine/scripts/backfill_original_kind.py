@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import os
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -24,6 +25,18 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 from ai_engine.job_runner.db_store import DbJobStore
 from ai_engine.radar.content_kind import kind_from_url
+from psycopg import AsyncConnection
+
+
+async def apply_updates(conn: AsyncConnection, updates: list[tuple[str, uuid.UUID]]) -> int:
+    """Only fill rows that are still missing a kind when the update runs."""
+    async with conn.cursor() as cursor:
+        await cursor.executemany(
+            'UPDATE "summaries" SET "originalKind" = %s, "updatedAt" = now() '
+            'WHERE "id" = %s AND "originalKind" IS NULL',
+            updates,
+        )
+        return cursor.rowcount
 
 
 async def main() -> int:
@@ -47,12 +60,12 @@ async def main() -> int:
                 )
             ).fetchall()
 
-            updates: list[tuple[str, str]] = []
+            updates: list[tuple[str, uuid.UUID]] = []
             for raw in rows:
                 row = dict(raw)
                 kind = kind_from_url(str(row["url"] or ""))
                 if kind:
-                    updates.append((kind, str(row["id"])))
+                    updates.append((kind, uuid.UUID(str(row["id"]))))
 
             by_kind: dict[str, int] = {}
             for kind, _summary_id in updates:
@@ -66,13 +79,8 @@ async def main() -> int:
                 return 0
 
             async with conn.transaction():
-                await conn.execute(
-                    'UPDATE "summaries" SET "originalKind" = v.kind, '
-                    '"updatedAt" = now() FROM (VALUES %s) AS v(kind, id) '
-                    'WHERE "summaries"."id" = v.id',
-                    updates,
-                )
-            print(f"updated={len(updates)}")
+                updated = await apply_updates(conn, updates)
+            print(f"updated={updated}")
             return 0
     finally:
         await store.close()

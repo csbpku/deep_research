@@ -9,12 +9,15 @@ async def test_health() -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/health")
+        readiness = await client.get("/healthz")
 
     assert response.status_code == 200
     body = response.json()
     # /health is the legacy alias of /healthz; it returns adapter metadata.
     assert body["status"] == "ok"
     assert body["adapter"] == "fake"
+    assert readiness.status_code == 200
+    assert readiness.json()["status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -26,8 +29,11 @@ async def test_healthz_reports_degraded_when_internal_token_is_missing(
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/healthz")
+        legacy = await client.get("/health")
 
-    assert response.status_code == 200
+    assert response.status_code == 503
     body = response.json()
     assert body["status"] == "degraded"
     assert body["internal_token_configured"] == "false"
+    assert legacy.status_code == 200
+    assert legacy.json()["status"] == "degraded"

@@ -1464,7 +1464,7 @@ async function deleteLibraryRecord(kind, record) {
   $('undo-library-delete').disabled = true;
   try {
     const removed = await libraryDeletion.remove(kind, record);
-    if (kind === 'annotation') await refreshLibraryAnnotations();
+    if (removed) await refreshLibraryAnnotations();
     await updateLibrary();
     setLibraryNotice(removed ? t("已删除“{0}”。关闭面板前可撤销。", title) : t("该收藏已不存在，列表已刷新。"));
     $('undo-library-delete').disabled = false;
@@ -1483,7 +1483,7 @@ async function undoLibraryDelete() {
   $('undo-library-delete').disabled = true;
   try {
     const item = await libraryDeletion.undo();
-    if (item?.kind === 'annotation') await refreshLibraryAnnotations();
+    if (item) await refreshLibraryAnnotations();
     await updateLibrary();
     setLibraryNotice(item?.restored ? t("收藏已恢复。") : t("记录已在其他页面恢复，未覆盖现有内容。"));
     if (libraryDeletion.count === 0) $('library-search').focus({ preventScroll: true });

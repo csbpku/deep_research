@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 import structlog
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -3279,9 +3279,13 @@ async def health_alias(
 @app.get("/healthz")
 async def healthz(
     request: Request,
+    response: Response,
     store: Annotated[JobStore, Depends(_store_singleton)],
 ) -> dict[str, str]:
-    return await _health_payload(request, store)
+    payload = await _health_payload(request, store)
+    if payload["status"] != "ok":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return payload
 
 
 async def _health_payload(request: Request, store: JobStore) -> dict[str, str]:

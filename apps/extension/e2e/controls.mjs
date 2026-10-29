@@ -399,6 +399,14 @@ try {
     marks: document.querySelectorAll('[data-deep-research-annotation-highlight] span').length,
   }));
   if (annotationState.hosts !== 1 || annotationState.marks < 1) throw new Error(`标注没有在原文中高亮：${JSON.stringify(annotationState)}`);
+  await panel.locator('#nav-library').click();
+  const highlightedRecord = panel.locator('#library-list .insight-row').filter({ hasText: '可复用的原文标注' });
+  panel.once('dialog', dialog => dialog.accept());
+  await highlightedRecord.locator('[data-action="delete"]').click();
+  await fixture.waitForSelector('[data-deep-research-annotation-highlight] span', { state: 'detached', timeout: 10_000 });
+  await panel.locator('#undo-library-delete').click();
+  await fixture.waitForSelector('[data-deep-research-annotation-highlight] span', { timeout: 10_000 });
+  await panel.locator('#nav-chat').click();
   await panel.locator('#save-selection').click();
   await panel.locator('#save-note').fill('可复用的本地阅读判断');
   await panel.locator('#confirm-save').click();
