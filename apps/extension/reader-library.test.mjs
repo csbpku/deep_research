@@ -146,7 +146,9 @@ test('the actual deletion controller honors cancel and exposes working undo afte
   const $ = nodeMap();
   store.insights.set('a', { id: 'a', title: 'Saved evidence' });
   const deletion = createLibraryDeletion(store);
-  const sandbox = { $, t, libraryDeletion: deletion, libraryMutationBusy: false, pageContext: null, documentContext: null, selectionContext: null,
+  const refreshed = [];
+  const sandbox = { $, t, libraryDeletion: deletion, libraryMutationBusy: false, pageContext: { url: 'https://example.test' }, documentContext: null, selectionContext: null,
+    applyAnnotationsForContext: async context => refreshed.push(context.url),
     show: (element, visible) => { element.visible = visible; }, updateLibrary: async () => {},
     window: { confirm: () => false }, record: store.insights.get('a') };
   vm.createContext(sandbox);
@@ -154,15 +156,18 @@ test('the actual deletion controller honors cancel and exposes working undo afte
   await vm.runInContext("deleteLibraryRecord('insight', record)", sandbox);
   assert.equal(store.insights.has('a'), true);
   assert.equal(deletion.count, 0);
+  assert.equal(refreshed.length, 0);
   sandbox.window.confirm = () => true;
   await vm.runInContext("deleteLibraryRecord('insight', record)", sandbox);
   assert.equal(store.insights.has('a'), false);
   assert.equal($('undo-library-delete').visible, true);
   assert.equal($('undo-library-delete').focused, true);
   assert.match($('library-notice-text').textContent, /Saved evidence/);
+  assert.equal(refreshed.length, 1);
   await vm.runInContext('undoLibraryDelete()', sandbox);
   assert.equal(store.insights.has('a'), true);
   assert.equal($('undo-library-delete').visible, false);
+  assert.equal(refreshed.length, 2);
 });
 
 test('late collection reads cannot overwrite a newer filter result', async () => {

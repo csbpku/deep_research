@@ -27,7 +27,7 @@ Zread 卷不属于镜像保留机制：普通阅读默认 browser 模式，但 A
   - 它**只是 liveness**，不查数据库。`scripts/docker-entrypoint-web.sh` 在 `prisma migrate deploy` 失败时现在会 `exit 1`（容器不再带着旧 schema 启动），所以迁移失败表现为容器退出 → 发布后 `/healthz` 检查失败 → deploy.yml 回滚。
   - `/api/readyz`（nginx 暴露为 `/readyz`）执行 `SELECT 1`（2 秒超时），失败返回 503；deploy.yml 发布后同时检查 `/healthz` 与 `/readyz`。容器 HEALTHCHECK 仍用 liveness。未做 `_prisma_migrations` 最新迁移校验（follow-up）。
 - Schema 漂移：CI（`web-e2e` job）在 `prisma migrate deploy` 之后运行 `scripts/check-schema-drift.sh`，对比 `schema.prisma` 与迁移后的数据库；仅允许两处已登记的无害差异（`topics.synthesisVersion` 的 client 端默认值，以及 `summaries_distilledProfile_distilledTotal_idx` 的 partial 谓词）。
-- AI engine `/healthz` 已存在（W1）。
+- AI engine `/healthz` 在适配器不可用或内部服务令牌未配置时返回 503，部署和容器健康检查因此不会将降级状态当作健康；旧 `/health` 保持 200 并在响应中报告状态。
 
 本地默认运行方式是原生 PostgreSQL + `pnpm dev:web` / `pnpm dev:ai`；Docker Compose 是独立的部署/恢复演练拓扑，不是本地默认依赖。
 macOS launchd 常驻、彻底停止和恢复命令见 [`docs/TECHNICAL_OVERVIEW.md`](../docs/TECHNICAL_OVERVIEW.md#6-本地服务生命周期)。
