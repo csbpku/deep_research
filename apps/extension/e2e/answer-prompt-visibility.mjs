@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { selectSettingsModel } from './settings-model-picker.mjs';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
@@ -61,7 +62,7 @@ try {
   await panel.locator('#provider-kind').selectOption('local-proxy', { force: true });
   await panel.locator('#provider-url').fill(`${origin}/v1`);
   await panel.locator('#provider-model-list option[value="test-chat"]').waitFor({ state: 'attached' });
-  await panel.locator('#provider-model-list').selectOption('test-chat');
+  await selectSettingsModel(panel, 'test-chat');
   await panel.locator('#save-settings').click();
   await panel.waitForFunction(() => document.querySelector('#settings-notice')?.dataset.result === 'success');
   await panel.locator('#close-settings').click();

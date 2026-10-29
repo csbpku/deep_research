@@ -14,6 +14,8 @@ import { ReaderButton, ReaderTextField, ReaderSelect, ReaderDisclosure } from '.
 import { ReaderThemeProvider } from '../../components/reader-theme';
 import { TranslationLanguagePicker } from '../../components/translation-language-picker';
 import { ProviderSelector } from '../../components/provider-selector';
+import { ReadingSaveOptions } from '../../components/reading-save-options';
+import { SettingsModelPicker } from '../../components/settings-model-picker';
 
 /**
  * React owns the panel UI. The reading controller remains an imperative
@@ -183,8 +185,7 @@ function ReaderPanel() {
                 <blockquote id="chat-selection-quote" />
                 <div id="selection-section" className="selection-preview-actions">
                   <ReaderButton id="copy-chat-selection" type="button" variant="text">{t("复制选段")}</ReaderButton>
-                  <ReaderButton id="annotate-selection" type="button" title={t("在原网页高亮并添加笔记")} variant="text">{t("标注")}</ReaderButton>
-                  <ReaderButton id="save-selection" type="button" title={t("将选段存入阅读库")} variant="text">{t("保存摘录")}</ReaderButton>
+                  <ReaderButton id="save-selection" type="button" title={t("保存摘录、笔记并选择是否高亮")} variant="text">{t("保存")}</ReaderButton>
                   <ReaderButton id="toggle-chat-selection" type="button" aria-expanded="false" aria-controls="chat-selection-quote" variant="text">{t("展开")}</ReaderButton>
                 </div>
               </Paper>
@@ -256,12 +257,13 @@ function ReaderPanel() {
             <span id="provider-connection-state" className="connection-badge">{t("未连接")}</span>
           </div>
           <ProviderSelector />
+          <div id="provider-region-field" className="field hidden"><label htmlFor="provider-region">{t('MiniMax 服务区域')}</label><ReaderSelect id="provider-region" defaultValue="minimax"><option value="minimax">{t('国内站 · minimaxi.com')}</option><option value="minimax-global">{t('国际站 · minimax.io')}</option></ReaderSelect><p className="small">{t('请选择 API Key 所属站点；切换区域后需填写该站点的 Key。')}</p></div>
           <div id="provider-custom-url-field" className="field"><label htmlFor="provider-url">{t("API 地址")}</label><ReaderTextField id="provider-url" type="url" className="reader-settings-field" placeholder="https://api.example.com/v1" autoComplete="off" slotProps={{ htmlInput: { spellCheck: false, 'aria-describedby': 'provider-endpoint-hint model-discovery-status' } }} /></div>
           <div id="provider-endpoint-hint" className="small provider-endpoint-hint" />
           <div className="field"><label id="provider-key-label" htmlFor="provider-key">API Key</label><div className="provider-key-control"><ReaderTextField id="provider-key" className="reader-settings-field" type="password" autoComplete="off" placeholder={t("输入服务商提供的 Key")} slotProps={{ htmlInput: { spellCheck: false, 'aria-describedby': 'model-discovery-status' } }} /><ReaderButton id="provider-key-toggle" className="provider-key-toggle" type="button" aria-label={t("显示 API Key")} title={t("显示 API Key")} aria-pressed="false" variant="outlined" control="icon"><ComposerIcon kind="eye" /></ReaderButton></div></div>
-          <ReaderButton id="refresh-models" className="provider-connect" type="button" variant="contained">{t("连接并获取模型")}</ReaderButton>
+          <ReaderButton id="refresh-models" className="provider-connect" type="button" variant="contained">{t("读取模型列表")}</ReaderButton>
           <div id="model-discovery-status" className="provider-feedback" role="status" aria-live="polite" />
-          <div className="field provider-model-field"><label htmlFor="provider-model-list">{t("模型")}</label><ReaderTextField id="provider-model-search" type="search" className="hidden" placeholder={t("搜索模型")} aria-label={t("搜索模型")}  /><ReaderSelect id="provider-model-list"><option value="">{t("请先连接模型服务")}</option></ReaderSelect><ReaderDisclosure id="manual-model-settings" label={<>{t("手动指定模型 ID")}</>}><label htmlFor="provider-model">{t("模型 ID")}</label><ReaderTextField id="provider-model" className="reader-settings-field" placeholder={t("填写服务商提供的模型 ID")} slotProps={{ htmlInput: { spellCheck: false } }} /></ReaderDisclosure></div>
+          <div className="field provider-model-field"><label htmlFor="provider-model-search">{t("选择模型")}</label><SettingsModelPicker /><p id="model-list-help" className="small">{t('列表由当前服务返回，可按名称或 ID 搜索；实际可用范围取决于账号权限。')}</p><ReaderDisclosure id="manual-model-settings" label={<>{t("手动指定模型 ID")}</>}><label htmlFor="provider-model">{t("模型 ID")}</label><ReaderTextField id="provider-model" className="reader-settings-field" placeholder={t("填写服务商提供的模型 ID")} slotProps={{ htmlInput: { spellCheck: false } }} /></ReaderDisclosure></div>
           <div className="actions provider-save-actions"><ReaderButton id="save-settings" type="button" variant="contained">{t("保存配置")}</ReaderButton><ReaderButton id="test-provider" type="button" variant="outlined">{t("测试连接")}</ReaderButton></div>
           <div id="provider-test-status" className="provider-feedback" role="status" aria-live="polite" />
           <ReaderDisclosure className="provider-extra-checks" label={<>{t("图片能力")}</>}><ReaderButton id="test-vision" type="button" variant="outlined">{t("检测图片能力")}</ReaderButton></ReaderDisclosure>
@@ -276,23 +278,15 @@ function ReaderPanel() {
 
       <section id="save-dialog" className="setting-panel hidden">
         <div className="eyebrow">{t("保存阅读成果")}</div>
-        <Typography component="h2" variant="h2">{t("留下以后能复用的结论")}</Typography>
-        <p id="save-mode-note" className="small" style={{ marginTop: 8 }}>{t("保存为可检索的阅读结论卡，不会在原文添加高亮。")}</p>
+        <Typography component="h2" variant="h2">{t("保存摘录与笔记")}</Typography>
+        <p id="save-mode-note" className="small" style={{ marginTop: 8 }} />
         <div className="card"><div className="card-title"><label htmlFor="save-quote">{t("原文摘录")}</label><span id="save-source-title">{t("当前页面")}</span></div><ReaderTextField id="save-quote" style={{ marginTop: 9, minHeight: 100 }}  multiline minRows={3} /></div>
         <div className="field"><label htmlFor="save-note">{t("我的笔记")}</label><ReaderTextField id="save-note" placeholder={t("补充自己的判断、待验证问题或使用场景")}  multiline minRows={3} /></div>
-        <div className="field"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
+        <ReadingSaveOptions />
+        <div id="save-ai-answer-field" className="field hidden"><label htmlFor="save-ai-answer">{t("要保存的 AI 结论")}</label><ReaderTextField id="save-ai-answer" placeholder={t("可以删掉不想长期保留的部分")}  multiline minRows={3} /></div>
         <div className="field"><label htmlFor="save-tags">{t("标签（用逗号分隔，最多 10 个）")}</label><ReaderTextField id="save-tags" placeholder={t("架构, 性能, 待验证")}  /></div>
         <Alert id="save-notice" className="notice hidden" role="status" aria-live="polite"  icon={false} severity="info" />
         <div className="actions"><ReaderButton id="confirm-save" variant="contained">{t("保存到阅读库")}</ReaderButton><ReaderButton id="cancel-save" variant="outlined">{t("取消")}</ReaderButton></div>
-      </section>
-
-      <section id="annotation-dialog" className="setting-panel hidden">
-        <div className="eyebrow">{t("原文标注")}</div><Typography component="h2" variant="h2">{t("给这段内容留下位置标记")}</Typography>
-        <p className="small">{t("保存后会按原文位置叠加高亮，并保留一条短笔记；不会创建阅读结论卡。仅在原文版本匹配时高亮，标注保存在浏览器本地。")}</p>
-        <div className="field"><label htmlFor="annotation-quote">{t("待标注原文")}</label><span id="annotation-source-title" className="small" /><ReaderTextField id="annotation-quote" multiline minRows={3} slotProps={{ htmlInput: { readOnly: true } }} /></div>
-        <div className="field"><label htmlFor="annotation-note">{t("标注笔记")}</label><ReaderTextField id="annotation-note" multiline minRows={3} placeholder={t("例如：这里是性能瓶颈的关键假设")} /></div>
-        <Alert id="annotation-notice" className="notice hidden" icon={false} severity="info" />
-        <div className="actions"><ReaderButton id="confirm-annotation" variant="contained">{t("保存标注并高亮")}</ReaderButton><ReaderButton id="cancel-annotation" variant="outlined">{t("取消")}</ReaderButton></div>
       </section>
 
       <div id="mode-data-note" className="footer">{t("独立模式：模型请求与阅读成果保存在本地，可导出或清除。")}</div>

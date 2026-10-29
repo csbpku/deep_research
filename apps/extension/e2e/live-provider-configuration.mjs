@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { selectSettingsModel } from './settings-model-picker.mjs';
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { chromium } from '../../web/node_modules/@playwright/test/index.mjs';
 import { join } from 'node:path';
@@ -40,7 +41,7 @@ try {
   assert.ok(models.length > 0);
   const selected = process.env.READER_LIVE_MODEL;
   assert.ok(models.includes(selected), 'The configured live test model must be offered by this service');
-  await page.locator('#provider-model-list').selectOption(selected);
+  await selectSettingsModel(page, selected);
   await page.locator('#save-settings').click();
   await page.waitForFunction(() => document.querySelector('#settings-notice')?.textContent?.includes('已保存'));
   await page.locator('#test-provider').click();

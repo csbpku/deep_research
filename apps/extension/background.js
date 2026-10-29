@@ -611,16 +611,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse?.({ ok: false, reason: 'unsupported' });
       return false;
     }
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sendResponse?.(result);
+    };
+    // Already-open panels can leave Chrome's promise pending. Bound the
+    // response channel and let the page offer the toolbar fallback.
+    const timer = setTimeout(() => finish({ ok: false, reason: 'panel-timeout' }), 4000);
     try {
-      chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
-    } catch {
-      // The click originated in the content script, but older Chromium
-      // versions may still reject sidePanel.open. The toolbar action remains
-      // available as a fallback.
-    }
+      Promise.resolve(chrome.sidePanel.open({ windowId: tab.windowId }))
+        .then(() => finish({ ok: true }))
+        .catch(() => finish({ ok: false, reason: 'panel-unavailable' }));
+    } catch { finish({ ok: false, reason: 'panel-unavailable' }); }
     void activateTabForReading(tab, { engageWindow: true });
-    sendResponse?.({ ok: true });
-    return false;
+    return true;
   }
   if (message?.type === 'deep-research:activate-current-page') {
     const requestedTabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
@@ -736,7 +743,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // message no longer carries a toolbar user gesture.  The page context must
     // still be forwarded immediately; otherwise clicking a figure appears to
     // do nothing and the image discussion scope is lost.
-    if (message.payload?.type === 'deep-research:image-action' && sender.tab?.windowId !== undefined) {
+    if (['deep-research:image-action', 'deep-research:selection-action'].includes(message.payload?.type) && sender.tab?.windowId !== undefined) {
       try {
         chrome.sidePanel.open({ windowId: sender.tab.windowId }).catch(() => {});
       } catch {

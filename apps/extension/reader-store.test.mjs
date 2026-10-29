@@ -31,6 +31,38 @@ test('conversation persistence retains more than ten turns and never creates a s
 const radarId = '10000000-0000-4000-8000-000000000001';
 const researchId = '10000000-0000-4000-8000-000000000002';
 
+test('one saved record owns both its excerpt and optional highlight through edits and export', async () => {
+  const url = 'https://unified.test/article';
+  const document = { url, title: 'Unified', version: 'a'.repeat(64) };
+  const anchor = { quote: 'Original excerpt', startOffset: 0, endOffset: 16, contentHash: document.version };
+  const record = await readerStore.saveInsight({ id: 'unified', url, document, quote: anchor.quote, anchor, highlight: true, note: 'Note', aiAnswer: 'AI', tags: ['tag'] });
+  assert.equal((await readerStore.findInsightForSource(record)).id, record.id);
+  assert.equal((await readerStore.listAnnotations()).filter(item => item.insightId === record.id).length, 1);
+  const exported = await readerStore.exportData();
+  assert.equal(exported.insights.filter(item => item.id === record.id).length, 1);
+  assert.equal(exported.annotations.filter(item => item.id === record.id).length, 0);
+  await readerStore.importData(exported);
+  assert.equal((await readerStore.listAnnotations()).find(item => item.insightId === record.id).note, 'Note');
+  await readerStore.saveInsight({ ...record, highlight: false });
+  assert.equal((await readerStore.listAnnotations()).some(item => item.insightId === record.id), false);
+  await readerStore.saveInsight({ ...record, quote: 'Edited excerpt' });
+  assert.equal((await readerStore.listAnnotations()).some(item => item.insightId === record.id), false);
+  await readerStore.deleteInsight(record.id);
+  assert.equal((await readerStore.listAnnotations()).some(item => item.insightId === record.id), false);
+});
+
+test('editing a legacy annotation preserves its identity and data in the unified record', async () => {
+  const document = { url: 'https://legacy.test/article', title: 'Legacy', version: 'b'.repeat(64) };
+  const anchor = { quote: 'Legacy excerpt', contentHash: document.version };
+  await readerStore.saveAnnotation({ id: 'legacy', document, anchor, note: 'Legacy note' });
+  const record = await readerStore.saveInsight({ id: 'legacy', url: document.url, document, anchor, quote: anchor.quote, note: 'Updated note', highlight: true }, { legacyAnnotationId: 'legacy' });
+  const data = await readerStore.exportData();
+  assert.equal(data.annotations.some(item => item.id === record.id), false);
+  assert.equal(data.insights.find(item => item.id === record.id).note, 'Updated note');
+  assert.equal((await readerStore.listAnnotations()).filter(item => item.id === record.id).length, 1);
+  await readerStore.deleteInsight(record.id);
+});
+
 test('knowledge identity drops only known tracking and reader hints, not session or page identity', () => {
   const base = 'https://recall.test/article?a=1&b=2';
   assert.equal(readerStore.knowledgePageKey(`${base}&utm_source=radar&fbclid=click&gclid=ad&deep-research-summary=${radarId}#section`), base);

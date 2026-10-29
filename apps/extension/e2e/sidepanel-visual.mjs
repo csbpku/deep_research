@@ -112,6 +112,10 @@ async function layoutReport(page, name) {
 try {
   const serviceWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(serviceWorker.url()).host;
+  // This test drives a regular extension tab as its panel. Keep Chrome from
+  // opening a second native reader that also consumes the dock action.
+  // Native panel opening is covered by ui-regressions.test.mjs.
+  await serviceWorker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
   // The injected controls follow the browser UI language, which differs
   // between a developer's macOS session and a Linux CI runner. Pin it so
   // the label assertions below describe one fixed product state.
@@ -142,6 +146,22 @@ try {
     }
     dockActions.push({ label, role: 'button', visible: true });
   }
+
+  // Keep the native opener stubbed, but click the real page dock and let the
+  // service worker/content-script response channel handle every outcome.
+  for (const outcome of ['success', 'reject', 'timeout']) {
+    await serviceWorker.evaluate(mode => {
+      chrome.sidePanel.open = mode === 'success' ? async () => {}
+        : mode === 'reject' ? async () => { throw new Error('fixture panel rejection'); }
+          : () => new Promise(() => {});
+    }, outcome);
+    await article.getByRole('button', { name: '打开聊天', exact: true }).click();
+    const status = article.locator('[data-deep-research-status] .status');
+    await status.locator('.label').filter({ hasText: outcome === 'success' ? '聊天侧栏已打开' : '未能打开聊天侧栏' }).waitFor({ timeout: 7000 });
+    await status.evaluate(node => { if (!node.classList.contains('visible')) throw new Error('open-panel feedback was not shown'); });
+    await article.waitForFunction(() => !document.querySelector('[data-deep-research-status]')?.shadowRoot?.querySelector('.status')?.classList.contains('visible'), null, { timeout: 5000 });
+  }
+  await serviceWorker.evaluate(() => { chrome.sidePanel.open = async () => {}; });
 
   const panel = await context.newPage();
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`, { waitUntil: 'domcontentloaded' });
@@ -186,6 +206,24 @@ try {
   if (!summaryGuidance.includes('全文总结尚未开始') || !summaryGuidance.includes('模型服务')) {
     throw new Error(`dock summary click did not explain local model setup: ${summaryGuidance}`);
   }
+  // A newly opened native panel and ordinary article updates both re-report
+  // context. That refresh must retain the reason settings were opened.
+  await panel.evaluate(() => {
+    window.contextRefreshed = new Promise(resolve => {
+      const listener = message => {
+        if (message.type !== 'deep-research:page-context') return;
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve();
+      };
+      chrome.runtime.onMessage.addListener(listener);
+    });
+  });
+  await serviceWorker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    await chrome.tabs.sendMessage(tab.id, { type: 'deep-research:request-page' });
+  });
+  await panel.evaluate(() => window.contextRefreshed);
+  await panel.waitForFunction(() => document.querySelector('#mode-guidance')?.textContent?.includes('全文总结尚未开始'));
   await panel.locator('#close-settings').click();
   const localAvailability = await panel.locator('#ai-availability-banner').innerText();
   if (!localAvailability.includes('独立模式尚未配置模型') || await panel.locator('#ai-availability-action').innerText() !== '配置模型') {
@@ -273,11 +311,12 @@ try {
   if (await panel.locator('#ask-page').count() !== 0 || await panel.locator('.selection-action-label').isVisible()) {
     throw new Error('选段工具仍重复展示聊天范围/整页提问入口。');
   }
-  await panel.locator('#annotate-selection').click();
-  await panel.locator('#annotation-dialog').waitFor({ state: 'visible', timeout: 5_000 });
-  await panel.locator('#annotation-note').fill('E2E annotation note');
-  await panel.locator('#confirm-annotation').click();
-  await panel.getByText('标注已保存，并已在原文高亮。').waitFor({ state: 'visible', timeout: 10_000 });
+  await panel.locator('#save-selection').click();
+  await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
+  await panel.locator('#save-note').fill('E2E annotation note');
+  await panel.locator('#save-highlight').check();
+  await panel.locator('#confirm-save').click();
+  await panel.locator('#save-dialog').waitFor({ state: 'hidden', timeout: 10_000 });
   const annotationHighlight = await article.waitForFunction(() => {
     const target = document.querySelector('#target')?.getBoundingClientRect();
     const marks = [...document.querySelectorAll('[data-deep-research-annotation-highlight] > span')];
@@ -302,8 +341,8 @@ try {
   await panel.locator('#save-selection').click();
   await panel.locator('#save-dialog').waitFor({ state: 'visible', timeout: 5_000 });
   const excerptCopy = await panel.locator('#save-mode-note').innerText();
-  if (!excerptCopy.includes('不会在原文添加高亮') || !excerptCopy.includes('阅读结论卡')) {
-    throw new Error(`excerpt action does not explain its distinction from an annotation: ${excerptCopy}`);
+  if (!excerptCopy.includes('同一条记录') || !excerptCopy.includes('按需选择')) {
+    throw new Error(`save action should explain unified records and optional features: ${excerptCopy}`);
   }
   await panel.locator('#cancel-save').click();
 

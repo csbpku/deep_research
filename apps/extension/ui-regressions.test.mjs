@@ -15,6 +15,168 @@ const panel = readFileSync(new URL('./sidepanel.js', import.meta.url), 'utf8');
 const content = readFileSync(new URL('./content.js', import.meta.url), 'utf8');
 function extract(source, start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 
+test('page status refresh retains action-specific model setup guidance until configured', () => {
+  const nodes = {};
+  const sandbox = {
+    $: id => nodes[id] ||= { classList: { remove() {}, add() {}, toggle() {} }, setAttribute() {} },
+    readingMode: 'local', platformConnected: false, lastSavedInsight: null, insightSyncFailed: false,
+    contextUrl: () => '', provider: {}, providerReady: () => sandbox.ready,
+    textModelReady: () => sandbox.ready, ready: false,
+    show() {}, setStatus() {}, updateAiAvailabilityBanner() {},
+    showSettings() { sandbox.updateReadingModeUi(); },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, "let modelSetupAction = '';", 'async function setReadingMode(')
+    + extract(panel, 'function showModelSetupGuidance(', 'function showReading('), sandbox);
+  vm.runInContext("showModelSetupGuidance('全文总结')", sandbox);
+  assert.match(nodes['mode-guidance'].textContent, /全文总结尚未开始/);
+  vm.runInContext('updateReadingModeUi()', sandbox);
+  assert.match(nodes['mode-guidance'].textContent, /全文总结尚未开始/);
+  sandbox.ready = true;
+  vm.runInContext('updateReadingModeUi()', sandbox);
+  assert.equal(vm.runInContext('modelSetupAction', sandbox), '');
+});
+
+test('selection explain waits for panel initialization and runs exactly once', () => {
+  const calls = [];
+  const removed = [];
+  const sandbox = {
+    selectionActionsReady: false, queuedSelectionAction: null, interactionGeneration: 0,
+    pageContext: null, selectionContext: null,
+    chrome: { storage: { session: { remove: async key => removed.push(key) } } },
+    renderPage() {}, explainOrAsk: (...args) => calls.push(args),
+    message: { actionId: 'selection-action-1', action: 'explain', context: { url: 'https://article.test', selection: { quote: 'Selected text' } } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'const consumedSelectionActions =', 'async function restorePendingSelectionAction('), sandbox);
+  vm.runInContext('handleSelectionAction(message)', sandbox);
+  assert.equal(calls.length, 0);
+  assert.equal(removed.length, 0);
+  assert.equal(sandbox.queuedSelectionAction, sandbox.message);
+  sandbox.selectionActionsReady = true;
+  vm.runInContext('handleSelectionAction(queuedSelectionAction); handleSelectionAction(message)', sandbox);
+  assert.deepEqual(calls, [['', 'selection', 'explain']]);
+  assert.equal(removed.length, 1);
+});
+
+test('cross-paragraph selection retains the exact original slice for platform validation', async () => {
+  const body = 'First paragraph.\n\nSecond paragraph.';
+  const sandbox = {
+    window: { getSelection: () => ({ toString: () => body, rangeCount: 0 }) },
+    Node: { ELEMENT_NODE: 1 }, removeSelectionTranslation() {}, isTranslationNode: () => false,
+    pageContext: () => ({ body, url: 'https://article.test' }), contentHash: async () => 'a'.repeat(64),
+    selectorPathForSelection: () => null, sectionForSelection: () => body, sectionTitleForSelection: () => '',
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(content, '  function clean(', '  function stableNodeId(')
+    + extract(content, '  function findQuoteRange(', '  function extractBlocks(')
+    + extract(content, '  async function selectionContext(', '  function removeSelectionToolbar('), sandbox);
+  const result = await vm.runInContext('selectionContext()', sandbox);
+  assert.equal(result.selection.quote, body.slice(result.selection.startOffset, result.selection.endOffset));
+  assert.equal(result.selection.quote, body);
+});
+
+test('platform selection validation errors keep actionable context and request id', async () => {
+  const { platformAnswerErrorMessage } = await import('./platform-answer.js');
+  const message = platformAnswerErrorMessage({ code: 'VALIDATION_FAILED', message: '原文摘录与锚点位置不一致，请重新选择原文', requestId: 'request-anchor' }, 400);
+  assert.match(message, /重新选择原文/);
+  assert.match(message, /request-anchor/);
+  assert.doesNotMatch(message, /平台 AI 暂时无法完成/);
+  assert.match(platformAnswerErrorMessage({}, 401), /重新连接平台/);
+  assert.match(platformAnswerErrorMessage({ message: 'invalid_api_key' }, 401), /模型服务鉴权失败/);
+  assert.match(platformAnswerErrorMessage({ message: 'insufficient_balance' }, 400), /模型额度不足/);
+});
+
+test('a failed quick action retains its question in chat without adding model history', () => {
+  const rendered = [];
+  const nodes = {};
+  const sandbox = {
+    $: id => nodes[id] ||= {}, failedQuestion: '解释当前选段', discussionHistory: [], discussionRunning: false,
+    renderMaterialConversation: (_host, messages) => rendered.push(...messages),
+    show: (node, visible) => { node.visible = visible; },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extract(panel, 'function renderConversation(', 'function renderEmptyState('), sandbox);
+  vm.runInContext('renderConversation()', sandbox);
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].content, '解释当前选段');
+  assert.equal(nodes['conversation-empty'].visible, false);
+  assert.equal(sandbox.discussionHistory.length, 0);
+});
+
+test('selection actions open the native side panel without awaiting its promise', () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const opener = extract(background, "    if (['deep-research:image-action'", '    // Inactive articles still emit');
+  let opened = 0;
+  vm.runInNewContext(opener, {
+    message: { payload: { type: 'deep-research:selection-action', action: 'explain' } },
+    sender: { tab: { windowId: 7 } },
+    chrome: { sidePanel: { open: ({ windowId }) => { assert.equal(windowId, 7); opened++; return new Promise(() => {}); } } },
+  });
+  assert.equal(opened, 1);
+});
+
+test('dock open feedback finishes on success, failure or timeout without replacing newer progress', async () => {
+  for (const outcome of ['success', 'failure', 'reject', 'throw', 'timeout', 'newer-task']) {
+    const statuses = [];
+    const timers = new Map();
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    const sandbox = {
+      readerStatusRevision: 0,
+      setReaderStatus(label, tone) { statuses.push({ label, tone }); return ++sandbox.readerStatusRevision; },
+      window: { setTimeout(callback, delay) { timers.set(delay, callback); return delay; }, clearTimeout(id) { timers.delete(id); } },
+      chrome: { runtime: { sendMessage() {
+        if (outcome === 'throw') throw new Error('extension unavailable');
+        if (outcome === 'reject') return Promise.reject(new Error('worker unavailable'));
+        return pending;
+      } } },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(extract(content, '  function openChatPanel(', '  function setReaderStatus('), sandbox);
+    vm.runInContext('openChatPanel()', sandbox);
+    assert.equal(statuses[0].tone, 'loading');
+    if (outcome === 'timeout') timers.get(5000)();
+    if (outcome === 'newer-task') sandbox.setReaderStatus('Translation in progress', 'loading');
+    resolve({ ok: outcome === 'success' || outcome === 'newer-task' });
+    await new Promise(done => setImmediate(done));
+    assert.equal(timers.size, 0);
+    assert.equal(statuses.length, 2);
+    if (outcome === 'newer-task') assert.equal(statuses.at(-1).label, 'Translation in progress');
+    else assert.equal(statuses.at(-1).tone, outcome === 'success' ? 'ready' : 'error');
+  }
+});
+
+test('open-panel replies reflect Chrome completion and bound pending promises', async () => {
+  const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+  const handler = extract(background, "  if (message?.type === 'deep-research:open-panel')", "  if (message?.type === 'deep-research:activate-current-page')");
+  for (const outcome of ['success', 'reject', 'throw', 'timeout']) {
+    const replies = [];
+    const timers = new Map();
+    let resolve;
+    const pending = new Promise(done => { resolve = done; });
+    const sandbox = {
+      message: { type: 'deep-research:open-panel' }, sender: { tab: { id: 12, windowId: 7 } },
+      sendResponse: result => replies.push(result), activateTabForReading() {},
+      setTimeout(callback, delay) { timers.set(delay, callback); return delay; }, clearTimeout(id) { timers.delete(id); },
+      chrome: { sidePanel: { open({ windowId }) {
+        assert.equal(windowId, 7);
+        if (outcome === 'throw') throw new Error('gesture expired');
+        if (outcome === 'reject') return Promise.reject(new Error('gesture expired'));
+        return pending;
+      } } },
+    };
+    vm.createContext(sandbox);
+    assert.equal(vm.runInContext(`(function () { ${handler} })()`, sandbox), true);
+    if (outcome === 'timeout') timers.get(4000)();
+    resolve();
+    await new Promise(done => setImmediate(done));
+    assert.equal(timers.size, 0);
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].ok, outcome === 'success');
+  }
+});
+
 test('platform output-limit failures retain their cause and either request-id spelling', () => {
   const source = readFileSync(new URL('./platform-answer.js', import.meta.url), 'utf8');
   const sandbox = {};
@@ -282,18 +444,19 @@ test('saving freezes radar and version at capture; editing never borrows the cur
       document: { url: visibleUrl, version: editing ? null : 'v1' },
       ...(editing === 'with-radar' ? { radarSummaryId: originalRadarId } : {}) };
     const sandbox = {
-      $, readingMode: 'local', editingInsight: null, pendingInsightSource: null, platformStateEvents: 0,
+      $, readingMode: 'local', editingInsight: null, pendingInsightSource: null, platformStateEvents: 0, saveDialogGeneration: 0, saveOptions: {}, pageContext: null, documentContext: null,
       platformConnected: false, platformDisconnecting: false, selectionContext: null,
       latestAnswerSource: () => original, currentRadarSummaryId: () => radarId, contextUrl: () => visibleUrl,
       normalizeRadarSummaryId: readerStore.normalizeRadarSummaryId,
       readerStore: { ...readerStore, saveInsight: async item => { saved.push(item); return { ...item, id: item.id || 'new-insight' }; } },
       ensureSaveDialog: () => ({}), ensureAnnotationDialog: () => ({}), show() {}, setNotice() {},
       platformModeReady: () => false, readPlatformToken: async () => '', showReading() {}, updateLibrary: async () => {},
+      updateSaveOptions: options => { sandbox.saveOptions = options; }, applyAnnotationsForContext: async () => {},
     };
     vm.createContext(sandbox);
-    vm.runInContext(extract(panel, 'function openSaveDialog(', 'function saveInsight('), sandbox);
+    vm.runInContext(extract(panel, 'async function openSaveDialog(', 'function saveInsight('), sandbox);
     sandbox.input = editing ? original : null;
-    vm.runInContext('openSaveDialog(input)', sandbox);
+    await vm.runInContext('openSaveDialog(input)', sandbox);
     visibleUrl = 'https://save-source.test/unrelated';
     sandbox.selectionContext = { url: visibleUrl, contentHash: 'unrelated-v9', selection: { quote: original.quote, contentHash: 'unrelated-v9' } };
     await vm.runInContext('confirmSaveInsight()', sandbox);
