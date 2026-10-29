@@ -48,7 +48,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       await page.getByRole('link', { name: candidate.title, exact: true }).click();
       const panel = page.locator('aside[aria-label="文章概览"]:visible');
       const buttons = [
-        panel.getByRole('button', { name: '记录判断' }),
+        panel.getByRole('button', { name: '写笔记' }),
         panel.getByRole('link', { name: '打开原文' }),
         panel.getByRole('link', { name: '用 Reader 阅读' }),
         panel.getByRole('link', { name: '深入调研' }),
@@ -63,9 +63,20 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       await expect(buttons[2]).toHaveAttribute('href', /chromewebstore\.google\.com\/detail\//u);
       await expect(buttons[2]).toHaveAttribute('data-reader-launch-source', /deep-research-summary=/u);
       if (width === 1440) {
-        const [store] = await Promise.all([page.waitForEvent('popup'), buttons[2].click()]);
+        await buttons[2].click();
+        const dialog = page.getByRole('dialog', { name: '用 Reader 阅读这篇文章' });
+        await expect(dialog).toBeVisible();
+        const [store] = await Promise.all([page.waitForEvent('popup'), dialog.getByRole('link', { name: '前往 Chrome 扩展商店' }).click()]);
         await expect(store).toHaveURL(/chromewebstore\.google\.com\/detail\//u);
         await store.close();
+        const waiting = page.getByRole('dialog', { name: '继续用 Reader 阅读' });
+        await expect(waiting.getByRole('status')).toContainText('正在等待安装');
+        await expect(waiting.getByRole('link', { name: '我已安装，继续阅读' })).toBeVisible();
+        const pending = await page.evaluate(() => JSON.parse(sessionStorage.getItem('dr:reader-pending-install') || 'null'));
+        expect(pending.status).toBe('pending');
+        expect(new URL(pending.url).searchParams.get('deep-research-summary')).toBe(id);
+        await waiting.getByRole('button', { name: '关闭继续用 Reader 阅读' }).click();
+        expect(await page.evaluate(() => sessionStorage.getItem('dr:reader-pending-install'))).toBeNull();
       }
     }
   });
@@ -185,7 +196,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
         await sourcePage.close();
 
         // 无扩展时走商店，已安装扩展可从数据属性读取原文。
-        const readerLink = page.getByRole('link', { name: '用 Reader 阅读' });
+        const readerLink = page.getByRole('link', { name: '用 Reader 阅读' }).first();
         await expect(readerLink).toHaveAttribute('data-reader-launch-source', /deep-research-summary=/u);
         await expect(readerLink).toHaveAttribute('href', /chromewebstore\.google\.com\/detail\//u);
 

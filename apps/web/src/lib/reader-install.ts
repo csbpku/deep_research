@@ -21,6 +21,24 @@ export function safeReaderReturnUrl(value: unknown): string | null {
 }
 
 export const READER_STORE_URL = 'https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl';
+export const READER_PENDING_INSTALL_KEY = 'dr:reader-pending-install';
+
+export function rememberReaderInstall(sourceUrl: string): boolean {
+  const source = safeReaderReturnUrl(sourceUrl);
+  if (!source) return false;
+  try {
+    const url = new URL(source);
+    url.searchParams.set('deep-research-platform', window.location.origin);
+    window.sessionStorage.setItem(READER_PENDING_INSTALL_KEY, JSON.stringify({
+      id: crypto.randomUUID(), url: url.toString(), createdAt: Date.now(), status: 'pending',
+    }));
+    return true;
+  } catch { return false; }
+}
+
+export function clearReaderInstall(): void {
+  try { window.sessionStorage.removeItem(READER_PENDING_INSTALL_KEY); } catch { /* storage unavailable */ }
+}
 
 export function getReaderInstallHref(_sourceUrl: string): string {
   return READER_STORE_URL;

@@ -203,6 +203,7 @@ export function RadarPreviewPanel({
             target="_blank"
             rel="noopener noreferrer"
             data-reader-launch-source={readerUrl}
+            onClick={(event) => { event.preventDefault(); setSourcePromptOpen(true); }}
           >
             <BookOpen aria-hidden />用 Reader 阅读
           </AppButton>
@@ -212,7 +213,7 @@ export function RadarPreviewPanel({
         ) : null}
         <AppButton component={Link} href={`/ai-research?seed=${encodeURIComponent(detail.id)}`} prefetch={false} variant="outlined"><Sparkles aria-hidden />深入调研</AppButton>
       </Box>
-      <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} />
+      <ReaderSourcePrompt key={detail.id} open={sourcePromptOpen} onClose={() => setSourcePromptOpen(false)} readerUrl={readerUrl} sourceUrl={detail.url} articleTitle={detail.title} />
     </Box>
   );
 }

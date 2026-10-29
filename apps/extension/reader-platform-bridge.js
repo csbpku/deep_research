@@ -1,4 +1,6 @@
 (() => {
+  if (globalThis.__deepResearchPlatformBridge) return;
+  globalThis.__deepResearchPlatformBridge = true;
   const storeUrl = 'https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl';
   const sourceSelector = '[data-reader-launch-source]';
 
@@ -49,6 +51,7 @@
       // script on the page. Let the link's own store fallback handle the click.
       return;
     }
+    try { sessionStorage.removeItem('dr:reader-pending-install'); } catch { /* optional */ }
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();

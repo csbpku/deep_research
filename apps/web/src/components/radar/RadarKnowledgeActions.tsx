@@ -43,8 +43,8 @@ export function PreviousJudgments({ radarSummaryId, topicId, enabled }: {
     return () => controller.abort();
   }, [radarSummaryId, topicId, enabled, revision]);
   if (!enabled || !items.length) return null;
-  return <Box component="section" aria-label="你之前的判断" sx={{ borderTop: 1, borderColor: 'divider', pt: 2, mt: 2 }}>
-    <Typography component="h2" variant="fieldTitle">你之前的判断</Typography>
+  return <Box component="section" aria-label="你之前的笔记" sx={{ borderTop: 1, borderColor: 'divider', pt: 2, mt: 2 }}>
+    <Typography component="h2" variant="fieldTitle">你之前的笔记</Typography>
     {items.slice(0, 3).map(item => <Box key={item.id} sx={{ mt: 1.5 }}>
       <Typography component={Link} href={`/researches/${item.id}`} variant="body2" sx={{ color: 'primary.main', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}>{item.title}</Typography>
       <Typography component="p" variant="body2" color="text.secondary" sx={{ mt: 0.5, overflowWrap: 'anywhere', whiteSpace: 'pre-line' }}>{item.conclusion}</Typography>
@@ -127,16 +127,16 @@ export function RadarKnowledgeActions({ detail }: { detail: ExternalReadingDetai
 
   if (!detail.isAuthenticated) return null;
   return <>
-    <AppButton variant="outlined" startIcon={<Lightbulb aria-hidden />} onClick={start}>记录判断</AppButton>
-    <AppDialog open={open} onClose={() => { if (!saving) setOpen(false); }} title="记录判断"
+    <AppButton variant="outlined" startIcon={<Lightbulb aria-hidden />} onClick={start}>写笔记</AppButton>
+    <AppDialog open={open} onClose={() => { if (!saving) setOpen(false); }} title="写笔记"
       actions={savedId
         ? <AppButton component={Link} href={`/researches/${savedId}`} variant="contained">查看知识卡</AppButton>
-        : <><AppButton onClick={() => setOpen(false)} disabled={saving} color="inherit">取消</AppButton><AppButton variant="contained" startIcon={<Save aria-hidden />} disabled={!note.trim() || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存判断'}</AppButton></>}>
+        : <><AppButton onClick={() => setOpen(false)} disabled={saving} color="inherit">取消</AppButton><AppButton variant="contained" startIcon={<Save aria-hidden />} disabled={!note.trim() || saving} onClick={() => void save()}>{saving ? '保存中…' : '保存笔记'}</AppButton></>}>
       {savedId ? <Alert severity="success">已保存，仅你可见。</Alert> : <Box sx={{ display: 'grid', gap: 2, pt: 1 }}>
         <Typography component="a" href={detail.url} target="_blank" rel="noopener noreferrer" variant="body2" sx={{ color: 'primary.main', overflowWrap: 'anywhere' }}>{detail.title}</Typography>
         <TextField label="来源摘录 / AI 摘要" multiline minRows={2} maxRows={5} value={quote} slotProps={{ htmlInput: { readOnly: true } }} fullWidth />
         <TextField
-          label="我的判断"
+          label="我的笔记"
           autoFocus
           inputRef={noteRef}
           multiline

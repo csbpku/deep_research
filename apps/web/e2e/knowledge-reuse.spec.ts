@@ -196,7 +196,7 @@ test.describe('Knowledge reuse and frontend trust acceptance', () => {
 
             const panel = await openRadar(page, candidate, surface);
             await expect.poll(() => panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-            const previous = panel.getByRole('region', { name: '你之前的判断', exact: true });
+            const previous = panel.getByRole('region', { name: '你之前的笔记', exact: true });
             await expect(previous).toBeVisible();
             await expect(previous.getByRole('link', { name: judgment.title, exact: true }))
               .toHaveAttribute('href', `/researches/${judgment.id}`);
@@ -209,12 +209,12 @@ test.describe('Knowledge reuse and frontend trust acceptance', () => {
             await noOverflow(page);
             await screenshot(page, info, `${identity}-${surface}-previous-judgments`);
 
-            const trigger = panel.getByRole('button', { name: '记录判断', exact: true });
+            const trigger = panel.getByRole('button', { name: '写笔记', exact: true });
             await trigger.click();
-            const dialog = page.getByRole('dialog', { name: '记录判断', exact: true });
+            const dialog = page.getByRole('dialog', { name: '写笔记', exact: true });
             const quote = dialog.getByRole('textbox', { name: '来源摘录 / AI 摘要', exact: true });
-            const note = dialog.getByRole('textbox', { name: '我的判断', exact: true });
-            const save = dialog.getByRole('button', { name: '保存判断', exact: true });
+            const note = dialog.getByRole('textbox', { name: '我的笔记', exact: true });
+            const save = dialog.getByRole('button', { name: '保存笔记', exact: true });
             const expectedQuote = (candidate.interpretation || candidate.excerpt || candidate.title).slice(0, 12000);
             await expect(quote).toHaveValue(expectedQuote);
             await expect(quote).toHaveJSProperty('readOnly', true);
@@ -276,8 +276,8 @@ test.describe('Knowledge reuse and frontend trust acceptance', () => {
         for (const surface of ['preview', 'detail'] as const) {
           const panel = await openRadar(page, candidate, surface);
           await expect(panel).toBeVisible();
-          await expect(panel.getByRole('button', { name: '记录判断', exact: true })).toHaveCount(0);
-          await expect(panel.getByRole('region', { name: '你之前的判断' })).toHaveCount(0);
+          await expect(panel.getByRole('button', { name: '写笔记', exact: true })).toHaveCount(0);
+          await expect(panel.getByRole('region', { name: '你之前的笔记' })).toHaveCount(0);
           await noOverflow(page);
           await screenshot(page, info, `anonymous-radar-${surface}`);
         }
@@ -387,17 +387,17 @@ test.describe('Knowledge reuse and frontend trust acceptance', () => {
         } });
     });
     const panel = await openRadar(page, candidate, 'detail');
-    await panel.getByRole('button', { name: '记录判断', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '记录判断', exact: true });
-    const note = dialog.getByRole('textbox', { name: '我的判断', exact: true });
+    await panel.getByRole('button', { name: '写笔记', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '写笔记', exact: true });
+    const note = dialog.getByRole('textbox', { name: '我的笔记', exact: true });
     await note.fill('我的判断：应先复现实验，暂不直接采用。');
-    await dialog.getByRole('button', { name: '保存判断', exact: true }).click();
+    await dialog.getByRole('button', { name: '保存笔记', exact: true }).click();
     await expect(dialog.getByRole('alert')).toHaveText('保存暂时不可用，请重试。');
     await expect(note).toHaveValue('我的判断：应先复现实验，暂不直接采用。');
     await expect(dialog.getByRole('textbox', { name: '来源摘录 / AI 摘要', exact: true }))
       .toHaveValue(candidate.interpretation);
     expect(writes).toHaveLength(1);
-    await dialog.getByRole('button', { name: '保存判断', exact: true }).click();
+    await dialog.getByRole('button', { name: '保存笔记', exact: true }).click();
     await expect(dialog.getByRole('alert')).toContainText('已保存，仅你可见。');
     expect(writes).toHaveLength(2);
     expect(writes[1]).toEqual(writes[0]);
