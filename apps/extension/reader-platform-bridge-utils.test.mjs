@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 import { getTrustedReaderPlatformOrigin, validateRadarSourceUrl } from './reader-platform-bridge-utils.js';
 
@@ -25,4 +27,24 @@ test('rejects untrusted, malformed, credentialed, and non-radar targets', () => 
   assert.equal(validateRadarSourceUrl('https://user:pass@example.com/article', 'https://techradar.top'), null);
   assert.equal(validateRadarSourceUrl('https://example.com/article?deep-research-source=radar', 'https://techradar.top'), null);
   assert.equal(validateRadarSourceUrl('https://example.com/article?deep-research-source=radar&deep-research-summary=1&deep-research-platform=https%3A%2F%2Fevil.example', 'https://techradar.top'), null);
+});
+
+test('an invalidated extension does not suppress the install link', () => {
+  let listener;
+  class Element {
+    closest() { return this; }
+    getAttribute() { return 'https://example.com/article?deep-research-source=radar&deep-research-summary=1'; }
+  }
+  const sandbox = {
+    Element, URL,
+    location: { origin: 'https://techradar.top', assign: () => assert.fail('must leave navigation to the link') },
+    document: { addEventListener: (_type, callback) => { listener = callback; } },
+    chrome: { runtime: { sendMessage: () => { throw new Error('Extension context invalidated'); } } },
+  };
+  vm.runInNewContext(readFileSync(new URL('./reader-platform-bridge.js', import.meta.url), 'utf8'), sandbox);
+  let prevented = false;
+  listener({ isTrusted: true, target: new Element(), preventDefault: () => { prevented = true; },
+    stopPropagation: () => assert.fail('must not stop propagation'),
+    stopImmediatePropagation: () => assert.fail('must not stop propagation') });
+  assert.equal(prevented, false);
 });

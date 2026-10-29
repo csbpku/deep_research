@@ -28,7 +28,7 @@ import {
 } from '../../lib/radar/source-labels';
 import { TIER_LABELS, readingTierColor } from '../domain/ScoreBar';
 import { AppButton } from '@/components/material/AppButton';
-import { isReaderPromptDismissed } from '@/lib/reader-install';
+import { isReaderPromptDismissed, READER_STORE_URL } from '@/lib/reader-install';
 import { effectiveOriginalKind, zreadRepositoryUrl } from './radar-repository';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
@@ -183,10 +183,10 @@ export function RadarExternalReadingLanding({
             </AppButton>
           ) : null}
           {sourceUrlAvailable ? (
-            // Reader 是可选增强：装了扩展开侧栏，没装就是普通外链。
+            // The installed extension intercepts this link; without it the link opens the store.
             <AppButton
               component="a" variant="outlined" color="inherit"
-              href={readerUrl} target="_blank" rel="noopener noreferrer"
+              href={READER_STORE_URL} target="_blank" rel="noopener noreferrer"
               data-reader-launch-source={readerUrl}
               startIcon={<BookOpenCheck aria-hidden />}
             >
@@ -289,7 +289,7 @@ export function RadarExternalReadingLanding({
             </Box>
             {readerPromptDismissed ? (
               <AppButton
-                component="a" href={readerUrl} target="_blank" rel="noopener noreferrer"
+                component="a" href={READER_STORE_URL} target="_blank" rel="noopener noreferrer"
                 variant="outlined" color="inherit" startIcon={<BookOpenCheck aria-hidden />}
                 data-reader-launch-source={readerUrl}
               >

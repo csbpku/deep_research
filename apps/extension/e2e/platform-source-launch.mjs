@@ -25,7 +25,7 @@ async function routeFixtures(page) {
     if (url.pathname === '/radar') {
       await route.fulfill({
         contentType: 'text/html; charset=utf-8',
-        body: `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>雷达测试</title><button id="open-source" data-reader-launch-source="${sourceUrl}">打开原文</button><script>document.querySelector('#open-source').addEventListener('click', () => { window.location.assign('${storeUrl}'); });</script></html>`,
+        body: `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>雷达测试</title><a id="open-source" href="${storeUrl}" target="_blank" rel="noopener noreferrer" data-reader-launch-source="${sourceUrl}">用 Reader 阅读</a></html>`,
       });
       return;
     }
@@ -57,9 +57,12 @@ async function verifyWithoutExtension() {
     const page = await context.newPage();
     await routeFixtures(page);
     await page.goto(`${platformOrigin}/radar`);
-    const destination = page.waitForRequest(request => request.isNavigationRequest() && request.url().startsWith(storeUrl), { timeout: 15000 });
-    await page.getByRole('button', { name: '打开原文' }).click();
-    assert.equal((await destination).url(), storeUrl);
+    assert.equal(await page.getByRole('link', { name: '用 Reader 阅读' }).getAttribute('href'), storeUrl);
+    const [store] = await Promise.all([
+      page.waitForEvent('popup', { timeout: 15000 }),
+      page.getByRole('link', { name: '用 Reader 阅读' }).click(),
+    ]);
+    assert.ok(store);
     console.log('PASS no-extension route: Chrome Web Store opens directly');
   } finally {
     await context.close();
@@ -84,9 +87,10 @@ async function verifyWithExtension() {
     const page = await context.newPage();
     await routeFixtures(page);
     await page.goto(`${platformOrigin}/radar`);
-    const sourcePromise = context.waitForEvent('page', { timeout: 15_000 });
-    await page.getByRole('button', { name: '打开原文' }).click();
-    const source = await sourcePromise;
+    const [source] = await Promise.all([
+      context.waitForEvent('page', { timeout: 15_000 }),
+      page.getByRole('link', { name: '用 Reader 阅读' }).click(),
+    ]);
     await source.waitForLoadState('domcontentloaded');
     assert.equal(source.url(), installedSourceUrl.toString(), '已安装时应直接在新标签页打开带雷达上下文的原文');
 

@@ -35,7 +35,7 @@ export default defineConfig({
   manifestVersion: 3,
   manifest: {
     name: '__MSG_extensionName__',
-    version: '0.2.33',
+    version: '0.2.34',
     default_locale: 'zh_CN',
     // Stable public key keeps the manually loaded Beta extension ID stable
     // across machines, so platform PKCE can use one production allowlist.

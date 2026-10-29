@@ -39,13 +39,18 @@
     // The extension handles this trusted click so it can open its native
     // side panel in the same user-gesture turn. The app's own click handler is
     // the no-extension fallback and routes to the install guide.
+    try {
+      chrome.runtime.sendMessage({ type: 'deep-research:open-reader-source', url: sourceUrl }, (response) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError || !response?.ok) guideInstallation();
+      });
+    } catch {
+      // An uninstalled or reloaded extension can leave an invalidated content
+      // script on the page. Let the link's own store fallback handle the click.
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-
-    chrome.runtime.sendMessage({ type: 'deep-research:open-reader-source', url: sourceUrl }, (response) => {
-      const runtimeError = chrome.runtime.lastError;
-      if (runtimeError || !response?.ok) guideInstallation(sourceUrl);
-    });
   }, true);
 })();

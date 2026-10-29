@@ -32,9 +32,10 @@ describe('RadarPreviewPanel', () => {
     expect(html).not.toContain('line-clamp-6');
     expect(html).not.toContain('AI 摘要');
     expect(html).toContain('打开原文');
-    // Reader 是可选增强：装了就开侧栏，没装就是普通外链。
+    // Reader 保留原文上下文，网页默认入口指向商店。
     expect(html).toContain('用 Reader 阅读');
     expect(html).toContain('data-reader-launch-source=');
+    expect(html).toContain('href="https://chromewebstore.google.com/detail/bldpmkepljipbadeegednfinnilgoedl"');
     expect(html).toContain('href="https://example.com/article"');
     expect(html).toContain('深入调研');
     expect(html).not.toContain('查看完整详情');
