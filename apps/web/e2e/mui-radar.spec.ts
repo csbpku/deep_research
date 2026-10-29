@@ -532,26 +532,27 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       const sourcePage = await sourcePromise;
       await expect(sourcePage).toHaveURL(/https:\/\/example\.com\/research$/u);
       await sourcePage.close();
-      await expect(page.getByRole('dialog', { name: '是否已安装 Reader？' })).toHaveCount(0);
+      await expect(page.getByRole('dialog', { name: '用 Reader 阅读这篇文章' })).toHaveCount(0);
       await expect(page).toHaveURL(platformUrl);
 
       // 显式请求 Reader 时才给安装说明。
-      await page.getByRole('button', { name: '安装 Reader', exact: true }).click();
-      const prompt = page.getByRole('dialog', { name: '是否已安装 Reader？' });
+      await page.getByRole('link', { name: '用 Reader 阅读', exact: true }).last().click();
+      const prompt = page.getByRole('dialog', { name: '用 Reader 阅读这篇文章' });
       await expect(prompt).toBeVisible();
       const storePromise = page.waitForEvent('popup');
-      await prompt.getByRole('link', { name: '未安装，前往商店' }).click();
+      await prompt.getByRole('link', { name: '前往 Chrome 扩展商店' }).click();
       const store = await storePromise;
       await expect(store).toHaveURL(storeUrl);
       await expect(page).toHaveURL(platformUrl);
-      await expect(prompt.getByRole('link', { name: '安装完成，打开原文' })).toBeVisible();
-      await expect(prompt.locator('..')).toHaveCSS('opacity', '1');
-      expect(await prompt.locator('[data-reader-launch-source]').count()).toBe(1);
-      expect(await prompt.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      const waiting = page.getByRole('dialog', { name: '继续用 Reader 阅读' });
+      await expect(waiting.getByRole('link', { name: '我已安装，继续阅读' })).toBeVisible();
+      await expect(waiting.locator('..')).toHaveCSS('opacity', '1');
+      expect(await waiting.locator('[data-reader-launch-source]').count()).toBe(1);
+      expect(await waiting.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`reader-install-return-${width}.png`) });
       await store.close();
       const readerSourcePromise = page.waitForEvent('popup');
-      await prompt.getByRole('link', { name: '安装完成，打开原文' }).click();
+      await waiting.getByRole('link', { name: '我已安装，继续阅读' }).click();
       const readerSourcePage = await readerSourcePromise;
       await expect(readerSourcePage.getByRole('heading', { name: 'Original article fixture' })).toBeVisible();
       expect(new URL(readerSourcePage.url()).searchParams.get('deep-research-summary')).toBe(id);
