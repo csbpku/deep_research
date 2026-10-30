@@ -18,6 +18,8 @@ function AiResearchPageClient() {
   const searchParams = useSearchParams();
   const conversationId = searchParams.get('conversation');
   const historyOpen = searchParams.get('history') === '1';
+  const fromJobId = searchParams.get('fromJob');
+  const jobId = searchParams.get('job');
 
   return (
     <Box className="material-surface" sx={{ width: '100%', maxWidth: 'var(--dr-width-shell)', mx: 'auto' }}>
@@ -28,7 +30,7 @@ function AiResearchPageClient() {
       />
       <Box sx={{ display: 'grid', alignItems: 'start', gap: 3, gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '280px minmax(0, 1fr)' } }}>
         <Box sx={{ order: { xs: 1, lg: 2 }, minWidth: 0 }}>
-          <AiResearchConversation conversationId={conversationId} />
+          <AiResearchConversation conversationId={conversationId} fromJobId={fromJobId} jobId={jobId} />
         </Box>
         <Box sx={{ order: { xs: 2, lg: 1 }, minWidth: 0 }}>
           <AiResearchWorkspaceSidebar

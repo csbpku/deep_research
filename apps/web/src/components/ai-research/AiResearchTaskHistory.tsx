@@ -146,7 +146,7 @@ function HistoryActions({ item, rerunning, onRerun }: {
   return (
     <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
       <Button asChild variant="link" size="xs">
-        <Link href={`/ai-research/${item.jobId}`}>打开</Link>
+        <Link href={`/ai-research?job=${item.jobId}`}>打开</Link>
       </Button>
       <Button
         type="button"
@@ -293,7 +293,7 @@ export function AiResearchTaskHistory({
       const jobId = await rerunResearchTask(item);
       await queryClient.invalidateQueries({ queryKey: ['ai-research-jobs'] });
       setHistoryOpen(false);
-      router.push(`/ai-research/${jobId}`);
+      router.push(`/ai-research?job=${jobId}`);
     } catch (error) {
       setRerunError(error instanceof Error ? error.message : '重新运行失败');
     } finally {
