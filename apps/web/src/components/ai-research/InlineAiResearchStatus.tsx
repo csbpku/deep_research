@@ -7,6 +7,7 @@ import NextLink from 'next/link';
 
 import { ArtifactPreview } from '@/components/ai-research/ArtifactPreview';
 import { ResearchWebBrief } from '@/components/ai-research/ResearchWebBrief';
+import { ResearchOutputViews } from '@/components/ai-research/ResearchOutputViews';
 import { MarkdownPreview } from '@/components/MarkdownPreview';
 import Box from '@mui/material/Box';
 import LinearProgress from '@mui/material/LinearProgress';
@@ -116,17 +117,15 @@ function StepStepper({ currentStep, succeeded }: { currentStep: string | null; s
 export function InlineAiResearchStatus({
   jobId,
   onRestart,
-  embedded = false,
 }: {
   jobId: string;
   /** Reuse this job's configuration and return to the editable brief. */
   onRestart?: () => void | Promise<void>;
-  /** Rendered inside the conversation: show the report in full. */
-  embedded?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(true);
   const query = useQuery<InlineJob>({
     queryKey: ['inline-ai-research', jobId],
     queryFn: async () => {
@@ -264,6 +263,48 @@ export function InlineAiResearchStatus({
     }
   }
 
+  // A full research report is tens of thousands of characters. Rendering it
+  // inline pushed the follow-up composer thousands of pixels down, so keep
+  // the reading pane collapsed until the reader asks for it.
+  function renderReport() {
+    if (job.artifact?.content) {
+      if (job.artifact.type === 'slides') return <ArtifactPreview content={job.artifact.content} />;
+      if (job.reportType === 'web_brief') {
+        return (
+          <ResearchWebBrief
+            content={job.artifact.content}
+            sources={job.sources}
+            reviewStatus={job.review?.status}
+          />
+        );
+      }
+      return (
+        <ResearchOutputViews
+          content={job.artifact.content}
+          artifactType="markdown"
+          sources={job.sources}
+          presentationType="standard"
+          reviewStatus={job.review?.status}
+          showQualityStatus={false}
+        />
+      );
+    }
+    if (job.outputText) {
+      return (
+        <MarkdownPreview
+          source={job.outputText}
+          sx={{
+            maxHeight: 'none',
+            overflow: 'visible',
+            bgcolor: 'background.paper',
+            '@media (min-width: 1024px)': { maxHeight: 720, overflowY: 'auto' },
+          }}
+        />
+      );
+    }
+    return null;
+  }
+
   return (
     <Paper component="section" id="ai-research-result" variant="outlined" aria-label="调研状态" sx={{ overflow: 'hidden', scrollMarginTop: 72 }}>
       <Box component="header" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, borderBottom: 1, borderColor: 'divider', px: 2, py: 1.5 }}>
@@ -277,7 +318,7 @@ export function InlineAiResearchStatus({
                   ? <AlertTriangle size={16} color="var(--dr-color-warning)" />
                   : <Clock3 size={16} color="var(--dr-color-primary)" />}
             <Typography component="span" variant="body2" sx={{ fontWeight: 600 }}>
-              {terminal ? userStatus.label : '正在研究'}
+              {terminal ? '研究结果' : '正在研究'}
             </Typography>
             <StatusBadge kind="job" value={userStatus.code === 'ready' ? 'succeeded' : userStatus.code === 'failed' ? 'failed' : 'partial'} label={userStatus.label} />
           </Box>
@@ -364,42 +405,20 @@ export function InlineAiResearchStatus({
           </Box>
         ) : null}
 
-        {status === 'succeeded' && job.artifact?.content ? (
-          <Box sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
-            {job.artifact.type === 'slides' ? (
-              <ArtifactPreview content={job.artifact.content} />
-            ) : job.reportType === 'web_brief' ? (
-              <ResearchWebBrief
-                content={job.artifact.content}
-                sources={job.sources}
-                reviewStatus={job.review?.status}
-              />
-            ) : (
-              <MarkdownPreview
-                source={job.artifact.content}
-                sx={{
-                  maxHeight: 'none',
-                  overflow: 'visible',
-                  bgcolor: 'background.paper',
-                  '@media (min-width: 1024px)': embedded
-                    ? { maxHeight: 'none', overflowY: 'visible' }
-                    : { maxHeight: 720, overflowY: 'auto' },
-                }}
-              />
-            )}
+        {status === 'succeeded' && (job.artifact?.content || job.outputText) ? (
+          <Box
+            component="details"
+            open={reportOpen}
+            onToggle={(event) => setReportOpen((event.currentTarget as HTMLDetailsElement).open)}
+            sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}
+          >
+            <Box component="summary" sx={{ cursor: 'pointer', typography: 'metadata', fontWeight: 500 }}>
+              研究全文{reportOpen ? '（可收起）' : '（已收起）'}
+            </Box>
+            <Box sx={{ pt: 1.5 }}>
+              {renderReport()}
+            </Box>
           </Box>
-        ) : status === 'succeeded' && job.outputText ? (
-          <MarkdownPreview
-            source={job.outputText}
-            sx={{
-              maxHeight: 'none',
-              overflow: 'visible',
-              bgcolor: 'background.paper',
-              '@media (min-width: 1024px)': embedded
-                ? { maxHeight: 'none', overflowY: 'visible' }
-                : { maxHeight: 720, overflowY: 'auto' },
-            }}
-          />
         ) : null}
 
         {terminal && job.sources.length > 0 ? (

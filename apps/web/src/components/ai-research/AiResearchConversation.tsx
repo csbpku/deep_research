@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import NextLink from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bot,
   Check,
@@ -114,10 +114,10 @@ const reportOptions: Array<{
 const durableReportOptions = reportOptions.filter((option) => option.value !== 'summary_brief');
 const quickJudgmentOption = reportOptions.find((option) => option.value === 'summary_brief');
 
-/** 顶部阶段 stepper：理解 → 补全 → 启动 → 进行中。 */
+/** 顶部阶段 stepper：理解 → 补全 → 启动 → 进行中/已完成。 */
 const STEP_LABELS = ['明确问题', '确认设置', '启动研究', '进行中'] as const;
 
-function StepStepper({ step }: { step: number }) {
+function StepStepper({ step, finished = false }: { step: number; finished?: boolean }) {
   return (
     <Box component="ol" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, m: 0, p: 0, listStyle: 'none', typography: 'metadata' }} aria-label="调研进度">
       {STEP_LABELS.map((label, index) => {
@@ -129,7 +129,7 @@ function StepStepper({ step }: { step: number }) {
               {state === 'done' ? <Check size={12} /> : index + 1}
             </Box>
             <Typography component="span" variant="metadata" sx={{ fontWeight: state === 'active' ? 500 : undefined, color: state === 'active' ? 'text.primary' : 'text.secondary' }}>
-              {label}
+              {index === STEP_LABELS.length - 1 && finished ? '已完成' : label}
             </Typography>
           </Box>
         );
@@ -287,6 +287,7 @@ export function AiResearchConversation({
   jobId?: string | null;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
   const seedId = searchParams.get('seed');
   const topicQuery = searchParams.get('topic');
@@ -940,6 +941,9 @@ export function AiResearchConversation({
           markSubmitted(lockOwner, lockTarget, body.jobId);
           writeLastSubmitted(body.jobId, topic.trim());
           setActiveJobId(body.jobId);
+          // The sidebar's recent-task list is a separate query; without this
+          // it keeps showing the pre-submission snapshot.
+          void queryClient.invalidateQueries({ queryKey: ['ai-research-jobs'] });
           const finalContent = '调研已启动。进度、来源和结果会持续显示在这里；完成后可以直接接着追问。';
           setMessages((current) => current.map((message) => (
             message.id === placeholder.id ? { ...message, content: finalContent } : message
@@ -1132,7 +1136,7 @@ export function AiResearchConversation({
     && sourceRefs.length === 0
     && (brief?.suggestedContextIds.length ?? 0) === 0;
   const loginRequired = !!error && /登录|401|未认证/u.test(error);
-  const stepIndex = activeJobId ? 3 : phase === 'understand' ? 0 : phase === 'refine' ? 1 : 2;
+  const stepIndex = activeJobId && !activeJobTerminal ? 3 : phase === 'understand' && !activeJobId ? 0 : activeJobId ? 4 : phase === 'refine' ? 1 : 2;
   // The composer has three jobs in one thread: shape the brief, wait for a
   // running job, then ask follow-ups about the finished report. Keeping one
   // input avoids a second "chat" surface competing with the conversation.
@@ -1161,7 +1165,7 @@ export function AiResearchConversation({
             <Typography variant="metadata" color="text.secondary">对话自动保存；方案草稿仅保存在当前浏览器。</Typography>
           </Box>
         </Box>
-        <StepStepper step={stepIndex} />
+        <StepStepper step={stepIndex} finished={Boolean(activeJobId) && activeJobTerminal} />
       </Box>
 
       <Box sx={{ display: 'flex', minHeight: 0, flexDirection: 'column' }}>
@@ -1290,7 +1294,7 @@ export function AiResearchConversation({
                     jobId={activeJobId}
                     topic={topic}
                   />
-                  <InlineAiResearchStatus jobId={activeJobId} onRestart={restartWithSameConfig} embedded />
+                  <InlineAiResearchStatus jobId={activeJobId} onRestart={restartWithSameConfig} />
                 </Box>
               ) : null}
             </>
