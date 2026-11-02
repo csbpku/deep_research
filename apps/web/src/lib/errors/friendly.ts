@@ -114,6 +114,8 @@ function mapCode(code: ErrorCode): { message: string; hint?: string } {
       return { message: '数据服务暂时不可用', hint: '同步任务会在依赖恢复后继续。' };
     case ERROR_CODES.AI_QUOTA_EXCEEDED:
       return { message: '今日 AI 调研配额已用完', hint: '明天再试，或联系 Admin 调整预算。' };
+    case ERROR_CODES.AI_SEARCH_UNAVAILABLE:
+      return { message: '联网检索服务暂时不可用', hint: '未能获取资料，请稍后重试。' };
     case ERROR_CODES.AI_INVALID_SOURCE_POLICY:
       return { message: '指定资料的策略不合法' };
     case ERROR_CODES.AI_SOURCE_NOT_VISIBLE:

@@ -180,6 +180,13 @@ def _record_retrieval_event(
     diagnostics["attempts"] = int(diagnostics.get("attempts", 0) or 0) + 1
     if result_count == 0:
         diagnostics["emptyResults"] = int(diagnostics.get("emptyResults", 0) or 0) + 1
+    if result_count is not None and result_count > 0:
+        # Count the queries that actually produced results. A provider
+        # failure must not be reported as an outage when another engine
+        # answered successfully in the same run.
+        diagnostics["resultsFound"] = (
+            int(diagnostics.get("resultsFound", 0) or 0) + result_count
+        )
     if error is not None:
         diagnostics["failed"] = int(diagnostics.get("failed", 0) or 0) + 1
     provider_name = provider.strip() or "unknown"
@@ -206,6 +213,32 @@ def _record_retrieval_event(
 
 def _diagnostic_int(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _search_unavailable(job: object) -> bool:
+    """Report whether every search attempt failed rather than found nothing.
+
+    A search backend that is unreachable (DNS poisoning, blocked egress,
+    upstream outage) and a query that legitimately matches nothing both end
+    with an empty source list, but they need different remedies. Only report
+    an outage when a provider actually failed and no engine produced any
+    result, so a real "nothing relevant found" result still surfaces as
+    NO_SOURCES_FOUND.
+    """
+    diagnostics = getattr(job, "retrieval_diagnostics", None)
+    if not isinstance(diagnostics, dict):
+        return False
+    if _diagnostic_int(diagnostics.get("resultsFound")) > 0:
+        return False
+    if not _diagnostic_int(diagnostics.get("failed")):
+        return False
+    providers = diagnostics.get("providers")
+    if not isinstance(providers, dict):
+        return True
+    return any(
+        isinstance(stats, dict) and _diagnostic_int(stats.get("failed")) > 0
+        for stats in providers.values()
+    )
 
 
 def _should_skip_degraded_tavily() -> bool:
@@ -282,7 +315,12 @@ _DDGS_BACKEND_ALLOWLIST = frozenset({
     "yahoo",
     "yandex",
 })
-_DEFAULT_DDGS_BACKENDS = ("duckduckgo", "brave", "google")
+# ``yahoo`` leads the default order because it is the only engine in the
+# allow-list that stayed reachable from the production host, where
+# duckduckgo/brave/google/mojeek all failed after the engine's domains were
+# DNS-poisoned.  The trailing engines are still attempted one by one, so a
+# host with different egress can fall through to them.
+_DEFAULT_DDGS_BACKENDS = ("yahoo", "duckduckgo", "brave", "google")
 
 
 def _resolve_ddgs_backends() -> tuple[str, ...]:
@@ -760,17 +798,39 @@ try:  # pragma: no cover — import-time guard
                 ddg = getattr(self._delegate, "ddg", None)
                 text_search = getattr(ddg, "text", None)
                 if callable(text_search):
-                    results = text_search(
-                        self.query,
-                        region="wt-wt",
-                        max_results=max_results,
-                        backend=",".join(self._backends),
-                    )
+                    # Ask for one engine at a time. Handing ddgs a
+                    # comma-joined backend list makes it fail the whole
+                    # call when the first engine is unreachable, which is
+                    # exactly the failure mode observed in production: the
+                    # DNS-poisoned engines took the reachable one down with
+                    # them and the search silently returned nothing.
+                    results = []
+                    for backend in self._backends:
+                        try:
+                            results = text_search(
+                                self.query,
+                                region="wt-wt",
+                                max_results=max_results,
+                                backend=backend,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - try the next engine
+                            _record_retrieval_event(
+                                provider=f"Duckduckgo:{backend}",
+                                error=exc,
+                            )
+                            continue
+                        if isinstance(results, list) and results:
+                            break
                 else:
                     results = self._delegate.search(max_results=max_results)
-            except Exception:
+            except Exception as exc:
                 # Keep the same graceful-degradation contract as the vendor
                 # adapter. The shared query boundary records the empty run.
+                # Recording the failure keeps an unreachable search
+                # distinguishable from a search that legitimately found
+                # nothing, which is what made NO_SOURCES_FOUND point at the
+                # wrong stage of the pipeline.
+                _record_retrieval_event(provider="Duckduckgo", error=exc)
                 return []
             if not self.query_domains:
                 values = results if isinstance(results, list) else []
@@ -4533,6 +4593,13 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                     if job.request.report_type != "evidence_search" and _fetched_source_count(sources_for_report) == 0:
                         async with job.lock:
                             job.current_step = cast("AiJobStep", AI_JOB_STEP["SEARCH"])
+                        if _search_unavailable(job):
+                            await self._mark_failed(
+                                job,
+                                "AI_SEARCH_UNAVAILABLE",
+                                "联网检索服务暂时不可用，未能获取任何资料。请稍后重试。",
+                            )
+                            return
                         await self._mark_failed(
                             job, "NO_SOURCES_FOUND", "调研未收集到任何可访问来源，已中止生成草稿"
                         )
@@ -4893,6 +4960,18 @@ class GptResearcherAdapter(ResearchEngineAdapter):
                 # DB CHECK ai_jobs_partial_sources_valid requires succeeded
                 # jobs to carry at least one fetched source; fail loudly
                 # instead of treating URL discovery as grounded evidence.
+                # When the search backends themselves were unreachable the
+                # real cause is a broken retrieval path, not an empty
+                # source list. Report it with its own code so the user is
+                # told to retry rather than told that the topic had no
+                # accessible material.
+                if _search_unavailable(job):
+                    await self._mark_failed(
+                        job,
+                        "AI_SEARCH_UNAVAILABLE",
+                        "联网检索服务暂时不可用，未能获取任何资料。请稍后重试。",
+                    )
+                    return
                 await self._mark_failed(
                     job,
                     "NO_SOURCES_FOUND",
