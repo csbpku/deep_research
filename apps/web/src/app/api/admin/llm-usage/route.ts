@@ -5,6 +5,7 @@ import { apiHandler } from '@/lib/api-handler';
 import { requireAdmin } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { withRequestId } from '@/lib/log';
+import { costCoverage } from '@/app/admin/llm-usage/cost-coverage';
 
 const MAX_LIMIT = 200;
 
@@ -179,6 +180,7 @@ export const GET = apiHandler<[NextRequest]>(async (req) => {
       inputTokens: aggregates._sum.inputTokens ?? 0,
       outputTokens: aggregates._sum.outputTokens ?? 0,
       knownCostCents: aggregates._sum.costCents ?? 0,
+      ...costCoverage(trendItems),
       fallbackCount,
       failureCount,
     },

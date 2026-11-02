@@ -74,6 +74,8 @@ class RadarRunView(BaseModel):
     tokenInputTotal: int
     tokenOutputTotal: int
     costUsd: float
+    costStatus: Literal["reported", "unavailable", "no_recorded_usage"] = "no_recorded_usage"
+    fallbackCount: int = 0
     elapsedMs: int | None
     errorCode: str | None
     errorMessage: str | None
@@ -82,6 +84,7 @@ class RadarRunView(BaseModel):
     candidateCount: int
     scoredCount: int
     pendingScoreCount: int
+    sourcePendingScoreCount: int = 0
     enrichedCount: int
     pendingEnrichmentCount: int
     skippedExisting: int
@@ -441,7 +444,7 @@ async def list_radar_runs(
     limit: int = 50,
     run_date: date | None = Query(default=None, alias="date"),
 ) -> list[RadarRunView]:
-    bounded_limit = min(max(limit, 1), 200)
+    bounded_limit = min(max(limit, 1), 1000)
     params: list[Any] = []
     where_clause = ""
     if run_date is not None:
@@ -486,7 +489,7 @@ async def list_radar_runs(
                 'SELECT r."id", r."sourceId", s."name" AS "sourceName", '
                 's."sourceType", r."triggeredBy", r."status", r."totalFetched", '
                 'r."totalNew", r."totalSkipped", r."totalFailed", r."tokenInputTotal", '
-                'r."tokenOutputTotal", r."costUsd", r."elapsedMs", r."errorCode", r."errorMessage", '
+                'r."tokenOutputTotal", r."costUsd", r."fallbackCount", r."elapsedMs", r."errorCode", r."errorMessage", '
                 'r."skippedExisting", r."skippedRuleNoise", r."skippedDistilledNoise", r."skippedConflict", '
                 'r."createdAt", r."completedAt", '
                 'COUNT(c."id")::int AS "candidateCount", '
@@ -504,6 +507,21 @@ async def list_radar_runs(
                 tuple(params),
             )
         ).fetchall()
+        backlog_rows: list[Any] = []
+        if rows:
+            source_ids = list({str(dict(row)["sourceId"]) for row in rows})
+            backlog_rows = await (
+                await conn.execute(
+                    'SELECT previous."sourceId", count(*)::int AS pending '
+                    'FROM "summaries" candidate '
+                    'JOIN "radar_sync_runs" previous ON previous."id" = candidate."syncRunId" '
+                    'WHERE previous."sourceId" = ANY(%s::uuid[]) '
+                    'AND candidate."source" = \'daily\' AND candidate."status" = \'candidate\' '
+                    'AND candidate."distilledScore" IS NULL GROUP BY previous."sourceId"',
+                    (source_ids,),
+                )
+            ).fetchall()
+    backlog = {str(dict(row)["sourceId"]): int(dict(row)["pending"]) for row in backlog_rows}
     result: list[RadarRunView] = []
     for raw in rows:
         row = dict(raw)
@@ -514,6 +532,12 @@ async def list_radar_runs(
                     "id": str(row["id"]),
                     "sourceId": str(row["sourceId"]),
                     "status": str(row["status"]),
+                    "sourcePendingScoreCount": backlog.get(str(row["sourceId"]), 0),
+                    "costStatus": (
+                        "reported" if float(row.get("costUsd") or 0) > 0 else
+                        "unavailable" if (row.get("tokenInputTotal") or row.get("tokenOutputTotal")) else
+                        "no_recorded_usage"
+                    ),
                     "createdAt": row["createdAt"].isoformat(),
                     "completedAt": (
                         row["completedAt"].isoformat() if row.get("completedAt") else None

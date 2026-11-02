@@ -81,7 +81,9 @@ async def _generate_brief(
         context=context or None,
         report_type="summary_brief",
         source_policy="only_user_sources",
-        source_refs=({"type": "url", "value": canonical_url},),
+        source_refs=() if item.get("context_is_source_snapshot") is True else (
+            {"type": "url", "value": canonical_url},
+        ),
         timeout_seconds=max(1, int(timeout_seconds)),
         context_max_chars=context_max_chars,
     )

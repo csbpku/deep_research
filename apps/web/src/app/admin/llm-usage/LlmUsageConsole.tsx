@@ -26,6 +26,7 @@ import {
 } from '@mui/material';
 import { AlertTriangle, ArrowLeftRight, CheckCircle2, Clock3, GitBranch, RefreshCw, Search } from 'lucide-react';
 import { adminRootSx } from '../AdminMaterial';
+import { formatKnownCost } from './cost-coverage';
 
 type UsageItem = {
   id: string;
@@ -59,6 +60,8 @@ type UsageResponse = {
     inputTokens: number;
     outputTokens: number;
     knownCostCents: number;
+    costReportedCalls?: number;
+    costUnavailableCalls?: number;
     fallbackCount: number;
     failureCount: number;
   };
@@ -125,6 +128,7 @@ export default function LlmUsageConsole() {
   }
 
   const { summary, operationBreakdown, modelBreakdown, daily, failureBreakdown } = usage.data;
+  const costLabel = formatKnownCost(summary.knownCostCents, summary.costUnavailableCalls ?? 0);
   const totalTokens = summary.inputTokens + summary.outputTokens;
   const callCount = Math.max(summary.calls, 1);
   const fallbackRate = Math.round((summary.fallbackCount / callCount) * 100);
@@ -175,7 +179,7 @@ export default function LlmUsageConsole() {
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(80px, 1fr))', gap: { xs: 2, sm: 3 }, textAlign: 'right' }}>
             <Signal label="失败率" value={`${failureRate}%`} tone={failureRate > 0 ? 'danger' : 'success'} />
             <Signal label="降级率" value={`${fallbackRate}%`} tone={fallbackRate > 0 ? 'warning' : 'success'} />
-            <Signal label="已知成本" value={`$${(summary.knownCostCents / 100).toFixed(2)}`} tone="default" />
+            <Signal label="已记录费用" value={costLabel} tone="default" />
           </Box>
         </Stack>
       </Paper>
@@ -251,11 +255,11 @@ export default function LlmUsageConsole() {
           </TableBody>
         </UsageTable>
         <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-          <SectionHeading title="已知成本" />
+          <SectionHeading title="已记录费用" />
           <Box sx={{ p: 2.5 }}>
-            <Typography variant="h2" sx={{ fontVariantNumeric: 'tabular-nums' }}>${(summary.knownCostCents / 100).toFixed(2)}</Typography>
+            <Typography variant="h2" sx={{ fontVariantNumeric: 'tabular-nums' }}>{costLabel}</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1, maxWidth: 520 }}>
-              只有上游返回价格或主研究引擎提供成本时才会计入；Token 统计不受此限制。
+              {summary.costUnavailableCalls ?? 0} 次有 Token 的调用未记录可用费用；已记录金额不代表完整账单。
             </Typography>
           </Box>
         </Paper>

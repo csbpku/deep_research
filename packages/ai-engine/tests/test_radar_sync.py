@@ -83,6 +83,7 @@ class _Connection:
         self.sources = sources
         self.executions: list[tuple[str, tuple[Any, ...]]] = []
         self.canonical_urls: set[str] = set()
+        self.legacy_urls: set[str] = set()
 
     @asynccontextmanager
     async def transaction(self):  # type: ignore[no-untyped-def]
@@ -114,7 +115,10 @@ class _Connection:
             return _Cursor(rows=self.sources)
         if 'FROM "summaries"' in sql and '"canonicalUrl"' in sql and 'SELECT' in sql:
             canonical = str(params[0])
-            return _Cursor({"id": "existing"} if canonical in self.canonical_urls else None)
+            exists = canonical in self.canonical_urls
+            if len(params) == 3:
+                exists = exists or (str(params[1]) in self.canonical_urls and str(params[2]) in self.legacy_urls)
+            return _Cursor({"id": "existing"} if exists else None)
         if 'INSERT INTO "summaries"' in sql:
             canonical = str(params[4])
             if canonical in self.canonical_urls:
@@ -205,6 +209,103 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert params[5] == "rss"
     assert params[14] == "1.2"
     assert "仅用于排序，不自动发布" in params[15]
+
+
+async def test_vendor_changelog_distinct_entries_survive_legacy_page_identity_and_repeat() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    pool.connection_value.canonical_urls.add("https://example.com/notes")
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url=f"https://example.com/notes#{part}",
+                               snippet="A specific release note. " * 20) for part in ("first", "second")]
+
+    options = dict(triggered_by="admin", adapter=FakeAdapter(),
+                   fetchers={"vendor_changelog": fetcher}, document_fetcher=_safe_fetch)
+    first = await run_radar_sync(pool, **options)
+    second = await run_radar_sync(pool, **options)
+    assert first.runs[0].total_new == 2
+    assert second.runs[0].total_new == 0
+    assert second.runs[0].skipped_existing == 2
+
+
+async def test_vendor_changelog_preserves_existing_legacy_entry_without_duplication() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    pool.connection_value.canonical_urls.add("https://example.com/notes")
+    pool.connection_value.legacy_urls.add("https://example.com/notes#first")
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url=f"https://example.com/notes#{part}",
+                               snippet="A specific release note. " * 20) for part in ("first", "second")]
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher}, document_fetcher=_safe_fetch)
+    assert run.runs[0].total_new == 1
+    assert run.runs[0].skipped_existing == 1
+
+
+async def test_changelog_scores_and_summarizes_only_the_selected_entry() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    entry = "This release adds a concrete API behavior. " * 12
+    seen: list[dict[str, Any]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url="https://example.com/notes#entry", snippet=entry)]
+
+    async def document_fetcher(url: str, **kwargs: Any) -> FetchedDocument:
+        raise AssertionError("the whole changelog page must not be used")
+
+    async def brief(adapter: Any, item: dict[str, Any], url: str, **kwargs: Any) -> Any:
+        seen.append(item)
+        return type("Brief", (), {"status": AI_JOB_STATUS["SUCCEEDED"],
+                                  "output_text": "A grounded summary of the release note. " * 5,
+                                  "cost": type("Cost", (), {"token_input_total": 1,
+                                             "token_output_total": 1, "cost_cents": 0})()})()
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher},
+                               document_fetcher=document_fetcher, generate_brief=brief)
+    assert run.runs[0].total_new == 1
+    assert seen[0]["snippet"] == entry.strip()
+    assert seen[0]["context_is_source_snapshot"] is True
+
+
+async def test_changelog_short_entry_is_kept_without_inventing_page_content() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+    entry = "This release adds a new API option."
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url="https://example.com/notes#entry", snippet=entry)]
+
+    async def no_brief(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("short entries must not trigger a model summary")
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher}, generate_brief=no_brief)
+    assert run.runs[0].total_new == 1
+    insert = next(item for item in pool.connection_value.executions if 'INSERT INTO "summaries"' in item[0])
+    assert entry in insert[1]
+
+
+async def test_changelog_missing_entry_content_is_diagnosed_without_fetching_whole_page() -> None:
+    pool = _Pool([_source(source_type="vendor_changelog")])
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        del config
+        return [RadarCandidate(title="LLM agent update", url="https://example.com/notes#entry")]
+
+    async def no_fetch(*args: Any, **kwargs: Any) -> FetchedDocument:
+        raise AssertionError("unrelated page content must not replace missing entry content")
+
+    run = await run_radar_sync(pool, triggered_by="admin", adapter=FakeAdapter(),
+                               fetchers={"vendor_changelog": fetcher}, document_fetcher=no_fetch)
+    assert run.runs[0].total_new == 0
+    assert run.runs[0].total_skipped == 1
+    assert any("CHANGELOG_ENTRY_BODY_UNAVAILABLE" in str(params)
+               for _, params in pool.connection_value.executions)
 
 
 async def test_sync_keeps_discovery_url_when_article_mentions_github_repo() -> None:
@@ -1795,3 +1896,13 @@ def test_finish_run_partial_without_error_does_not_touch_health() -> None:
         assert not any('"lastErrorCode"' in sql for sql in updates), updates
 
     asyncio.run(_scenario())
+
+
+def test_changelog_fragments_are_not_enriched_as_full_web_pages() -> None:
+    from ai_engine.radar.enrichment_worker import DEFAULT_ENRICHMENT_KINDS
+    from ai_engine.radar.sync_runner import _classify_original_kind
+
+    kind = _classify_original_kind("vendor_changelog", "https://example.com/changes#entry")
+    assert kind == "vendor_changelog_entry"
+    assert kind not in DEFAULT_ENRICHMENT_KINDS
+    assert _classify_original_kind("vendor_changelog", "https://example.com/entry") == "web_share"

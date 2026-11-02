@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 
 from ai_engine.adapters.fake import FakeAdapter
 from ai_engine.radar import sync_endpoint
+
+
+async def test_runs_expose_current_source_backlog_and_fallbacks() -> None:
+    from unittest.mock import AsyncMock
+
+    pool = _Pool()
+    now = datetime.now(timezone.utc)
+    row = {"id": "run-1", "sourceId": "00000000-0000-4000-8000-000000000001",
+           "sourceName": "HN", "sourceType": "rss", "triggeredBy": "cron",
+           "status": "completed", "totalFetched": 0, "totalNew": 0,
+           "totalSkipped": 0, "totalFailed": 0, "tokenInputTotal": 100,
+           "tokenOutputTotal": 0, "costUsd": 0.0, "fallbackCount": 2,
+           "elapsedMs": 1, "errorCode": None, "errorMessage": None,
+           "createdAt": now, "completedAt": now, "candidateCount": 0,
+           "scoredCount": 0, "pendingScoreCount": 0, "enrichedCount": 0,
+           "pendingEnrichmentCount": 0, "skippedExisting": 0, "skippedRuleNoise": 0,
+           "skippedDistilledNoise": 0, "skippedConflict": 0}
+    pool.connection_value.execute = AsyncMock(side_effect=[
+        _Cursor(rows=[row]),
+        _Cursor(rows=[{"sourceId": row["sourceId"], "pending": 17}]),
+    ])  # type: ignore[method-assign]
+    result = await sync_endpoint.list_radar_runs(None, pool, None, limit=500, run_date=None)  # type: ignore[arg-type]
+    assert result[0].pendingScoreCount == 0
+    assert result[0].sourcePendingScoreCount == 17
+    assert result[0].fallbackCount == 2
+    assert result[0].costStatus == "unavailable"
+    first_call = pool.connection_value.execute.await_args_list[0]  # type: ignore[attr-defined]
+    assert first_call.args[1][-1] == 500
 
 
 class _Cursor:

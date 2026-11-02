@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 import html as html_lib
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
-from ai_engine.fetcher.safe_fetch import FetchedDocument, safe_fetch
+from ai_engine.fetcher.safe_fetch import FetchedDocument, SafeFetchError, raise_for_document_status, safe_fetch
 from ai_engine.ingestion.sources import _parse_rss_xml_simple
 from ai_engine.radar.community_fetcher import _is_ai_related
 from ai_engine.radar.models import RadarCandidate
@@ -164,8 +165,12 @@ async def fetch_rss_candidates(
         # Raise cap to 32MB to accommodate large feeds.
         fetch_kwargs["max_bytes"] = 32 * 1024 * 1024
     document = await fetcher(feed_url, **fetch_kwargs)
+    host = urlsplit(feed_url).hostname
+    raise_for_document_status(document, host=host)
     text = document.content.decode("utf-8", errors="replace")
     items = _parse_rss_xml_simple(text)
+    if not items and re.match(r"^\s*(?:<!doctype\s+html[^>]*>\s*)?<html\b", text, re.I):
+        raise SafeFetchError("UPSTREAM_HTTP_ERROR", "RSS source returned an HTML page instead of a feed", host=host)
     # Source-side AI keyword filter (mirrors agents-radar pattern).
     # Default: ON. Set applyAiFilter=False in config for AI-only feeds
     # (e.g. OpenAI News, Anthropic News, Google AI Blog) to skip the check.
