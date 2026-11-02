@@ -23,6 +23,10 @@ import { researchUserStatus } from '@/lib/research-user-status';
 import { capturedResearchSourceCount } from '@/lib/research-evidence-profile';
 import { DeepResearchProgressCard } from '@/components/ai-research/DeepResearchProgressCard';
 import type { DeepResearchProgress } from '@/lib/ai-progress';
+import { ReviewClaimsPanel, type ReviewClaimRun } from '@/components/ai-research/ReviewClaimsPanel';
+import { ResearchChatPanel } from '@/components/ai-research/ResearchChatPanel';
+import { KnowledgeCardComposer } from '@/components/KnowledgeCardComposer';
+import type { AiResearchConversationDetail } from '@/lib/ai-research-chat';
 
 interface InlineJob {
   jobId: string;
@@ -59,7 +63,7 @@ interface InlineJob {
     capturedAt?: string;
   }>;
   review?: { status?: string | null; phase?: string | null; error?: string | null; error_code?: string | null } | null;
-  reviewRun?: { executionStatus?: string | null } | null;
+  reviewRun?: ReviewClaimRun | null;
 }
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'partial']);
@@ -81,8 +85,19 @@ export function shouldPollInlineResearch(job: Pick<InlineJob, 'status' | 'finalS
 }
 
 /** 横向阶段 stepper：plan → search → compress → analyze → write。 */
-function StepStepper({ currentStep, succeeded }: { currentStep: string | null; succeeded: boolean }) {
+function StepStepper({
+  currentStep,
+  succeeded,
+  briefOnly = false,
+}: {
+  currentStep: string | null;
+  succeeded: boolean;
+  briefOnly?: boolean;
+}) {
   const activeIndex = currentStep ? STEP_ORDER.indexOf(currentStep as (typeof STEP_ORDER)[number]) : -1;
+  const labels = briefOnly
+    ? { ...STEP_LABELS, write: '生成摘要' }
+    : STEP_LABELS;
   return (
     <Box component="ol" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, m: 0, p: 0, listStyle: 'none' }} aria-label="调研步骤">
       {STEP_ORDER.map((key, index) => {
@@ -105,7 +120,7 @@ function StepStepper({ currentStep, succeeded }: { currentStep: string | null; s
               {state === 'done' ? <Check size={12} /> : index + 1}
             </Box>
             <Typography component="span" variant="metadata" sx={{ fontWeight: state === 'active' ? 500 : undefined, color: state === 'active' ? 'text.primary' : state === 'done' ? 'text.secondary' : 'text.disabled' }}>
-              {STEP_LABELS[key]}
+              {labels[key]}
             </Typography>
           </Box>
         );
@@ -117,10 +132,16 @@ function StepStepper({ currentStep, succeeded }: { currentStep: string | null; s
 export function InlineAiResearchStatus({
   jobId,
   onRestart,
+  followUpConversation = null,
+  onEnsureConversation = null,
 }: {
   jobId: string;
   /** Reuse this job's configuration and return to the editable brief. */
   onRestart?: () => void | Promise<void>;
+  /** Durable conversation bound to this job, for report follow-ups. */
+  followUpConversation?: AiResearchConversationDetail | null;
+  /** Create the durable conversation the first time a follow-up is sent. */
+  onEnsureConversation?: (() => Promise<AiResearchConversationDetail>) | null;
 }) {
   const queryClient = useQueryClient();
   const [cancelling, setCancelling] = useState(false);
@@ -245,6 +266,29 @@ export function InlineAiResearchStatus({
         : job.reportType === 'summary_brief'
           ? '快速判断'
           : '研究稿';
+  const terminalSummary = !terminal
+    ? null
+    : status === 'failed'
+      ? '任务失败，可以调整配置后重新调研。'
+      : status === 'cancelled'
+        ? '任务已撤回。'
+        : status === 'partial'
+          ? evidenceOnly ? '已保留可核对资料快照；尚未生成研究结论。' : '阶段性研究稿已保存，关键结论确认未完成。'
+          : isBrief
+            ? '快速判断已生成，未创建调研草稿。'
+            : job.reportType === 'slides'
+              ? 'Slides 提纲已生成，可继续编辑或追问。'
+              : job.reportType === 'web_brief'
+                ? '网页简报已生成，可直接阅读、分享或继续追问。'
+                : '研究稿已完成，私有草稿仅你本人可见。';
+  const terminalTone = status === 'failed'
+    ? 'error.main'
+    : status === 'partial' || evidenceOnly
+      ? 'warning.main'
+      : 'success.main';
+  // A brief can succeed with zero captured pages. That is a model-only
+  // excerpt, not a verified research result, so say so next to the counters.
+  const evidenceFreeBrief = status === 'succeeded' && isBrief && evidenceCount === 0;
   async function cancelRun(): Promise<void> {
     if (cancelling) return;
     setCancelling(true);
@@ -318,11 +362,16 @@ export function InlineAiResearchStatus({
                   ? <AlertTriangle size={16} color="var(--dr-color-warning)" />
                   : <Clock3 size={16} color="var(--dr-color-primary)" />}
             <Typography component="span" variant="body2" sx={{ fontWeight: 600 }}>
-              {terminal ? '研究结果' : '正在研究'}
+              {terminal ? (evidenceFreeBrief ? '仅模型摘录' : '研究结果') : '正在研究'}
             </Typography>
             <StatusBadge kind="job" value={userStatus.code === 'ready' ? 'succeeded' : userStatus.code === 'failed' ? 'failed' : 'partial'} label={userStatus.label} />
           </Box>
           <Typography component="p" variant="metadata" noWrap sx={{ mt: 0.5, color: 'text.secondary' }}>{job.topic ?? '当前调研'}</Typography>
+          {terminalSummary ? (
+            <Typography component="p" variant="metadata" sx={{ mt: 0.5, color: terminalTone }}>
+              {terminalSummary}
+            </Typography>
+          ) : null}
         </Box>
         {terminal ? (
           <Typography component="span" variant="metadata" color="text.secondary">结果与追问在本对话中</Typography>
@@ -340,7 +389,11 @@ export function InlineAiResearchStatus({
             进度更新暂时中断，正在重试；以下保留最近一次状态。
           </Typography>
         ) : null}
-        {!isBrief ? <StepStepper currentStep={job.currentStep} succeeded={terminal && status === 'succeeded'} /> : null}
+        <StepStepper
+          currentStep={job.currentStep}
+          succeeded={terminal && status === 'succeeded'}
+          briefOnly={isBrief}
+        />
         {isBrief ? <Typography variant="metadata" color="text.secondary">快速判断不做完整检索或逐条核验；{evidenceCount > 0 ? `已参考 ${evidenceCount} 条可核对资料。` : '仅模型摘录，未保存可核对资料。'}</Typography> : null}
 
         {reviewUnavailable ? (
@@ -359,6 +412,11 @@ export function InlineAiResearchStatus({
           <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'divider', borderRadius: 999, bgcolor: 'background.paper', px: 1, py: 0.5, typography: 'metadata', color: 'text.secondary' }}>
             {isBrief ? '可核对资料' : '已抓取正文'} <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums', color: 'text.primary' }}>{evidenceCount}</Box>
           </Box>
+          {evidenceFreeBrief ? (
+            <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'warning.main', borderRadius: 999, bgcolor: 'var(--dr-color-warning-container)', px: 1, py: 0.5, typography: 'metadata', color: 'warning.main' }}>
+              无证据 · 仅模型摘录
+            </Box>
+          ) : null}
           {terminal && status === 'partial' && job.partialSourcesCount > 0 ? (
             <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', border: 1, borderColor: 'warning.main', borderRadius: 999, bgcolor: 'var(--dr-color-warning-container)', px: 1, py: 0.5, typography: 'metadata', color: 'warning.main' }}>
               部分 <Box component="span" sx={{ ml: 0.5, fontFamily: 'monospace', fontVariantNumeric: 'tabular-nums' }}>{job.partialSourcesCount}</Box>
@@ -405,19 +463,14 @@ export function InlineAiResearchStatus({
           </Box>
         ) : null}
 
-        {status === 'succeeded' && (job.artifact?.content || job.outputText) ? (
-          <Box
-            component="details"
-            open={reportOpen}
-            onToggle={(event) => setReportOpen((event.currentTarget as HTMLDetailsElement).open)}
-            sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}
-          >
-            <Box component="summary" sx={{ cursor: 'pointer', typography: 'metadata', fontWeight: 500 }}>
-              研究全文{reportOpen ? '（可收起）' : '（已收起）'}
-            </Box>
-            <Box sx={{ pt: 1.5 }}>
-              {renderReport()}
-            </Box>
+        {status === 'succeeded' && isBrief && evidenceCount === 0 ? (
+          <Box sx={{ border: 1, borderColor: 'warning.main', borderRadius: 1, bgcolor: 'var(--dr-color-warning-container)', px: 1.5, py: 1.25 }} role="status">
+            <Typography component="h3" variant="fieldTitle" sx={{ color: 'warning.main' }}>
+              仅模型摘录
+            </Typography>
+            <Typography component="p" variant="metadata" sx={{ mt: 0.5, lineHeight: 1.6, color: 'warning.main' }}>
+              本轮仅模型摘录，不做完整检索或逐条核验；未保存可核对资料，不能作为已验证的研究结论。
+            </Typography>
           </Box>
         ) : null}
 
@@ -446,6 +499,14 @@ export function InlineAiResearchStatus({
           </Box>
         ) : null}
 
+        {terminal && !evidenceOnly && job.reportType !== 'summary_brief' ? (
+          <ReviewClaimsPanel
+            jobId={jobId}
+            draftResearchId={job.draftResearchId}
+            reviewRun={job.reviewRun ?? null}
+          />
+        ) : null}
+
         {terminal ? (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, borderTop: 1, borderColor: 'divider', pt: 1.5 }}>
             {onRestart ? (
@@ -459,6 +520,44 @@ export function InlineAiResearchStatus({
                 <NextLink href={`/researches/${job.draftResearchId}`}>打开可编辑草稿</NextLink>
               </Button>
             ) : null}
+            {status === 'succeeded' && job.reportType === 'slides' && job.draftResearchId ? (
+              <Button asChild size="sm" variant="outline">
+                <NextLink href={`/researches/${job.draftResearchId}/edit`}>编辑 Slides 提纲</NextLink>
+              </Button>
+            ) : null}
+          </Box>
+        ) : null}
+
+        {terminal && (job.artifact?.content || job.outputText) ? (
+          <Box sx={{ display: 'grid', gap: 1.5 }}>
+            <Box
+              component="details"
+              open={reportOpen}
+              onToggle={(event) => setReportOpen((event.currentTarget as HTMLDetailsElement).open)}
+              sx={{ borderTop: 1, borderColor: 'divider', pt: 1.5 }}
+            >
+              <Box component="summary" sx={{ cursor: 'pointer', typography: 'metadata', fontWeight: 500 }}>
+                研究全文{reportOpen ? '（可收起）' : '（已收起）'}
+              </Box>
+              {/* The knowledge-card composer extracts the selected text from
+                  the rendered report, so it must wrap the report pane. */}
+              <Box data-knowledge-source-message={job.draftResearchId ?? undefined} sx={{ pt: 1.5 }}>
+                {renderReport()}
+              </Box>
+            </Box>
+            {job.draftResearchId ? (
+              <KnowledgeCardComposer sourceKind="research_report" messageId={job.draftResearchId} />
+            ) : null}
+            <ResearchChatPanel
+              conversation={followUpConversation}
+              canAsk
+              ensureConversation={onEnsureConversation}
+              reportId={job.draftResearchId}
+              reportContent={job.artifact?.content ?? job.outputText ?? null}
+              note={evidenceOnly
+                ? '当前只有可核对资料快照；追问只会基于这批资料回答。'
+                : '回答基于上方报告和本次研究上下文，会自动保存到该对话。'}
+            />
           </Box>
         ) : null}
       </Box>

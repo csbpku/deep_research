@@ -27,27 +27,50 @@ test.describe('AI Research flows', () => {
   });
 });
 
-test.describe('AI Research detail (UI polish)', () => {
-  test('header refresh button exists', async ({ page }) => {
-    await page.goto('/ai-research/48844f9d-01aa-4ca9-a923-2ecb636656a9');
-    // 加载完后 header 应有「刷新」按钮
-    await page.waitForLoadState('networkidle').catch(() => {});
-    const refresh = page.getByRole('button', { name: /刷新调研状态/ });
-    await expect(refresh).toBeVisible();
-  });
+test.describe('AI Research detail (in-conversation result)', () => {
+  test('an old result link renders the result inside the conversation', async ({ page }) => {
+    await loginWithCredentials(page.context().request, { email: 'member@e2e.local', role: 'member' });
+    const jobId = '48844f9d-01aa-4ca9-a923-2ecb636656a9';
+    await page.route(`**/api/ai-research/${jobId}`, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        jobId,
+        status: 'succeeded',
+        finalStatus: 'succeeded',
+        currentStep: 'write',
+        topic: '结果内联验收',
+        sourcesCount: 0,
+        savedSourcesCount: 0,
+        partialSourcesCount: 0,
+        failedSourcesCount: 0,
+        reportType: 'research_report',
+        reportLength: 'standard',
+        deliverableStatus: 'report',
+        sourcePolicy: 'prefer_user_sources',
+        researchProgress: null,
+        outputText: null,
+        errorCode: null,
+        errorMessage: null,
+        errorDetails: null,
+        startedAt: null,
+        createdAt: null,
+        completedAt: null,
+        draftResearchId: null,
+        review: null,
+        reviewRun: null,
+        conversation: [],
+        sources: [],
+        artifact: null,
+      }),
+    }));
+    await page.route(`**/api/ai-research/conversations/by-job/${jobId}`, (route) => route.fulfill({ status: 404, body: 'not found' }));
 
-  test('error empty state has retry button', async ({ page }) => {
-    // 模拟网络错误:route /api/ai-research/<id> 第一次返回 500
-    let firstCall = true;
-    await page.route('**/api/ai-research/48844f9d-01aa-4ca9-a923-2ecb636656a9', (route) => {
-      if (firstCall) firstCall = false;
-      return route.fulfill({ status: 500, body: 'fail' });
-    });
-    await page.goto('/ai-research/48844f9d-01aa-4ca9-a923-2ecb636656a9');
-    await page.waitForLoadState('networkidle').catch(() => {});
-    // 错误 EmptyState 应有「重试」按钮
-    const retry = page.getByRole('button', { name: '重试' }).first();
-    await expect(retry).toBeVisible();
+    await page.goto(`/ai-research/${jobId}`);
+    await expect(page).toHaveURL(new RegExp(`/ai-research\\?job=${jobId}`));
+    await expect(page.getByRole('heading', { name: 'AI 调研' })).toBeVisible();
+    await expect(page.getByRole('region', { name: '调研状态' })).toBeVisible();
+    await expect(page.getByText('研究结果', { exact: true })).toBeVisible();
   });
 });
 
@@ -746,12 +769,13 @@ test.describe('AI Research parent (UI polish)', () => {
     await page.goto(`/ai-research/${jobId}`);
     await expect(page.getByRole('heading', { name: '仅模型摘录' })).toBeVisible();
     await expect(page.getByText('本轮仅模型摘录，不做完整检索或逐条核验；未保存可核对资料，不能作为已验证的研究结论。')).toBeVisible();
-    await expect(page.getByText('无证据', { exact: true })).toBeVisible();
-    await expect(page.getByRole('status')).toContainText('无证据 · 仅模型摘录');
-    // 研究步骤默认收在“查看研究详情”里；先展开再断言摘要步骤。
-    await page.getByText('查看研究详情', { exact: true }).click();
+    // 结果卡把“无证据”表达为“仅模型摘录”，不再是单独的状态标签。
+    await expect(page.getByRole('status')).toContainText('未保存可核对资料');
+    await expect(page.getByRole('region', { name: '调研状态' })).toContainText('仅模型摘录');
+    // 结果卡直接显示阶段与结论，不再有独立的“查看研究详情”入口。
     await expect(page.getByText('生成摘要', { exact: true })).toBeVisible();
-    await expect(page.getByRole('region', { name: '快速判断结果' })).toContainText('仅模型摘录 · 未保存可核对资料');
-    await expect(page.getByText('100%', { exact: true })).toHaveCount(0);
+    // 结果卡用状态说明承载“仅模型摘录 + 未保存资料”，不再有独立摘要区。
+    await expect(page.getByRole('region', { name: '调研状态' })).toContainText('无证据 · 仅模型摘录');
+    await expect(page.getByText('快速判断已生成，未创建调研草稿。')).toBeVisible();
   });
 });

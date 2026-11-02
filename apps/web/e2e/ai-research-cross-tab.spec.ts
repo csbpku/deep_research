@@ -62,7 +62,7 @@ for (const outcome of ['success', 'unknown', 'concurrent', 'sync', 'unsupported'
     await expect(page.getByRole('link', { name: /查看任务历史/ })).toBeVisible();
     await second.click();
   } else {
-    await expect(page.getByRole('link', { name: /打开完整任务/ })).toBeVisible();
+    await expect(page.getByRole('region', { name: '调研状态' })).toBeVisible();
     if (outcome !== 'sync') await second.click();
   }
   if (outcome === 'unknown') {
@@ -73,6 +73,6 @@ for (const outcome of ['success', 'unknown', 'concurrent', 'sync', 'unsupported'
     await second.click();
     await expect.poll(() => submissions).toBe(2);
     return;
-  } else await expect(stale.getByRole('link', { name: /打开完整任务/ })).toBeVisible();
+  } else await expect(stale.getByRole('region', { name: '调研状态' })).toBeVisible();
   expect(submissions).toBe(1);
 });

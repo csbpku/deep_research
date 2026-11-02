@@ -23,7 +23,6 @@ import { InlineAiResearchStatus } from '@/components/ai-research/InlineAiResearc
 import { AiResearchBrief, type BriefValue } from '@/components/ai-research/AiResearchBrief';
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
 import { AppTextField as Input } from '@/components/material/AppTextField';
-import MarkdownContent from '@/components/MarkdownContent';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import Link from '@mui/material/Link';
@@ -34,8 +33,7 @@ import {
   isStartResearchIntent,
   type ResearchConversationPhase,
 } from '@/lib/ai-research-conversation';
-import type { AiResearchChatMessage, AiResearchConversationDetail, FollowUpIntent } from '@/lib/ai-research-chat';
-import { stripResearchCitationMarkers } from '@/lib/ai-research-state';
+import type { AiResearchChatMessage, AiResearchConversationDetail } from '@/lib/ai-research-chat';
 import { friendlyMessage } from '@/lib/errors/friendly';
 import { toApiHttpError } from '@/lib/errors/api-error';
 import { writeLastSubmitted } from '@/lib/last-submitted';
@@ -81,13 +79,6 @@ const EXAMPLE_PROMPTS = [
   '哪些 HTML 转 Markdown 工具最不容易丢失结构？',
 ];
 
-const FOLLOW_UP_SHORTCUTS: Array<{ intent: FollowUpIntent; label: string }> = [
-  { intent: 'answer', label: '继续问答' },
-  { intent: 'verify', label: '核验证据' },
-  { intent: 'revise', label: '修订建议' },
-  { intent: 'action', label: '生成行动项' },
-];
-
 interface Message {
   id: string;
   role: 'assistant' | 'user';
@@ -97,6 +88,71 @@ interface Message {
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * Map a persisted research brief back into the editable form value.
+ *
+ * The job API returns the confirmed brief for finished runs. Rebuilding the
+ * form from it keeps scope, comparison dimensions and non-URL sources, which
+ * topic/type/depth alone cannot express.
+ */
+function restoreBriefValue(raw: unknown): BriefValue | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const brief = raw as Record<string, unknown>;
+  if (typeof brief.question !== 'string') return null;
+  const scope = brief.scope && typeof brief.scope === 'object'
+    ? brief.scope as Record<string, unknown>
+    : {};
+  const timeRange = scope.timeRange && typeof scope.timeRange === 'object'
+    ? scope.timeRange as Record<string, unknown>
+    : {};
+  const list = (value: unknown): string[] => (
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+  );
+  const contextRefs = (Array.isArray(brief.contextRefs) ? brief.contextRefs : [])
+    .filter((ref): ref is { type: 'url' | 'favorite' | 'research' | 'summary'; value: string; required?: boolean } => (
+      Boolean(ref) && typeof ref === 'object'
+      && ['url', 'favorite', 'research', 'summary'].includes(String((ref as Record<string, unknown>).type))
+      && typeof (ref as Record<string, unknown>).value === 'string'
+    ));
+  const uuidRefs = contextRefs.filter((ref) => ref.type !== 'url');
+  const objective = ['explore', 'learn', 'investigate', 'decide'].includes(String(brief.objective))
+    ? brief.objective as BriefValue['objective']
+    : 'investigate';
+  return {
+    objective,
+    ...(typeof brief.primaryTopicId === 'string' ? { primaryTopicId: brief.primaryTopicId } : {}),
+    suggestedContextIds: uuidRefs.map((ref) => ref.value),
+    contextSelectionIncomplete: false,
+    assistantMessage: '已载入上次调研的确认方案。',
+    scopeValid: true,
+    brief: {
+      objective,
+      question: brief.question,
+      constraints: list(brief.constraints),
+      questionsToAnswer: list(brief.questionsToAnswer),
+      comparisonOptions: list(brief.comparisonOptions),
+      decisionDimensions: list(brief.decisionDimensions),
+      successCriteria: list(brief.successCriteria),
+      sourcePolicy: brief.sourcePolicy === 'only_user_sources' ? 'only_user_sources' : 'prefer_user_sources',
+      scope: {
+        timeRange: {
+          preset: (['any', '7d', '30d', '90d', '1y', 'custom'].includes(String(timeRange.preset))
+            ? timeRange.preset
+            : 'any') as BriefValue['brief'] extends { scope: infer S } ? S extends { timeRange: { preset: infer P } } ? P : never : never,
+          ...(typeof timeRange.from === 'string' && timeRange.from ? { from: timeRange.from } : {}),
+          ...(typeof timeRange.to === 'string' && timeRange.to ? { to: timeRange.to } : {}),
+        },
+        regions: list(scope.regions),
+        technologyVersions: list(scope.technologyVersions),
+        retrievalNotes: typeof scope.retrievalNotes === 'string' ? scope.retrievalNotes : '',
+      },
+      ...(typeof brief.primaryTopicId === 'string' ? { primaryTopicId: brief.primaryTopicId } : {}),
+      outputType: brief.outputType === 'slides' ? 'slides' : brief.outputType === 'web' ? 'web' : 'markdown',
+      contextRefs: contextRefs.map((ref) => ({ type: ref.type, value: ref.value, required: ref.required === true })),
+    },
+  };
 }
 
 const reportOptions: Array<{
@@ -267,6 +323,7 @@ interface InlineJobSnapshot {
   jobId: string;
   status: string;
   finalStatus: string | null;
+  topic?: string | null;
   outputText: string | null;
   reportType: string | null;
   reportLength?: 'brief' | 'standard' | 'deep';
@@ -323,67 +380,21 @@ export function AiResearchConversation({
   const [restoredBrief, setRestoredBrief] = useState<BriefValue | null>(null);
   const [draftStorageError, setDraftStorageError] = useState(false);
   const [submissionUncertain, setSubmissionUncertain] = useState(false);
-  const [followUpSending, setFollowUpSending] = useState(false);
-  const [followUpError, setFollowUpError] = useState<string | null>(null);
-  const [followUpIntent, setFollowUpIntent] = useState<FollowUpIntent>('answer');
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousConversationIdRef = useRef<string | null>(conversationId ?? null);
   const loadedConversationIdRef = useRef<string | null>(null);
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const fromJobAppliedRef = useRef(false);
-  const jobRouteResolvedRef = useRef(false);
 
-  // Task history, the topbar and old /ai-research/<jobId> links all land here.
-  // Resolve the job to its conversation instead of rendering a separate
-  // result page; jobs created outside the chat get a conversation on demand.
+  // Task history, the topbar and old /ai-research/<jobId> links land here
+  // with a job id. Show that job's result in place; a conversation is only
+  // created when the reader actually asks a follow-up question.
+  const routedJobId = conversationId ? null : jobId;
   useEffect(() => {
-    if (!jobId || conversationId || jobRouteResolvedRef.current) return;
-    jobRouteResolvedRef.current = true;
-    let cancelled = false;
-    setHydrating(true);
-    void (async () => {
-      const existing = await fetch(`/api/ai-research/conversations/by-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
-      if (cancelled) return;
-      if (existing.ok) {
-        const conversation = await existing.json() as AiResearchConversationDetail;
-        router.replace(`/ai-research?conversation=${conversation.id}`, { scroll: false });
-        return;
-      }
-      if (existing.status !== 404) throw await toApiHttpError(existing, '读取调研对话失败');
-      const detail = await fetch(`/api/ai-research/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
-      if (!detail.ok) throw await toApiHttpError(detail, '读取调研任务失败');
-      if (cancelled) return;
-      const job = await detail.json() as { topic?: string | null };
-      const topicText = typeof job.topic === 'string' ? job.topic : 'AI 调研';
-      const created = await fetch('/api/ai-research/conversations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          title: topicText.slice(0, 200),
-          jobId,
-          messages: [
-            { role: 'user', content: topicText },
-            { role: 'assistant', content: '这次调研已结束，结果、证据和追问都在本对话中。' },
-          ],
-        }),
-      });
-      if (!created.ok) throw await toApiHttpError(created, '创建调研对话失败');
-      if (cancelled) return;
-      const conversation = await created.json() as AiResearchConversationDetail;
-      router.replace(`/ai-research?conversation=${conversation.id}`, { scroll: false });
-    })().catch((err: unknown) => {
-      if (!cancelled) {
-        setErrorKind('restore');
-        setError(friendlyMessage(err, '无法打开这条调研，请从任务历史重试。'));
-      }
-    }).finally(() => {
-      if (!cancelled) setHydrating(false);
-    });
-    return () => {
-      cancelled = true;
-      jobRouteResolvedRef.current = false;
-    };
-  }, [conversationId, jobId, router]);
+    if (!routedJobId || conversationId) return;
+    setActiveJobId(routedJobId);
+    setPhase('ready');
+  }, [routedJobId, conversationId]);
 
   // "调整配置后重跑" navigates here with the failed job id. Rebuild the
   // submit form from that job so the user edits the previous research
@@ -505,8 +516,6 @@ export function AiResearchConversation({
     setOwnerId(null);
     setDraftStorageError(false);
     setSubmissionUncertain(false);
-    setFollowUpSending(false);
-    setFollowUpError(null);
     setErrorKind(null);
     setActiveJobId(null);
     setError(null);
@@ -575,6 +584,10 @@ export function AiResearchConversation({
             setSourcePolicy(draft.sourcePolicy); setSourceUrls(draft.sourceUrls);
             setSourceDraft(draft.sourceDraft); setInput(draft.input); setSeed(draft.seed ?? null);
             setBrief(draft.brief); setRestoredBrief(draft.brief);
+            // A restored draft means the user already shaped this brief; the
+            // replayed transcript may still read as "understand" and would
+            // otherwise hide the confirmation form.
+            setPhase((current) => (current === 'understand' ? 'ready' : current));
           }
         }
         if (conversation.jobId || !owner || readPending(owner, conversation.id) === false) setError(null);
@@ -613,7 +626,10 @@ export function AiResearchConversation({
   }, [ownerId, currentConversationId]);
 
   useEffect(() => {
+    // Never write while a restore is still in flight: the defaults rendered
+    // before hydration would overwrite the draft the user already edited.
     if (!ownerId || !currentConversationId || hydrating || activeJobId) return;
+    if (loadedConversationIdRef.current !== currentConversationId) return;
     try {
       setDraftStorageError(!writeResearchDraft(window.localStorage, ownerId, currentConversationId, {
         reportType, reportLength, sourcePolicy, sourceUrls, sourceDraft, input, seed, brief,
@@ -755,20 +771,12 @@ export function AiResearchConversation({
 
   function handleMessageSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (composerMode === 'followup') {
-      void sendFollowUp(input);
-      return;
-    }
     processUserMessage(input);
   }
 
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
-      if (composerMode === 'followup') {
-        void sendFollowUp(input);
-        return;
-      }
       processUserMessage(input);
     }
   }
@@ -965,131 +973,33 @@ export function AiResearchConversation({
   }
 
   /**
-   * Send a post-research question through the same conversation thread.
-   *
-   * The durable conversation already carries the research context, so the
-   * follow-up uses that instead of creating a second "chat" surface. The
-   * server persists both turns; this component only renders the stream.
-   */
-  async function sendFollowUp(raw: string): Promise<void> {
-    const content = raw.trim();
-    if (!content || !activeJobId || followUpSending) return;
-    setInput('');
-    setFollowUpError(null);
-    setFollowUpSending(true);
-    const userId = newId('followup-user');
-    const assistantId = newId('followup-assistant');
-    setMessages((current) => [
-      ...current,
-      { id: userId, role: 'user', content, intent: followUpIntent },
-      { id: assistantId, role: 'assistant', content: '', intent: followUpIntent },
-    ]);
-    let accumulated = '';
-    try {
-      let conversationIdForJob = activeJobConversationQuery.data?.id;
-      if (!conversationIdForJob) {
-        const created = await fetch('/api/ai-research/conversations', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            title: (topic || 'AI 调研').slice(0, 200),
-            jobId: activeJobId,
-            messages: messages.map(({ role, content: text }) => ({ role, content: text })).slice(0, 200),
-          }),
-        });
-        if (!created.ok) throw await toApiHttpError(created, '追问会话创建失败');
-        const detail = await created.json() as AiResearchConversationDetail;
-        conversationIdForJob = detail.id;
-        await activeJobConversationQuery.refetch();
-      }
-      const response = await fetch(
-        `/api/ai-research/conversations/${encodeURIComponent(conversationIdForJob)}/messages/stream`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ content, intent: followUpIntent }),
-        },
-      );
-      if (!response.ok || !response.body) {
-        throw new Error(friendlyMessage(await toApiHttpError(response, '追问失败'), '追问失败，请稍后重试。'));
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-        for (const frame of frames) {
-          const lines = frame.split('\n');
-          const dataLine = lines.find((line) => line.startsWith('data: '));
-          if (!dataLine) continue;
-          const eventLine = lines.find((line) => line.startsWith('event: '));
-          const event = eventLine ? eventLine.slice(7).trim() : 'progress';
-          if (event === 'error') {
-            try {
-              const payload = JSON.parse(dataLine.slice(6)) as { message?: unknown };
-              if (typeof payload.message === 'string' && payload.message) {
-                setFollowUpError(payload.message);
-              }
-            } catch {
-              // A malformed error frame must not break the turn.
-            }
-            continue;
-          }
-          let payload: unknown;
-          try {
-            payload = JSON.parse(dataLine.slice(6));
-          } catch {
-            continue;
-          }
-          if (event === 'done') {
-            // The done frame carries the authoritative full answer, so use it
-            // instead of appending (which would duplicate the whole text).
-            const complete = typeof payload === 'string'
-              ? payload
-              : payload && typeof payload === 'object' && typeof (payload as { content?: unknown }).content === 'string'
-                ? (payload as { content: string }).content
-                : '';
-            if (complete) {
-              accumulated = complete;
-              setMessages((current) => current.map((message) => (
-                message.id === assistantId ? { ...message, content: accumulated } : message
-              )));
-            }
-            continue;
-          }
-          if (event !== 'delta') continue;
-          const delta = typeof payload === 'string'
-            ? payload
-            : payload && typeof payload === 'object' && typeof (payload as { content?: unknown }).content === 'string'
-              ? (payload as { content: string }).content
-              : '';
-          if (!delta) continue;
-          accumulated += delta;
-          setMessages((current) => current.map((message) => (
-            message.id === assistantId ? { ...message, content: accumulated } : message
-          )));
-        }
-      }
-      if (activeJobConversationQuery.data) {
-        void activeJobConversationQuery.refetch();
-      }
-    } catch (err) {
-      setFollowUpError(friendlyMessage(err, '追问失败，请稍后重试。'));
-      setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
-    } finally {
-      setFollowUpSending(false);
-    }
-  }
-
-  /**
    * Rebuild the submit form from the finished job so the single "重新调研"
    * action returns to the same conversation with the previous configuration
    * already loaded and editable.
    */
+  /**
+   * Resolve the durable thread for a job opened by id.
+   *
+   * Nothing is written until the reader asks a question, so opening a result
+   * link never fabricates transcript content.
+   */
+  async function ensureJobConversation(): Promise<AiResearchConversationDetail> {
+    if (activeJobConversationQuery.data) return activeJobConversationQuery.data;
+    if (!activeJobId) throw new Error('没有可追问的调研任务');
+    const created = await fetch('/api/ai-research/conversations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: (activeJobQuery.data?.topic ?? topic ?? 'AI 调研').slice(0, 200),
+        jobId: activeJobId,
+      }),
+    });
+    if (!created.ok) throw await toApiHttpError(created, '创建追问会话失败');
+    const detail = await created.json() as AiResearchConversationDetail;
+    await activeJobConversationQuery.refetch();
+    return detail;
+  }
+
   async function restartWithSameConfig(): Promise<void> {
     const jobId = activeJobId;
     if (!jobId) return;
@@ -1115,10 +1025,19 @@ export function AiResearchConversation({
       setSourcePolicy(data.sourcePolicy === 'only_user_sources' ? 'only_user_sources' : 'prefer_user_sources');
       setSourceUrls(restoredUrls);
       setActiveJobId(null);
+      // The old conversation is bound to the finished job. Reusing it would
+      // leave the rerun unbound, so the next submit starts a fresh thread that
+      // carries the restored configuration.
+      currentConversationIdRef.current = null;
+      loadedConversationIdRef.current = null;
+      setCurrentConversationId(null);
+      setOwnerId(null);
+      setSubmissionUncertain(false);
+      router.replace('/ai-research', { scroll: false });
       setPhase('ready');
-      setBrief(null);
-      setRestoredBrief(null);
-      setFollowUpError(null);
+      const restoredBrief = restoreBriefValue(data.brief);
+      setBrief(restoredBrief);
+      setRestoredBrief(restoredBrief);
       setMessages([
         {
           id: newId('assistant'),
@@ -1127,7 +1046,8 @@ export function AiResearchConversation({
         },
       ]);
     } catch (err) {
-      setFollowUpError(friendlyMessage(err, '无法载入上次调研配置，请重新填写。'));
+      setErrorKind('restore');
+      setError(friendlyMessage(err, '无法载入上次调研配置，请重新填写。'));
     }
   }
 
@@ -1137,15 +1057,13 @@ export function AiResearchConversation({
     && (brief?.suggestedContextIds.length ?? 0) === 0;
   const loginRequired = !!error && /登录|401|未认证/u.test(error);
   const stepIndex = activeJobId && !activeJobTerminal ? 3 : phase === 'understand' && !activeJobId ? 0 : activeJobId ? 4 : phase === 'refine' ? 1 : 2;
-  // The composer has three jobs in one thread: shape the brief, wait for a
-  // running job, then ask follow-ups about the finished report. Keeping one
-  // input avoids a second "chat" surface competing with the conversation.
-  const composerMode: 'plan' | 'running' | 'followup' | 'restart' = !activeJobId
+  // The composer shapes the brief and waits for a running job. Once a report
+  // exists, its own follow-up panel takes over the conversation.
+  const composerMode: 'plan' | 'running' | 'restart' = !activeJobId
     ? 'plan'
     : activeJobTerminal
-      ? activeJobHasReport ? 'followup' : 'restart'
+      ? activeJobHasReport ? 'plan' : 'restart'
       : 'running';
-  const showInlineFollowUp = composerMode === 'followup';
   const visibleMessages = messages;
 
   useEffect(() => {
@@ -1190,19 +1108,9 @@ export function AiResearchConversation({
                     <Typography component="span" variant="metadata" sx={{ mb: 0.5, display: 'block', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: message.role === 'assistant' ? 'primary.main' : 'text.secondary' }}>
                       {message.role === 'assistant' ? 'AI 调研助手' : '你'}
                     </Typography>
-                    {message.role === 'assistant' && message.intent ? (
-                      message.content ? (
-                        <Box sx={{ mt: 0.5, typography: 'reading', textAlign: 'left', overflowWrap: 'anywhere' }}>
-                          <MarkdownContent content={stripResearchCitationMarkers(message.content)} compact />
-                        </Box>
-                      ) : (
-                        <CircularProgress size={14} sx={{ mt: 0.5 }} aria-label="正在生成回答" />
-                      )
-                    ) : (
-                      <Typography component="p" variant="reading" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                        {message.content}
-                      </Typography>
-                    )}
+                    <Typography component="p" variant="reading" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                      {message.content}
+                    </Typography>
                   </Box>
                 </Box>
               ))}
@@ -1226,7 +1134,7 @@ export function AiResearchConversation({
                 </Box>
               ) : null}
 
-              {phase !== 'understand' && !activeJobId ? (
+              {phase !== 'understand' && !activeJobId && !hydrating ? (
                 <Box sx={{ ml: 5, minWidth: 0 }}>
                   <AiResearchBrief
                     initialBrief={restoredBrief}
@@ -1294,7 +1202,12 @@ export function AiResearchConversation({
                     jobId={activeJobId}
                     topic={topic}
                   />
-                  <InlineAiResearchStatus jobId={activeJobId} onRestart={restartWithSameConfig} />
+                  <InlineAiResearchStatus
+                    jobId={activeJobId}
+                    onRestart={restartWithSameConfig}
+                    followUpConversation={activeJobConversationQuery.data ?? null}
+                    onEnsureConversation={ensureJobConversation}
+                  />
                 </Box>
               ) : null}
             </>
@@ -1317,37 +1230,13 @@ export function AiResearchConversation({
           </Box>
         ) : null}
 
-        {showInlineFollowUp ? (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, borderTop: 1, borderColor: 'divider', px: 2, py: 1.25 }}>
-            <Typography component="span" variant="metadata" color="text.secondary">追问方式</Typography>
-            {FOLLOW_UP_SHORTCUTS.map((item) => (
-              <Button
-                key={item.intent}
-                type="button"
-                size="xs"
-                variant={followUpIntent === item.intent ? 'secondary' : 'outline'}
-                aria-pressed={followUpIntent === item.intent}
-                onClick={() => setFollowUpIntent(item.intent)}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </Box>
-        ) : null}
-        {followUpError ? (
-          <Typography component="p" role="alert" sx={{ borderTop: 1, borderColor: 'divider', px: 2, py: 1, typography: 'metadata', color: 'error.main' }}>
-            {followUpError}
-          </Typography>
-        ) : null}
         <Box component="form" data-ai-research-form onSubmit={handleMessageSubmit} sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper', p: 2 }}>
     <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper', transition: 'border-color 120ms ease-out, box-shadow 120ms ease-out', '&:focus-within': { borderColor: 'primary.main', boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}22` } }}>
             <Textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder={showInlineFollowUp
-                ? '继续追问这份研究，例如：这个结论的关键前提是什么？'
-                : composerMode === 'running'
+              placeholder={composerMode === 'running'
                 ? '任务运行中，进度和结果会持续显示在这里'
                 : composerMode === 'restart'
                 ? '这次调研没有生成可追问的结果；请先点上方“重新调研”恢复配置'
@@ -1364,17 +1253,15 @@ export function AiResearchConversation({
             />
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, px: 1.5, pb: 1.5 }}>
               <Typography component="span" variant="metadata" color="text.secondary">
-                {showInlineFollowUp
-                  ? (followUpSending ? '正在基于已保存资料回答…' : '回答基于上方报告和已保存资料，并自动保存到当前对话。')
-                  : composerMode === 'running'
-                    ? '任务完成后可在这里继续追问'
-                    : composerMode === 'restart'
-                      ? '恢复原配置后可以直接修改并重新开始'
+                {composerMode === 'running'
+                  ? '任务完成后可在结果卡片里继续追问'
+                  : composerMode === 'restart'
+                    ? '恢复原配置后可以直接修改并重新开始'
                     : `⌘/Ctrl + Enter 发送 · ${input.length}/20000`}
               </Typography>
-              <Button type="submit" size="sm" disabled={!input.trim() || submitting || conversationCreating || hydrating || composerMode === 'running' || composerMode === 'restart' || followUpSending} aria-label="发送消息（AI 调研）">
-                {followUpSending ? <CircularProgress size={14} thickness={5} aria-hidden /> : <Send size={14} />}
-                {followUpSending ? '回答中…' : '发送'}
+              <Button type="submit" size="sm" disabled={!input.trim() || submitting || conversationCreating || hydrating || composerMode === 'running' || composerMode === 'restart'} aria-label="发送消息（AI 调研）">
+                <Send size={14} />
+                发送
               </Button>
             </Box>
           </Box>
