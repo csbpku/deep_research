@@ -2,7 +2,7 @@
 
 import { stripResearchCitationMarkers } from '@/lib/ai-research-state';
 
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bot, Check, Clipboard, Send, Sparkles, UserRound, X } from 'lucide-react';
 
 import { AiResearchButton as Button, AiResearchTextarea as Textarea } from '@/components/ai-research/AiResearchMaterial';
@@ -46,12 +46,18 @@ export function ResearchChatPanel({
   note,
   reportId,
   reportContent,
+  ensureConversation,
 }: {
   conversation: AiResearchConversationDetail | null;
   canAsk: boolean;
   note?: string;
   reportId?: string | null;
   reportContent?: string | null;
+  /**
+   * Jobs opened directly by id have no durable conversation yet. Resolve one
+   * on first use instead of guessing a title or failing the follow-up.
+   */
+  ensureConversation?: (() => Promise<AiResearchConversationDetail>) | null;
 }) {
   const [messages, setMessages] = useState<AiResearchChatMessage[]>(conversation?.messages ?? []);
   const [input, setInput] = useState('');
@@ -132,7 +138,25 @@ export function ResearchChatPanel({
 
   async function sendMessage() {
     const trimmed = input.trim();
-    if (!trimmed || !conversation || sending || !canAsk) return;
+    if (!trimmed || sending || !canAsk) return;
+    let target = conversation;
+    if (!target && ensureConversation) {
+      setErr(null);
+      setSending(true);
+      try {
+        target = await ensureConversation();
+        setMessages(target.messages ?? []);
+      } catch (error) {
+        setErr(friendlyMessage(error, '追问会话创建失败，请稍后重试。'));
+        setSending(false);
+        return;
+      }
+      setSending(false);
+    }
+    if (!target) {
+      setErr('追问会话尚未准备好，请刷新后重试。');
+      return;
+    }
     setInput('');
     setErr(null);
     setSending(true);
@@ -158,7 +182,7 @@ export function ResearchChatPanel({
     const slowTimer = window.setTimeout(() => setSlow(true), 12_000);
 
     try {
-      const response = await fetch(`/api/ai-research/conversations/${encodeURIComponent(conversation.id)}/messages/stream`, {
+      const response = await fetch(`/api/ai-research/conversations/${encodeURIComponent(target.id)}/messages/stream`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content: trimmed, intent }),
@@ -312,7 +336,7 @@ export function ResearchChatPanel({
         sx={{ minHeight: 180, maxHeight: { lg: 420 }, overflowY: { xs: 'visible', lg: 'auto' }, px: 2, py: 2, display: 'flex', flexDirection: 'column', gap: 2 }}
         aria-live="polite"
       >
-        {conversation === null ? (
+        {conversation === null && !ensureConversation ? (
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', color: 'text.secondary' }}><CircularProgress size={16} aria-label="正在恢复对话" /><Typography variant="body2">正在恢复对话…</Typography></Stack>
         ) : messages.length === 0 ? (
           <Typography variant="body2" color="text.secondary">还没有对话内容。研究完成后，可以从报告结论继续深入提问。</Typography>

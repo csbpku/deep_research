@@ -58,7 +58,7 @@ function AiResearchIndicator() {
         <Typography variant="metadata" component="p" color="text.secondary">{count} 个任务正在处理</Typography>
       </ListSubheader>
       <Divider />
-      {jobs.map(job => <MenuItem key={job.jobId} component={Link} href={`/ai-research/${job.jobId}`} onClick={() => setAnchor(null)} sx={{ display: 'block', whiteSpace: 'normal', padding: space.md }}>
+      {jobs.map(job => <MenuItem key={job.jobId} component={Link} href={`/ai-research?job=${job.jobId}`} onClick={() => setAnchor(null)} sx={{ display: 'block', whiteSpace: 'normal', padding: space.md }}>
         <Typography variant="body1" component="span" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{job.topic}</Typography>
         <Typography variant="metadata" component="span" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: space.xs }}>
           {job.status === 'queued' ? '排队中' : job.currentStep ? `正在${job.currentStep}` : '调研进行中'}<ArrowUpRight size={12} aria-hidden />
