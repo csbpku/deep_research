@@ -126,7 +126,7 @@ describe('recent artifact content hierarchy', () => {
   it('leads with the topic and result link while keeping the review gate visible', () => {
     mocks.query.mockReturnValue({ data: { items: [item] }, isLoading: false, isError: false });
     const html = render(h(RecentResearchArtifacts));
-    expect(html).toContain('/ai-research/job-1');
+    expect(html).toContain('/ai-research?job=job-1');
     expect(html.indexOf('Compare storage engines')).toBeLessThan(html.indexOf('查看结果'));
     expect(html.indexOf('查看结果')).toBeLessThan(html.indexOf('需要确认'));
     expect(html).not.toContain('可以直接参考');
