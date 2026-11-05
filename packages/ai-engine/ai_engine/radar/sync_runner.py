@@ -2049,9 +2049,16 @@ async def _run_source(
                     # evidence, so skip the generic brief but do not skip the
                     # tier decision.
                     if distilled_scorer is not None:
-                        from ai_engine.scoring.scoring_profiles import profile_for_source
+                        from ai_engine.scoring.scoring_profiles import profile_for_source_url
 
-                        profile, _ = profile_for_source(scoring_source_type)
+                        # Use the same source-and-URL routing as later scoring
+                        # and repair. A mixed news/RSS feed can contain first-
+                        # party engineering docs without making every article
+                        # in that feed an engineering article. The chosen
+                        # profile is persisted with the resulting score.
+                        profile, _ = profile_for_source_url(
+                            scoring_source_type, persisted_candidate_url,
+                        )
                         cleaned = _clean_content(raw_content)
                         scoreability = _scoreability(cleaned)
                         if github_repo_candidate and scoreability is None:

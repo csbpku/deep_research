@@ -254,23 +254,28 @@ def profile_for_source(source_type: str) -> tuple[ScoringProfile, str]:
 
 
 def profile_for_source_url(source_type: str, url: str | None = None) -> tuple[ScoringProfile, str]:
-    """Use the engineering profile for first-party technical docs.
+    """Use the engineering profile for documentation-shaped URLs.
 
     Vendor/news feeds also contain API and platform documentation. Those
     pages should be judged by implementation usefulness rather than news
-    timeliness. Model announcements and ordinary vendor articles retain the
-    news profile.
+    timeliness. An explicit ``docs.`` host or ``/docs`` path identifies the
+    document shape; it does not establish that the source is authoritative.
+    Model announcements and ordinary vendor articles retain the news profile.
     """
     normalized_type = (source_type or "").strip().lower()
-    raw_url = (url or "").strip()
-    parsed = urlsplit(raw_url)
-    host = (parsed.hostname or "").lower()
+    try:
+        parsed = urlsplit((url or "").strip())
+        host = (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        # A malformed URL must not turn a scoring attempt into a source failure.
+        return profile_for_source(source_type)
+    if parsed.scheme.lower() not in {"http", "https"} or not host:
+        return profile_for_source(source_type)
     path = parsed.path.lower()
-    is_technical_docs = (
-        "/docs/" in f"{path}/"
-        or host.startswith("docs.")
-        or host in {"platform.claude.com", "platform.openai.com", "ai.google.dev"}
-    )
+    # A product's entire platform site is not necessarily documentation.
+    # Classify only the document-shaped URL; the hostname is a shape signal,
+    # not a claim that the page is authoritative or its content is correct.
+    is_technical_docs = "/docs/" in f"{path}/" or host.startswith("docs.")
     if normalized_type in {"vendor_news", "rss", "sitemap_watch"} and is_technical_docs:
         return ENGINEERING_PROFILE, PROFILE_ENGINEERING
     return profile_for_source(source_type)

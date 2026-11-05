@@ -207,6 +207,65 @@ async def test_sync_writes_candidate_fields_and_cost() -> None:
     assert "仅用于排序，不自动发布" in params[15]
 
 
+@pytest.mark.parametrize(
+    ("source_type", "url", "expected_profile", "expected_source_type"),
+    [
+        ("rss", "https://platform.openai.com/docs/guides/agents", "engineering", "rss"),
+        ("vendor_news", "https://docs.anthropic.com/en/docs/agents", "engineering", "vendor_news"),
+        ("rss", "https://openai.com/index/agents", "news", "rss"),
+        ("github", "https://github.com/openai/codex", "engineering", "github"),
+        ("arxiv", "https://arxiv.org/abs/2401.00001", "paper", "arxiv"),
+    ],
+)
+async def test_sync_routes_each_new_score_by_source_and_document_url(
+    source_type: str, url: str, expected_profile: str, expected_source_type: str,
+) -> None:
+    """New sync decisions agree with repair while existing scores are retained."""
+    pool = _Pool([_source(source_type=source_type)])
+    seen: list[tuple[str, str, str]] = []
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [_candidate(url)]
+
+    async def score(title: str, content: str, **kwargs: Any) -> Any:
+        profile = kwargs["profile"]
+        seen.append((profile.id, kwargs["source_type"], kwargs["url"]))
+        return compute_score(
+            {
+                "信息增量": 3,
+                "分析深度": 3,
+                "可行动性": 3,
+                "事实可信度": 3,
+                "时效性": 3,
+                "表达质量": 3,
+                "综合信号": 3,
+                "direct_relevance": 3,
+                "relevance_evidence": "substantive source",
+            },
+            profile=profile,
+            source_type=kwargs["source_type"],
+        )
+
+    kwargs = {
+        "adapter": FakeAdapter(),
+        "fetchers": {source_type: fetcher},
+        "document_fetcher": _safe_fetch,
+        "distilled_scorer": score,
+    }
+    first = await run_radar_sync(pool, **kwargs)
+    second = await run_radar_sync(pool, **kwargs)
+
+    assert first.runs[0].total_new == 1
+    assert seen == [(expected_profile, expected_source_type, url)]
+    _, params = next(
+        entry for entry in pool.connection_value.executions
+        if 'INSERT INTO "summaries"' in entry[0]
+    )
+    assert params[20] == expected_profile
+    assert second.runs[0].skipped_existing == 1
+    assert len(seen) == 1
+
+
 async def test_sync_keeps_discovery_url_when_article_mentions_github_repo() -> None:
     pool = _Pool([_source()])
 
