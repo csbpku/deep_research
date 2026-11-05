@@ -24,6 +24,7 @@ import { RadarSourceChip } from './RadarSourceChip';
 import { PreviousJudgments, RadarKnowledgeActions } from './RadarKnowledgeActions';
 import { ReaderSourcePrompt } from './ReaderSourcePrompt';
 import { READER_STORE_URL } from '@/lib/reader-install';
+import { radarEvidenceNotice } from '@/lib/radar/evidence';
 
 function isHttpUrl(value: string): boolean {
   try {
@@ -172,7 +173,7 @@ export function RadarPreviewPanel({
             </Box>
           ) : null}
           <Typography component="p" variant="metadata" color="text.secondary" sx={{ marginTop: space.md }}>
-            同步时临时读取原文生成摘要和评分；全文不保存在本站。阅读请打开原文或 Reader。
+            {radarEvidenceNotice(detail)}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg, paddingTop: space.md, borderTop: 1, borderColor: 'divider' }}>

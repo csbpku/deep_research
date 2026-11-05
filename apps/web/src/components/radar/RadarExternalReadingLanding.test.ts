@@ -55,7 +55,7 @@ describe('RadarExternalReadingLanding', () => {
     // Only the confirmation inside the dialog may be intercepted by Reader.
     expect(html).toContain('data-reader-launch-source=');
     expect(html).toContain('为什么值得看');
-    expect(html).toContain('同步时临时读取原文生成摘要和评分；全文不保存在本站');
+    expect(html).toContain('摘要与评分基于同步时可用的资料；请打开原文或 Reader 核对');
     expect(html).toContain('A concise AI interpretation.');
     expect(html).toContain('MuiTypography-root');
     expect(html).toContain('MuiButton-root');
@@ -68,6 +68,41 @@ describe('RadarExternalReadingLanding', () => {
     expect(html).not.toContain('把阅读交回来源页面');
     expect(html).not.toContain('独立模式');
     expect(html).not.toContain('原文正文');
+  });
+
+  it.each([
+    {
+      tags: ['evidence_feed_excerpt', 'ai'],
+      scoreReason: null,
+      message: '摘要与评分基于 RSS 来源片段，原文尚未核实；请打开原文复核。',
+    },
+    {
+      tags: ['ai'],
+      scoreReason: '来源摘要初筛：未能取得原文正文，评分仅供发现排序；请打开原文复核。',
+      message: '摘要与评分基于来源摘要，未能取得原文正文；请打开原文复核。',
+    },
+  ])('shows limited evidence on the landing page', ({ tags, scoreReason, message }) => {
+    const html = renderToStaticMarkup(createElement(RadarExternalReadingLanding, {
+      detail: {
+        id: '11111111-1111-4111-8111-111111111111',
+        title: 'Limited source evidence',
+        excerpt: 'Source context.',
+        interpretation: 'A concise interpretation.',
+        scoreReason,
+        distilledScore: null,
+        tier: 'skim',
+        selectionReason: null,
+        url: 'https://example.com/article',
+        sourceType: 'rss',
+        sourceName: 'Engineering Feed',
+        tags,
+      },
+    }));
+
+    expect(html).toContain(message);
+    expect(html).toContain('#ai');
+    expect(html).not.toContain('evidence_feed_excerpt');
+    expect(html).not.toContain('同步时临时读取原文生成摘要和评分');
   });
 
   it('keeps the rating secondary to the reading summary', () => {
@@ -120,7 +155,7 @@ describe('RadarExternalReadingLanding', () => {
   });
 
   it('does not show the external-reading implementation tag to users', () => {
-    expect(cleanRadarTags(['external_reading', 'tier_deep_read', 'ai'])).toEqual(['ai']);
+    expect(cleanRadarTags(['evidence_feed_excerpt', 'external_reading', 'tier_deep_read', 'ai'])).toEqual(['ai']);
   });
 
   it('derives a Zread URL only for a GitHub repository root', () => {

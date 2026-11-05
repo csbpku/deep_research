@@ -6,7 +6,7 @@
 // 客户端组件：1) 切换视图并同步 URL；2) 在议题视图中显式标记已读；
 // 3) 只在概览视图展示趋势和时间线，避免每个标签重复占用阅读空间。
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -32,6 +32,7 @@ import { StatusBadge } from '@/components/domain/StatusBadge';
 import { TopicFollowButton } from '@/components/topics/TopicFollowButton';
 import { PreviousJudgments } from '@/components/radar/RadarKnowledgeActions';
 import { formatSourceType } from '@/lib/radar/source-labels';
+import { visibleRadarTags } from '@/lib/radar/evidence';
 import type { TopicCandidateTrendPoint } from '@/lib/topics';
 import type { ReactNode } from 'react';
 import styles from './topic-detail.module.css';
@@ -1018,7 +1019,8 @@ function SourcesPane({
   );
 }
 
-function SourceRow({ candidate }: { candidate: CandidateRow }): ReactNode {
+export function SourceRow({ candidate }: { candidate: CandidateRow }): ReactNode {
+  const tags = visibleRadarTags(candidate.tags).slice(0, 3);
   return (
     <li>
       <Link
@@ -1029,7 +1031,7 @@ function SourceRow({ candidate }: { candidate: CandidateRow }): ReactNode {
         <p className={styles.previewHint}>
           {formatSourceType(candidate.originalKind).short} ·{' '}
           {candidate.publishedAt ? new Date(candidate.publishedAt).toLocaleDateString('zh-CN') : '—'}
-          {candidate.tags.length > 0 ? ` · ${candidate.tags.slice(0, 3).join(', ')}` : ''}
+          {tags.length > 0 ? ` · ${tags.join(', ')}` : ''}
         </p>
         {candidate.interpretation ? (
           <p className={styles.previewSummary}>{candidate.interpretation}</p>
