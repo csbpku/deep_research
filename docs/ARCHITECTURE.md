@@ -10,7 +10,7 @@
 
 ### 当前能力
 
-1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；默认 `RADAR_READING_MODE=browser` 下，同步尽量临时抓取来源全文供摘要和评分，不持久化全文，也不执行后续文章/Zread enrichment。抓取失败时才以来源摘要/元数据初筛，并在评分依据中注明。`enriched` 仅作为显式回滚路径，历史 enrichment 和 Admin 显式刷新仍保留。
+1. **技术雷达**：从 GitHub、arxiv、RSS、WeWe RSS 微信公众号、社区（Hacker News / Product Hunt / Reddit）和用户分享发现候选；默认 `RADAR_READING_MODE=browser` 下，同步尽量临时抓取来源全文供摘要和评分，不持久化全文，也不执行后续文章/Zread enrichment。抓取失败或正文不足时，按来源和安全条件使用来源摘要、元数据或有界 RSS 片段初筛，并在评分依据中注明；片段使用边界见 [技术方案](./TECHNICAL_OVERVIEW.md)。`enriched` 仅作为显式回滚路径，历史 enrichment 和 Admin 显式刷新仍保留。
 2. **技术专题**：关注专题后自动聚合热点议题，生成带可点击引用的综述（内容 hash 变化触发重算）；发布调研自动回流专题；专题页四标签：概览 / 热点议题 / 相关研究 / 来源。
 3. **沉淀**：研究稿与知识卡片共用 `researches`，支持私人草稿、显式发布、全文搜索、版本审计与恢复、AI Diff 建议与事实核验、三栏研究工作台；AI 回答或报告中的选中判断可确认后保存为私人知识。
 4. **AI 调研**：对话澄清主题/背景/资料/检索范围/产物类型，规则推断 objective 并返回 Research Brief 与匹配上下文；异步流水线支持研究稿、快速判断、Slides 提纲和网页简报，用户实际修改且当前版本通过事实审核后才能发布。

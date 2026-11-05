@@ -39,14 +39,14 @@ Personal technical-research platform: radar discovery, topic follow-up, saved re
 - Start each task with `git fetch origin`, then create a short-lived `codex/<task>` branch from `origin/main`; do not reuse a historical task branch or develop directly on `main`.
 - Different computers use separate clones and synchronize through GitHub branches/PRs. Same-machine parallel tasks use separate worktrees; do not switch another agent's working checkout.
 - Commit only task changes, push the task branch and open a PR targeting `main`. CI must pass before merging; preserve unrelated changes and report authentication or CI failures explicitly.
-- Merging `main` triggers automatic production deployment, except when every changed path is documentation (`docs/**` or a `*.md` file): the CI workflow then skips the type check, the unit tests and the E2E suites, and the Deploy workflow skips the image build, the Reader Beta release and the VPS restart, reporting the skip in the job summary. `scripts/ci-changed-paths.sh` owns that decision for both workflows; Markdown that ships inside a published artefact (the Reader Beta bundle) counts as a code change, and any detection failure resolves to "run everything". Obtain explicit authorization for merge/release; creating a PR or passing CI does not authorize deployment. Once authorized, follow CI → merge → Actions deploy → production verification without asking again.
+- Merging `main` triggers the CI/release path; `scripts/ci-changed-paths.sh` classifies changes as `documentation`, `ci-only`, or `deployable`, with skips and exceptions described below and in [`CONTRIBUTING.md`](./CONTRIBUTING.md). Markdown shipped in the Reader Beta bundle counts as deployable; detection failures run the full path. Obtain explicit authorization for merge/release; creating a PR or passing CI does not authorize deployment. Once authorized, follow CI → merge → Actions deploy → production verification without asking again.
 - Normal releases use GitHub Actions and immutable commit-SHA images. A request to deploy/release authorizes this CI path, not a bypass. Direct VPS/source-snapshot releases require explicit exceptional authorization and must be reconciled back into a PR; report pushed, merged, deployed and live-verified states separately.
 - Delete task branches/worktrees only after reporting the result and receiving cleanup confirmation.
 
 ## Production VPS Access
 
 - Production VPS `159.223.50.187`: use `deploy` with `~/.ssh/deep-research-actions` for deployment operations; this key is also the one installed in `/home/deploy/.ssh/authorized_keys` and the account can run Docker.
-- Use `root` with `~/.ssh/digitalocean` only for root-level server administration; this key is installed in `/root/.ssh/authorized_keys`.
+- Use `root` with `~/.ssh/digitalocean` only for root-level server administration. Verify authentication at the time of use and report failures; a documented key path does not guarantee access.
 - Do not interchange these key/user pairs. `digitalocean` with `deploy` fails because that public key is not authorized for the `deploy` account.
 
 ## Current State
