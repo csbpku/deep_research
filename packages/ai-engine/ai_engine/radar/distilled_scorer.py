@@ -877,6 +877,7 @@ async def anthropic_scorer(
     structured_signals: dict[str, Any] | None = None,
     review_instruction: str | None = None,
     verified_arxiv_title: bool = False,
+    content_is_source_excerpt: bool = False,
 ) -> str:
     scoring_run_id = uuid4().hex[:12]
     metrics: dict[str, int] = {}
@@ -896,6 +897,7 @@ async def anthropic_scorer(
             structured_signals=structured_signals,
             review_instruction=review_instruction,
             verified_arxiv_title=verified_arxiv_title,
+            content_is_source_excerpt=content_is_source_excerpt,
         )
     except BaseException as exc:
         error_kind = _scoring_response_error_kind(exc)
@@ -939,6 +941,7 @@ async def _anthropic_scorer_impl(
     structured_signals: dict[str, Any] | None = None,
     review_instruction: str | None = None,
     verified_arxiv_title: bool = False,
+    content_is_source_excerpt: bool = False,
 ) -> str:
     """Call the configured light LLM to score article dimensions.
 
@@ -978,6 +981,7 @@ async def _anthropic_scorer_impl(
             structured_signals=structured_signals,
             review_instruction=review_instruction,
             verified_arxiv_title=verified_arxiv_title,
+            content_is_source_excerpt=content_is_source_excerpt,
         )
         async with _measure_scoring_stage("final_score"):
             raw, _ = await _generate_scoring_json(
@@ -1003,6 +1007,7 @@ async def _anthropic_scorer_impl(
             title=title,
             chunks=chunks,
             original_content=content_for_scoring,
+            content_is_source_excerpt=content_is_source_excerpt,
         )
     async with _measure_scoring_stage(
         "evidence_reduce",
@@ -1024,6 +1029,7 @@ async def _anthropic_scorer_impl(
         published_at=published_at,
         structured_signals=structured_signals,
         content_is_chunk_evidence=True,
+        content_is_source_excerpt=content_is_source_excerpt,
         review_instruction=review_instruction,
         verified_arxiv_title=verified_arxiv_title,
     )
@@ -1101,6 +1107,7 @@ async def _extract_scoring_evidence(
     title: str,
     chunks: list[TextChunk],
     original_content: str,
+    content_is_source_excerpt: bool = False,
 ) -> list[dict[str, Any]]:
     semaphore = asyncio.Semaphore(3)
 
@@ -1108,6 +1115,7 @@ async def _extract_scoring_evidence(
         prompt = f"""文章标题（不可信外部数据）：
 {_wrap_untrusted("untrusted-article-title", title)}
 当前分块：{chunk.index}/{len(chunks)}
+{'注意：这些分块来自信息源片段，不代表文章全文。' if content_is_source_excerpt else ''}
 章节路径（不可信外部数据）：
 {_wrap_untrusted("untrusted-section-path", chunk.section or "（未命名章节）")}
 
@@ -2100,6 +2108,7 @@ async def score_with_llm(
     published_at: datetime | None = None,
     structured_signals: dict[str, Any] | None = None,
     raise_on_error: bool = False,
+    content_is_source_excerpt: bool = False,
 ) -> DistilledScore:
     """Score an article using the LLM dimension scorer.
 
@@ -2145,6 +2154,9 @@ async def score_with_llm(
             return default_score(profile)
         # Use anthropic_scorer with full context
         async def _contextual_scorer(t: str, c: str) -> str:
+            excerpt_kwargs: dict[str, Any] = (
+                {"content_is_source_excerpt": True} if content_is_source_excerpt else {}
+            )
             return await anthropic_scorer(
                 t, c,
                 profile=profile,
@@ -2153,6 +2165,7 @@ async def score_with_llm(
                 published_at=published_at,
                 structured_signals=structured_signals,
                 verified_arxiv_title=verified_arxiv_title,
+                **excerpt_kwargs,
             )
         active_scorer: Callable[[str, str], Awaitable[str]] = _contextual_scorer
     else:
@@ -2201,6 +2214,7 @@ async def score_with_llm(
                             structured_signals=structured_signals,
                             review_instruction=correction,
                             verified_arxiv_title=verified_arxiv_title,
+                            **({"content_is_source_excerpt": True} if content_is_source_excerpt else {}),
                         )
                     else:
                         corrected_raw = await active_scorer(

@@ -84,6 +84,7 @@ async def _generate_brief(
         source_refs=({"type": "url", "value": canonical_url},),
         timeout_seconds=max(1, int(timeout_seconds)),
         context_max_chars=context_max_chars,
+        context_is_source_excerpt=item.get("context_is_source_excerpt") is True,
     )
     await adapter.submit(request)
     deadline = time.monotonic() + timeout_seconds

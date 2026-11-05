@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ from ai_engine.radar.rss_fetcher import (
     _clean_hn_rss_description,
     _is_hn_rss_shell,
 )
+from ai_engine.ingestion.sources import _parse_via_feedparser, _parse_via_regex
 from ai_engine.radar.source_manager import fetch_source
 from ai_engine.radar.vendor_changelog_fetcher import fetch_vendor_changelog
 from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
@@ -138,6 +140,78 @@ async def test_rss_fetcher_calls_safe_fetch_and_parses_item() -> None:
     # fetch_rss_candidates returns parsed items; just verify kwargs were passed
     assert items[0].title == "Agent release"
     assert items[0].content_origin == "rss"
+
+
+@pytest.mark.parametrize("parser", [_parse_via_feedparser, _parse_via_regex])
+def test_realistic_feed_structure_keeps_summary_and_content_separate(parser: Any) -> None:
+    xml = (Path(__file__).parent / "fixtures/nvidia_cuda_feed_excerpt.xml").read_text()
+    items = parser(xml)
+    assert items and len(items) == 1
+    assert items[0]["description"] == "A short engineering summary..."
+    assert "Longer synthetic technical content" in items[0]["content"]
+    assert items[0]["link"] == "https://blog.example.test/articles/runtime-2"
+
+
+def test_regex_atom_fallback_rejects_non_text_content() -> None:
+    xml = '''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>Agent data</title><link href="https://example.com/a"/>
+      <content type="application/json">{"secret":"not prose"}</content>
+    </entry></feed>'''
+    item = _parse_via_regex(xml)[0]
+    assert "content" not in item
+    assert "description" not in item
+
+
+def test_atom_content_only_is_identified_as_synthesized_summary() -> None:
+    xml = '''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>Agent content</title><link href="https://example.com/a"/>
+      <content type="html">&lt;p&gt;Article body&lt;/p&gt;</content>
+    </entry></feed>'''
+    for parser in (_parse_via_feedparser, _parse_via_regex):
+        items = parser(xml)
+        assert items and items[0]["description_is_content"] == "1"
+
+
+async def test_rss_preserves_bounded_feed_content_without_replacing_summary() -> None:
+    text = "A real engineering mechanism, tradeoff, and measured result. " * 600
+    xml = f'''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+      <title>LLM engineering</title><link href="https://example.com/article"/>
+      <summary>Short AI summary.</summary>
+      <content type="html">&lt;p&gt;{text}&lt;/p&gt;&lt;script&gt;evil()&lt;/script&gt;</content>
+    </entry></feed>'''.encode()
+
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(xml, url=url)
+
+    candidates = await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch)
+    assert len(candidates) == 1
+    assert candidates[0].snippet == "Short AI summary."
+    assert 2000 < len(candidates[0].feed_excerpt) <= 18_000
+    assert "engineering mechanism" in candidates[0].feed_excerpt
+    assert "evil()" not in candidates[0].feed_excerpt
+    assert candidates[0].feed_excerpt not in repr(candidates[0])
+
+
+async def test_rss_summary_only_and_wewe_keep_existing_behavior() -> None:
+    async def fake_fetch(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(RSS_XML, url=url)
+
+    normal = await fetch_rss_candidates({"feedUrl": "https://feed.example/rss"}, fetcher=fake_fetch)
+    assert normal[0].snippet == "LLM agent update"
+    assert normal[0].feed_excerpt == "LLM agent update"
+
+    async def fake_wewe(url: str, **kwargs: Any) -> FetchedDocument:
+        return _doc(WEWE_RSS_XML, url=url)
+
+    async def no_refresh(config: Any) -> bool:
+        return True
+
+    wewe = await fetch_rss_candidates(
+        {"feedUrl": "http://localhost:4001/feeds/all.rss", "allowLocalhost": True},
+        fetcher=fake_wewe, wewe_refresher=no_refresh,
+    )
+    assert "公众号全文内容" in wewe[0].snippet
+    assert wewe[0].feed_excerpt == ""
 
 
 async def test_rss_ai_filter_applies_result_cap_after_filtering() -> None:

@@ -59,6 +59,8 @@ class ResearchRequest:
     # Optional cap for the LLM context window (defaults are adapter-specific).
     # Repo digests need more room than a single page brief.
     context_max_chars: int | None = None
+    # The caller supplied only bounded source evidence, not verified full text.
+    context_is_source_excerpt: bool = False
 
 
 @dataclass(slots=True, frozen=True)

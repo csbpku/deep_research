@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import html as html_lib
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from ai_engine.fetcher.safe_fetch import FetchedDocument, safe_fetch
 from ai_engine.ingestion.sources import _parse_rss_xml_simple
@@ -17,6 +18,9 @@ from ai_engine.radar.wewe_refresh import is_wewe_config, refresh_wewe_articles
 SafeFetcher = Callable[..., Awaitable[FetchedDocument]]
 DEFAULT_MAX_AGE_HOURS = 24 * 30
 WEWE_CONTENT_MAX_CHARS = 64_000
+# Bound source-supplied evidence independently from display snippets and the
+# fetched feed's 2 MiB response limit. No length establishes completeness.
+FEED_EXCERPT_MAX_CHARS = 18_000
 _HN_SHELL_PATTERN = re.compile(
     r"article url:.*?comments url:.*?(?:points|#\s*comments)",
     re.IGNORECASE | re.DOTALL,
@@ -181,6 +185,13 @@ async def fetch_rss_candidates(
             continue
         title = (item.get("title") or "Untitled").strip()[:300]
         raw_description = item.get("description", "").strip()
+        # Keep source content separate from the short display/diagnostic
+        # snippet. HTML is cleaned before it can reach the scorer. WeWe has
+        # a dedicated path and retains its existing semantics.
+        raw_feed_content = item.get("content", "").strip() or raw_description
+        feed_excerpt = (
+            "" if is_wewe else _clean_wewe_content(raw_feed_content[:100_000])[:FEED_EXCERPT_MAX_CHARS]
+        )
         description = (
             _clean_wewe_content(raw_description)
             if is_wewe
@@ -188,6 +199,8 @@ async def fetch_rss_candidates(
         )
         if not is_wewe and _is_hn_rss_shell(description):
             description = _clean_hn_rss_description(description)
+            # An aggregator's metadata template is not article evidence.
+            feed_excerpt = ""
         if apply_ai_filter:
             # Check title + description (case-insensitive regex)
             if not _is_ai_related(f"{title}\n{description}"):
@@ -206,6 +219,9 @@ async def fetch_rss_candidates(
                 tags=("rss", "wewe") if is_wewe else ("rss",),
                 source_quality_hint=0.7,
                 source_diagnostic=source_diagnostic,
+                feed_excerpt=feed_excerpt,
+                feed_source_host=(urlsplit(document.url).hostname or "").lower(),
+                feed_snippet_from_content=item.get("description_is_content") == "1" and not is_wewe,
             )
         )
     return candidates

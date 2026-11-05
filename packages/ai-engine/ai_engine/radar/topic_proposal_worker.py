@@ -97,7 +97,9 @@ def _prompt(rows: list[dict[str, Any]], *, cluster_hint: str | None = None) -> s
         tags = row.get("tags")
         tag_text = ""
         if isinstance(tags, list) and tags:
-            tag_text = "，标签：" + ",".join(str(tag) for tag in tags[:8])
+            topic_tags = [str(tag) for tag in tags if not str(tag).lower().startswith("evidence_")]
+            if topic_tags:
+                tag_text = "，标签：" + ",".join(topic_tags[:8])
         lines.append(
             f"[{row['id']}] 标题：{str(row.get('title') or '')[:300]}\n"
             f"发布方：{row['sourceKey']}{tag_text}\n证据：{text or '无 enrichment，仅有标题'}"

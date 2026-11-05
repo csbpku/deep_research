@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -27,6 +28,8 @@ from urllib.parse import urlsplit
 from ai_engine.radar.diagnostic_policy import (
     close_scored_pending, deleted_publication, deterministic_retry_blocked, retire_duplicate_pending,
     record_noise_disposition, skipped_noise_publication,
+    close_excerpt_pending, excerpt_publication_decided, lock_excerpt_publication,
+    publication_identity,
 )
 from ai_engine.radar.noise_policy import confirmed_noise
 from ai_engine.radar.brief_quality import is_unavailable_brief
@@ -439,6 +442,7 @@ def _retryable_latest_source_ids(
 def _can_use_snippet_fallback(source: RadarSource, candidate: RadarCandidate) -> bool:
     return (
         source.source_type in _SNIPPET_FALLBACK_SOURCE_TYPES
+        and not (candidate.feed_snippet_from_content and not _usable_feed_excerpt(source, candidate))
         and len(candidate.snippet.strip()) >= 200
     )
 
@@ -454,7 +458,8 @@ def _can_use_candidate_metadata_fallback(
     the full article, but it should remain visible as a pending candidate.
     Verification shells and empty snippets stay in governance instead.
     """
-    del source  # reserved for source-specific policies as adapters evolve
+    if candidate.feed_snippet_from_content and not _usable_feed_excerpt(source, candidate):
+        return False
     snippet = candidate.snippet.strip()
     if len(snippet) < 20:
         return False
@@ -467,6 +472,97 @@ def _can_use_candidate_metadata_fallback(
             "complete the challenge",
             "all rights reserved",
         )
+    )
+
+
+# Multiple publishers can write unrelated articles beneath these hosts, so an
+# exact host match alone does not establish an original publication identity.
+_SHARED_FEED_HOSTS = frozenset({
+    "medium.com", "substack.com", "wordpress.com", "blogspot.com",
+    "github.io", "github.com", "reddit.com", "news.ycombinator.com", "t.me",
+})
+
+
+def _feed_identity_host(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return ""
+        host = parsed.hostname.rstrip(".").lower()
+        return host[4:] if host.startswith("www.") else host
+    except ValueError:
+        return ""
+
+
+def _usable_feed_excerpt(source: RadarSource, candidate: RadarCandidate) -> str:
+    """Return only bounded, source-supplied RSS evidence, never a challenge."""
+    if source.source_type != "rss" or candidate.content_origin != "rss":
+        return ""
+    if not _candidate_display_title(candidate.title, source) or len(candidate.title) > 300:
+        return ""
+    configured_host = _feed_identity_host(str(source.config.get("feedUrl") or ""))
+    article_host = _feed_identity_host(candidate.url)
+    final_feed_host = candidate.feed_source_host.rstrip(".").lower()
+    if final_feed_host.startswith("www."):
+        final_feed_host = final_feed_host[4:]
+    if (
+        not configured_host or configured_host in _SHARED_FEED_HOSTS
+        or configured_host != final_feed_host or configured_host != article_host
+    ):
+        return ""
+    text = candidate.feed_excerpt.strip()[:18_000]
+    if len(_clean_content(text)) < MIN_LIMITED_SCORE_CONTENT_CHARS:
+        return ""
+    if _is_low_quality_content(text) or _content_fetch_failure_reason(text, "rss", candidate.title):
+        return ""
+    return text
+
+
+def _candidate_display_title(title: str, source: RadarSource) -> str:
+    """Normalize the feed title identically for persistence and race checks."""
+    candidate_title = _html.unescape(title or "").strip()
+    if str(source.config.get("vendor") or "").lower() == "anthropic":
+        candidate_title = _re.sub(r"\s*\\\s*anthropic\s*$", "", candidate_title, flags=_re.IGNORECASE).strip()
+    if candidate_title.casefold() in {"untitled", "(no title)", "no title"}:
+        return ""
+    return candidate_title
+
+
+def _feed_excerpt_allowed_after_fetch_error(exc: Exception) -> bool:
+    """Never use feed fallback to evade access, safety or rate-limit failures."""
+    import httpx
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, SafeFetchError):
+            if current.code in {
+                "URL_FETCH_BLOCKED", "CONTENT_TYPE_REJECTED", "URL_REDIRECT_LIMIT",
+                "URL_FETCH_TOO_LARGE", "UPSTREAM_RATE_LIMITED", "UPSTREAM_AUTH_REQUIRED",
+            }:
+                return False
+            if isinstance(current, UpstreamHttpError) and current.status not in {500, 502, 503, 504}:
+                return False
+        if isinstance(current, httpx.HTTPStatusError) and current.response.status_code in {401, 403, 429}:
+            return False
+        current = current.__cause__ or current.__context__
+    if isinstance(exc, SourceNotFoundError):
+        return True
+    if isinstance(exc, UpstreamHttpError):
+        return exc.status in {500, 502, 503, 504}
+    return _is_retryable_transport_error(exc)
+
+
+def _accepts_keyword(fn: Any, keyword: str) -> bool:
+    """Maintain compatibility with injected pre-provenance scorers."""
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return keyword in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
     )
 
 
@@ -892,6 +988,25 @@ async def _noise_has_references(pool: Any, canonical_url: str) -> bool:
                                                  'canonicalUrl': canonical_url}]))
 
 
+async def _source_excerpt_noise_pending(
+    pool: Any, source: RadarSource, candidate: RadarCandidate, canonical_url: str,
+) -> bool:
+    """Avoid repeat model calls while a limited-evidence verdict is unresolved.
+
+    The original is fetched on every eligible source run before this check, so
+    an accessible original can still be assessed. Matching includes publication
+    identity to avoid blocking new content at a reused URL.
+    """
+    async with pool.connection() as conn:
+        row = await (await conn.execute(
+            'SELECT id FROM radar_sync_diagnostics WHERE "sourceId"=%s '
+            'AND "canonicalUrl"=%s AND "reasonCode"=\'SOURCE_EXCERPT_NOISE_PENDING\' '
+            "AND status='pending' AND \"distilledScore\"->>'publicationIdentity'=%s LIMIT 1",
+            (source.id, canonical_url[:2048], publication_identity(candidate.title, candidate.published_at)),
+        )).fetchone()
+    return row is not None
+
+
 async def _record_sync_diagnostic(
     pool: Any,
     *,
@@ -907,8 +1022,17 @@ async def _record_sync_diagnostic(
     distilled: Any | None = None,
     body: str | None = None,
     markdown: str | None = None,
+    feed_excerpt_fallback: bool = False,
 ) -> None:
     """Persist a reviewable record for candidates that never become summaries."""
+    redact_feed_excerpt = feed_excerpt_fallback or candidate.feed_snippet_from_content or bool(
+        candidate.feed_excerpt and markdown == candidate.feed_excerpt.strip()[:18_000]
+    )
+    if redact_feed_excerpt:
+        # Feed evidence is deliberately transient in *both* reader modes.
+        # Diagnostics store a short metadata field only, never this content.
+        markdown = None
+        body = ""
     original_markdown = None
     original_kind = None
     if markdown and DEEPDIVE_ENABLED and not browser_reading_mode_enabled():
@@ -919,18 +1043,35 @@ async def _record_sync_diagnostic(
     if distilled is not None and not getattr(distilled, "is_default", False):
         distilled_payload = json.dumps(distilled.to_dict(), ensure_ascii=False)
         distilled_tier = getattr(distilled, "tier", None)
-    diagnostic_body = (
+    elif reason_code in {"SOURCE_FEED_EXCERPT", "SOURCE_EXCERPT_NOISE_PENDING"}:
+        # A publication identity is a deduplication token, not an accepted
+        # score and not a confirmed-noise disposition.
+        distilled_payload = json.dumps({
+            "publicationIdentity": publication_identity(candidate.title, candidate.published_at)
+        })
+    diagnostic_body = "" if redact_feed_excerpt else (
         (candidate.snippet or "")[:2000]
         if browser_reading_mode_enabled()
-        else (body or candidate.snippet or "")[:64_000]
+        else (body if body is not None else candidate.snippet or "")[:64_000]
     )
     diagnostic_tags = list(candidate.tags)
     if browser_reading_mode_enabled() and "external_reading" not in diagnostic_tags:
         diagnostic_tags.append("external_reading")
     try:
         async with pool.connection() as conn:
-            await retire_duplicate_pending(conn, source.id, canonical_url[:2048], reason_code,
-                                           kind, original_markdown, diagnostic_body)
+            if reason_code in {"SOURCE_FEED_EXCERPT", "SOURCE_EXCERPT_NOISE_PENDING"}:
+                await lock_excerpt_publication(conn, source.id, canonical_url[:2048],
+                                               candidate.title, candidate.published_at)
+                if await excerpt_publication_decided(conn, source.id, canonical_url[:2048],
+                                                     candidate.title, candidate.published_at,
+                                                     _candidate_display_title(candidate.title, source)):
+                    await conn.commit()
+                    return
+                await close_excerpt_pending(conn, source.id, canonical_url[:2048],
+                                            candidate.title, candidate.published_at, reason_code)
+            else:
+                await retire_duplicate_pending(conn, source.id, canonical_url[:2048], reason_code,
+                                               kind, original_markdown, diagnostic_body)
             await conn.execute(
                 'INSERT INTO "radar_sync_diagnostics" '
                 '("id", "runId", "sourceId", "kind", "title", "url", '
@@ -964,6 +1105,8 @@ async def _record_sync_diagnostic(
             )
             await conn.commit()
     except Exception:
+        if reason_code in {"SOURCE_FEED_EXCERPT", "SOURCE_EXCERPT_NOISE_PENDING"}:
+            raise
         # Diagnostics must never turn a source-level skip into a source failure.
         logger.warning(
             "ai-engine.radar.diagnostic_write_failed",
@@ -989,15 +1132,10 @@ async def _insert_candidate(
     distilled: Any | None = None,
     limited_score: bool = False,
     metadata_only_fallback: bool = False,
+    feed_excerpt_fallback: bool = False,
 ) -> bool:
     stored_url = stored_url or candidate.url
-    candidate_title = _html.unescape(candidate.title or "").strip()
-    if str(source.config.get("vendor") or "").lower() == "anthropic":
-        candidate_title = _re.sub(r"\s*\\\s*anthropic\s*$", "", candidate_title, flags=_re.IGNORECASE).strip()
-    # RSS feeds occasionally provide a missing-title placeholder. Treat it as
-    # missing so the fetched page title can be recovered from HTML/Markdown.
-    if candidate_title.casefold() in {"untitled", "(no title)", "no title"}:
-        candidate_title = ""
+    candidate_title = _candidate_display_title(candidate.title, source)
     title = candidate_title or _infer_title(fetched, markdown)
 
     merged_tags = list(candidate.tags) + list(extra_tags)
@@ -1043,7 +1181,11 @@ async def _insert_candidate(
     body = (
         (interpretation or candidate.title).strip()[:2000]
         if external_reading
-        else _best_content_body(interpretation, markdown, candidate.snippet)
+        else (interpretation or candidate.title).strip()[:2000]
+        if feed_excerpt_fallback
+        else _best_content_body(
+            interpretation, markdown, candidate.snippet
+        )
     )
     content_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     published_at = candidate.published_at
@@ -1066,12 +1208,15 @@ async def _insert_candidate(
             original_kind_override
             or _classify_original_kind(source.source_type, stored_url)
         )
-        if not browser_reading_mode_enabled():
+        if not browser_reading_mode_enabled() and not feed_excerpt_fallback:
             # Truncate on a UTF-8 boundary and describe exactly what is stored.
             original_markdown, original_bytes, original_sha256 = _stored_original(markdown)
 
     async with pool.connection() as conn:
         async with conn.transaction():
+            if not metadata_only_fallback and not feed_excerpt_fallback and persisted_distilled is not None:
+                await lock_excerpt_publication(conn, source.id, canonical_url[:2048],
+                                               candidate.title, candidate.published_at)
             row = await (
                 await conn.execute(
                     'INSERT INTO "summaries" '
@@ -1116,6 +1261,7 @@ async def _insert_candidate(
                             url=stored_url,
                             external_reading=external_reading,
                             metadata_only_fallback=metadata_only_fallback,
+                            feed_excerpt_fallback=feed_excerpt_fallback,
                         ),
                         (
                             json.dumps(persisted_distilled.to_dict(), ensure_ascii=False)
@@ -1149,6 +1295,12 @@ async def _insert_candidate(
             ).fetchone()
             if row is not None:
                 await close_scored_pending(conn, str(dict(row)["id"]))
+                if not metadata_only_fallback and not feed_excerpt_fallback and persisted_distilled is not None:
+                    # Only a newly fetched original with the same source and
+                    # publication identity resolves an old excerpt verdict.
+                    for reason in ("SOURCE_FEED_EXCERPT", "SOURCE_EXCERPT_NOISE_PENDING"):
+                        await close_excerpt_pending(conn, source.id, canonical_url[:2048],
+                                                    candidate.title, candidate.published_at, reason)
     return row is not None
 
 
@@ -1162,6 +1314,7 @@ def _build_score_reason(
     url: str | None = None,
     external_reading: bool = False,
     metadata_only_fallback: bool = False,
+    feed_excerpt_fallback: bool = False,
 ) -> str:
     """Return the reason for the score that the UI actually displays."""
     reason = ""
@@ -1171,7 +1324,12 @@ def _build_score_reason(
         reason = build_distilled_score_reason(distilled)
     else:
         reason = str(score.reason or "")[:500]
-    if metadata_only_fallback and distilled is not None:
+    if feed_excerpt_fallback and distilled is not None:
+        reason = (
+            "RSS 来源片段初筛：未核实完整原文，评分仅供发现排序；请打开原文复核。"
+            + reason
+        )[:500]
+    elif metadata_only_fallback and distilled is not None:
         reason = (
             "来源摘要初筛：未能取得原文正文，评分仅供发现排序；请打开原文复核。"
             + reason
@@ -1719,6 +1877,7 @@ async def _run_source(
             nonlocal skipped_distilled_noise, skipped_conflict
             nonlocal token_in, token_out, cost_usd, first_error_code
 
+            feed_excerpt_fallback = False
             async with candidate_semaphore:
                 try:
                     normalized = normalize_candidate(raw_candidate)
@@ -1790,6 +1949,7 @@ async def _run_source(
                         return
 
                     metadata_only_fallback = False
+                    feed_excerpt_fallback = False
                     document_host = _host(raw_candidate.url)
                     # Full source text is an ephemeral scoring input in both
                     # reading modes. Browser mode only suppresses persistence
@@ -1828,7 +1988,34 @@ async def _run_source(
                             domain=document_host,
                         )
                     except Exception as fetch_exc:
-                        if (
+                        feed_excerpt = _usable_feed_excerpt(source, raw_candidate)
+                        if (source.source_type == "rss"
+                                and (raw_candidate.feed_excerpt or raw_candidate.feed_snippet_from_content)
+                                and not _feed_excerpt_allowed_after_fetch_error(fetch_exc)):
+                            # Do not downgrade a safety rejection, rate limit,
+                            # authentication error or unsupported content type
+                            # into a successful discovery through feed evidence.
+                            raise
+                        if feed_excerpt:
+                            fallback_count += 1
+                            metadata_only_fallback = True
+                            feed_excerpt_fallback = True
+                            markdown = feed_excerpt
+                            fetched = _snippet_document(raw_candidate.url, markdown)
+                            await _record_sync_diagnostic(
+                                pool, source=source, run_id=run_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                kind="filtered", reason_code="SOURCE_FEED_EXCERPT",
+                                reason_message=(
+                                    "原文读取失败，仅以 RSS 来源片段初筛；"
+                                    f"失败代码：{_safe_error_code(fetch_exc)}"
+                                ),
+                                error_type=type(fetch_exc).__name__,
+                                error_domain=document_host,
+                                feed_excerpt_fallback=True,
+                            )
+                        elif (
                             _can_use_snippet_fallback(source, raw_candidate)
                             or _can_use_candidate_metadata_fallback(source, raw_candidate)
                         ):
@@ -1858,6 +2045,9 @@ async def _run_source(
                         source.source_type,
                         normalized.title,
                     )
+                    if (source.source_type == "rss" and raw_candidate.feed_excerpt
+                            and content_failure_reason in {"bot_challenge", "javascript_or_cloudflare_challenge"}):
+                        raise SafeFetchError("URL_FETCH_BLOCKED", "Original source returned an access challenge", host=document_host)
                     if (
                         content_failure_reason
                         and not _can_use_candidate_metadata_fallback(
@@ -1885,6 +2075,9 @@ async def _run_source(
                         total_skipped += 1
                         return
                     low_quality = _is_low_quality_content(raw_content)
+                    if (source.source_type == "rss" and raw_candidate.feed_excerpt
+                            and any(marker in raw_content.lower() for marker in _LOW_QUALITY_MARKERS)):
+                        raise SafeFetchError("URL_FETCH_BLOCKED", "Original source returned an access challenge", host=document_host)
                     brief: Any = None
                     interpretation = ""
                     if low_quality:
@@ -1896,10 +2089,32 @@ async def _run_source(
                         # to source metadata only when it is independently useful;
                         # otherwise keep a diagnostic without the fetched body.
                         snippet_clean = normalized.snippet.strip()
+                        feed_excerpt = (
+                            _usable_feed_excerpt(source, raw_candidate)
+                            if not content_failure_reason else ""
+                        )
                         use_metadata_fallback = _can_use_candidate_metadata_fallback(
                             source, raw_candidate
                         )
-                        if (
+                        if raw_candidate.feed_snippet_from_content and not feed_excerpt:
+                            snippet_clean = ""
+                        if feed_excerpt:
+                            metadata_only_fallback = True
+                            feed_excerpt_fallback = True
+                            markdown = feed_excerpt
+                            raw_content = feed_excerpt
+                            brief_context = feed_excerpt
+                            low_quality = False
+                            await _record_sync_diagnostic(
+                                pool, source=source, run_id=run_id,
+                                candidate=raw_candidate,
+                                canonical_url=normalized.canonical_url,
+                                kind="filtered", reason_code="SOURCE_FEED_EXCERPT",
+                                reason_message="原网页正文不可用，仅以 RSS 来源片段初筛。",
+                                error_domain=document_host,
+                                feed_excerpt_fallback=True,
+                            )
+                        elif (
                             use_metadata_fallback
                             or (
                                 len(snippet_clean) >= 200
@@ -1953,6 +2168,14 @@ async def _run_source(
                     else:
                         brief_context = markdown or normalized.snippet
 
+                    if feed_excerpt_fallback and await _source_excerpt_noise_pending(
+                        pool, source, raw_candidate, normalized.canonical_url,
+                    ):
+                        # Keep retrying the original on later syncs without
+                        # paying to score the same incomplete evidence again.
+                        total_skipped += 1
+                        return
+
                     github_repo_candidate = _is_github_repo_candidate(
                         source,
                         raw_candidate,
@@ -1969,6 +2192,7 @@ async def _run_source(
                     item = {
                         "title": normalized.title,
                         "snippet": brief_context,
+                        "context_is_source_excerpt": metadata_only_fallback,
                     }
                     # 低质量 fallback（snippet 路径）已直接用 snippet 作 interpretation，跳过 LLM
                     if not low_quality:
@@ -2031,6 +2255,7 @@ async def _run_source(
                                     reason_code="REPAIR_SUMMARY_UNAVAILABLE",
                                     reason_message="摘要模型仅返回来源不可用或标题推断说明；保留来源证据待补齐",
                                     body=markdown or normalized.snippet, markdown=markdown,
+                                    feed_excerpt_fallback=feed_excerpt_fallback,
                                 )
                             logger.info(
                                 "ai-engine.radar.snippet_brief_fallback",
@@ -2079,9 +2304,7 @@ async def _run_source(
                             # article regardless of their character count.
                             scoreability = "limited"
                         if github_repo_candidate or scoreability is not None:
-                            distilled_result = await distilled_scorer(
-                                normalized.title,
-                                cleaned,
+                            scorer_kwargs: dict[str, Any] = dict(
                                 profile=profile,
                                 source_type=scoring_source_type,
                                 url=persisted_candidate_url,
@@ -2091,6 +2314,15 @@ async def _run_source(
                                     if github_repo_candidate
                                     else None
                                 ),
+                            )
+                            if metadata_only_fallback and _accepts_keyword(
+                                distilled_scorer, "content_is_source_excerpt"
+                            ):
+                                scorer_kwargs["content_is_source_excerpt"] = True
+                            distilled_result = await distilled_scorer(
+                                normalized.title,
+                                cleaned,
+                                **scorer_kwargs,
                             )
                         else:
                             from ai_engine.radar.distilled_scorer import default_score
@@ -2113,16 +2345,35 @@ async def _run_source(
                                     interpretation, markdown, normalized.snippet
                                 ),
                                 markdown=markdown,
+                                feed_excerpt_fallback=feed_excerpt_fallback,
                             )
                     extra_tags_list = ["pr_soft"] if filter_result.is_pr else []
                     if browser_reading_mode_enabled():
                         extra_tags_list.append("external_reading")
+                    if feed_excerpt_fallback:
+                        extra_tags_list.append("evidence_feed_excerpt")
                     if metadata_only_fallback and not browser_reading_mode_enabled():
                         extra_tags_list.append("content_pending")
                         if source.source_type in {"github", "github_trending"}:
                             extra_tags_list.append("github_content_pending")
                     # Confirmed noise never enters summaries. A minimal identity
                     # receipt prevents rediscovery from paying for the same work.
+                    if (feed_excerpt_fallback and distilled_result is not None
+                            and not getattr(distilled_result, "is_default", False)
+                            and getattr(distilled_result, "tier", None) == "noise"):
+                        # Incomplete source evidence cannot establish that the
+                        # publication as a whole is noise. Do not create an
+                        # irreversible noise receipt or a noise summary row.
+                        await _record_sync_diagnostic(
+                            pool, source=source, run_id=run_id,
+                            candidate=raw_candidate, canonical_url=persisted_candidate_url,
+                            kind="filtered", reason_code="SOURCE_EXCERPT_NOISE_PENDING",
+                            reason_message="来源片段评分不足以判断全文；等待原文恢复后重新核验。",
+                            markdown=markdown,
+                            feed_excerpt_fallback=True,
+                        )
+                        total_skipped += 1
+                        return
                     if (distilled_result is not None and confirmed_noise(distilled_result.to_dict())
                             and not await _noise_has_references(pool, persisted_candidate_url)):
                         await record_noise_disposition(pool, source.id, run_id, raw_candidate,
@@ -2198,6 +2449,7 @@ async def _run_source(
                             or scoreability == "limited"
                         ),
                         metadata_only_fallback=metadata_only_fallback,
+                        feed_excerpt_fallback=feed_excerpt_fallback,
                     )
                     if inserted:
                         total_new += 1
@@ -2252,11 +2504,27 @@ async def _run_source(
                         error_type=type(exc).__name__,
                         error_domain=error_domain,
                         body=raw_candidate.snippet,
+                        feed_excerpt_fallback=feed_excerpt_fallback,
                     )
                 finally:
                     await _heartbeat_run(pool, run_id)
 
-        await asyncio.gather(*(_process_candidate(candidate) for candidate in candidates))
+        # Avoid duplicate model work for the same publication within one
+        # source run. This in-process lock is not a cross-process reservation.
+        publication_locks: dict[str, asyncio.Lock] = {}
+
+        async def _serial_publication(candidate: RadarCandidate) -> None:
+            try:
+                url = normalize_candidate(candidate).canonical_url
+            except ValueError:
+                await _process_candidate(candidate)
+                return
+            key = f"{url}:{publication_identity(candidate.title, candidate.published_at)}"
+            lock = publication_locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                await _process_candidate(candidate)
+
+        await asyncio.gather(*(_serial_publication(candidate) for candidate in candidates))
         run_status = "partial" if total_failed else "completed"
         error_message = (
             _format_failure_summary(candidate_failures, prefix="candidate failures")

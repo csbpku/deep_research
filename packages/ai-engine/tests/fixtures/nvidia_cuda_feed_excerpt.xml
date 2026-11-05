@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic text matching the summary/content RSS structure observed in a public feed. -->
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Engineering Blog</title>
+    <item>
+      <title>Engine Runtime 2.0</title>
+      <link>https://blog.example.test/articles/runtime-2</link>
+      <description><![CDATA[A short engineering summary...]]></description>
+      <content:encoded><![CDATA[<p>A short engineering summary...</p><p>Longer synthetic technical content.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

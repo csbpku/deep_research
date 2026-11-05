@@ -47,7 +47,8 @@ def _build_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
     for i, c in enumerate(candidates, 1):
         title = (c.get("title") or "").strip()[:200]
         snippet = (c.get("snippet") or c.get("interpretation") or "").strip()[:500]
-        tags = c.get("tags") or []
+        tags = [tag for tag in (c.get("tags") or [])
+                if not str(tag).lower().startswith("evidence_")]
         parts.append(
             f"[{i}] (id={c.get('id')}) {title}\n    标签: {', '.join(tags[:5])}\n    摘要: {snippet}"
         )

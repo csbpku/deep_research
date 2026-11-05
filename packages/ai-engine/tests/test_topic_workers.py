@@ -88,6 +88,16 @@ def test_build_candidate_clusters_skips_single_source_groups() -> None:
     assert build_candidate_clusters(rows) == []
 
 
+def test_feed_evidence_metadata_does_not_cluster_unrelated_articles() -> None:
+    rows = [
+        {"id": "1", "title": "Quantum circuits", "sourceKey": "a.dev", "tags": ["evidence_feed_excerpt"]},
+        {"id": "2", "title": "Distributed databases", "sourceKey": "b.dev", "tags": ["evidence_feed_excerpt"]},
+        {"id": "3", "title": "Compiler optimizations", "sourceKey": "c.dev", "tags": ["evidence_feed_excerpt"]},
+    ]
+    assert is_metadata_tag("evidence_feed_excerpt")
+    assert build_candidate_clusters(rows) == []
+
+
 def test_build_candidate_clusters_prefers_specific_tag() -> None:
     rows = [
         {"id": str(i), "title": f"ops note {i}", "sourceKey": f"d{i}.dev", "tags": ["devops"]}

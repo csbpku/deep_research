@@ -38,6 +38,8 @@ from ai_engine.radar.sync_runner import (
     run_radar_pipeline,
     _retryable_latest_source_ids,
     _record_sync_diagnostic,
+    _usable_feed_excerpt,
+    _feed_excerpt_allowed_after_fetch_error,
     run_radar_sync,
 )
 from ai_engine.contracts.states import AI_JOB_STATUS
@@ -156,6 +158,243 @@ def _candidate(url: str = "https://example.com/item") -> RadarCandidate:
         content_origin="rss",
         tags=("ai",),
     )
+
+
+@pytest.mark.parametrize("reading_mode", ["browser", "enriched"])
+async def test_content_only_feed_never_persists_through_diagnostic_shell(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str,
+) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
+    pool = _Pool([])
+    excerpt = "Private feed content " * 100
+    candidate = RadarCandidate(title="Title", url="https://example.com/item",
+                               snippet=excerpt, feed_excerpt=excerpt, feed_snippet_from_content=True)
+    await _record_sync_diagnostic(
+        pool, source=RadarSource("source-1", "RSS", "rss", {}), run_id="run-1",
+        candidate=candidate, canonical_url=candidate.url, kind="filtered",
+        reason_code="PENDING_SCORE", body=excerpt, markdown="unusable page shell",
+    )
+    inserts = [params for sql, params in pool.connection_value.executions
+               if 'INSERT INTO "radar_sync_diagnostics"' in sql]
+    assert len(inserts) == 1
+    assert inserts[0][7] == "" and inserts[0][8] is None
+    assert excerpt[:100] not in str(pool.connection_value.executions)
+
+
+@pytest.mark.parametrize("reading_mode", ["browser", "enriched"])
+async def test_rss_excerpt_survives_timeout_without_persisting_original(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str,
+) -> None:
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://example.com/feed"}
+    pool = _Pool([source])
+    feed_text = ("An agent implementation explains measured tradeoffs and latency. " * 120)
+    candidate = RadarCandidate(
+        title="LLM agent pipeline",
+        url="https://example.com/article",
+        snippet="A short article summary about agent pipelines.",
+        content_origin="rss",
+        feed_excerpt=feed_text,
+        feed_source_host="example.com",
+    )
+    seen: dict[str, Any] = {}
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def timeout(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError("URL_FETCH_TIMEOUT", "timeout", host="example.com")
+
+    async def brief(adapter: Any, item: dict[str, Any], url: str, **kwargs: Any) -> Any:
+        seen["brief"] = item
+        return type("Brief", (), {
+            "status": AI_JOB_STATUS["SUCCEEDED"],
+            "output_text": "文章描述了代理实现中的工程权衡、延迟和可验证的测量结果。" * 3,
+            "cost": type("Cost", (), {
+                "token_input_total": 1, "token_output_total": 1, "cost_cents": 0,
+            })(),
+        })()
+
+    async def scorer(title: str, content: str, **kwargs: Any) -> Any:
+        seen["scorer_content"] = content
+        seen["scorer_kwargs"] = kwargs
+        return compute_score({
+            "信息增量": 2, "分析深度": 2, "可行动性": 2, "事实可信度": 2,
+            "时效性": 2, "表达质量": 2, "综合信号": 2,
+            "direct_relevance": 2, "scope_breadth": 1,
+        }, source_type="rss")
+
+    result = await run_radar_sync(
+        pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+        document_fetcher=timeout, generate_brief=brief, distilled_scorer=scorer,
+    )
+    assert result.runs[0].total_new == 1
+    assert seen["brief"]["context_is_source_excerpt"] is True
+    assert seen["brief"]["snippet"] == feed_text.strip()
+    assert "measured tradeoffs" in seen["scorer_content"]
+    assert seen["scorer_kwargs"]["content_is_source_excerpt"] is True
+    inserts = [entry for entry in pool.connection_value.executions if 'INSERT INTO "summaries"' in entry[0]]
+    assert len(inserts) == 1
+    params = inserts[0][1]
+    assert params[15].startswith("RSS 来源片段初筛")
+    assert params[23] is None
+    assert "evidence_feed_excerpt" in params[10]
+    assert feed_text not in str(pool.connection_value.executions)
+    assert feed_text[:120] not in str(pool.connection_value.executions)
+    diagnostics = [params for sql, params in pool.connection_value.executions
+                   if 'INSERT INTO "radar_sync_diagnostics"' in sql]
+    assert any(params[13] == "SOURCE_FEED_EXCERPT" for params in diagnostics)
+    assert all(params[7] == "" and params[8] is None for params in diagnostics)
+
+
+@pytest.mark.parametrize(("feed_host", "response_host", "article_url", "valid"), [
+    ("example.com", "www.example.com", "https://www.example.com/a", True),
+    ("example.com", "example.com", "https://evil-example.com/a", False),
+    ("example.com", "elsewhere.com", "https://example.com/a", False),
+    ("medium.com", "medium.com", "https://medium.com/other-author/a", False),
+    ("a.example.com", "a.example.com", "https://b.example.com/a", False),
+])
+def test_feed_evidence_requires_non_shared_exact_publisher_host(
+    feed_host: str, response_host: str, article_url: str, valid: bool,
+) -> None:
+    source = RadarSource(id="s", name="rss", source_type="rss", config={"feedUrl": f"https://{feed_host}/feed"})
+    candidate = RadarCandidate(title="An AI engine update", url=article_url, content_origin="rss",
+                               feed_source_host=response_host, feed_excerpt="Relevant engineering evidence. " * 30)
+    assert bool(_usable_feed_excerpt(source, candidate)) is valid
+
+
+def test_feed_evidence_requires_reliable_title() -> None:
+    source = RadarSource(id="s", name="rss", source_type="rss", config={"feedUrl": "https://example.com/feed"})
+    for title in ("", "Untitled", "No title"):
+        candidate = RadarCandidate(title=title, url="https://example.com/a", content_origin="rss",
+                                   feed_source_host="example.com", feed_excerpt="Evidence " * 100)
+        assert _usable_feed_excerpt(source, candidate) == ""
+
+
+def test_wrapped_rate_limit_cannot_use_feed_evidence() -> None:
+    original = SafeFetchError("UPSTREAM_RATE_LIMITED", "rate limited")
+    wrapper = RuntimeError("wrapper")
+    wrapper.__cause__ = original
+    assert not _feed_excerpt_allowed_after_fetch_error(wrapper)
+
+
+@pytest.mark.parametrize("code", ["URL_FETCH_BLOCKED", "UPSTREAM_RATE_LIMITED", "CONTENT_TYPE_REJECTED"])
+async def test_cross_site_content_only_feed_cannot_bypass_rejection(
+    monkeypatch: pytest.MonkeyPatch, code: str,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://aggregator.example/feed"}
+    pool = _Pool([source])
+    excerpt = "Feed source commentary mistakenly linked to another publication. " * 40
+    candidate = RadarCandidate(title="LLM agent update", url="https://publisher.example/a", content_origin="rss",
+                               snippet=excerpt[:2000], feed_excerpt=excerpt,
+                               feed_source_host="aggregator.example", feed_snippet_from_content=True)
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def rejected(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError(code, "rejected", host="publisher.example")
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("Unrelated feed evidence must not be scored as the article")
+
+    await run_radar_sync(pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+                         document_fetcher=rejected, generate_brief=unexpected,
+                         distilled_scorer=unexpected)
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+    assert excerpt[:100] not in str(pool.connection_value.executions)
+
+
+@pytest.mark.parametrize("code", ["URL_FETCH_BLOCKED", "UPSTREAM_RATE_LIMITED", "CONTENT_TYPE_REJECTED"])
+async def test_rss_feed_excerpt_cannot_bypass_safety_or_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, code: str,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://example.com/feed"}
+    pool = _Pool([source])
+    candidate = RadarCandidate(
+        title="LLM agent update", url="https://example.com/item", content_origin="rss",
+        snippet="Useful abstract that must not bypass a blocked URL.",
+        feed_excerpt="An agent paper with useful engineering details. " * 30,
+        feed_source_host="example.com",
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def rejected(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError(code, "rejected", host="example.com")
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A blocked original URL must not enter model processing")
+
+    await run_radar_sync(
+        pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+        document_fetcher=rejected, generate_brief=unexpected, distilled_scorer=unexpected,
+    )
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+
+
+@pytest.mark.parametrize("challenge", ["prove your humanity", "complete the challenge"])
+async def test_fetched_challenge_never_uses_feed_fallback(
+    monkeypatch: pytest.MonkeyPatch, challenge: str,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    source = _source()
+    source["config"] = {"feedUrl": "https://example.com/feed"}
+    pool = _Pool([source])
+    candidate = RadarCandidate(
+        title="LLM agent update", url="https://example.com/item", content_origin="rss",
+        snippet="A useful but limited feed summary about LLM agents.",
+        feed_excerpt="Longer article feed excerpt with engineering detail. " * 30,
+        feed_source_host="example.com",
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def blocked(url: str, **kwargs: Any) -> FetchedDocument:
+        return FetchedDocument(url=url, final_ip="93.184.216.34", status=200, headers={},
+                               content=challenge.encode(), content_type="text/html", elapsed_ms=1)
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A verification shell cannot be scored")
+
+    result = await run_radar_sync(pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+                                  document_fetcher=blocked, generate_brief=unexpected, distilled_scorer=unexpected)
+    assert result.runs[0].total_failed == 1
+    assert result.runs[0].error_code == "URL_FETCH_BLOCKED"
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
+
+
+async def test_verification_shell_in_feed_never_becomes_source_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("ai_engine.radar.sync_runner.RADAR_FETCH_RETRIES", 0)
+    pool = _Pool([_source()])
+    candidate = RadarCandidate(
+        title="LLM agent update", url="https://example.com/item", content_origin="rss",
+        snippet="short", feed_excerpt="Checking your browser before accessing the site. " * 50,
+    )
+
+    async def fetcher(config: dict[str, Any]) -> list[RadarCandidate]:
+        return [candidate]
+
+    async def timeout(url: str, **kwargs: Any) -> FetchedDocument:
+        raise SafeFetchError("URL_FETCH_TIMEOUT", "timeout", host="example.com")
+
+    async def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("A verification shell cannot be scored")
+
+    await run_radar_sync(pool, adapter=FakeAdapter(), fetchers={"rss": fetcher},
+                         document_fetcher=timeout, generate_brief=unexpected,
+                         distilled_scorer=unexpected)
+    assert not any('INSERT INTO "summaries"' in sql for sql, _ in pool.connection_value.executions)
 
 
 def _document(url: str = "https://example.com/item") -> FetchedDocument:

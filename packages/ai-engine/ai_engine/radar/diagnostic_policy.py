@@ -22,6 +22,48 @@ def publication_identity(title: str, published_at: Any) -> str:
     return hashlib.sha256((re.sub(r'\s+', ' ', title).strip().casefold() + '\n' + stamp).encode()).hexdigest()
 
 
+async def lock_excerpt_publication(conn: Any, source_id: str, url: str,
+                                   title: str, published_at: Any) -> None:
+    """Serialize pending excerpt decisions with source-backed final decisions."""
+    identity = publication_identity(title, published_at)
+    await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                       (f'source-excerpt:{source_id}:{url}:{identity}',))
+
+
+async def close_excerpt_pending(conn: Any, source_id: str, url: str,
+                                title: str, published_at: Any, reason_code: str) -> None:
+    if reason_code not in {"SOURCE_FEED_EXCERPT", "SOURCE_EXCERPT_NOISE_PENDING"}:
+        raise ValueError("unsupported source excerpt diagnostic")
+    await conn.execute(
+        "UPDATE radar_sync_diagnostics SET status='dismissed', \"updatedAt\"=now() "
+        'WHERE "sourceId"=%s AND "canonicalUrl"=%s AND "reasonCode"=%s '
+        "AND status='pending' AND \"distilledScore\"->>'publicationIdentity'=%s",
+        (source_id, url, reason_code, publication_identity(title, published_at)),
+    )
+
+
+async def excerpt_publication_decided(conn: Any, source_id: str, url: str,
+                                     title: str, published_at: Any,
+                                     display_title: str) -> bool:
+    """Prevent a delayed excerpt verdict reopening a completed publication."""
+    row = await (await conn.execute(
+        'SELECT 1 FROM summaries s JOIN radar_sync_runs r ON r.id=s."syncRunId" '
+        'WHERE r."sourceId"=%s AND s."canonicalUrl"=%s '
+        "AND NOT ('evidence_feed_excerpt'=ANY(COALESCE(s.tags, ARRAY[]::text[]))) "
+        "AND lower(regexp_replace(btrim(s.title), '\\s+', ' ', 'g'))=lower(%s) "
+        'AND s."publishedAt" IS NOT DISTINCT FROM %s::timestamptz AND %s '
+        "UNION ALL SELECT 1 FROM radar_sync_diagnostics d WHERE d.\"sourceId\"=%s "
+        "AND d.\"canonicalUrl\"=%s AND d.\"reasonCode\"='NOISE_NOT_STORED' "
+        "AND d.status='dismissed' AND d.\"distilledScore\"->>'policy'=%s "
+        "AND d.\"distilledScore\"->>'version'=ANY(%s) "
+        "AND d.\"distilledScore\"->>'publicationIdentity'=%s LIMIT 1",
+        (source_id, url, re.sub(r'\s+', ' ', display_title[:300]).strip(), published_at,
+         bool(display_title) and len(title) <= 300, source_id, url, NOISE_POLICY,
+         list(NOISE_RECEIPT_VERSIONS), publication_identity(title, published_at)),
+    )).fetchone()
+    return row is not None
+
+
 async def deleted_publication(pool: Any, source_id: str, url: str, title: str, published_at: Any) -> bool:
     """Minimal audit tombstone; a different publication remains eligible."""
     async with pool.connection() as conn:
@@ -59,6 +101,7 @@ async def record_noise_disposition(pool: Any, source_id: str, run_id: str, candi
     identity = publication_identity(candidate.title, candidate.published_at)
     async with pool.connection() as conn:
         async with conn.transaction():
+            await lock_excerpt_publication(conn, source_id, url, candidate.title, candidate.published_at)
             await conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                                (f'noise-disposition:{source_id}:{url}:{identity}',))
             await conn.execute(
@@ -75,6 +118,8 @@ async def record_noise_disposition(pool: Any, source_id: str, run_id: str, candi
                  source_id, url,
                  Jsonb({'version': DISTILLED_VERSION, 'policy': NOISE_POLICY, 'publicationIdentity': identity})),
             )
+            for reason in ("SOURCE_FEED_EXCERPT", "SOURCE_EXCERPT_NOISE_PENDING"):
+                await close_excerpt_pending(conn, source_id, url, candidate.title, candidate.published_at, reason)
 
 
 async def retire_duplicate_pending(conn: Any, source_id: str, url: str, reason: str,
