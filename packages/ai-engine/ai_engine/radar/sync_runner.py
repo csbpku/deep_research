@@ -2835,6 +2835,7 @@ async def run_radar_pipeline(
             enrichment_error=None,
         )
     all_runs = list(sync_result.runs)
+    quota_stopped = False
     triggered_by = str(sync_kwargs.get("triggered_by", "cron"))
     # Retry only the sources that failed or were partial. Successful sources
     # are never re-fetched, so a flaky upstream cannot duplicate the whole
@@ -2862,11 +2863,17 @@ async def run_radar_pipeline(
                 },
             )
             all_runs.extend(retry_result.runs)
+            if retry_result.quota_stopped:
+                quota_stopped = True
+                break
     sync_result = RadarSyncResult(
         batch_id=sync_result.batch_id,
         runs=tuple(all_runs),
+        quota_stopped=quota_stopped,
     )
-    if not radar_enrichment_enabled():
+    if sync_result.quota_stopped or not radar_enrichment_enabled():
+        # A retry can exhaust the allowance too. Keep the stop signal for
+        # operator alerts and skip all remaining model-dependent stages.
         # Browser mode deliberately stops after discovery and metadata-based
         # ordering. The original URL remains the reading source; no automatic
         # article/Zread fetch, enrichment, or post-enrichment review is queued.

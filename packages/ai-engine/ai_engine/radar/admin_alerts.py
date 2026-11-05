@@ -15,6 +15,7 @@ import hmac
 import logging
 import os
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
@@ -24,6 +25,19 @@ import httpx
 from ai_engine.llm.client import _SECRET_RE
 
 logger = logging.getLogger(__name__)
+
+# HTTPX logs the full request URL at INFO, including a webhook's credential.
+# Scope suppression to this request's async context; other tasks keep their
+# ordinary HTTP diagnostics and our own host/status-only logs remain visible.
+_private_request: ContextVar[bool] = ContextVar("admin_alert_private_request", default=False)
+
+
+class _PrivateRequestLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _private_request.get()
+
+
+logging.getLogger("httpx").addFilter(_PrivateRequestLogFilter())
 
 _TIMEOUT_SECONDS = 5.0
 _MAX_TEXT_CHARS = 3000
@@ -141,7 +155,11 @@ async def _send(
     owned = client is None
     http = client or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
     try:
-        response = await http.post(url, json=payload, timeout=_TIMEOUT_SECONDS)
+        token = _private_request.set(True)
+        try:
+            response = await http.post(url, json=payload, timeout=_TIMEOUT_SECONDS)
+        finally:
+            _private_request.reset(token)
         accepted = _feishu_accepted(response) if feishu else 200 <= response.status_code < 300
         if not accepted:
             logger.warning(

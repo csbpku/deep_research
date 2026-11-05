@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -140,6 +141,50 @@ async def test_logs_never_contain_the_webhook_token(
     with caplog.at_level("DEBUG"):
         assert await send_admin_alert("k", "t", ["1"], client=client) is False
     assert "secret-token-value" not in caplog.text
+
+
+@pytest.mark.parametrize("status", [200, 503])
+async def test_webhook_response_logs_hide_credentials_without_hiding_other_requests(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: int,
+) -> None:
+    monkeypatch.setenv("ADMIN_ALERT_WEBHOOK_URL", FEISHU_URL)
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, json={"code": 0}))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with caplog.at_level("DEBUG"):
+            assert await send_admin_alert("k", "t", ["1"], client=client) is (status == 200)
+            # The private-request context must be reset even after a rejection.
+            await client.get("https://status.example.com/public-diagnostics")
+    assert "secret-token-value" not in caplog.text
+    assert "public-diagnostics" in caplog.text
+    if status == 503:
+        assert "admin_alert.rejected" in caplog.text
+
+
+async def test_alert_log_privacy_does_not_suppress_concurrent_http_requests(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("ADMIN_ALERT_WEBHOOK_URL", FEISHU_URL)
+    sending = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            sending.set()
+            await finish.wait()
+        return httpx.Response(200, json={"code": 0})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level("DEBUG"):
+            alert = asyncio.create_task(send_admin_alert("k", "t", ["1"], client=client))
+            try:
+                await asyncio.wait_for(sending.wait(), timeout=1)
+                await client.get("https://status.example.com/concurrent-diagnostics")
+            finally:
+                finish.set()
+                sent = await alert
+    assert sent is True
+    assert "secret-token-value" not in caplog.text
+    assert "concurrent-diagnostics" in caplog.text
 
 
 async def test_rendered_text_redacts_credentials_and_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

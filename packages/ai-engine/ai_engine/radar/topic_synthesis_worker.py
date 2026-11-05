@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 from ai_engine.radar.topic_eligibility import TOPIC_ELIGIBILITY_SQL
+from ai_engine.radar.topic_clustering import is_metadata_tag
 from ai_engine.llm.client import generate_text
 from ai_engine.knowledge.gbrain import build_gbrain_client
 
@@ -48,7 +49,7 @@ def _build_prompt(name: str, candidates: list[dict[str, Any]]) -> str:
         title = (c.get("title") or "").strip()[:200]
         snippet = (c.get("snippet") or c.get("interpretation") or "").strip()[:500]
         tags = [tag for tag in (c.get("tags") or [])
-                if not str(tag).lower().startswith("evidence_")]
+                if not is_metadata_tag(str(tag))]
         parts.append(
             f"[{i}] (id={c.get('id')}) {title}\n    标签: {', '.join(tags[:5])}\n    摘要: {snippet}"
         )

@@ -96,7 +96,7 @@ export function formatRadarDetailDate(value: string | null | undefined): string 
 
 export function cleanRadarTags(tags: string[] | undefined): string[] {
   return visibleRadarTags(tags).filter((tag) => {
-    if (!tag || tag.startsWith('tier_') || tag.startsWith('profile_') || tag.startsWith('brief_')) return false;
+    if (!tag || tag.startsWith('tier_') || tag.startsWith('profile_')) return false;
     if (tag.startsWith('veto_') || tag.startsWith('risk_')) return false;
     if (tag.startsWith('migration_') || tag.endsWith('_pending')) return false;
     return ![

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -2214,6 +2215,50 @@ async def test_pipeline_does_not_retry_sources_after_quota_stop(
     assert fetch_calls == 1  # no source retry rounds once the allowance is gone
     assert result.quota_stopped is True
     assert result.enriched_count == 0
+
+
+@pytest.mark.parametrize("reading_mode", ["browser", "enriched"])
+@pytest.mark.parametrize("retry_count", [1, 2])
+async def test_pipeline_preserves_quota_stop_from_source_retry(
+    monkeypatch: pytest.MonkeyPatch, reading_mode: str, retry_count: int,
+) -> None:
+    from dataclasses import replace
+
+    from ai_engine.radar import candidate_postprocessor, enrichment_worker, sync_runner
+
+    monkeypatch.setenv("RADAR_READING_MODE", reading_mode)
+    monkeypatch.setattr(sync_runner, "RADAR_SOURCE_RETRIES", retry_count)
+    monkeypatch.setattr(sync_runner, "RADAR_SOURCE_RETRY_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(sync_runner, "RADAR_RATE_LIMIT_RETRY_BACKOFF_SECONDS", 0)
+    failed = SourceRunResult(
+        run_id="initial-run", source_id="source-1", status="failed",
+        total_fetched=0, total_new=0, total_skipped=0, total_failed=1,
+        token_input_total=0, token_output_total=0, cost_usd=0,
+        error_code="URL_FETCH_TIMEOUT",
+    )
+    stopped = replace(
+        failed, run_id="quota-retry", status="partial", total_fetched=1,
+        total_skipped=1, total_failed=0, error_code="AI_QUOTA_EXCEEDED",
+    )
+    sync = AsyncMock(side_effect=[
+        RadarSyncResult("initial-batch", (failed,)),
+        RadarSyncResult("retry-batch", (stopped,), quota_stopped=True),
+    ])
+    score = AsyncMock(return_value=0)
+    enrich = AsyncMock(return_value=0)
+    monkeypatch.setattr(sync_runner, "run_radar_sync", sync)
+    monkeypatch.setattr(candidate_postprocessor, "score_missing_candidates", score)
+    monkeypatch.setattr(enrichment_worker, "run_enrichment_for_pending", enrich)
+
+    result = await run_radar_pipeline(object())
+
+    assert sync.await_count == 2  # no later source round after the quota retry
+    assert result.quota_stopped is True  # remains visible to operator alerts
+    assert result.sync.batch_id == "initial-batch"
+    assert result.sync.runs == (failed, stopped)
+    assert result.enriched_count == 0
+    score.assert_not_awaited()
+    enrich.assert_not_awaited()
 
 
 def test_rate_limit_text_is_not_treated_as_quota_exhaustion() -> None:

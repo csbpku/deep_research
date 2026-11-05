@@ -14,7 +14,7 @@ from typing import Any, TypedDict
 from urllib.parse import urlsplit
 
 from ai_engine.llm.client import generate_text
-from ai_engine.radar.topic_clustering import build_candidate_clusters
+from ai_engine.radar.topic_clustering import build_candidate_clusters, is_metadata_tag
 
 logger = logging.getLogger("ai_engine.radar.topic_proposals")
 
@@ -97,7 +97,7 @@ def _prompt(rows: list[dict[str, Any]], *, cluster_hint: str | None = None) -> s
         tags = row.get("tags")
         tag_text = ""
         if isinstance(tags, list) and tags:
-            topic_tags = [str(tag) for tag in tags if not str(tag).lower().startswith("evidence_")]
+            topic_tags = [str(tag) for tag in tags if not is_metadata_tag(str(tag))]
             if topic_tags:
                 tag_text = "，标签：" + ",".join(topic_tags[:8])
         lines.append(

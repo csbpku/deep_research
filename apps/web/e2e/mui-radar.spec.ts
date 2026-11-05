@@ -25,7 +25,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
     test(`${width}px: the reading preview discloses limited feed evidence`, async ({ page }) => {
       const limited = {
         ...candidate,
-        tags: ['rss', 'external_reading', 'evidence_feed_excerpt', 'agent'],
+        tags: ['rss', 'external_reading', 'evidence_feed_excerpt', 'brief_typed_v1', 'agent'],
         scoreReason: 'RSS 来源片段初筛：未核实完整原文，评分仅供发现排序；请打开原文复核。',
       };
       await page.route('**/api/radar?*', route => route.fulfill({
@@ -40,6 +40,7 @@ test.describe('MUI radar migration contracts (no database writes)', () => {
       await expect(preview.getByText('该文章曾使用 RSS 来源片段生成摘要或评分；原文覆盖情况请打开原文核实。')).toBeVisible();
       await expect(preview.getByText('#agent')).toBeVisible();
       await expect(preview.getByText('#evidence_feed_excerpt')).toHaveCount(0);
+      await expect(preview.getByText('#brief_typed_v1')).toHaveCount(0);
       await expect(preview.getByText('同步时临时读取原文生成摘要和评分', { exact: false })).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     });

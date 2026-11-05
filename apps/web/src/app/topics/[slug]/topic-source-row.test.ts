@@ -12,7 +12,7 @@ describe('topic source row', () => {
         title: 'An article',
         url: 'https://example.com/article',
         originalKind: 'rss',
-        tags: ['evidence_feed_excerpt', 'ai', 'engineering'],
+        tags: ['evidence_feed_excerpt', 'brief_typed_v1', 'ai', 'engineering'],
         interpretation: 'A concise interpretation.',
         publishedAt: null,
       },
@@ -20,6 +20,7 @@ describe('topic source row', () => {
 
     expect(html).toContain('ai, engineering');
     expect(html).not.toContain('evidence_feed_excerpt');
+    expect(html).not.toContain('brief_typed_v1');
     expect(html).toContain('/radar/summary-1');
   });
 });

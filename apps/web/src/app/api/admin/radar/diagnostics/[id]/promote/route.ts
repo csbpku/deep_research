@@ -35,6 +35,7 @@ export const POST = apiHandler<[NextRequest, { params: Promise<{ id: string }> }
           !diagnostic || diagnostic.kind !== 'filtered' || diagnostic.status !== 'pending'
           || diagnostic.reasonCode === 'SOURCE_FEED_EXCERPT'
           || diagnostic.reasonCode === 'SOURCE_EXCERPT_NOISE_PENDING'
+          || diagnostic.reasonCode === 'MODEL_QUOTA_STOPPED'
         ) {
           throw new Error('DIAGNOSTIC_NOT_PROMOTABLE');
         }

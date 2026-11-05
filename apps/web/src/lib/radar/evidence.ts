@@ -2,7 +2,7 @@
 export const RADAR_FEED_EXCERPT_TAG = 'evidence_feed_excerpt';
 
 export function visibleRadarTags(tags: readonly string[] | null | undefined): string[] {
-  return (tags ?? []).filter((tag) => tag !== RADAR_FEED_EXCERPT_TAG);
+  return (tags ?? []).filter((tag) => tag !== RADAR_FEED_EXCERPT_TAG && !tag.startsWith('brief_'));
 }
 
 /** Explain only what is known about the evidence used for this score. */

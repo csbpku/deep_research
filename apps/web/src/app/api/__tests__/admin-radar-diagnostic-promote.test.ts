@@ -40,7 +40,7 @@ beforeEach(() => {
 });
 
 describe('admin radar diagnostic promotion', () => {
-  it.each(['SOURCE_FEED_EXCERPT', 'SOURCE_EXCERPT_NOISE_PENDING'])(
+  it.each(['SOURCE_FEED_EXCERPT', 'SOURCE_EXCERPT_NOISE_PENDING', 'MODEL_QUOTA_STOPPED'])(
     'rejects the incomplete-evidence diagnostic %s before modifying a candidate',
     async (reasonCode) => {
       mocks.diagnosticFind.mockResolvedValue({ kind: 'filtered', status: 'pending', reasonCode });
